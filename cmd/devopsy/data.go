@@ -1232,6 +1232,7 @@ func runImport(cwd string, args []string, color bool) int {
 		if imgs, err = copyImages(cwd); err != nil {
 			return fail(err.Error() + ": nothing imported")
 		}
+		imgs.Marked = readMark(base) != nil
 		unlock, err := imagesShared(ctx)
 		if err != nil {
 			return fail(err.Error() + ": nothing imported")
@@ -1388,8 +1389,13 @@ func runImport(cwd string, args []string, color bool) int {
 			return 1
 		}
 	}
-	if err := restoreServices(cwd, services, false, imgs != nil, nil); err != nil {
+	if err := restoreServices(cwd, services, false, imgs != nil, nil, []string{name}); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
+	}
+	if imgs != nil {
+		// What runs on the data now, for whatever reads its history next
+		// (an export, a parent's sync, a snapshot), as after a run step.
+		_ = imgs.RanCut(base, rel)
 	}
 	clearImportMark(base, name)
 	return code
@@ -1564,9 +1570,15 @@ func runResolved(cwd, name string) int {
 	// image than its container's (another activation's container, a hold
 	// gone): started, the old container would run its image on the
 	// imported data.
-	if err := restoreServices(cwd, services, false, true, nil); err != nil {
+	if err := restoreServices(cwd, services, false, true, nil, []string{name}); err != nil {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
+	}
+	// What runs on the data now, as after an import that completed.
+	if s, ok := cli.SyncFind(services, name); ok && s.Copy == cli.CopyVolumes {
+		if set, err := copyImages(cwd); err == nil {
+			_ = set.RanCut(base, remote.ReleaseFile(projectDir, ""))
+		}
 	}
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")

@@ -219,6 +219,10 @@ type Set struct {
 	// against the snapshot's window. Reset: a sync that starts the child
 	// over (--reset), whose wipe starts every history over (SyncLanding).
 	Restart, NoCheck, Reset bool
+	// Marked: the environment has a mark, which refuses a release, so a
+	// refused copy names what goes through instead (ImportLanding,
+	// RestoreLanding).
+	Marked bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
 	// exports them): a snapshot's directory holds a release's listing

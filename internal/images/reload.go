@@ -117,21 +117,29 @@ func (s *Set) ReloadCheck(rel string) ([]string, error) {
 	var out []string
 	for _, svc := range svcs {
 		e, ok := recorded[svc.Name]
-		if ok && e.held() {
-			e.Ref, e.Build = e.OwnRef, e.OwnBuild
-		}
-		switch {
-		case !ok:
-			out = append(out, fmt.Sprintf("%s is not one of the services the release fetched images for (a profile turned on?)", svc.Name))
-		case e.Ref == "":
-			// Held, its own not recorded.
-		case familiar(e.Ref) != familiar(svc.Ref):
-			out = append(out, fmt.Sprintf("%s's image is %s now, the release fetched %s", svc.Name, svc.Ref, e.Ref))
-		case e.Build != "" && svc.BuildKey != e.Build:
-			out = append(out, fmt.Sprintf("%s's build changed since the release built its image: %s", svc.Name, changedArgs(e.Build, svc.BuildKey)))
+		if why := fetchedOther(svc, ownOf(e), ok); why != "" {
+			out = append(out, why)
 		}
 	}
 	return out, nil
+}
+
+// fetchedOther says what svc, as compose gives it now, wants that its
+// release did not fetch (o, its release's own image, ok: listed): another
+// image's name, another build, or a service it has no listing of; "" when
+// it fetched that.
+func fetchedOther(svc Service, o entry, ok bool) string {
+	switch {
+	case !ok:
+		return fmt.Sprintf("%s is not one of the services the release fetched images for (a profile turned on?)", svc.Name)
+	case o.Ref == "":
+		// Held, its own not recorded.
+	case familiar(o.Ref) != familiar(svc.Ref):
+		return fmt.Sprintf("%s's image is %s now, the release fetched %s", svc.Name, svc.Ref, o.Ref)
+	case o.Build != "" && svc.BuildKey != o.Build:
+		return fmt.Sprintf("%s's build changed since the release built its image: %s", svc.Name, changedArgs(o.Build, svc.BuildKey))
+	}
+	return ""
 }
 
 // changedArgs names what differs between two BuildKeys: the arguments

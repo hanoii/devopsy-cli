@@ -894,8 +894,10 @@ restore brings a snapshot back whole: its data, its code and the images
 that ran on them, as a new release (a --rollback after it goes back to
 the release before), every service with data and what depends on it
 stopped while the data is written, its data's history with it: nothing
-is checked. Its pulled images run as their names give them now. Its
-steps are the restored release's rollback:, else release:. --no-code
+is checked. Its pulled images run as their names give them now, but a
+data service its data's version refuses them on, held on the snapshot's
+image. Its steps are the restored release's rollback:, else release:.
+--no-code
 restores the data alone under the current release, rerunning its run
 step: refused when its labels no longer fit the snapshot's, or when a
 data service's devopsy.data.version is lower than the snapshot's data's

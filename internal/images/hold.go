@@ -177,7 +177,9 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 		}
 	}
 	src := entry{Ref: l.Ref, ID: l.ID, Service: service, Kind: KindOwn}
-	if l.Tag != "" {
+	// With a tag pulled; in image mode a build: service's too, which has no
+	// tag and which the registry serves (its digests are no local build's).
+	if l.Tag != "" || ModeOf(rel) == ModeImage {
 		if d := digestIn(Image{Digests: l.Digests}, l.Ref); d != "" {
 			src.Kind, src.Digest = KindPulled, d
 		}
@@ -216,10 +218,13 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 			return nil, nil, err
 		}
 		es[i] = e
-		if !e.held() {
+		if !e.held() && !ch.bookmark {
 			continue // said (ownInstead)
 		}
 		holds[o.Service] = ch
+		if !e.held() {
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("%s stays on %s (%s, %s), as %s's would run it on data it does not allow (%s): a release that fixes forward is the way on", o.Service, heldWhat(from), shownEntry(e), shownData(e), tid, h.why))
 	}
 	return holds, lines, nil
@@ -311,16 +316,18 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 // here holds (review: the run step's up could not start it, and the
 // release's own bookmark went).
 func (s *Set) ownInstead(o entry, h hold, what string, own map[string]bool) (entry, composeHold, error) {
+	var ch composeHold
 	if cur, err := s.Docker.ID(o.Ref); (err != nil || cur != o.ID) && s.imagePresent(o.ID) {
 		if who := s.others(cur, own); err == nil && len(who) > 0 {
-			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s)", o.Ref, strings.Join(who, ", "))
+			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", o.Ref, strings.Join(who, ", "), o.Service)
+			ch.bookmark = true
 		} else if err := s.Docker.Tag(o.ID, o.Ref); err != nil {
 			s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
 		}
 	}
 	s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s, built by the project, is gone from this server: its release's own image runs on data it does not allow (%s)", o.Service, what, h.why),
 		nil, report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
-	return o, composeHold{}, nil
+	return o, ch, nil
 }
 
 // resolveBookmarks names, in holds, the bookmark each hold by bookmark
@@ -364,7 +371,7 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 		return nil
 	}
 	tid := s.idOf(rel)
-	own := ownEntries(rel, es, svcs)
+	own := ownEntries(rel, es, svcs, nil)
 	held := holdsFor(own, windows(base, rel))
 	imgs, _, wasHeld := composeFacts(rel)
 	before := append([]entry{}, es...)
@@ -386,12 +393,17 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 		}
 		svc, ok := svcs[e.Service]
 		if !ok {
-			s.say(report.ErrorLevel, "%s: %s's compose no longer gives it: it stays on the image it is held on", e.Service, tid)
-			return ErrRefused
+			// Its compose no longer gives it (a profile turned off): nothing
+			// runs it to derive for, and a release's check judges it again.
+			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
+			continue
 		}
 		if asIs && svc.own(mode) && !s.imagePresent(own[i].ID) {
+			// That image then runs on the data, so a release is judged by what
+			// it ran: a plain one refused unless its label reaches that.
 			s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s's own image of it, built by the project, is gone from this server: it stays on %s (%s), on the data as it is", e.Service, tid, heldWhat(wasHeld[e.Service]), shownData(e)),
-				nil, report.Fix("a release builds it:", s.cmd("--release")))
+				nil, report.Fix("a release builds it, its label raised to the data's version:", s.cmd("--release")),
+				report.Fix("or, knowing its data takes the older image, accept it:", s.again("--release", []string{e.Service})))
 			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
 			continue
 		}
@@ -492,7 +504,7 @@ func (s *Set) LastHold(target, against string) error {
 	if err != nil {
 		s.say(report.WarnLevel, "could not read the labels of %s (%v): its data services' versions are its listing's", tid, err)
 	}
-	own := ownEntries(target, es, svcs)
+	own := ownEntries(target, es, svcs, svcs)
 	held := holdsFor(own, windows(baseOf(target), target))
 	imgs, _, wasHeld := composeFacts(target)
 	// What the file holds now stays but for what this changes: a hold by

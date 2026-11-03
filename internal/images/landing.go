@@ -26,13 +26,16 @@ import (
 //   - a restore's data step, full or --no-code (RestoreLanding): a
 //     snapshot's windows.
 //
-// What a service is, and the version and tag it claims, are its labels'
-// now (labelsOf), on every path: in a sync's holder with the pending
-// inherited variables, in a restore --with-env with the snapshot's. Its
-// release's listing takes them as the data lands, so what runs on the
-// data from then on (Ran) and every later derivation say the same. A name
-// its release did not fetch is refused first (notFetched): the listing's
-// image is what runs.
+// What a service the copy writes is, and the version and tag it claims,
+// are its labels' now (labelsOf), on every path: in a sync's holder with
+// the pending inherited variables, in a restore --with-env with the
+// snapshot's. Its release's listing takes them as the data lands, so what
+// runs on the data from then on (Ran) and every later derivation say the
+// same. An image or a build its release did not fetch is refused first
+// (notFetched), or under --resolved, which checks nothing, keeps the
+// listing's claim (claimed): the listing's image is what runs, whatever
+// the labels say. A service the copy does not write keeps its listing's:
+// nothing about it changed, and what it runs is what its release fetched.
 //
 // A failure of Land has one policy, its callers': the error says what
 // failed, the environment's mark stays and what the copy stopped stays
@@ -132,6 +135,11 @@ func (s *Set) ImportLanding(data, service string) Landing {
 		source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>",
 		builds: "an import builds nothing", rebuild: report.Fix("release it first, which builds its images, then import again:", s.cmd("--release")),
 		fetch: report.Fix("release it first, which fetches them, then import again:", s.cmd("--release"))}}
+	if s.Marked {
+		// A marked environment refuses that release: --resolved first.
+		first := report.Fix("the mark refuses a release: accept the data as it is, then release:", s.cmd("--import "+service+" --resolved"))
+		l.words.rebuild, l.words.fetch = first, first
+	}
 	if len(l.windows) == 0 {
 		l.over = []string{service}
 	}
@@ -166,6 +174,10 @@ func (s *Set) RestoreLanding(data, snapshot string, services []string) Landing {
 		source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code",
 		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot)),
 		fetch: report.Fix("release it first, which fetches them, then restore again:", s.cmd("--release"))}}
+	if s.Marked {
+		// A marked environment refuses a release: the full restore fetches.
+		l.words.fetch = l.words.rebuild
+	}
 	for _, svc := range services {
 		if l.windows[svc] == nil {
 			l.over = append(l.over, svc)
@@ -185,6 +197,19 @@ func (s *Set) labelsOf(rel string) (map[string]Service, error) {
 		svcs[svc.Name] = svc
 	}
 	return svcs, nil
+}
+
+// claimed are the services whose labels' claims this landing takes: those
+// it writes whose image and build their release fetched (fetchedOther).
+func (l Landing) claimed(es []entry, svcs map[string]Service) map[string]Service {
+	out := map[string]Service{}
+	for _, e := range es {
+		svc, ok := svcs[e.Service]
+		if _, lands := l.window(e.Service); ok && lands && fetchedOther(svc, ownOf(e), true) == "" {
+			out[e.Service] = svc
+		}
+	}
+	return out
 }
 
 // claim is what svc says of its data: its version and tag, none without
@@ -215,18 +240,22 @@ func withClaims(es []entry, svcs map[string]Service) []entry {
 }
 
 // ownEntries are es (rel's listing) as their release's own images
-// (ownOf), each one's version and tag as svcs give them; without svcs (the
-// restart's last resort, compose's config unreadable), the listing's own.
-func ownEntries(rel string, es []entry, svcs map[string]Service) []entry {
+// (ownOf): a held one's kind and name as svcs give them, and each one's
+// version and tag as claims gives them, else the listing's (a held one
+// that records none, svcs').
+func ownEntries(rel string, es []entry, svcs, claims map[string]Service) []entry {
 	mode := ModeOf(rel)
 	own := make([]entry, len(es))
 	for i, e := range es {
 		o := ownOf(e)
-		if svc, ok := svcs[e.Service]; ok {
-			if e.held() {
-				o.Kind = map[bool]string{true: KindOwn, false: KindPulled}[svc.own(mode)]
-				o.Ref = cmp.Or(o.Ref, svc.Ref)
+		if svc, ok := svcs[e.Service]; ok && e.held() {
+			o.Kind = map[bool]string{true: KindOwn, false: KindPulled}[svc.own(mode)]
+			o.Ref = cmp.Or(o.Ref, svc.Ref)
+			if o.DataVersion == "" {
+				o.DataVersion, o.Tag = svc.claim()
 			}
+		}
+		if svc, ok := claims[e.Service]; ok {
 			o.DataVersion, o.Tag = svc.claim()
 		}
 		own[i] = o
@@ -248,7 +277,7 @@ func (s *Set) CheckLanding(rel string, l Landing) error {
 		return ErrRefused
 	}
 	es := readList(rel)
-	own := ownEntries(rel, es, svcs)
+	own := ownEntries(rel, es, svcs, l.claimed(es, svcs))
 	if err := s.notFetched(es, own, svcs, l); err != nil {
 		return err
 	}
@@ -270,11 +299,12 @@ func (s *Set) CheckLanding(rel string, l Landing) error {
 	return s.copyNeeds(rel, es, own, svcs, l, forced)
 }
 
-// notFetched refuses a landing into a data service whose labels name an
+// notFetched refuses a landing into a data service whose labels want an
 // image its release did not fetch (a variable set since, a profile turned
 // on): the rule would judge what its labels say, and the image it listed
-// would run. Only a release fetches it (w.fetch), as a reload and a
-// sync's or a --no-code restore's run step refuse (ReloadCheck).
+// would run. Only a release fetches it (w.fetch), as a reload and a sync's
+// or a --no-code restore's run step refuse (ReloadCheck, by the same
+// fetchedOther).
 func (s *Set) notFetched(es, own []entry, svcs map[string]Service, l Landing) error {
 	recorded := map[string]entry{}
 	for i, e := range es {
@@ -293,11 +323,9 @@ func (s *Set) notFetched(es, own []entry, svcs map[string]Service, l Landing) er
 		if _, lands := l.window(name); !lands || !svc.Data {
 			continue
 		}
-		switch e, ok := recorded[name]; {
-		case !ok:
-			lines = append(lines, name+" is not one of the services the release fetched images for")
-		case familiar(e.Ref) != familiar(svc.Ref):
-			lines = append(lines, fmt.Sprintf("%s's image is %s now, the release fetched %s", name, svc.Ref, e.Ref))
+		o, ok := recorded[name]
+		if why := fetchedOther(svc, o, ok); why != "" {
+			lines = append(lines, why)
 		}
 	}
 	if len(lines) == 0 {
@@ -379,13 +407,13 @@ func (s *Set) Land(base, rel string, l Landing) error {
 		return fmt.Errorf("its labels could not be read: %w", err)
 	}
 	listed := readList(rel)
-	es := withClaims(listed, svcs)
+	es := withClaims(listed, l.claimed(listed, svcs))
 	if !slices.Equal(listed, es) {
 		if err := writeList(rel, es); err != nil {
 			return fmt.Errorf("its version could not be recorded in the release's listing: %w", err)
 		}
 	}
-	own := ownEntries(rel, es, svcs)
+	own := ownEntries(rel, es, svcs, nil)
 	h := readHistory(base)
 	changed := false
 	for i, e := range es {

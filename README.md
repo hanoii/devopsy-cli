@@ -920,7 +920,8 @@ rollback, whose code is the older release's), or `--accept-image
 history of its data starting over from it. `--yes` never does: it only
 skips prompts. `--accept-image` lets through only what was refused; a
 service the rule allows runs as it would. `--release`, `--rollback`,
-`--sync`, `--import` and `--snapshots restore <id> --no-code` take it.
+`--release-sync`, `--release-no-sync`, `--sync`, `--reset`, `--import`
+and `--snapshots restore <id> --no-code` take it.
 
 Within a version, the release's image is the project's claim: nothing
 is held by digest, and a plain `up` follows the names, as for any
@@ -1375,10 +1376,7 @@ does: its script loads the dump through the image that runs, so the
 data's files are that image's, not the parent's version. A child below the parent's
 version, or on another tag at it, is refused, every sync, unless `--sync
 --accept-image <service>`: the way to try an upgrade path on the parent's
-data, one command per sync, its history starting over. A service the
-parent copies that the child's labels make data only now (a variable it
-inherits in this sync turns `devopsy.data` on) is refused the same way,
-before anything stops, until a `--release-sync` lists it as data. The
+data, one command per sync, its history starting over. The
 child always runs its own image on the copy; once the copy is complete it takes over
 the parent's history of that data. A parent released between the sync's
 start and its copy refuses the copy before stopping anything: sync

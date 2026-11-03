@@ -108,3 +108,147 @@ func TestResolvedOwnBuildGone(t *testing.T) {
 		t.Errorf("the release it names (%d):\n%s", code, out)
 	}
 }
+
+// Bug: an import lands the export's window and starts the environment's
+// own image on the data, which may upgrade it (the receiving side always
+// runs its own image), but nothing records that it ran: Ran's comment says
+// "after a run step, a sync, an import", no import calls it, and only the
+// next activation's img ran catches up. Until then what reads the history
+// without an activation reads a version below what the data ran: an
+// --export's header, a parent's img data, a snapshot's windows. A database
+// at 13 importing a dump of 12 upgrades it; its --export then says 12, and
+// an environment at 12 imports it unrefused, running 12 on data 13 changed.
+func TestImportRecordsWhatRanOnTheData(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	current := filepath.Join(base, "current")
+	list := releaseFile(t, current, images.ListFile)
+	const digests = "FAKE_IMAGES=sha256:twelve=shop-prod-app@sha256:twelve sha256:thirteen=shop-prod-app@sha256:thirteen"
+	write(t, s.log+".shop-prod", "FAKE_APP=mnt+own\n", 0o644)
+	// An export of the data at 12.
+	write(t, list, "shop-prod-app\tsha256:twelve\tapp\tpulled\tshop-prod-app@sha256:twelve\t\t\t12\tlatest\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:twelve\tshop-prod-app@sha256:twelve\t12\tlatest\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "at 12\n", 0o644)
+	exported, errs, code := s.runIO([]string{"FAKE_APP_VERSION=12", digests}, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("the export (%d):\n%s", code, errs)
+	}
+	// Since, a release at 13, whose container runs.
+	write(t, list, "shop-prod-app\tsha256:thirteen\tapp\tpulled\tshop-prod-app@sha256:thirteen\t\t\t13\tlatest\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "2\tapp\tran\tshop-prod-app\tsha256:thirteen\tshop-prod-app@sha256:thirteen\t13\tlatest\n", 0o644)
+	write(t, s.log+".containers.shop-prod", "app shop-prod-app@sha256:thirteen sha256:thirteen\n", 0o644)
+	env := []string{"FAKE_APP_VERSION=13", digests}
+	if _, errs, code := s.runIO(env, exported, "@prod", "--import", "app", "--yes"); code != 0 {
+		t.Fatalf("the import of the dump at 12 into 13 (%d):\n%s", code, errs)
+	}
+	// 13 was stopped, the data replaced, 13 started on it.
+	if docker, _ := s.logs(); !strings.Contains(docker, "start app") {
+		t.Fatalf("setup: app did not start again on the data:\n%s", docker)
+	}
+	again, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("the export after it (%d):\n%s", code, errs)
+	}
+	spool := filepath.Join(t.TempDir(), "export.tar")
+	write(t, spool, string(again), 0o644)
+	record := images.DataFor(tarRecord(spool), "app")
+	if !strings.Contains(record, "\t13\t") {
+		t.Errorf("app runs 13 on the imported data, and its export says only:\n%s", record)
+	}
+}
+
+// Bug: an import made again only what it imported when that ran through it
+// (recreateRunning); restoreServices now takes every running volumes
+// service whose container another activation made, whatever the import
+// wrote. An import of db recreates app, which it never touched and which
+// runs on (devopsy.data.stop never): a release cut off past its switch
+// (nothing finishes it by itself, Sessions, drops and signals) goes live
+// for app without its run step, an unrelated service restarts, and its
+// up failing fails an import that completed.
+func TestImportLeavesOtherServicesContainers(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	current := filepath.Join(base, "current")
+	write(t, s.log+".shop-prod", "FAKE_DB=mnt\nFAKE_APP=mnt\n", 0o644)
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "shop-prod-app\tsha256:new\tapp\town\t\t\t\tany\t\nshop-prod-db\tsha256:db\tdb\town\t\t\t\tany\t\n", 0o644)
+	// app's container is the release before's, db's this one's.
+	write(t, s.log+".containers.shop-prod", "app sha256:old\ndb sha256:db\n", 0o644)
+	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "db"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/file.txt": "imported\n"}), "@prod", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	if code != 0 {
+		t.Fatalf("the import of db (%d):\n%s", code, errs)
+	}
+	if strings.Contains(docker, "up -d --no-deps --wait app") {
+		t.Errorf("an import of db made app again:\n%s\n%s", errs, docker)
+	}
+}
+
+// Bug: an import a marked environment retries, refused for what its release
+// did not fetch (a variable set since) or has no more (copyNeeds), says
+// "release it first, ... then import again": a line a marked environment
+// refuses, whose release stops at the mark. The way that goes through is
+// --resolved (as the refusal of the release itself would say), which the
+// import's own refusal never names.
+func TestMarkedImportFixGoesThrough(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_APP_BUILD=1\nFAKE_APP_IMAGE=shop-other:2\n", 0o644)
+	write(t, filepath.Join(s.base, remote.SyncIncompleteFile), "2026-11-03 10:00:00\tapp\t"+remote.IncompleteImport+"\tcut\n", 0o644)
+	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/file.txt": "imported\n"}), "@prod", "--import", "app", "--yes")
+	if code == 0 || !strings.Contains(errs, "did not fetch") {
+		t.Fatalf("the retried import (%d):\n%s", code, errs)
+	}
+	if strings.Contains(errs, "--release\n") {
+		if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+			t.Errorf("the import's refusal names a release:\n%s\nwhich its mark refuses (%d):\n%s", errs, code, out)
+		}
+	}
+}
+
+// --resolved keeps a hold whose release's own build is gone, and the held
+// image then starts on the accepted data: every activation first records
+// what runs on current (img ran cut), so a release at the label it had is
+// refused, rightly. Its lines say so: the label raised, or accepted, which
+// copied goes through (review: it named the plain release that refuses).
+func TestResolvedFixReleases(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	link, err := os.Readlink(filepath.Join(s.base, "current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(s.base, filepath.Dir(link))
+	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"build"}`, 0o644)
+	list := filepath.Join(rel, images.ListFile)
+	var lines []string
+	for _, l := range strings.Split(strings.TrimRight(readString(list), "\n"), "\n") {
+		if f := strings.Split(l, "\t"); f[2] == "app" {
+			// Held on HELD, the data's 12; its own, 11, gone.
+			l = strings.Join([]string{"shop-prod-app", "HELD", "app", "own", "", "", "", "12", "", "shop-prod-app", "GONE", "", "", "11", ""}, "\t")
+		}
+		lines = append(lines, l)
+	}
+	write(t, list, strings.Join(lines, "\n")+"\n", 0o644)
+	write(t, filepath.Join(rel, images.ComposeFile), "services:\n  \"app\":\n    labels:\n      \"devopsy.digest\": \"HELD\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_APP_BUILD=1\nFAKE_APP_VERSION=11\nFAIL_PULL=1\nFAKE_NAMES='shop-prod-app=HELD HELD=HELD'\nFAKE_IMAGES='HELD=shop-prod-app@sha256:HELD'\n", 0o644)
+	write(t, s.log+".containers.shop-prod", "app HELD HELD\n", 0o644)
+	write(t, filepath.Join(s.base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tHELD\t\t12\t\n", 0o644)
+	write(t, filepath.Join(s.base, remote.SyncIncompleteFile), "2026-11-03 10:00:00\tapp\t"+remote.IncompleteImport+"\tcut\n", 0o644)
+
+	_, out, code := s.runIO(nil, nil, "@prod", "--import", "app", "--resolved", "--yes")
+	if code != 0 || !strings.Contains(out, "its label raised to the data's version") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release --accept-image app\n") {
+		t.Fatalf("--resolved with its own build gone (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--release", "--accept-image", "app"); code != 0 {
+		t.Errorf("the release its line names (%d):\n%s", code, out)
+	}
+}

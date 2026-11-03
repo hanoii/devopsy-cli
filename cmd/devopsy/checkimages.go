@@ -103,6 +103,7 @@ func runCheckImages(cwd string, args []string) int {
 			// (images.Landing), the operator's --accept-image letting a refused
 			// one through.
 			s.Address, s.Accept, s.Again = strings.TrimPrefix(address, "@"), acceptedImages(), again
+			s.Marked = readMark(filepath.Dir(cwd)) != nil
 			if err := s.CheckLanding(rel, snapshotLanding(s, filepath.Join(s.Snapshots, snapshot))); errors.Is(err, images.ErrRefused) {
 				return checkImagesExit
 			} else if err != nil {

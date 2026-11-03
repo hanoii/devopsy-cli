@@ -1252,7 +1252,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		// What it stopped before failing comes back: restoring reads the
 		// containers' state, not what stopping did.
 		code := fail(err.Error())
-		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set), nil); err != nil {
 			fail(err.Error())
 		}
 		return finish(code, false)
@@ -1328,7 +1328,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	var restoreErr error
 	restore := func() {
 		restored = true
-		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set), nil); err != nil {
 			restoreErr = err
 		}
 	}
@@ -2701,13 +2701,19 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	case "go":
 		// Complete: whatever an earlier sync or import left is replaced.
 		_ = os.Remove(incomplete)
-		if err := restoreServices(cwd, services, true, true, cli.StoppedNames(set)); err != nil {
+		var written []string
+		for _, s := range services {
+			if s.Copy == cli.CopyVolumes {
+				written = append(written, s.Name)
+			}
+		}
+		if err := restoreServices(cwd, services, true, true, cli.StoppedNames(set), written); err != nil {
 			code = fail(err.Error())
 		}
 	case "abort":
 		// A first release's services are not created on empty data: it
 		// does not go live.
-		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set), nil); err != nil {
 			code = fail(err.Error())
 		}
 	case "partial":
@@ -3348,7 +3354,7 @@ const healthyTimeout = 5 * time.Minute
 // With create, a child's first release gets its data services and the
 // child side's set created (finish go): never on an abort, which leaves
 // it not live.
-func restoreServices(cwd string, services []cli.SyncService, create, recreate bool, fallback []string) error {
+func restoreServices(cwd string, services []cli.SyncService, create, recreate bool, fallback, written []string) error {
 	stop := fallback
 	var errs []error
 	// A child's first release had no containers: nothing was stopped,
@@ -3410,22 +3416,24 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 	// its container was made (another activation's container, a hold) is
 	// made again, with no other: compose start would run the old image on
 	// the new data, and one the copy's data landed under as it ran
-	// (devopsy.data.stop never) would run on with it. Never otherwise: an
-	// abort in a release that syncs restores the child's own data, which
-	// the release's images, not live, must not touch (the release goes
-	// back).
+	// (devopsy.data.stop never: written, what this copy wrote) would run on
+	// with it, never one it did not touch (review: an import made a release
+	// cut past its switch live on another service, without its run step).
+	// Never otherwise: an abort in a release that syncs restores the
+	// child's own data, which the release's images, not live, must not
+	// touch (the release goes back).
 	var again []string
 	if recreate {
 		changed := images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""))
 		again = intersect(start, changed)
-		if len(changed) > 0 {
+		if through := intersect(written, changed); len(through) > 0 {
 			running, err := servicesIn(cwd, "running")
 			if err != nil {
 				errs = append(errs, err)
 			}
-			for _, s := range services {
-				if s.Copy == cli.CopyVolumes && slices.Contains(changed, s.Name) && slices.Contains(running, s.Name) && !slices.Contains(again, s.Name) {
-					again = append(again, s.Name)
+			for _, s := range intersect(through, running) {
+				if !slices.Contains(again, s) {
+					again = append(again, s)
 				}
 			}
 		}

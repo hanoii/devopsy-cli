@@ -133,7 +133,7 @@ func (s *Set) snapshotFix(refusals []judged) report.Remedy {
 				}
 			}
 			id := filepath.Base(filepath.Dir(m))
-			if kind != "release" || id <= newest {
+			if kind != "release" || id <= newest || strings.HasSuffix(id, ".tmp") {
 				continue
 			}
 			windows, _ := os.ReadFile(filepath.Join(filepath.Dir(m), snapshotDataDir, snapshotImages))
