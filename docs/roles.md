@@ -30,8 +30,8 @@ only with its next release or `--reload`. `devopsy @vm1:prod --debug
 imports` lists every project on that server and marks as STALE the ones
 holding an outdated value.
 
-Roles prevent mistakes, not attacks: anyone in the docker group is
-root-equivalent.
+Roles guard against mistakes and are no security boundary, since anyone
+in the docker group is root-equivalent.
 
 ## Probe
 
@@ -48,5 +48,5 @@ devopsy --probe [--ip <server ip>] <host>...
   a name (a proxied second-level subdomain, beyond its free
   certificate).
 
-It exits 1 on a problem, so it doubles as a smoke test. A proxy's own
+It exits 1 on a problem, so it can serve as a smoke test. A proxy's own
 commands print the line to run, like the Traefik template's `domains`.
