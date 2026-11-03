@@ -196,6 +196,51 @@ func (m *sim) restart(prev, failed string) {
 	m.e.set.Ran(m.base(), m.e.rel(prev))
 }
 
+// snapshot takes a snapshot of the current release and its data as a
+// take writes it: its data's windows (SnapshotData), its listing
+// bookmarked (BookmarkFrom).
+func (m *sim) snapshot(id string) string {
+	m.t.Helper()
+	dir := filepath.Join(m.e.set.Snapshots, id)
+	os.MkdirAll(filepath.Join(dir, "data"), 0o755)
+	os.WriteFile(filepath.Join(dir, "data", "images"), []byte(m.e.set.SnapshotData(m.base(), m.e.rel(m.cur))), 0o644)
+	if err := m.e.set.BookmarkFrom(dir, m.e.rel(m.cur)); err != nil {
+		m.fail("snapshot: %v", err)
+	}
+	return dir
+}
+
+// fullRestore restores the snapshot dir whole: a release made from its
+// code (svcs), its record naming the snapshot and its listing the
+// snapshot's (make-release), its images restored checking nothing (img
+// restore --restore, again --fetched when one it builds is gone), then
+// the data step (ImportDone), the run step and img ran.
+func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
+	m.t.Helper()
+	id := m.e.release(svcs...)
+	rel := m.e.rel(id)
+	os.WriteFile(filepath.Join(rel, RecordFile), []byte(`{"mode":"`+m.e.mode+`","restore":"`+filepath.Base(dir)+`"}`), 0o644)
+	if err := m.e.set.BookmarkFrom(rel, dir); err != nil {
+		m.fail("make-release: %v", err)
+	}
+	m.e.set.NoCheck = true
+	defer func() { m.e.set.NoCheck = false }()
+	err := m.e.set.Restore(rel, m.prev(), false)
+	if errors.Is(err, ErrGone) {
+		m.fetch(svcs)
+		err = m.e.set.Restore(rel, m.prev(), true)
+	}
+	if err != nil {
+		return id, err
+	}
+	m.cur = id
+	data, _ := os.ReadFile(filepath.Join(dir, "data", "images"))
+	m.e.set.ImportDone(m.base(), rel, string(data))
+	m.up()
+	m.e.set.Ran(m.base(), rel)
+	return id, nil
+}
+
 // runs is what a service's container runs.
 func (m *sim) runs(svc string) string {
 	for _, c := range m.d.containers {
@@ -1032,6 +1077,67 @@ func TestDataRestoreCheck(t *testing.T) {
 	}
 }
 
+// A snapshot taken while the restart holds a data service on the failed
+// release's image has the previous release's code and the newer data: a
+// manual one, or the release snapshot of that release a fix forward
+// takes, which a refused rollback names. Its full restore checks
+// nothing, but holds every data service the rule would refuse against
+// the snapshot's window, as the restart holds: a pulled one by digest, a
+// built one by its own name from its bookmark; said, and in --status.
+func TestDataFullRestoreOfHeld(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	m.strict = true
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	search := func(v string) Service {
+		return Service{Name: "search", Ref: "app-prod-search", Build: true, Data: true, Method: CopyVolumes, DataVersion: v}
+	}
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118, search("8"))
+	d.publish("mariadb:12.1", "J1")
+	r2, _ := m.failRun(false, dbSvc("mariadb:12.1"), search("9"))
+	searchHeld, _ := match(readList(m.e.rel(r2)), entry{Service: "search"})
+	if m.cur != r1 || m.runs("database") != "J1" || m.runs("search") != searchHeld.ID {
+		m.fail("the restart of %s: database %s, search %s", r1, m.runs("database"), m.runs("search"))
+	}
+	snap := m.snapshot("20261102000001")
+	// A release fixing forward, then the restore of the snapshot: r1's code.
+	d.publish("mariadb:12.1", "J2")
+	if _, err := m.release(false, dbSvc("mariadb:12.1"), search("9")); err != nil {
+		m.fail("fix forward: %v", err)
+	}
+	out.Reset()
+	id, err := m.fullRestore(snap, m.e.svcs[r1])
+	if err != nil {
+		m.fail("restore: %v", err)
+	}
+	rel := m.e.rel(id)
+	if m.runs("database") != "J1" || m.runs("search") != searchHeld.ID {
+		m.fail("the restored code runs database on %s (want J1), search on %s (want %s): the images the snapshot's data ran", m.runs("database"), m.runs("search"), searchHeld.ID)
+	}
+	imgs, _, held := composeFacts(rel)
+	if imgs["database"] != "mariadb@J1" || held["database"] != "snapshot 20261102000001" || held["search"] != "snapshot 20261102000001" {
+		t.Errorf("devopsy's compose file: images %v, held %v", imgs, held)
+	}
+	for svc, v := range map[string]string{"database": "12.1", "search": "9"} {
+		if w := readHistory(m.base()).window(svc); windowVersion(w) != v {
+			t.Errorf("%s's window after the restore: %v, want %s", svc, w, v)
+		}
+		if l, _ := readHistory(m.base()).last(svc); l.Version != v {
+			t.Errorf("%s's history ends on %+v, not the held image's version %s", svc, l, v)
+		}
+	}
+	if !strings.Contains(out.String(), "database stays on the image its data ran when snapshot 20261102000001 was taken") {
+		m.fail("the hold is not said")
+	}
+	lines := strings.Join(StatusLines(d, "app-prod", rel), "\n")
+	if !strings.Contains(lines, "database held on mariadb@J1, the image its data ran when snapshot 20261102000001 was taken") || !strings.Contains(lines, "search held on app-prod-search (") {
+		t.Errorf("--status:\n%s", lines)
+	}
+}
+
 // Two environments release, fail in their run step after the database
 // started (restarted, as built now and then), fail in their fetch, roll
 // back, sync from each other, import each other's exports, take and
@@ -1039,13 +1145,14 @@ func TestDataRestoreCheck(t *testing.T) {
 // their database pulled under several tags and versions, built, or
 // labeled any, accepting now and then, while the registry moves the tags.
 // A model of the data, kept by the test from what each step runs (the
-// versions and tags its releases claim, never devopsy's history), says
-// what the rule allows: devopsy refuses exactly what the model refuses
-// unaccepted, a restart holds exactly what the model refuses, and
-// devopsy's window says the model's version. So no data ever runs a lower
-// version, or another tag at its version, unaccepted. And every kept
-// release's and snapshot's bookmarks hold what it lists; once all goes,
-// nothing is left.
+// versions and tags its releases claim, never devopsy's history or
+// listings), says what the rule allows: devopsy refuses exactly what the
+// model refuses unaccepted, a restart and a full restore hold exactly
+// what the model refuses, and devopsy's window says the model's version.
+// And every run the model records is checked against the model's window
+// itself: no data ever runs a lower version, or another tag at its
+// version, unaccepted. And every kept release's and snapshot's bookmarks
+// hold what it lists; once all goes, nothing is left.
 func TestDataRandom(t *testing.T) {
 	t.Parallel()
 	for seed := int64(1); seed <= int64(seeds(300)); seed++ {
@@ -1095,18 +1202,32 @@ func dataRandom(t *testing.T, seed int64) {
 	verdict := func(w history, svc Service) bool {
 		return rule(w.window("database"), svc.DataVersion, svc.tag(), "its") != ""
 	}
-	// ran is a run of svc on m's data in the model.
+	// running is the claim each environment's database runs under now,
+	// as the model has it: the release's that gave it its image (a
+	// hold's, the failed release's or the snapshot's).
+	running := map[*sim]Service{}
+	var log []string
+	// run is a run of svc's claim on m's data in the model: the invariant,
+	// checked against the model's window whatever devopsy said, then the
+	// line, a forced one when accepted and refused.
 	run := func(m *sim, svc Service, accepted bool) {
+		t.Helper()
+		refused := verdict(model[m], svc)
+		if refused && !accepted {
+			t.Fatalf("after %v: %s runs its database as %s=%s (tag %q) on data its window refuses it on, unaccepted\nmodel %v\n%s", log, m.e.set.Name, DataVersionLabel, svc.DataVersion, svc.tag(), model[m].window("database"), out.String())
+		}
 		how := Ran
-		if accepted && verdict(model[m], svc) {
+		if accepted && refused {
 			how = Forced
 		}
 		model[m] = append(model[m], claim(svc, how))
+		running[m] = svc
 	}
 	type snapshot struct {
-		dir   string
-		svcs  []Service
-		model history
+		dir     string
+		svcs    []Service
+		model   history
+		running Service
 	}
 	snaps := map[*sim][]snapshot{}
 	snapN := 0
@@ -1120,7 +1241,6 @@ func dataRandom(t *testing.T, seed int64) {
 	for _, r := range refs {
 		push(r)
 	}
-	var log []string
 	check := func(step string) {
 		t.Helper()
 		log = append(log, step)
@@ -1221,7 +1341,9 @@ func dataRandom(t *testing.T, seed int64) {
 			if held && m.runs("database") != failedImg.ID {
 				t.Fatalf("after %v: the restart of %s runs its database on %s, not %s's %s that ran on its data\n%s", log, prev, m.runs("database"), id, failedImg.ID, out.String())
 			}
-			if !held {
+			if held {
+				run(m, dbOf(ss), false)
+			} else {
 				run(m, dbOf(m.e.svcs[prev]), false)
 			}
 			check(m.e.set.Name + " failed run " + id)
@@ -1288,16 +1410,9 @@ func dataRandom(t *testing.T, seed int64) {
 				continue
 			}
 			yes := rng.Intn(3) == 0
-			db := dbOf(m.e.svcs[m.cur])
-			// The listing's own version: a hold's, the failed release's.
-			if e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"}); ok {
-				db.DataVersion = e.DataVersion
-				if e.Tag == "" {
-					db.Build = true
-				} else {
-					db.Build, db.Ref = false, "x:"+e.Tag
-				}
-			}
+			// What runs: a hold's claim, the failed release's or the
+			// snapshot's.
+			db := running[m]
 			refused := verdict(model[o], db)
 			if expect("sync from "+o.e.set.Name, syncInto(t, o, m, yes), refused, yes) {
 				if yes && refused {
@@ -1308,7 +1423,8 @@ func dataRandom(t *testing.T, seed int64) {
 						w = history{{Service: "database"}}
 					}
 					w[0].How = SyncedFrom + "x"
-					model[m] = append(w, claim(db, Ran))
+					model[m] = w
+					run(m, db, false)
 				}
 			}
 			check(m.e.set.Name + " sync from " + o.e.set.Name)
@@ -1326,11 +1442,7 @@ func dataRandom(t *testing.T, seed int64) {
 				continue
 			}
 			data := DataFor(o.e.set.ExportData(o.base(), o.e.rel(o.cur), "database"), "database")
-			db := dbOf(m.e.svcs[m.cur])
-			if e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"}); ok {
-				db.DataVersion = e.DataVersion
-				db.Build, db.Ref = e.Tag == "", "x:"+e.Tag
-			}
+			db := running[m]
 			yes := rng.Intn(3) == 0
 			if yes {
 				m.e.set.Accept = map[string]bool{"database": true}
@@ -1358,12 +1470,8 @@ func dataRandom(t *testing.T, seed int64) {
 			}
 			snapN++
 			dir := filepath.Join(m.e.set.Snapshots, fmt.Sprintf("2026101700%04d", snapN))
-			os.MkdirAll(filepath.Join(dir, "data"), 0o755)
-			os.WriteFile(filepath.Join(dir, "data", "images"), []byte(m.e.set.SnapshotData(m.base(), m.e.rel(m.cur))), 0o644)
-			if err := m.e.set.BookmarkFrom(dir, m.e.rel(m.cur)); err != nil {
-				t.Fatalf("after %v: snapshot: %v\n%s", log, err, out.String())
-			}
-			snaps[m] = append(snaps[m], snapshot{dir: dir, svcs: m.e.svcs[m.cur], model: append(history{}, model[m]...)})
+			m.snapshot(filepath.Base(dir))
+			snaps[m] = append(snaps[m], snapshot{dir: dir, svcs: m.e.svcs[m.cur], model: append(history{}, model[m]...), running: running[m]})
 			check(m.e.set.Name + " snapshot " + filepath.Base(dir))
 		case 13, 14: // a restore of a snapshot: full (a release made from it, nothing checked), or --no-code
 			if m.cur == "" || len(snaps[m]) == 0 {
@@ -1372,40 +1480,35 @@ func dataRandom(t *testing.T, seed int64) {
 			sn := snaps[m][rng.Intn(len(snaps[m]))]
 			data, _ := os.ReadFile(filepath.Join(sn.dir, "data", "images"))
 			if op == 13 {
-				id := m.e.release(sn.svcs...)
-				rel := m.e.rel(id)
-				if err := m.e.set.BookmarkFrom(rel, sn.dir); err != nil {
-					t.Fatalf("after %v: make-release: %v\n%s", log, err, out.String())
-				}
-				m.e.set.NoCheck = true
-				err := m.e.set.Restore(rel, m.prev(), false)
-				if errors.Is(err, ErrGone) {
-					m.fetch(sn.svcs)
-					err = m.e.set.Restore(rel, m.prev(), true)
-				}
-				m.e.set.NoCheck = false
+				id, err := m.fullRestore(sn.dir, sn.svcs)
 				if err != nil {
 					t.Fatalf("after %v: the restore's images: %v\n%s", log, err, out.String())
 				}
-				m.cur = id
-				m.e.set.ImportDone(m.base(), rel, string(data))
-				m.up()
-				m.e.set.Ran(m.base(), rel)
 				w := append(history{}, sn.model.window("database")...)
 				if len(w) == 0 {
 					w = history{{Service: "database"}}
 				}
 				w[0].How = Imported
 				model[m] = w
-				run(m, dbOf(sn.svcs), false)
+				// The snapshot's code on its data: held on what its data ran
+				// when the model refuses the code's claim.
+				held := verdict(model[m], dbOf(sn.svcs))
+				rel := m.e.rel(id)
+				if held != (heldIn(rel)["database"] != "") {
+					t.Fatalf("after %v: the full restore of %s held %v, the model says %v\n%s", log, filepath.Base(sn.dir), heldIn(rel), held, out.String())
+				}
+				if held {
+					if e, _ := match(readList(sn.dir), entry{Service: "database"}); m.runs("database") != e.ID {
+						t.Fatalf("after %v: the full restore of %s runs its database on %s, not the snapshot's %s\n%s", log, filepath.Base(sn.dir), m.runs("database"), e.ID, out.String())
+					}
+					run(m, sn.running, false)
+				} else {
+					run(m, dbOf(sn.svcs), false)
+				}
 				check(m.e.set.Name + " full restore " + filepath.Base(sn.dir))
 				continue
 			}
-			db := dbOf(m.e.svcs[m.cur])
-			if e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"}); ok {
-				db.DataVersion = e.DataVersion
-				db.Build, db.Ref = e.Tag == "", "x:"+e.Tag
-			}
+			db := running[m]
 			yes := rng.Intn(3) == 0
 			if yes {
 				m.e.set.Accept = map[string]bool{"database": true}
@@ -1426,7 +1529,7 @@ func dataRandom(t *testing.T, seed int64) {
 				}
 				m.up()
 				m.e.set.Ran(m.base(), rel)
-				model[m] = append(model[m], claim(db, Ran))
+				run(m, db, false)
 			}
 			m.e.set.Accept = nil
 			check(m.e.set.Name + " --no-code restore " + filepath.Base(sn.dir))

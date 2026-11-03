@@ -1,6 +1,7 @@
 package images
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,9 +41,11 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // rule on each (rule, CheckRollback) before any pull: refused, nothing
 // changes (ErrRefused); accepted, its history starts over from the image
 // it runs (ForcedFile). A full restore checks nothing: its data and their
-// history come back from the snapshot. The restart cannot refuse: a data
-// service the rule would refuse, when the failed release's image ran on
-// its data, stays on that image (holds), whatever --accept-image says.
+// history come back from the snapshot, and a data service the rule would
+// refuse against the snapshot's window stays on the image the snapshot's
+// listing ran on that data (restoreHolds). The restart cannot refuse: a
+// data service the rule would refuse, when the failed release's image ran
+// on its data, stays on that image (holds), whatever --accept-image says.
 //
 // Never a pulled name retagged: another environment may run it. Every
 // service that does not go back says why. Every check comes before any
@@ -80,7 +83,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	switch {
 	case s.Restart:
 		held = s.holds(target, against, svcs, ag)
-	case !s.NoCheck:
+	case s.NoCheck:
+		held = s.restoreHolds(target, svcs, old)
+	default:
 		if accepted, err = s.checkRollback(target, svcs); err != nil {
 			return err
 		}
@@ -149,7 +154,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			}
 			es = append(es, e)
 			holds[svc.Name] = ch
-			lines = append(lines, fmt.Sprintf("%s stays on the image release %s ran on its data (%s, %s), as %s's would %s: a release that fixes forward is the way on", svc.Name, hd.from, shownEntry(e), shownData(hd.e), tid, hd.why))
+			lines = append(lines, fmt.Sprintf("%s stays on %s (%s, %s), as %s's would %s: a release that fixes forward is the way on", svc.Name, hd.what, shownEntry(e), shownData(hd.e), tid, hd.why))
 			continue
 		}
 		switch {
@@ -259,12 +264,15 @@ func (s *Set) checkRollback(target string, svcs []Service) ([]string, error) {
 }
 
 // restartHold is a data service the restart keeps on the failed
-// release's image: its entry there (e), the failed release's id, and why
-// the restored release's own would not do.
+// release's image, or a full restore on the one its snapshot's data ran:
+// its entry there (e), and why the restored release's own would not do.
 type restartHold struct {
 	e entry
-	// dir is the failed release's directory, from its id.
-	dir, from, why string
+	// dir is the directory whose bookmark holds e's image (the failed
+	// release's, the restored release's own, bookmarked from the
+	// snapshot); from what ComposeFile's HeldLabel says (the failed
+	// release's id, "snapshot <id>"); what the image, for messages.
+	dir, from, what, why string
 }
 
 // holds are the data services of target (svcs) the restart after the
@@ -287,10 +295,72 @@ func (s *Set) holds(target, against string, svcs []Service, ag []entry) map[stri
 			continue
 		}
 		if why := rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its"); why != "" {
-			held[svc.Name] = restartHold{e: fe, dir: against, from: filepath.Base(against), why: "run it on data it does not allow (" + why + ")"}
+			held[svc.Name] = restartHold{e: fe, dir: against, from: filepath.Base(against), what: "the image release " + filepath.Base(against) + " ran on its data", why: "run it on data it does not allow (" + why + ")"}
 		}
 	}
 	return held
+}
+
+// restoreHolds are the data services of target, the release a full
+// restore made from a snapshot (its record's restore), that the rule
+// refuses against the snapshot's window (its data's images: the window
+// the data step brings back), held on the image the snapshot's listing
+// (old: target's own, copied from it) ran on that data, as the restart
+// holds. Why (review): a snapshot taken while the restart held a database
+// on a failed release's newer image has the previous release's code, so
+// its restore ran the older image on the newer data, unchecked; a
+// release snapshot taken by the release fixing forward is the one a
+// refused rollback names. A service the snapshot carries no window for
+// is judged against its listing's own version and tag.
+func (s *Set) restoreHolds(target string, svcs []Service, old []entry) map[string]restartHold {
+	snap := restoreOf(target)
+	var ps map[string]*sourceData
+	if dir := s.snapshots(); snap != "" && dir != "" {
+		data, _ := os.ReadFile(filepath.Join(dir, snap, snapshotDataDir, snapshotImages))
+		ps = parseParentData(string(data))
+	}
+	held := map[string]restartHold{}
+	for _, svc := range svcs {
+		if !svc.Data {
+			continue
+		}
+		o, ok := match(old, entry{Service: svc.Name})
+		if !ok || o.DataVersion == "" || o.ID == "" && o.Digest == "" {
+			continue
+		}
+		w := []ran{{Service: svc.Name, How: Ran, Version: o.DataVersion, Tag: o.Tag}}
+		if p := ps[svc.Name]; p != nil {
+			w = p.window()
+		}
+		if why := rule(w, svc.DataVersion, svc.tag(), "the snapshot's"); why != "" {
+			held[svc.Name] = restartHold{e: o, dir: target, from: snapshotHeld + snap, what: "the image its data ran when snapshot " + snap + " was taken", why: "run it on data it does not allow (" + why + ")"}
+		}
+	}
+	return held
+}
+
+// snapshotHeld prefixes HeldLabel's value for a full restore's hold: the
+// snapshot's id follows.
+const snapshotHeld = "snapshot "
+
+// A snapshot's data directory and its images file (remote's
+// SnapshotData, the take's data/images: SnapshotData's windows).
+const (
+	snapshotDataDir = "data"
+	snapshotImages  = "images"
+)
+
+// restoreOf is the snapshot a full restore made rel from (its record's
+// restore), "" for any other release.
+func restoreOf(rel string) string {
+	var r struct {
+		Restore string `json:"restore"`
+	}
+	data, err := os.ReadFile(filepath.Join(rel, RecordFile))
+	if err != nil || json.Unmarshal(data, &r) != nil {
+		return ""
+	}
+	return r.Restore
 }
 
 // hold gets svc onto the failed release's image hd.e, the entry it is
@@ -342,10 +412,10 @@ func (s *Set) hold(svc Service, hd restartHold, mode string, own map[string]bool
 			src := bookmarkOf(hd.dir, s.Name, svc.Name)
 			if _, berr := s.Docker.ID(src); src == "" || berr != nil {
 				if !s.AsBuilt {
-					s.say(report.ErrorLevel, "%s: the image release %s built, which its data ran, is gone from this server", svc.Name, hd.from)
+					s.say(report.ErrorLevel, "%s: %s, built by the project, is gone from this server", svc.Name, hd.what)
 					return entry{}, ch, ErrRefused
 				}
-				s.say(report.WarnLevel, "%s: the image release %s built, which its data ran, is gone from this server: it runs what %s holds", svc.Name, hd.from, name)
+				s.say(report.WarnLevel, "%s: %s, built by the project, is gone from this server: it runs what %s holds", svc.Name, hd.what, name)
 			} else if who := s.others(cur, own); err == nil && len(who) > 0 {
 				// A name another environment runs never moves: held by
 				// target's own bookmark of the image instead (Restore names

@@ -929,14 +929,18 @@ a rollback past a data upgrade (to `mariadb:11.8` after a release of
 snapshot of the older release's data (Snapshots, below) and
 `--accept-image`. `--snapshots restore <id>` brings data, code and
 images back together, checking nothing: the snapshot's data and its
-history come back as the pair they were. `--no-code` brings back data
-alone, checked against the current release's labels.
+history come back as the pair they were. A snapshot taken while the
+restart held a data service (below) has the older release's code and
+the newer data: its restore holds that service on the image its data
+ran, as the restart does, said and in `--status`. `--no-code` brings
+back data alone, checked against the current release's labels.
 
 **The restart after a failed run step** is the one place that cannot
 refuse: it runs on its own, past the switch. When the failed release's
 image ran on the data and the previous release's would be refused, that
 service stays on the failed release's image (by its digest when pulled,
-by its own name when built), said in the release's output and in
+by its own name when built, the failed release's own name when it built
+what the previous release pulls), said in the release's output and in
 `--status` (`held on`), until a release fixes forward. The release's
 `--accept-image` never reaches it: it accepted the new image, never the
 old one back on the new data.
@@ -980,8 +984,8 @@ never went live, `--releases remove failed` the release alone.
 `devopsy-compose.yaml` is devopsy's own compose file, the only one it
 writes, holding only facts of the release's last activation: the image
 each service was given (a `devopsy.digest` label) and, after the restart
-of a failed run step, the services it holds (a `devopsy.held` label, the
-image it holds them by: above). devopsy runs compose with it between the project's
+of a failed run step or a full restore, the services it holds (a
+`devopsy.held` label, the image it holds them by: above). devopsy runs compose with it between the project's
 `compose.yaml` and your `compose.override.yaml`, so your override still
 wins; `devopsy -- config` shows the result. Run compose on a server
 through devopsy: a plain `docker compose up` lacks it, recreates every

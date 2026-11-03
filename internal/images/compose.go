@@ -21,8 +21,9 @@ import (
 const ComposeFile = "devopsy-compose.yaml"
 
 // HeldLabel marks a service the restart holds on the failed release's
-// image, that release's id as its value: --status says so, and a reload
-// takes the hold for the listing's image (ReloadCheck).
+// image, that release's id as its value, or a full restore on the image
+// its snapshot's data ran, "snapshot <id>": --status says so, and a
+// reload takes the hold for the listing's image (ReloadCheck).
 const HeldLabel = "devopsy.held"
 
 // composeHold is how ComposeFile holds a service: Image its image: (""
@@ -158,7 +159,11 @@ func StatusLines(d Docker, project, rel string) []string {
 			if r := refs[c.Service]; r != "" && digestOf(labels[c.Service]) == "" {
 				on = r + " (" + on + ")"
 			}
-			lines = append(lines, fmt.Sprintf("%s held on %s, the image release %s ran on its data, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, from))
+			what := "the image release " + from + " ran on its data"
+			if snap, ok := strings.CutPrefix(from, snapshotHeld); ok {
+				what = "the image its data ran when snapshot " + snap + " was taken"
+			}
+			lines = append(lines, fmt.Sprintf("%s held on %s, %s, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, what))
 		}
 	}
 	return lines
