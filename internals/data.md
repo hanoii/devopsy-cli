@@ -45,7 +45,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - A bind source that reaches `mnt` through links (for example the tree's `files -> .devopsy/mnt/storage/files`) is judged by where it lands in `mnt`, before the links in `mnt` are followed (`throughMnt`).
 - A bind source below an entry that the deploy user cannot resolve (a directory on the way it cannot search) is refused as one leading out of it is (`HiddenBinds`), in the leaving binds' words (`LeavingLines`, one place for the mounts check, the start gate and `CheckLeavingBinds`): Docker resolves it as root.
 - With an entry owned the check readies `UtilImage` (`ensureUtilImage`), so a registry down refuses the release instead of failing `--mnt-owners` after its switch.
-- Absolute bind paths cannot be checked; the README says so.
+- Absolute bind paths cannot be checked; `docs/data.md` says so.
 - `--check-mounts restored` (a rollback's, in the release it restores; the restart's after a failed run step, `restart`; a full restore's, `restored <snapshot>`, all but the entries the snapshot replaces) refuses no label, warning on ones it cannot read, and checks only what `--mnt-owners restored` needs: the leaving binds (`CheckLeavingBinds`), no owned entry a link and the util image readied (`checkOwned`).
 - A `--no-code` restore checks the leaving binds in the entries it keeps (`check-tars`), and a sync's `finish go` before it starts anything, a copy that brings one kept as one its finish refused (`IncompleteFinish`).
 - The restart after a failed run step runs `--check-mounts restored restart` first and keeps the previous release down when it refuses, saying what runs on from the failed release's code and the `--release` to run once the link or the util image is fixed.
