@@ -1,11 +1,13 @@
 # Config and targets
 
-What a project says about itself in `.devopsy/config.yaml`, how an address names an environment on a server, and where an environment's variables come from.
+What a project says about itself in `.devopsy/config.yaml`, how an address
+names an environment on a server, and where an environment's variables
+come from.
 
 ## `.devopsy/config.yaml`
 
-`devopsy --init` writes one (it asks for the project's name and never
-touches an existing file); `devopsy --debug schema` documents every key.
+`devopsy --init` writes one: it asks for the project's name, and never
+touches an existing file. `devopsy --debug schema` documents every key.
 
 ```yaml
 project: shop                   # its name on servers: required
@@ -35,17 +37,24 @@ environments:
     parent: prod
 ```
 
-Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
-committed, never uploaded) is read over it for one machine: its `defaults:`
-and each environment merge over the project's of the same name as
-`defaults:` merge into environments, so it changes a key and keeps the
-rest, and `parent: ~` there removes a parent. In `env`, `""`
-sets an empty value and `~` removes a default; `inherit: ~` removes its
-list. `snapshots:` merges key by key too: `true` and `false` only
-turn a kind on or off, `{keep: <n>}` only counts, `~` goes back to the
-default. Patterns match one or
-more name characters; an exact name wins, then the most literal characters;
-`"*"` allows any. Unknown keys are errors.
+Commit it: it holds no secret values and no servers. Unknown keys are
+errors.
+
+How the keys combine:
+
+- Each environment takes `defaults:` and changes what it sets itself. In
+  `env`, `""` sets an empty value and `~` removes a default; `inherit: ~`
+  removes the list. `snapshots:` merges key by key: `true` and `false`
+  only turn a kind on or off, `{keep: <n>}` only changes the count, and
+  `~` goes back to the default.
+- An environment key with `*` is a pattern, matching one or more name
+  characters (`"*"` matches any name). An exact name wins over a pattern,
+  then the pattern with the most literal characters.
+- `.devopsy/config.local.yaml`, never committed or uploaded, is read over
+  `config.yaml` on one machine. Its `defaults:` and each of its
+  environments merge over the project's of the same name, the way
+  `defaults:` merge into environments, so it changes a key and keeps the
+  rest; `parent: ~` there removes a parent.
 
 ## Targets
 
@@ -57,8 +66,8 @@ devopsy @[<server>:][<instance>/]<environment> ...
 @prod                         server and instance from variables
 ```
 
-What the target leaves out comes from your environment or the project's
-`.devopsy/.env`, most specific first:
+What the address leaves out comes from your environment or the project's
+`.devopsy/.env`, the most specific first:
 
 ```sh
 DEVOPSY_SERVER_PR_12=...       # one environment's server (upper case, others as _)
@@ -67,55 +76,67 @@ DEVOPSY_SERVER=vm1             # any environment's
 DEVOPSY_INSTANCE=b
 ```
 
-A missing server is an error.
+No server from any of them is an error.
 
 ## Instances
 
-Instances are opt in: a project with
-`instances: true` has them, and every target names one (the address,
-`DEVOPSY_INSTANCE` or an alias's `to:`); any other refuses them, so one
-project's environments never mix both layouts on a server. They are never
-listed in the project: any name works (lowercase, digits, `-`), and the
-first release of one the server lacks asks before creating it (`--release
---yes` in CI).
+Instances are opt in. In a project with `instances: true` every target
+names one, by the address, `DEVOPSY_INSTANCE` or an alias's `to:`; any
+other project refuses them. So one project's environments never mix both
+layouts on a server.
+
+Instances are never listed in the project: any name works (lowercase,
+digits, `-`). The first release of an instance the server lacks asks
+before creating it (`--release --yes` in CI).
 
 ## Where an environment lives
 
-On the server, an environment lives in `<project>/[<instance>/]<environment>`
-under the server's release root, and its compose project, containers,
-volumes are named `<project>[-<instance>]-<environment>`
-(`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
+On the server an environment lives in
+`<project>/[<instance>/]<environment>` under the server's release root
+(Release settings, below). Its compose project, containers and volumes are
+named `<project>[-<instance>]-<environment>`: that is its
+`COMPOSE_PROJECT_NAME`, from which the templates build their URLs.
 
 ## Parents
 
-A child's parent (`parent:`, a concrete environment of the project,
-never itself) is named per environment, a pattern included, never under
-`defaults:`: a child gets its parent's data, secrets and personal data
-included, so that shows where the child is defined. It
-resolves like a target of its own, one level only: at the child's
-instance, on the server its variables name (`DEVOPSY_SERVER_<PARENT>`,
-`DEVOPSY_SERVER`), never the child's: a guess could copy the wrong data,
-so a sync without one fails and says which variable to set. `@vm2:develop`
-with `DEVOPSY_SERVER_PROD=vm1` syncs from `vm1:prod`. Without the
-variable, an address does it for one command: `devopsy @vm2:develop
---release --from @vm1:prod`, or `--release-sync --from`, `--sync --from`.
-Parents can chain (`pr-*` from `staging` from `prod`), never in a cycle:
-two environments that are each other's parent could never be released,
-since a child's first release syncs from a released parent. `devopsy
---debug environments` shows it resolved.
+A child environment names its parent with `parent:`, a concrete
+environment of the project other than itself. It is set per environment
+(a pattern's included), never under `defaults:`: a child gets its
+parent's data, secrets and personal data included, so the config shows
+that where the child is defined.
+
+The parent resolves like a target of its own, one level only: at the
+child's instance, on the server its own variables name
+(`DEVOPSY_SERVER_<PARENT>`, `DEVOPSY_SERVER`), never the child's server.
+A guess could copy the wrong data, so a sync without one fails and says
+which variable to set. `@vm2:develop` with `DEVOPSY_SERVER_PROD=vm1` syncs
+from `vm1:prod`. Without the variable, an address does it for one
+command: `devopsy @vm2:develop --release --from @vm1:prod`, and likewise
+`--release-sync --from` and `--sync --from`.
+
+Parents can chain (`pr-*` from `staging` from `prod`) but never form a
+cycle: two environments that are each other's parent could never be
+released, since a child's first release syncs from a released parent.
+`devopsy --debug environments` shows each parent resolved. What a sync
+copies is in [Parent environments and syncs](syncs.md).
 
 ## Variables on a server
 
-A server's variables, nearest first: the environment's `shared/.env`,
-a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
-the instance's `.env` (`<project>/<instance>/.env`), the project's
-(`<project>/.env`), a child's `shared/parent.env` (its copy of its
-parent's server's instance and project `.env`, when that is another
-server), then the release's `devopsy-target.env`, written from the
-config with `COMPOSE_PROJECT_NAME`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,
-`DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET` and `DEVOPSY_RELEASE_COMMIT` (and a
-child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`).
-Rollbacks bring back their release's `devopsy-target.env`.
+An environment's variables on a server come from these files, the nearest
+first:
+
+1. the environment's `shared/.env`;
+2. a child's `shared/inherit.env`, what its parent's `inherit:` gave it;
+3. the instance's `.env` (`<project>/<instance>/.env`);
+4. the project's `.env` (`<project>/.env`);
+5. a child's `shared/parent.env`, its copy of its parent's server's
+   instance and project `.env`, when the parent is on another server;
+6. the release's `devopsy-target.env`, written from the config, with
+   `COMPOSE_PROJECT_NAME`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,
+   `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET` and `DEVOPSY_RELEASE_COMMIT`
+   (and a child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`).
+
+A rollback brings back its release's `devopsy-target.env`.
 
 ```sh
 devopsy @vm1:prod --vars                       # KEY=value, secrets as *** (--show: all)
@@ -127,33 +148,42 @@ devopsy @vm1:b/prod --vars-instance set SITE_ID   # the instance's .env
 devopsy @vm1 --vars-project set SHARED_KEY        # the project's .env on vm1
 ```
 
-`--vars` lists the environment's own file, and `get` gives the value the
-environment gets (inherited, the instance's or the project's, from
-`devopsy-target.env`, imported or computed: what `--env` shows), on
-stdout, saying where it comes from. Edits stay in their flag's file:
-a set over another value warns that it overrides it now (the
-environment's own over an inherited value, the instance's over the
-project's), and a set that a nearer file hides warns, for each
-environment it reaches, which files do (the project's under an
-environment's own and its inherited one). The first comes with the
-`unset` that brings the other value back; the second, when an inherited
-value hides it, with the `--vars set` that gives the environment its
-own and how the inherited value goes (dropped from the parent's
-`inherit:`, released, then `--inherit`). An `unset` says the value left, if any.
+`--vars` lists the environment's own file. `--vars get` prints, on
+stdout, the value the environment gets, whatever defines it (inherited,
+the instance's or the project's, from `devopsy-target.env`, imported or
+computed: what `--env` shows), and says where it comes from.
 
-The instance's and the project's `.env` are that server's: two servers
-of one project each have their own, which `--vars-instance` and
-`--vars-project` edit through any of its environments (or the server
+Edits stay in their flag's file, and devopsy says how the other files
+bear on them:
+
+- A set over a value it now overrides (the environment's own over an
+  inherited value, the instance's over the project's) says so, with the
+  `unset` that brings the other value back.
+- A set that a nearer file hides (the project's under an environment's
+  own and its inherited one) says which files hide it, for each
+  environment it reaches. When an inherited value hides it, the warning
+  gives the `--vars set` that gives the environment its own value, and
+  how the inherited value goes: dropped from the parent's `inherit:`, the
+  parent released, then `--inherit`.
+- An `unset` says where the key's value now comes from, if it still has
+  one.
+
+The instance's and the project's `.env` are each server's own: two
+servers of one project each have their own files, which `--vars-instance`
+and `--vars-project` edit through any environment there (or the server
 alone, for the project's).
 
 ## Applying changes
 
 Values travel over SSH's stdin, never as arguments. Running containers see
-changes when recreated: `--vars set` and `unset` on an environment say
-what applies them, never refusing one: `--reload`; a release, when the
-variables now give a service another image than the release fetched;
-nothing until a variable compose requires is set again, or until data
-a sync, an import or a restore did not complete is settled.
+a change only once they are recreated, so `--vars set` and `--vars unset`
+on an environment say what applies it, and never refuse one:
+
+- `--reload` ([Reloads](releases.md#reloads));
+- a release, when the variables now give a service another image than
+  the release fetched;
+- nothing yet, while a variable compose requires is unset, or while data
+  a sync, an import or a restore did not complete is not settled.
 
 ## Release settings
 
@@ -171,16 +201,20 @@ snapshots:
   mirror: false        # no environment keeps a mirror here, whatever it asks (default: each decides)
 ```
 
-Moving a server's release root: stop each environment (`devopsy down`
-in its `current`), `mv` the projects' directories under the new root,
-change `root:`, then start each again (its `deploy`, or a release).
-Containers keep the paths their bind mounts had, so they must be made
-again; everything in the directories is linked relatively.
+To move a server's release root:
+
+1. stop each environment (`devopsy down` in its `current`);
+2. `mv` the projects' directories under the new root;
+3. change `root:`;
+4. start each environment again (its `deploy`, or a release).
+
+Containers keep the paths their bind mounts had, so they must be created
+again; everything inside the directories is linked relatively.
 
 Changing a server's `snapshots: root` leaves the snapshots taken before
-where they are, unseen by `--snapshots`, pruning and `--destroy`: move
-each environment's directory under the new root first (their images'
-bookmarks go with them).
+where they are, unseen by `--snapshots`, pruning and `--destroy`. Move
+each environment's snapshot directory under the new root first; their
+images' bookmarks go with them.
 
 ## Aliases
 
@@ -193,9 +227,11 @@ aliases:
   shop-demo:   {source: ~/src/shop, to: "vm1:demo/prod"}
 ```
 
-`source:` is the project's checkout: its config, and the only directory the
-alias releases from. Without it, `project:` names the project, for commands
-only. Inside a project its own environment of the same name wins; an alias
-never reads a project's `.env`, and its instance is its `to:`'s, never
-`DEVOPSY_INSTANCE`'s. With `project:`, a `to:` naming an instance is how
-it knows the project has them.
+`source:` is the project's checkout: the alias uses its config, and
+releases only from that directory. Without `source:`, `project:` names
+the project, and the alias works for commands only.
+
+Inside a project, its own environment of the same name wins over an
+alias. An alias never reads a project's `.env`, and its instance is its
+`to:`'s, never `DEVOPSY_INSTANCE`'s. With `project:`, a `to:` that names
+an instance is how devopsy knows the project has instances.
