@@ -205,32 +205,29 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
 		case st.kind == KindOwn && st.retag != "":
 			bid, _ := s.Docker.ID(st.retag)
-			if cur, err := s.Docker.ID(svc.Ref); err != nil || cur != bid {
-				if err == nil {
-					if who := s.others(cur, own); len(who) > 0 {
-						if svc.Data {
-							// On data its rule judged by its own label, never
-							// another environment's build: by its bookmark, as
-							// unhold does (review: it upgraded the data).
-							s.say(report.InfoLevel, "%s stays on its newer image, which other environments use (%s): %s runs its own by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
-							e := s.entryOf(svc, st.retag, mode)
-							e.Ref = svc.Ref
-							if b := ownOf(o).Build; b != "" && e.Build != "" {
-								e.Build = b
-							}
-							es = append(es, e)
-							byBookmark = append(byBookmark, svc.Name)
-							continue
-						}
-						s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
-						es = append(es, s.entryOf(svc, svc.Ref, mode))
-						continue
-					}
+			who, err := s.putName(svc.Ref, bid, own)
+			if err != nil {
+				s.say(report.ErrorLevel, "could not put %s back on %s's image: %v", svc.Ref, tid, err)
+				return err
+			}
+			if len(who) > 0 {
+				if !svc.Data {
+					s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
+					es = append(es, s.entryOf(svc, svc.Ref, mode))
+					continue
 				}
-				if err := s.Docker.Tag(st.retag, svc.Ref); err != nil {
-					s.say(report.ErrorLevel, "could not put %s back on %s's image: %v", svc.Ref, tid, err)
-					return err
+				// On data its rule judged by its own label, never another
+				// environment's build: by its bookmark (review: it upgraded
+				// the data).
+				s.say(report.InfoLevel, "%s stays on its newer image, which other environments use (%s): %s runs its own by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
+				e := s.entryOf(svc, st.retag, mode)
+				e.Ref = svc.Ref
+				if b := ownOf(o).Build; b != "" && e.Build != "" {
+					e.Build = b
 				}
+				es = append(es, e)
+				byBookmark = append(byBookmark, svc.Name)
+				continue
 			}
 			// Its bookmark, put back: built with what its listing said then,
 			// whatever the variables say now.
@@ -445,18 +442,11 @@ func (s *Set) RestoreOwn(rel string) {
 		if err != nil {
 			continue
 		}
-		cur, err := s.Docker.ID(e.Ref)
-		if err == nil && cur == bid {
-			continue
-		}
-		if err == nil {
-			if who := s.others(cur, own); len(who) > 0 {
-				s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
-				continue
-			}
-		}
-		if err := s.Docker.Tag(names[i], e.Ref); err != nil {
+		who, err := s.putName(e.Ref, bid, own)
+		if err != nil {
 			s.say(report.WarnLevel, "could not put %s back on %s's image: %v", e.Ref, id, err)
+		} else if len(who) > 0 {
+			s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
 		}
 	}
 }

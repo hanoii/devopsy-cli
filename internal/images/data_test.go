@@ -1413,9 +1413,7 @@ func TestDataSync(t *testing.T) {
 		t.Errorf("after a sync from any: %s", got)
 	}
 	// Entries all missing on the parent: nothing of its is sent.
-	missing := dbSvc("mariadb:12.1")
-	missing.EntriesKnown, missing.Entries = true, []string{"database"}
-	prod.release(false, missing)
+	prod.e.set.Copied = func(string, bool) ([]string, error) { return nil, nil }
 	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); data != "" {
 		t.Errorf("ParentData of a service whose entries are missing: %q", data)
 	}

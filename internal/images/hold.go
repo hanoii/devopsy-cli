@@ -341,23 +341,20 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 			// bookmark (review: the child's next up ran the parent's newer
 			// build on its data).
 			name, ch.Image, ch.bookmark = o.Ref, "", true
-		} else if cur, err := s.Docker.ID(name); err != nil || cur != id {
-			if _, gerr := s.Docker.ID(id); id == "" || gerr != nil {
-				if !s.AsBuilt {
-					s.say(report.ErrorLevel, "%s: %s, built by the project, is gone from this server", svc, what)
-					return entry{}, ch, ErrRefused
-				}
-				return s.ownInstead(o, h, what, own)
-			} else if who := s.others(cur, own); err == nil && len(who) > 0 {
-				// A name another environment runs never moves: held by the
-				// release's own bookmark of the image instead (writeHeld names
-				// it).
-				s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s is held on the image by its bookmark", name, strings.Join(who, ", "), svc)
-				ch.Image, ch.bookmark = "", true
-			} else if err := s.Docker.Tag(id, name); err != nil {
-				s.say(report.ErrorLevel, "could not put %s on the image its data ran: %v", name, err)
-				return entry{}, ch, err
+		} else if cur, err := s.Docker.ID(name); (err != nil || cur != id) && !s.imagePresent(id) {
+			if !s.AsBuilt {
+				s.say(report.ErrorLevel, "%s: %s, built by the project, is gone from this server", svc, what)
+				return entry{}, ch, ErrRefused
 			}
+			return s.ownInstead(o, h, what, own)
+		} else if who, err := s.putName(name, id, own); err != nil {
+			s.say(report.ErrorLevel, "could not put %s on the image its data ran: %v", name, err)
+			return entry{}, ch, err
+		} else if len(who) > 0 {
+			// Held by the release's own bookmark of the image instead
+			// (writeHeld names it).
+			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s is held on the image by its bookmark", name, strings.Join(who, ", "), svc)
+			ch.Image, ch.bookmark = "", true
 		}
 		e = entry{Ref: name, ID: id, Service: svc, Kind: KindOwn, Version: src.Version}
 		if ch.bookmark {
@@ -383,21 +380,38 @@ func (s *Set) ownInstead(o entry, h hold, what string, own map[string]bool) (ent
 	return o, ch, nil
 }
 
+// putName puts name on the image id, the one way devopsy moves a name of
+// an environment's: unless another environment runs what the name holds
+// now, those environments returned, the name left where it is, for the
+// caller to run its service by a bookmark (or say so). Why one place: each
+// caller had its own copy, and each finding on a shared name was one
+// differing (review).
+func (s *Set) putName(name, id string, own map[string]bool) ([]string, error) {
+	cur, err := s.Docker.ID(name)
+	if err == nil && cur == id {
+		return nil, nil
+	}
+	if err == nil {
+		if who := s.others(cur, own); len(who) > 0 {
+			return who, nil
+		}
+	}
+	return nil, s.Docker.Tag(id, name)
+}
+
 // ownNameBack puts a built own image's name back on it, true when another
 // environment runs what the name holds, so it runs by its bookmark
 // instead. Never a pulled name (nothing to do: compose runs what it holds).
 func (s *Set) ownNameBack(o entry, own map[string]bool) bool {
-	if o.Kind != KindOwn {
+	if o.Kind != KindOwn || !s.imagePresent(o.ID) {
 		return false
 	}
-	if cur, err := s.Docker.ID(o.Ref); (err != nil || cur != o.ID) && s.imagePresent(o.ID) {
-		if who := s.others(cur, own); err == nil && len(who) > 0 {
-			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", o.Ref, strings.Join(who, ", "), o.Service)
-			return true
-		}
-		if err := s.Docker.Tag(o.ID, o.Ref); err != nil {
-			s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
-		}
+	who, err := s.putName(o.Ref, o.ID, own)
+	if err != nil {
+		s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
+	} else if len(who) > 0 {
+		s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", o.Ref, strings.Join(who, ", "), o.Service)
+		return true
 	}
 	return false
 }
@@ -557,14 +571,12 @@ func (s *Set) unhold(rel string, e, o entry, svc Service, mode string, own map[s
 			nil, report.Fix("a release builds it:", s.cmd("--release")))
 		return entry{}, ch, ErrRefused
 	}
-	if cur, err := s.Docker.ID(svc.Ref); err != nil || cur != o.ID {
-		if who := s.others(cur, own); err == nil && len(who) > 0 {
-			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
-			ch.bookmark = true
-		} else if err := s.Docker.Tag(o.ID, svc.Ref); err != nil {
-			s.say(report.ErrorLevel, "could not put %s back on %s's own image: %v", svc.Ref, tid, err)
-			return entry{}, ch, err
-		}
+	if who, err := s.putName(svc.Ref, o.ID, own); err != nil {
+		s.say(report.ErrorLevel, "could not put %s back on %s's own image: %v", svc.Ref, tid, err)
+		return entry{}, ch, err
+	} else if len(who) > 0 {
+		s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
+		ch.bookmark = true
 	}
 	return entry{Ref: svc.Ref, ID: o.ID, Service: svc.Name, Kind: KindOwn, Build: o.Build, DataVersion: o.DataVersion, Tag: o.Tag}, ch, nil
 }

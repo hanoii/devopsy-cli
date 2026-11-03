@@ -21,8 +21,6 @@ import (
 // are kept and shown as Docker shows them (docker.io/library/nginx is
 // nginx). fail, when set, makes the next call of that method fail.
 type fakeDocker struct {
-	// volumes are the named volumes there.
-	volumes    map[string]bool
 	images     map[string]bool
 	names      map[string]string
 	containers []container
@@ -257,8 +255,6 @@ func (d *fakeDocker) Pull(ref string) error {
 	d.pull(ref, id)
 	return nil
 }
-
-func (d *fakeDocker) VolumeExists(name string) bool { return d.volumes[name] }
 
 func (d *fakeDocker) Containers(project string) ([]Container, error) {
 	if err := d.failing("Containers"); err != nil {

@@ -1383,7 +1383,7 @@ func TestAsBuiltDigestInBuiltRepository(t *testing.T) {
 func TestParentDataNeverMadeVolumeKeepsWindow(t *testing.T) {
 	t.Parallel()
 	search := func(ref, version string) Service {
-		return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: version, EntriesKnown: true, Volumes: []string{"search-data"}}
+		return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: version}
 	}
 	d := newFake()
 	var out bytes.Buffer
@@ -1393,6 +1393,7 @@ func TestParentDataNeverMadeVolumeKeepsWindow(t *testing.T) {
 	prod := newSim(t, d, "app-prod", &out)
 	// Its profile is off: every profile's list has it, the release's has not.
 	prod.e.set.ListAll = func(string) ([]Service, error) { return []Service{dbSvc("mariadb:11.8"), search("search:8", "8")}, nil }
+	prod.e.set.Copied = func(string, bool) ([]string, error) { return []string{"database"}, nil }
 	if _, err := prod.release(false, dbSvc("mariadb:11.8")); err != nil {
 		prod.fail("prod: %v", err)
 	}
@@ -1619,7 +1620,7 @@ func TestHoldOnParentsNameFollowsItsNextBuild(t *testing.T) {
 func TestRestoreNeverMadeVolumeKeepsWindow(t *testing.T) {
 	t.Parallel()
 	search := func(ref, version string) Service {
-		return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: version, EntriesKnown: true, Volumes: []string{"search-data"}}
+		return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: version}
 	}
 	var out bytes.Buffer
 	d := newFake()
@@ -1629,11 +1630,13 @@ func TestRestoreNeverMadeVolumeKeepsWindow(t *testing.T) {
 	m := newSim(t, d, "app-prod", &out)
 	m.e.set.Snapshots = m.base() + "/snapshots"
 	m.e.set.ListAll = func(string) ([]Service, error) { return []Service{dbSvc("mariadb:11.8"), search("search:8", "8")}, nil }
+	m.e.set.Copied = func(string, bool) ([]string, error) { return []string{"database"}, nil }
 	if _, err := m.release(false, dbSvc("mariadb:11.8")); err != nil {
 		m.fail("release: %v", err)
 	}
 	snap := m.snapshot("20261017000001")
 	m.e.set.ListAll = nil
+	m.e.set.Copied = nil
 	// Its profile turned on, its label raised.
 	if _, err := m.release(false, dbSvc("mariadb:11.8"), search("search:9", "9")); err != nil {
 		m.fail("release: %v", err)

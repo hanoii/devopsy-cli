@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,5 +337,35 @@ func TestSyncVolumeWithNoHistoryIsJudged(t *testing.T) {
 	copied := readString(filepath.Join(s.log+".vol", "shop-dev_dbdata", "ibd"))
 	if code == 0 || strings.Contains(copied, "at 13") {
 		t.Errorf("a child at 12 took a volume at 13 unjudged (%d), its volume %q, its history %q:\n%s", code, copied, readString(filepath.Join(s.root, "shop", "dev", images.HistoryFile)), out)
+	}
+}
+
+// What a copy sends of its data's history goes by what it writes: a bind that
+// reaches mnt through a link in the release's tree is an entry of the copy's,
+// so an export of it records its window. (A second reading of compose's
+// config, by the path alone, took it for a service with nothing there.)
+func TestExportRecordsABindThroughALink(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	current := filepath.Join(base, "current")
+	if err := os.Symlink(filepath.Join("mnt", "storage"), filepath.Join(current, ".devopsy", "files")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\t\t11.8\t\n", 0o644)
+	dot, err := filepath.EvalSymlinks(filepath.Join(current, ".devopsy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP_SOURCE="+filepath.Join(dot, "files")+"\nFAKE_APP_VERSION=11.8\n", 0o644)
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	h, err := tar.NewReader(bytes.NewReader(out)).Next()
+	if err != nil || h.PAXRecords[images.ExportKey] == "" {
+		t.Errorf("the export carries no record of its data's history (%v): %+v\n%s", err, h, errs)
 	}
 }

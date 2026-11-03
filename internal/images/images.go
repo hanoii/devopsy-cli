@@ -104,9 +104,6 @@ type Docker interface {
 	Pull(ref string) error
 	// Containers are a compose project's containers, stopped ones too.
 	Containers(project string) ([]Container, error)
-	// VolumeExists says whether a named volume is there; true when Docker
-	// cannot tell.
-	VolumeExists(name string) bool
 }
 
 // Container is one of an environment's containers, as the rules read it.
@@ -194,9 +191,14 @@ type Set struct {
 	Out io.Writer
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
-	// ListAll lists every profile's (ListComposeAll): what a copy writes,
-	// for the windows it carries. List without it.
+	// ListAll lists every profile's (ListComposeAll), for the labels of what
+	// a copy writes. List without it.
 	ListAll func(rel string) ([]Service, error)
+	// Copied are the services a copy of rel writes, every one with data
+	// when all (a take): the copy's own answer, what is there of what its
+	// labels say (cli.SyncServices, copiedServices), for the windows it
+	// carries. Without it, by the labels alone (tests).
+	Copied func(rel string, all bool) ([]string, error)
 	// No mode: each release's own record says its (ModeOf), so one set
 	// serves releases made in either.
 	// Now is the time, for tests (time.Now when nil).
@@ -261,12 +263,6 @@ type Service struct {
 	// release's code).
 	BuildSpec json.RawMessage
 	BuildKey  string
-	// Entries are the entries of mnt it bind-mounts, less its excluded
-	// ones (. for mnt whole), Volumes its named volumes by key, less its
-	// excluded ones; EntriesKnown: read from compose's config.
-	Entries      []string
-	Volumes      []string
-	EntriesKnown bool
 }
 
 // own says whether a service's image is the project's own: built (in

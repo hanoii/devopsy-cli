@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -104,11 +103,6 @@ func (d CLI) Pull(ref string) error {
 	return err
 }
 
-func (d CLI) VolumeExists(name string) bool {
-	_, err := d.run("volume", "inspect", "--format", "{{.Name}}", name)
-	return err == nil || !strings.Contains(err.Error(), "No such volume")
-}
-
 func (d CLI) Containers(project string) ([]Container, error) {
 	ids, err := d.run("ps", "-a", "-q", "--no-trunc", "--filter", "label=com.docker.compose.project="+project)
 	if err != nil || strings.TrimSpace(ids) == "" {
@@ -162,8 +156,8 @@ func ListCompose(rel string) ([]Service, error) {
 	return listCompose(rel, "--", "config", "--format", "json")
 }
 
-// ListComposeAll is ListCompose of every profile's services: what a copy,
-// a take and an export write, for the windows they carry (parentData).
+// ListComposeAll is ListCompose of every profile's services: the labels of
+// what a copy, a take and an export write (parentData).
 func ListComposeAll(rel string) ([]Service, error) {
 	return listCompose(rel, "--", "--profile", "*", "config", "--format", "json")
 }
@@ -195,7 +189,6 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 			Build      json.RawMessage
 			Labels     map[string]string
 			PullPolicy string `json:"pull_policy"`
-			Volumes    []struct{ Type, Source string }
 		}
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -223,34 +216,6 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 		}
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
-		}
-		// The entries of mnt it bind-mounts (. for mnt whole), and its
-		// named volumes, less those its exclude label names: what a sync
-		// copies for it.
-		svc.EntriesKnown = true
-		excluded := map[string]bool{}
-		for _, x := range strings.FieldsFunc(c.Labels[DataExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' }) {
-			excluded[x] = true
-		}
-		for _, v := range c.Volumes {
-			if v.Type == "volume" && v.Source != "" && !excluded[v.Source] && !slices.Contains(svc.Volumes, v.Source) {
-				svc.Volumes = append(svc.Volumes, v.Source)
-			}
-			if v.Type != "bind" {
-				continue
-			}
-			src := filepath.ToSlash(v.Source)
-			i := strings.Index(src+"/", "/.devopsy/mnt/")
-			if i < 0 {
-				continue
-			}
-			entry := strings.SplitN(strings.TrimPrefix(src[i+len("/.devopsy/mnt"):], "/"), "/", 2)[0]
-			if entry == "" {
-				entry = "."
-			}
-			if !excluded[entry] && !slices.Contains(svc.Entries, entry) {
-				svc.Entries = append(svc.Entries, entry)
-			}
 		}
 		svcs = append(svcs, svc)
 	}

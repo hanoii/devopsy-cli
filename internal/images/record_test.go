@@ -213,12 +213,12 @@ func TestParseComposeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, BuildSpec: json.RawMessage(`{"context":"."}`), Data: true, Method: "volumes", Entries: []string{"storage"}, Volumes: []string{"cache"}, EntriesKnown: true},
-		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none", EntriesKnown: true},
-		{Name: "plain", Ref: "busybox", EntriesKnown: true},
-		{Name: "tool", Ref: "local/tool", NeverPull: true, EntriesKnown: true},
-		{Name: "web", Ref: "caddy:2", EntriesKnown: true},
-		{Name: "whole", Ref: "busybox", Data: true, Method: "volumes", Entries: []string{"."}, EntriesKnown: true},
+		{Name: "app", Ref: "x-prod-app", Build: true, BuildSpec: json.RawMessage(`{"context":"."}`), Data: true, Method: "volumes"},
+		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none"},
+		{Name: "plain", Ref: "busybox"},
+		{Name: "tool", Ref: "local/tool", NeverPull: true},
+		{Name: "web", Ref: "caddy:2"},
+		{Name: "whole", Ref: "busybox", Data: true, Method: "volumes"},
 	}
 	if len(svcs) != len(want) {
 		t.Fatalf("%+v", svcs)

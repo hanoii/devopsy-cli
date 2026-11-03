@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,17 +53,14 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		s.say(report.WarnLevel, "could not list the services of %s (%v): the child keeps its history", filepath.Base(rel), err)
 		return ""
 	}
+	written, err := s.copiedNames(rel, svcs, all)
+	if err != nil {
+		s.say(report.WarnLevel, "could not tell what a copy of %s writes (%v): the child keeps its history", filepath.Base(rel), err)
+		return ""
+	}
 	var copied []string
 	for _, svc := range svcs {
-		if !svc.Data || (only != "" && svc.Name != only) {
-			continue
-		}
-		// A service with none of its entries or volumes here has nothing a
-		// copy or a take writes, as they go by what is there: the receiving
-		// side keeps its own data and history (review: a profile never up
-		// gave the child's data its label's version, a restore forgot what a
-		// volume it never held had run).
-		if (all || svc.Method == CopyVolumes) && s.hasData(rel, svc) {
+		if svc.Data && (only == "" || svc.Name == only) && slices.Contains(written, svc.Name) {
 			copied = append(copied, svc.Name)
 		}
 	}
@@ -95,19 +92,22 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 	return b.String()
 }
 
-// hasData says whether any of svc's entries or volumes is there.
-func (s *Set) hasData(rel string, svc Service) bool {
-	if !svc.EntriesKnown || hasEntry(rel, svc.Entries) {
-		return true
+// copiedNames are the services a copy of rel writes (Set.Copied): nothing
+// else decides it, so a window always goes with its files (review: a second
+// reading of compose's config missed a bind through a link, a profile off,
+// a volume absent, one finding each). A service with none of its entries or
+// volumes there is none: the receiving side keeps its data and history.
+func (s *Set) copiedNames(rel string, svcs []Service, all bool) ([]string, error) {
+	if s.Copied != nil {
+		return s.Copied(rel, all)
 	}
-	for _, key := range svc.Volumes {
-		// A data service's volume is its compose project's, by its key
-		// (external: and a fixed name: are refused on one).
-		if s.Docker.VolumeExists(s.Name + "_" + key) {
-			return true
+	var names []string
+	for _, svc := range svcs {
+		if svc.Data && (all || svc.Method == CopyVolumes) {
+			names = append(names, svc.Name)
 		}
 	}
-	return false
+	return names, nil
 }
 
 // written are the services a copy of rel writes: every profile's, as the
@@ -329,15 +329,4 @@ func FilterImported(snap, cur string) error {
 		kept = append(kept, e)
 	}
 	return writeList(snap, kept)
-}
-
-// hasEntry says whether any of entries is in rel's mnt (its shared/mnt,
-// through the release's link).
-func hasEntry(rel string, entries []string) bool {
-	for _, e := range entries {
-		if _, err := os.Stat(filepath.Join(rel, codeDir, ".devopsy", "mnt", e)); err == nil {
-			return true
-		}
-	}
-	return false
 }

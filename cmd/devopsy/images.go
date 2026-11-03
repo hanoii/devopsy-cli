@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -80,8 +82,41 @@ func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll,
+	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll, Copied: copiedServices,
 		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
+}
+
+// copiedServices are the services a copy of rel writes (images.Set.Copied),
+// or with all a take: by the labels and what is there, as syncData and a
+// take go, the links in a bind source resolved as they do.
+func copiedServices(rel string, all bool) ([]string, error) {
+	projectDir, services, err := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, s := range services {
+		if !(all && s.HasData) && s.Copy != cli.CopyVolumes {
+			continue
+		}
+		there := false
+		for _, e := range s.Dirs {
+			if _, err := os.Stat(filepath.Join(projectDir, "mnt", e)); err == nil {
+				there = true
+			}
+		}
+		for _, v := range s.Volumes {
+			// One Docker cannot tell of counts: a window too many is judged,
+			// one too few lets data land unjudged.
+			if ok, err := volumeExists(context.Background(), v.Name); ok || err != nil {
+				there = true
+			}
+		}
+		if there {
+			names = append(names, s.Name)
+		}
+	}
+	return names, nil
 }
 
 // imagesRoot is the server's release root, under which its image lock

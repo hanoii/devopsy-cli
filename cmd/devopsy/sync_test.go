@@ -171,7 +171,7 @@ case "$*" in
   *" config --format json")
     # FAIL_CONFIG: this project's compose config fails.
     [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
-    printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "${FAKE_APP_SOURCE:-$dir/mnt${FAKE_APP_MOUNT-/storage}}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
