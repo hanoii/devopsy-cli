@@ -475,8 +475,23 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels, running bo
 			return err
 		}
 	}
-	return s.Rederive(base, rel)
+	if err := s.Rederive(base, rel); err != nil {
+		return &HoldsError{Err: err}
+	}
+	return nil
 }
+
+// HoldsError is a copy's take-over of the history written, and the holds
+// it gives not derived again (Rederive failed, Err): the data's window is
+// the copy's, what runs on it not yet what that window allows. An
+// import's --resolved derives them (Resolved).
+type HoldsError struct{ Err error }
+
+func (e *HoldsError) Error() string {
+	return "the history was taken over, and its holds could not be derived again: " + e.Err.Error()
+}
+
+func (e *HoldsError) Unwrap() error { return e.Err }
 
 // Recreate are the services of rel whose container its activation gave
 // another image than rel's ComposeFile now gives it (another
@@ -560,15 +575,18 @@ func (s *Set) Wiped(base, rel string) error {
 }
 
 // Resolved is Imported for --resolved, since the time of the import's
-// mark: nothing when the history's window starts with an import line
+// mark: the history kept when its window starts with an import line
 // written since (the import took the export's window, and only what came
 // after failed: the data is complete, and starting over would forget its
 // version), or a forced one (the import was accepted: its history over
 // from its own image, which a line of no version would undo, letting the
-// next release adopt any label: review), else Imported, as before.
+// next release adopt any label: review), else Imported, as before. Either
+// way the holds are derived again (Rederive): the import's own derivation
+// may be what failed after its take-over (HoldsError; review: a stale hold
+// started the held image on the imported data).
 func (s *Set) Resolved(base, rel, service string, since time.Time) error {
 	if w := readHistory(base).window(service); len(w) > 0 && (w[0].How == Imported || w[0].How == Forced) && !since.IsZero() && w[0].Time >= since.Unix() {
-		return nil
+		return s.Rederive(base, rel)
 	}
 	return s.Imported(base, rel, service)
 }

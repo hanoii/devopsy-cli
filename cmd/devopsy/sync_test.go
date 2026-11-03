@@ -283,10 +283,14 @@ case "$*" in
       case $q in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
     done
     echo "Error: No such image: $5" >&2; exit 1 ;;
+  # FAIL_PULL: every pull fails, as with the registry out of reach, and
+  # a name FAKE_NAMES does not list is no image.
+  "pull "*) [ -z "${FAIL_PULL:-}" ] || { echo "Error response from daemon: registry unreachable" >&2; exit 1; } ;;
   # FAKE_NAMES: space separated <name>=<id>, the image a name points to
   # (images.CLI's ID); any other name answers nothing.
   "image inspect --format {{.Id}} "*)
-    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done ;;
+    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done
+    [ -z "${FAIL_PULL:-}" ] || { echo "Error: No such image: $5" >&2; exit 1; } ;;
   # FAKE_USERS: the compose projects whose containers use any image
   # (images.CLI's Users: a container's id, then its project), none by
   # default.

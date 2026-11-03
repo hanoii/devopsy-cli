@@ -1389,6 +1389,13 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 			unlock()
 		}
+		// Taken over, its holds not derived (images.HoldsError): the
+		// data's window is the export's, what would run on it not yet what
+		// that allows, which --resolved derives.
+		var holds *images.HoldsError
+		if errors.As(err, &holds) {
+			return fail("the import completed and took over " + name + "'s history of its data, and what runs on it could not be derived again from it (" + holds.Err.Error() + "): what it stopped stays down, and the mark until an import of " + name + " completes (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved derives it and starts them)")
+		}
 		if err != nil {
 			return fail(err.Error() + ": the import completed, and " + name + "'s history of its data could not be taken over: what it stopped stays down, and the mark until an import of " + name + " completes")
 		}

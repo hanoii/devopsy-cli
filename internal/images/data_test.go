@@ -1544,6 +1544,29 @@ func TestDataCopyDropsHold(t *testing.T) {
 	test.up()
 	dropped(test, "the import of no record")
 
+	// An import whose take-over was written but whose holds could not be
+	// derived (its own name gone, the pull failing) keeps the hold until
+	// --resolved derives them (review: it found the history taken over and
+	// derived nothing, so the held image started on the imported data).
+	uat := newSim(t, d, "app-uat", &out)
+	held(uat)
+	mark := time.Now().Add(-time.Minute)
+	delete(d.names, "mariadb:11.8")
+	d.fail = map[string]bool{"Pull": true}
+	var holdsErr *HoldsError
+	if err := uat.e.set.ImportDone(uat.base(), uat.e.rel(uat.cur), data); !errors.As(err, &holdsErr) {
+		uat.fail("ImportDone with the pull failing: %v", err)
+	}
+	if heldIn(uat.e.rel(uat.cur))["database"] == "" {
+		uat.fail("setup: the hold went with the pull failing")
+	}
+	out.Reset()
+	if err := uat.e.set.Resolved(uat.base(), uat.e.rel(uat.cur), "database", mark); err != nil {
+		uat.fail("--resolved: %v", err)
+	}
+	uat.up()
+	dropped(uat, "--resolved")
+
 	// A reset's wipe starts every history over: the hold goes with it.
 	ci := newSim(t, d, "app-ci", &out)
 	held(ci)

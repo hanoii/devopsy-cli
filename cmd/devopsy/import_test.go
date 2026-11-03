@@ -1087,9 +1087,21 @@ func TestImportDropsHold(t *testing.T) {
 	write(t, list, "shop-prod-app\tsha256:twelve\tapp\tpulled\tshop-prod-app@sha256:twelve\t\t\t12.1\tlatest\tshop-prod-app\tsha256:own\t\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
 	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"app\":\n    image: \"shop-prod-app@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"shop-prod-app@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
 	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n2\tapp\tran\tshop-prod-app\tsha256:twelve\tshop-prod-app@sha256:twelve\t12.1\tlatest\n", 0o644)
-	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	// Its own name gone and the registry out of reach: the history taken
+	// over, the hold not derived, which the failure says and --resolved
+	// derives (review: --resolved found the history taken over and
+	// derived nothing, the held image starting on the imported data).
+	gone := []string{"FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAIL_PULL=1"}
+	_, errs, code = s.runIO(gone, out, "@prod", "--import", "app", "--yes")
+	if code == 0 || !strings.Contains(errs, "the import completed and took over app's history of its data, and what runs on it could not be derived again from it") || !strings.Contains(errs, "--import app --resolved derives it") || readMark(base) == nil || !readMark(base).IsImport() {
+		t.Fatalf("the import with its hold not derived (%d):\n%s", code, errs)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, images.HeldLabel) {
+		t.Fatalf("setup: the hold went with the pull failing:\n%s", c)
+	}
+	_, errs, code = s.runIO(env, nil, "@prod", "--import", "app", "--resolved", "--yes")
 	if code != 0 || !strings.Contains(errs, "app runs ") || !strings.Contains(errs, "own image again") {
-		t.Fatalf("the import of 11.8 data into the held environment (%d):\n%s", code, errs)
+		t.Fatalf("--resolved after the import (%d):\n%s", code, errs)
 	}
 	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "shop-prod-app@sha256:own") {
 		t.Errorf("still held after the import:\n%s", c)
