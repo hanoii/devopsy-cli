@@ -1462,20 +1462,23 @@ func TestDataFullRestoreOfHeld(t *testing.T) {
 }
 
 // Two environments release, fail in their run step after the database
-// started (restarted, as built now and then), fail in their fetch, roll
-// back, sync from each other, import each other's exports, take and
-// restore snapshots (whole or --no-code) and lose releases to pruning,
-// their database pulled under several tags and versions, built, or
-// labeled any, accepting now and then, while the registry moves the tags.
-// A model of the data, kept by the test from what each step runs (the
-// versions and tags its releases claim, never devopsy's history or
-// listings), says what the rule allows: devopsy refuses exactly what the
-// model refuses unaccepted, a restart and a full restore hold exactly
-// what the model refuses, and devopsy's window says the model's version.
-// And every run the model records is checked against the model's window
-// itself: no data ever runs a lower version, or another tag at its
-// version, unaccepted. And every kept release's and snapshot's bookmarks
-// hold what it lists; once all goes, nothing is left.
+// started or before (its container the one before, or none: restarted,
+// as built now and then), fail in their fetch, roll back, sync from each
+// other, import each other's exports, take and restore snapshots (whole
+// or --no-code) and lose releases to pruning, their database pulled under
+// several tags and versions, built, or labeled any, accepting now and
+// then, while the registry moves the tags. A model of the data, kept by
+// the test from what each database runs (the image its container runs,
+// under the version and tag that image was fetched under, never devopsy's
+// history or listings: review, a model of what each step meant to run
+// passed a Restore retagging the release's own name from the leaving
+// release's bookmark), says what the rule allows: devopsy refuses exactly
+// what the model refuses unaccepted, a restart and a full restore hold
+// exactly what the model refuses, and devopsy's window says the model's
+// version. And every run the model records is checked against the
+// model's window itself: no data ever runs a lower version, or another
+// tag at its version, unaccepted. And every kept release's and snapshot's
+// bookmarks hold what it lists; once all goes, nothing is left.
 func TestDataRandom(t *testing.T) {
 	t.Parallel()
 	for seed := int64(1); seed <= int64(seeds(300)); seed++ {
@@ -1530,14 +1533,54 @@ func dataRandom(t *testing.T, seed int64) {
 	// hold's, the failed release's or the snapshot's).
 	running := map[*sim]Service{}
 	var log []string
-	// run is a run of svc's claim on m's data in the model: the invariant,
-	// checked against the model's window whatever devopsy said, then the
-	// line, a forced one when accepted and refused.
-	run := func(m *sim, svc Service, accepted bool) {
+	// claimed is every claim (version and tag) each image was fetched
+	// under in each environment, oldest first (the sim's fetch: a build's,
+	// a pull's): what runs is judged by the image its container runs,
+	// never by what the step meant to run.
+	claimed := map[*sim]map[string][]Service{}
+	for _, m := range envs {
+		claimed[m] = map[string][]Service{}
+		m.fetched = func(svc Service, id string) {
+			if svc.Name == "database" && id != "" {
+				claimed[m][id] = append(claimed[m][id], svc)
+			}
+		}
+	}
+	sameClaim := func(a, b Service) bool { return a.DataVersion == b.DataVersion && a.tag() == b.tag() }
+	// actual is the claim m's database runs the image img under, pref
+	// being what the step meant to run: pref when it pulls img by its name
+	// (a pulled name runs what it holds now, under the running release's
+	// label) or img was fetched under it; else the newest claim img was
+	// fetched under (another release's image: a hold's, or one a bookmark
+	// gave in place of the release's own build); else pref (an image no
+	// fetch got: a gone name pulled again).
+	actual := func(m *sim, img string, pref Service) Service {
+		if !pref.Build && img != "" && d.names[familiar(pref.Ref)] == img {
+			return pref
+		}
+		cs := claimed[m][img]
+		for _, c := range cs {
+			if sameClaim(c, pref) {
+				return pref
+			}
+		}
+		if len(cs) > 0 {
+			return cs[len(cs)-1]
+		}
+		return pref
+	}
+	// run is a run of the image img on m's data in the model, under the
+	// claim it was fetched under (actual; pref, what the step meant to
+	// run, which accepted accepts): the invariant, checked against the
+	// model's window whatever devopsy said, then the line, a forced one
+	// when accepted and refused.
+	run := func(m *sim, img string, pref Service, accepted bool) {
 		t.Helper()
+		svc := actual(m, img, pref)
+		accepted = accepted && sameClaim(svc, pref)
 		refused := verdict(model[m], svc)
 		if refused && !accepted {
-			t.Fatalf("after %v: %s runs its database as %s=%s (tag %q) on data its window refuses it on, unaccepted\nmodel %v\n%s", log, m.e.set.Name, DataVersionLabel, svc.DataVersion, svc.tag(), model[m].window("database"), out.String())
+			t.Fatalf("after %v: %s runs its database on %s as %s=%s (tag %q) on data its window refuses it on, unaccepted (the step meant %s=%s, tag %q)\nmodel %v\n%s", log, m.e.set.Name, img, DataVersionLabel, svc.DataVersion, svc.tag(), DataVersionLabel, pref.DataVersion, pref.tag(), model[m].window("database"), out.String())
 		}
 		how := Ran
 		if accepted && refused {
@@ -1640,36 +1683,58 @@ func dataRandom(t *testing.T, seed int64) {
 			refused := m.cur != "" && verdict(model[m], dbOf(ss))
 			id, err := m.release(yes, ss...)
 			if expect("release "+id, err, refused, yes) {
-				run(m, dbOf(ss), yes)
+				run(m, m.runs("database"), dbOf(ss), yes)
 			}
 			check(m.e.set.Name + " release " + id)
-		case 3, 11: // a run step failing after its database ran, restarted
+		case 3, 11: // a run step failing after its database ran, or before (its container the one before, or none), restarted
 			if m.cur == "" {
 				continue
 			}
 			prev, ss := m.cur, svcs()
 			yes := rng.Intn(4) == 0
 			refused := verdict(model[m], dbOf(ss))
-			id, err := m.failRun(yes, ss...)
-			if !expect("failed release "+id, err, refused, yes) {
+			heldBefore, before := heldIn(m.e.rel(prev))["database"] != "", m.runs("database")
+			early, gone := rng.Intn(2) == 0, rng.Intn(2) == 0
+			n := len(m.ups)
+			var id string
+			var err error
+			ran := true
+			if early {
+				id, ran, err = m.failEarly(yes, gone, ss...)
+			} else {
+				id, err = m.failRun(yes, ss...)
+			}
+			what := map[bool]string{false: "failed release ", true: "release failed early "}[early]
+			if !expect(what+id, err, refused, yes) {
 				check(m.e.set.Name + " refused " + id)
 				continue
 			}
-			run(m, dbOf(ss), yes)
 			failedImg, _ := match(readList(m.e.rel(id)), entry{Service: "database"})
+			if ran {
+				img := before
+				if !early {
+					img = m.ups[n]
+				}
+				run(m, img, dbOf(ss), yes)
+			}
 			held := verdict(model[m], dbOf(m.e.svcs[prev]))
 			if held != (heldIn(m.e.rel(prev))["database"] != "") {
 				t.Fatalf("after %v: the restart of %s held %v, the model says %v\n%s", log, prev, heldIn(m.e.rel(prev)), held, out.String())
 			}
-			if held && m.runs("database") != failedImg.ID {
-				t.Fatalf("after %v: the restart of %s runs its database on %s, not %s's %s that ran on its data\n%s", log, prev, m.runs("database"), id, failedImg.ID, out.String())
-			}
+			// Held on the failed release's image when it ran, else on the
+			// hold before, else on the failed release's.
+			pref, want := dbOf(m.e.svcs[prev]), ""
 			if held {
-				run(m, dbOf(ss), false)
-			} else {
-				run(m, dbOf(m.e.svcs[prev]), false)
+				pref, want = dbOf(ss), failedImg.ID
+				if !ran && heldBefore {
+					pref, want = running[m], before
+				}
 			}
-			check(m.e.set.Name + " failed run " + id)
+			if held && m.runs("database") != want {
+				t.Fatalf("after %v: the restart of %s runs its database on %s, not %s\n%s", log, prev, m.runs("database"), want, out.String())
+			}
+			run(m, m.runs("database"), pref, false)
+			check(m.e.set.Name + " " + what + id)
 		case 4: // a fetch failing: undone
 			id := m.e.release(svcs()...)
 			if m.e.set.Check(m.e.rel(id)) == nil {
@@ -1701,7 +1766,7 @@ func dataRandom(t *testing.T, seed int64) {
 			}
 			cur := m.cur
 			if expect("rollback to "+target, m.rollback(target, yes), refused, yes) {
-				run(m, dbOf(m.e.svcs[target]), yes)
+				run(m, m.runs("database"), dbOf(m.e.svcs[target]), yes)
 				os.WriteFile(filepath.Join(m.e.rel(cur), RolledBackFile), nil, 0o644)
 			}
 			for n, i := range before {
@@ -1747,7 +1812,7 @@ func dataRandom(t *testing.T, seed int64) {
 					}
 					w[0].How = SyncedFrom + "x"
 					model[m] = w
-					run(m, db, false)
+					run(m, m.runs("database"), db, false)
 				}
 			}
 			check(m.e.set.Name + " sync from " + o.e.set.Name)
@@ -1824,9 +1889,9 @@ func dataRandom(t *testing.T, seed int64) {
 					if e, _ := match(readList(sn.dir), entry{Service: "database"}); m.runs("database") != e.ID {
 						t.Fatalf("after %v: the full restore of %s runs its database on %s, not the snapshot's %s\n%s", log, filepath.Base(sn.dir), m.runs("database"), e.ID, out.String())
 					}
-					run(m, sn.running, false)
+					run(m, m.runs("database"), sn.running, false)
 				} else {
-					run(m, dbOf(sn.svcs), false)
+					run(m, m.runs("database"), dbOf(sn.svcs), false)
 				}
 				check(m.e.set.Name + " full restore " + filepath.Base(sn.dir))
 				continue
@@ -1852,7 +1917,7 @@ func dataRandom(t *testing.T, seed int64) {
 				}
 				m.up()
 				m.e.set.Ran(m.base(), rel)
-				run(m, db, false)
+				run(m, m.runs("database"), db, false)
 			}
 			m.e.set.Accept = nil
 			check(m.e.set.Name + " --no-code restore " + filepath.Base(sn.dir))
