@@ -190,10 +190,10 @@ digest when that image was pulled, and by name when it was built (the
 name of the release that built it, when this release pulls the service
 instead).
 
-A hold is never carried over. It is worked out again from the history
-every time what a service with data runs is settled: every activation,
-the restart after a failed run step, a full or a `--no-code` restore, a
-sync, an import, a reset. A hold ends as soon as the data allows the
+A hold is never carried over. devopsy works it out again from the
+history whenever it picks the image for a service with data: at every
+activation, the restart after a failed run step, a full or a `--no-code`
+restore, a sync, an import and a reset. A hold ends as soon as the data allows the
 release's image again.
 
 A release or a rollback is refused or accepted before it runs, so it
