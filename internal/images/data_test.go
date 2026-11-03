@@ -1067,6 +1067,19 @@ func TestDataImport(t *testing.T) {
 	if err := stage.e.set.ImportCheck(rel, data, "database"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "this environment would run the export's data on an image its version does not allow: nothing imported") || !strings.Contains(out.String(), "--import database --accept-image database") {
 		stage.fail("an import onto a lower version (%v)", err)
 	}
+	// Accepted, its history over from its own image; --resolved after it
+	// (the data in, a later step failed) keeps that start, never a line of
+	// no version the next release would adopt any label over.
+	mark := time.Now().Add(-time.Minute)
+	stage.e.set.Accept = map[string]bool{"database": true}
+	if err := stage.e.set.ImportCheck(rel, data, "database"); err != nil {
+		stage.fail("an accepted import: %v", err)
+	}
+	stage.e.set.ImportDone(stage.base(), rel, data)
+	stage.e.set.Accept = nil
+	if err := stage.e.set.Resolved(stage.base(), rel, "database", mark); err != nil || strings.Join(stage.history("database"), " ") != "forced:I1:11.8" {
+		t.Errorf("--resolved after an accepted import (%v): %v", err, stage.history("database"))
+	}
 	stage.release(false, dbSvc("mariadb:12.1"))
 	rel = stage.e.rel(stage.cur)
 	if err := stage.e.set.ImportCheck(rel, data, "database"); err != nil {

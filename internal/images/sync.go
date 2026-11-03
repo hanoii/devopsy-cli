@@ -383,9 +383,11 @@ func (s *Set) Imported(base, rel, service string) error {
 // mark: nothing when the history's window starts with an import line
 // written since (the import took the export's window, and only what came
 // after failed: the data is complete, and starting over would forget its
-// version), else Imported, as before.
+// version), or a forced one (the import was accepted: its history over
+// from its own image, which a line of no version would undo, letting the
+// next release adopt any label: review), else Imported, as before.
 func (s *Set) Resolved(base, rel, service string, since time.Time) error {
-	if w := readHistory(base).window(service); len(w) > 0 && w[0].How == Imported && !since.IsZero() && w[0].Time >= since.Unix() {
+	if w := readHistory(base).window(service); len(w) > 0 && (w[0].How == Imported || w[0].How == Forced) && !since.IsZero() && w[0].Time >= since.Unix() {
 		return nil
 	}
 	return s.Imported(base, rel, service)
