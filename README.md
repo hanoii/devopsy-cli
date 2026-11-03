@@ -3,41 +3,43 @@
 `devopsy` is a small command-line tool for running Docker Compose projects,
 both on your machine and on servers you own.
 
-Compose is great for describing a project, but leaves you on your own once
-it has to live on a server. devopsy tries to help with a few things there:
+Compose describes a project but has nothing for running it on a server.
+devopsy adds:
 
-- Releases: ship a new version with one command, from your machine or
-  CI, and roll back just as easily.
-- Environments: production, staging or one per pull request, side by
-  side on the same server without stepping on each other.
-- Variables per deployment: set a value once for a project on a
-  server, or only for one install or one environment; the most specific
-  wins. Secrets never touch git or your shell history, and a release that
-  is missing a required value stops before going live and tells you what
-  to set.
+- Releases. One command ships a new version, from your machine or CI, and
+  another rolls it back.
+- Environments. Production, staging or one per pull request run side by
+  side on one server, each with its own containers, volumes and URL.
+- Variables per deployment. A value can be set for a project on a
+  server, for one install, or for one environment, and the most specific
+  wins. Secrets stay out of git and your shell history. A release that is
+  missing a required value stops before going live and names what to
+  set.
 
 Everything a project needs lives in a `.devopsy/` directory next to your
-code, so every project works the same way.
+code, and every project works the same way.
 
 ## What it is not
 
-- Not a platform. No control plane, dashboard, agent or daemon; nothing
-  listens for webhooks. A server is Docker, SSH and this binary.
-- Not an orchestrator. No Kubernetes, no Swarm, no failover: an
-  environment is one compose project on one server.
-- Not a compose replacement. It never rewrites your compose files:
-  plain `docker compose` sees what devopsy runs, but for the one file of
-  devopsy's own a release adds on a server (`devopsy-compose.yaml`: the
-  image each service was given, and the data services held on another
-  image than their release's own).
-- Not a local development tool like DDEV. No per-framework setup or
-  router: it runs the compose project you write.
-- Not a build system. Images are built however you like: on the server
-  by compose, or in CI and pushed to a registry.
+devopsy has no control plane, dashboard, agent or daemon, and nothing
+listens for webhooks. A server is Docker, SSH and this binary.
 
-devopsy is none of these, but any of them can be built on top of it: its
-commands, `--debug` output and plain files are meant to be scripted, by
-you or with an AI agent.
+It does no orchestration: no Kubernetes, no Swarm, no failover. An
+environment is one compose project on one server.
+
+It does not replace compose or rewrite your compose files. Plain `docker
+compose` sees what devopsy runs, apart from one file a release adds on a
+server, `devopsy-compose.yaml` ([On the
+server](docs/releases.md#on-the-server)).
+
+It is not a local development tool like DDEV. It has no per-framework
+setup or router, and runs the compose project you write.
+
+It is not a build system. Images are built however you like: on the
+server by compose, or in CI and pushed to a registry.
+
+Any of these can be built on top of it. Its commands, `--debug` output and
+plain files are meant to be scripted, by you or with an AI agent.
 
 ## Who it is for
 
@@ -48,9 +50,8 @@ releases and rollbacks, secrets out of git, URLs and certificates) without
 running or paying for one.
 
 It assumes some technical knowledge: a terminal, SSH, and the basics of
-Docker. It is also a good way to learn how Docker and Docker Compose
-deployments work: devopsy hides nothing, and every step it takes is plain
-compose you can read and run yourself.
+Docker. It can also teach how Docker and Docker Compose deployments work,
+since every step it takes is plain compose you can read and run yourself.
 
 It grew out of hosting websites for clients: many projects, some installed
 several times from one codebase, spread over a handful of servers, each
@@ -61,60 +62,56 @@ deployed by a different person or CI job. It fits when:
 - a release that recreates its containers, for a few seconds, is fine;
 - the people deploying have SSH access to the servers.
 
-## Opinionated (as little as possible)
+## The choices it makes
 
-devopsy is small, but not neutral. Its goal is that every project is worked
-on, released and operated the same way, so that moving between projects,
-handing one over, or letting CI or an agent deploy it needs nothing to be
-relearned:
+devopsy aims for every project to be worked on, released and operated the
+same way. Moving between projects, handing one over, or letting CI or an
+agent deploy it then needs nothing relearned:
 
 - the same commands in every project: `devopsy up`, `devopsy @prod
   --release`, `--rollback`, `--log`, `--vars`, `--shell`;
 - the same layout on every server: `<project>/<environment>/` with
-  `releases/`, `current` and `shared/`, so data, secrets and release logs
-  are always in the same place;
-- the same names: compose project, containers and volumes are
-  `<project>[-<instance>]-<environment>`.
+  `releases/`, `current` and `shared/`, with data, secrets and release
+  logs always in the same place;
+- the same names for compose projects, containers and volumes
+  ([Where an environment lives](docs/config.md#where-an-environment-lives)).
 
-To get there it makes choices for you:
+For that, it decides some things for you:
 
-- Compose plus environment variables. devopsy only adds variables, all
-  visible with `devopsy --env`. Anything else is compose's.
-- Push over SSH, never pull. The server needs no access to the
-  repository: no deploy keys, tokens or webhooks. Locally devopsy needs
-  `ssh`; on the server `devopsy` and what Debian has: `tar`, GNU
-  coreutils and util-linux (`flock`, `setsid`, `script`).
-- Releases are complete directories, run through a `current` symlink;
-  `shared/` keeps data and secrets across them. A release never changes a
-  live tree in place.
-- Steps are explicit. `--release` and `--rollback` refuse without the
-  steps the environment names. A release's steps come from the checkout,
-  which is what it uploads; a rollback's remote steps, the restart after
-  a failed `run` and `--destroy`'s step come from the release they act
-  on, its own `config.yaml` on the server.
+- devopsy adds only environment variables to compose, all of them shown by
+  `devopsy --env`. Everything else is compose's.
+- Releases are pushed over SSH. The server needs no access to the
+  repository, and no deploy keys, tokens or webhooks. Locally devopsy
+  needs `ssh`. On the server it needs `devopsy` and what Debian has:
+  `tar`, GNU coreutils and util-linux (`flock`, `setsid`, `script`).
+- A release is a complete directory, run through a `current` symlink, and
+  `shared/` keeps data and secrets across releases. A release never
+  changes a live tree in place ([On the
+  server](docs/releases.md#on-the-server)).
+- `--release` and `--rollback` run the steps the environment names, and
+  refuse without them ([Steps](docs/releases.md#steps)).
 - Project behavior lives in the project, as commands in
-  `.devopsy/commands/`, not as devopsy features.
-- Capabilities for common needs. Some conveniences are useful to most
-  projects but depend on each one to get right. devopsy defines them as
-  small contracts, and a project that wants one implements it in
-  `.devopsy/capabilities/`.
-- Deployment facts stay out of the project: which servers and instances
-  exist is decided by the command, variables or aliases, never the
-  project's config.
-- Words are yours. devopsy's own features are flags or `@target`; a word
-  is always a project command, then a compose command.
-- Secrets stay out of sight: the ones the project names are masked in
-  output, and values never go in arguments.
+  `.devopsy/commands/` ([Project commands](docs/local.md#project-commands)).
+- Conveniences most projects need, but each must get right for itself,
+  are small contracts devopsy defines and a project implements in
+  `.devopsy/capabilities/` ([Capabilities](docs/capabilities.md)).
+- Which servers and instances exist is decided by the command, variables
+  or aliases, and is kept out of the project's config
+  ([Targets](docs/config.md#targets)).
+- devopsy's own features are flags or `@target`. A word is a project
+  command, else a compose command ([Words](docs/local.md#words)).
+- The secrets a project names are masked in output, and their values are
+  never passed as arguments ([Secrets](docs/local.md#secrets)).
 
-Everything else is yours to make; `devopsy --ai-skill` ([Agents](docs/agents.md))
-teaches an agent how.
+Everything else is yours to make; `devopsy --ai-skill`
+([Agents](docs/agents.md)) teaches an agent how.
 
 ## Templates
 
 I created these templates as starting points, and as examples of how to work
 with devopsy. Together they set up a stack for deploying complex web
 applications, with an environment per branch or pull request, from your own
-repository and in relatively little time.
+repository.
 
 They are GitHub template repositories: start a project from one ("Use this
 template"), or sync it and keep it as a remote to pull its changes when you
@@ -128,7 +125,7 @@ its features.
   - A base domain, so every environment gets its own URL.
   - Real visitor IPs behind CDNs and other proxies.
   - A `domains` report: DNS, certificates and what to do next.
-  - Cloudflare aware: its IP ranges, automatic DNS challenges with an API
+  - Cloudflare support: its IP ranges, automatic DNS challenges with an API
     token, and proxied domains.
 - [devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami):
   the smallest project.
@@ -170,12 +167,14 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh 
 It installs the latest release, checksum verified, to `/usr/local/bin` when
 it can, else `~/.local/bin` (`DEVOPSY_VERSION=v0.19.0` and
 `DEVOPSY_INSTALL_DIR` choose). `devopsy --upgrade [vX.Y.Z]` replaces the
-binary (with `sudo` when its directory is not yours; on servers set up
-with devopsy-server it is the deploy user's, so `devopsy @<server>
---upgrade` upgrades a server from your machine). At a terminal it
-checks for a new release once a day in the background and says so; never in
-CI or in what devopsy runs on servers, and `DEVOPSY_NO_UPDATE_CHECK=1` turns
-it off.
+binary, with `sudo` when its directory is not yours. On servers set up
+with devopsy-server the directory is the deploy user's, and `devopsy
+@<server> --upgrade` upgrades a server from your machine.
+
+At a terminal, devopsy checks for a new release once a day in the
+background and says when there is one. It does not check in CI or in what
+devopsy runs on servers, and `DEVOPSY_NO_UPDATE_CHECK=1` turns the check
+off.
 
 To run a checkout's code instead, symlink `scripts/devopsy` into your `PATH`
 (it rebuilds on every run, instantly when nothing changed; needs Go).
