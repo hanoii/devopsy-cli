@@ -7,7 +7,7 @@ How a release notices its operator gone, what a signal may stop, and how a relea
 - Activations and holders are always `-T`, at a terminal too, with a pipe devopsy keeps open as stdin (`WatchEnv`) and a pseudo-terminal from `with_tty`: a `-t` session's hangup reaches only the shell, and dash runs a trap only once the command it waits for ends.
 - `remote.TTY` is exported into every session as `DEVOPSY_INTERNAL_TTY='<cols> <rows>'` (`remote.TTYEnv`) when stderr is a terminal (80x24 when its size is unknown), and `with_tty` in `basePrelude` runs steps, the fetch and the run step under `script`, plainly when `script` is missing or stdout is a tty already: BuildKit draws its live progress and colors only to a terminal, and the session stays one path for a terminal and CI.
 - Activations and holders print on one stream (`exec 1>&2`): on two pipes a line on stdout could reach the log after the marker and be cut.
-- `KeepAlive` (`ServerAliveInterval` of 3 beats, `ServerAliveCountMax=3`) goes on activations, uploads and a sync's sessions; `Bounded` (`KeepAlive` plus `ConnectTimeout=30`) on a log's save, `--export` and `--import`: without them a dead connection waits minutes.
+- Every session, and the parent's to a child, bounds its connection in one place (`connectOptions`, in `SSHOptions` and `ChildSSH`) with `ConnectTimeout=30`, a `ServerAliveInterval` of 3 beats and `ServerAliveCountMax=3`: a session left unbounded waits on a dead host until TCP gives up.
 - A release is pending from its upload until right before `make_current`: one cut off anywhere before is never rolled back to nor kept, and `prelude` removes stale `releases/*.tmp` and `.devopsy-watch.*` under the lock.
 
 ## The watcher
@@ -33,7 +33,7 @@ How a release notices its operator gone, what a signal may stop, and how a relea
 ## Ctrl-C and signals
 
 - devopsy takes Ctrl-C itself (`session` in `runRemote`; ssh ignores it): the first closes the pipe, and before the switch the watcher cancels the release while devopsy waits, saying so after 5 seconds; after the switch devopsy says the release goes on, and a second Ctrl-C ends the session; the log is saved either way.
-- "After the switch" is `SSHStreams`' flag on `SwitchMarker` (`WithSwitched`) or the disarm's byte answered (`WithBeaten`), never the release log, which stops at its cap: from the byte the script goes on to its switch on its own, so a Ctrl-C or a session lost between the two says the release goes on, never that nothing went live.
+- "After the switch" is `SSHStreams`' one flag (`WithLive`), set on `SwitchMarker` or on the disarm's byte answered, never the release log, which stops at its cap: from the byte the script goes on to its switch on its own, so a Ctrl-C or a session lost between the two says the release goes on, never that nothing went live.
 - During the upload (`signal.NotifyContext`) a Ctrl-C ends the progress line, and nothing changed.
 - A signal during the fetch only sets `fetch_sig` (INT, TERM, HUP); the fetch's child gets it too and fails, and the same path undoes it under the image lock with signals ignored from there on, exit 130, so a second Ctrl-C cannot stop the undo.
 - PIPE is ignored from the fetch on: dash writes "Terminated" to the dead session.

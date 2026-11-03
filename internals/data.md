@@ -1,6 +1,6 @@
 # Data, destroying and removing
 
-Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.CheckMounts` in `internal/cli/sync.go`, `ensureUtilImage` in `cmd/devopsy/sync.go` and `UtilDockerfile` in `internal/remote/sync.go`, `runDestroyData` in `cmd/devopsy/release_local.go`, `cmd/devopsy/releases.go`, and `DestroyScript`, `LeftoverScript` and `ReleasesRemoveScript` in `internal/remote/remote.go`.
+Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.CheckMounts` in `internal/cli/sync.go`, `ensureUtilImage` in `cmd/devopsy/sync.go` and `UtilDockerfile` in `internal/remote/sync.go`, `runDestroyData` in `cmd/devopsy/release_local.go`, devopsy's containers in `cmd/devopsy/writers.go`, `cmd/devopsy/releases.go`, and `DestroyScript`, `LeftoverScript` and `ReleasesRemoveScript` in `internal/remote/remote.go`.
 
 ## mnt and owners
 
@@ -26,8 +26,6 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - `Plan.Starts` reads the labels from the project's own compose files (`ComposeConfig`), never a `-f` the command adds; never for a `--dry-run` where compose parses it (before the command, after it up to `--`, for `run` only before its service: `commandValueFlags`, `dryRun`); never in a release on a server (`cli.InRelease`), where `--mnt-owners` owns it, so a rollback's plain `up` never fails on labels `--mnt-owners restored` only warns about.
 - Locally, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
 - No owners are fixed for a stream's import (it writes as the service's user), restarts or reboots (owners persist), and no flag fixes owners: a release does it.
-- Containers named after devopsy's pid (`<ownersPrefix><compose name>-<pid>-<n>` for owners, an import's `<ImportContainerPrefix><compose name>-<pid>-extract-<n>` and `-owners-<n>`) start through `dockerRunFresh`, which removes a container of that very name first: only a devopsy killed outright whose pid this one reuses can have left one, still running, and `docker run` refuses the name.
-- On a server the next lock-taker removes the rest of them, a release's owners' by `ownersContainers` in `--mnt-owners` before it scans, an import's by `importContainers`, both in `--destroy-data`; locally only the name's own goes, since another terminal's owners' step may be running.
 - The owners in copies are a named feature, `mnt-owner` (internals/releases.md for what `childNeeds` carries), found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
 
 ## The mounts check
@@ -69,9 +67,30 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - The tag is bumped whenever `UtilDockerfile` changes, and a new tag is a named feature of its own (internals/snapshots.md's gates): a new tag is built at its first use on each host, where the old one would be rebuilt from the old Dockerfile only once a week old.
 - One implementation, in Go, never in a script: a weekly check in shell needs GNU `date`, which the macOS test runs lack.
 
+## devopsy's containers
+
+- Every container devopsy starts in `UtilImage` carries `devopsy.env=<compose name>`, the environment whose data it works on, and `devopsy.task=<task>`, what it does (`remote.ContainerLabels`, `container` in `cmd/devopsy/writers.go`), never a `devopsy.data*` label, which are the project's.
+- The tasks (`remote.TaskOwners` and the rest):
+  - `owners`, a release's or a local command's owners' step;
+  - `import`, an import's or a restore's extraction and its owners';
+  - `sync-<id>` (`remote.SyncTask`), what writes sync `<id>`'s copy into the child: its rsync, clone and owners' containers on one server, the receive's across, a reset's wipe and its owners';
+  - `source`, the parent's side of a push's or an export's copy (the reflink check, the clone, its removal, the rsync daemon);
+  - `snapshot`, `export` and `destroy`.
+- What a killed devopsy left is found by these labels alone, never by a name, through one remover (`removeLeft(env, task)`, a `docker ps` filter on both): each guarantee is then a filter value, so a holder's can never match another sync's or the parent's clone, and an environment's never another environment's.
+- Who removes which:
+  - the child's holder (`endWriters`) its own `sync-<id>`, never another sync's and never the parent's clone of that very sync (`source`, the parent's env);
+  - the next lock-taker an import's or a restore's `import` (the next import of that service, `--resolved`, a reset's wipe, the next restore on a restore's mark, a child's prepare on an import's or a restore's mark);
+  - `--mnt-owners` the `owners` ones, before it scans;
+  - the next holder of the parent's sync lock (a push, an export) the `source` ones;
+  - `--destroy-data` every task of its environment, never another environment's, since it holds every lock.
+- Locally only a failed import's end removes by label (`endImport`, `import`), never a local `--destroy` and never `owners`: nothing holds a lock there, and another terminal's owners' step may be running.
+- A name stays only where it keeps a running container unique (`<prefix><compose name>-<pid>-<n>`, a sync's id), and `dockerRunFresh` (an import's, an owners' step's) and a snapshot check's `unzstd` remove a container of that very name first (`removeNamed`): a devopsy killed outright whose pid or snapshot this one repeats can have left it running, and `docker run` refuses the name.
+- A container's own devopsy removes it by name when its context ends (`dockerRunIO`).
+- Across servers the push's receive script starts the child's rsync, which the child's holder removes by its labels, so the labels are a named feature, `container-labels` (`remote.ContainerLabelsFeature`), found by `--sync-push`: an older parent would start it unlabeled, and its write could outlive the sync.
+
 ## Destroying and removing
 
-- `--destroy` removes nothing unless everything before succeeded (`DestroyScript`, under the release and image locks; it asks for the target's full name unless `--yes`): the hidden `--destroy-data` (`runDestroyData`), in `current` else the newest release, runs the environment's `destroy:` step if any while everything is up, then `compose --profile '*' down --volumes --remove-orphans --rmi local`, then empties `mnt` as root in `UtilImage` through a plain `docker run` (`compose run` would bring the network back), a sync's leftover record's writers ended first (`endWriters`); then every release's images go; then `removeBase`.
+- `--destroy` removes nothing unless everything before succeeded (`DestroyScript`, under the release and image locks; it asks for the target's full name unless `--yes`): the hidden `--destroy-data` (`runDestroyData`), in `current` else the newest release, runs the environment's `destroy:` step if any while everything is up, then `compose --profile '*' down --volumes --remove-orphans --rmi local`, then empties `mnt` as root in `UtilImage` through a plain `docker run` (`compose run` would bring the network back), a sync's leftover record's writers ended first (`endWriters`) and every container of devopsy's the environment has removed, so nothing writes into `mnt` while it is emptied; then every release's images go; then `removeBase`.
 - Prompts that destroy or replace data (`--destroy`, `--sync`, `--reset`, a snapshot's restore, `--import`, `--resolved`) ask for the target's full name (`confirmWord`, `Target.Path`: `<project>/[<instance>/]<environment>`), never the service, which the prompt's text names; a local `--destroy` asks for the project's name.
 - Leftover levels are asked about, never removed silently: `purgeLeftovers` finds a level's directory left with only its `.env` (`LeftoverScript`) and removes it with `--purge` or a yes at a terminal, else warns with the command.
 - `--releases remove` refuses all its words when one is wrong (`runReleases`): it lists first, resolves every word (`chooseReleases` takes an exact id, else a unique prefix, and `failed` as every failed or rolled-back release and an INCOMPLETE one older than current), refuses when one names nothing, several or the current release, then asks, `--yes` without a terminal.

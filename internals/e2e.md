@@ -6,7 +6,7 @@ Code: `e2e/` (`main_test.go` holds the lanes, the containers and the helpers; `D
 
 - The servers are privileged Debian 13 containers with their own Docker and sshd, the operator a container too, devopsy built from the checkout in each; the tests drive them with `docker exec` and check from outside.
 - The suite runs locally with any Docker, on GitHub on demand and nightly when `main` moved since the last run that passed (`e2e.yml`); the release workflow does not run it.
-- `E2E_BEAT` (default 1) is passed as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`, so quiet times and the operator's `KeepAlive` keep their order; `E2E_BEAT=5` runs everything with the real timeouts, and one test always does.
+- `E2E_BEAT` (default 1) is passed as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`, so quiet times and the sessions' keepalive keep their order; `E2E_BEAT=5` runs everything with the real timeouts, and one test always does.
 - The test server's deploy user has `/bin/sh` (dash) as login shell, stricter than devopsy-server's bash.
 - The deploy user's home, where the releases go, is a tmpfs (`entrypoint`), so nothing clones by reflinks there on any host; a test of reflinks mounts an XFS loop device of its own below it (`TestSnapshotReflinkE2E`, `TestSyncReflinkE2E`), and one of their absence an ext4 (`TestSyncReflinkExt4E2E`).
 - Servers pull through a mirror of Docker Hub (`startMirror`, the volume `devopsy-e2e-mirror` its cache), so four lanes cost Docker Hub no more than one.

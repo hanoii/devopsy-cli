@@ -7,7 +7,7 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 - A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:` and `snapshots: {root, max_keep, mirror}`); an unknown key is an error.
 - Never `~/.devopsy`: project discovery would take the home directory for a project.
 - `defaults:` gives environments `mode`, steps, `releases`, `snapshots`, `inherit` and `env`, merged: `env` key by key, `snapshots` by kind and key (`mergeSnapshots`); a `~` value removes the key (`KEY: ~`, `snapshots.manual.keep: ~`, `inherit: ~`), and `""` stays empty.
-- `config.local.yaml`'s `defaults:` merge over the project's, while an environment it defines replaces the project's whole.
+- `config.local.yaml` replaces the project's top-level keys, but its `defaults:` and an environment of the same key (a pattern only over the same pattern) merge over the project's as `defaults:` do, `parent: ~` removing the parent (`mergeEnvironment`): a local file changing one key of an environment must not have to repeat the rest.
 - The config is parsed as YAML nodes (`nullKeys`): a plain decode cannot tell `~` from absent.
 - `.env` is read with compose's parser (`LoadDotenv`), and the caller's environment wins over it.
 - A project command in `.devopsy/commands/` gets `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`, and `devopsy <its own name>` inside it reaches the compose command it wraps, never itself.

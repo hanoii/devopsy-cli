@@ -45,8 +45,7 @@
 
 ## Locks
 
-- One order everywhere, release (fd 9), sync, snapshot (`.devopsy-snapshot.lock`, fd 6), image (fd 8): none is waited for while a later one is held.
-- The sync lock is fd 5 wherever the image lock may be taken (the snapshot scripts, a restore, release snapshots, `--destroy`), and fd 8 only in `syncSourceLock` (a push, an export).
+- One order everywhere, release (fd 9), sync (fd 5), snapshot (`.devopsy-snapshot.lock`, fd 6), image (fd 8): none is waited for while a later one is held.
 - A take holds the snapshot lock alone for pass 1, the release, sync and snapshot locks for the stopped pass, then the snapshot lock alone for the tars: a release never waits minutes for a tar.
 - A restore holds the snapshot lock from before it reads the snapshot to its end, and pruning keeps the snapshot a restore's mark names: a take's prune would otherwise remove the snapshot a restore is reading.
 - `--destroy` takes all four.
@@ -66,7 +65,7 @@
 - On a marked environment a restore refuses when any entry or volume there now of a service with data, current or restored, is absent from the snapshot: the restore clears the mark, so it must write all of each, as a sync does.
 - A data image gone is pulled by its digest in the service's own repository as the snapshot's listing names it (`SnapshotPull`, `ownHolds`), never from a repository an imported record names, under the image lock, shared, and bookmarked as the snapshot's at once: another environment's removal must never strip it before the data step holds it.
 - The data is written between the images and the switch (`restore-data`), past the point of no return, right after `followOutput` and its marker: a failure of the step puts the images' names back and goes `not_live`.
-- `restore-data` stops the set, writes a restore mark right before the first write, extracts each entry and volume with the import's own code (`extractEntry`, containers named with `ImportContainerPrefix`) and holds the data services on the snapshot's images (`ImportDone`); a failure before its first write starts the set again, and from the first write the set stays down under the mark.
+- `restore-data` stops the set, writes a restore mark right before the first write, extracts each entry and volume with the import's own code (`extractEntry`, containers of the `import` task, internals/data.md) and holds the data services on the snapshot's images (`ImportDone`); a failure before its first write starts the set again, and from the first write the set stays down under the mark.
 - The mark and the record of what it stopped go, the record whole, only once the run step went through (`restored`): cleared by the data step, a shell killed before the run step would leave the set down unmarked.
 - A run step that fails takes down what it started (`firstDown`) before current goes back, and the restart skips the marked environment (`RestoreFixes`, naming `--no-code`): the failed step's services must not run on the restored data.
 - A full restore never marks the release it leaves as rolled back: a rollback after it goes back there.
@@ -112,7 +111,7 @@
 - The checkout's config decides, as for a release's `keep`.
 - `releaseSnapshotSetup` runs before the fetch, in this order:
   1. A killed holder's files settled (`settleSync`, since a release that syncs runs no `partialGuard`).
-  2. The server's image lock, record and mode exported (the bookmarks and the detached pruning hold the lock).
+  2. The snapshots' settings exported (`snapshotEnv`); the bookmarks and the detached pruning take the server's image lock themselves (`serverImages`, internals/images.md).
   3. The effective releases `keep` checked (1 would prune the snapshot with its own release; `releases: keep: 1` with them on is a config error too).
   4. The sync and snapshot locks (release, sync, snapshot, then the fetch's image lock).
   5. `release-check`, the leftovers first, as a take's: exit 3 is no release snapshot, said (a marked environment, nothing with data), and the release goes on; any other failure, the space check's included, cancels the release (`not_live`).

@@ -5,6 +5,7 @@ History, not rules: `internals/sessions.md` wins where they differ.
 - Activations always `-T` (decided), one path for terminals and CI: a `-t` session's hangup reached only the shell, and dash runs a trap only once the command it waits for ends, so a build ran on and then compose hung on the gone terminal.
 - The pseudo-terminal from `with_tty` rather than a `-t` session: BuildKit draws its live progress and colors through the pipe only under a terminal, and a `-t` session would have made the session a second path for terminals.
 - `KeepAlive` and `Bounded`: a log's save, `--export` and `--import` once waited minutes on a dead connection before ssh gave up.
+- On 2026-11-01 `KeepAlive` (the `ServerAlive*` options) and `Bounded` (`KeepAlive` plus `ConnectTimeout=30`), chosen per call site while the rest passed none, became `connectOptions` in `SSHOptions`, which every session gets, and `ChildSSH` took the same instead of its own `ConnectTimeout`: a session devopsy forgot to bound waited on a dead host for the TCP timeout. `DEVOPSY_SSH_COMMAND`'s options stay first, so they win.
 
 ## The watcher
 
@@ -22,7 +23,7 @@ History, not rules: `internals/sessions.md` wins where they differ.
 
 ## Ctrl-C and signals
 
-- "After the switch" includes the disarm's byte answered (review round 9): a Ctrl-C or a session lost between the beat and `SwitchMarker` said nothing went live while the script went on to its switch on its own. A switch already under way when the pipe closed goes on, said.
+- "After the switch" includes the disarm's byte answered (review round 9): a Ctrl-C or a session lost between the beat and `SwitchMarker` said nothing went live while the script went on to its switch on its own. A switch already under way when the pipe closed goes on, said. The two markers first set two flags (`WithSwitched`, `WithBeaten`), only ever read together, which became one, `WithLive`, on 2026-11-01.
 - PIPE is ignored from the fetch on because dash wrote "Terminated" to the dead session and died of it.
 - `img recover` by every lock-taker (review of 2026-10-25): a sync's holder and a `--no-code` restore ran current's images without recovering a release left fetching.
 - Signals are ignored from the end of a fetch (decided): stopping the run step restarted the previous release while `script`'s compose ran on, two `up`s on one project.

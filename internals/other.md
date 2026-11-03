@@ -52,6 +52,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 
 - Every session is `ssh [DEVOPSY_SSH_COMMAND's options] [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` for any command at a terminal (a shell, a project or compose command, `--upgrade`), never for activations and holders (internals/sessions.md).
 - Every session but a sync's rsync session (internals/syncs.md) passes `ClearAllForwardings=yes` (the operator's `LocalForward` lines clash between sessions), and every session refuses passwords (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`), never `BatchMode`, which would refuse a passphrase and a new host key too: a devopsy server takes keys only, so a prompt means a missing key, asked again per session of a release.
+- Every session also bounds its connection (internals/sessions.md), and `DEVOPSY_SSH_COMMAND`'s options come first, so they win: ssh keeps the first value of each option.
 - Connection sharing is the operator's SSH config, which `--ssh-config` suggests and never writes.
 - Test fakes of ssh run their last argument.
 

@@ -5,9 +5,9 @@
 ## Fetching
 
 - Every image a release runs stays until its last release goes.
-- A release fetches its images before the switch (`fetchImages`, through `devopsy --`, past project commands), in build mode `ProfilePull` (`--profile '*' pull --ignore-buildable`) then `build --pull`, in image mode `pull` then `ProfilePull`: a build or pull in the run step would run after the switch, and in a sync after the copy.
+- A release fetches its images before the switch (`fetchImages`, through `devopsy --`, past project commands), by its own mode (`img mode`, its record's), in build mode `ProfilePull` (`--profile '*' pull --ignore-buildable`) then `build --pull`, in image mode `pull` then `ProfilePull`: a build or pull in the run step would run after the switch, and in a sync after the copy.
 - Image mode's `pull` pulls buildable services with an `image:` too and fails on a missing tag.
-- A rollback or a restart restores its images (`img restore`) and fetches only when an image it builds is gone.
+- A rollback or a restart restores its images (`img restore`) and fetches, by the restored release's mode, only when an image it builds is gone.
 - Every release pulls every profile's non-buildable services, pull only, while the listing and the bookmarks stay the default services': a profile-only tool pulled once on first use never gets a patch.
 - A profile's buildable services are never built or pulled by a release, so a tool nobody pushed never fails one; a profile's non-buildable one that fails to pull fails it before the switch.
 - Image mode asks the registry twice for its default third-party tags; accepted.
@@ -16,7 +16,7 @@
 ## The listing
 
 - Each release lists its images per service in `devopsy-images` (`ListFile`: name, image id, service, kind, registry digest, version label, build key), from `compose config --format json` without profiles and without devopsy's own compose file (`NoReleaseComposeEnv`).
-- Own or pulled comes from compose and the mode (`Service.own`, a build in build mode or `pull_policy: never`), never from `RepoDigests` alone: on Docker's containerd store built and loaded images carry `RepoDigests` too, and a pulled image's id is its index digest.
+- Own or pulled comes from compose and the mode of the release listed (`Service.own`, a build in build mode or `pull_policy: never`), never from `RepoDigests` alone: on Docker's containerd store built and loaded images carry `RepoDigests` too, and a pulled image's id is its index digest.
 - A pulled image without a registry digest is restored as own: nothing could hold it.
 - The version label is display only: no field is common to images.
 - A built service's build key (`images.BuildKey`) hashes its interpolated `build:` section with paths relative to the release's code and links resolved, then a short hash per argument and never a value: compose prints paths absolute, the same code is reached by other paths (through `current`, a release root behind a link), and an argument can be a secret.
@@ -76,8 +76,11 @@
 
 ## On the server
 
+- Each release's mode comes from its own record (`images.ModeOf`, `RecordFile`, written at the upload), the new release's at a record and a fetch, the restored one's at a rollback, a restart and a full restore, never the operator's checkout, and a `Set` has no mode: a checkout may be in the other mode by now, which would restore a release made in build mode as pulled, or put a bookmark on a pushed name.
+- Every `Set` on a server comes from one constructor, `serverImages` (`cmd/devopsy/images.go`), which finds the image lock and the project's record of names left (`images.LeftFile`) from the release root (`ReleaseSettings`) and the environment's directory (`images.BaseEnv`), and the scripts pass `img` only `--name` and `--address`: a setting a script passes is one a script can forget.
+- The server finding these itself is a named feature, `record-mode` (`RecordModeFeature`), found by every script that runs the server's images (`--images`, `--export`, `--import`, `--snapshot-step`): an older server, told nothing, would take build mode for every release and hold no lock.
 - `runImages` ignores SIGPIPE, SIGTERM, SIGINT and SIGHUP: Go keeps no inherited ignored SIGPIPE or SIGTERM, so the script's `trap ''` alone would let a gone session or a second TERM kill an undo halfway.
-- The history and the holds are a named feature, `data-images` (`DataImagesFeature`, internals/releases.md for what `childNeeds` carries), found by the `img` words they added (`names`, `record`, `restore`, `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s `--mode`, which an older `--images` refuses as usage after the locks: every activation, holder, parent check and removal refuses on an older server before anything changes.
+- The history and the holds are a named feature, `data-images` (`DataImagesFeature`, internals/releases.md for what `childNeeds` carries), found by the `img` words they added (`names`, `record`, `restore`, `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s `--name`, with its `--address`, which an older `--images` refuses as usage after the locks: every activation, holder, parent check and removal refuses on an older server before anything changes.
 
 ## Tests
 

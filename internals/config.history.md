@@ -8,3 +8,4 @@ History, not rules: `internals/config.md` wins where they differ.
 - An unresolvable parent is recorded (`ParentErr`) rather than failing the load, so that every command but a sync works on a child whose parent's server is unknown locally.
 - `confirmUnnamedSecrets` runs locally and without a session, by design: a secret-like name only in the server's files is left to `--vars set`, which asks the same question.
 - `parent:` left `defaults:` on 2026-11-01: `defaults: {parent: prod}` made every environment but prod a child, a new or misspelled one included, copying prod's data with nothing in its own definition saying so.
+- An environment in `config.local.yaml` replaced the project's of the same name whole until 2026-11-01, while its `defaults:` merged: a local file changing one key had to repeat the rest, and could not clear a parent without redefining the environment. It merges since, as `defaults:` do, a breaking change (`feat!`).
