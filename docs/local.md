@@ -31,8 +31,8 @@ has it, else a compose command (devopsy asks compose which ones exist),
 else an error.
 
 Arguments that start with a flag go to compose unchecked (`devopsy
---profile x up`). A flag on its own is the exception: compose has none
-that stand alone, so a lone flag devopsy does not know is an error, with
+--profile x up`). A flag on its own is different. Compose has none that
+stand alone, so a lone flag devopsy does not know is an error, with
 the nearest of its own flags as a hint (`devopsy --ssh-host`: did you
 mean `--shell-host`?). This holds locally and with a target.
 
@@ -68,9 +68,9 @@ Help shows where each command runs, as it shows a flag's scope (`(runs
 locally)` after a local command that takes an address), and completion
 offers each command only where it runs. A release refuses, before
 anything changes, a step whose command runs in the wrong place (`local:`
-steps run locally, the rest on the server). devopsy tells a server from
-your machine by the release's `devopsy-target.env`, so `target` commands
-do not run in a plain directory on a server either.
+steps run locally, the rest on the server). devopsy detects a release on
+a server by its `devopsy-target.env`, so a `target` command does not run
+in a plain directory on a server either.
 
 A command can wrap the compose command of the same name: a `commands/up`
 that calls `devopsy up` reaches compose, not itself.
@@ -97,11 +97,10 @@ devopsy --env --show > /tmp/env && docker compose -f .devopsy/compose.yaml --env
 devopsy always sets `COMPOSE_PROJECT_NAME`. Locally it is the config's
 `project:`, else compose's top-level `name:`, else the name of the
 directory holding `.devopsy/`, normalized; your own `COMPOSE_PROJECT_NAME`
-wins over all three. On a server it is always
-`<project>[-<instance>]-<environment>`
-([Targets](config.md#where-an-environment-lives)), whatever `name:` or
-your environment says: nothing of your local environment goes to a
-server.
+wins over all three. On a server it is always the environment's compose
+name ([Where an environment lives](config.md#where-an-environment-lives)),
+regardless of `name:` or your environment, since nothing of your local
+environment goes to a server.
 
 ## A release in place
 
@@ -117,12 +116,12 @@ the way a server runs one:
    of its own in a registry);
 5. `run`.
 
-There is no upload and no switch, so a failure just stops there, with
-nothing to go back to. There are no `before` or `after` steps either:
-those are the operator's side of a deploy (pushing an image, announcing
-it). A step whose command runs only on a target (`## Run: target`)
-refuses before anything runs. So a project's `deploy` only starts what is
-there, on a server and locally alike.
+There is no upload and no switch, and a failure stops the release with
+nothing to go back to. There are no `before` or `after` steps either,
+since those are the operator's side of a deploy (pushing an image,
+announcing it). A step whose command runs only on a target (`## Run:
+target`) refuses before anything runs. A project's `deploy` only starts
+what is there, here as on a server.
 
 ## Starting over
 
@@ -156,8 +155,8 @@ change it (`tag=ctx-$(devopsy --context-hash app)`). It covers:
   imagetools inspect`, nothing pulled; a base pinned by digest needs no
   request).
 
-A patched base therefore makes a new hash; build it with `--pull`, or
-Docker's cache keeps the old base. A registry that does not answer fails
+A patched base makes a new hash; build it with `--pull`, or Docker's
+cache keeps the old base. A registry that does not answer fails
 the command, so the caller builds. Downloads during the build are not
 covered. devopsy builds nothing itself.
 
@@ -165,9 +164,9 @@ covered. devopsy builds nothing itself.
 
 What a command produces goes to stdout: compose's output, `--env`,
 `--vars`, lists, `--export`'s data. Everything devopsy says goes to
-stderr, each line starting with `devopsy:`, so it stands apart from what
+stderr, each line starting with `devopsy:`, which sets it apart from what
 compose, Docker and your commands print around it, locally and from a
-server alike:
+server:
 
 ```
 devopsy: releasing to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
@@ -192,17 +191,17 @@ Without one, a command that would ask fails and says to add `--yes`.
 Secrets are opt in. `secrets:` in `config.yaml` names the variables whose
 values are secret (`[DB_PASSWORD, DATABASE_URL, "*_TOKEN"]`, `*` matching
 any characters), wherever they are set: `.env`, `shared/.env` on a server,
-the caller's environment. Name every secret the project uses, the ones it
-generates included: nothing else is masked, and nothing is guessed from
-names.
+the caller's environment. Name every secret the project uses, including
+the ones it generates. Nothing else is masked, and nothing is guessed
+from names.
 
 - `--env`, `--vars` and `--debug env` print those values as `***`;
   `--show` prints them. On a server the release's `config.yaml` decides,
   and `--vars` also takes your checkout's, which may be newer.
 - devopsy's own messages (what it runs, at `-v` and `-vv`) mask those
   values wherever they appear, when 8 characters or longer. Only the
-  messages are masked: what commands print is theirs. Masking is a safety
-  net, so pass secrets through the environment, not as arguments
+  messages are masked, and what commands print is left as it is. Masking
+  is a safety net: pass secrets through the environment, not as arguments
   (`devopsy exec -T db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD"
   mariadb'`).
 - A variable named like a secret (`PASSWORD`, `TOKEN`, `KEY`, `SALT`,
@@ -210,8 +209,8 @@ names.
   variables and the target's `env:`) and `--vars set`: devopsy asks
   first, and fails without a terminal or with `--yes`. List it in
   `secrets:`, or in `public:` when it is not a secret (`public:
-  [SORT_KEY]`). These names only make devopsy ask; they never mask
-  anything.
+  [SORT_KEY]`). These names only trigger the question; masking comes
+  from `secrets:` alone.
 
 ## Verbose output and debugging
 
@@ -256,5 +255,5 @@ util-linux), sized like yours: a build's live progress shows as it would
 locally. Logs are saved without the colors, and a progress display only
 as its final state.
 
-Variables named `DEVOPSY_INTERNAL_*` are how one devopsy tells another
-these things. Never set or read them: they change in any release.
+Variables named `DEVOPSY_INTERNAL_*` pass these settings from one devopsy
+to another. Never set or read them, since any release may change them.
