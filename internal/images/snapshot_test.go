@@ -71,3 +71,25 @@ func TestSnapshotBookmarkLength(t *testing.T) {
 		}
 	}
 }
+
+// An imported snapshot's held entry keeps the release's own name in the
+// current release's repository, its id cleared as the entry's is: the
+// other server's word, which a --no-code restore ending the hold would
+// otherwise tag as the service's own build.
+func TestFilterImportedOwn(t *testing.T) {
+	t.Parallel()
+	snap, cur := t.TempDir(), t.TempDir()
+	if err := writeList(cur, []entry{{Ref: "app-prod-database", ID: "sha256:cur", Service: "database", Kind: KindOwn, DataVersion: "11.8"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeList(snap, []entry{{Ref: "app-stage-database", ID: "sha256:held", Service: "database", Kind: KindOwn, DataVersion: "12.1", OwnRef: "app-stage-database", OwnID: "sha256:own", OwnBuild: "key"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FilterImported(snap, cur); err != nil {
+		t.Fatal(err)
+	}
+	es := readList(snap)
+	if len(es) != 1 || es[0].ID != "" || es[0].OwnID != "" || es[0].Ref != "app-prod-database" || es[0].OwnRef != "app-prod-database" || es[0].OwnBuild != "key" {
+		t.Errorf("the imported listing: %+v", es)
+	}
+}
