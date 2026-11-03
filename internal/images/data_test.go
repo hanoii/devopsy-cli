@@ -831,6 +831,38 @@ func TestDataRestartLastResort(t *testing.T) {
 	}
 }
 
+// The last resort rewrites the compose file only with what it can write,
+// and every hold already there keeps its mark: a built one held under its
+// own name (no image:, only devopsy.held) is no less held because a
+// pulled one beside it gets a hold by digest.
+func TestDataLastResortKeepsMarks(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	search := func(v string) Service {
+		return Service{Name: "search", Ref: "app-prod-search", Build: true, Data: true, Method: CopyVolumes, DataVersion: v}
+	}
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118, search("8"))
+	r2, _ := m.failRun(false, db118, search("9"))
+	if heldIn(m.e.rel(r1))["search"] != r2 {
+		m.fail("setup: search held %v", heldIn(m.e.rel(r1)))
+	}
+	d.publish("mariadb:12.1", "J1")
+	r3 := m.e.release(dbSvc("mariadb:12.1"), search("9"))
+	m.e.set.Check(m.e.rel(r3))
+	m.fetch(m.e.svcs[r3])
+	m.e.set.Record(m.e.rel(r3), m.prev())
+	m.cur = r3
+	m.up()
+	m.e.set.Ran(m.base(), m.e.rel(r3))
+	m.e.set.LastHold(m.e.rel(r1), m.e.rel(r3))
+	if imgs, _, held := composeFacts(m.e.rel(r1)); imgs["database"] != "mariadb@J1" || held["database"] != r3 || held["search"] != r2 {
+		m.fail("the last resort's compose file: images %v, held %v", imgs, held)
+	}
+}
+
 // The hold survives a fetch: the restart whose own image is gone builds
 // again (ErrGone, then --fetched), which moves a built database's name to
 // the previous release's build, and the hold puts it back on the image

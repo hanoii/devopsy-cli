@@ -490,9 +490,14 @@ func (s *Set) LastHold(target, against string) error {
 	own, _ := s.ownEntries(target, false)
 	held := holdsFor(own, windows(baseOf(target), target))
 	imgs, _, wasHeld := composeFacts(target)
+	// What the file holds now stays but for what this changes: a hold by
+	// its own name has no image:, only its mark.
 	holds := map[string]composeHold{}
 	for svc, img := range imgs {
 		holds[svc] = composeHold{Image: img, From: wasHeld[svc]}
+	}
+	for svc, from := range wasHeld {
+		holds[svc] = composeHold{Image: imgs[svc], From: from}
 	}
 	var lines, unheld []string
 	for i, e := range es {
