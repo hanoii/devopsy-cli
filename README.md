@@ -937,15 +937,26 @@ history come back as the pair they were. A snapshot taken while the
 restart held a data service (below) has the older release's code and
 the newer data: its restore holds that service on the image its data
 ran, as the restart does, said and in `--status`. `--no-code` brings
-back data alone, checked against the current release's labels.
+back data alone, checked against the current release's labels; a
+service held on another release's image (below) whose own label and
+tag the restored data allows runs on its own image again, the hold
+gone, or the held image would upgrade that data again (a built one
+needs its own build still on the server: without it the full restore,
+which builds, is the way). One the restored data still refuses stays
+held.
 
 **The restart after a failed run step** is the one place that cannot
-refuse: it runs on its own, past the switch. When the failed release's
-image ran on the data and the previous release's would be refused, that
-service stays on the failed release's image (by its digest when pulled,
-by its own name when built, the failed release's own name when it built
-what the previous release pulls), said in the release's output and in
-`--status` (`held on`), until a release fixes forward. When its images
+refuse: it runs on its own, past the switch. When the previous release's
+image would be refused on the data, that service stays on the image the
+data ran last: the failed release's when it ran, else the one the
+previous release was held on already (a release failing before its
+database started keeps an earlier hold), by its digest when pulled, by
+its own name when built, the failed release's own name when it built
+what the previous release pulls; said in the release's output and in
+`--status` (`held on`), until a release fixes forward. A rollback to a
+release that was held runs its own image, built again when the project
+builds it, and a `--reload` of one compares the variables with its own
+image, not the held one. When its images
 cannot be restored at all (the server's images held by another for 10
 minutes, Docker failing), a pulled one is still held, by its digest; a
 built one cannot be, and the release's output names it, with the release
@@ -1194,7 +1205,7 @@ value is an error. A service with data also says its data's version,
 - `none`: no copy carries it: a sync leaves the child's as it is, and
   `--export` and `--import` refuse it. It is still the service's data:
   its version is checked (Data and its images), and `--reset` empties it
-  with the rest. A variable turns a service's copying off this way
+  with the rest, its history starting over. A variable turns a service's copying off this way
   (`devopsy.data.copy=${DATA_DATABASE:-volumes}`, `DATA_DATABASE=none`).
 
 An empty `devopsy.data.copy` is an error too; on a service without data
@@ -1474,7 +1485,11 @@ everything the labels say; what must never be copied is excluded by label
 `--sync`) is a sync that first throws away everything a sync leaves on
 the child: every container of every profile, its named volumes, and
 every entry of `shared/mnt`, the ones no label copies included (logs,
-an unlabeled service's files). The parent's data then goes in as on a
+an unlabeled service's files). Every data service's history of its
+images starts over with it (Data and its images): what the copy writes
+takes the parent's, and one it writes nothing for (`copy=none`, its
+entries all missing on the parent) has no version until a release
+adopts its label. The parent's data then goes in as on a
 first release, the services with data are created before `finish
 child go`, and the run step starts the rest. The release, its images
 and the child's `shared/.env` (its secrets) stay. Nothing of the child

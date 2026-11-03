@@ -118,7 +118,8 @@ What devopsy requires:
   which only skips prompts): a release, a rollback, a sync, an import
   and a restore of a snapshot's data alone refuse it, and the restart
   after a failed run step and a full restore keep the data on the image
-  it ran. The one exception: a restart whose images cannot be restored
+  it ran (a later failed release keeps that hold; a restore of older data
+  alone, which allows the release's own image, ends it). The one exception: a restart whose images cannot be restored
   at all cannot hold a built one, and says so; fix forward then. A database takes it from the same variable
   as its image (`image: mariadb:${MARIADB_VERSION:-11.8}`,
   `devopsy.data.version=${MARIADB_VERSION:-11.8}`), or as its build
