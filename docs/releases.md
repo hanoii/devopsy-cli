@@ -45,8 +45,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
 names. When it names none, devopsy prints a starting point. A release's
 steps come from your checkout, which is what it uploads. A rollback's
 remote steps, the restart after a failed `run` and `--destroy`'s step
-come from the release they act on, from its own `config.yaml` on the
-server. A rollback's local `before` and `after` steps are your
+come from the release they act on, from the `config.yaml` stored with
+it on the server. A rollback's local `before` and `after` steps are your
 checkout's.
 
 The remote steps share one SSH session under the release lock, which is
@@ -116,13 +116,13 @@ profile's buildable services are built when they are used.
 The run step's `up` then finds every image there, and a `deploy` needs
 no `build` or `pull`.
 
-A failure here leaves the current release's images untouched. What
-the failed release got is tagged as that release's and removed with it.
-So is what an interrupted release got: a Ctrl-C or a lost connection
-(Dropped connections, below) stops the build or pull, and the release is
-marked failed. If the server does not detect the drop, the release stays
-marked fetching until the next release, `--destroy` or `--releases
-remove` marks it failed.
+A failure here leaves the current release's images untouched. What the
+failed release got is tagged as that release's and removed with it.
+The same applies when a Ctrl-C or a lost connection (Dropped
+connections, below) stops the build or pull, and the release is marked
+failed. If the drop goes unseen on the server, the release stays marked
+fetching until the next release, `--destroy` or `--releases remove`
+marks it failed.
 
 ## Owners
 
@@ -153,12 +153,12 @@ project's to undo.
 - A first release has nothing to go back to: it takes down what it
   started (`down`, volumes and `mnt` kept), and `--status` says the
   release failed.
-- A run step that fails while Docker does not answer (the server
-  shutting down, which stops the step, or the daemon gone) is not taken
-  as a failure of the release: nothing goes back or restarts, since that
-  could only fail too. The release is left as one cut off past its
-  switch (below). `--status` names it, and the next `--release` finishes
-  it once Docker is back.
+- A run step that fails while Docker does not answer (the server is
+  shutting down and stops the step, or the daemon is gone) does not
+  count as a failed release. Nothing goes back or restarts, since
+  that would fail too. The release is left cut off past its switch
+  (below). `--status` names it, and the next `--release` finishes it
+  once Docker is back.
 
 A run step that fails leaves what it started. When a container is left
 restarting, Docker recreates its bind mounts under `current` as
@@ -168,9 +168,9 @@ is taken down and the directory removed, and says how.
 ## A child's first release
 
 A child's first release syncs its parent's data between switching
-`current` and `run`, so `run` (a `deploy`: database updates, cache
-clears) works on the parent's data and no empty site is ever served. If
-the copy fails, the release does not go live.
+`current` and `run`, so `run` (a `deploy`, with its database updates
+and cache clears) works on the parent's data and no empty site is ever
+served. If the copy fails, the release does not go live.
 
 - `--release-sync` syncs on any release. On a child already released it
   asks for the environment's name first, as `--sync` does (`--yes` skips
@@ -187,8 +187,8 @@ What a sync copies is in [Parent environments and syncs](syncs.md).
 Before the switch, a release depends on your session:
 
 - A session that drops (a cancelled CI job, a killed devopsy) cancels
-  the release at once: the server detects it and undoes what the release
-  fetched.
+  the release at once: the server detects it and undoes what the
+  release fetched.
 - A connection that dies silently (a laptop asleep or off the network)
   cancels it within about 30 seconds: devopsy sends the server a
   heartbeat, and silence counts as the session gone, as does devopsy
@@ -200,9 +200,9 @@ Before the switch, a release depends on your session:
 From the switch on (step 6 above), the release finishes on its own, or
 fails and brings the previous release back, and `--log` shows how. A
 Ctrl-C then does not stop it. The release goes on to its end (the run
-step, pruning, the remote `after` steps), and devopsy says so, at a
-terminal and in CI. A second Ctrl-C only ends your session. To go back,
-run `--rollback` once the release has ended.
+step, pruning, the remote `after` steps), and devopsy prints that it
+goes on, at a terminal and in CI. A second Ctrl-C only ends your
+session. To go back, run `--rollback` once the release has ended.
 
 A release that syncs is the exception during its copy: a Ctrl-C there
 aborts the sync, and the release goes back
@@ -214,11 +214,12 @@ current, but its run step may not have run. `--releases` marks it `CUT`,
 and `--status` says so and names what finishes it:
 
 - for a release, the release again, or on a child a `--sync`, which runs
-  the release's run step again (the way out when a cut sync refuses the
-  release);
+  the release's run step again. A `--sync` is the way out when a cut
+  sync refuses the release.
 - for a rollback, `--rollback` again, which finishes that rollback
-  rather than going one release further back (a release instead leaves
-  it as it is, marking the release it left rolled back);
+  instead of going one release further back. A release leaves the cut
+  rollback as it is, and marks the release that rollback left as rolled
+  back.
 - for a restore, the restore again, or on a child a `--sync`.
 
 ## Logs
@@ -341,7 +342,7 @@ Data in `shared/` is never touched.
 release lock, in the current release (else the newest one), it runs:
 
 1. the environment's `destroy:` step, if it has one: one devopsy
-   command, run while everything still runs (a last dump, for example);
+   command, run before anything is stopped (a last dump, for example);
 2. `docker compose down --volumes --remove-orphans --rmi local`, every
    profile, so the images built without an `image:` name go too;
 3. `shared/mnt` emptied as root in `devopsy-util`, since its files
@@ -364,7 +365,7 @@ how), even once the environment is already gone.
 `devopsy @<target> --reload` applies what changed since the release
 without another release: its variables (`--vars`, `--inherit`, an edit
 of `shared/.env`) and the facts it imports (a proxy's base domain, which
-every site imports again with its own reload, not a release).
+each site picks up again with a reload of the site, no release needed).
 
 It is one session under the release lock, in the current release, and it
 changes nothing until everything is checked:
@@ -377,14 +378,14 @@ changes nothing until everything is checked:
 - every service's image is checked: a reload runs the images the release
   fetched and never builds or pulls one. It refuses a variable that now
   names another image, changes a build argument (named, never its value)
-  or turns a profile on, and names `--release` as the way.
+  or turns a profile on, and points to `--release`.
 
 A lost session or a Ctrl-C before then changes nothing. From there on
 the reload continues even if the session goes (`--log` shows it): the
 imports are put in place, the entries of `mnt` go to their owners (an
 owner label may come from a variable), then the release's `reload:` step
-runs, read from its own `config.yaml` on the server, as a rollback's
-steps are:
+runs, read from the release's `config.yaml` on the server, as a
+rollback's steps are:
 
 ```yaml
 environments:
@@ -404,9 +405,11 @@ place (in a release on a server, its environment's), else the same `up`,
 once compose's required variables are set.
 
 A `--sync` and a `--snapshots restore --no-code` check the images the
-same way before anything stops, since both run the current release's run
-step on its images again. With `--with-env` the restore checks them
-under the snapshot's variables, and when they fail it is refused, with
-the full restore as the way. A full restore with `--with-env` reads the
+same way before anything stops, since both run the current release's
+run step on its images again.
+
+With `--with-env`, a `--no-code` restore checks them under the
+snapshot's variables. When the check fails, the restore is refused and
+points to the full restore. A full restore with `--with-env` reads the
 snapshot's variables from its checks on, so its images are fetched for
 them.
