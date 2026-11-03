@@ -335,11 +335,13 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 			name, ch.Image = src.Ref, src.Ref
 		}
 		id := cmp.Or(src.ID, h.line.ID)
-		if ch.Image != "" && from == historyHeld && s.imagePresent(id) {
+		if (ch.Image != "" && from == historyHeld || ch.Image == "" && o.Kind != KindOwn) && s.imagePresent(id) {
 			// A name only its history gives, a parent's on this server: its
-			// next release moves it, so never by it, by the release's own
-			// bookmark (review: the child's next up ran the parent's newer
-			// build on its data).
+			// next release moves it, so never by it (review: the child's next
+			// up ran the parent's newer build on its data); or a pulled name of
+			// its own, never retagged (review: deriving the hold again moved
+			// mariadb:11.8 to the parent's build). By the release's own
+			// bookmark.
 			name, ch.Image, ch.bookmark = o.Ref, "", true
 		} else if cur, err := s.Docker.ID(name); (err != nil || cur != id) && !s.imagePresent(id) {
 			if !s.AsBuilt {
@@ -472,8 +474,10 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 			continue
 		}
 		if !e.held() {
-			// Its own image by bookmark, another environment running its name.
-			if img := imgs[e.Service]; img != "" && wasHeld[e.Service] == "" {
+			// Its own image by bookmark, another environment running its name:
+			// on landed data, too, its own build, which the rule judged, never
+			// another's under a shared name (review: a sync's run step ran it).
+			if img := imgs[e.Service]; img != "" && wasHeld[e.Service] == "" || own[i].DataVersion != "" && s.ownNameBack(own[i], ownNames) {
 				kept[e.Service] = composeHold{bookmark: true}
 			}
 			continue

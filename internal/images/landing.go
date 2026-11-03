@@ -377,8 +377,15 @@ func (s *Set) copyNeeds(rel string, es, own []entry, svcs map[string]Service, l 
 		o := own[i]
 		if h, ok := held[e.Service]; ok {
 			src, from := s.source(rel, e.Service, h.line)
-			if (src.Kind == KindOwn || src.Digest == "") && !s.imagePresent(cmp.Or(src.ID, h.line.ID)) {
+			switch {
+			case (src.Kind == KindOwn || src.Digest == "") && !s.imagePresent(cmp.Or(src.ID, h.line.ID)):
 				gone = append(gone, e.Service+": "+heldWhat(from)+", built by the project, is gone from this server, and its data allows the release's own on it no more")
+			case src.Kind != KindOwn && src.Digest != "" && !s.here(src):
+				// Pulled now, as a full restore does before its switch, what
+				// derive would need once the data is in: the landing keeps it.
+				if err := s.Docker.Pull(src.Digest); err != nil {
+					gone = append(gone, e.Service+": "+src.Digest+", "+heldWhat(from)+", is gone from this server and could not be pulled by its digest: "+err.Error())
+				}
 			}
 			continue
 		}
