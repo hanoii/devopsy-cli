@@ -1060,7 +1060,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	streams, err := cli.SyncCustomServices(services)
 	if err != nil {
@@ -2495,10 +2495,10 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		if args[0] != "settle" {
-			return fail(err.Error())
+			return failErr(err)
 		}
 		// What is down then is what the record says.
-		report.Warn("settling with the record alone: " + err.Error())
+		report.Warn("settling with the record alone: "+err.Error(), report.Messages(err)[1:]...)
 		if projectDir, err = cli.FindProjectDir(cwd); err != nil {
 			return fail(err.Error())
 		}

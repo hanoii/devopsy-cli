@@ -258,7 +258,7 @@ func runExport(cwd string, args []string, color bool) int {
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	s, err := dataService(services, name)
 	if err != nil {
@@ -1064,7 +1064,7 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	s, err := dataService(services, name)
 	if err != nil {
@@ -1547,7 +1547,7 @@ func runResolved(cwd, name string) int {
 	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 	if err := endLeftoverImport(cwd, base, services, name); err != nil {

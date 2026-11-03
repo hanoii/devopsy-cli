@@ -245,7 +245,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		defer stop()
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(interrupted(ctx, err).Error())
+			return failErr(interrupted(ctx, err))
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
 			report.Fail(interrupted(ctx, err))
@@ -257,7 +257,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		defer stop()
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(interrupted(ctx, err).Error())
+			return failErr(interrupted(ctx, err))
 		}
 		if takeCopy(ctx, cwd, p, d) != "mirror" {
 			// No first pass: the stopped one clones the data or writes the
@@ -269,7 +269,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
 		if err := copyMirror(ctx, p, d, snapshotContainer(cwd, "-mirror")); err != nil {
-			return fail(interrupted(ctx, err).Error())
+			return failErr(interrupted(ctx, err))
 		}
 		return 0
 	case "stopped":
@@ -359,7 +359,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(interrupted(ctx, err).Error())
+			return failErr(interrupted(ctx, err))
 		}
 		if len(d.data) == 0 {
 			report.Info("no release snapshot: no service has data (" + cli.DataLabel + "=true)")
@@ -628,7 +628,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	}
 	d, err := readSnapshotData(ctx, cwd)
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	// Stopped: the services with data, and any service writing what the
 	// take copies, a label or not (a worker writing the app's entry), as
@@ -1248,7 +1248,7 @@ func startLeftDown(cwd string, names []string) {
 	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		report.Warn("reading the release's services: " + err.Error())
+		report.Warn("reading the release's services: "+err.Error(), report.Messages(err)[1:]...)
 		return
 	}
 	var have []string
@@ -2371,7 +2371,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	switch mk := readMark(p.base); {
 	case mk.IsImport():
@@ -2393,7 +2393,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// anything stops.
 	_, restored, err := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
 	if err != nil {
-		return fail("the restored code's labels: " + err.Error() + ": nothing restored")
+		report.Fail(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
+		return 1
 	}
 	entries, volumes := map[string]bool{}, map[string]cli.Volume{}
 	for _, s := range restored {
@@ -2408,7 +2409,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	owners, err := cli.MntOwners(restored)
 	if err != nil {
-		return fail("the restored code's labels: " + err.Error() + ": nothing restored")
+		report.Fail(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
+		return 1
 	}
 	tars := snapshotTars(m)
 	for _, t := range tars {

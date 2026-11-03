@@ -264,6 +264,18 @@ func TestCheckMountsRelease(t *testing.T) {
 	if code == 0 || strings.Contains(out, "current is now") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release, whose labels cannot be read: it does not go live\ndevopsy: | service app: devopsy.data=pause: true or false") {
 		t.Errorf("refused after the switch, not before (%d), current %q:\n%s", code, s.current("prod"), out)
 	}
+
+	// Two data services without their version: each said whole, with its
+	// details, the second too (review: flattened into one detail line,
+	// only the first service's message reached the release).
+	write(t, s.log+".shop-prod", "FAKE_APP=true\nFAKE_DB=true\n", 0o644)
+	out, code = s.run(nil, "@prod", "--release")
+	write(t, s.log+".shop-prod", "", 0o644)
+	for _, svc := range []string{"app", "db"} {
+		if code == 0 || strings.Contains(out, "current is now") || !strings.Contains(out, "devopsy: error: "+svc+": devopsy.data.version is missing\ndevopsy: | a new image can upgrade its data in place") || !strings.Contains(out, "devopsy: | set one of these labels on "+svc+":") {
+			t.Errorf("%s without its version (%d):\n%s", svc, code, out)
+		}
+	}
 }
 
 // A reset gives the owned entries back to their owners once mnt is

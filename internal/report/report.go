@@ -170,6 +170,16 @@ func Also(err error) []*Failure {
 	return nil
 }
 
+// Messages are err's message and each of its Also's (Failure.Also), for
+// a warning that names them all on its detail lines.
+func Messages(err error) []string {
+	ms := []string{err.Error()}
+	for _, f := range Also(err) {
+		ms = append(ms, f.Msg)
+	}
+	return ms
+}
+
 // Fixes are err's, when a Failure is in its chain.
 func Fixes(err error) []Remedy {
 	var e *Failure
