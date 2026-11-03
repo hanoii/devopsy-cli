@@ -1332,6 +1332,23 @@ func TestDataSyncInheritedVersion(t *testing.T) {
 	if l, _ := readHistory(dev.base()).last("database"); l.Version != "12.1" {
 		t.Errorf("the history ends on %+v, not the label's version", l)
 	}
+	// An inherited variable that makes a service data in the same sync:
+	// its release lists it without a version, which nothing would check or
+	// record, so the sync is refused before anything stops, naming the
+	// release that syncs, which lists it (review round 3).
+	qa := newSim(t, d, "app-qa", &out)
+	plain := dbSvc("mariadb:12.1")
+	plain.Data, plain.DataVersion = false, ""
+	qa.release(false, plain)
+	qa.e.svcs[qa.cur][0] = dbSvc("mariadb:12.1")
+	qa.e.set.Address = "vm1:qa"
+	out.Reset()
+	if err := syncInto(t, prod, qa, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "database: its labels make it a data service now, and the current release lists it as none") || !strings.Contains(out.String(), "devopsy @vm1:qa --release-sync\n") {
+		qa.fail("a sync into a service an inherited variable makes data (%v)", err)
+	}
+	if h := readHistory(qa.base()); len(h) > 0 {
+		t.Errorf("the refused sync wrote a history: %v", h)
+	}
 }
 
 // A sync checks the child against the parent's window and runs the

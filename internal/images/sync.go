@@ -321,6 +321,11 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) er
 	ps := parseParentData(data)
 	es := readList(rel)
 	own, svcs := s.ownEntries(rel, labels)
+	if labels {
+		if err := s.unlistedData(es, svcs, ps, w); err != nil {
+			return err
+		}
+	}
 	var js []judged
 	for i, e := range es {
 		p, o := ps[e.Service], own[i]
@@ -337,6 +342,31 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) er
 		s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image on the %s data, its history starting over from it", svc, strings.TrimPrefix(strings.TrimSuffix(w.source, "'s"), "the "))
 	}
 	return s.copyNeeds(rel, es, own, svcs, ps, forced, w)
+}
+
+// unlistedData refuses a sync, before anything stops, that copies into a
+// service its labels make data now (svcs: in the holder, with the
+// pending inherited variables) and the current release (es) lists
+// without a data version: a variable inherited in this very sync turned
+// devopsy.data on, so nothing would check its version against the
+// parent's data or record what runs on it (review round 3: the copy
+// landed with no history). A release that syncs lists it.
+func (s *Set) unlistedData(es []entry, svcs map[string]Service, ps map[string]*sourceData, w checkWords) error {
+	var lines []string
+	for _, e := range es {
+		if ps[e.Service] == nil || e.DataVersion != "" || e.held() {
+			continue
+		}
+		if svc, ok := svcs[e.Service]; ok && svc.Data {
+			lines = append(lines, e.Service+": its labels make it a data service now, and the current release lists it as none: its "+DataVersionLabel+" would go unchecked against the parent's data, and what runs on it unrecorded")
+		}
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	s.sayAll(report.ErrorLevel, "the release does not list as data what the sync copies as data: "+w.nothing, lines,
+		report.Fix("release it with the sync, which lists it:", s.cmd("--release-sync")))
+	return ErrRefused
 }
 
 // copyRule is the rule a copy's check runs on a data service whose entry

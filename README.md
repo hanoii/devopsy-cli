@@ -1371,8 +1371,11 @@ included; one whose entries are all missing on the parent writes
 nothing, and keeps the child's history). A child below the parent's
 version, or on another tag at it, is refused, every sync, unless `--sync
 --accept-image <service>`: the way to try an upgrade path on the parent's
-data, one command per sync, its history starting over. The child always
-runs its own image on the copy; once the copy is complete it takes over
+data, one command per sync, its history starting over. A service the
+parent copies that the child's labels make data only now (a variable it
+inherits in this sync turns `devopsy.data` on) is refused the same way,
+before anything stops, until a `--release-sync` lists it as data. The
+child always runs its own image on the copy; once the copy is complete it takes over
 the parent's history of that data. A parent released between the sync's
 start and its copy refuses the copy before stopping anything: sync
 again.
