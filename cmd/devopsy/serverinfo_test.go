@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -277,6 +278,25 @@ func fixText(fixes []report.Remedy) string {
 	return b.String()
 }
 
+// firstWrite as a command's stdout, the way a session's facts reach it:
+// exec.Cmd copies into it with io.Copy, which prefers a ReadFrom to Write.
+func TestFirstWriteAsCommandStdout(t *testing.T) {
+	t.Parallel()
+	out := &firstWrite{}
+	before := time.Now()
+	cmd := exec.Command("echo", "hello")
+	cmd.Stdout = out
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if out.at.Before(before) || out.at.After(time.Now()) {
+		t.Errorf("first write at %v, want since %v", out.at, before)
+	}
+	if got := out.buf.Bytes(); string(got) != "hello\n" {
+		t.Errorf("output %q", got)
+	}
+}
+
 // --server-info end to end against the fake ssh: the server's facts
 // read there, its environments and their state, a role, the warnings
 // and exit 3.
@@ -339,6 +359,10 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm") || strings.Contains(out, "has no tail") {
 		t.Errorf("exit %d:\n%s", code, out)
+	}
+	// The fake ssh shares this clock: no first byte seen reads as days off.
+	if strings.Contains(out, "days ahead") {
+		t.Errorf("clock offset:\n%s", out)
 	}
 	// It left nothing of its own in the release root.
 	if m, _ := filepath.Glob(filepath.Join(s.root, ".devopsy-reflink.*")); len(m) > 0 {

@@ -519,7 +519,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 		return code
 	}
 	var info remote.ServerInfo
-	if err := json.Unmarshal(out.Bytes(), &info); err != nil {
+	if err := json.Unmarshal(out.buf.Bytes(), &info); err != nil {
 		report.Error("the server's devopsy answered what this one cannot read: " + err.Error())
 		return 1
 	}
@@ -531,17 +531,19 @@ func runServerInfo(t *remote.Target, args []string) int {
 	return printServerInfo(head, info, t.Host, ref, out.at)
 }
 
-// firstWrite is a buffer that keeps when its first write came.
+// firstWrite is a buffer that keeps when its first write came. The buffer
+// is a named field: embedded, its ReadFrom would take exec.Cmd's io.Copy
+// around Write.
 type firstWrite struct {
-	bytes.Buffer
-	at time.Time
+	buf bytes.Buffer
+	at  time.Time
 }
 
 func (w *firstWrite) Write(p []byte) (int, error) {
 	if w.at.IsZero() {
 		w.at = time.Now()
 	}
-	return w.Buffer.Write(p)
+	return w.buf.Write(p)
 }
 
 // printServerInfo prints info's report under head, then its notes and
