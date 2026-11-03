@@ -153,9 +153,9 @@ project's to undo.
 - A first release has nothing to go back to: it takes down what it
   started (`down`, volumes and `mnt` kept), and `--status` says the
   release failed.
-- Sometimes a run step fails because Docker does not answer: the server
-  is shutting down and stops the step, or the daemon is gone. That does
-  not count as a failed release. Nothing goes back or restarts, since
+- A run step that fails while Docker does not answer (the server is
+  shutting down and stops the step, or the daemon is gone) does not
+  count as a failed release. Nothing goes back or restarts, since
   that would fail too. The release is left cut off past its switch
   (below). `--status` names it, and the next `--release` finishes it
   once Docker is back.
@@ -168,10 +168,9 @@ is taken down and the directory removed, and says how.
 ## A child's first release
 
 A child's first release syncs its parent's data between switching
-`current` and `run`. `run` (a `deploy`, with its database updates and
-cache clears) then works on the parent's data, and no empty site is
-served. If
-the copy fails, the release does not go live.
+`current` and `run`, so `run` (a `deploy`, with its database updates
+and cache clears) works on the parent's data and no empty site is ever
+served. If the copy fails, the release does not go live.
 
 - `--release-sync` syncs on any release. On a child already released it
   asks for the environment's name first, as `--sync` does (`--yes` skips
@@ -188,7 +187,8 @@ What a sync copies is in [Parent environments and syncs](syncs.md).
 Before the switch, a release depends on your session:
 
 - A session that drops (a cancelled CI job, a killed devopsy) cancels
-  the release at once, and the server undoes what the release fetched.
+  the release at once: the server detects it and undoes what the
+  release fetched.
 - A connection that dies silently (a laptop asleep or off the network)
   cancels it within about 30 seconds: devopsy sends the server a
   heartbeat, and silence counts as the session gone, as does devopsy

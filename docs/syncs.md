@@ -148,7 +148,7 @@ An `--export` of a `volumes` service on a target clones the same way,
 and makes its tar from the clone.
 
 This has a cost on the parent. The pages a database writes while the
-clone exists go to new places, and its files fragment and stay
+clone exists go to new places, so its files fragment, and they stay
 fragmented after the clone is gone. On XFS, a database writing 200 pages
 of 16 KiB while a sync's clone existed made some 400 extents, where a
 file written in place keeps one. `xfs_fsr` on the database's files puts
@@ -175,7 +175,8 @@ serving only the entries being copied, with no published port) and
 reaches the child's server over SSH through a reverse forward. Your SSH
 agent is forwarded for that session only, and never on to the child. A
 stream also goes to the child's file through an SSH session from the
-parent's server, never through your machine.
+parent's server. Data goes from server to server, never through your
+machine.
 
 The sync's SSH sessions, like every session devopsy opens, send
 keepalives every 15 seconds, so a firewall does not drop a quiet copy.
@@ -272,7 +273,7 @@ Interrupting a sync:
 
 devopsy itself can go away mid-sync: killed, its connection lost, or
 silent. The parent's side gives up after 30 seconds without devopsy's
-heartbeat, the child's after 90. Each side then finishes on its own and
+heartbeat, the child's after 90. Each side finishes on its own and
 writes what happened to `<environment>/.devopsy-sync.log` on its server.
 When a child's side is killed before it settles the outcome, the next
 sync, release or rollback to take its lock settles it as not completed.
@@ -293,7 +294,8 @@ goes. `--status` names it meanwhile.
 The same applies to the services an `--export` stopped when it was
 killed this way. It also applies to the services a release stopped for
 its release snapshot, when the release was killed between its switch and
-its run step. Those start on the images that release gives them.
+its run step. The release's services then start on the images that
+release gives them.
 
 Only what the child's side stopped is kept off partial data. A service
 left running during the copy (a `volumes` one labeled `never`, a

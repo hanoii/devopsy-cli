@@ -162,8 +162,8 @@ both are still the same tag.
 
 ## Rollback against restore
 
-A rollback past a data upgrade (back to `mariadb:11.8` after a release
-of `12.1`) is refused. The refusal names three ways forward: a new
+Since a rollback brings back code alone, a rollback past a data upgrade
+(back to `mariadb:11.8` after a release of `12.1`) is refused. The refusal names three ways forward: a new
 release with the fix, the release snapshot of the older release's data
 ([Release snapshots](snapshots.md#release-snapshots)), or
 `--accept-image`.
@@ -176,8 +176,8 @@ pair they were, held as the history says (Holds, below).
 current release's labels, or, for a held service, against the image it
 runs, since the snapshot's data is an earlier state of the same
 environment. It is then held as the restored history says. A `--no-code`
-restore builds nothing. When it would need a built image that is gone,
-it is refused before any service stops, and the refusal points to the
+restore builds nothing, so when it would need a built image that is
+gone, it is refused before any service stops, and the refusal points to the
 full restore, which builds.
 
 ## Holds
