@@ -10,3 +10,4 @@ History, not rules: the root's Checks section, Workflow's "Tests and checks" and
 - The test server's dash login shell found the watcher signalling only the script, where devopsy-server's bash hid it.
 - The deploy user's home became a tmpfs on 2026-10-27: on OrbStack's btrfs the container's overlay cloned by reflinks, on CI's ext4 not, so a sync ran in another order locally than in CI and six tests failed only locally.
 - The Docker Hub mirror came with the lanes, so four lanes pull from Docker Hub no more than one did.
+- On 2026-11-03 the root's warning went from 200 lines to 250: Claude Code's memory docs advise under 200, but adherence drops gradually, and the root at 205 made the warning fire on every run, where it was ignored.
