@@ -154,8 +154,18 @@ const NoReleaseComposeEnv = "DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE"
 // command there), with the release script's variables, without devopsy's
 // own file and without profiles.
 func ListCompose(rel string) ([]Service, error) {
+	return listCompose(rel, "--", "config", "--format", "json")
+}
+
+// ListComposeAll is ListCompose of every profile's services: what a copy,
+// a take and an export write, for the windows they carry (parentData).
+func ListComposeAll(rel string) ([]Service, error) {
+	return listCompose(rel, "--", "--profile", "*", "config", "--format", "json")
+}
+
+func listCompose(rel string, args ...string) ([]Service, error) {
 	var out bytes.Buffer
-	cmd := exec.Command("devopsy", "--", "config", "--format", "json")
+	cmd := exec.Command("devopsy", args...)
 	cmd.Dir = filepath.Join(rel, codeDir)
 	cmd.Env = append(os.Environ(), NoReleaseComposeEnv+"=1")
 	cmd.Stdout, cmd.Stderr = &out, os.Stderr

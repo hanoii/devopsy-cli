@@ -862,3 +862,83 @@ func TestCopyNeedsFixKeepsWithEnv(t *testing.T) {
 		t.Errorf("the fix drops the --with-env the operator ran:\n%s", out.String())
 	}
 }
+
+// Bug: a copy writes every profile's data (cli.SyncDirs over cli.SyncServices,
+// --profile '*'), and ParentData sends only the windows of what Set.List gives,
+// the profiles that are on. With database's profile off on the parent, its
+// files land on the child and its window does not, so the child's check judges
+// nothing and its history stays: 11.8 runs on the parent's 12.1 data. It is
+// also the chain: a window Land kept for a profile that is off (for the
+// release that turns it on) goes no further than that environment. And
+// an --export of such a service carries no record, so its import takes the
+// next label, whatever it is.
+func TestCopiedDataOfAProfileOffCarriesItsWindow(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dp, d := newFake(), newFake()
+	prod := newSim(t, dp, "app-prod", &out)
+	dp.publish("mariadb:12.1", "J1")
+	dp.publish("caddy:2-alpine", "C1")
+	if _, err := prod.release(false, proxySvc, dbSvc("mariadb:12.1")); err != nil {
+		prod.fail("with its profile on: %v", err)
+	}
+	if _, err := prod.release(false, proxySvc); err != nil {
+		prod.fail("with its profile off: %v", err)
+	}
+	prod.e.set.ListAll = func(string) ([]Service, error) { return []Service{proxySvc, dbSvc("mariadb:12.1")}, nil }
+	dev := newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	if _, err := dev.release(false, db118); err != nil {
+		dev.fail("dev: %v", err)
+	}
+	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) {
+		t.Errorf("the copy writes the parent's 12.1 data, and the child's 11.8 is not refused (%v), its history %v:\n%s", err, dev.history("database"), out.String())
+	}
+	rel := prod.e.rel(prod.cur)
+	if rec := prod.e.set.ExportData(prod.base(), rel, "database"); !strings.Contains(rec, "12.1") {
+		t.Errorf("the export of its data records nothing of 12.1: %q", rec)
+	}
+}
+
+// Bug: a restore lands one line of no version for each service its manifest
+// names and its windows lack (RestoreLanding's over), and since Land also
+// takes what the listing leaves out, that now includes a service in a profile
+// that is off: the manifest counts every profile (cli.SyncServices), the
+// windows only the ones compose lists (SnapshotData, by Set.List). A snapshot
+// of an environment with database's profile off, restored, wipes database's
+// real window though its data comes back as it was: with the profile on
+// again, 11.8 runs on data 12.1 upgraded, unrefused.
+func TestRestoreKeepsTheWindowOfAProfileOff(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	d.publish("mariadb:12.1", "J1")
+	d.publish("caddy:2-alpine", "C1")
+	if _, err := m.release(false, proxySvc, dbSvc("mariadb:12.1")); err != nil {
+		m.fail("with its profile on: %v", err)
+	}
+	if _, err := m.release(false, proxySvc); err != nil {
+		m.fail("with its profile off: %v", err)
+	}
+	m.e.set.ListAll = func(string) ([]Service, error) { return []Service{proxySvc, dbSvc("mariadb:12.1")}, nil }
+	dir := m.snapshot("20260101000000")
+	data, err := os.ReadFile(filepath.Join(dir, "data", "images"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As snapshotLanding gives it: every service with data its manifest names.
+	l := m.e.set.RestoreLanding(string(data), filepath.Base(dir), []string{"database"})
+	rel := m.e.rel(m.cur)
+	if err := m.e.set.CheckLanding(rel, l); err != nil {
+		m.fail("the restore's check: %v", err)
+	}
+	if err := m.e.set.Land(m.base(), rel, l); err != nil {
+		m.fail("the data step: %v", err)
+	}
+	d.publish("mariadb:11.8", "I1")
+	if _, err := m.release(false, proxySvc, db118); !errors.Is(err, ErrRefused) {
+		t.Errorf("the restored data is 12.1's, and a release runs 11.8 on it unrefused (%v), its history %v:\n%s", err, m.history("database"), out.String())
+	}
+}

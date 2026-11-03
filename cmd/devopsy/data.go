@@ -455,7 +455,7 @@ func runExport(cwd string, args []string, color bool) int {
 func exportRecord(cwd, projectDir, name string) string {
 	if !cli.InRelease(projectDir) {
 		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut,
-			List: func(string) ([]images.Service, error) { return localServices(cwd) }}
+			ListAll: func(string) ([]images.Service, error) { return localServices(cwd) }}
 		return set.ExportData("", "", name)
 	}
 	set, err := serverImages(cwd, composeName(cwd), errOut)
@@ -467,14 +467,15 @@ func exportRecord(cwd, projectDir, name string) string {
 }
 
 // localServices are the local project's services as compose resolves
-// them, for ExportData to tell a pulled data service from a built one.
+// them, every profile's as a copy writes them, for ExportData to tell a
+// pulled data service from a built one.
 func localServices(cwd string) ([]images.Service, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
 	var out bytes.Buffer
-	cmd := exec.Command(self, "--", "config", "--format", "json")
+	cmd := exec.Command(self, "--", "--profile", "*", "config", "--format", "json")
 	cmd.Dir, cmd.Stdout, cmd.Stderr = cwd, &out, errOut
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("compose config: %w", err)

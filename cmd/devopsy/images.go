@@ -80,7 +80,7 @@ func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose,
+	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll,
 		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
 }
 
@@ -264,11 +264,9 @@ func runImages(args []string, color bool) int {
 		}
 		// Labels that cannot be read refuse the sync, before anything stops
 		// on either side: a missing window would land as data of no version.
-		if s.List != nil {
-			if _, err := s.List(rest[1]); err != nil {
-				report.Error("could not read the labels of " + filepath.Base(rest[1]) + ": " + err.Error())
-				return 1
-			}
+		if _, err := s.ListAll(rest[1]); err != nil {
+			report.Error("could not read the labels of " + filepath.Base(rest[1]) + ": " + err.Error())
+			return 1
 		}
 		fmt.Print(s.ParentData(rest[0], rest[1]))
 	case "sync-check":

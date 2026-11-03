@@ -244,7 +244,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		return err
 	}
 	switch {
-	case len(held) > 0:
+	case len(heldLines) > 0:
 		s.sayAll(report.WarnLevel, "images of "+tid+" restored, but for what its data does not allow:", lines)
 	case len(lines) > 0:
 		s.sayAll(report.InfoLevel, "images of "+tid+" restored, but for what does not go back:", lines)

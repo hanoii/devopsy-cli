@@ -47,7 +47,7 @@ func (s *Set) SnapshotData(base, rel string) string {
 // every data service with all.
 func (s *Set) parentData(base, rel, only string, all bool) string {
 	h := readHistory(base)
-	svcs, err := s.List(rel)
+	svcs, err := s.written(rel)
 	if err != nil {
 		s.say(report.WarnLevel, "could not list the services of %s (%v): the child keeps its history", filepath.Base(rel), err)
 		return ""
@@ -86,6 +86,18 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		}
 	}
 	return b.String()
+}
+
+// written are the services a copy of rel writes: every profile's, as the
+// rsync, a take's tars and an export go by (cli.SyncServices), or a
+// window would leave out data that lands with its files (review: a profile
+// off there left the child's old window on the parent's data, and a restore
+// forgot the data's version).
+func (s *Set) written(rel string) ([]Service, error) {
+	if s.ListAll != nil {
+		return s.ListAll(rel)
+	}
+	return s.List(rel)
 }
 
 // ParentHistoryLines is how many lines of their windows, in all,
@@ -151,10 +163,10 @@ func (s *Set) ExportData(base, rel, service string) string {
 	if rel != "" {
 		return s.parentData(base, rel, service, false)
 	}
-	if s.List == nil {
+	if s.List == nil && s.ListAll == nil {
 		return ""
 	}
-	svcs, err := s.List("")
+	svcs, err := s.written("")
 	if err != nil {
 		return ""
 	}

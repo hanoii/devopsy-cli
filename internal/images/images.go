@@ -191,6 +191,9 @@ type Set struct {
 	Out io.Writer
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
+	// ListAll lists every profile's (ListComposeAll): what a copy writes,
+	// for the windows it carries. List without it.
+	ListAll func(rel string) ([]Service, error)
 	// No mode: each release's own record says its (ModeOf), so one set
 	// serves releases made in either.
 	// Now is the time, for tests (time.Now when nil).

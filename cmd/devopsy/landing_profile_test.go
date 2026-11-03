@@ -65,7 +65,7 @@ func TestExportProfileOffCarriesNoWindow(t *testing.T) {
 	if h.Typeflag != tar.TypeXGlobalHeader || !strings.HasPrefix(h.PAXRecords[images.ExportKey], "data\tworker\nran\t1\tworker\tran\tbusybox:12\t") {
 		t.Errorf("the export of a data service in a profile that is off carries no window of its data (its history says 12): header %+v, record %q", h, h.PAXRecords[images.ExportKey])
 	}
-	if _, err := os.Stat(filepath.Join(s.log + ".x", "work", "file.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.log+".x", "work", "file.txt")); err != nil {
 		t.Errorf("the export did not carry the worker's entry: %v", err)
 	}
 	// The control: the same worker in no profile exports its window.
