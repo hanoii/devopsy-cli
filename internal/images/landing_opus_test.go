@@ -37,3 +37,38 @@ func TestRefusalFixKeepsAccepted(t *testing.T) {
 		t.Errorf("the fix drops what was accepted already:\n%s", out.String())
 	}
 }
+
+// A sync's refusal keeps the operator's --from in its --accept-image line
+// (Set.Again), but its other fix, the release that builds what a copy
+// needs, says --release-sync alone: copied, it syncs from the configured
+// parent, another source than the one the operator named, or fails on a
+// parent that does not resolve.
+func TestCopyNeedsFixKeepsFrom(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	if _, err := prod.release(false, dbSvc("mariadb:11.8")); err != nil {
+		prod.fail("setup: %v", err)
+	}
+	qa := newSim(t, d, "app-qa", &out)
+	qa.release(false, builtDB("app-qa", "11.8"))
+	own := qa.runs("database")
+	qa.failRun(false, builtDB("app-qa", "12.1"))
+	for n, id := range d.names {
+		if id == own {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, own)
+	qa.e.set.Again = "--sync --from vm2:prod"
+	out.Reset()
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	if err := qa.e.set.CheckLanding(qa.e.rel(qa.cur), qa.e.set.SyncLanding(data, "")); !errors.Is(err, ErrRefused) {
+		qa.fail("its own build is gone: %v", err)
+	}
+	if !strings.Contains(out.String(), "--release-sync --from vm2:prod") {
+		t.Errorf("the fix drops the source the operator named:\n%s", out.String())
+	}
+}
