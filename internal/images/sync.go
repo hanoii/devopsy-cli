@@ -242,7 +242,7 @@ func (s *Set) SyncCheck(rel, data string) error {
 // export's (ExportData, DataFor) in place of a parent's, before the
 // import stops anything.
 func (s *Set) ImportCheck(rel, data, service string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service}, false)
+	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>"}, false)
 }
 
 // RestoreCheck is SyncCheck for a --no-code restore of snapshot, its

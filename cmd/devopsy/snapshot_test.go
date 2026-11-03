@@ -3310,6 +3310,11 @@ func TestRestoreDataVersion(t *testing.T) {
 		env := []string{"FAKE_DB_IMAGE=mariadb:11.4", "FAKE_IMAGES=sha256:four=mariadb@sha256:four sha256:snap=mariadb@sha256:snap"}
 		restore := append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)
 		if len(args) > 0 {
+			// Refused with --with-env, its fix runs it again with it.
+			s.logs()
+			if out, code := s.run(env, append(append([]string{}, restore...), "--with-env")...); code == 0 || !strings.Contains(out, "--snapshots restore "+m[1]+" --no-code --with-env --accept-image db") {
+				t.Fatalf("%v: a --no-code restore --with-env below the snapshot's version (%d):\n%s", args, code, out)
+			}
 			s.logs()
 			out, code = s.run(env, restore...)
 			docker, _ := s.logs()

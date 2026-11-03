@@ -1020,7 +1020,7 @@ func TestImportExportImages(t *testing.T) {
 	s.logs()
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
 	docker, _ := s.logs()
-	if code == 0 || !strings.Contains(errs, "app: devopsy.data.version=11.4 is lower than the export's data's version, 11.8") || !strings.Contains(errs, "--import app --accept-image app") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
+	if code == 0 || !strings.Contains(errs, "app: devopsy.data.version=11.4 is lower than the export's data's version, 11.8") || !strings.Contains(errs, "--import app --accept-image app < <export>") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
 		t.Fatalf("a lower version (%d):\n%s\n%s", code, errs, docker)
 	}
 	if _, errs, code := s.runIO(env, out, "@prod", "--import", "app", "--accept-image", "app", "--yes"); code != 0 || !strings.Contains(errs, "accepted (--accept-image)") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {

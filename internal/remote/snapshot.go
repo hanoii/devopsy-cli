@@ -246,8 +246,14 @@ export ` + RestoreByEnv + `=` + Quote(r.By)
 	if r.WithEnv {
 		env = DotenvPendingEnv + `="$snap/` + SnapshotData + `/shared.env" ` + InheritPendingEnv + `="$snap/` + SnapshotData + `/inherit.env" `
 	}
+	// A refusal's fix runs it again as the operator did, --with-env
+	// included (review: it named the restore without it).
+	again := "--snapshots restore " + r.Snapshot + " --no-code"
+	if r.WithEnv {
+		again += " --with-env"
+	}
 	s += `[ -z "${` + ImagesAcceptEnv + `:-}" ] || export ` + ImagesAcceptEnv + `
-` + checkImages(t, projectName, true, env, "nothing restored", "--restore", r.Snapshot)
+` + checkImages(t, projectName, true, env, "nothing restored", "--restore", r.Snapshot, "--again", again)
 	// With release snapshots on, the data it replaces first, as a
 	// release's: what it stops stays down for the data step, and anything
 	// that ends this before it starts them again (rd_unsnap).

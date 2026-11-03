@@ -34,14 +34,15 @@ const (
 // it; --sync, a sync's holder: a release that syncs, which inherits
 // first; --restore <snapshot>, a --no-code restore: its data services
 // checked against the snapshot's data first (images.RestoreCheck, exit
-// 3), and with --with-env the fixes the full restore, or the restore
-// without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
+// 3, its fix --again, what the operator ran), and with --with-env the
+// fixes the full restore, or the restore without the snapshot's
+// variables). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
 // follow-up: "missing <name>" lines, exit 4, when compose requires a
 // variable that is not set; else "image <what>" lines, exit 3, when a
 // release applies the change; else nothing, exit 0: a reload does.
 func runCheckImages(cwd string, args []string) int {
-	hint, sync, address, snapshot := false, false, "", ""
+	hint, sync, address, snapshot, again := false, false, "", "", ""
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--hint":
@@ -51,10 +52,14 @@ func runCheckImages(cwd string, args []string) int {
 		case a == "--restore" && i+1 < len(args):
 			snapshot = args[i+1]
 			i++
+		case a == "--again" && i+1 < len(args):
+			// What the operator ran, for a refusal's fix (images.Set.Again).
+			again = args[i+1]
+			i++
 		case address == "" && !strings.HasPrefix(a, "-"):
 			address = a
 		default:
-			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot>] [<address>]")
+			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot> [--again <args>]] [<address>]")
 			return 2
 		}
 	}
@@ -91,7 +96,7 @@ func runCheckImages(cwd string, args []string) int {
 		// the snapshot's data's history, as a sync's against the parent's
 		// (images.RestoreCheck), the operator's --accept-image letting a
 		// refused one through.
-		s.Address, s.Accept = strings.TrimPrefix(address, "@"), acceptedImages()
+		s.Address, s.Accept, s.Again = strings.TrimPrefix(address, "@"), acceptedImages(), again
 		data, _ := os.ReadFile(filepath.Join(s.Snapshots, snapshot, remote.SnapshotData, "images"))
 		if err := s.RestoreCheck(rel, string(data), snapshot); errors.Is(err, images.ErrRefused) {
 			return checkImagesExit

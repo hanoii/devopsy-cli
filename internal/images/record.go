@@ -45,6 +45,9 @@ type checkWords struct {
 	// rollback adds a rollback's ways out: a release that fixes forward,
 	// the release snapshot from before the change.
 	rollback bool
+	// input follows the command run again: an import's data (" <
+	// <export>", as the README writes an import).
+	input string
 }
 
 // judge says what the rule decided over js in w's words: refused (and
@@ -83,7 +86,7 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 		if s.Again != "" {
 			flag = s.Again
 		}
-		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, refusedSvcs)))
+		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, refusedSvcs)+w.input))
 		s.sayAll(report.ErrorLevel, w.what+": "+w.nothing, refused, fixes...)
 		return nil, ErrRefused
 	}
