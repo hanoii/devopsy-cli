@@ -1994,13 +1994,20 @@ func seeds(n int) int {
 	return n
 }
 
-func dataRandom(t *testing.T, seed int64) {
+func dataRandom(t *testing.T, seed int64) { dataRandomMode(t, seed, ModeBuild) }
+
+// dataRandomMode is dataRandom with every release in mode: in image mode
+// a service with build: is pulled, the project's registry serving a new
+// image under a commit tag per release (push), as CI pushes them.
+func dataRandomMode(t *testing.T, seed int64, mode string) {
 	rng := rand.New(rand.NewSource(seed))
 	d := newFake()
 	var out bytes.Buffer
 	envs := []*sim{newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)}
 	left := filepath.Join(t.TempDir(), LeftFile)
+	commit := 0
 	for _, m := range envs {
+		m.e.mode = mode
 		m.e.set.Left = left
 		m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
 	}
@@ -2173,13 +2180,24 @@ func dataRandom(t *testing.T, seed int64) {
 		var db Service
 		if rng.Intn(5) == 0 {
 			db = builtDB(m.e.set.Name, versions[rng.Intn(len(versions))])
+			if mode == ModeImage {
+				commit++
+				db.Ref += fmt.Sprintf(":c%d", commit)
+				push(db.Ref)
+			}
 		} else {
 			db = dbSvc(refs[rng.Intn(len(refs))])
 			if rng.Intn(3) == 0 {
 				db.DataVersion = versions[rng.Intn(len(versions))]
 			}
 		}
-		return []Service{{Name: "app", Ref: m.e.set.Name + "-app", Build: true}, db, proxySvc}
+		app := Service{Name: "app", Ref: m.e.set.Name + "-app", Build: true}
+		if mode == ModeImage {
+			commit++
+			app.Ref += fmt.Sprintf(":c%d", commit)
+			push(app.Ref)
+		}
+		return []Service{app, db, proxySvc}
 	}
 	other := func() *sim {
 		if m == envs[0] {
