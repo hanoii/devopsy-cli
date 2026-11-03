@@ -1263,6 +1263,10 @@ exec 7<&-
     get_images "$base/$prev" "$rel" || {
       gi_s=$?
       devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway"
+      # Its data services still held where the failed release's image ran
+      # on their data, without the image lock or Docker (img hold):
+      # never its old compose file's older image on that data.
+      img hold "$base/$prev" "$rel" || true
     }
 `
 	// Its entries of mnt to their owners, by its own labels: the new

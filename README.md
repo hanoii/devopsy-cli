@@ -943,7 +943,11 @@ image ran on the data and the previous release's would be refused, that
 service stays on the failed release's image (by its digest when pulled,
 by its own name when built, the failed release's own name when it built
 what the previous release pulls), said in the release's output and in
-`--status` (`held on`), until a release fixes forward. The release's
+`--status` (`held on`), until a release fixes forward. When its images
+cannot be restored at all (the server's images held by another for 10
+minutes, Docker failing), a pulled one is still held, by its digest; a
+built one cannot be, and the release's output names it, with the release
+that fixes forward. The release's
 `--accept-image` never reaches it: it accepted the new image, never the
 old one back on the new data.
 

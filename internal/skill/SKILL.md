@@ -114,9 +114,12 @@ What devopsy requires:
 - Every service with `devopsy.data=true` sets `devopsy.data.version`
   (required): a version (`11.8`, dotted numbers) or `any`. devopsy never
   runs the data on a lower version, nor a pulled image on another tag at
-  the same version, in a release, a rollback, a sync, an import or a
-  restore of a snapshot's data alone, unless `--accept-image <service>`
-  (never `--yes`, which only skips prompts). A database takes it from the same variable
+  the same version, unless `--accept-image <service>` (never `--yes`,
+  which only skips prompts): a release, a rollback, a sync, an import
+  and a restore of a snapshot's data alone refuse it, and the restart
+  after a failed run step and a full restore keep the data on the image
+  it ran. The one exception: a restart whose images cannot be restored
+  at all cannot hold a built one, and says so; fix forward then. A database takes it from the same variable
   as its image (`image: mariadb:${MARIADB_VERSION:-11.8}`,
   `devopsy.data.version=${MARIADB_VERSION:-11.8}`), or as its build
   argument when it is built, so a series bump is raising that variable;

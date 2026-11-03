@@ -40,7 +40,10 @@ import (
 // after a failed run step: none refused, those the rule would refuse held
 // on the failed release's image, --accept-image ignored; --restore, a
 // full restore: nothing checked; as built, the restart's last try,
-// neither exit), ran <environment> <release> [cut] (the history of what
+// neither exit), hold <release> <failed release> (the restart's last
+// resort once get_images failed: the holds written into the release's
+// listing and compose file without the image lock or Docker, exit 3 when
+// one cannot be), ran <environment> <release> [cut] (the history of what
 // ran on the data; cut: of an activation cut off past its switch),
 // remove <release>... (exit 1 when Docker failed: keep the
 // release), undo [--rollback] <release> [<current release>], recover
@@ -241,6 +244,17 @@ func runImages(args []string, color bool) int {
 			return 1
 		} else if err != nil {
 			return 3
+		}
+	case "hold":
+		// The restart's last resort, without the image lock or Docker
+		// (images.Set.LastHold): exit 3 when a hold could not be written.
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if err := s.LastHold(rest[0], rest[1]); errors.Is(err, images.ErrRefused) {
+			return 3
+		} else if err != nil {
+			return 1
 		}
 	case "data":
 		if len(rest) != 2 {

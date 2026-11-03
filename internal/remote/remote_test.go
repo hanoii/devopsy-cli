@@ -2914,7 +2914,9 @@ case "$*" in
     fi
     echo "$IMG" >"$FAKE_ROOT/images/mariadb:11.8" ;;
   "-- build --pull") echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
-  deploy) exit ${FAIL_RUN:-0} ;;
+  # LOCK_ON_FAIL: a failing run step leaves the image lock held by
+  # another (the restart's get_images waits for it in vain).
+  deploy) [ -z "${FAIL_RUN:-}" ] || [ -z "${LOCK_ON_FAIL:-}" ] || : >"$FAKE_ROOT/locked"; exit ${FAIL_RUN:-0} ;;
 esac
 exit 0
 `
@@ -3006,6 +3008,46 @@ func TestRestartFetchIgnoresOldHolds(t *testing.T) {
 	}
 	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) || !strings.Contains(got, `"devopsy.held": "2"`) || !strings.Contains(out, "db stays on the image release 2 ran on its data") || strings.Contains(out, "as built") {
 		t.Errorf("release 1 restarted without its database held on I2, the image its data ran at 12.1:\n%s\n%s", got, out)
+	}
+}
+
+// The restart's last resort: get_images failing (here the image lock,
+// which another holds for 10 minutes) left release 1 restarting on its
+// own compose file, mariadb:11.8 on the data release 2's 12.1 image ran
+// (review). Without the lock or Docker, img hold writes the hold by
+// digest into release 1's compose file and listing, said.
+func TestRestartLastResortHolds(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), oldHoldsFake)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild, Address: "vm1:prod", Project: &Project{Name: "app"}}
+	base := filepath.Join(root, tg.Path)
+	release := func(id string, env ...string) (string, error) {
+		t.Helper()
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := release("1", "IMG=I1"); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+	// Release 2 pulls I2, its database runs on it at 12.1, its run step
+	// fails (what ran written as img ran would, no container in the fakes).
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\t12.1\t11.8\n")
+	out, err := release("2", "IMG=I2", "FAIL_RUN=4", "LOCK_ON_FAIL=1")
+	if err == nil || !strings.Contains(out, "getting the images of 1 failed") {
+		t.Fatalf("release 2's restart did not fail to get its images (%v):\n%s", err, out)
+	}
+	got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile))
+	if !strings.Contains(got, `image: "mariadb@I2"`) || !strings.Contains(got, `"devopsy.held": "2"`) || !strings.Contains(out, "db stays on the image release 2 ran on its data") {
+		t.Errorf("release 1 restarted on its own compose file, 11.8 on the data 12.1 ran:\n%s\n%s", got, out)
+	}
+	if l := readFile(filepath.Join(base, "releases", "1", "devopsy-images")); !strings.Contains(l, "mariadb@I2") || !strings.Contains(l, "12.1") {
+		t.Errorf("release 1's listing does not record the held image:\n%s", l)
 	}
 }
 

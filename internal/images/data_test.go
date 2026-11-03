@@ -683,6 +683,56 @@ func TestDataRestartHolds(t *testing.T) {
 	}
 }
 
+// The restart's last resort, once get_images failed: from the listings
+// and the history alone, a pulled data service is held by its digest in
+// the previous release's compose file and listing; a built one, which
+// only a name moved by Docker could hold, is named, with the way on.
+func TestDataRestartLastResort(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	search := func(v string) Service {
+		return Service{Name: "search", Ref: "app-prod-search", Build: true, Data: true, Method: CopyVolumes, DataVersion: v}
+	}
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118, search("8"))
+	d.publish("mariadb:12.1", "J1")
+	r2 := m.e.release(dbSvc("mariadb:12.1"), search("9"))
+	if err := m.e.set.Check(m.e.rel(r2)); err != nil {
+		m.fail("r2: %v", err)
+	}
+	m.fetch(m.e.svcs[r2])
+	m.e.set.Record(m.e.rel(r2), m.prev())
+	m.cur = r2
+	m.up()
+	m.e.set.Ran(m.base(), m.e.rel(r2))
+	// get_images failed: nothing restored, r1's own compose file.
+	out.Reset()
+	err := m.e.set.LastHold(m.e.rel(r1), m.e.rel(r2))
+	m.cur = r1
+	m.up()
+	if !errors.Is(err, ErrRefused) || m.runs("database") != "J1" {
+		m.fail("the last resort (%v): database %s (want J1)", err, m.runs("database"))
+	}
+	imgs, _, held := composeFacts(m.e.rel(r1))
+	if imgs["database"] != "mariadb@J1" || held["database"] != r2 || held["search"] != "" {
+		t.Errorf("devopsy's compose file: images %v, held %v", imgs, held)
+	}
+	if e, _ := match(readList(m.e.rel(r1)), entry{Service: "database"}); e.ID != "J1" || e.DataVersion != "12.1" {
+		t.Errorf("r1's listing: %+v", e)
+	}
+	for _, want := range []string{"database stays on the image release " + r2 + " ran on its data", "search: " + r1 + "'s image would run it on data it does not allow", "it runs what app-prod-search holds", "fix forward: a release", "devopsy @vm1:prod --release"} {
+		if !strings.Contains(out.String(), want) {
+			m.fail("no %q", want)
+		}
+	}
+	m.e.set.Ran(m.base(), m.e.rel(r1))
+	if l, _ := readHistory(m.base()).last("database"); l.Version != "12.1" {
+		t.Errorf("the history ends on %+v, not the held image's version", l)
+	}
+}
+
 // The hold survives a fetch: the restart whose own image is gone builds
 // again (ErrGone, then --fetched), which moves a built database's name to
 // the previous release's build, and the hold puts it back on the image

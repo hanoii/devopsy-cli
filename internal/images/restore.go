@@ -436,6 +436,70 @@ func (s *Set) hold(svc Service, hd restartHold, mode string, own map[string]bool
 	return e, ch, nil
 }
 
+// LastHold is the restart's last resort, once get_images failed (the
+// image lock's wait, a docker tag, a bookmark gone, compose's config
+// unreadable): without the image lock and without Docker, from the
+// listings and the history alone, it writes into target's listing and
+// ComposeFile the holds the restart would have made where a file can
+// make them: a data service whose version and tag in target's listing
+// the rule refuses against its data's window, once against's image ran on
+// it, held by against's registry digest (pulled), which the run step's up
+// pulls when gone. A built one needs its own name moved onto the image,
+// which only Docker does: said, naming the service and the way on, a
+// release that fixes forward. Why (review): the restart went on with
+// target's own ComposeFile, its older image on the data the newer one
+// ran. Holds already in the file stay.
+func (s *Set) LastHold(target, against string) error {
+	tid, from := filepath.Base(target), filepath.Base(against)
+	es, ag := readList(target), readList(against)
+	h := readHistory(baseOf(target))
+	imgs, _, held := composeFacts(target)
+	holds := map[string]composeHold{}
+	for svc, f := range held {
+		holds[svc] = composeHold{Image: imgs[svc], From: f}
+	}
+	var lines, unheld []string
+	for i, e := range es {
+		if e.Service == "" || e.DataVersion == "" || holds[e.Service].From != "" {
+			continue
+		}
+		fe, ok := match(ag, entry{Service: e.Service})
+		last, ran := h.last(e.Service)
+		if !ok || fe.ID == "" || fe.DataVersion == "" || !ran || last.ID != fe.ID {
+			continue
+		}
+		why := rule(h.window(e.Service), e.DataVersion, e.Tag, "its")
+		if why == "" {
+			continue
+		}
+		if fe.Kind == KindOwn || fe.Digest == "" {
+			unheld = append(unheld, fmt.Sprintf("%s: %s's image would run it on data it does not allow (%s), and the image release %s built, which its data ran, is held only by moving a name, which needs the images: it runs what %s holds", e.Service, tid, why, from, e.Ref))
+			continue
+		}
+		e.ID, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag = fe.ID, KindPulled, fe.Digest, fe.Version, "", fe.DataVersion, fe.Tag
+		es[i] = e
+		holds[e.Service] = composeHold{Image: fe.Digest, From: from}
+		lines = append(lines, fmt.Sprintf("%s stays on the image release %s ran on its data (%s, %s), as %s's would run it on data it does not allow (%s): a release that fixes forward is the way on", e.Service, from, shownEntry(e), shownData(fe), tid, why))
+	}
+	if len(lines) > 0 {
+		if err := writeList(target, es); err != nil {
+			s.say(report.ErrorLevel, "could not record the images of %s: %v", tid, err)
+			return err
+		}
+		if err := writeCompose(target, es, holds); err != nil {
+			s.say(report.ErrorLevel, "could not write %s's %s: %v", tid, ComposeFile, err)
+			return err
+		}
+		s.sayAll(report.WarnLevel, "images of "+tid+" not restored, but held where its data does not allow its own:", lines)
+	}
+	if len(unheld) > 0 {
+		s.sayAll(report.ErrorLevel, "images of "+tid+" not restored, and its data runs an image it does not allow:", unheld,
+			report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
+		return ErrRefused
+	}
+	return nil
+}
+
 // bookmarkOf is the bookmark of service in the release rel's listing,
 // "" when it lists none.
 func bookmarkOf(rel, name, service string) string {
