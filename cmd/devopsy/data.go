@@ -1218,13 +1218,11 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		}
 	}
-	// The data's history, when its export recorded it: the service's
-	// version and tag are checked against it before anything stops, as a
-	// sync checks its parent's (images.ImportCheck), and it is taken over
-	// once the data is in, on a target. A tar without it (made by hand)
-	// starts the history over. Either way the service's
-	// hold is derived again from it (images.Set.Rederive), and checked
-	// first for a built image that would need (a copy builds nothing).
+	// The data lands on a target (images.Landing): the service's labels
+	// checked against its export's history before anything stops, as a
+	// sync's against its parent's, then, once the data is in, that history
+	// taken over and its hold derived again. A tar without it (made by
+	// hand) starts the history over.
 	var imgs *images.Set
 	var record string
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
@@ -1239,7 +1237,7 @@ func runImport(cwd string, args []string, color bool) int {
 		if err != nil {
 			return fail(err.Error() + ": nothing imported")
 		}
-		err = imgs.ImportCheck(rel, record, name)
+		err = imgs.CheckLanding(rel, imgs.ImportLanding(record, name))
 		unlock()
 		if errors.Is(err, images.ErrRefused) {
 			return 1
@@ -1375,50 +1373,32 @@ func runImport(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 	}
-	// The export's history of its data taken over (ImportDone), or
-	// started over without its record (Imported), before anything starts
-	// on it: the data's version is the export's now, which the next check
-	// compares; the service runs its own image, its hold derived again.
+	// It lands before anything starts on it: the data's version is the
+	// export's now, which the next check compares, and the service runs
+	// its own image, its hold derived again. What ran through the import
+	// (devopsy.data.stop never) is made again when its container runs
+	// another image than rel's ComposeFile now gives it (another
+	// activation's), before what it stopped starts again. A failure ends
+	// what still runs on the data, as a failed write does (endImport), and
+	// keeps the mark (one policy: images.Landing).
 	if imgs != nil {
-		unlock, err := imagesShared(context.Background())
-		if err == nil {
-			if record != "" {
-				err = imgs.ImportDone(base, rel, record)
-			} else {
-				err = imgs.Imported(base, rel, name)
+		err := land(imgs, base, rel, imgs.ImportLanding(record, name))
+		if err == nil && !slices.Contains(stopped, name) {
+			if err = recreateRunning(cwd, rel, name); err != nil {
+				err = fmt.Errorf("%s still ran the image it had: %w", name, err)
 			}
-			unlock()
-		}
-		// Taken over (or started over), its holds not derived
-		// (images.HoldsError): what would run on the data not yet what
-		// its window allows, which --resolved derives.
-		var holds *images.HoldsError
-		if errors.As(err, &holds) {
-			what := "took over"
-			if record == "" {
-				what = "started over"
-			}
-			return fail("the import completed and " + what + " " + name + "'s history of its data, and what runs on it could not be derived again from it (" + holds.Err.Error() + "): what it stopped stays down, and the mark until an import of " + name + " completes (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved derives it and starts them)")
 		}
 		if err != nil {
-			return fail(err.Error() + ": the import completed, and " + name + "'s history of its data could not be taken over: what it stopped stays down, and the mark until an import of " + name + " completes")
-		}
-	}
-	// Running through the import (devopsy.data.stop never): made again
-	// when its container runs another image than rel's ComposeFile gives
-	// it (another activation's), before what it stopped starts again.
-	if imgs != nil && !slices.Contains(stopped, name) {
-		if err := recreateRunning(cwd, rel, name); err != nil {
-			return fail(err.Error() + ": the import completed, and " + name + " still runs the image it had: the mark stays until an import of " + name + " completes")
+			if _, stopErr := endImport(cwd, name, services, true, wasUp); stopErr != nil {
+				report.Error(stopErr.Error())
+			}
+			report.Fail(fmt.Errorf("the import of %s completed, but %w: what it stopped stays down, and the mark until an import of %s completes", name, err, name),
+				report.Fix("once that is fixed (the registry, Docker), accept the data and start them:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
+			return 1
 		}
 	}
 	if err := restoreServices(cwd, services, false, imgs != nil, nil); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
-	}
-	if imgs == nil {
-		if err := importedImages(cwd, base, name, services, time.Time{}); err != nil {
-			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
-		}
 	}
 	clearImportMark(base, name)
 	return code
@@ -1452,15 +1432,21 @@ func recreateRunning(cwd, rel, name string) error {
 	return nil
 }
 
-// importedImages starts the history of the images that ran on a pulled
-// data service's data over (images.Set.Imported) once its files were
-// imported (mnt), or accepted (--resolved): they came from elsewhere. A
-// stream's import goes through the service's own image, which keeps its
-// history. In a release, under the server's image lock: its hold is
-// derived again (images.Set.Rederive). Its error is what could not be
-// recorded or derived, which --resolved fails on (the held image would
-// start on the imported data) and a local import only warns of.
-func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) error {
+// land lands l on the environment at base (images.Set.Land), under the
+// server's image lock, shared.
+func land(set *images.Set, base, rel string, l images.Landing) error {
+	unlock, err := imagesShared(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return set.Land(base, rel, l)
+}
+
+// resolvedLanding lands an mnt import of name, accepted as it is, whose
+// mark is since (images.Set.ResolvedLanding). A stream's goes through the
+// service's own image, which keeps its history.
+func resolvedLanding(cwd, base, name string, services []cli.SyncService, since time.Time) error {
 	s, ok := cli.SyncFind(services, name)
 	if !ok || s.Copy != cli.CopyVolumes {
 		return nil
@@ -1469,18 +1455,7 @@ func importedImages(cwd, base, name string, services []cli.SyncService, resolved
 	if err != nil {
 		return err
 	}
-	if cli.InRelease(filepath.Join(cwd, cli.ProjectDirName)) {
-		unlock, err := imagesShared(context.Background())
-		if err != nil {
-			return err
-		}
-		defer unlock()
-	}
-	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
-	if !resolvedSince.IsZero() {
-		return set.Resolved(base, rel, name, resolvedSince)
-	}
-	return set.Imported(base, rel, name)
+	return land(set, base, remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), set.ResolvedLanding(name, since))
 }
 
 // importFailed is a failure from the first write: whatever may still
@@ -1596,8 +1571,8 @@ func runResolved(cwd, name string) int {
 	// One that fails keeps the mark, and what the import kept down down
 	// (review round 4: it warned, then started the held image on the
 	// imported data).
-	if err := importedImages(cwd, base, name, services, since); err != nil {
-		report.Fail(fmt.Errorf("could not derive what runs on %s's imported data (%w): the mark stays, and what the import kept down stays down", name, err),
+	if err := resolvedLanding(cwd, base, name, services, since); err != nil {
+		report.Fail(fmt.Errorf("%s's imported data did not land, as %w: the mark stays, and what the import kept down stays down", name, err),
 			report.Fix("once that is fixed (the registry, Docker), run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
 		return 1
 	}

@@ -2530,31 +2530,6 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
 		return 1
 	}
-	// The images that ran on the data, held, with their history.
-	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
-	if len(data) > 0 {
-		set, err := serverImages(cwd, composeName(cwd), errOut)
-		if err != nil {
-			return fail(err.Error())
-		}
-		unlock, err := imagesShared(ctx)
-		if err != nil {
-			return fail(err.Error())
-		}
-		// A --no-code restore's --accept-image (remote.ImagesAcceptEnv):
-		// a service its check refused starts its history over (a full
-		// restore takes none: nothing is checked).
-		set.Accept = acceptedImages()
-		// Its holds derived again from the restored history (Rederive): a
-		// hold the restored data no longer needs goes, the held image
-		// would upgrade it again, and one it needs is on the image the
-		// snapshot's window ends on.
-		err = set.RestoreDone(p.base, rel, string(data))
-		unlock()
-		if err != nil {
-			return fail(err.Error())
-		}
-	}
 	if os.Getenv(remote.RestoreEnvEnv) != "" {
 		for from, to := range map[string]string{"shared.env": ".env", "inherit.env": remote.InheritFile} {
 			if src := filepath.Join(snap, remote.SnapshotData, from); fileExists(src) {
@@ -2580,10 +2555,38 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		}
 		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+again)
 	}
+	// It lands under the variables it leaves (its labels read with the
+	// snapshot's, --with-env, moved in place above): its history comes back
+	// with it, a hold the restored data no longer needs goes (the held image
+	// would upgrade it again), and one it needs is on the image the
+	// snapshot's window ends on. --accept-image (remote.ImagesAcceptEnv,
+	// a --no-code restore's) forces a service its check refused.
+	imgs, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return fail(err.Error())
+	}
+	imgs.Accept = acceptedImages()
+	if err := land(imgs, p.base, rel, snapshotLanding(imgs, snap)); err != nil {
+		report.Fail(&report.Failure{Msg: "the snapshot's data is in, but " + err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
+		return 1
+	}
 	// The mark and the record stay until the run step has started the set
 	// (restored): a shell killed before it leaves the set down, marked.
 	report.Info("snapshot " + id + "'s data is in")
 	return 0
+}
+
+// snapshotLanding is what the snapshot at snap lands, its windows from its
+// images file and the services its manifest says it writes.
+func snapshotLanding(set *images.Set, snap string) images.Landing {
+	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
+	var services []string
+	if m, err := readManifest(snap); err == nil {
+		for _, svc := range m.services {
+			services = append(services, svc.name)
+		}
+	}
+	return set.RestoreLanding(string(data), filepath.Base(snap), services)
 }
 
 // snapshotReceive extracts the tar on in (an exported snapshot) into dir

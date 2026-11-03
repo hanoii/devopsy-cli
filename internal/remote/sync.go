@@ -597,6 +597,16 @@ func (o *SyncOptions) againArg() string {
 	return "--again " + Quote(o.Again) + " "
 }
 
+// resetOr has the holder's check run under a reset whatever the parent's
+// windows: its wipe lands on every data service, and what that derives is
+// checked before anything stops (images.Set.CheckLanding).
+func (o *SyncOptions) resetOr() string {
+	if o != nil && o.Reset {
+		return " || :"
+	}
+	return ""
+}
+
 func (o *SyncOptions) imagesExport() string {
 	return "export " + images.SyncImagesEnv + "=" + Quote(images.EncodeData(o.Images)) + "\n"
 }
@@ -742,24 +752,20 @@ func syncBlock(projectName, failed string, release bool) string {
   # finish partial ends what the record names, then it goes.
   if [ "$sync_word" = go ]; then
     # The data is the parent's: so is its history of versions (img
-    # sync-done), whatever the answer or finish child go says, before
-    # finish starts the services on it.
+    # sync-done, what lands it: images.Land), whatever the answer or
+    # finish child go says, before finish starts the services on it.
     if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
+      sd_why=
       if image_lock shared syncing; then
-        img sync-done "$base" "$rel" || status=$?
+        sd_why=$(img sync-done "$base" "$rel") || status=$?
         image_unlock
       else
         status=75
+        sd_why="the server's images stayed held"
       fi
       if [ "$status" != 0 ]; then
-        # The data is the parent's, its history not, or (4: img
-        # sync-done's images.HoldsError) its history but not what runs on
-        # it: nothing runs on it.
-        if [ "$status" = 4 ]; then
-          sd_why="the copy is complete and its history the parent's, but what runs on it could not be derived again"
-        else
-          sd_why="the copy is complete, but the parent's history of its data could not be taken over"
-        fi
+        # Nothing runs on it (one policy: images.Landing).
+        sd_why="the copy is complete, but ${sd_why:-its history did not land}"
         devopsy --say error "$sd_why ($status): the services stay down until a sync completes" || true
         printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "$sd_why" >` + incomplete + ` || true
         sync_finish partial || true
@@ -831,7 +837,7 @@ rel="$base/releases/$id"
 # versions and tags must allow the parent's data (img sync-check), as
 # their labels read with the pending inherited variables: an abort or a
 # session gone meanwhile ends this, nothing stopped.
-if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
+if [ -n "${` + images.SyncImagesEnv + `:-}" ]` + o.resetOr() + `; then
   image_lock shared syncing || exit $?
   sc=0
   (export ` + InheritPendingEnv + `="$base"/` + Quote(SyncInheritPending(o.ID)) + `; img sync-check ` + o.againArg() + `"$rel") || sc=$?

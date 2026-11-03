@@ -85,13 +85,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	case s.Restart:
 	case s.NoCheck:
 		// The window the data step brings back with the snapshot's data.
-		ps := s.snapshotWindows(restoreOf(target))
-		window = func(svc string) []ran {
-			if p := ps[svc]; p != nil {
-				return p.window()
-			}
-			return h.window(svc)
-		}
+		window = s.restoreLanding(restoreOf(target)).after(h.window)
 	default:
 		if accepted, err = s.checkRollback(target, svcs, false); err != nil {
 			return err
@@ -299,15 +293,14 @@ const (
 	snapshotImages  = "images"
 )
 
-// snapshotWindows are the windows snapshot snap's data carries
-// (SnapshotData), by service: none without it.
-func (s *Set) snapshotWindows(snap string) map[string]*sourceData {
-	dir := s.snapshots()
-	if snap == "" || dir == "" {
-		return nil
+// restoreLanding is what snapshot snap's data step lands (RestoreLanding),
+// its windows from its images file (SnapshotData): none without it.
+func (s *Set) restoreLanding(snap string) Landing {
+	var data []byte
+	if dir := s.snapshots(); snap != "" && dir != "" {
+		data, _ = os.ReadFile(filepath.Join(dir, snap, snapshotDataDir, snapshotImages))
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, snap, snapshotDataDir, snapshotImages))
-	return parseParentData(string(data))
+	return s.RestoreLanding(string(data), snap, nil)
 }
 
 // restoreOf is the snapshot a full restore made rel from (its record's

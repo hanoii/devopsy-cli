@@ -128,6 +128,8 @@ after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at"
 # FAKE_APP_OWNER: app's devopsy.mnt.owner.
 applab=$(lab "${FAKE_APP:-mnt}")
 dblab=$(lab "${FAKE_DB:-mnt+own}")
+# FAKE_APP_VERSION: app's devopsy.data.version, in place of any.
+[ -z "${FAKE_APP_VERSION:-}" ] || applab=$(printf '%s' "$applab" | sed "s/\"devopsy.data.version\":\"any\"/\"devopsy.data.version\":\"$FAKE_APP_VERSION\"/")
 # FAKE_DB_VERSION: db's devopsy.data.version, in place of any.
 [ -z "${FAKE_DB_VERSION:-}" ] || dblab=$(printf '%s' "$dblab" | sed "s/\"devopsy.data.version\":\"any\"/\"devopsy.data.version\":\"$FAKE_DB_VERSION\"/")
 # FAKE_DB_OWNER: db's.
@@ -150,6 +152,8 @@ dbvol= appvol= topvols=
 # code, its argument APP_UID FAKE_APP_UID (10001 by default).
 appbuild=
 [ -z "${FAKE_APP_BUILD:-}" ] || appbuild=$(printf '"build":{"context":"%s/..","dockerfile":".devopsy/Dockerfile","args":{"APP_UID":"%s"}},' "${dir:-}" "${FAKE_APP_UID:-10001}")
+# FAKE_APP_IMAGE: app's image: (none by default: compose names a build).
+[ -z "${FAKE_APP_IMAGE:-}" ] || appbuild="$appbuild$(printf '"image":"%s",' "$FAKE_APP_IMAGE")"
 # FAKE_DB_IMAGE: db's image: (none by default: compose names a build).
 dbimg=
 [ -z "${FAKE_DB_IMAGE:-}" ] || dbimg=$(printf '"image":"%s",' "$FAKE_DB_IMAGE")
@@ -1887,7 +1891,7 @@ func TestSyncRunStepDeployed(t *testing.T) {
 	}
 }
 
-// --sync --accept-image, the fix SyncCheck's refusal names, reaches the
+// --sync --accept-image, the fix a sync's refusal names, reaches the
 // holder's img sync-check with the services named, each once.
 func TestSyncAcceptReachesHolder(t *testing.T) {
 	t.Parallel()

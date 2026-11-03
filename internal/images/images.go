@@ -200,7 +200,7 @@ type Set struct {
 	Accept  map[string]bool
 	Address string
 	// SyncData is a parent's ParentData, in a sync's activation or
-	// holder: Check and SyncCheck check the child against it.
+	// holder: Check and SyncLanding read the child's data against it.
 	SyncData string
 	// Again is what the operator ran, which a refusal's --accept-image
 	// fix repeats (--release-sync, --reset, --sync --from <address>), in
@@ -217,7 +217,7 @@ type Set struct {
 	// never reaches it. NoCheck: a full restore, whose data and history
 	// come back from its snapshot: nothing checked, its holds derived
 	// against the snapshot's window. Reset: a sync that starts the child
-	// over (--reset), whose wipe starts every history over (copyNeeds).
+	// over (--reset), whose wipe starts every history over (SyncLanding).
 	Restart, NoCheck, Reset bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script

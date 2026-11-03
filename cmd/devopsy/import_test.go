@@ -1038,7 +1038,7 @@ func TestImportExportImages(t *testing.T) {
 	write(t, list, "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\t\t11.8\t11.8\n", 0o644)
 	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\t11.8\t11.8\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
+	env := []string{"FAKE_APP_IMAGE=mariadb:11.8", "FAKE_APP_VERSION=11.8", "FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
 	if code != 0 {
 		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
@@ -1065,6 +1065,7 @@ func TestImportExportImages(t *testing.T) {
 	// A lower version here: refused before anything stops.
 	write(t, list, "mariadb:11.4\tsha256:four\tapp\tpulled\tmariadb@sha256:four\t\t\t11.4\t11.4\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "prod's own\n", 0o644)
+	env = []string{"FAKE_APP_IMAGE=mariadb:11.4", "FAKE_APP_VERSION=11.4", "FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
 	s.logs()
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
 	docker, _ := s.logs()
@@ -1102,7 +1103,7 @@ func TestImportDropsHold(t *testing.T) {
 	write(t, list, "shop-prod-app\tsha256:own\tapp\tpulled\tshop-prod-app@sha256:own\t\t\t11.8\tlatest\n", 0o644)
 	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "at 11.8\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAKE_NAMES=shop-prod-app=sha256:own"}
+	env := []string{"FAKE_APP_VERSION=11.8", "FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAKE_NAMES=shop-prod-app=sha256:own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
 	if code != 0 {
 		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
@@ -1115,9 +1116,16 @@ func TestImportDropsHold(t *testing.T) {
 	// over, the hold not derived, which the failure says and --resolved
 	// derives (review: --resolved found the history taken over and
 	// derived nothing, the held image starting on the imported data).
-	gone := []string{"FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAIL_PULL=1"}
+	gone := []string{"FAKE_APP_VERSION=11.8", "FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAIL_PULL=1"}
+	s.logs()
 	_, errs, code = s.runIO(gone, out, "@prod", "--import", "app", "--yes")
-	if code == 0 || !strings.Contains(errs, "the import completed and took over app's history of its data, and what runs on it could not be derived again from it") || !strings.Contains(errs, "--import app --resolved derives it") || readMark(base) == nil || !readMark(base).IsImport() {
+	// What ran through the import (devopsy.data.stop never) is stopped and
+	// recorded with what the import stopped, as for a failed write: it
+	// would go on running the held image on the imported data.
+	if failed, _ := s.logs(); !strings.Contains(failed, "stop app") || !strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "stop app") {
+		t.Errorf("app after the import's failed take-over:\n%s\n%s", failed, errs)
+	}
+	if code == 0 || !strings.Contains(errs, "the import of app completed, but what runs on it could not be derived from its history") || !strings.Contains(errs, "--import app --resolved") || readMark(base) == nil || !readMark(base).IsImport() {
 		t.Fatalf("the import with its hold not derived (%d):\n%s", code, errs)
 	}
 	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, images.HeldLabel) {
@@ -1129,7 +1137,7 @@ func TestImportDropsHold(t *testing.T) {
 	s.logs()
 	_, errs, code = s.runIO(gone, nil, "@prod", "--import", "app", "--resolved", "--yes")
 	docker, _ := s.logs()
-	if code == 0 || readMark(base) == nil || !readMark(base).IsImport() || strings.Contains(docker, " start ") || !strings.Contains(errs, "could not derive what runs on app's imported data") || !strings.Contains(errs, "--import app --resolved") {
+	if code == 0 || readMark(base) == nil || !readMark(base).IsImport() || strings.Contains(docker, " start ") || !strings.Contains(errs, "app's imported data did not land, as what runs on it could not be derived from its history") || !strings.Contains(errs, "--import app --resolved") {
 		t.Fatalf("--resolved with its derivation failing (%d), mark %+v:\n%s\n%s", code, readMark(base), errs, docker)
 	}
 	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, images.HeldLabel) {
@@ -1158,11 +1166,9 @@ func TestImportExportImagesImageLock(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
-	// app listed as data (its version, any, as the fake's labels say), as
-	// a release lists it: one listed as none is refused.
 	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\t\tany\t11.8\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
+	env := []string{"FAKE_APP_IMAGE=mariadb:11.8", "FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
 	if code != 0 {
 		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
@@ -1306,12 +1312,12 @@ func TestSyncHoldsNotDerived(t *testing.T) {
 	setApp(releaseFile(t, current, images.ListFile), "shop-dev-app\tsha256:twelve\tapp\tpulled\tshop-dev-app@sha256:twelve\t\t\t12.1\tlatest\tshop-dev-app\tsha256:own\t\tshop-dev-app@sha256:own\t11.8\tlatest\n")
 	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"app\":\n    image: \"shop-dev-app@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"shop-dev-app@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
 	write(t, filepath.Join(dev, images.HistoryFile), "1\tapp\tran\tshop-dev-app\tsha256:own\tshop-dev-app@sha256:own\t11.8\tlatest\n2\tapp\tran\tshop-dev-app\tsha256:twelve\tshop-dev-app@sha256:twelve\t12.1\tlatest\n", 0o644)
-	gone := []string{"FAKE_IMAGES=sha256:own=shop-dev-app@sha256:own sha256:twelve=shop-dev-app@sha256:twelve", "FAIL_PULL=1"}
+	gone := []string{"FAKE_APP_VERSION=11.8", "FAKE_IMAGES=sha256:own=shop-dev-app@sha256:own sha256:twelve=shop-dev-app@sha256:twelve", "FAIL_PULL=1"}
 	out, code := s.run(gone, "@dev", "--sync", "--yes")
-	if code == 0 || !strings.Contains(out, "the copy is complete and its history the parent's, but what runs on it could not be derived again") || strings.Contains(out, "could not take over the parent's history") {
+	if code == 0 || !strings.Contains(out, "the copy is complete, but what runs on it could not be derived from its history") || strings.Contains(out, "its history could not be written") {
 		t.Fatalf("a sync with its holds not derived (%d):\n%s", code, out)
 	}
-	if _, _, mc, why := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); mc != remote.IncompleteFinish || !strings.Contains(why, "what runs on it could not be derived again") {
+	if _, _, mc, why := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); mc != remote.IncompleteFinish || !strings.Contains(why, "what runs on it could not be derived from its history") {
 		t.Errorf("the mark: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))
 	}
 }

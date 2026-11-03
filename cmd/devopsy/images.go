@@ -267,7 +267,7 @@ func runImages(args []string, color bool) int {
 		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		if err := s.SyncCheck(rest[0], s.SyncData); errors.Is(err, images.ErrRefused) {
+		if err := s.CheckLanding(rest[0], s.SyncLanding(s.SyncData, "")); errors.Is(err, images.ErrRefused) {
 			return 3
 		} else if err != nil {
 			return 1
@@ -276,12 +276,10 @@ func runImages(args []string, color bool) int {
 		if len(rest) != 2 {
 			return imagesUsage(color)
 		}
-		// 4: the parent's history taken over, what runs on it not derived
-		// (images.HoldsError), which the holder says apart.
-		var holds *images.HoldsError
-		if err := s.SyncDone(rest[0], rest[1], s.SyncData, os.Getenv(remote.SyncFromTargetEnv)); errors.As(err, &holds) {
-			return 4
-		} else if err != nil {
+		// What failed, on one line on stdout, for the holder's words and
+		// the mark's (images.Land).
+		if err := s.Land(rest[0], rest[1], s.SyncLanding(s.SyncData, os.Getenv(remote.SyncFromTargetEnv))); err != nil {
+			fmt.Println(strings.Join(strings.Fields(err.Error()), " "))
 			return 1
 		}
 	case "ran":

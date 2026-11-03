@@ -53,9 +53,9 @@ type checkWords struct {
 	// builds it.
 	builds  string
 	rebuild report.Remedy
-	// relist is what lists as data a service the copy writes that the
-	// current release lists as none (unlistedData): a release.
-	relist report.Remedy
+	// fetch is what fetches an image the labels name and the current
+	// release did not (notFetched): a release.
+	fetch report.Remedy
 }
 
 // judge says what the rule decided over js in w's words: refused (and
@@ -168,15 +168,15 @@ func (s *Set) judgeRelease(rel string) ([]judged, error) {
 		return nil, err
 	}
 	h := readHistory(baseOf(rel))
-	parent := parseParentData(s.SyncData)
+	l := s.SyncLanding(s.SyncData, "")
 	var js []judged
 	for _, svc := range svcs {
 		if !svc.Data {
 			continue
 		}
 		w, source := h.window(svc.Name), "its"
-		if p := parent[svc.Name]; p != nil {
-			w, source = p.window(), "the parent's"
+		if lw, ok := l.window(svc.Name); ok {
+			w, source = lw, l.words.source
 		}
 		js = append(js, judged{service: svc.Name, why: rule(w, svc.DataVersion, svc.tag(), source)})
 	}
@@ -190,8 +190,7 @@ func (s *Set) judgeRelease(rel string) ([]judged, error) {
 // release it replaces ("" for a first one): its listing says what moved.
 // Check came before the fetch; what it let through by --accept-image
 // starts its data's history over once it runs (ForcedFile, Ran), but for
-// a service a release that syncs copies, whose sync does that
-// (SyncDone).
+// a service a release that syncs copies, whose landing does that (Land).
 func (s *Set) Record(rel, prev string) error {
 	es, err := s.entries(rel)
 	if err != nil {
@@ -200,18 +199,18 @@ func (s *Set) Record(rel, prev string) error {
 	}
 	old := readList(prev)
 	h := readHistory(baseOf(rel))
-	parent := parseParentData(s.SyncData)
+	l := s.SyncLanding(s.SyncData, "")
 	// What starts its history over at this release's run: what
 	// --accept-image let through, a service the parent copies by the
-	// sync's own (SyncDone).
+	// sync's own landing.
 	over := map[string]bool{}
 	var forced []string
 	for _, e := range es {
 		if !s.Accept[e.Service] || e.DataVersion == "" {
 			continue
 		}
-		if p := parent[e.Service]; p != nil {
-			over[e.Service] = rule(p.window(), e.DataVersion, e.Tag, "the parent's") != ""
+		if w, ok := l.window(e.Service); ok {
+			over[e.Service] = rule(w, e.DataVersion, e.Tag, l.words.source) != ""
 		} else if rule(h.window(e.Service), e.DataVersion, e.Tag, "its") != "" {
 			over[e.Service] = true
 			forced = append(forced, e.Service+"\t"+e.ID)
@@ -229,14 +228,12 @@ func (s *Set) Record(rel, prev string) error {
 	// Its holds, derived against the window its data has when it runs (a
 	// copied service's the parent's): none, Check having refused or
 	// accepted it before, which this agrees with.
+	after := l.after(h.window)
 	held := holdsFor(es, func(svc string) []ran {
-		switch p := parent[svc]; {
-		case over[svc]:
+		if over[svc] {
 			return nil
-		case p != nil:
-			return p.window()
 		}
-		return h.window(svc)
+		return after(svc)
 	})
 	holds, lines, err := s.applyHolds(rel, es, held, nil)
 	if err != nil {

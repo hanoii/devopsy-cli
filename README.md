@@ -1390,14 +1390,14 @@ tag alone), in the tar's first header, which `tar` itself skips. An
 `--import` of it on a target checks the environment's labels against it
 before anything stops, as a sync does, and takes it over once the data
 is in; refused, `--import <service> --accept-image <service>` runs it
-anyway, its history starting over. A service that its current release
-does not list as data, but its labels make data now (a variable set
-since), is refused, as by a sync or a `--no-code` restore, until a
-release lists it. A tar without the header, every
-import locally and a `volumes` service's `--resolved` (unless the import
-took the history over before what failed) start the service's history
-over, data of no known version, which the next release's label is taken
-for. A `custom` export is its script's output and carries none, and a
+anyway, its history starting over. An import, a sync and a `--no-code`
+restore all read a service's labels as they are now, and refuse one
+whose image they name otherwise than its release fetched (a variable set
+since) until a release fetches it. A tar without the header and a
+`volumes` service's `--resolved` (unless the import took the history over
+before what failed) start the service's history over, data of no known
+version, which the next release's label is taken for; locally there is no
+history. A `custom` export is its script's output and carries none, and a
 `custom` import, or its `--resolved`, checks nothing and leaves the
 service's history and what it runs as they were: its script loads the
 dump through the image that runs, so the data stays what that image

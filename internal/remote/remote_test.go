@@ -289,6 +289,13 @@ func TestImagesAgain(t *testing.T) {
 	if !strings.Contains(s["holder"], `(export `+InheritPendingEnv+`="$base"/'.devopsy-sync.inherit.1.2.env'; img sync-check --again '--reset' "$rel")`) {
 		t.Errorf("a --reset: no --again on its img sync-check")
 	}
+	// A reset's wipe lands on every data service, whatever the parent's
+	// windows (none, every copy custom): its check runs all the same, or
+	// what it derives fails only once the data is wiped.
+	reset := HolderScript(&Target{Name: "dev", Host: "h", Path: "app/dev", Project: &Project{Name: "app"}}, "app-dev", &SyncOptions{ID: "1.2", Reset: true}, true)
+	if !strings.Contains(reset, `if [ -n "${`+images.SyncImagesEnv+`:-}" ] || :; then`) {
+		t.Errorf("a --reset's img sync-check goes by the parent's windows:\n%s", reset)
+	}
 	if strings.Contains(s["holder plain"], "--again") || strings.Contains(s["sync only"], "--again") {
 		t.Errorf("--again where nothing says what the operator ran")
 	}

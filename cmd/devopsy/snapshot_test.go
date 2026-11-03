@@ -489,6 +489,63 @@ func TestSnapshotRestoreNoCode(t *testing.T) {
 	}
 }
 
+// A --no-code restore of a snapshot that records no versions brings back
+// data of no known version: its history starts over, so the next release
+// adopts its label, never compared with what ran on the data it replaced.
+func TestSnapshotRestoreNoVersions(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, "snapshots", m[1], remote.SnapshotData, "images"), "", 0o600)
+	history := filepath.Join(base, images.HistoryFile)
+	write(t, history, "1\tdb\tran\ty\tsha256:new\t\t12\tlatest\n", 0o644)
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 {
+		t.Fatalf("--no-code (%d):\n%s", code, out)
+	}
+	if h := readString(history); strings.Contains(h, "\t12\t") {
+		t.Errorf("the replaced data's version is still in its history:\n%s", h)
+	}
+}
+
+// A --no-code restore --with-env lands under the variables it leaves, as
+// its check reads them (the snapshot's): its listing takes the version
+// they give, never the one in the file it replaces.
+func TestSnapshotRestoreLandsWithItsEnv(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	env := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	write(t, env, "FAKE_DB_VERSION=11\n", 0o600)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, env, "FAKE_DB_VERSION=12\n", 0o600)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--with-env", "--yes")
+	if code != 0 {
+		t.Fatalf("--no-code --with-env (%d):\n%s", code, out)
+	}
+	list := readString(releaseFile(t, filepath.Join(s.root, "shop", "prod", "current"), images.ListFile))
+	var db string
+	for _, l := range strings.Split(list, "\n") {
+		if f := strings.Split(l, "\t"); len(f) > 2 && f[2] == "db" {
+			db = l
+		}
+	}
+	if f := strings.Split(db, "\t"); len(f) < 8 || f[7] != "11" {
+		t.Errorf("db's listing after the restore: %q\n%s", db, out)
+	}
+}
+
 // --snapshots export writes one tar, which --snapshots import stores as
 // a snapshot of the environment under a new id, restorable as any; one
 // that is no snapshot, or into an environment with no current release,
@@ -3250,7 +3307,7 @@ func TestSnapshotImportPullsOwnRepository(t *testing.T) {
 }
 
 // A restore holds a pulled data service on the image its data ran when
-// the snapshot was taken (ImportDone, devopsy-compose.yaml), and its
+// the snapshot was taken (Land, devopsy-compose.yaml), and its
 // run step's up makes the container again on it. A run step that leaves
 // that service stopped (one that ups only some services, what
 // startLeftDown is for) leaves its container the one from before, on
@@ -3281,7 +3338,7 @@ func TestRestoredStartsOnHeldImage(t *testing.T) {
 }
 
 // A restore brings the snapshot's data back with its history (its data
-// step, ImportDone): nothing is held, and the history's window is the
+// step, Land): nothing is held, and the history's window is the
 // snapshot's from an import line. A full restore checks nothing; a
 // --no-code one checks the current release's labels against the
 // snapshot's data first, refusing a lower version before anything stops
@@ -3307,8 +3364,12 @@ func TestRestoreDataVersion(t *testing.T) {
 		write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:11.4\tsha256:four\tdb\tpulled\tmariadb@sha256:four\t\t\t11.4\t11.4\n", 0o644)
 		history := filepath.Join(base, images.HistoryFile)
 		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n2\tdb\tforced\tmariadb:11.4\tsha256:four\tmariadb@sha256:four\t11.4\t11.4\n", 0o644)
-		env := []string{"FAKE_DB_IMAGE=mariadb:11.4", "FAKE_IMAGES=sha256:four=mariadb@sha256:four sha256:snap=mariadb@sha256:snap"}
+		env := []string{"FAKE_DB_IMAGE=mariadb:11.4", "FAKE_DB_VERSION=11.4", "FAKE_IMAGES=sha256:four=mariadb@sha256:four sha256:snap=mariadb@sha256:snap"}
 		restore := append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)
+		if len(args) == 0 {
+			// A full restore's labels are its snapshot's code's.
+			env = []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_DB_VERSION=11.8", env[2]}
+		}
 		if len(args) > 0 {
 			// Refused with --with-env, its fix runs it again with it.
 			s.logs()

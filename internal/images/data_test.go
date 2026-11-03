@@ -266,7 +266,7 @@ func (m *sim) snapshot(id string) string {
 // code (svcs), its record naming the snapshot and its listing the
 // snapshot's (make-release), its images restored checking nothing (img
 // restore --restore, again --fetched when one it builds is gone), then
-// the data step (RestoreDone), the run step and img ran.
+// the data step (Land), the run step and img ran.
 func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 	m.t.Helper()
 	id := m.e.release(svcs...)
@@ -287,7 +287,7 @@ func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 	}
 	m.cur = id
 	data, _ := os.ReadFile(filepath.Join(dir, "data", "images"))
-	m.e.set.RestoreDone(m.base(), rel, string(data))
+	m.e.set.Land(m.base(), rel, m.e.set.RestoreLanding(string(data), "", nil))
 	m.up()
 	m.e.set.Ran(m.base(), rel)
 	return id, nil
@@ -295,16 +295,16 @@ func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 
 // noCode restores the snapshot dir's data alone under the current
 // release, as a --no-code restore does: its check against the snapshot's
-// data, the data step (RestoreDone, which derives its holds again), the
+// data, the data step (Land, which derives its holds again), the
 // run step and img ran.
 func (m *sim) noCode(dir string) error {
 	m.t.Helper()
 	rel := m.e.rel(m.cur)
 	data, _ := os.ReadFile(filepath.Join(dir, "data", "images"))
-	if err := m.e.set.RestoreCheck(rel, string(data), filepath.Base(dir)); err != nil {
+	if err := m.e.set.CheckLanding(rel, m.e.set.RestoreLanding(string(data), filepath.Base(dir), nil)); err != nil {
 		return err
 	}
-	if err := m.e.set.RestoreDone(m.base(), rel, string(data)); err != nil {
+	if err := m.e.set.Land(m.base(), rel, m.e.set.RestoreLanding(string(data), "", nil)); err != nil {
 		m.fail("the data step: %v", err)
 	}
 	m.up()
@@ -721,7 +721,7 @@ func TestDataReleaseSyncAcceptedRestart(t *testing.T) {
 		dev.fail("record: %v", err)
 	}
 	dev.cur = r2
-	if err := dev.e.set.SyncDone(dev.base(), rel, data, "vm1:prod"); err != nil {
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
 		dev.fail("sync-done: %v", err)
 	}
 	if got := strings.Join(dev.history("database"), " "); got != "forced:R2:11.8" {
@@ -1287,8 +1287,8 @@ func TestStatusLinesRollbackCutPastSwitch(t *testing.T) {
 
 // syncInto is a sync of parent's data into child, as the child's side
 // runs it: the parent's data read (ParentData), checked before anything
-// stops (SyncCheck), and, the copy complete, its history taken over
-// (SyncDone), then the child's run step on its own images.
+// stops (CheckLanding), and, the copy complete, its history taken over
+// (Land), then the child's run step on its own images.
 func syncInto(t *testing.T, parent, child *sim, yes bool) error {
 	t.Helper()
 	data := parent.e.set.ParentData(parent.base(), parent.e.rel(parent.cur))
@@ -1297,10 +1297,10 @@ func syncInto(t *testing.T, parent, child *sim, yes bool) error {
 	}
 	defer func() { child.e.set.Accept = nil }()
 	rel := child.e.rel(child.cur)
-	if err := child.e.set.SyncCheck(rel, data); err != nil {
+	if err := child.e.set.CheckLanding(rel, child.e.set.SyncLanding(data, "")); err != nil {
 		return err
 	}
-	if err := child.e.set.SyncDone(child.base(), rel, data, "vm1:prod"); err != nil {
+	if err := child.e.set.Land(child.base(), rel, child.e.set.SyncLanding(data, "vm1:prod")); err != nil {
 		return err
 	}
 	child.up()
@@ -1333,21 +1333,32 @@ func TestDataSyncInheritedVersion(t *testing.T) {
 		t.Errorf("the history ends on %+v, not the label's version", l)
 	}
 	// An inherited variable that makes a service data in the same sync:
-	// its release lists it without a version, which nothing would check or
-	// record, so the sync is refused before anything stops, naming the
-	// release that syncs, which lists it (review round 3).
+	// its labels decide, as for any: checked against the parent's window,
+	// its listing and history following (review round 3: nothing checked
+	// or recorded it, and the next release adopted its label on the copy).
 	qa := newSim(t, d, "app-qa", &out)
 	plain := dbSvc("mariadb:12.1")
 	plain.Data, plain.DataVersion = false, ""
 	qa.release(false, plain)
 	qa.e.svcs[qa.cur][0] = dbSvc("mariadb:12.1")
+	qa.e.svcs[qa.cur][0].DataVersion = "11.8"
 	qa.e.set.Address = "vm1:qa"
 	out.Reset()
-	if err := syncInto(t, prod, qa, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "database: its labels make it a data service now, and the current release lists it as none") || !strings.Contains(out.String(), "devopsy @vm1:qa --release-sync\n") {
-		qa.fail("a sync into a service an inherited variable makes data (%v)", err)
+	if err := syncInto(t, prod, qa, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy.data.version=11.8 is lower than the parent's data's version, 12.1") {
+		qa.fail("a sync into a service an inherited variable makes data, at a lower version (%v)", err)
 	}
 	if h := readHistory(qa.base()); len(h) > 0 {
 		t.Errorf("the refused sync wrote a history: %v", h)
+	}
+	qa.e.svcs[qa.cur][0].DataVersion = "12.1"
+	if err := syncInto(t, prod, qa, false); err != nil {
+		qa.fail("a sync into a service an inherited variable makes data: %v", err)
+	}
+	if e, _ := match(readList(qa.e.rel(qa.cur)), entry{Service: "database"}); e.DataVersion != "12.1" || e.Tag != "12.1" {
+		t.Errorf("the listing after the sync: %+v", e)
+	}
+	if l, _ := readHistory(qa.base()).last("database"); l.Version != "12.1" {
+		t.Errorf("the history ends on %+v", l)
 	}
 }
 
@@ -1505,7 +1516,7 @@ func TestDataImport(t *testing.T) {
 	}
 	rel := stage.e.rel(stage.cur)
 	out.Reset()
-	if err := stage.e.set.ImportCheck(rel, data, "database"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "this environment would run the export's data on an image its version does not allow: nothing imported") || !strings.Contains(out.String(), "--import database --accept-image database") {
+	if err := stage.e.set.CheckLanding(rel, stage.e.set.ImportLanding(data, "database")); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "this environment would run the export's data on an image its version does not allow: nothing imported") || !strings.Contains(out.String(), "--import database --accept-image database") {
 		stage.fail("an import onto a lower version (%v)", err)
 	}
 	// Accepted, its history over from its own image; --resolved after it
@@ -1513,52 +1524,59 @@ func TestDataImport(t *testing.T) {
 	// no version the next release would adopt any label over.
 	mark := time.Now().Add(-time.Minute)
 	stage.e.set.Accept = map[string]bool{"database": true}
-	if err := stage.e.set.ImportCheck(rel, data, "database"); err != nil {
+	if err := stage.e.set.CheckLanding(rel, stage.e.set.ImportLanding(data, "database")); err != nil {
 		stage.fail("an accepted import: %v", err)
 	}
-	stage.e.set.ImportDone(stage.base(), rel, data)
+	stage.e.set.Land(stage.base(), rel, stage.e.set.ImportLanding(data, "database"))
 	stage.e.set.Accept = nil
-	if err := stage.e.set.Resolved(stage.base(), rel, "database", mark); err != nil || strings.Join(stage.history("database"), " ") != "forced:I1:11.8" {
+	if err := stage.e.set.Land(stage.base(), rel, stage.e.set.ResolvedLanding("database", mark)); err != nil || strings.Join(stage.history("database"), " ") != "forced:I1:11.8" {
 		t.Errorf("--resolved after an accepted import (%v): %v", err, stage.history("database"))
 	}
 	stage.release(false, dbSvc("mariadb:12.1"))
 	rel = stage.e.rel(stage.cur)
-	if err := stage.e.set.ImportCheck(rel, data, "database"); err != nil {
+	if err := stage.e.set.CheckLanding(rel, stage.e.set.ImportLanding(data, "database")); err != nil {
 		stage.fail("at its version: %v", err)
 	}
 	before := time.Now().Add(-time.Hour)
-	stage.e.set.ImportDone(stage.base(), rel, data)
+	stage.e.set.Land(stage.base(), rel, stage.e.set.ImportLanding(data, "database"))
 	if got := strings.Join(stage.history("database"), " "); got != "import:J1:12.1" {
 		t.Errorf("history after the import: %s", got)
 	}
-	if err := stage.e.set.Resolved(stage.base(), rel, "database", before); err != nil || strings.Join(stage.history("database"), " ") != "import:J1:12.1" {
+	if err := stage.e.set.Land(stage.base(), rel, stage.e.set.ResolvedLanding("database", before)); err != nil || strings.Join(stage.history("database"), " ") != "import:J1:12.1" {
 		t.Errorf("--resolved after a complete import (%v): %v", err, stage.history("database"))
 	}
-	if err := stage.e.set.Imported(stage.base(), rel, "database"); err != nil {
+	if err := stage.e.set.Land(stage.base(), rel, stage.e.set.ImportLanding("", "database")); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(stage.history("database"), " "); got != "import:J1:12.1 import:J1:" {
+	if got := strings.Join(stage.history("database"), " "); got != "import::" {
 		t.Errorf("history after an import without a record: %s", got)
 	}
 	if _, err := stage.release(false, db118); err != nil {
 		stage.fail("a version after an import of none is adopted: %v", err)
 	}
 	// A service its current release lists without data, which its labels
-	// make data now (a variable set since): refused before anything stops,
-	// with a record or without, naming the release that lists it (review
-	// round 4: nothing was checked, and the next release adopted its label
-	// on the imported data).
+	// make data now (a variable set since): its labels decide, as for any:
+	// the export's window judged, with a record, its listing and history
+	// following (review round 4: nothing was checked, and the next release
+	// adopted its label on the imported data).
 	qa := newSim(t, d, "app-qa", &out)
 	plain := dbSvc("mariadb:11.8")
 	plain.Data, plain.DataVersion = false, ""
 	qa.release(false, plain)
 	qa.e.svcs[qa.cur][0] = db118
 	qa.e.set.Address = "vm1:qa"
-	for _, record := range []string{data, ""} {
-		out.Reset()
-		if err := qa.e.set.ImportCheck(qa.e.rel(qa.cur), record, "database"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "database: its labels make it a data service now, and the current release lists it as none") || !strings.Contains(out.String(), "devopsy @vm1:qa --release\n") {
-			qa.fail("an import into a service made data since its release (record %q): %v", record, err)
-		}
+	out.Reset()
+	if err := qa.e.set.CheckLanding(qa.e.rel(qa.cur), qa.e.set.ImportLanding(data, "database")); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy.data.version=11.8 is lower than the export's data's version, 12.1") {
+		qa.fail("an import into a service made data since its release, at a lower version: %v", err)
+	}
+	if err := qa.e.set.CheckLanding(qa.e.rel(qa.cur), qa.e.set.ImportLanding("", "database")); err != nil {
+		qa.fail("an import of no record into a service made data since its release: %v", err)
+	}
+	if err := qa.e.set.Land(qa.base(), qa.e.rel(qa.cur), qa.e.set.ImportLanding("", "database")); err != nil {
+		qa.fail("its landing: %v", err)
+	}
+	if e, _ := match(readList(qa.e.rel(qa.cur)), entry{Service: "database"}); e.DataVersion != "11.8" {
+		t.Errorf("the listing after the import: %+v", e)
 	}
 	// Locally: the label's version and tag, as one line.
 	local := &Set{Docker: d, Name: "app-local", Out: &out, List: func(string) ([]Service, error) { return []Service{db118}, nil }}
@@ -1620,11 +1638,11 @@ func TestDataCopyDropsHold(t *testing.T) {
 	held(dev)
 	data := DataFor(prod.e.set.ExportData(prod.base(), prod.e.rel(prod.cur), "database"), "database")
 	out.Reset()
-	if err := dev.e.set.ImportCheck(dev.e.rel(dev.cur), data, "database"); err != nil {
+	if err := dev.e.set.CheckLanding(dev.e.rel(dev.cur), dev.e.set.ImportLanding(data, "database")); err != nil {
 		dev.fail("the import of 11.8 data into the held dev: %v", err)
 	}
-	if err := dev.e.set.ImportDone(dev.base(), dev.e.rel(dev.cur), data); err != nil {
-		dev.fail("ImportDone: %v", err)
+	if err := dev.e.set.Land(dev.base(), dev.e.rel(dev.cur), dev.e.set.ImportLanding(data, "database")); err != nil {
+		dev.fail("the landing: %v", err)
 	}
 	dev.up()
 	dropped(dev, "the import")
@@ -1632,10 +1650,10 @@ func TestDataCopyDropsHold(t *testing.T) {
 	test := newSim(t, d, "app-test", &out)
 	held(test)
 	out.Reset()
-	if err := test.e.set.ImportCheck(test.e.rel(test.cur), "", "database"); err != nil {
+	if err := test.e.set.CheckLanding(test.e.rel(test.cur), test.e.set.ImportLanding("", "database")); err != nil {
 		test.fail("the import of no record into the held test: %v", err)
 	}
-	if err := test.e.set.Imported(test.base(), test.e.rel(test.cur), "database"); err != nil {
+	if err := test.e.set.Land(test.base(), test.e.rel(test.cur), test.e.set.ImportLanding("", "database")); err != nil {
 		test.fail("Imported: %v", err)
 	}
 	test.up()
@@ -1650,34 +1668,33 @@ func TestDataCopyDropsHold(t *testing.T) {
 	mark := time.Now().Add(-time.Minute)
 	delete(d.names, "mariadb:11.8")
 	d.fail = map[string]bool{"Pull": true}
-	var holdsErr *HoldsError
-	if err := uat.e.set.ImportDone(uat.base(), uat.e.rel(uat.cur), data); !errors.As(err, &holdsErr) {
-		uat.fail("ImportDone with the pull failing: %v", err)
+	if err := uat.e.set.Land(uat.base(), uat.e.rel(uat.cur), uat.e.set.ImportLanding(data, "database")); err == nil || !strings.Contains(err.Error(), "what runs on it could not be derived from its history") {
+		uat.fail("the landing with the pull failing: %v", err)
 	}
 	if heldIn(uat.e.rel(uat.cur))["database"] == "" {
 		uat.fail("setup: the hold went with the pull failing")
 	}
 	out.Reset()
-	if err := uat.e.set.Resolved(uat.base(), uat.e.rel(uat.cur), "database", mark); err != nil {
+	if err := uat.e.set.Land(uat.base(), uat.e.rel(uat.cur), uat.e.set.ResolvedLanding("database", mark)); err != nil {
 		uat.fail("--resolved: %v", err)
 	}
 	uat.up()
 	dropped(uat, "--resolved")
 
-	// The same with no record (Imported) and for a reset's wipe (Wiped):
-	// the history started over, its holds not derived, says so
-	// (HoldsError), never that the history was not written (review round
-	// 4).
+	// The same with no record and for a reset's wipe: the history started
+	// over, its holds not derived, says so, never that the history was not
+	// written (review round 4).
 	for i, start := range []func(m *sim) error{
-		func(m *sim) error { return m.e.set.Imported(m.base(), m.e.rel(m.cur), "database") },
-		func(m *sim) error { return m.e.set.Wiped(m.base(), m.e.rel(m.cur)) },
+		func(m *sim) error {
+			return m.e.set.Land(m.base(), m.e.rel(m.cur), m.e.set.ImportLanding("", "database"))
+		},
+		func(m *sim) error { return m.e.set.Land(m.base(), m.e.rel(m.cur), m.e.set.ResetLanding()) },
 	} {
 		m := newSim(t, d, fmt.Sprintf("app-gone%d", i), &out)
 		held(m)
 		delete(d.names, "mariadb:11.8")
 		d.fail = map[string]bool{"Pull": true}
-		var he *HoldsError
-		if err := start(m); !errors.As(err, &he) || len(m.history("database")) != 3 {
+		if err := start(m); err == nil || !strings.Contains(err.Error(), "what runs on it could not be derived from its history") || strings.Join(m.history("database"), " ") != "import::" {
 			m.fail("a start over with the pull failing: %v, history %v", err, m.history("database"))
 		}
 		d.fail = nil
@@ -1687,8 +1704,8 @@ func TestDataCopyDropsHold(t *testing.T) {
 	ci := newSim(t, d, "app-ci", &out)
 	held(ci)
 	out.Reset()
-	if err := ci.e.set.Wiped(ci.base(), ci.e.rel(ci.cur)); err != nil {
-		ci.fail("Wiped: %v", err)
+	if err := ci.e.set.Land(ci.base(), ci.e.rel(ci.cur), ci.e.set.ResetLanding()); err != nil {
+		ci.fail("the wipe's landing: %v", err)
 	}
 	ci.up()
 	dropped(ci, "the wipe")
@@ -1706,19 +1723,63 @@ func TestDataCopyDropsHold(t *testing.T) {
 	}
 	delete(d.images, own)
 	out.Reset()
-	if err := qa.e.set.SyncCheck(qa.e.rel(qa.cur), prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "a sync builds nothing: nothing changed") || !strings.Contains(out.String(), "devopsy @vm1:qa --release-sync\n") {
+	if err := qa.e.set.CheckLanding(qa.e.rel(qa.cur), qa.e.set.SyncLanding(prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)), "")); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "a sync builds nothing: nothing changed") || !strings.Contains(out.String(), "devopsy @vm1:qa --release-sync\n") {
 		qa.fail("a sync into a held qa whose own build is gone (%v)", err)
 	}
 	out.Reset()
-	if err := qa.e.set.ImportCheck(qa.e.rel(qa.cur), "", "database"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "an import builds nothing: nothing imported") {
+	if err := qa.e.set.CheckLanding(qa.e.rel(qa.cur), qa.e.set.ImportLanding("", "database")); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "an import builds nothing: nothing imported") {
 		qa.fail("an import into a held qa whose own build is gone (%v)", err)
 	}
 	// A reset starts every history over: refused alike, whatever the
 	// parent copies.
 	qa.e.set.Reset = true
 	out.Reset()
-	if err := qa.e.set.SyncCheck(qa.e.rel(qa.cur), ""); !errors.Is(err, ErrRefused) {
+	if err := qa.e.set.CheckLanding(qa.e.rel(qa.cur), qa.e.set.SyncLanding("", "")); !errors.Is(err, ErrRefused) {
 		qa.fail("a reset of a held qa whose own build is gone (%v)", err)
+	}
+}
+
+// An import reads its service's labels as a sync and a --no-code restore
+// do, and refuses, as they do, one whose image they name otherwise than
+// its release does (a variable set since): only a release fetches that
+// image, and the listing's would run on data checked for another.
+func TestDataImportImageChanged(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Address = "vm1:prod"
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	data := DataFor(m.e.set.ExportData(m.base(), m.e.rel(m.cur), "database"), "database")
+	m.e.svcs[m.cur][0] = dbSvc("mariadb:12.1")
+	out.Reset()
+	if err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.ImportLanding(data, "database")); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy @vm1:prod --release\n") {
+		m.fail("an import with its image changed since its release (%v)", err)
+	}
+}
+
+// The restart's last resort judges a data service by its labels now, as
+// Restore does for the restart it replaces: a label raised since its
+// release (a variable, its image's name the same) is what the run step
+// runs under, which the data allows.
+func TestDataLastResortReadsLabels(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118)
+	d.publish("mariadb:12.1", "J1")
+	r2, _ := m.failRun(false, dbSvc("mariadb:12.1"))
+	raised := db118
+	raised.DataVersion, raised.Ref = "12.1", "mariadb:12.1"
+	m.e.svcs[r1] = []Service{raised}
+	if err := m.e.set.LastHold(m.e.rel(r1), m.e.rel(r2)); err != nil {
+		m.fail("the last resort: %v", err)
+	}
+	if h := heldIn(m.e.rel(r1))["database"]; h != "" {
+		t.Errorf("held on %s, its labels allowing it", h)
 	}
 }
 
@@ -1734,25 +1795,24 @@ func TestDataRestoreCheck(t *testing.T) {
 	snap := m.e.set.SnapshotData(m.base(), m.e.rel(m.cur))
 	d.publish("mariadb:12.1", "J1")
 	m.release(false, dbSvc("mariadb:12.1"))
-	if err := m.e.set.RestoreCheck(m.e.rel(m.cur), snap, "s1"); err != nil {
+	if err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.RestoreLanding(snap, "s1", nil)); err != nil {
 		m.fail("12.1 on the snapshot's 11.8 data: %v", err)
 	}
 	snap = m.e.set.SnapshotData(m.base(), m.e.rel(m.cur))
 	m.release(false, dbSvc("mariadb:12.1"))
 	m.release(true, db118)
 	out.Reset()
-	if err := m.e.set.RestoreCheck(m.e.rel(m.cur), snap, "s2"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "--snapshots restore s2 --no-code --accept-image database") {
+	if err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.RestoreLanding(snap, "s2", nil)); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "--snapshots restore s2 --no-code --accept-image database") {
 		m.fail("11.8 on the snapshot's 12.1 data (%v)", err)
 	}
 	// A current release listing it without data, its labels making it
-	// data now: refused, naming the release that lists it, as an import.
+	// data now: judged by them, as an import.
 	plain := dbSvc("mariadb:12.1")
 	plain.Data, plain.DataVersion = false, ""
 	m.release(false, plain)
 	m.e.svcs[m.cur][0] = dbSvc("mariadb:12.1")
-	out.Reset()
-	if err := m.e.set.RestoreCheck(m.e.rel(m.cur), snap, "s2"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "the current release lists it as none") || !strings.Contains(out.String(), "devopsy @vm1:prod --release\n") {
-		m.fail("a --no-code restore into a service made data since its release (%v)", err)
+	if err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.RestoreLanding(snap, "s2", nil)); err != nil {
+		m.fail("a --no-code restore into a service made data since its release: %v", err)
 	}
 }
 
@@ -2274,7 +2334,7 @@ func dataRandom(t *testing.T, seed int64) {
 				t.Fatalf("after %v: record %s: %v\n%s", log, id, err, out.String())
 			}
 			m.cur = id
-			if err := m.e.set.SyncDone(m.base(), rel, data, "vm1:"+o.e.set.Name); err != nil {
+			if err := m.e.set.Land(m.base(), rel, m.e.set.SyncLanding(data, "vm1:"+o.e.set.Name)); err != nil {
 				t.Fatalf("after %v: sync-done %s: %v\n%s", log, id, err, out.String())
 			}
 			m.e.set.SyncData, m.e.set.Accept = "", nil
@@ -2348,16 +2408,16 @@ func dataRandom(t *testing.T, seed int64) {
 			}
 			if o.cur == "" || rng.Intn(3) == 0 {
 				if copyNeedsGone(m, db, true) {
-					if err := m.e.set.ImportCheck(m.e.rel(m.cur), "", "database"); !errors.Is(err, ErrRefused) {
+					if err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.ImportLanding("", "database")); !errors.Is(err, ErrRefused) {
 						t.Fatalf("after %v: an import of no record into %s whose own build is gone: %v\n%s", log, m.e.set.Name, err, out.String())
 					}
 					check(m.e.set.Name + " import refused")
 					continue
 				}
-				if err := m.e.set.ImportCheck(m.e.rel(m.cur), "", "database"); err != nil {
+				if err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.ImportLanding("", "database")); err != nil {
 					t.Fatalf("after %v: an import of no record: %v\n%s", log, err, out.String())
 				}
-				if err := m.e.set.Imported(m.base(), m.e.rel(m.cur), "database"); err != nil {
+				if err := m.e.set.Land(m.base(), m.e.rel(m.cur), m.e.set.ImportLanding("", "database")); err != nil {
 					t.Fatal(err)
 				}
 				model[m] = history{{Service: "database", How: Imported}}
@@ -2372,13 +2432,13 @@ func dataRandom(t *testing.T, seed int64) {
 			}
 			refused := verdict(model[o], db)
 			gone := copyNeedsGone(m, db, refused && yes)
-			err := m.e.set.ImportCheck(m.e.rel(m.cur), data, "database")
+			err := m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.ImportLanding(data, "database"))
 			if gone {
 				if !errors.Is(err, ErrRefused) {
 					t.Fatalf("after %v: an import into %s whose own build is gone: %v\n%s", log, m.e.set.Name, err, out.String())
 				}
 			} else if expect("import of "+o.e.set.Name+"'s export", err, refused, yes) {
-				m.e.set.ImportDone(m.base(), m.e.rel(m.cur), data)
+				m.e.set.Land(m.base(), m.e.rel(m.cur), m.e.set.ImportLanding(data, "database"))
 				if yes && refused {
 					model[m] = history{claim(db, Forced)}
 				} else {

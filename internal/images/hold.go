@@ -24,10 +24,8 @@ import (
 // refused or accepted before they run and so hold nothing new; the
 // restart after a failed run step and its last resort (Restore with
 // Restart, LastHold); a full restore (Restore with NoCheck, against the
-// snapshot's window it brings back); and every copy's take-over of the
-// history, a sync's, an import's, a --no-code restore's, a reset's
-// (Rederive, from SyncDone, ImportDone, Imported, Resolved, Wiped), whose
-// ComposeFile restoreServices' recreate then follows. Why (review rounds 1
+// snapshot's window it brings back); and every copy that lands (derive,
+// from Land), whose ComposeFile restoreServices' recreate then follows. Why (review rounds 1
 // and 2): carried holds vanished or went stale on the paths that forgot
 // them, one path at a time.
 
@@ -107,48 +105,6 @@ func setOwn(e *entry, o entry) {
 	if o.Kind == KindOwn {
 		e.OwnDigest = ""
 	}
-}
-
-// ownEntries are rel's listing's entries as its release's own images
-// (ownOf), in order, and the services its compose gives now (List: only
-// when a held entry or labels asks, none when it cannot be read). A held
-// entry's own kind is compose's now (Service.own); with labels (a sync's
-// check, whose run step runs under them: in the holder with the pending
-// inherited variables) every data service's version and tag are the
-// labels' now, else the listing's own (the labels' for a held entry that
-// records none).
-func (s *Set) ownEntries(rel string, labels bool) ([]entry, map[string]Service) {
-	es := readList(rel)
-	svcs := map[string]Service{}
-	need := labels
-	for _, e := range es {
-		need = need || e.held()
-	}
-	if need && s.List != nil {
-		if list, err := s.List(rel); err != nil {
-			s.say(report.WarnLevel, "could not read the labels of %s (%v): its data services' versions are its listing's", filepath.Base(rel), err)
-		} else {
-			for _, svc := range list {
-				svcs[svc.Name] = svc
-			}
-		}
-	}
-	mode := ModeOf(rel)
-	own := make([]entry, len(es))
-	for i, e := range es {
-		o := ownOf(e)
-		if svc, ok := svcs[e.Service]; ok && svc.Data && (e.DataVersion != "" || e.held()) {
-			if e.held() {
-				o.Kind = map[bool]string{true: KindOwn, false: KindPulled}[svc.own(mode)]
-				o.Ref = cmp.Or(o.Ref, svc.Ref)
-			}
-			if labels || o.DataVersion == "" {
-				o.DataVersion, o.Tag = svc.DataVersion, svc.tag()
-			}
-		}
-		own[i] = o
-	}
-	return own, svcs
 }
 
 // historyHeld is HeldLabel's value for a hold on an image no listing of
@@ -357,22 +313,20 @@ func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold) er
 	return nil
 }
 
-// Rederive derives rel's holds again (holdsFor) from its data's history
-// as it is now, once a copy took the history over or started it over (a
-// sync, an import, a --no-code or full restore's data step, a reset, an
-// import of no record, --resolved): a service the rule allows its
-// release's own image on runs that again (unhold), one it refuses is held
-// on the image the window ends on (applyHolds), whatever it ran before.
-// Under the image lock; quiet when nothing changes. A built own image
-// gone, which only a build gives back: ErrRefused, said (the checks
-// before a copy refuse it first: copyNeeds).
-func (s *Set) Rederive(base, rel string) error {
+// derive derives rel's holds again (holdsFor) from its data's history as
+// it is now, a copy having just landed (Land), its labels svcs: a service
+// the rule allows its release's own image on runs that again (unhold), one
+// it refuses is held on the image the window ends on (applyHolds),
+// whatever it ran before. Under the image lock; quiet when nothing
+// changes. A built own image gone, which only a build gives back:
+// ErrRefused, said (the check before a copy refuses it first: copyNeeds).
+func (s *Set) derive(base, rel string, svcs map[string]Service) error {
 	es := readList(rel)
 	if len(es) == 0 {
 		return nil
 	}
 	tid := s.idOf(rel)
-	own, svcs := s.ownEntries(rel, false)
+	own := ownEntries(rel, es, svcs)
 	held := holdsFor(own, windows(base, rel))
 	imgs, _, wasHeld := composeFacts(rel)
 	before := append([]entry{}, es...)
@@ -394,7 +348,7 @@ func (s *Set) Rederive(base, rel string) error {
 		}
 		svc, ok := svcs[e.Service]
 		if !ok {
-			s.say(report.ErrorLevel, "%s: %s's labels could not be read: it stays on the image it is held on until its labels read", e.Service, tid)
+			s.say(report.ErrorLevel, "%s: %s's compose no longer gives it: it stays on the image it is held on", e.Service, tid)
 			return ErrRefused
 		}
 		ne, ch, err := s.unhold(rel, e, own[i], svc, mode, ownNames)
@@ -488,7 +442,13 @@ func (s *Set) unhold(rel string, e, o entry, svc Service, mode string, own map[s
 func (s *Set) LastHold(target, against string) error {
 	tid := filepath.Base(target)
 	es := readList(target)
-	own, _ := s.ownEntries(target, false)
+	// Its labels now, as the restart it replaces reads them (Restore): the
+	// run step runs under them. Compose's config unreadable, the listing's.
+	svcs, err := s.labelsOf(target)
+	if err != nil {
+		s.say(report.WarnLevel, "could not read the labels of %s (%v): its data services' versions are its listing's", tid, err)
+	}
+	own := ownEntries(target, es, svcs)
 	held := holdsFor(own, windows(baseOf(target), target))
 	imgs, _, wasHeld := composeFacts(target)
 	// What the file holds now stays but for what this changes: a hold by
