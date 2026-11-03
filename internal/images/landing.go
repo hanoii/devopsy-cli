@@ -64,6 +64,10 @@ type Landing struct {
 	// since keeps a window that started with an import or an accepted
 	// image since then (--resolved): only what came after it failed.
 	since time.Time
+	// asIs: the operator accepts the data as it is (--resolved): a hold
+	// whose release's own image is gone stays, said, rather than leave no
+	// way out of the mark (derive).
+	asIs bool
 	// words are what its check says.
 	words checkWords
 }
@@ -93,8 +97,17 @@ func (l Landing) after(now func(string) []ran) func(string) []ran {
 func (s *Set) SyncLanding(data, from string) Landing {
 	return Landing{windows: parseParentData(data), all: s.Reset, first: SyncedFrom + from, words: checkWords{
 		source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync",
-		builds: "a sync builds nothing", rebuild: report.Fix("release it with the sync, which builds its images:", s.cmd("--release-sync")),
-		fetch: report.Fix("release it with the sync, which fetches them:", s.cmd("--release-sync"))}}
+		builds: "a sync builds nothing", rebuild: report.Fix("release it with the sync, which builds its images:", s.cmd(ReleaseSync(s.Again))),
+		fetch: report.Fix("release it with the sync, which fetches them:", s.cmd(ReleaseSync(s.Again)))}}
+}
+
+// ReleaseSync is the release that syncs a refused sync's fix names, from
+// the source again (what the operator ran) names.
+func ReleaseSync(again string) string {
+	if _, from, ok := strings.Cut(again, " --from "); ok {
+		return "--release-sync --from " + from
+	}
+	return "--release-sync"
 }
 
 // ResetLanding is a reset's wipe: the data every history described is
@@ -131,9 +144,13 @@ func (s *Set) ImportLanding(data, service string) Landing {
 // and only what came after failed: the data is complete, and starting over
 // would forget its version) or a forced one (the import was accepted: a
 // line of no version would undo that, letting the next release adopt any
-// label: review), else it starts over.
+// label: review), else it starts over. A hold it would end stays when its
+// release's own build is gone: refused, nothing would have a way out, as a
+// marked environment refuses a release, the only thing that builds it, and
+// an import refuses what it cannot derive (review). The held image runs on
+// the accepted data, said, and a release builds the release's own.
 func (s *Set) ResolvedLanding(service string, since time.Time) Landing {
-	return Landing{over: []string{service}, first: Imported, since: since}
+	return Landing{over: []string{service}, first: Imported, since: since, asIs: true}
 }
 
 // RestoreLanding is a restore's data step: snapshot's windows (its
@@ -407,7 +424,7 @@ func (s *Set) Land(base, rel string, l Landing) error {
 			return fmt.Errorf("its history could not be written: %w", err)
 		}
 	}
-	if err := s.derive(base, rel, svcs); err != nil {
+	if err := s.derive(base, rel, svcs, l.asIs); err != nil {
 		return fmt.Errorf("what runs on it could not be derived from its history: %w", err)
 	}
 	return nil

@@ -1229,10 +1229,9 @@ func runImport(cwd string, args []string, color bool) int {
 	if s.Copy == cli.CopyVolumes && onTarget {
 		record = images.DataFor(tarRecord(spool), name)
 		var err error
-		if imgs, err = serverImages(cwd, composeName(cwd), errOut); err != nil {
+		if imgs, err = copyImages(cwd); err != nil {
 			return fail(err.Error() + ": nothing imported")
 		}
-		imgs.Address, imgs.Accept = targetAddress(cwd), acceptedImages()
 		unlock, err := imagesShared(ctx)
 		if err != nil {
 			return fail(err.Error() + ": nothing imported")
@@ -1375,20 +1374,12 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	// It lands before anything starts on it: the data's version is the
 	// export's now, which the next check compares, and the service runs
-	// its own image, its hold derived again. What ran through the import
-	// (devopsy.data.stop never) is made again when its container runs
-	// another image than rel's ComposeFile now gives it (another
-	// activation's), before what it stopped starts again. A failure ends
-	// what still runs on the data, as a failed write does (endImport), and
-	// keeps the mark (one policy: images.Landing).
+	// its own image, its hold derived again (restoreServices makes it
+	// again, running or not). A failure ends what still runs on the data,
+	// as a failed write does (endImport), and keeps the mark (one policy:
+	// images.Landing).
 	if imgs != nil {
-		err := land(imgs, base, rel, imgs.ImportLanding(record, name))
-		if err == nil && !slices.Contains(stopped, name) {
-			if err = recreateRunning(cwd, rel, name); err != nil {
-				err = fmt.Errorf("%s still ran the image it had: %w", name, err)
-			}
-		}
-		if err != nil {
+		if err := land(imgs, base, rel, imgs.ImportLanding(record, name)); err != nil {
 			if _, stopErr := endImport(cwd, name, services, true, wasUp); stopErr != nil {
 				report.Error(stopErr.Error())
 			}
@@ -1414,22 +1405,15 @@ func acceptedImages() map[string]bool {
 	return m
 }
 
-// recreateRunning makes name's container again when it runs and its
-// activation gave it another image than rel's ComposeFile now holds it
-// on (images.Recreate).
-func recreateRunning(cwd, rel, name string) error {
-	if !slices.Contains(images.Recreate(images.CLI{}, composeName(cwd), rel), name) {
-		return nil
+// copyImages is the images.Set a copy lands with: serverImages, with the
+// target's address for its fix lines and the operator's --accept-image.
+func copyImages(cwd string) (*images.Set, error) {
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return nil, err
 	}
-	running, err := servicesIn(cwd, "running")
-	if err != nil || !slices.Contains(running, name) {
-		return err
-	}
-	report.Info("recreating " + name + " on the image its release gives it now")
-	if err := compose(cwd, errOut, "up", "-d", "--no-deps", "--wait", name); err != nil {
-		return fmt.Errorf("docker compose up: %w", err)
-	}
-	return nil
+	set.Address, set.Accept = targetAddress(cwd), acceptedImages()
+	return set, nil
 }
 
 // land lands l on the environment at base (images.Set.Land), under the
@@ -1451,7 +1435,7 @@ func resolvedLanding(cwd, base, name string, services []cli.SyncService, since t
 	if !ok || s.Copy != cli.CopyVolumes {
 		return nil
 	}
-	set, err := serverImages(cwd, composeName(cwd), errOut)
+	set, err := copyImages(cwd)
 	if err != nil {
 		return err
 	}

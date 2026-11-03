@@ -598,13 +598,30 @@ func (o *SyncOptions) againArg() string {
 }
 
 // resetOr has the holder's check run under a reset whatever the parent's
-// windows: its wipe lands on every data service, and what that derives is
-// checked before anything stops (images.Set.CheckLanding).
+// windows, and resetExport tells it it is one (exports, which sets it for
+// the rest, comes after the disarm): its wipe lands on every data service,
+// and what that derives is checked before anything stops
+// (images.Set.CheckLanding).
 func (o *SyncOptions) resetOr() string {
 	if o != nil && o.Reset {
 		return " || :"
 	}
 	return ""
+}
+
+func (o *SyncOptions) resetExport() string {
+	if o != nil && o.Reset {
+		return "export " + SyncResetEnv + "=1; "
+	}
+	return ""
+}
+
+// againFlags is againArg for --check-images.
+func (o *SyncOptions) againFlags() []string {
+	if o == nil || o.Again == "" {
+		return nil
+	}
+	return []string{"--again", o.Again}
 }
 
 func (o *SyncOptions) imagesExport() string {
@@ -833,14 +850,14 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the child's data services'
+` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", append([]string{"--sync"}, o.againFlags()...)...) + o.imagesExport() + `# Before anything stops, still armed: the child's data services'
 # versions and tags must allow the parent's data (img sync-check), as
 # their labels read with the pending inherited variables: an abort or a
 # session gone meanwhile ends this, nothing stopped.
 if [ -n "${` + images.SyncImagesEnv + `:-}" ]` + o.resetOr() + `; then
   image_lock shared syncing || exit $?
   sc=0
-  (export ` + InheritPendingEnv + `="$base"/` + Quote(SyncInheritPending(o.ID)) + `; img sync-check ` + o.againArg() + `"$rel") || sc=$?
+  (export ` + InheritPendingEnv + `="$base"/` + Quote(SyncInheritPending(o.ID)) + `; ` + o.resetExport() + `img sync-check ` + o.againArg() + `"$rel") || sc=$?
   image_unlock
   [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
 fi

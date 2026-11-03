@@ -59,7 +59,7 @@ func runCheckImages(cwd string, args []string) int {
 		case address == "" && !strings.HasPrefix(a, "-"):
 			address = a
 		default:
-			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot> [--again <args>]] [<address>]")
+			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot>] [--again <args>] [<address>]")
 			return 2
 		}
 	}
@@ -124,7 +124,7 @@ func runCheckImages(cwd string, args []string) int {
 		// A sync's variables are the parent's inherited ones too, which
 		// only a release that syncs takes before it fetches (a plain one
 		// keeps the child's inherit.env: the next sync refused again).
-		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" --release-sync")
+		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" "+images.ReleaseSync(again))
 	}
 	fixes := []report.Remedy{fix}
 	if snapshot != "" && os.Getenv(remote.RestoreEnvEnv) != "" {

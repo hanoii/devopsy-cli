@@ -151,7 +151,13 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 		}
 	}
 	if l.ID != "" {
-		for _, d := range newest(filepath.Join(filepath.Dir(rel), "*")) {
+		// A failed release last: one that failed its fetch lists an image
+		// it never ran, which the words would say it did.
+		dirs := newest(filepath.Join(filepath.Dir(rel), "*"))
+		slices.SortStableFunc(dirs, func(a, b string) int {
+			return cmp.Compare(failedRank(a), failedRank(b))
+		})
+		for _, d := range dirs {
 			if filepath.Clean(d) == filepath.Clean(rel) || strings.HasSuffix(d, ".tmp") {
 				continue
 			}
@@ -179,6 +185,14 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 	return src, historyHeld
 }
 
+// failedRank orders a failed release after any other.
+func failedRank(rel string) int {
+	if _, err := os.Stat(filepath.Join(rel, failedFile)); err == nil {
+		return 1
+	}
+	return 0
+}
+
 // applyHolds holds, in es (rel's entries, each service's release's own
 // image), every service of held on the image its line names (source,
 // holdOn): the holds ComposeFile writes, and a line each saying so.
@@ -202,6 +216,9 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 			return nil, nil, err
 		}
 		es[i] = e
+		if !e.held() {
+			continue // said (ownInstead)
+		}
 		holds[o.Service] = ch
 		lines = append(lines, fmt.Sprintf("%s stays on %s (%s, %s), as %s's would run it on data it does not allow (%s): a release that fixes forward is the way on", o.Service, heldWhat(from), shownEntry(e), shownData(e), tid, h.why))
 	}
@@ -224,8 +241,9 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 //     keeps it.
 //
 // An image gone that cannot be had: ErrRefused, said; AsBuilt (the
-// restart's last try) holds all the same, said, naming the release that
-// fixes forward.
+// restart's last try): a pulled one held all the same, for the run step to
+// pull, a built one its release's own instead (ownInstead), said, naming
+// the release that fixes forward.
 func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]bool, pulled *[]string) (entry, composeHold, error) {
 	ch := composeHold{From: cmp.Or(from, historyHeld)}
 	what := heldWhat(from)
@@ -263,8 +281,7 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 					s.say(report.ErrorLevel, "%s: %s, built by the project, is gone from this server", svc, what)
 					return entry{}, ch, ErrRefused
 				}
-				s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s, built by the project, is gone from this server: it runs what %s holds", svc, what, name),
-					nil, report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
+				return s.ownInstead(o, h, what, own)
 			} else if who := s.others(cur, own); err == nil && len(who) > 0 {
 				// A name another environment runs never moves: held by the
 				// release's own bookmark of the image instead (writeHeld names
@@ -284,6 +301,26 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 	e.DataVersion, e.Tag = h.line.Version, h.line.Tag
 	setOwn(&e, o)
 	return e, ch, nil
+}
+
+// ownInstead is holdOn's last try (AsBuilt) when the image cannot be had
+// (built on the parent's server, pruned): nothing here is held, its
+// release's own image runs, its name put back on it unless another
+// environment runs what the name holds, said, with the release that fixes
+// forward. Never the hold's own name in its compose file, which nothing
+// here holds (review: the run step's up could not start it, and the
+// release's own bookmark went).
+func (s *Set) ownInstead(o entry, h hold, what string, own map[string]bool) (entry, composeHold, error) {
+	if cur, err := s.Docker.ID(o.Ref); (err != nil || cur != o.ID) && s.imagePresent(o.ID) {
+		if who := s.others(cur, own); err == nil && len(who) > 0 {
+			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s)", o.Ref, strings.Join(who, ", "))
+		} else if err := s.Docker.Tag(o.ID, o.Ref); err != nil {
+			s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
+		}
+	}
+	s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s, built by the project, is gone from this server: its release's own image runs on data it does not allow (%s)", o.Service, what, h.why),
+		nil, report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
+	return o, composeHold{}, nil
 }
 
 // resolveBookmarks names, in holds, the bookmark each hold by bookmark
@@ -319,8 +356,9 @@ func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold) er
 // it refuses is held on the image the window ends on (applyHolds),
 // whatever it ran before. Under the image lock; quiet when nothing
 // changes. A built own image gone, which only a build gives back:
-// ErrRefused, said (the check before a copy refuses it first: copyNeeds).
-func (s *Set) derive(base, rel string, svcs map[string]Service) error {
+// ErrRefused, said (the check before a copy refuses it first: copyNeeds),
+// but with asIs (--resolved: ResolvedLanding), where it stays held, said.
+func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error {
 	es := readList(rel)
 	if len(es) == 0 {
 		return nil
@@ -350,6 +388,12 @@ func (s *Set) derive(base, rel string, svcs map[string]Service) error {
 		if !ok {
 			s.say(report.ErrorLevel, "%s: %s's compose no longer gives it: it stays on the image it is held on", e.Service, tid)
 			return ErrRefused
+		}
+		if asIs && svc.own(mode) && !s.imagePresent(own[i].ID) {
+			s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s's own image of it, built by the project, is gone from this server: it stays on %s (%s), on the data as it is", e.Service, tid, heldWhat(wasHeld[e.Service]), shownData(e)),
+				nil, report.Fix("a release builds it:", s.cmd("--release")))
+			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
+			continue
 		}
 		ne, ch, err := s.unhold(rel, e, own[i], svc, mode, ownNames)
 		if err != nil {

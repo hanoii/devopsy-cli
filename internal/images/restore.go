@@ -276,7 +276,7 @@ func (s *Set) checkRollback(target string, svcs []Service, quiet bool) ([]string
 	var js []judged
 	for _, svc := range svcs {
 		if svc.Data {
-			js = append(js, judged{service: svc.Name, why: rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its")})
+			js = append(js, judged{service: svc.Name, why: rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its"), version: svc.DataVersion, tag: svc.tag()})
 		}
 	}
 	return s.judge(js, checkWords{source: "its", what: "the rollback to " + filepath.Base(target) + " would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--rollback", rollback: true}, target, quiet)

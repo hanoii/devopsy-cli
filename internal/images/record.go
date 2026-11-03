@@ -27,6 +27,9 @@ func (s *Set) sayAll(lv report.Level, msg string, details []string, fixes ...rep
 // it ("" when it allowed it).
 type judged struct {
 	service, why string
+	// version and tag are what it claims (a rollback's, for the snapshot
+	// its refusal names: snapshotFix).
+	version, tag string
 }
 
 // checkWords are what a check says of the data's source and of what it
@@ -67,6 +70,7 @@ type checkWords struct {
 // accepted warning came twice).
 func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]string, error) {
 	var refused, refusedSvcs, accepted, forced []string
+	var refusals []judged
 	for _, j := range js {
 		switch {
 		case j.why == "":
@@ -79,6 +83,7 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 		default:
 			refused = append(refused, j.service+": "+j.why)
 			refusedSvcs = append(refusedSvcs, j.service)
+			refusals = append(refusals, j)
 		}
 	}
 	if len(refused) > 0 {
@@ -88,13 +93,15 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 		if w.rollback {
 			fixes = []report.Remedy{
 				report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")),
-				s.snapshotFix(target)}
+				s.snapshotFix(refusals)}
 		}
 		flag := w.flag
 		if s.Again != "" {
 			flag = s.Again
 		}
-		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, refusedSvcs)+w.input))
+		// What it accepted too: a line naming only the rest would be refused
+		// on these (review: copied lines took turns, none going through).
+		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, append(forced, refusedSvcs...))+w.input))
 		s.sayAll(report.ErrorLevel, w.what+": "+w.nothing, refused, fixes...)
 		return nil, ErrRefused
 	}
@@ -104,11 +111,13 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 	return forced, nil
 }
 
-// snapshotFix is a rollback's way back to the data before the change:
-// the newest release snapshot of target's data (its manifest's release),
-// else the snapshots to choose from.
-func (s *Set) snapshotFix(target string) report.Remedy {
-	tid := filepath.Base(target)
+// snapshotFix is a rollback's way back to the data before the change: the
+// newest release snapshot whose data allows what the rollback's refusals
+// claim (the rule against its windows), so nothing written since it that
+// the rollback could run on is lost (review: naming the snapshot of the
+// target's own data lost everything written under the release a failed
+// one's restart holds), else the snapshots to choose from.
+func (s *Set) snapshotFix(refusals []judged) report.Remedy {
 	newest := ""
 	if dir := s.snapshots(); dir != "" {
 		ms, _ := filepath.Glob(filepath.Join(dir, "*", SnapshotManifest))
@@ -117,23 +126,31 @@ func (s *Set) snapshotFix(target string) report.Remedy {
 			if err != nil {
 				continue
 			}
-			kind, rel := "", ""
+			kind := ""
 			for _, line := range strings.Split(string(data), "\n") {
-				k, v, _ := strings.Cut(line, "\t")
-				switch k {
-				case "kind":
+				if k, v, _ := strings.Cut(line, "\t"); k == "kind" {
 					kind = v
-				case "release":
-					rel = v
 				}
 			}
-			if id := filepath.Base(filepath.Dir(m)); kind == "release" && rel == tid && id > newest {
+			id := filepath.Base(filepath.Dir(m))
+			if kind != "release" || id <= newest {
+				continue
+			}
+			windows, _ := os.ReadFile(filepath.Join(filepath.Dir(m), snapshotDataDir, snapshotImages))
+			ps := parseParentData(string(windows))
+			allowed := true
+			for _, j := range refusals {
+				if p := ps[j.service]; p != nil && rule(p.window(), j.version, j.tag, "its") != "" {
+					allowed = false
+				}
+			}
+			if allowed {
 				newest = id
 			}
 		}
 	}
 	if newest != "" {
-		return report.Fix("or restore the snapshot of "+tid+"'s data, taken by the release that replaced it, with its code:", s.cmd("--snapshots restore "+newest))
+		return report.Fix("or restore the newest snapshot of the data from before the change, with its code:", s.cmd("--snapshots restore "+newest))
 	}
 	return report.Fix("or restore a snapshot from before the change, with its code:", s.cmd("--snapshots"))
 }

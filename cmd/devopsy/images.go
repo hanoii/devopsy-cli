@@ -262,6 +262,14 @@ func runImages(args []string, color bool) int {
 		if len(rest) != 2 {
 			return imagesUsage(color)
 		}
+		// Labels that cannot be read refuse the sync, before anything stops
+		// on either side: a missing window would land as data of no version.
+		if s.List != nil {
+			if _, err := s.List(rest[1]); err != nil {
+				report.Error("could not read the labels of " + filepath.Base(rest[1]) + ": " + err.Error())
+				return 1
+			}
+		}
 		fmt.Print(s.ParentData(rest[0], rest[1]))
 	case "sync-check":
 		if len(rest) != 1 {

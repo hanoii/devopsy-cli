@@ -169,6 +169,8 @@ vols="$DOCKER_LOG.vol"
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
   *" config --format json")
+    # FAIL_CONFIG: this project's compose config fails.
+    [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
     printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
@@ -4162,6 +4164,51 @@ func parentChanged(docker string) bool {
 		}
 	}
 	return false
+}
+
+// A complete copy makes again what ran through it (devopsy.data.stop
+// never, a volumes service the child guard lets run) when its image
+// changed, as it makes what was stopped: its hold gone with the data, it
+// would go on running the held image on the copy until the run step, the
+// finish hook first. A service without data keeps its container.
+func TestSyncFinishRecreatesRunning(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, filepath.Join(s.root, "shop", "dev", s.current("dev"), "devopsy-compose.yaml"),
+		"services:\n  \"app\":\n    labels:\n      \"devopsy.digest\": \"y@sha256:own\"\n  \"worker\":\n    labels:\n      \"devopsy.digest\": \"y@sha256:own\"\n", 0o644)
+	write(t, s.log+".containers.shop-dev", "app y@sha256:held\nworker y@sha256:held\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_WORKER=none\n", 0o644)
+	cmd := exec.Command(binary, "--sync-services", "finish", "go")
+	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
+	out, err := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	if err != nil || !strings.Contains(docker, "up -d --no-deps --wait app") || strings.Contains(docker, "--wait app worker") || strings.Contains(docker, "--wait worker") {
+		t.Errorf("finish go (%v): app must be made again, worker left:\n%s\n%s", err, out, docker)
+	}
+}
+
+// Labels of the parent that cannot be read refuse a sync in its preflight,
+// before anything stops: no window would land as data of no version.
+func TestSyncParentLabelsUnreadable(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, s.log+".shop-prod", "FAIL_CONFIG=shop-prod\n", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "could not read the labels of") || strings.Contains(docker, "shop-dev compose") && strings.Contains(docker, " stop ") {
+		t.Errorf("a sync whose parent's labels cannot be read (%d):\n%s\n%s", code, out, docker)
+	}
 }
 
 // Bug: finish abort recreates, like finish go, every stopped service

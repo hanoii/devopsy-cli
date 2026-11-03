@@ -1816,6 +1816,36 @@ func TestDataRestoreCheck(t *testing.T) {
 	}
 }
 
+// A hold says which release ran its image: one that only failed a fetch of
+// it lists it too, and never ran it.
+func TestDataHoldNamesWhatRan(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	d.publish("mariadb:12.1", "J1")
+	r2, _ := m.release(false, dbSvc("mariadb:12.1"))
+	// A later release fetched the same image, and failed.
+	r3 := m.e.release(dbSvc("mariadb:12.1"))
+	m.fetch(m.e.svcs[r3])
+	if err := m.e.set.Record(m.e.rel(r3), m.prev()); err != nil {
+		m.fail("record: %v", err)
+	}
+	os.WriteFile(filepath.Join(m.e.rel(r3), failedFile), nil, 0o644)
+	_, from := m.e.set.source(m.e.rel(r2), "database", ran{ID: "J1", Version: "12.1", Tag: "12.1"})
+	// r2 is the target here, so only r3 lists it; a target of another
+	// release must find r2 first.
+	if from != r3 {
+		m.fail("setup: %s", from)
+	}
+	r4 := m.e.release(db118)
+	if _, from := m.e.set.source(m.e.rel(r4), "database", ran{ID: "J1", Version: "12.1", Tag: "12.1"}); from != r2 {
+		t.Errorf("the hold names release %s, not %s, which ran it", from, r2)
+	}
+}
+
 // A snapshot taken while the restart holds a data service on the failed
 // release's image has the previous release's code and the newer data: a
 // manual one, or the release snapshot of that release a fix forward
@@ -2022,8 +2052,10 @@ func dataRandom(t *testing.T, seed int64) {
 	// (a pulled name runs what it holds now, under the running release's
 	// label) or img was fetched under it; else the newest claim img was
 	// fetched under (another release's image: a hold's, or one a bookmark
-	// gave in place of the release's own build); else pref (an image no
-	// fetch got: a gone name pulled again).
+	// gave in place of the release's own build), one the data's window
+	// allows first: a hold names a line the window has, and another release
+	// may have failed a fetch of the same image under a lower claim (seed
+	// 16423); else pref (an image no fetch got: a gone name pulled again).
 	actual := func(m *sim, img string, pref Service) Service {
 		if !pref.Build && img != "" && d.names[familiar(pref.Ref)] == img {
 			return pref
@@ -2032,6 +2064,11 @@ func dataRandom(t *testing.T, seed int64) {
 		for _, c := range cs {
 			if sameClaim(c, pref) {
 				return pref
+			}
+		}
+		for i := len(cs) - 1; i >= 0; i-- {
+			if !verdict(model[m], cs[i]) {
+				return cs[i]
 			}
 		}
 		if len(cs) > 0 {

@@ -2561,11 +2561,10 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// would upgrade it again), and one it needs is on the image the
 	// snapshot's window ends on. --accept-image (remote.ImagesAcceptEnv,
 	// a --no-code restore's) forces a service its check refused.
-	imgs, err := serverImages(cwd, composeName(cwd), errOut)
+	imgs, err := copyImages(cwd)
 	if err != nil {
 		return fail(err.Error())
 	}
-	imgs.Accept = acceptedImages()
 	if err := land(imgs, p.base, rel, snapshotLanding(imgs, snap)); err != nil {
 		report.Fail(&report.Failure{Msg: "the snapshot's data is in, but " + err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
 		return 1

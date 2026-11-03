@@ -708,8 +708,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   entry through a link: then it stays down, what the failed run step
   started running on, said, until a release goes live) with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its images as a rollback gets
-  them (below: what it built back, a database staying on the newest image
-  its data ran). Data changes, like database updates, are the project's
+  them (below: what it built back, a data service held on an image its
+  data allows). Data changes, like database updates, are the project's
   to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
   kept), and `--status` says the release failed. A run step that fails

@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // A reset's check runs before anything stops so that what its wipe will
@@ -55,5 +58,53 @@ func TestResetCheckSeesReset(t *testing.T) {
 	wiped := strings.Contains(docker, "-wipe ")
 	if code == 0 || !strings.Contains(out, "a sync builds nothing") || wiped || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "dev's\n" {
 		t.Errorf("a reset whose wipe needs a build that is gone (%d), wiped %v:\n%s", code, wiped, out)
+	}
+}
+
+// An environment marked by an import, held, its own build gone (nothing
+// names it once held: any pruning on the server takes it) has one way out
+// of the mark: a release refuses on the mark, an import on what it cannot
+// derive, and --resolved, which accepts the data as it is, keeps the hold,
+// said, with a line that can be copied (its Set knows the address: the
+// line once read "$ --release"), and a release then builds its own.
+func TestResolvedOwnBuildGone(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	link, err := os.Readlink(filepath.Join(s.base, "current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(s.base, filepath.Dir(link))
+	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"build"}`, 0o644)
+	list := filepath.Join(rel, images.ListFile)
+	var lines []string
+	for _, l := range strings.Split(strings.TrimRight(readString(list), "\n"), "\n") {
+		if f := strings.Split(l, "\t"); f[2] == "app" {
+			// Held on HELD, the data's 11.8; its own, 11, gone.
+			l = strings.Join([]string{"shop-prod-app", "HELD", "app", "own", "", "", "", "11.8", "", "shop-prod-app", "GONE", "", "", "11", ""}, "\t")
+		}
+		lines = append(lines, l)
+	}
+	write(t, list, strings.Join(lines, "\n")+"\n", 0o644)
+	compose := filepath.Join(rel, images.ComposeFile)
+	write(t, compose, "services:\n  \"app\":\n    labels:\n      \"devopsy.digest\": \"HELD\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_APP_BUILD=1\nFAKE_APP_VERSION=11\nFAIL_PULL=1\nFAKE_NAMES='shop-prod-app=HELD HELD=HELD'\n", 0o644)
+	write(t, filepath.Join(s.base, remote.SyncIncompleteFile), "2026-11-03 10:00:00\tapp\t"+remote.IncompleteImport+"\tcut\n", 0o644)
+
+	_, out, code := s.runIO(nil, nil, "@prod", "--import", "app", "--resolved", "--yes")
+	if code != 0 || !strings.Contains(out, "own image of it, built by the project, is gone") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release\n") {
+		t.Fatalf("--resolved with its own build gone (%d):\n%s", code, out)
+	}
+	if readMark(s.base) != nil {
+		t.Errorf("the mark stays: %+v", readMark(s.base))
+	}
+	if c := readString(compose); !strings.Contains(c, images.HeldLabel) {
+		t.Errorf("the hold went:\n%s", c)
+	}
+	if l := readString(list); !strings.Contains(l, "HELD\tapp\town") || !strings.Contains(l, "GONE") {
+		t.Errorf("the listing:\n%s", l)
+	}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Errorf("the release it names (%d):\n%s", code, out)
 	}
 }

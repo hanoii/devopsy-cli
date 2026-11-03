@@ -742,7 +742,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		return 1
 	}
 	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0, Again: job.again(flag)})
-	// --yes also lets the child's images through the check against the
+	// --accept-image lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
@@ -3277,7 +3277,7 @@ func wipeData(cwd, projectDir, base string) error {
 	// ones the copy writes nothing for included (the holder's sync-done
 	// takes the copied ones over once the copy is complete). Under the
 	// holder's release lock.
-	set, err := serverImages(cwd, composeName(cwd), errOut)
+	set, err := copyImages(cwd)
 	if err != nil {
 		return err
 	}
@@ -3397,43 +3397,58 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 		}
 		stop = intersect(rec.stops, names)
 	}
+	var start []string
 	if len(stop) > 0 {
 		exited, err := servicesIn(cwd, "exited")
 		if err != nil {
 			errs = append(errs, err)
 		}
-		start := intersect(stop, exited)
-		// On a complete copy (recreate: a sync's finish go, a complete
-		// import), a service whose image devopsy's compose file changed
-		// since its container was made (another activation's container,
-		// a hold) is made again, with no other: compose start would run
-		// the old image on the new data. Never otherwise: an abort in a release that syncs
-		// restores the child's own data, which the release's images, not
-		// live, must not touch (the release goes back).
-		var again []string
-		if recreate {
-			again = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
-		}
-		if len(again) > 0 {
-			report.Info("recreating " + strings.Join(again, " ") + " on the image its release gives it now")
-			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
-				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
-			}
-			var rest []string
-			for _, s := range start {
-				if !slices.Contains(again, s) {
-					rest = append(rest, s)
-				}
-			}
-			start = rest
-		}
-		if len(start) > 0 {
-			report.Info("starting " + strings.Join(start, " "))
-			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
-				errs = append(errs, fmt.Errorf("docker compose start: %w", err))
-			} else if err := waitHealthy(cwd, start); err != nil {
+		start = intersect(stop, exited)
+	}
+	// On a complete copy (recreate: a sync's finish go, a complete
+	// import), a service whose image devopsy's compose file changed since
+	// its container was made (another activation's container, a hold) is
+	// made again, with no other: compose start would run the old image on
+	// the new data, and one the copy's data landed under as it ran
+	// (devopsy.data.stop never) would run on with it. Never otherwise: an
+	// abort in a release that syncs restores the child's own data, which
+	// the release's images, not live, must not touch (the release goes
+	// back).
+	var again []string
+	if recreate {
+		changed := images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""))
+		again = intersect(start, changed)
+		if len(changed) > 0 {
+			running, err := servicesIn(cwd, "running")
+			if err != nil {
 				errs = append(errs, err)
 			}
+			for _, s := range services {
+				if s.Copy == cli.CopyVolumes && slices.Contains(changed, s.Name) && slices.Contains(running, s.Name) && !slices.Contains(again, s.Name) {
+					again = append(again, s.Name)
+				}
+			}
+		}
+	}
+	if len(again) > 0 {
+		report.Info("recreating " + strings.Join(again, " ") + " on the image its release gives it now")
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
+			errs = append(errs, fmt.Errorf("docker compose up: %w", err))
+		}
+		var rest []string
+		for _, s := range start {
+			if !slices.Contains(again, s) {
+				rest = append(rest, s)
+			}
+		}
+		start = rest
+	}
+	if len(start) > 0 {
+		report.Info("starting " + strings.Join(start, " "))
+		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+			errs = append(errs, fmt.Errorf("docker compose start: %w", err))
+		} else if err := waitHealthy(cwd, start); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if len(errs) == 0 {
