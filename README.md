@@ -1390,7 +1390,10 @@ tag alone), in the tar's first header, which `tar` itself skips. An
 `--import` of it on a target checks the environment's labels against it
 before anything stops, as a sync does, and takes it over once the data
 is in; refused, `--import <service> --accept-image <service>` runs it
-anyway, its history starting over. A tar without the header, every
+anyway, its history starting over. A service that its current release
+does not list as data, but its labels make data now (a variable set
+since), is refused, as by a sync or a `--no-code` restore, until a
+release lists it. A tar without the header, every
 import locally and a `volumes` service's `--resolved` (unless the import
 took the history over before what failed) start the service's history
 over, data of no known version, which the next release's label is taken

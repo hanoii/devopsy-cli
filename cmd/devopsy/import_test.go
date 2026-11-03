@@ -1158,7 +1158,9 @@ func TestImportExportImagesImageLock(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
-	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
+	// app listed as data (its version, any, as the fake's labels say), as
+	// a release lists it: one listed as none is refused.
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\t\tany\t11.8\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")

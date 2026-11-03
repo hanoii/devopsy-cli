@@ -1543,6 +1543,23 @@ func TestDataImport(t *testing.T) {
 	if _, err := stage.release(false, db118); err != nil {
 		stage.fail("a version after an import of none is adopted: %v", err)
 	}
+	// A service its current release lists without data, which its labels
+	// make data now (a variable set since): refused before anything stops,
+	// with a record or without, naming the release that lists it (review
+	// round 4: nothing was checked, and the next release adopted its label
+	// on the imported data).
+	qa := newSim(t, d, "app-qa", &out)
+	plain := dbSvc("mariadb:11.8")
+	plain.Data, plain.DataVersion = false, ""
+	qa.release(false, plain)
+	qa.e.svcs[qa.cur][0] = db118
+	qa.e.set.Address = "vm1:qa"
+	for _, record := range []string{data, ""} {
+		out.Reset()
+		if err := qa.e.set.ImportCheck(qa.e.rel(qa.cur), record, "database"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "database: its labels make it a data service now, and the current release lists it as none") || !strings.Contains(out.String(), "devopsy @vm1:qa --release\n") {
+			qa.fail("an import into a service made data since its release (record %q): %v", record, err)
+		}
+	}
 	// Locally: the label's version and tag, as one line.
 	local := &Set{Docker: d, Name: "app-local", Out: &out, List: func(string) ([]Service, error) { return []Service{db118}, nil }}
 	p := parseParentData(DataFor(local.ExportData("", "", "database"), "database"))["database"]
@@ -1726,6 +1743,16 @@ func TestDataRestoreCheck(t *testing.T) {
 	out.Reset()
 	if err := m.e.set.RestoreCheck(m.e.rel(m.cur), snap, "s2"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "--snapshots restore s2 --no-code --accept-image database") {
 		m.fail("11.8 on the snapshot's 12.1 data (%v)", err)
+	}
+	// A current release listing it without data, its labels making it
+	// data now: refused, naming the release that lists it, as an import.
+	plain := dbSvc("mariadb:12.1")
+	plain.Data, plain.DataVersion = false, ""
+	m.release(false, plain)
+	m.e.svcs[m.cur][0] = dbSvc("mariadb:12.1")
+	out.Reset()
+	if err := m.e.set.RestoreCheck(m.e.rel(m.cur), snap, "s2"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "the current release lists it as none") || !strings.Contains(out.String(), "devopsy @vm1:prod --release\n") {
+		m.fail("a --no-code restore into a service made data since its release (%v)", err)
 	}
 }
 

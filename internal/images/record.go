@@ -53,6 +53,9 @@ type checkWords struct {
 	// builds it.
 	builds  string
 	rebuild report.Remedy
+	// relist is what lists as data a service the copy writes that the
+	// current release lists as none (unlistedData): a release.
+	relist report.Remedy
 }
 
 // judge says what the rule decided over js in w's words: refused (and

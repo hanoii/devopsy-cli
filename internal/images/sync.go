@@ -240,7 +240,8 @@ func parseParentData(data string) map[string]*sourceData {
 // that image (copyNeeds).
 func (s *Set) SyncCheck(rel, data string) error {
 	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync",
-		builds: "a sync builds nothing", rebuild: report.Fix("release it with the sync, which builds its images:", s.cmd("--release-sync"))}, true, false)
+		builds: "a sync builds nothing", rebuild: report.Fix("release it with the sync, which builds its images:", s.cmd("--release-sync")),
+		relist: report.Fix("release it with the sync, which lists it:", s.cmd("--release-sync"))}, true, false)
 }
 
 // ImportCheck is SyncCheck for an import of one service's data, the
@@ -255,7 +256,8 @@ func (s *Set) ImportCheck(rel, data, service string) error {
 		data = "data\t" + service + "\n"
 	}
 	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>",
-		builds: "an import builds nothing", rebuild: report.Fix("release it first, which builds its images, then import again:", s.cmd("--release"))}, false, false)
+		builds: "an import builds nothing", rebuild: report.Fix("release it first, which builds its images, then import again:", s.cmd("--release")),
+		relist: report.Fix("release it first, which lists it, then import again:", s.cmd("--release"))}, false, false)
 }
 
 // RestoreCheck is SyncCheck for a --no-code restore of snapshot, its
@@ -268,7 +270,8 @@ func (s *Set) ImportCheck(rel, data, service string) error {
 // which builds, named.
 func (s *Set) RestoreCheck(rel, data, snapshot string) error {
 	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code",
-		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot))}, false, true)
+		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot)),
+		relist: report.Fix("release it first, which lists it, then restore again:", s.cmd("--release"))}, false, true)
 }
 
 // writeClaims writes into rel's listing each data service's version and
@@ -322,10 +325,8 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) er
 	ps := parseParentData(data)
 	es := readList(rel)
 	own, svcs := s.ownEntries(rel, labels)
-	if labels {
-		if err := s.unlistedData(es, svcs, ps, w); err != nil {
-			return err
-		}
+	if err := s.unlistedData(rel, es, svcs, ps, w); err != nil {
+		return err
 	}
 	var js []judged
 	for i, e := range es {
@@ -345,28 +346,39 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) er
 	return s.copyNeeds(rel, es, own, svcs, ps, forced, w)
 }
 
-// unlistedData refuses a sync, before anything stops, that copies into a
-// service its labels make data now (svcs: in the holder, with the
-// pending inherited variables) and the current release (es) lists
-// without a data version: a variable inherited in this very sync turned
-// devopsy.data on, so nothing would check its version against the
-// parent's data or record what runs on it (review round 3: the copy
-// landed with no history). A release that syncs lists it.
-func (s *Set) unlistedData(es []entry, svcs map[string]Service, ps map[string]*sourceData, w checkWords) error {
+// unlistedData refuses a copy, before anything stops, into a service
+// its labels make data now (svcs, else read: in a sync's holder with the
+// pending inherited variables) and the current release (rel, es) lists
+// without a data version: a variable inherited in this very sync, or set
+// since (--vars set), turned devopsy.data on, so nothing would check its
+// version against the copy's data or record what runs on it, and the
+// next release would adopt its label on that data (review rounds 3 and
+// 4). A release lists it (w.relist).
+func (s *Set) unlistedData(rel string, es []entry, svcs map[string]Service, ps map[string]*sourceData, w checkWords) error {
 	var lines []string
 	for _, e := range es {
 		if ps[e.Service] == nil || e.DataVersion != "" || e.held() {
 			continue
 		}
+		if _, ok := svcs[e.Service]; !ok && s.List != nil {
+			list, err := s.List(rel)
+			if err != nil {
+				s.say(report.WarnLevel, "could not read the labels of %s (%v): a service they make data now goes unchecked", filepath.Base(rel), err)
+				return nil
+			}
+			svcs = map[string]Service{}
+			for _, svc := range list {
+				svcs[svc.Name] = svc
+			}
+		}
 		if svc, ok := svcs[e.Service]; ok && svc.Data {
-			lines = append(lines, e.Service+": its labels make it a data service now, and the current release lists it as none: its "+DataVersionLabel+" would go unchecked against the parent's data, and what runs on it unrecorded")
+			lines = append(lines, e.Service+": its labels make it a data service now, and the current release lists it as none: its "+DataVersionLabel+" would go unchecked against "+w.source+" data, and what runs on it unrecorded")
 		}
 	}
 	if len(lines) == 0 {
 		return nil
 	}
-	s.sayAll(report.ErrorLevel, "the release does not list as data what the sync copies as data: "+w.nothing, lines,
-		report.Fix("release it with the sync, which lists it:", s.cmd("--release-sync")))
+	s.sayAll(report.ErrorLevel, "the current release does not list as data what the copy writes as data: "+w.nothing, lines, w.relist)
 	return ErrRefused
 }
 
