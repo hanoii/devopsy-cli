@@ -425,7 +425,7 @@ func TestCutRollbackFinishingSaysCurrent(t *testing.T) {
 // leaves the release the cut rollback left as it was: never marked
 // rolled back, so it stays a live release, counted toward keep and the
 // next --rollback's target, where a rollback that ended marks it (the
-// README: a later rollback never goes back to a release a rollback
+// docs/releases.md: a later rollback never goes back to a release a rollback
 // left). The cut rollback was past its switch: that release was left.
 func TestReleaseOverCutRollback(t *testing.T) {
 	t.Parallel()

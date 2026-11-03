@@ -280,7 +280,7 @@ func TestRestartImageModeHoldsByDigest(t *testing.T) {
 // would run), but only by name; ReloadCheck, which a sync and a --no-code
 // restore run first, compares a built service's build too. An import runs
 // only notFetched, and for a database the project builds its name never
-// changes: with the README's pattern (one variable for the build argument
+// changes: with docs/images.md's pattern (one variable for the build argument
 // and the label) a variable raised to 12.1 and no release lets an export
 // at 12.1 through, and the image its release built at 11.8 starts on it.
 func TestImportRefusesBuildNotFetched(t *testing.T) {
@@ -523,7 +523,7 @@ func TestDataRandomImageMode(t *testing.T) {
 // database ran, holds on that digest: the restart's last try keeps it "for
 // the run step to pull", and the previous release's run step cannot start its
 // database. The same scenario in build mode runs its own image, said
-// (TestRestartAsBuiltHoldOnParentsBuiltImage; README, "the previous release's
+// (TestRestartAsBuiltHoldOnParentsBuiltImage; docs/images.md, "the previous release's
 // own image runs on it").
 func TestRestartImageModeHoldOnParentsLocalBuild(t *testing.T) {
 	t.Parallel()
@@ -685,7 +685,7 @@ func TestDataRestartHoldsAcrossModes(t *testing.T) {
 // Data of no known version (an import without a record, a --resolved that
 // starts its history over) gets one from what next runs on it: a service
 // that runs once it lands is recorded at its own label there, and a lower
-// one is then refused, as for any data that ran; the README and --import's
+// one is then refused, as for any data that ran; docs/images.md and --import's
 // help say so (review: they said the next release's label was taken).
 func TestNoKnownVersionWhatRunsSaysIt(t *testing.T) {
 	t.Parallel()
@@ -735,7 +735,7 @@ func otherAt(t *testing.T, out *bytes.Buffer, name, ref string) string {
 // allowed; the profile comes back on, ReloadCheck passes and a reload runs
 // the held 12.1 on the 11.8 data, upgrading it, where "a hold goes as soon
 // as the data allows the release's own image again, and nothing else keeps
-// one" (README).
+// one" (docs/images.md).
 func TestStaleHoldOnServiceComposeLacks(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -781,7 +781,7 @@ func TestStaleHoldOnServiceComposeLacks(t *testing.T) {
 // window of a service whose profile is off on the child: its files land, and
 // its history does not. Turned on later, the child's first release adopts its
 // label, however low: 11.8 runs on the parent's 12.1 data with no refusal, no
-// --accept-image, where the README says the receiving side's history becomes
+// --accept-image, where docs/images.md says the receiving side's history becomes
 // the source's for every service whose files the copy writes.
 func TestLandingOutsideTheListingKeepsNoWindow(t *testing.T) {
 	t.Parallel()

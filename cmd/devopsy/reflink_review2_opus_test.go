@@ -19,7 +19,7 @@ import (
 // copyStreams), but with the environment computed for the stopped set
 // (env := dataHookEnv(services, cli.StoppedNames(set))): the export hook
 // is told in DEVOPSY_DATA_STOP that app is stopped while app runs. The
-// README's contract says "A service in DEVOPSY_DATA_STOP is stopped:
+// docs/capabilities.md's contract says "A service in DEVOPSY_DATA_STOP is stopped:
 // reach it with devopsy run --rm --no-deps -T <service>, not exec": a
 // script following it runs a second container of a running service on
 // prod's data, and one that dumps without a transaction because its

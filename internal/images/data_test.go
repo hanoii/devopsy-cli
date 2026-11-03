@@ -2405,7 +2405,7 @@ func dataRandomMode(t *testing.T, seed int64, mode string) {
 			// Failing before its database ran, the restart holds the release
 			// before on the accepted release's own image, or on nothing; a
 			// hold on the parent's lines, whose images may not be this
-			// server's, is the accepted case the README names, left out.
+			// server's, is the accepted case docs/images.md names, left out.
 			held := verdict(model[m], dbOf(m.e.svcs[prev]))
 			if rng.Intn(2) == 0 || (held && !(yes && refused)) {
 				m.up()
