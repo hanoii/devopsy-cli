@@ -21,10 +21,12 @@ import (
 // the server's image lock, for a release's images (internal/images):
 //
 //	devopsy --images --name <compose name> [--address <target>]
-//	  [--accept <services>] [--fetched] <action> ...
+//	  [--accept <services>] [--again <args>] [--fetched] <action> ...
 //
 // Its settings are the server's own (serverImages): the scripts pass
-// only the environment's name and the address for hints. mode <release>
+// only the environment's name and the address for hints (--again: what
+// the operator ran, for a refusal's fix, when not the check's own
+// --release or --sync). mode <release>
 // (its record's mode, for the script's fetch), check <release> (its data
 // services against their data's history, before anything is built or
 // pulled: exit 3 when refused), data <environment> <release> (the
@@ -126,7 +128,7 @@ func runImages(args []string, color bool) int {
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	rollback, named, quiet, goneOK, fetched, asBuilt, restart, fullRestore := false, false, false, false, false, false, false, false
-	var name, address string
+	var name, address, again string
 	var accept map[string]bool
 	var words []string
 	for i := 0; i < len(args); i++ {
@@ -141,7 +143,7 @@ func runImages(args []string, color bool) int {
 			restart = true
 		case "--restore":
 			fullRestore = true
-		case "--name", "--address", "--accept":
+		case "--name", "--address", "--accept", "--again":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
@@ -150,6 +152,10 @@ func runImages(args []string, color bool) int {
 				name, named = args[i+1], true
 			case "--address":
 				address = args[i+1]
+			case "--again":
+				// What the operator ran, for a refusal's fix
+				// (images.Set.Again).
+				again = args[i+1]
 			case "--accept":
 				// The services --accept-image named (remote.ImagesAcceptEnv).
 				accept = map[string]bool{}
@@ -183,7 +189,7 @@ func runImages(args []string, color bool) int {
 		report.Error(err.Error())
 		return 1
 	}
-	s.Address, s.Accept, s.AsBuilt, s.Restart, s.NoCheck = address, accept, asBuilt, restart, fullRestore
+	s.Address, s.Accept, s.AsBuilt, s.Restart, s.NoCheck, s.Again = address, accept, asBuilt, restart, fullRestore, again
 	if restart {
 		// The release accepted its new image, never the old one back on
 		// the new data: the restart holds what the rule refuses.

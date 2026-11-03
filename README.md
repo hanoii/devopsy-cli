@@ -911,8 +911,10 @@ history last started over):
 | no version yet (a first release, after `any`, after an import of data of no known version) | runs, its label taken |
 
 A refusal comes before anything is built, pulled or stopped, and names
-the versions or tags and the ways out: raise the label, or `--accept-image
-<service>` (comma separated, or repeated), which runs it anyway, the
+the versions or tags and the ways out: raise the label (not for a
+rollback, whose code is the older release's), or `--accept-image
+<service>` (comma separated, or repeated) on the command you ran
+(`--release-sync`, `--reset`, with its `--from`), which runs it anyway, the
 history of its data starting over from it. `--yes` never does: it only
 skips prompts. `--accept-image` lets through only what was refused; a
 service the rule allows runs as it would. `--release`, `--rollback`,

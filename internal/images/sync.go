@@ -259,7 +259,7 @@ func (s *Set) copyCheck(rel, data string, w checkWords) error {
 			js = append(js, judged{service: e.Service, why: rule(p.window(), e.DataVersion, e.Tag, w.source)})
 		}
 	}
-	forced, err := s.judge(js, w, rel)
+	forced, err := s.judge(js, w, rel, false)
 	for _, svc := range forced {
 		s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image on the %s data, its history starting over from it", svc, strings.TrimPrefix(strings.TrimSuffix(w.source, "'s"), "the "))
 	}

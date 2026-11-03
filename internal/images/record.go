@@ -51,13 +51,15 @@ type checkWords struct {
 // not accepted: ErrRefused, with the ways out), accepted (--accept-image
 // lets through only what was refused: the services whose history starts
 // over, returned), or an --accept-image naming a service the rule let
-// through (said, nothing forced).
-func (s *Set) judge(js []judged, w checkWords, target string) ([]string, error) {
+// through (said, nothing forced). quiet says only a refusal: a rollback's
+// lenient check, whose img restore says the rest once (review: the
+// accepted warning came twice).
+func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]string, error) {
 	var refused, refusedSvcs, accepted, forced []string
 	for _, j := range js {
 		switch {
 		case j.why == "":
-			if s.Accept[j.service] {
+			if s.Accept[j.service] && !quiet {
 				s.say(report.InfoLevel, "%s: --accept-image lets through only what the check refuses, and it refuses nothing: it runs as it would", j.service)
 			}
 		case s.Accept[j.service]:
@@ -69,17 +71,23 @@ func (s *Set) judge(js []judged, w checkWords, target string) ([]string, error) 
 		}
 	}
 	if len(refused) > 0 {
+		// A rollback's code is the older release's: no label to raise there,
+		// only a release that fixes forward or the data from before.
 		fixes := []report.Remedy{report.Fix("raise " + DataVersionLabel + " to the image's version, when it is newer than the data's (one variable for the image and the label keeps them together)")}
 		if w.rollback {
-			fixes = append(fixes,
-				report.Fix("or fix forward: a release, which never takes the data back", s.cmd("--release")),
-				s.snapshotFix(target))
+			fixes = []report.Remedy{
+				report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")),
+				s.snapshotFix(target)}
 		}
-		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(w.flag, refusedSvcs)))
+		flag := w.flag
+		if s.Again != "" {
+			flag = s.Again
+		}
+		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, refusedSvcs)))
 		s.sayAll(report.ErrorLevel, w.what+": "+w.nothing, refused, fixes...)
 		return nil, ErrRefused
 	}
-	if len(accepted) > 0 {
+	if len(accepted) > 0 && !quiet {
 		s.sayAll(report.WarnLevel, "accepted (--accept-image): running them anyway, the history of their data starting over from them:", accepted)
 	}
 	return forced, nil
@@ -136,7 +144,7 @@ func (s *Set) Check(rel string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.judge(js, checkWords{source: "its", what: "the release would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--release"}, rel)
+	_, err = s.judge(js, checkWords{source: "its", what: "the release would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--release"}, rel, false)
 	return err
 }
 

@@ -474,15 +474,28 @@ func TestDataRollback(t *testing.T) {
 			m.fail("refusal: no %q", want)
 		}
 	}
+	// The target's code is the older release's: no label to raise there.
+	if strings.Contains(out.String(), "raise "+DataVersionLabel) {
+		m.fail("a rollback's refusal offers to raise the label")
+	}
 	m.e.set.List = func(string) ([]Service, error) { return nil, errors.New("required variable X is missing") }
 	if err := m.e.set.CheckRollback(m.e.rel(r1)); err != nil {
 		t.Errorf("a config that cannot be read refused the lenient check: %v", err)
 	}
 	m.e.set.List = func(rel string) ([]Service, error) { return m.e.svcs[filepath.Base(rel)], nil }
 	// What mariadb:11.8 holds now, I2: a rollback pulls a name only once
-	// it is gone.
+	// it is gone. Accepted, said once: the lenient check (img
+	// rollback-target) says only a refusal, img restore the rest.
+	out.Reset()
+	m.e.set.Accept = map[string]bool{"database": true}
+	if err := m.e.set.CheckRollback(m.e.rel(r1)); err != nil {
+		m.fail("the lenient check, accepted: %v", err)
+	}
 	if err := m.rollback(r1, true); err != nil || m.runs("database") != "I2" {
 		m.fail("accepted (%v): %s", err, m.runs("database"))
+	}
+	if n := strings.Count(out.String(), "accepted (--accept-image)"); n != 1 {
+		m.fail("the accepted warning said %d times", n)
 	}
 	if got := strings.Join(m.history("database"), " "); got != "ran:I1:11.8 ran:I2:11.8 ran:J1:12.1 forced:I2:11.8" {
 		t.Errorf("history: %s", got)
@@ -595,9 +608,16 @@ func TestDataReleaseSyncChecksFirst(t *testing.T) {
 	if _, err := dev.release(false, db118); !errors.Is(err, ErrRefused) || d.names["mariadb:11.8"] != "I1" {
 		dev.fail("a release that syncs onto the parent's 12.1 (%v): mariadb:11.8 is %s", err, d.names["mariadb:11.8"])
 	}
-	if !strings.Contains(out.String(), "devopsy.data.version=11.8 is lower than the parent's data's version, 12.1") {
+	if !strings.Contains(out.String(), "devopsy.data.version=11.8 is lower than the parent's data's version, 12.1") || !strings.Contains(out.String(), "devopsy @vm1:dev --release --accept-image database") {
 		dev.fail("refusal")
 	}
+	// A --release-sync's refusal names --release-sync (img's --again).
+	dev.e.set.Again = "--release-sync"
+	out.Reset()
+	if _, err := dev.release(false, db118); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy @vm1:dev --release-sync --accept-image database") {
+		dev.fail("a --release-sync onto the parent's 12.1 (%v)", err)
+	}
+	dev.e.set.Again = ""
 	if _, err := dev.release(false, dbSvc("mariadb:12.1")); err != nil {
 		dev.fail("at the parent's version: %v", err)
 	}
@@ -958,6 +978,13 @@ func TestDataSync(t *testing.T) {
 	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "the child would run the parent's data on an image its version does not allow: nothing changed") || !strings.Contains(out.String(), "devopsy @vm1:dev --sync --accept-image database") {
 		dev.fail("a sync onto a lower child (%v)", err)
 	}
+	// A --reset's refusal names --reset, with its --from (img's --again).
+	dev.e.set.Again = "--reset --from vm1:prod"
+	out.Reset()
+	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy @vm1:dev --reset --from vm1:prod --accept-image database") || strings.Contains(out.String(), "--sync --accept-image") {
+		dev.fail("a --reset onto a lower child (%v)", err)
+	}
+	dev.e.set.Again = ""
 	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "I1" {
 		dev.fail("accepted (%v): %s", err, dev.runs("database"))
 	}

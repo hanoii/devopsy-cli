@@ -1089,7 +1089,7 @@ ln -sfn "` + toBase + `shared/` + ParentEnvFile + `" "$code/.devopsy/` + ParentE
 	// it builds is gone (exit 1); a full restore checks nothing (--restore:
 	// its data and their history come back from the snapshot). A signal
 	// during either (img ignores it) skips the fetch.
-	fetchStep := `{ [ -z "$fetch_sig" ] && img check "$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
+	fetchStep := `{ [ -z "$fetch_sig" ] && img check ` + sync.againArg() + `"$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
 	if rollback {
 		restoreFlag := ""
 		if restore != nil {

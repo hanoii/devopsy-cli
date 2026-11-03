@@ -547,6 +547,10 @@ type SyncOptions struct {
 	// Reset is a --reset's: the child's side knows it from its prepare
 	// on (SyncResetEnv), as the push's devopsy does.
 	Reset bool
+	// Again is what the operator ran (--release, --release-sync, --sync,
+	// --reset, with its --from), which a refusal of the child's images
+	// against the parent's data names with --accept-image (img's --again).
+	Again string
 	// SameServerFrom is the parent's directory under the release root
 	// when it is on the child's server, whose instance and project .env
 	// are the child's already: the child copies the parent's own
@@ -584,6 +588,15 @@ func (o *SyncOptions) sameServerCopy() string {
 
 // imagesExport exports the parent's data's windows for the child's img
 // calls (images.SyncImagesEnv).
+// againArg is img's --again for what the operator ran, "" when nothing
+// says it.
+func (o *SyncOptions) againArg() string {
+	if o == nil || o.Again == "" {
+		return ""
+	}
+	return "--again " + Quote(o.Again) + " "
+}
+
 func (o *SyncOptions) imagesExport() string {
 	return "export " + images.SyncImagesEnv + "=" + Quote(images.EncodeData(o.Images)) + "\n"
 }
@@ -813,7 +826,7 @@ rel="$base/releases/$id"
 if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
   image_lock shared syncing || exit $?
   sc=0
-  img sync-check "$rel" || sc=$?
+  img sync-check ` + o.againArg() + `"$rel" || sc=$?
   image_unlock
   [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
 fi

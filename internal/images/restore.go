@@ -86,7 +86,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	case s.NoCheck:
 		held = s.restoreHolds(target, svcs, old)
 	default:
-		if accepted, err = s.checkRollback(target, svcs); err != nil {
+		if accepted, err = s.checkRollback(target, svcs, false); err != nil {
 			return err
 		}
 	}
@@ -246,13 +246,13 @@ func (s *Set) CheckRollback(target string) error {
 	if err != nil {
 		return nil
 	}
-	_, err = s.checkRollback(target, svcs)
+	_, err = s.checkRollback(target, svcs, true)
 	return err
 }
 
 // checkRollback is the rollback's check of svcs, target's: the services
-// --accept-image let through (judge).
-func (s *Set) checkRollback(target string, svcs []Service) ([]string, error) {
+// --accept-image let through (judge), quiet but for a refusal.
+func (s *Set) checkRollback(target string, svcs []Service, quiet bool) ([]string, error) {
 	h := readHistory(baseOf(target))
 	var js []judged
 	for _, svc := range svcs {
@@ -260,7 +260,7 @@ func (s *Set) checkRollback(target string, svcs []Service) ([]string, error) {
 			js = append(js, judged{service: svc.Name, why: rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its")})
 		}
 	}
-	return s.judge(js, checkWords{source: "its", what: "the rollback to " + filepath.Base(target) + " would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--rollback", rollback: true}, target)
+	return s.judge(js, checkWords{source: "its", what: "the rollback to " + filepath.Base(target) + " would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--rollback", rollback: true}, target, quiet)
 }
 
 // restartHold is a data service the restart keeps on the failed

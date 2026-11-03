@@ -200,6 +200,10 @@ type Set struct {
 	// SyncData is a parent's ParentData, in a sync's activation or
 	// holder: Check and SyncCheck check the child against it.
 	SyncData string
+	// Again is what the operator ran, which a refusal's --accept-image
+	// fix repeats (--release-sync, --reset, --sync --from <address>), in
+	// place of the check's own (--release, --sync): img's --again.
+	Again string
 	// AsBuilt has Restore put own images' bookmarks back even when their
 	// build changed since (changed): the restart after a failed run step
 	// whose build again failed runs what the release built, never the

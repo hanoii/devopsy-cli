@@ -251,9 +251,9 @@ func allScripts() map[string]string {
 		"role holders":    RoleHoldersScript(tg, "proxy"),
 		"root shell":      RootShellScript(&Target{Host: "h"}),
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
-		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
+		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Again: "--release-sync --from it's:prod"}),
 		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
-		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Inherit: true, ID: "1.2"}, true),
+		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Inherit: true, ID: "1.2", Again: "--reset"}, true),
 		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg, nil),
@@ -274,6 +274,23 @@ func allScripts() map[string]string {
 		"snapshots rm":    SnapshotsRemoveScript(tg, "app-prod", []string{"20261025120000"}),
 		"restore":         RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000", WithEnv: true, By: "me"}),
 		"restore data":    RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+	}
+}
+
+// A refusal of a sync's images names what the operator ran (img's
+// --again): a release that syncs its own flag (--release-sync, or
+// --release for a first one), a sync --sync or --reset, a --from kept.
+func TestImagesAgain(t *testing.T) {
+	t.Parallel()
+	s := allScripts()
+	if !strings.Contains(s["activate+sync"], `img check --again '--release-sync --from it'\''s:prod' "$1"`) {
+		t.Errorf("a release that syncs: no --again on its img check")
+	}
+	if !strings.Contains(s["holder"], `img sync-check --again '--reset' "$rel"`) {
+		t.Errorf("a --reset: no --again on its img sync-check")
+	}
+	if strings.Contains(s["holder plain"], "--again") || strings.Contains(s["sync only"], "--again") {
+		t.Errorf("--again where nothing says what the operator ran")
 	}
 }
 

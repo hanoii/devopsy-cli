@@ -670,7 +670,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, job.sameServer(&remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, NoInherit: len(job.inherit) == 0}))
+			flag := "--release-sync"
+			if job.first {
+				flag = "--release"
+			}
+			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, job.sameServer(&remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, NoInherit: len(job.inherit) == 0, Again: job.again(flag)}))
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(id, code)
 			}

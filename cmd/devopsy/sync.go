@@ -81,6 +81,15 @@ func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 	return o
 }
 
+// again is flag as the operator ran it, its --from kept, for a refusal's
+// fix (remote.SyncOptions.Again).
+func (job *syncJob) again(flag string) string {
+	if job.from {
+		return flag + " --from " + job.fromAddr
+	}
+	return flag
+}
+
 // sourceRef is what the child's copy names as its source: a --from's
 // address as typed, else the parent's.
 func (job *syncJob) sourceRef() string {
@@ -732,7 +741,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0})
+	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0, Again: job.again(flag)})
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
