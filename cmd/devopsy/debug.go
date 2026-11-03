@@ -430,7 +430,7 @@ func debugCapabilities(st style, projectDir string) {
 	fmt.Println("A capability is an interface devopsy defines and a project may implement:")
 	fmt.Println("executables in .devopsy/capabilities/<capability>/<action>, which devopsy runs")
 	fmt.Println("(people never do), in the project's directory with its environment.")
-	fmt.Println(st.dim("Full contracts: devopsy-cli's README, Capabilities."))
+	fmt.Println(st.dim("Full contracts: devopsy-cli's docs/capabilities.md."))
 	for _, c := range cli.Capabilities {
 		fmt.Printf("\n%s\n", st.name(st.head(c.Name)))
 		fmt.Printf("  %s\n", wrap(c.What, 76, "  "))

@@ -39,7 +39,7 @@ func TestContent(t *testing.T) {
 	}
 }
 
-// publicLabels are the labels the README documents for projects: what
+// publicLabels are the labels the docs document for projects: what
 // the skill may name. Each must be one the code reads, so the list
 // follows a rename, and the skill may name no other (an internal or an
 // old one).

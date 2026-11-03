@@ -49,7 +49,7 @@ type checkWords struct {
 	// the release snapshot from before the change.
 	rollback bool
 	// input follows the command run again: an import's data (" <
-	// <export>", as the README writes an import).
+	// <export>", as docs/images.md writes an import).
 	input string
 	// builds is what a copy's refusal says when an image its take-over
 	// needs is gone (copyNeeds: "a sync builds nothing"), rebuild what

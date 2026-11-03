@@ -38,7 +38,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - The skill is embedded, so it describes the binary that prints it, its frontmatter carrying that version and the copy's checksum (`devopsy: <version> sha256:<hex>`, of the file with that line ending at its version; `stub` for `--stub`, the short form that sends the agent to the command).
 - `Install` replaces only a copy so marked whose checksum still matches; an edited one, or one without a checksum, is the user's, left as it is and said with `rm` and the install again as its fix.
 - The skill states what devopsy enforces as fact and what the templates do (10001, read-only, `alwaysup`) as what new projects should do.
-- `TestContentNamesWhatExists` keeps the skill honest: every `--flag` it names is in `cli.Flags` or a flag's `Args`, every `devopsy.*` label is in the test's `publicLabels` (the README's, each checked against the code), and its config.yaml example loads.
+- `TestContentNamesWhatExists` keeps the skill honest: every `--flag` it names is in `cli.Flags` or a flag's `Args`, every `devopsy.*` label is in the test's `publicLabels` (the docs', each checked against the code), and its config.yaml example loads.
 - The skill installs into `.agents/skills/devopsy` in the project's directory (`FindProjectDir`), shared by Codex, Cursor and the skills installer, with a link from `.claude/skills/devopsy`, since Claude Code reads only its own directory; the link is relative from where the link really is (`EvalSymlinks` of both ends), a dangling one is replaced, anything else there is left and said.
 
 ## Capabilities and the environment

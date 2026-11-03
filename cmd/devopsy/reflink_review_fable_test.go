@@ -25,7 +25,7 @@ func reviewLine(log, prefix, sub string) (string, int) {
 // Bug: with the clone, a custom service NOT in the set is exported after
 // the parent's set is started again (runSyncPush: restore(), then
 // copyStreams), so a service labeled devopsy.data.stop=always runs
-// while another service's data is exported. The README's table says an
+// while another service's data is exported. docs/data.md's table says an
 // `always` service is down while "another service's data exported", and
 // the label's text "while any data is exported or imported". Here: db is
 // custom with stop=never (a hot dump, the recipe), app is volumes with

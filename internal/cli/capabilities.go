@@ -14,7 +14,7 @@ import (
 // Capability describes an interface devopsy defines and a project may
 // implement in .devopsy/capabilities/<Name>/<action>. This is what
 // `devopsy --debug capabilities` prints, so it lives with the code that
-// calls them; README's Capabilities section has the full contracts.
+// calls them; docs/capabilities.md has the full contracts.
 type Capability struct {
 	Name string
 	// What it lets devopsy do, in a sentence.

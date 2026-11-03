@@ -2028,7 +2028,7 @@ func TestReleaseSnapshotCases(t *testing.T) {
 			t.Skip("waiting for the detached tar reads /proc")
 		}
 		// A release whose run step fails halfway (a migration gone wrong:
-		// the reason for release snapshots, README) leaves the data as it
+		// the reason for release snapshots, docs/snapshots.md) leaves the data as it
 		// wrote it, and the release before restarts on it. Its snapshot is
 		// then the only copy of the data before the migration; the release
 		// tried again takes another of the same release, of the migrated
@@ -2760,7 +2760,7 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 	// such bind (the fake's config: app binds mnt/storage/public unless
 	// the code holds nobind). The link stays in the data, and the
 	// rollback after it, back to the release before (a rollback target,
-	// as the README says), binds mnt/storage/public again: Docker mounts
+	// as docs/snapshots.md says), binds mnt/storage/public again: Docker mounts
 	// the host's root there, nothing refusing it.
 	s = newSyncSetup(t)
 	write(t, s.log+".shop-prod", "[ \"$1\" = compose ] && [ \"$2\" = -f ] && [ -e \"$(dirname \"$3\")/nobind\" ] || FAKE_APP_MOUNT2=/storage/public\n", 0o644)

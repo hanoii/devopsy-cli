@@ -26,7 +26,7 @@
 
 ## The stop set
 
-- `cli.DataStops` is a pure function of the operation (`ExportOne`, `ImportOne`, `SyncParent`, `SyncChild`) and the services, giving the set with each one's why; the table in the README is the spec.
+- `cli.DataStops` is a pure function of the operation (`ExportOne`, `ImportOne`, `SyncParent`, `SyncChild`) and the services, giving the set with each one's why; the table in `docs/data.md` is the spec.
 - `own` and `import` overlap only on the service's own import, and the values are not a scale (`import` on a raw database exports it running, a corrupt copy).
 - An operation over several services takes the union of their sets, under one stop and one start.
 - Dependents follow everywhere devopsy stops something, the services whose `depends_on` reaches a stopped one, transitively, every edge (`required: false`, and Compose's implicit `network_mode: service:`, `links` and `volumes_from`, which its config lists under `depends_on`, pinned by a fixture), computed by `cli.WithDependents` and never left to Compose's `stop`: the record, the hooks' lists and the restore need the full set.
