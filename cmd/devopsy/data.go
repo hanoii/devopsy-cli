@@ -1221,8 +1221,8 @@ func runImport(cwd string, args []string, color bool) int {
 	// The data's history, when its export recorded it: the service's
 	// version and tag are checked against it before anything stops, as a
 	// sync checks its parent's (images.ImportCheck), and it is taken over
-	// once the data is in, on a target. A tar without it (made by hand, a
-	// custom export) starts the history over. Either way the service's
+	// once the data is in, on a target. A tar without it (made by hand)
+	// starts the history over. Either way the service's
 	// hold is derived again from it (images.Set.Rederive), and checked
 	// first for a built image that would need (a copy builds nothing).
 	var imgs *images.Set

@@ -1406,10 +1406,10 @@ func TestParentDataBounded(t *testing.T) {
 
 // An export records its service's window (on a target) or its label's
 // version and tag alone (locally); an import checks the environment's
-// labels against it and takes it over from an import line; a custom
-// import, or a tar without the record, starts the history over with a
-// line of no version; --resolved keeps a window an import took over
-// since its mark, else starts over.
+// labels against it and takes it over from an import line; a tar
+// without the record starts the history over with a line of no version;
+// --resolved keeps a window an import took over since its mark, else
+// starts over. (A custom import calls none of these: TestImportResolved.)
 func TestDataImport(t *testing.T) {
 	t.Parallel()
 	d := newFake()

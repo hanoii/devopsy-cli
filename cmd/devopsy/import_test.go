@@ -423,9 +423,32 @@ func TestImportLeftoverWriter(t *testing.T) {
 // starts); with it, what the record holds starts, the imported service
 // included, and only then do the mark and the record go. One whose
 // start fails keeps both, and a second one works.
+//
+// A custom import, complete or resolved, leaves the history of what ran
+// on its data and its hold as they were: the dump is loaded by the image
+// that runs, so the data stays what that image made it.
 func TestImportResolved(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
+	current := filepath.Join(s.base, "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:twelve\tdb\tpulled\tmariadb@sha256:twelve\t\t\t12.1\t12.1\tmariadb:11.8\tsha256:own\t\tmariadb@sha256:own\t11.8\t11.8\n", 0o644)
+	held := "services:\n  \"db\":\n    image: \"mariadb@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"mariadb@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n"
+	write(t, releaseFile(t, current, images.ComposeFile), held, 0o644)
+	history := "1\tdb\tran\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\t11.8\t11.8\n2\tdb\tran\tmariadb:12.1\tsha256:twelve\tmariadb@sha256:twelve\t12.1\t12.1\n"
+	write(t, filepath.Join(s.base, images.HistoryFile), history, 0o644)
+	kept := func(what string) {
+		t.Helper()
+		if h := readString(filepath.Join(s.base, images.HistoryFile)); h != history {
+			t.Errorf("%s: the history changed:\n%s", what, h)
+		}
+		if c := readString(releaseFile(t, current, images.ComposeFile)); c != held {
+			t.Errorf("%s: the hold changed:\n%s", what, c)
+		}
+	}
+	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 {
+		t.Fatalf("a complete import (%d):\n%s", code, out)
+	}
+	kept("a complete custom import")
 	if _, out, code := s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes"); code == 0 || !strings.Contains(out, "no import of db to resolve on @devopsy@one:prod") {
 		t.Errorf("without a mark (%d):\n%s", code, out)
 	}
@@ -453,6 +476,7 @@ func TestImportResolved(t *testing.T) {
 	if code != 0 || s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || !strings.Contains(docker, " start app db worker\n") || len(s.stopped()) > 0 {
 		t.Errorf("resolved (%d), mark %+v, stopped %v:\n%s\n%s", code, s.mark(), s.stopped(), out, docker)
 	}
+	kept("a custom import resolved")
 	if !strings.Contains(docker, "rm -f devopsy-import-shop-prod-123-extract-0\n") || strings.Contains(docker, "shop-prod-eu-9") {
 		t.Errorf("resolved: the import's leftover containers:\n%s", docker)
 	}

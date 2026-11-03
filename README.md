@@ -972,7 +972,9 @@ source's data (Parent environments and syncs, `--export` and
 `--import`): the receiving side always runs its release's own image on
 the copy, a hold it had going with its old data, and its history
 becomes the source's. One whose own built image is gone while held is
-refused before anything stops: a copy builds nothing.
+refused before anything stops: a copy builds nothing. A `custom`
+import is loaded through the image that runs, so it checks nothing and
+its history and hold stay as they were.
 
 Image mode needs no git: without it the release just has no commit.
 Either way files arrive with git's modes, whatever the checkout's: 0755
@@ -1377,10 +1379,15 @@ tag alone), in the tar's first header, which `tar` itself skips. An
 `--import` of it on a target checks the environment's labels against it
 before anything stops, as a sync does, and takes it over once the data
 is in; refused, `--import <service> --accept-image <service>` runs it
-anyway, its history starting over. A `custom` export is its script's
-output and carries none: its import, a tar without the header, every
-import locally and `--resolved` start the service's history over, data
-of no known version, which the next release's label is taken for.
+anyway, its history starting over. A tar without the header, every
+import locally and a `volumes` service's `--resolved` (unless the import
+took the history over before what failed) start the service's history
+over, data of no known version, which the next release's label is taken
+for. A `custom` export is its script's output and carries none, and a
+`custom` import, or its `--resolved`, checks nothing and leaves the
+service's history and what it runs as they were: its script loads the
+dump through the image that runs, so the data stays what that image
+made it.
 
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits

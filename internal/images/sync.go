@@ -246,7 +246,9 @@ func (s *Set) SyncCheck(rel, data string) error {
 // export's (ExportData, DataFor) in place of a parent's, before the
 // import stops anything: by the listing's own image (what its last
 // activation runs). Without a record of it (data ""), the import starts
-// the history over, and only copyNeeds checks.
+// the history over, and only copyNeeds checks. A custom import calls none
+// of this: loaded through the image that runs, it leaves the history and
+// the hold as they were.
 func (s *Set) ImportCheck(rel, data, service string) error {
 	if DataFor(data, service) == "" {
 		data = "data\t" + service + "\n"
@@ -517,9 +519,9 @@ func Recreate(d Docker, project, rel string) []string {
 	return svcs
 }
 
-// Imported starts a service's history over, once a complete import of
-// its data without a record of it (a custom one, a tar without the
-// header, a local one) or --resolved is in: the data came from elsewhere,
+// Imported starts a service's history over, once a complete volumes
+// import of its data without a record of it (a tar without the header, a
+// local one) or --resolved is in: the data came from elsewhere,
 // of no known version, so the next release adopts its label, and its
 // release's own image runs on it (Rederive: under the image lock).
 func (s *Set) Imported(base, rel, service string) error {

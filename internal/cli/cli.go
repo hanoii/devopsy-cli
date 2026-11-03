@@ -615,9 +615,10 @@ checked against it before anything stops, as a sync checks its
 parent's: a version lower than the data's, or another tag at it, is
 refused. --accept-image <service> runs it on the data then, its history
 starting over. Each side runs its own image. A tar without it (made by
-hand, or a custom export) and every import locally start the history
-over, data of no known version, which the next release's label is taken
-for.
+hand) and every import locally start the history over, data of no known
+version, which the next release's label is taken for. A custom import
+checks nothing and leaves the history and the image that runs as they
+were: its script loads the dump through that image.
 
 Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
 import or always, every import and always service (an app, a worker),
