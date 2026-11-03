@@ -172,18 +172,23 @@ func (s *Set) ResolvedLanding(service string, since time.Time) Landing {
 func (s *Set) RestoreLanding(data, snapshot string, services []string) Landing {
 	l := Landing{windows: parseParentData(data), first: Imported, running: true, words: checkWords{
 		source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code",
-		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot)),
+		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd(withEnvOf("--snapshots restore "+snapshot, s.Again))),
 		fetch: report.Fix("release it first, which fetches them, then restore again:", s.cmd("--release"))}}
-	if s.Marked {
-		// A marked environment refuses a release: the full restore fetches.
-		l.words.fetch = l.words.rebuild
-	}
 	for _, svc := range services {
 		if l.windows[svc] == nil {
 			l.over = append(l.over, svc)
 		}
 	}
 	return l
+}
+
+// withEnvOf is args, with --with-env when again (what the operator ran)
+// has it: its labels were judged under the snapshot's variables.
+func withEnvOf(args, again string) string {
+	if strings.Contains(again, " --with-env") {
+		return args + " --with-env"
+	}
+	return args
 }
 
 // labelsOf are rel's services as their labels give them now, by name.
@@ -435,17 +440,22 @@ func (s *Set) Land(base, rel string, l Landing) error {
 			}
 			lines = history{ranOn(o, Forced, img, s.now())}
 		} else {
-			lines = append(lines, w...)
-			if len(lines) == 0 {
-				lines = history{{Service: e.Service, Ref: o.Ref, Time: s.now().Unix()}}
-			}
-			lines[0].How = l.first
-			if l.first == Imported {
-				lines[0].Time = s.now().Unix()
-			}
+			lines = l.lines(w, e.Service, o.Ref, s.now())
 		}
 		h = append(h.without(e.Service), lines...)
 		changed = true
+	}
+	// What its listing leaves out, a profile not up: a copy writes every
+	// profile's, so its window lands all the same, for the release that
+	// turns it on to be judged against; nothing here to judge it by now
+	// (review: it ran an older image on the copy, and a reset's left a
+	// refusal for data that no longer existed).
+	for _, svc := range l.unlisted(h, es) {
+		if !l.kept(h, svc) {
+			w, _ := l.window(svc)
+			h = append(h.without(svc), l.lines(w, svc, "", s.now())...)
+			changed = true
+		}
 	}
 	if changed {
 		if err := h.write(base); err != nil {
@@ -456,6 +466,47 @@ func (s *Set) Land(base, rel string, l Landing) error {
 		return fmt.Errorf("what runs on it could not be derived from its history: %w", err)
 	}
 	return nil
+}
+
+// lines is the window w as it lands: its first line says how and when,
+// which is one line of no version without any.
+func (l Landing) lines(w []ran, service, ref string, now time.Time) history {
+	lines := append(history{}, w...)
+	if len(lines) == 0 {
+		lines = history{{Service: service, Ref: ref}}
+	}
+	lines[0].How, lines[0].Time = l.first, now.Unix()
+	return lines
+}
+
+// unlisted are the services this writes that es (a listing) has no entry
+// of, sorted: its windows' and over's, and with all every one with a
+// history.
+func (l Landing) unlisted(h history, es []entry) []string {
+	listed := map[string]bool{}
+	for _, e := range es {
+		listed[e.Service] = true
+	}
+	names := map[string]bool{}
+	for svc := range l.windows {
+		names[svc] = true
+	}
+	for _, svc := range l.over {
+		names[svc] = true
+	}
+	if l.all {
+		for _, r := range h {
+			names[r.Service] = true
+		}
+	}
+	var out []string
+	for svc := range names {
+		if !listed[svc] {
+			out = append(out, svc)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // kept says whether service's history stays as it is: its window started

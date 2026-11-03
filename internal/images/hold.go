@@ -263,6 +263,10 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 				s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s, %s, is gone from this server and could not be pulled by its digest", svc, d, what),
 					[]string{perr.Error()}, report.Fix("the image its data ran must be there: never one its data does not allow"))
 				return entry{}, ch, ErrRefused
+			case perr != nil && h.line.Tag == "":
+				// A build: service's line, in image mode: the digest may be a
+				// parent's local build, which no registry serves.
+				return s.ownInstead(o, h, what, own)
 			case perr != nil:
 				s.say(report.WarnLevel, "%s: %s is gone from this server and could not be pulled by its digest (%v): held on it anyway, for the run step to pull", svc, d, perr)
 			default:
@@ -316,18 +320,29 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 // here holds (review: the run step's up could not start it, and the
 // release's own bookmark went).
 func (s *Set) ownInstead(o entry, h hold, what string, own map[string]bool) (entry, composeHold, error) {
-	var ch composeHold
-	if cur, err := s.Docker.ID(o.Ref); (err != nil || cur != o.ID) && s.imagePresent(o.ID) {
-		if who := s.others(cur, own); err == nil && len(who) > 0 {
-			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", o.Ref, strings.Join(who, ", "), o.Service)
-			ch.bookmark = true
-		} else if err := s.Docker.Tag(o.ID, o.Ref); err != nil {
-			s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
-		}
-	}
+	ch := composeHold{bookmark: s.ownNameBack(o, own)}
 	s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s, built by the project, is gone from this server: its release's own image runs on data it does not allow (%s)", o.Service, what, h.why),
 		nil, report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
 	return o, ch, nil
+}
+
+// ownNameBack puts a built own image's name back on it, true when another
+// environment runs what the name holds, so it runs by its bookmark
+// instead. Never a pulled name (nothing to do: compose runs what it holds).
+func (s *Set) ownNameBack(o entry, own map[string]bool) bool {
+	if o.Kind != KindOwn {
+		return false
+	}
+	if cur, err := s.Docker.ID(o.Ref); (err != nil || cur != o.ID) && s.imagePresent(o.ID) {
+		if who := s.others(cur, own); err == nil && len(who) > 0 {
+			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", o.Ref, strings.Join(who, ", "), o.Service)
+			return true
+		}
+		if err := s.Docker.Tag(o.ID, o.Ref); err != nil {
+			s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
+		}
+	}
+	return false
 }
 
 // resolveBookmarks names, in holds, the bookmark each hold by bookmark
@@ -393,9 +408,23 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 		}
 		svc, ok := svcs[e.Service]
 		if !ok {
-			// Its compose no longer gives it (a profile turned off): nothing
-			// runs it to derive for, and a release's check judges it again.
-			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
+			// Its compose no longer gives it (a profile turned off), so
+			// nothing runs it now and nothing pulls it: the rule allows its
+			// own, so it goes back to that, for a plain up or a reload once
+			// the profile is on (review: the hold outlived the data it was
+			// for, its image upgrading the copy). A built own image gone
+			// stays, said: only a release builds it.
+			o := own[i]
+			if o.Kind == KindOwn && !s.imagePresent(o.ID) {
+				s.say(report.WarnLevel, "%s: %s's own image of it, built by the project, is gone from this server, and its compose no longer gives it: it stays on %s until a release", e.Service, tid, heldWhat(wasHeld[e.Service]))
+				kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
+				continue
+			}
+			es[i] = o
+			if s.ownNameBack(o, ownNames) {
+				kept[e.Service] = composeHold{bookmark: true}
+			}
+			lines = append(lines, fmt.Sprintf("%s goes back to %s's own image (%s, %s), not %s: its compose no longer gives it", e.Service, tid, shownEntry(o), shownData(o), heldWhat(wasHeld[e.Service])))
 			continue
 		}
 		if asIs && svc.own(mode) && !s.imagePresent(own[i].ID) {

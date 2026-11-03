@@ -119,9 +119,12 @@ func (d CLI) Containers(project string) ([]Container, error) {
 			continue
 		}
 		var v struct {
-			Name   string
-			Image  string
-			State  struct{ Status string }
+			Name  string
+			Image string
+			State struct {
+				Status    string
+				StartedAt time.Time
+			}
 			Config struct {
 				Image  string
 				Labels map[string]string
@@ -131,7 +134,7 @@ func (d CLI) Containers(project string) ([]Container, error) {
 			return nil, fmt.Errorf("docker inspect: %w", err)
 		}
 		l := v.Config.Labels
-		cs = append(cs, Container{Name: strings.TrimPrefix(v.Name, "/"), Service: l["com.docker.compose.service"], Image: v.Image, Ref: v.Config.Image, State: v.State.Status, OneOff: l["com.docker.compose.oneoff"] == "True", Digest: l[DigestLabel]})
+		cs = append(cs, Container{Name: strings.TrimPrefix(v.Name, "/"), Service: l["com.docker.compose.service"], Image: v.Image, Ref: v.Config.Image, State: v.State.Status, Started: v.State.StartedAt, OneOff: l["com.docker.compose.oneoff"] == "True", Digest: l[DigestLabel]})
 	}
 	return cs, nil
 }

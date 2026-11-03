@@ -3,10 +3,12 @@ package images
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A refusal's fix runs the command again accepting what was refused, but
@@ -477,5 +479,386 @@ func TestRollbackFixSkipsUnfinishedSnapshot(t *testing.T) {
 	}
 	if strings.Contains(out.String(), ".tmp") || !strings.Contains(out.String(), "--snapshots restore 20261102000001") {
 		t.Errorf("the fix names a take that never completed:\n%s", out.String())
+	}
+}
+
+// TestDataRandom in image mode: every release pulls what the project
+// builds (a database FROM mariadb pushed under a commit tag), so a hold
+// on a built data service goes by its registry digest, a rollback pulls
+// its tag, and nothing is ever built on the server.
+func TestDataRandomImageMode(t *testing.T) {
+	t.Parallel()
+	for seed := int64(1); seed <= int64(seeds(300)); seed++ {
+		t.Run(fmt.Sprint(seed), func(t *testing.T) { dataRandomMode(t, seed, ModeImage) })
+	}
+}
+
+// Bug: in image mode a hold's line with digests is taken for one the registry
+// serves (source), the reason of its build: service's tag being empty. Across
+// a parent in build mode, a line's digests are a local build's (the
+// containerd store gives every image some), which no registry serves. A child
+// in image mode, after a release that syncs whose run step failed before its
+// database ran, holds on that digest: the restart's last try keeps it "for
+// the run step to pull", and the previous release's run step cannot start its
+// database. The same scenario in build mode runs its own image, said
+// (TestRestartAsBuiltHoldOnParentsBuiltImage; README, "the previous release's
+// own image runs on it").
+func TestRestartImageModeHoldOnParentsLocalBuild(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dp, d := newFake(), newFake()
+	prod := newSim(t, dp, "app-prod", &out)
+	if _, err := prod.release(false, builtDB("app-prod", "12.1")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	if lines := readHistory(prod.base()).window("database"); len(lines) == 0 || len(lines[0].Digests) == 0 {
+		prod.fail("setup: a local build's line has no digests here: %v", lines)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	dev.e.mode = ModeImage
+	r1Svc := Service{Name: "database", Ref: "registry.example.com/db:one", Build: true, Data: true, Method: CopyVolumes, DataVersion: "11.8"}
+	d.publish("registry.example.com/db:one", "I1")
+	r1, err := dev.release(false, r1Svc)
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	r2Svc := Service{Name: "database", Ref: "registry.example.com/db:two", Build: true, Data: true, Method: CopyVolumes, DataVersion: "12.1"}
+	d.publish("registry.example.com/db:two", "J2")
+	r2 := dev.e.release(r2Svc)
+	rel := dev.e.rel(r2)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("the release that syncs: %v", err)
+	}
+	dev.fetch(dev.e.svcs[r2])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r2
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.Ran(dev.base(), rel)
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.e.set.SyncData = ""
+	dev.e.set.Restart = true
+	defer func() { dev.e.set.Restart, dev.e.set.AsBuilt = false, false }()
+	out.Reset()
+	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); !errors.Is(err, ErrRefused) {
+		dev.fail("img restore --restart with the held image on the parent's server only: %v", err)
+	}
+	dev.e.set.AsBuilt = true
+	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); err != nil {
+		dev.fail("img restore --restart --as-built: %v", err)
+	}
+	imgs, _, _ := composeFacts(dev.e.rel(r1))
+	if img := imgs["database"]; img != "" {
+		if err := d.Pull(img); err != nil {
+			t.Errorf("%s's compose file points database at %s, a local build's digest on the parent's server, which no registry serves (%v): its run step cannot start it:\n%s", r1, img, err, out.String())
+		}
+	}
+
+}
+
+// Bug: an import records what runs on the data once it lands (RanCut, as
+// after a run step), reading a container that "once started" counts: an
+// exited one too. A service down on purpose while its data is imported stays
+// down (restoreServices starts only what the import stopped), and nothing
+// ran on the new data; the history says its image did. Here 11.8 data is
+// imported under a stopped 12.1: its history ends on a 12.1 that never ran on
+// it, so an --export carries 12.1, and the release at 11.8 that matches the
+// data is refused as lower than the data's version. The next activation's
+// ran cut writes the same line, so the fix is not only here.
+func TestImportDownServiceRecordsNoRun(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:12.1", "J1")
+	if _, err := m.release(false, dbSvc("mariadb:12.1")); err != nil {
+		m.fail("setup: %v", err)
+	}
+	for i := range d.containers {
+		if d.containers[i].project == "app-prod" {
+			d.containers[i].state, d.containers[i].started = "exited", time.Unix(1, 0)
+		}
+	}
+	data := otherAt(t, &out, "app-other", "mariadb:11.8")
+	rel := m.e.rel(m.cur)
+	l := m.e.set.ImportLanding(data, "database")
+	if err := m.e.set.CheckLanding(rel, l); err != nil {
+		m.fail("the import of 11.8 under 12.1: %v", err)
+	}
+	if err := m.e.set.Land(m.base(), rel, l); err != nil {
+		m.fail("land: %v", err)
+	}
+	if err := m.e.set.RanCut(m.base(), rel); err != nil {
+		m.fail("ran: %v", err)
+	}
+	if v := windowVersion(readHistory(m.base()).window("database")); v != "11.8" {
+		t.Errorf("the data's version is %s, its history %v: nothing ran on the imported 11.8 data, its container exited before it landed", v, m.history("database"))
+	}
+}
+
+// A project moving between modes: a release in build mode followed by
+// one in image mode (its database pushed under a commit tag), and the
+// reverse. The restart after the newer one's failed run step holds the
+// older one on the failed release's image as that release's listing has
+// it (pulled by digest in image mode, by the build's name in build
+// mode), and a release that fixes forward then goes.
+func TestDataRestartHoldsAcrossModes(t *testing.T) {
+	t.Parallel()
+	for _, first := range []string{ModeBuild, ModeImage} {
+		second := ModeImage
+		if first == ModeImage {
+			second = ModeBuild
+		}
+		t.Run(first+"-then-"+second, func(t *testing.T) {
+			t.Parallel()
+			d := newFake()
+			var out bytes.Buffer
+			m := newSim(t, d, "app-prod", &out)
+			m.strict = true
+			db := func(mode, commit, version string) Service {
+				s := builtDB("app-prod", version)
+				if mode == ModeImage {
+					s.Ref = "registry.example.com/app-prod-database:" + commit
+					d.publish(s.Ref, "I"+commit)
+				}
+				return s
+			}
+			m.e.mode = first
+			r1, err := m.release(false, db(first, "c1", "11.8"))
+			if err != nil {
+				m.fail("r1: %v", err)
+			}
+			m.e.mode = second
+			r2, err := m.failRun(false, db(second, "c2", "12.1"))
+			if err != nil {
+				m.fail("r2: %v", err)
+			}
+			failed, _ := match(readList(m.e.rel(r2)), entry{Service: "database"})
+			imgs, labels, held := composeFacts(m.e.rel(r1))
+			if m.cur != r1 || m.runs("database") != failed.ID || held["database"] != r2 {
+				m.fail("the restart of %s (%s) after %s (%s): runs %s, want %s; compose images %v labels %v held %v", r1, first, r2, second, m.runs("database"), failed.ID, imgs, labels, held)
+			}
+			if second == ModeImage && digestOf(imgs["database"]) == "" {
+				m.fail("a hold on an image the registry serves goes by its digest, not %q", imgs["database"])
+			}
+			if l, _ := readHistory(m.base()).last("database"); l.Version != "12.1" {
+				m.fail("the history ends on %+v", l)
+			}
+			// A release that fixes forward, in the mode the project is in now.
+			if _, err := m.release(false, db(second, "c3", "12.1")); err != nil {
+				m.fail("fixing forward: %v", err)
+			}
+			if heldIn(m.e.rel(m.cur))["database"] != "" {
+				m.fail("the release that fixes forward is held: %v", heldIn(m.e.rel(m.cur)))
+			}
+		})
+	}
+}
+
+// Data of no known version (an import without a record, a --resolved that
+// starts its history over) gets one from what next runs on it: a service
+// that runs once it lands is recorded at its own label there, and a lower
+// one is then refused, as for any data that ran; the README and --import's
+// help say so (review: they said the next release's label was taken).
+func TestNoKnownVersionWhatRunsSaysIt(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:12.1", "J1")
+	if _, err := m.release(false, dbSvc("mariadb:12.1")); err != nil {
+		m.fail("setup: %v", err)
+	}
+	rel := m.e.rel(m.cur)
+	l := m.e.set.ImportLanding("", "database")
+	if err := m.e.set.CheckLanding(rel, l); err != nil {
+		m.fail("the import of a tar made by hand: %v", err)
+	}
+	if err := m.e.set.Land(m.base(), rel, l); err != nil {
+		m.fail("land: %v", err)
+	}
+	if err := m.e.set.RanCut(m.base(), rel); err != nil {
+		m.fail("ran: %v", err)
+	}
+	d.publish("mariadb:11.8", "I1")
+	if _, err := m.release(false, db118); !errors.Is(err, ErrRefused) {
+		t.Errorf("a lower label on data its own image ran on (%v), its history %v:\n%s", err, m.history("database"), out.String())
+	}
+}
+
+// otherAt is the window another environment's export or sync of database
+// carries, which ran ref.
+func otherAt(t *testing.T, out *bytes.Buffer, name, ref string) string {
+	t.Helper()
+	d := newFake()
+	other := newSim(t, d, name, out)
+	d.publish(ref, "other-"+ref)
+	if _, err := other.release(false, dbSvc(ref)); err != nil {
+		other.fail("the other environment: %v", err)
+	}
+	return other.e.set.ParentData(other.base(), other.e.rel(other.cur))
+}
+
+// Bug: derive keeps a held service its compose no longer gives (a profile
+// turned off), "nothing runs it to derive for". But that branch is reached
+// only when the rule allows its release's own image: one it refuses is in
+// held, a few lines above. So what it keeps is exactly the hold the data no
+// longer needs. Here database is held on 12.1, its profile goes off, 11.8
+// data lands on it (an import names any profile's service), its own image
+// allowed; the profile comes back on, ReloadCheck passes and a reload runs
+// the held 12.1 on the 11.8 data, upgrading it, where "a hold goes as soon
+// as the data allows the release's own image again, and nothing else keeps
+// one" (README).
+func TestStaleHoldOnServiceComposeLacks(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, db118)
+	if err != nil {
+		m.fail("r1: %v", err)
+	}
+	d.publish("mariadb:12.1", "J1")
+	if _, err := m.failRun(false, dbSvc("mariadb:12.1")); err != nil {
+		m.fail("r2: %v", err)
+	}
+	if m.cur != r1 || m.runs("database") != "J1" {
+		m.fail("setup: current %s runs %s", m.cur, m.runs("database"))
+	}
+	data := otherAt(t, &out, "app-other", "mariadb:11.8")
+	rel := m.e.rel(r1)
+	// Its profile off: compose config no longer lists it.
+	m.e.svcs[r1] = []Service{proxySvc}
+	l := m.e.set.ImportLanding(data, "database")
+	if err := m.e.set.CheckLanding(rel, l); err != nil {
+		m.fail("the import of 11.8 data, its own 11.8 allowed: %v", err)
+	}
+	if err := m.e.set.Land(m.base(), rel, l); err != nil {
+		m.fail("land: %v", err)
+	}
+	// Its profile back on.
+	m.e.svcs[r1] = []Service{db118}
+	if needs, err := m.e.set.ReloadCheck(rel); err != nil || len(needs) != 0 {
+		m.fail("a reload is refused (%v): %v", err, needs)
+	}
+	m.up()
+	if got := m.runs("database"); got != d.names["mariadb:11.8"] {
+		t.Errorf("database's data is 11.8 and its own 11.8 is allowed, and it runs %s, not its own %s: the hold on 12.1 stayed (%v) and upgrades the data:\n%s", got, d.names["mariadb:11.8"], heldIn(rel), out.String())
+	}
+}
+
+// Bug: Land walks the release's listing, and a listing has the services
+// compose gives without profiles, while a copy writes every profile's
+// (cli.SyncServices, --profile '*'). A parent whose profile is on sends the
+// window of a service whose profile is off on the child: its files land, and
+// its history does not. Turned on later, the child's first release adopts its
+// label, however low: 11.8 runs on the parent's 12.1 data with no refusal, no
+// --accept-image, where the README says the receiving side's history becomes
+// the source's for every service whose files the copy writes.
+func TestLandingOutsideTheListingKeepsNoWindow(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dp, d := newFake(), newFake()
+	prod := newSim(t, dp, "app-prod", &out)
+	dp.publish("mariadb:12.1", "J1")
+	if _, err := prod.release(false, dbSvc("mariadb:12.1")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev := newSim(t, d, "app-dev", &out)
+	d.publish("caddy:2-alpine", "C1")
+	if _, err := dev.release(false, proxySvc); err != nil {
+		dev.fail("dev: %v", err)
+	}
+	rel := dev.e.rel(dev.cur)
+	l := dev.e.set.SyncLanding(data, "vm1:prod")
+	if err := dev.e.set.CheckLanding(rel, l); err != nil {
+		dev.fail("the sync: %v", err)
+	}
+	if err := dev.e.set.Land(dev.base(), rel, l); err != nil {
+		dev.fail("land: %v", err)
+	}
+	// Its profile turned on, at a version below the data the sync wrote.
+	d.publish("mariadb:11.8", "I1")
+	if _, err := dev.release(false, proxySvc, db118); !errors.Is(err, ErrRefused) {
+		t.Errorf("a release runs 11.8 on the parent's 12.1 data the sync wrote, unrefused (%v), its history %v:\n%s", err, dev.history("database"), out.String())
+	}
+}
+
+// Bug, the same walk the other way: a reset's wipe empties every profile's
+// data (down --volumes --profile '*', every entry of mnt), and ResetLanding
+// says every history starts over "the ones the copy writes nothing for
+// included", but only the listing's do. A service whose profile is off keeps
+// the window of data that no longer exists: turned on later, its label is
+// refused for it, the very thing that comment fixed.
+func TestResetOutsideTheListingKeepsItsHistory(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:12.1", "J1")
+	d.publish("caddy:2-alpine", "C1")
+	if _, err := m.release(false, proxySvc, dbSvc("mariadb:12.1")); err != nil {
+		m.fail("with its profile on: %v", err)
+	}
+	if _, err := m.release(false, proxySvc); err != nil {
+		m.fail("with its profile off: %v", err)
+	}
+	if err := m.e.set.Land(m.base(), m.e.rel(m.cur), m.e.set.ResetLanding()); err != nil {
+		m.fail("the wipe: %v", err)
+	}
+	d.publish("mariadb:11.8", "I1")
+	if _, err := m.release(false, proxySvc, db118); err != nil {
+		t.Errorf("its data was wiped and no copy wrote any, and a release is refused against it (%v), its history %v:\n%s", err, m.history("database"), out.String())
+	}
+}
+
+// Bug: the fix of a refused copy that needs a build keeps what the operator
+// ran for a sync (ReleaseSync, its --from) but not for a --no-code restore
+// --with-env: its labels were judged with the snapshot's variables, and the
+// full restore it names, without --with-env, runs under the environment's as
+// they are, another version, another image. --check-images' own line for the
+// same restore keeps it ("--snapshots restore <id> --with-env").
+func TestCopyNeedsFixKeepsWithEnv(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-qa", &out)
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	r1, err := m.release(false, builtDB("app-qa", "11.8"))
+	if err != nil {
+		m.fail("r1: %v", err)
+	}
+	own := m.runs("database")
+	dir := m.snapshot("20261102000001")
+	if _, err := m.failRun(false, builtDB("app-qa", "12.1")); err != nil {
+		m.fail("r2: %v", err)
+	}
+	if m.cur != r1 {
+		m.fail("setup: current %s", m.cur)
+	}
+	// Its own build gone, nothing but a build gives it back: only what the
+	// snapshot's bookmark held kept it.
+	for n, id := range d.names {
+		if id == own {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, own)
+	m.e.set.Again = "--snapshots restore 20261102000001 --no-code --with-env"
+	out.Reset()
+	data, _ := os.ReadFile(filepath.Join(dir, "data", "images"))
+	err = m.e.set.CheckLanding(m.e.rel(m.cur), m.e.set.RestoreLanding(string(data), "20261102000001", nil))
+	if !errors.Is(err, ErrRefused) {
+		m.fail("its own build is gone: %v", err)
+	}
+	if !strings.Contains(out.String(), "--snapshots restore 20261102000001 --with-env") {
+		t.Errorf("the fix drops the --with-env the operator ran:\n%s", out.String())
 	}
 }

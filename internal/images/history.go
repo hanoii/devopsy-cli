@@ -251,7 +251,12 @@ func (s *Set) containers() map[string]Container {
 // one whose container, once started, runs the image rel's activation
 // gave it (its DigestLabel against rel's ComposeFile, as Recreate
 // compares), when the last line differs (another image, version or tag):
-// after a run step (failed or not), a sync, an import. A service running
+// after a run step (failed or not), a sync, an import. A container down
+// that last started before its data landed (the window's first line) ran
+// nothing on that data, whatever it ran on what it replaced (review: a
+// service left down through an import recorded its image as the data's
+// version). One running counts whenever it started: it runs on it now. A
+// service running
 // the very image --accept-image let through (ForcedFile) starts its
 // history over from it; the file is the activation's and goes once read,
 // so a later rollback to the release forces nothing.
@@ -285,7 +290,7 @@ func (s *Set) ran(base, rel string, cut bool) error {
 	ranForced := map[string]bool{}
 	for _, e := range data {
 		c, ok := cs[e.Service]
-		if !ok || !c.started() || labels[e.Service] == "" || c.Digest != labels[e.Service] {
+		if !ok || !c.started() || labels[e.Service] == "" || c.Digest != labels[e.Service] || ranBefore(c, h.window(e.Service)) {
 			continue
 		}
 		img, err := s.Docker.Inspect(c.Image)
@@ -336,6 +341,12 @@ func (s *Set) keepForced(rel string, forced map[string]string, ran map[string]bo
 	if err := writeForced(rel, left); err != nil {
 		s.say(report.WarnLevel, "could not rewrite %s: %v", ForcedFile, err)
 	}
+}
+
+// ranBefore says c, not running, last started before the data w describes
+// landed.
+func ranBefore(c Container, w []ran) bool {
+	return c.State != "running" && !c.Started.IsZero() && len(w) > 0 && w[0].How != Ran && c.Started.Unix() < w[0].Time
 }
 
 // ForcedFile, in a release's directory, names each service whose image

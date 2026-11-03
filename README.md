@@ -1394,8 +1394,9 @@ whose image they name otherwise than its release fetched (a variable set
 since) until a release fetches it. A tar without the header and a
 `volumes` service's `--resolved` (unless the import took the history over
 before what failed) start the service's history over, data of no known
-version, which the next release's label is taken for; locally there is no
-history. A `custom` export is its script's output and carries none, and a
+version: what next runs on it says its version, the service's own label
+if it runs once the import is in, else the next release's; locally there
+is no history. A `custom` export is its script's output and carries none, and a
 `custom` import, or its `--resolved`, checks nothing and leaves the
 service's history and what it runs as they were: its script loads the
 dump through the image that runs, so the data stays what that image

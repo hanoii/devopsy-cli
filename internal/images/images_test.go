@@ -55,6 +55,7 @@ func (d *fakeDocker) failing(method string) error {
 }
 
 type container struct {
+	started             time.Time
 	image, project, ref string
 	// digest is its devopsy.digest label.
 	digest string
@@ -266,7 +267,7 @@ func (d *fakeDocker) Containers(project string) ([]Container, error) {
 			if st == "" {
 				st = "running"
 			}
-			cs = append(cs, Container{Name: fmt.Sprintf("%s-%s-%d", project, c.service, i), Service: c.service, Image: c.image, Ref: c.ref, State: st, Digest: c.digest})
+			cs = append(cs, Container{Name: fmt.Sprintf("%s-%s-%d", project, c.service, i), Service: c.service, Image: c.image, Ref: c.ref, State: st, Digest: c.digest, Started: c.started})
 		}
 	}
 	return cs, nil

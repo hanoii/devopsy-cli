@@ -620,7 +620,7 @@ parent's: a version lower than the data's, or another tag at it, is
 refused. --accept-image <service> runs it on the data then, its history
 starting over. Each side runs its own image. A tar without it (made by
 hand) and every import locally start the history over, data of no known
-version, which the next release's label is taken for. A custom import
+version: what next runs on it says its version. A custom import
 checks nothing and leaves the history and the image that runs as they
 were: its script loads the dump through that image.
 

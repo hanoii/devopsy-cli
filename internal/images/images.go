@@ -114,6 +114,8 @@ type Container struct {
 	Image, Ref string
 	// State is Docker's: created (never started), running, exited...
 	State string
+	// Started is when it last started: zero when Docker does not say.
+	Started time.Time
 	// OneOff: a compose run's.
 	OneOff bool
 	// Digest is its devopsy.digest label: the image its activation gave
@@ -220,8 +222,7 @@ type Set struct {
 	// over (--reset), whose wipe starts every history over (SyncLanding).
 	Restart, NoCheck, Reset bool
 	// Marked: the environment has a mark, which refuses a release, so a
-	// refused copy names what goes through instead (ImportLanding,
-	// RestoreLanding).
+	// refused import names what goes through instead (ImportLanding).
 	Marked bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
