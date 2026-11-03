@@ -837,17 +837,17 @@ func TestDataRestartLastResort(t *testing.T) {
 	err := m.e.set.LastHold(m.e.rel(r1), m.e.rel(r2))
 	m.cur = r1
 	m.up()
-	if !errors.Is(err, ErrRefused) || m.runs("database") != "J1" {
+	if err != nil || m.runs("database") != "J1" {
 		m.fail("the last resort (%v): database %s (want J1)", err, m.runs("database"))
 	}
 	imgs, _, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != "mariadb@J1" || held["database"] != r2 || held["search"] != "" {
+	if imgs["database"] != "mariadb@J1" || held["database"] != r2 || held["search"] != r2 {
 		t.Errorf("devopsy's compose file: images %v, held %v", imgs, held)
 	}
 	if e, _ := match(readList(m.e.rel(r1)), entry{Service: "database"}); e.ID != "J1" || e.DataVersion != "12.1" {
 		t.Errorf("r1's listing: %+v", e)
 	}
-	for _, want := range []string{"database stays on the image release " + r2 + " ran on its data", "search: " + r1 + "'s image would run it on data it does not allow", "it runs what app-prod-search holds", "fix forward: a release", "devopsy @vm1:prod --release"} {
+	for _, want := range []string{"database stays on the image release " + r2 + " ran on its data", "search stays on the image release " + r2 + " ran on its data"} {
 		if !strings.Contains(out.String(), want) {
 			m.fail("no %q", want)
 		}
@@ -903,7 +903,8 @@ func TestDataLastResortKeepsMarks(t *testing.T) {
 	m.up()
 	m.e.set.Ran(m.base(), m.e.rel(r3))
 	m.e.set.LastHold(m.e.rel(r1), m.e.rel(r3))
-	if imgs, _, held := composeFacts(m.e.rel(r1)); imgs["database"] != "mariadb@J1" || held["database"] != r3 || held["search"] != r2 {
+	// search's data last ran r3's build: held on that, by its bookmark.
+	if imgs, _, held := composeFacts(m.e.rel(r1)); imgs["database"] != "mariadb@J1" || held["database"] != r3 || held["search"] != r3 || !isBookmark(imgs["search"]) {
 		m.fail("the last resort's compose file: images %v, held %v", imgs, held)
 	}
 }

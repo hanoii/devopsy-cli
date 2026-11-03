@@ -1926,3 +1926,54 @@ func TestDataUndoRestoresTheNameAHoldIsOn(t *testing.T) {
 		t.Errorf("the name the hold is on is %s after the undo, not %s", got, held)
 	}
 }
+
+// The restart's last resort holds a built image too, with no lock and no
+// Docker: by the failed release's bookmark as image: in its compose file, a
+// name nothing moves. It only said so, and the release before's older image
+// ran on the data the failed one's had upgraded.
+func TestDataLastResortHoldsABuiltImage(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	r1, _ := m.release(false, builtDB("app-prod", "11.8"))
+	r2 := m.e.release(builtDB("app-prod", "12.1"))
+	m.fetch(m.e.svcs[r2])
+	if err := m.e.set.Record(m.e.rel(r2), m.e.rel(r1)); err != nil {
+		m.fail("record: %v", err)
+	}
+	m.cur = r2
+	m.up()
+	if err := m.e.set.Ran(m.base(), m.e.rel(r2)); err != nil {
+		m.fail("ran: %v", err)
+	}
+	built := m.runs("database")
+	os.WriteFile(filepath.Join(m.e.rel(r2), failedFile), nil, 0o644)
+	if err := m.e.set.LastHold(m.e.rel(r1), m.e.rel(r2)); err != nil {
+		m.fail("the last resort: %v\n%s", err, out.String())
+	}
+	m.cur = r1
+	m.up()
+	if got := m.runs("database"); got != built {
+		t.Errorf("%s runs %s, not %s, the image the data ran:\n%s", r1, got, built, out.String())
+	}
+	if labelsIn(m.e.rel(r1))["database"] != built || heldIn(m.e.rel(r1))["database"] != r2 {
+		t.Errorf("its compose file holds nothing of it: %v, %v", labelsIn(m.e.rel(r1)), heldIn(m.e.rel(r1)))
+	}
+	// With no release listing it, no bookmark to name: said, refused.
+	stage := newSim(t, d, "app-stage", &out)
+	s1, _ := stage.release(false, builtDB("app-stage", "11.8"))
+	s2 := stage.e.release(builtDB("app-stage", "12.1"))
+	stage.fetch(stage.e.svcs[s2])
+	if err := stage.e.set.Record(stage.e.rel(s2), stage.e.rel(s1)); err != nil {
+		stage.fail("record: %v", err)
+	}
+	stage.cur = s2
+	stage.up()
+	stage.e.set.Ran(stage.base(), stage.e.rel(s2))
+	os.Remove(filepath.Join(stage.e.rel(s2), ListFile))
+	out.Reset()
+	if err := stage.e.set.LastHold(stage.e.rel(s1), stage.e.rel(s2)); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "has no bookmark here") || !strings.Contains(out.String(), "--release") {
+		stage.fail("the last resort with no bookmark (%v):\n%s", err, out.String())
+	}
+}

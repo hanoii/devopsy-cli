@@ -594,9 +594,10 @@ func (s *Set) unhold(rel string, e, o entry, svc Service, mode string, own map[s
 // step's up pulls when gone, the image it replaces in the listing
 // recorded (LeftFile) for the next pruning; a pulled own image back as
 // every derivation writes an unheld one (its own digest's DigestLabel and
-// no image, so compose runs its name). A built one, held or given back,
-// needs a name moved, which only Docker does: said, naming the service
-// and the way on, a release that fixes forward. Why (review): the restart went on with
+// no image, so compose runs its name). A built one, held or given back, by
+// a bookmark that already names it, as image: (no name moved, which only
+// Docker does); with none, said, naming the service and the way on, a
+// release that fixes forward. Why (review): the restart went on with
 // target's own ComposeFile, its older image on the data the newer one ran.
 func (s *Set) LastHold(target, against string) error {
 	tid := filepath.Base(target)
@@ -622,6 +623,8 @@ func (s *Set) LastHold(target, against string) error {
 		holds[svc] = composeHold{Image: imgs[svc], From: from}
 	}
 	var lines, unheld []string
+	listed := append([]entry{}, es...)
+	listedNames := bookmarks(listed, s.Name, tid)
 	for i, e := range es {
 		o := own[i]
 		h, ok := held[e.Service]
@@ -631,9 +634,14 @@ func (s *Set) LastHold(target, against string) error {
 				continue // held on that image already
 			}
 			src, from := s.source(target, e.Service, h.line)
+			// A built one by the bookmark of the release that lists it: a name
+			// nothing moves, which a file can name without Docker.
+			by := src.Digest
 			if src.Kind == KindOwn || src.Digest == "" {
-				unheld = append(unheld, fmt.Sprintf("%s: %s's image would run it on data it does not allow (%s), and %s, built by the project, is held only by moving a name, which needs the images: it runs what %s holds", e.Service, tid, h.why, heldWhat(from), e.Ref))
-				continue
+				if by = s.bookmarkOf(target, e.Service, src.ID, from); by == "" {
+					unheld = append(unheld, fmt.Sprintf("%s: %s's image would run it on data it does not allow (%s), and %s, built by the project, has no bookmark here: it runs what %s holds", e.Service, tid, h.why, heldWhat(from), e.Ref))
+					continue
+				}
 			}
 			// The image it replaces in the listing keeps its names, which no
 			// listing gives it now: recorded, as keep records them, or they
@@ -642,14 +650,22 @@ func (s *Set) LastHold(target, against string) error {
 			if e.ID != "" && e.ID != src.ID && !e.held() {
 				s.record(digestRef(e.Ref), e.ID, tid, "no release lists it any more")
 			}
-			ne := entry{Ref: o.Ref, ID: cmp.Or(src.ID, h.line.ID), Service: e.Service, Kind: KindPulled, Digest: src.Digest, Version: src.Version, DataVersion: h.line.Version, Tag: h.line.Tag}
+			ne := entry{Ref: o.Ref, ID: cmp.Or(src.ID, h.line.ID), Service: e.Service, Kind: src.Kind, Digest: src.Digest, Version: src.Version, DataVersion: h.line.Version, Tag: h.line.Tag}
 			setOwn(&ne, o)
 			es[i] = ne
-			holds[e.Service] = composeHold{Image: src.Digest, From: cmp.Or(from, historyHeld)}
+			holds[e.Service] = composeHold{Image: by, From: cmp.Or(from, historyHeld)}
 			lines = append(lines, fmt.Sprintf("%s stays on %s (%s, %s), as %s's would run it on data it does not allow (%s): a release that fixes forward is the way on", e.Service, heldWhat(from), shownEntry(ne), shownData(ne), tid, h.why))
 		case e.held():
 			if o.Kind == KindOwn || o.Digest == "" {
-				unheld = append(unheld, fmt.Sprintf("%s: its data allows %s's own image again, which goes back only by moving a name, which needs the images: it stays on %s", e.Service, tid, heldWhat(wasHeld[e.Service])))
+				// Its own build by the bookmark it kept (withOwnBuilds).
+				b := ownBuildBookmark(listed, listedNames, e.OwnID)
+				if b == "" {
+					unheld = append(unheld, fmt.Sprintf("%s: its data allows %s's own image again, which has no bookmark here: it stays on %s", e.Service, tid, heldWhat(wasHeld[e.Service])))
+					continue
+				}
+				es[i] = o
+				holds[e.Service] = composeHold{Image: b}
+				lines = append(lines, fmt.Sprintf("%s runs %s's own image again (%s, %s): its data's version allows it", e.Service, tid, shownEntry(o), shownData(o)))
 				continue
 			}
 			es[i] = o
@@ -674,6 +690,24 @@ func (s *Set) LastHold(target, against string) error {
 		return ErrRefused
 	}
 	return nil
+}
+
+// bookmarkOf is the bookmark of the image id of service in the listing of
+// from (what source says of the image: a release of rel's environment, or
+// a snapshot), "" without one.
+func (s *Set) bookmarkOf(rel, service, id, from string) string {
+	dir := filepath.Join(filepath.Dir(rel), from)
+	if snap, ok := strings.CutPrefix(from, snapshotHeld); ok {
+		dir = filepath.Join(s.snapshots(), snap)
+	}
+	es := readList(dir)
+	names := bookmarks(es, s.Name, s.idOf(dir))
+	for i, e := range es {
+		if e.Service == service && e.ID == id && id != "" && !e.held() {
+			return names[i]
+		}
+	}
+	return ""
 }
 
 // imagePresent says whether Docker has the image id (a built one's: what

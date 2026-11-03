@@ -964,9 +964,10 @@ A rollback to a release that was held runs its own image, which stays on
 the server through the hold, built again only when gone, and a `--reload` of one compares the
 variables with its own image, not the held one. When the restart's
 images cannot be restored at all (the server's images held by another
-for 10 minutes, Docker failing), a pulled one is still held, by its
-digest; a built one cannot be, and the release's output names it, with
-the release that fixes forward. The same goes for a child after a
+for 10 minutes, Docker failing), it is still held, a pulled one by its
+digest, a built one by the bookmark of the release that built it; with no
+bookmark, the release's output names it, with the release that fixes
+forward. The same goes for a child after a
 release that syncs whose run step failed before its database ran: its
 data is then the parent's, and a database the parent builds ran on an
 image only the parent's server has, so it runs an image of this server
