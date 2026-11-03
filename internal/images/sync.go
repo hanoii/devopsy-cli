@@ -235,21 +235,52 @@ func parseParentData(data string) map[string]*sourceData {
 // refused one through, its history starting over (SyncDone). The child
 // always runs its own image on the copy.
 func (s *Set) SyncCheck(rel, data string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"}, true)
+	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"}, true, nil)
 }
 
 // ImportCheck is SyncCheck for an import of one service's data, the
 // export's (ExportData, DataFor) in place of a parent's, before the
 // import stops anything.
 func (s *Set) ImportCheck(rel, data, service string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>"}, false)
+	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>"}, false, nil)
 }
 
 // RestoreCheck is SyncCheck for a --no-code restore of snapshot, its
 // data (SnapshotData) against the current release (rel), before anything
 // stops.
+//
+// A service held on another release's image (the restart's, a full
+// restore's) that the current release's own label and tag allow on the
+// snapshot's data is judged by them: the data step runs it on its own
+// image again (Unhold), whose build, when the project builds it, must be
+// there (a --no-code restore builds nothing: refused, the full restore
+// the way, which builds).
 func (s *Set) RestoreCheck(rel, data, snapshot string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code"}, false)
+	ps := parseParentData(data)
+	h := readHistory(baseOf(rel))
+	drop := s.unholdable(rel, func(svc string) []ran {
+		if p := ps[svc]; p != nil {
+			return p.window()
+		}
+		return h.window(svc)
+	})
+	mode := ModeOf(rel)
+	var gone []string
+	for _, e := range readList(rel) {
+		svc, ok := drop[e.Service]
+		if !ok || !svc.own(mode) {
+			continue
+		}
+		if _, err := s.Docker.ID(e.OwnID); e.OwnID == "" || err != nil {
+			gone = append(gone, svc.Name+": the current release's own image of it, built by the project, is gone from this server, and the image it is held on ("+shownData(e)+") would upgrade the snapshot's data again")
+		}
+	}
+	if len(gone) > 0 {
+		s.sayAll(report.ErrorLevel, "a --no-code restore builds nothing: nothing restored", gone,
+			report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot)))
+		return ErrRefused
+	}
+	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code"}, false, drop)
 }
 
 // claims are rel's listing with each data service's version and tag as
@@ -286,8 +317,9 @@ func (s *Set) claims(rel string) []entry {
 // copyCheck is SyncCheck in w's words: by rel's labels now with labels
 // (a sync, whose run step runs under them), else by its listing (what its
 // last activation runs: an import and a --no-code restore check no image
-// names, so a label changed with its image since would pass).
-func (s *Set) copyCheck(rel, data string, w checkWords, labels bool) error {
+// names, so a label changed with its image since would pass), but for the
+// services in own, judged by their own label and tag (RestoreCheck).
+func (s *Set) copyCheck(rel, data string, w checkWords, labels bool, own map[string]Service) error {
 	ps := parseParentData(data)
 	var js []judged
 	es := readList(rel)
@@ -296,6 +328,11 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels bool) error {
 	}
 	for _, e := range es {
 		if p := ps[e.Service]; p != nil && e.DataVersion != "" {
+			// One the data step runs on its own image (Unhold): its own
+			// label and tag, which the data allows.
+			if svc, ok := own[e.Service]; ok {
+				e.DataVersion, e.Tag = svc.DataVersion, svc.tag()
+			}
 			js = append(js, judged{service: e.Service, why: rule(p.window(), e.DataVersion, e.Tag, w.source)})
 		}
 	}

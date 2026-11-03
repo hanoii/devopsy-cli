@@ -704,3 +704,108 @@ func (s *Set) Recover(base, prev string) {
 		os.Remove(m)
 	}
 }
+
+// unholdable are rel's data services held on another release's image
+// (the restart's hold, a full restore's) that rel's own label and tag
+// (List: its labels now) let run on data of window(service), the window
+// a --no-code restore's data step brings back: by name, the service as
+// rel's compose gives it now.
+func (s *Set) unholdable(rel string, window func(service string) []ran) map[string]Service {
+	held := heldIn(rel)
+	es := readList(rel)
+	out := map[string]Service{}
+	if s.List == nil {
+		return out
+	}
+	svcs, err := s.List(rel)
+	if err != nil {
+		return out
+	}
+	for _, svc := range svcs {
+		e, ok := match(es, entry{Service: svc.Name})
+		if !svc.Data || !ok || !e.held() && held[svc.Name] == "" {
+			continue
+		}
+		if rule(window(svc.Name), svc.DataVersion, svc.tag(), "its") == "" {
+			out[svc.Name] = svc
+		}
+	}
+	return out
+}
+
+// Unhold runs on rel's own image each data service a hold kept on
+// another release's image that the data's history now allows rel's own
+// on, after a --no-code restore's data step brought back older data
+// (ImportDone): the held image would upgrade it again, the hold staying
+// (review). Its compose hold goes and its listing is rel's own: a pulled
+// name as it holds now (pulled when gone), a built one its own build put
+// back on its name (entry.OwnID: RestoreCheck refused before anything
+// stopped when it is gone), by its bookmark when another environment
+// runs the name's image. One the rule still refuses stays held. Said.
+func (s *Set) Unhold(base, rel string) error {
+	drop := s.unholdable(rel, readHistory(base).window)
+	if len(drop) == 0 {
+		return nil
+	}
+	tid := s.idOf(rel)
+	mode := ModeOf(rel)
+	es := readList(rel)
+	imgs, _, held := composeFacts(rel)
+	holds := map[string]composeHold{}
+	for svc, f := range held {
+		holds[svc] = composeHold{Image: imgs[svc], From: f}
+	}
+	own := s.own(rel)
+	var lines []string
+	byBookmark := map[string]bool{}
+	for i, e := range es {
+		svc, ok := drop[e.Service]
+		if !ok {
+			continue
+		}
+		was := e
+		if svc.own(mode) {
+			if _, err := s.Docker.ID(e.OwnID); e.OwnID == "" || err != nil {
+				s.say(report.ErrorLevel, "%s: %s's own image of it is gone: it stays on the image it is held on", svc.Name, tid)
+				return ErrRefused
+			}
+			if cur, err := s.Docker.ID(svc.Ref); err != nil || cur != e.OwnID {
+				if who := s.others(cur, own); err == nil && len(who) > 0 {
+					s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
+					byBookmark[svc.Name] = true
+				} else if err := s.Docker.Tag(e.OwnID, svc.Ref); err != nil {
+					s.say(report.ErrorLevel, "could not put %s back on %s's own image: %v", svc.Ref, tid, err)
+					return err
+				}
+			}
+			e = entry{Ref: svc.Ref, ID: e.OwnID, Service: svc.Name, Kind: KindOwn, Build: e.OwnBuild, DataVersion: svc.DataVersion, Tag: svc.tag()}
+		} else {
+			if _, err := s.Docker.ID(svc.Ref); errors.Is(err, ErrNoImage) {
+				s.say(report.InfoLevel, "%s: %s is gone from this server: pulling it", svc.Name, svc.Ref)
+				if err := s.Docker.Pull(svc.Ref); err != nil {
+					s.say(report.ErrorLevel, "%s: could not pull %s: %v", svc.Name, svc.Ref, err)
+					return err
+				}
+			}
+			e = s.entryOf(svc, svc.Ref, mode)
+		}
+		es[i] = e
+		delete(holds, svc.Name)
+		lines = append(lines, fmt.Sprintf("%s runs %s's own image again (%s, %s), not %s (%s): the restored data's version allows it", svc.Name, tid, shownEntry(e), shownData(e), heldWhat(held[svc.Name]), shownData(was)))
+	}
+	if err := s.keep(rel, es); err != nil {
+		s.say(report.ErrorLevel, "could not record the images of %s: %v", tid, err)
+		return err
+	}
+	for i, b := range bookmarks(es, s.Name, tid) {
+		if byBookmark[es[i].Service] {
+			holds[es[i].Service] = composeHold{Image: b}
+		}
+	}
+	if err := writeCompose(rel, es, holds); err != nil {
+		s.say(report.ErrorLevel, "could not write %s's %s: %v", tid, ComposeFile, err)
+		return err
+	}
+	s.sayAll(report.InfoLevel, "held no more, the restored data allowing "+tid+"'s own:", lines)
+	return nil
+}

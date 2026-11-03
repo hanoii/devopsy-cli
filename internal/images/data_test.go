@@ -293,6 +293,27 @@ func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 	return id, nil
 }
 
+// noCode restores the snapshot dir's data alone under the current
+// release, as a --no-code restore does: its check against the snapshot's
+// data, the data step (ImportDone, then Unhold), the run step and img
+// ran.
+func (m *sim) noCode(dir string) error {
+	m.t.Helper()
+	rel := m.e.rel(m.cur)
+	data, _ := os.ReadFile(filepath.Join(dir, "data", "images"))
+	if err := m.e.set.RestoreCheck(rel, string(data), filepath.Base(dir)); err != nil {
+		return err
+	}
+	if err := m.e.set.ImportDone(m.base(), rel, string(data)); err != nil {
+		m.fail("the data step: %v", err)
+	}
+	if err := m.e.set.Unhold(m.base(), rel); err != nil {
+		m.fail("the data step's holds: %v", err)
+	}
+	m.up()
+	return m.e.set.Ran(m.base(), rel)
+}
+
 // runs is what a service's container runs.
 func (m *sim) runs(svc string) string {
 	for _, c := range m.d.containers {
@@ -1419,6 +1440,8 @@ func TestDataFullRestoreOfHeld(t *testing.T) {
 	}
 	d.publish("mariadb:11.8", "I1")
 	r1, _ := m.release(false, db118, search("8"))
+	searchOwn := m.runs("search")
+	before := m.snapshot("20261102000000")
 	d.publish("mariadb:12.1", "J1")
 	r2, _ := m.failRun(false, dbSvc("mariadb:12.1"), search("9"))
 	searchHeld, _ := match(readList(m.e.rel(r2)), entry{Service: "search"})
@@ -1458,6 +1481,58 @@ func TestDataFullRestoreOfHeld(t *testing.T) {
 	lines := strings.Join(StatusLines(d, "app-prod", rel), "\n")
 	if !strings.Contains(lines, "database held on mariadb@J1, the image its data ran when snapshot 20261102000001 was taken") || !strings.Contains(lines, "search held on app-prod-search (") {
 		t.Errorf("--status:\n%s", lines)
+	}
+	// The held data alone: the rule still refuses the release's own on it,
+	// so its holds stay.
+	if err := m.noCode(snap); err != nil || m.runs("database") != "J1" || heldIn(rel)["database"] == "" || heldIn(rel)["search"] == "" {
+		m.fail("the --no-code restore of the held data (%v): database runs %s, held %v", err, m.runs("database"), heldIn(rel))
+	}
+	// The data from before the hold, alone: the held images would upgrade
+	// it again, so the restored release's own run on it, its holds gone
+	// (review: the hold stayed, 12.1 on the restored 11.8 data).
+	out.Reset()
+	if err := m.noCode(before); err != nil {
+		m.fail("the --no-code restore of the data from before the hold: %v", err)
+	}
+	if m.runs("database") != "I1" || m.runs("search") != searchOwn || len(heldIn(rel)) > 0 {
+		m.fail("after the --no-code restore: database runs %s (want I1), search %s (want %s), held %v", m.runs("database"), m.runs("search"), searchOwn, heldIn(rel))
+	}
+	for svc, v := range map[string]string{"database": "11.8", "search": "8"} {
+		if e, _ := match(readList(rel), entry{Service: svc}); e.held() || e.DataVersion != v {
+			t.Errorf("%s's listing after the --no-code restore: %+v", svc, e)
+		}
+		if l, _ := readHistory(m.base()).last(svc); l.Version != v {
+			t.Errorf("%s's history ends on %+v, want %s", svc, l, v)
+		}
+	}
+	if !strings.Contains(out.String(), "database runs "+id+"'s own image again") {
+		m.fail("the hold's end is not said")
+	}
+}
+
+// A --no-code restore that would run a held built service on its own
+// image again, which is gone: refused before anything stops, a
+// --no-code restore building nothing, the full restore named.
+func TestDataNoCodeOwnBuildGone(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	m.release(false, builtDB("app-prod", "11.8"))
+	own := m.runs("database")
+	before := m.snapshot("20261102000000")
+	m.failRun(false, builtDB("app-prod", "12.1"))
+	held := m.runs("database")
+	for n, id := range d.names {
+		if id == own {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, own)
+	out.Reset()
+	if err := m.noCode(before); !errors.Is(err, ErrRefused) || m.runs("database") != held || !strings.Contains(out.String(), "a --no-code restore builds nothing: nothing restored") || !strings.Contains(out.String(), "devopsy @vm1:prod --snapshots restore 20261102000000\n") {
+		m.fail("a --no-code restore whose own build is gone (%v): database runs %s", err, m.runs("database"))
 	}
 }
 
@@ -1866,7 +1941,6 @@ func dataRandom(t *testing.T, seed int64) {
 				continue
 			}
 			sn := snaps[m][rng.Intn(len(snaps[m]))]
-			data, _ := os.ReadFile(filepath.Join(sn.dir, "data", "images"))
 			if op == 13 {
 				id, err := m.fullRestore(sn.dir, sn.svcs)
 				if err != nil {
@@ -1901,10 +1975,21 @@ func dataRandom(t *testing.T, seed int64) {
 			if yes {
 				m.e.set.Accept = map[string]bool{"database": true}
 			}
-			refused := verdict(sn.model, db)
+			// Held, and the release's own allowed on the snapshot's data: it
+			// runs its own again (its build there, else refused: a --no-code
+			// restore builds nothing).
 			rel := m.e.rel(m.cur)
-			if expect("--no-code restore of "+filepath.Base(sn.dir), m.e.set.RestoreCheck(rel, string(data), "s"), refused, yes) {
-				m.e.set.ImportDone(m.base(), rel, string(data))
+			own := dbOf(m.e.svcs[m.cur])
+			cur, _ := match(readList(rel), entry{Service: "database"})
+			unhold := heldIn(rel)["database"] != "" && !verdict(sn.model, own)
+			gone := unhold && own.own(m.e.mode) && !d.images[cur.OwnID]
+			refused := !unhold && verdict(sn.model, db)
+			err := m.noCode(sn.dir)
+			if gone {
+				if !errors.Is(err, ErrRefused) {
+					t.Fatalf("after %v: a --no-code restore of %s whose own build is gone: %v\n%s", log, filepath.Base(sn.dir), err, out.String())
+				}
+			} else if expect("--no-code restore of "+filepath.Base(sn.dir), err, refused, yes) {
 				if yes && refused {
 					model[m] = history{claim(db, Forced)}
 				} else {
@@ -1915,9 +2000,14 @@ func dataRandom(t *testing.T, seed int64) {
 					w[0].How = Imported
 					model[m] = w
 				}
-				m.up()
-				m.e.set.Ran(m.base(), rel)
-				run(m, m.runs("database"), db, false)
+				pref := db
+				if unhold {
+					pref = own
+				}
+				if unhold && heldIn(rel)["database"] != "" {
+					t.Fatalf("after %v: the --no-code restore of %s left held %v, the model says held no more: %v\n%s", log, filepath.Base(sn.dir), heldIn(rel), unhold, out.String())
+				}
+				run(m, m.runs("database"), pref, false)
 			}
 			m.e.set.Accept = nil
 			check(m.e.set.Name + " --no-code restore " + filepath.Base(sn.dir))

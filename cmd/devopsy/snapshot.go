@@ -2546,6 +2546,12 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		// restore takes none: nothing is checked).
 		set.Accept = acceptedImages()
 		err = set.ImportDone(p.base, rel, string(data))
+		if err == nil && noCode {
+			// A hold the restored data no longer needs goes: the held image
+			// would upgrade it again (a full restore's release decided its
+			// holds against the snapshot's window already).
+			err = set.Unhold(p.base, rel)
+		}
 		unlock()
 		if err != nil {
 			return fail(err.Error())
