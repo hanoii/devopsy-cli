@@ -11,7 +11,6 @@
 - Every release pulls every profile's non-buildable services, pull only, while the listing and the bookmarks stay the default services': a profile-only tool pulled once on first use never gets a patch.
 - A profile's buildable services are never built or pulled by a release, so a tool nobody pushed never fails one; a profile's non-buildable one that fails to pull fails it before the switch.
 - Image mode asks the registry twice for its default third-party tags; accepted.
-- A signal during `img names` stops the fetch before it pulls.
 
 ## The listing
 
@@ -32,32 +31,62 @@
 - A re-listing that drops an image records its names as left (`keep`): otherwise the names other releases counted on it to take leak.
 - Snapshots' bookmarks count as the environment's own (`images.Set.own`, internals/snapshots.md).
 
-## Data only goes forward
+## Data follows its version
 
-- A pulled data service (`KindData`: `devopsy.data=true` whatever its copy, no `build:`, pulled) never runs an image older than the newest its data ran (`history.go`, `record.go`, `restore.go`).
-- There is no version ordering: "newer" means "ran later on this data", kept in the environment's `HistoryFile` (`$base/.devopsy-data-images`), one line per image that ran on each such service's data.
-- The history is appended only after something ran (`img ran` after the run step, failed or not, before a restart), never at `img record`: a release cancelled after its record ran nothing.
+- Every service with `devopsy.data=true` says its data's version (`devopsy.data.version`, `DataVersionLabel`, internals/data-labels.md): devopsy cannot tell what an image does to its data, so it compares what the project says.
+- One rule (`rule`, `history.go`) judges a version and a tag against the data's window at every place data meets an image: a higher version runs, a lower one is refused, the same one runs unless pulled under another tag than the window's newest line at that version, `any` and a window with no version run unchecked.
+- The window is the history since its last start (`window`): every line but `Ran` starts it over, and its version is the highest of its lines.
+- A service with `build:` has no tag check (`Service.tag`): image mode's tag is usually the commit's, new every release.
+- The history is the environment's `HistoryFile` (`$base/.devopsy-data-images`), appended only after something ran (`img ran` after the run step, failed or not, before a restart), never at `img record`: a release cancelled after its record ran nothing.
 - Every activation runs `img ran` on current before anything reads the history, and so does a settle once it started anything (`ranOnData`): a release killed past its switch never got to its own.
-- A restore runs `img ran` only once `restored` started its set on the images it holds, and not when its run step failed: a database the step left as it was still ran the replaced data.
-- `img record` refuses an image the history moved past, or one it never ran under a changed name (`check`), unless the operator names the service with `--accept-image` (`ImagesAcceptEnv`), never with `--yes`: CI passes `--yes` everywhere, which would skip every check.
-- An accepted service's `ForcedFile` starts its history over once that image runs: the activation's `img ran` removes it, and a cut activation's `img ran ... cut` (`RanCut`) keeps each line until its service runs that image, so a database found still on the image before, stopped for a release snapshot, is left to the settle that makes it again.
-- A built service whose data has a history is checked by name too: a switch between pulled and built needs acceptance, its own builds go through.
-- A refused record puts back what `img names` saved before the fetch (`putNamesBack`).
-- A history is seeded from the running container when it has none (`seed`): an older devopsy's data, a label just added.
+- `Ran` records a container only once it ran the image its activation gave it (its `devopsy.digest` label against `ComposeFile`), and never one down that last started before the data landed (`ranBefore`).
+- A restore runs `img ran` only once `restored` started its set, and not when its run step failed: a database the step left as it was still ran the replaced data.
+- A release is checked before anything is built or pulled (`img check`, `Check`), so a refused one fetches nothing and moves no names.
+- A rollback is checked twice, leniently at `img rollback-target` before its before and prepare steps (`CheckRollback`, a config that cannot be read refusing nothing) and for real at `img restore`.
+- `--accept-image <service>` (`ImagesAcceptEnv`) forces only what the rule refused (`judge`), never `--yes`, which CI passes everywhere.
+- An accepted service's `ForcedFile` starts its history over once that image runs: the activation's `img ran` removes it, and a cut activation's `img ran ... cut` (`RanCut`) keeps each line until its service runs that image.
+- A refused rollback names the newest release snapshot whose data allows what it refused (`snapshotFix`).
 - Only the environment's own side writes its history, under its release lock; `--destroy-data` removes it (`RemoveHistory`).
+- The rule and its lines are a named feature, `data-version` (`DataVersionFeature`), found by the `img` words and flags that carry them and by `--export`, `--import` and `--check-images --restore`.
 
 ## Holds and restores
 
-- Every activation writes `ComposeFile` with a `devopsy.digest` label per fetched service (`DigestLabel`, the image it was given, never a release id, since compose recreates on a label change) and `image: <repo>@<digest>` for every pulled data service, never another.
-- `Restore(target, against, fetched)` decides per service from target's compose now (`List`, never reading devopsy's own file): a data service gets the history's last, else its container's, else against's; any other pulled image what target's name holds now, pulled when gone; an own image its bookmark, `ErrGone` (exit 1) to build again, also when the listing's build key differs from what `build:` gives now (`changed`, `rebuilt`).
+- Every activation writes `ComposeFile` with a `devopsy.digest` label per fetched service (`DigestLabel`, the image it was given, never a release id, since compose recreates on a label change).
+- A data service is held, on another image than its release's own, exactly when the rule refuses its own label and tag against the window its data has then, on the image that window ends on (`holdsFor`, `holdLine`, `hold.go`).
+- A hold is never carried, every writer of `ComposeFile` deriving it again from the history (`Record`, `Restore`, `LastHold`, `derive`): carried holds go stale on the path that forgets them.
+- A held entry records its release's own image (`entry.OwnRef`, `ownOf`), which every derivation judges, `ReloadCheck` compares the variables with and a hold that ends gives back.
+- A pulled image is held by its registry digest (`image:` in `ComposeFile`, `HeldLabel`), in the service's own repository when the service pulls, and pulled when gone before the switch.
+- A built image is held under its own name, moved by `putName`, by the name of the release that built it (a failed release's own, never a retag of a pulled name), or by the release's own bookmark when that name is only the history's or another environment runs what it holds.
+- `putName` is the one way a name of an environment moves, each caller saying what it does when another environment runs what the name holds: variants drift.
+- A held service's own build keeps a bookmark (`withOwnBuilds`, an entry of no service): nothing else names it, and the next pruning on the server would take it, leaving nothing to give back.
+- `Restore(target, against, fetched)` decides per service from target's compose now (`List`, never reading devopsy's own file): any pulled image what target's name holds now, pulled when gone; an own image its bookmark, a held one's from its kept bookmark, `ErrGone` (exit 1) to build again when there is none or its build key changed (`changed`, `rebuilt`).
 - A rollback brings back code, never a changed name's exact image: a floating tag goes forward to the patched image.
-- A rollback keeps a pulled data service of the release it leaves on its data's newest image, even where the target builds that service.
 - Never retag a pulled name: a backward retag takes a database back on its upgraded data, and a rollback moving a shared pin back changes another environment.
-- `Undo` and `Recover` put back own names only (`RestoreOwn`).
-- A restore never changes another environment: pulled names never move back, and an own name whose current image another compose project's container uses (`docker ps --filter ancestor=`), or that a bookmark none of this environment's releases made holds (exact names, `app-prod` never matching `app-prod-eu`), stays on the newer image, said.
-- A held image gone is pulled by its digest before the switch: the run step's `up` would pull it after.
-- `img hold` (`HoldData`) holds an environment's data services on their data's newest image, for a restart whose `get_images` failed (internals/releases.md).
-- `img undo` bookmarks a new release's fetch so it goes with the release, leaves a rollback's target alone (its names may hold the live release's images), then brings current's own names back, never a pulled one.
+- A restart cannot refuse: it holds what the rule refuses and ignores `--accept-image` (`runImages`), which accepted the new image, never the old one back on the new data.
+- Its last try (`img restore --restart --as-built`) puts bookmarks back whatever their build keys, and for a hold on an image this server lacks runs one the data allows (`allowedHere`, never from a release that failed its fetch, `FetchFailedFile`), else its release's own, said (`ownInstead`).
+- `img hold` (`LastHold`) writes what a file can without the image lock or Docker when `get_images` failed: a pulled hold by digest, for the run step's `up` to pull; a built one is said, with the release that fixes forward.
+- `Undo` and `Recover` put back own names only (`RestoreOwn`), never a pulled name held by a bookmark.
+- A restore never changes another environment: pulled names never move back, and an own name whose current image another compose project's container uses (`docker ps --filter ancestor=`), or that a bookmark none of this environment's releases made holds (exact names, `app-prod` never matching `app-prod-eu`), stays, a data service then running its own by its bookmark and any other its newer image, said.
+- `img undo` bookmarks a new release's fetch so it goes with the release, marks it (`FetchFailedFile`), leaves a rollback's target alone (its names may hold the live release's images), then brings current's own names back, never a pulled one.
+
+## A copy that lands
+
+- Data arriving from elsewhere goes through one entry point (`landing.go`), its path only saying what lands (`SyncLanding`, `ResetLanding`, `ImportLanding`, `ResolvedLanding`, `RestoreLanding`): `CheckLanding` before anything stops, `Land` once the data is in and before anything starts on it.
+- `Land` reads the labels, has the listing take the claims of what it writes (`Landing.claimed`), takes the history over and derives the holds, in that order, and its error says which failed in words that follow "completed, but".
+- A failed landing keeps the mark and what the copy stopped down, until a copy lands or `--resolved` accepts it: data that landed halfway must not start.
+- What a service is and claims is its labels' now, in a sync's holder with the pending inherited variables and in a restore `--with-env` with the snapshot's, its files moved into place before it lands.
+- Only what a copy writes takes its labels' claims, so a variable changed for another service since its release never reaches that service's history.
+- A landed service whose labels want an image or a build its release did not fetch is refused (`notFetched`, `fetchedOther`, shared with `ReloadCheck`), and `--resolved`, which checks nothing, keeps the listing's claim.
+- A service its labels make data since its release is judged by them like any other.
+- `CheckLanding` also refuses what the landing would need and cannot have (`copyNeeds`): a built image gone, a pulled hold neither here nor pullable.
+- What a copy writes has one answer (`Set.Copied`, `copiedServices`, from `cli.SyncServices` and what is there, as `syncData` and a take go), so a window always goes with its files.
+- A window lands for what the listing leaves out too (a profile not up, `Landing.unlisted`), for the release that turns it on to be judged against.
+- A service with none of its entries or volumes there sends nothing, and the receiving side keeps its data and history.
+- A parent with no history of its data yet sends its label's line (time 0, so the push's checksum holds).
+- A window's lines from an export's header give a service the project builds only their version and tag when they name another repository (`Landing.header`): a header is whoever made the tar's.
+- `--resolved` keeps a hold whose release's own build is gone, said (`asIs`): a release refuses on the mark and an import on what it cannot derive, so nothing else would have a way out.
+- What ran through a copy (`devopsy.data.stop=never`) is made again as what it stopped is, only what that copy wrote (`restoreServices`, `written`), and a landed data service whose shared name another environment runs goes by its bookmark.
+- An import and `--resolved` record what then runs (`RanCut`), for whatever reads the history next.
 
 ## Removals
 

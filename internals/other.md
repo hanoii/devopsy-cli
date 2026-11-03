@@ -7,7 +7,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - Locally `--status` prints the containers as a table, then the `status` capability's `show`.
 - With a target, `StatusScript` prints header lines from the server's files (`remote.EnvStatus`, which `--server-info` runs per environment too, both read by `parseStatus`), then `---`, then `devopsy --status` in the current release; the operator formats the header and prints the rest as it came.
 - The header holds the record, the live releases kept, the last completed sync from the child's `SyncedFile` (written by `finish go` once its hook accepted the copy), and a partial or running sync from `partialStatus`: "syncing" while a holder holds the child's lock, from its holding file on (`SyncRunning`), "source" while a push or an export holds the parent's sync lock (`SourceBusy`); `--releases` marks the current release SYNCING the same way.
-- In a release `images.StatusLines` names the services held by digest, those running another image than the current release's `ComposeFile` gives them (another activation's container) and those running another image than their `devopsy.digest` label says (a plain up that followed a moved name).
+- In a release `images.StatusLines` names the services held (`HeldLabel`, own names included), those running another image than the current release's `ComposeFile` gives them (another activation's container) and those running another image than their `devopsy.digest` label says (a plain up that followed a moved name).
 
 ## --server-info
 

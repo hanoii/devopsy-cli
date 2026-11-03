@@ -1,6 +1,6 @@
 # --export and --import
 
-Code: `cmd/devopsy/data.go`, `cmd/devopsy/writers.go`, `ExportScript`, `ImportScript`, `ResolvedCheckScript` and `ResolvedScript` in `internal/remote/sync.go`, the export's record and `ImportCheck`, `ImportDone` and `Resolved` in `internal/images/sync.go`.
+Code: `cmd/devopsy/data.go`, `cmd/devopsy/writers.go`, `ExportScript`, `ImportScript`, `ResolvedCheckScript` and `ResolvedScript` in `internal/remote/sync.go`, the export's record in `internal/images/sync.go`, `ImportLanding` and `ResolvedLanding` in `internal/images/landing.go`.
 
 ## The contract
 
@@ -65,13 +65,11 @@ Code: `cmd/devopsy/data.go`, `cmd/devopsy/writers.go`, `ExportScript`, `ImportSc
 
 ## The images in an export
 
-- A `volumes` `--export` carries the images its service's data ran, as a pax global header before the members (`ExportData`: on a target `ParentData`'s lines, locally its container's image; `exportHeader`, `images.ExportKey`), which GNU tar and bsdtar skip.
-- A local export records only a pulled data service (`List`): a built one's containerd digest is a local build's.
-- An `--import` on a target reads the header (`tarRecord`, `DataFor`) and checks it before anything stops (`ImportCheck`, a sync's check in its own words, internals/images.md): the export's image or name passes, one the data moved past or never ran needs `--accept-image`.
-- The import's hold is always `<own repository>@<digest>`, the record's digest in the service's own repository first (`ownHold`, never `localHold`'s fallback to the record's repository): the header is whoever made the tar's, so an image of another repository is a name the data never ran, and a reference of the service's repository with another's digest would pull and run that one.
-- The history an import takes over ends on a line in the service's own repository, every line kept: a line dropped is one the data moved past.
-- A record line without its reference, id or a registry digest (`<repository>@sha256:...`, not a name) counts as none (`DataFor`), and the record's parser keeps only such digests.
-- Once the data is in, `ImportDone` holds the service on the export's image, its history the export's with a first line `import` timed at the import, and makes the service again, stopped (`restoreServices`' recreate) or running (`recreateRunning`, before what the import stopped starts on it): `compose start` would run the old image on the new data.
-- A tar without the header, a local import and `--resolved` start the history over (`Imported`); `--resolved` keeps it when its window starts with an `import` line written since the mark (`Resolved`): an import whose data completed and held its service but failed after left both, and neither the hold nor the newest line alone tells.
+- A `volumes` `--export` carries its service's data's window, as a pax global header before the members (`ExportData`: on a target `ParentData`'s lines, locally its label's version and tag as one line; `exportHeader`, `images.ExportKey`), which GNU tar and bsdtar skip.
+- A `custom` export is the hook's stdout and carries none, and a `custom` import or its `--resolved` checks nothing and leaves the history and the hold: its script loads the dump through the image that runs.
+- An `--import` on a target reads the header (`tarRecord`, `DataFor`) and is a landing (`ImportLanding`, internals/images.md): its service's labels judged against the export's window before anything stops, the window taken over once the data is in, first line `import` timed at the import.
+- A tar without the header starts the history over, as data of no known version, and what next runs on it says its version; locally there is no history.
+- A failed landing stops what ran through the import (`endImport`) as a failed write does, and keeps the mark.
+- `--resolved` keeps a window that starts with an `import` or `forced` line written since the mark (`ResolvedLanding`), else starts it over, and an import's mark is timed at its latest write (`markIncomplete`): an earlier import's window is none of what a retry wrote over.
 - The check and the take-over run under the server's image lock, shared, taken from Go in two short windows (`imagesShared`), never across the load: a removal elsewhere waits only for them.
 - The import's `Set` is `serverImages`', with the project's record, as `img`'s is (internals/images.md): without the record the names the take-over gave up leak.

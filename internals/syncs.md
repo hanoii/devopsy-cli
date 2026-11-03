@@ -72,20 +72,17 @@
 - The services created are the ones with data and the child side's set by labels, without the running filter (an unlabeled app following its `own` database, an `import` app without data), but none in a profile that is not up (`SyncService.Active`, `COMPOSE_PROFILES`): an `up` naming a service starts it whatever its profiles.
 - An aborted first sync creates nothing, and no later sync creates a missing service: it was removed on purpose.
 
-## The data images
+## The data versions
 
-- The child takes the parent's pulled data services' images with its data (`img data`, `sync-check`, `sync-done`): the parent's images (their containers', else the history's last) and history are read in the preflight session (`ParentCheckScript`, `images.Set.ParentData`, its `image` and `ran` lines passed through by `remote.ParseParentData`), passed to the child's side (`images.SyncImagesEnv`) and their checksum to the push (`SyncImagesSumEnv`), which refuses before stopping anything when the parent's changed since.
-- `ParentData` holds only `devopsy.data.copy=volumes` services as the parent's config resolves them now, counting one with a named volume as copied, and leaves out a service whose entries are all missing on the parent, so the child keeps its own data and image; it sends at most `ParentHistoryLines` history lines in all, 10 at least per service, since they ride in the child's script as one argument.
-- The holder checks before its prepare, and a release that syncs at its record, in place of its own check for those services: the parent's image or name passes; one the child's data moved past, or a name it never ran, needs `--accept-image` on every sync (`imagesAccept`), and then the child runs its own image on the copy, its history one `forced` line (`SyncDone`), nothing of the parent's pulled.
-- The child's image checked, and the one its history's last line names, is what its own name holds on its server (`ownImage`), never the parent's it is held on.
-- The parent's image is pulled by digest when missing, held in the child's own repository when its server has it there (`localHold`), and listed at once as a `sync:<service>` entry of the child's release (bookmarked, removed with it); a check or a restore that fails removes what it pulled.
-- The holder checks and pulls while its watcher is still armed, so an abort or a session gone during a long pull stops nothing.
-- On a complete copy, whatever the answer, `sync-done` holds the child on the parent's image and replaces its history with the parent's window (first line `sync <parent>`), adding a line naming the image as the child does only when the child ran that very image; failing, the child is marked (`finish`) and stays down.
-- Only `volumes` copies take the parent's image: a `custom` one goes through the child's own.
-- Only `finish go` makes services again on the parent's image: `restoreServices` recreates (`up --no-deps --wait`) a service whose container's `devopsy.digest` label differs from the release's `ComposeFile` (`images.Recreate`) before starting the rest, since `compose start` would run the old image on the new data; an abort in a release that syncs restores the child's own data, which the release's never-live images must not touch.
+- A sync is a landing (`SyncLanding`, internals/images.md): the parent's windows are read in the preflight session (`img data`, `ParentCheckScript`, `images.Set.ParentData`, `remote.ParseParentData`), passed to the child's side (`images.SyncImagesEnv`) and their checksum to the push (`SyncImagesSumEnv`), which refuses before stopping anything when the parent's changed since.
+- `ParentData` holds what the copy writes (`Set.Copied`), `devopsy.data.copy=volumes` services with something there, and sends at most `ParentHistoryLines` history lines in all, 10 at least per service, cut by `compact` to what the rule reads: they ride in the child's script as one argument.
+- A `custom` copy carries nothing, and the child's window and hold stay as they were: a dump is loaded by the image that runs.
+- The holder checks before its prepare (`img sync-check`), while its watcher is still armed, and a release that syncs at `img check`, before it builds anything; a refusal needs `--accept-image` on every sync (`imagesAccept`), which runs the child's own image on the copy, its history one `forced` line.
+- A reset's check runs whatever the parent sends, and as a reset (`resetOr`, `resetExport`): its wipe lands on every data service.
+- The child always runs its own image on the copy; on a complete copy, whatever the answer, `sync-done` takes the parent's window over (first line `sync <parent>`), and failing, the child is marked (`finish`) and stays down, the reason on stdout for the holder's words and the mark's.
+- Only `finish go` makes services again: `restoreServices` recreates (`up --no-deps --wait`) a service whose container's `devopsy.digest` label differs from the release's `ComposeFile` (`images.Recreate`) before starting the rest, since `compose start` would run the old image on the new data; an abort in a release that syncs restores the child's own data, which the release's never-live images must not touch.
 - Holds and labels are spelled as Docker shows digests (`repoKey`), so holding the same image never changes the reference compose sees.
-- A pull refused for having no build for the server's platform (`otherPlatform`) says so with its platform, naming `--accept-image`.
-- The parent's images are unset with the sync's variables before the run step.
+- The parent's windows are unset with the sync's variables before the run step.
 
 ## Streams
 
