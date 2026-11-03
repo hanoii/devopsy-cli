@@ -9,7 +9,7 @@ devopsy adds:
 - Releases. One command ships a new version, from your machine or CI, and
   another rolls it back.
 - Environments. Production, staging or one per pull request run side by
-  side on one server, each with its own containers, volumes and URL.
+  side on one server, each with its own containers and volumes.
 - Variables per deployment. A value can be set for a project on a
   server, for one install, or for one environment, and the most specific
   wins. Secrets stay out of git and your shell history. A release that is
@@ -80,7 +80,7 @@ For that, it decides some things for you:
 
 - devopsy adds only environment variables to compose, all of them shown by
   `devopsy --env`. Everything else is compose's.
-- Releases are pushed over SSH. The server needs no access to the
+- Releases are pushed over SSH, never pulled. The server needs no access to the
   repository, and no deploy keys, tokens or webhooks. Locally devopsy
   needs `ssh`. On the server it needs `devopsy` and what Debian has:
   `tar`, GNU coreutils and util-linux (`flock`, `setsid`, `script`).

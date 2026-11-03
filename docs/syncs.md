@@ -220,7 +220,7 @@ starts its stopped services again.
 
 The parent marks the child's data right before its first write into it
 and again after its last. The child's side reads those marks to tell what
-the copy did, even if devopsy died.
+the copy did, however devopsy went away.
 
 - Nothing written (a prepare or a check failed, the parent's stop failed,
   the first export failed with nothing to rsync): the child's stopped

@@ -137,7 +137,7 @@ copy carries them:
   child partial` they are what stays down. A stopped `custom` service is
   in both of the last two. A script reaches a stopped service with
   `devopsy run --rm --no-deps -T <service> ...` instead of `exec`, and a
-  script whose service must be running refuses.
+  script whose service must be running should refuse.
 
 In a sync, the actions also get `DEVOPSY_SYNC_FROM_TARGET` and
 `DEVOPSY_SYNC_TO_TARGET`, the parent's and the child's addresses. The

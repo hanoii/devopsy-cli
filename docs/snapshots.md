@@ -49,15 +49,15 @@ There are two ways to make that moment shorter:
   btrfs filesystem together with the environment's directory, with
   Docker's volumes bound onto it), the stopped pass only clones the data.
   That takes seconds for any size, a database too. The services start
-  again, and the tars are made from the clone afterwards, in the
-  background. Then the clone is removed, and so is any mirror left from
+  again, and the tars are made from the clone afterwards, with
+  the services running. Then the clone is removed, and so is any mirror left from
   before. devopsy tries this before anything stops, with any settings.
 - An environment with `snapshots: {mirror: true}` keeps a mirror of its
   data (`.mirror` among its snapshots, kept between takes). The data is
   first copied into it while everything runs, then copied again with the
   services stopped, this time only what changed. That second copy is the
-  downtime, and the tars are made from the mirror afterwards, in the
-  background. A mirror suits data that stays put between the two passes,
+  downtime, and the tars are made from the mirror afterwards, with the
+  services running. A mirror suits data that stays put between the two passes,
   like uploaded files. For a busy database, whose written tables change
   within minutes and are copied again whole, use reflinks.
 

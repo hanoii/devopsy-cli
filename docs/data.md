@@ -41,8 +41,8 @@ the labels from its own release, so the two sides' labels can differ.
 
 `devopsy.data=true` says the service has data. `false`, or no label, says
 it has none, and devopsy neither copies nor touches it. An empty value is
-an error. Read as `false`, a variable left unset by accident
-(`devopsy.data=${HAS_DATA}`) would silently stop the copying. Any other
+an error rather than `false`, so a variable left unset by accident
+(`devopsy.data=${HAS_DATA}`) cannot silently stop the copying. Any other
 value is an error too.
 
 A service with data must also say its data's version,

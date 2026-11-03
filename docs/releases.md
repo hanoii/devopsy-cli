@@ -116,7 +116,7 @@ profile's buildable services are built when they are used.
 The run step's `up` then finds every image there, and a `deploy` needs
 no `build` or `pull`.
 
-A failure here also leaves the current release's images untouched. What
+A failure here leaves the current release's images untouched. What
 the failed release got is tagged as that release's and removed with it.
 So is what an interrupted release got: a Ctrl-C or a lost connection
 (Dropped connections, below) stops the build or pull, and the release is
@@ -233,7 +233,7 @@ are two logs:
   local steps run, the server's lines, the copy's. Each line starts with
   its time in UTC (`2026-10-09 15:24:32`).
 - `devopsy-log-server`: what the server printed from there on, written
-  on the server even if your connection drops.
+  on the server however your session ends.
 
 `--log` shows the two joined, with progress displays reduced to their
 final state: the most recent release's, or one release's with `--log

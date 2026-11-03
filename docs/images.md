@@ -139,7 +139,7 @@ started over:
 A refusal comes before anything is built, pulled or stopped. For a
 rollback that is before its remote `before` and `prepare` steps; its
 local `before` steps run before the server is asked, so they have run.
-The refusal names the versions or tags, and two ways past it:
+The refusal names the versions or tags, and the ways past it:
 
 - raise the label, unless it is a rollback, whose code is the older
   release's;
@@ -188,7 +188,8 @@ digest when that image was pulled, and by name when it was built (the
 name of the release that built it, when this release pulls the service
 instead).
 
-devopsy works out a hold again from the history each time it decides
+A hold is never carried over. devopsy works it out again from the
+history each time it decides
 what a service with data runs: every activation, the restart after a
 failed run step, a full or a `--no-code` restore, a sync, an import, a
 reset. A hold ends as soon as the data allows the release's image again.

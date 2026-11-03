@@ -101,8 +101,8 @@ named `<project>[-<instance>]-<environment>`. That name is its
 
 A child environment names its parent with `parent:`, a concrete
 environment of the project other than itself. It is set on an
-environment or a pattern, and not under `defaults:`. A child gets all of
-its parent's data, including secrets and personal data, so the config
+environment or a pattern, and not under `defaults:`. A child gets its
+parent's data, including secrets and personal data, so the config
 shows this where the child is defined.
 
 The parent resolves like a target of its own, one level only: at the
