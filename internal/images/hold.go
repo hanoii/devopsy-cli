@@ -179,16 +179,17 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 	src := entry{Ref: l.Ref, ID: l.ID, Service: service, Kind: KindOwn}
 	// With a tag pulled; in image mode a build: service's too, which has no
 	// tag and which the registry serves (its digests are no local build's).
-	// By its digest in the service's own repository, never the one the line
-	// names: a window from an export's header is whoever made the tar's
-	// (review), and a mirror has the same digest.
+	// A service that pulls holds it in its own repository, whichever the
+	// line names (a mirror has the digest under the name it reaches); one
+	// the project builds has no repository a registry serves, so in the
+	// line's (Land keeps only what is safe of a line from an export's
+	// header: review).
 	if l.Tag != "" || ModeOf(rel) == ModeImage {
 		if d := digestIn(Image{Digests: l.Digests}, l.Ref); d != "" {
-			repo := repoOf(l.Ref)
-			if e, ok := match(readList(rel), entry{Service: service}); ok {
-				repo = repoOf(ownOf(e).Ref)
+			src.Kind, src.Digest = KindPulled, d
+			if e, ok := match(readList(rel), entry{Service: service}); ok && ownOf(e).Kind != KindOwn {
+				src.Digest = repoOf(ownOf(e).Ref) + "@" + digestOf(d)
 			}
-			src.Kind, src.Digest = KindPulled, repo+"@"+digestOf(d)
 		}
 	}
 	return src, historyHeld
@@ -217,6 +218,11 @@ func (s *Set) allowedHere(rel, service string, line ran) (entry, string, bool) {
 			continue
 		}
 		for _, e := range readList(d) {
+			// Never one that failed its fetch: its listing names what the
+			// names held then, under labels they never had (FetchFailedFile).
+			if _, err := os.Stat(filepath.Join(d, FetchFailedFile)); err == nil {
+				break
+			}
 			if e.Service == service && !e.held() && e.DataVersion != "" && e.DataVersion != AnyVersion && s.here(e) && rule([]ran{line}, e.DataVersion, e.Tag, "its") == "" {
 				return e, filepath.Base(d), true
 			}

@@ -1021,9 +1021,10 @@ func TestDataNoHistorySendsItsLabel(t *testing.T) {
 	}
 }
 
-// A hold by a line's digest goes through the service's own repository,
-// never the one a line names: an export's header is whoever made the tar's,
-// and a restart would pull and run what it says.
+// A hold by a line's digest goes through the service's own repository when
+// it pulls, whichever the line names; and an export's header, whoever made
+// the tar's, gives a service the project builds no image of another
+// repository to pull or tag: only its version and tag land.
 func TestDataHoldStaysInItsOwnRepository(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1032,9 +1033,20 @@ func TestDataHoldStaysInItsOwnRepository(t *testing.T) {
 	d.publish("mariadb:11.8", "I1")
 	m.release(false, db118)
 	rel := m.e.rel(m.cur)
-	src, _ := m.e.set.source(rel, "database", ran{Service: "database", Ref: "evil/image:12.1", ID: "E1", Digests: []string{"evil/image@sha256:abc"}, Version: "12.1", Tag: "12.1"})
+	line := ran{Service: "database", How: Ran, Ref: "evil/image:12.1", ID: "E1", Digests: []string{"evil/image@sha256:abc"}, Version: "12.1", Tag: "12.1"}
+	src, _ := m.e.set.source(rel, "database", line)
 	if src.Digest != "mariadb@sha256:abc" {
 		t.Errorf("the line's digest is held as %q", src.Digest)
+	}
+	b := newSim(t, d, "app-built", &out)
+	b.release(false, builtDB("app-built", "13"))
+	record := "data\tdatabase\nran\t" + line.line()
+	if err := b.e.set.Land(b.base(), b.e.rel(b.cur), b.e.set.ImportLanding(record, "database")); err != nil {
+		b.fail("the landing: %v", err)
+	}
+	w := readHistory(b.base()).window("database")
+	if len(w) != 1 || w[0].Version != "12.1" || w[0].ID != "" || len(w[0].Digests) != 0 {
+		t.Errorf("the header's line landed as %+v", w)
 	}
 }
 
@@ -1098,5 +1110,306 @@ func TestDataCopyNeedsAgreesWithDerive(t *testing.T) {
 	}
 	if err := m.e.set.Land(m.base(), m.e.rel(r1), l); err != nil {
 		m.fail("the landing: %v\n%s", err, out.String())
+	}
+}
+
+// Bug: allowedHere takes a release's listing for what it could run, but a
+// release whose fetch failed lists whatever the name held (Undo's Bookmark,
+// the reason source ranks failed releases last): its label, with the image
+// of the release before. Here r2's build failed, so it lists r1's own 11.8
+// build under 12.1; the parent's 12.1 data lands, and the restart's last try
+// "finds" that image as allowed: r1's older image runs on the parent's data
+// with no warning, and img ran then records it as 12.1. With nothing here
+// the data allows, the release's own runs, said.
+func TestAllowedHereSkipsAFailedFetch(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dp, d := newFake(), newFake()
+	prod := newSim(t, dp, "app-prod", &out)
+	if _, err := prod.release(false, builtDB("app-prod", "12.1")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	r1, err := dev.release(false, builtDB("app-dev", "11.8"))
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	own := dev.runs("database")
+	// A release whose build fails: nothing moved, undone.
+	r2 := dev.e.release(builtDB("app-dev", "12.1"))
+	dev.e.set.Undo(dev.e.rel(r2), dev.prev(), false)
+	os.WriteFile(filepath.Join(dev.e.rel(r2), failedFile), nil, 0o644)
+	// A release that syncs, its data service's version now any.
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	r3 := dev.e.release(builtDB("app-dev", AnyVersion))
+	rel := dev.e.rel(r3)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("check: %v", err)
+	}
+	dev.fetch(dev.e.svcs[r3])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r3
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.SyncData = ""
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.e.set.Restart, dev.e.set.AsBuilt = true, true
+	out.Reset()
+	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); err != nil {
+		dev.fail("img restore --restart --as-built: %v", err)
+	}
+	e, _ := match(readList(dev.e.rel(r1)), entry{Service: "database"})
+	if e.ID == own && e.DataVersion == "12.1" {
+		t.Errorf("%s's own 11.8 build (%s) is listed as 12.1, what its next run records:\n%s", r1, own, out.String())
+	}
+}
+
+// Bug: a held service's own build keeps a bookmark now (withOwnBuilds), but
+// Restore still takes it for gone once the hold is over: its restart's last
+// try (--as-built, the build having failed) says "its own image is gone" and
+// runs what the name holds, the failed release's build, under the release's
+// code. AsBuilt's promise is the reverse ("never the failed release's image
+// under the name"), and the bookmark that would give it back is dropped.
+// Here r1 is held on 12.1's build, a release that syncs brings the parent's
+// 11.8 data, so r1's own 11.8 is allowed again, and its run step fails.
+func TestAsBuiltHoldOverRunsItsOwnBuild(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dp, d := newFake(), newFake()
+	dp.publish("mariadb:11.8", "P11")
+	prod := newSim(t, dp, "app-prod", &out)
+	if _, err := prod.release(false, dbSvc("mariadb:11.8")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	r1, err := dev.release(false, builtDB("app-dev", "11.8"))
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	own := dev.runs("database")
+	if _, err := dev.failRun(false, builtDB("app-dev", "12.1")); err != nil {
+		dev.fail("failed release: %v", err)
+	}
+	if heldIn(dev.e.rel(r1))["database"] == "" {
+		dev.fail("setup: %s is not held", r1)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	r3 := dev.e.release(builtDB("app-dev", "11.8"))
+	rel := dev.e.rel(r3)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("check: %v", err)
+	}
+	dev.fetch(dev.e.svcs[r3])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r3
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.SyncData = ""
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.e.set.Restart = true
+	// Its own build back from its bookmark: nothing to build, no last try.
+	out.Reset()
+	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); err != nil {
+		dev.fail("img restore --restart: %v", err)
+	}
+	if got := labelsIn(dev.e.rel(r1))["database"]; got != own {
+		t.Errorf("%s runs %s, not its own build %s, which its bookmark kept:\n%s", r1, got, own, out.String())
+	}
+}
+
+// A snapshot of an environment whose built database was held on a pulled
+// image (the failed release's, by its registry digest), imported into
+// another server (FilterImported clears its ids), is fully restored there:
+// the hold's line names the pulled image's digest, which the registry
+// serves, so the restore pulls it by that digest and holds the database on
+// it, as the snapshot's listing says. Instead source re-roots the digest
+// into the service's own repository, the project's build name
+// (app-stage-database@sha256:...), which no registry serves: the pull
+// fails and the restore is refused, saying the image is gone and could
+// not be pulled by its digest.
+func TestImportedSnapshotHoldOnPulledImage(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	d := newFake()
+	d.strictRepo = true
+	prod := newSim(t, d, "app-prod", &out)
+	prod.e.set.Snapshots = filepath.Join(prod.base(), "snapshots")
+	d.publish("mariadb:12.1", "J1")
+	r1, err := prod.release(false, builtDB("app-prod", "11.8"))
+	if err != nil {
+		prod.fail("release: %v", err)
+	}
+	if _, err := prod.failRun(false, dbSvc("mariadb:12.1")); err != nil {
+		prod.fail("the failed release: %v", err)
+	}
+	if heldIn(prod.e.rel(r1))["database"] == "" || prod.runs("database") != "J1" {
+		prod.fail("setup: %s is not held on the failed release's image (%v)", r1, heldIn(prod.e.rel(r1)))
+	}
+	snap := prod.snapshot("20261017000001")
+
+	// Another server, whose registry serves mariadb:12.1 at the same digest.
+	d2 := newFake()
+	d2.strictRepo = true
+	d2.publish("mariadb:12.1", "J1")
+	stage := newSim(t, d2, "app-stage", &out)
+	stage.e.set.Snapshots = filepath.Join(stage.base(), "snapshots")
+	if _, err := stage.release(false, builtDB("app-stage", "11.8")); err != nil {
+		stage.fail("release: %v", err)
+	}
+	dir := filepath.Join(stage.e.set.Snapshots, "20261017000002")
+	if err := os.CopyFS(dir, os.DirFS(snap)); err != nil {
+		t.Fatal(err)
+	}
+	if err := FilterImported(dir, stage.e.rel(stage.cur)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	id, err := stage.fullRestore(dir, []Service{builtDB("app-stage", "11.8")})
+	if err != nil {
+		t.Fatalf("the full restore of the imported snapshot is refused, the hold's image pullable by its digest (mariadb@J1): %v\n%s", err, out.String())
+	}
+	if heldIn(stage.e.rel(id))["database"] == "" || stage.runs("database") != "J1" {
+		t.Errorf("the restored release runs database on %s, not held on the snapshot's J1 (%v)\n%s", stage.runs("database"), heldIn(stage.e.rel(id)), out.String())
+	}
+}
+
+// syncedAndFailed is a child that builds its database (r1, at 11.8) after a
+// release that syncs from a parent that pulls mariadb:12.1 and whose run
+// step failed before the child's database ran: the window is the parent's
+// line, mariadb:12.1 by its digest, and the restart of r1 must hold.
+func syncedAndFailed(t *testing.T, out *bytes.Buffer) (dev *sim, d *fakeDocker, r1, failed string) {
+	t.Helper()
+	dp := newFake()
+	d = newFake()
+	d.strictRepo = true
+	dp.publish("mariadb:12.1", "P12")
+	d.publish("mariadb:12.1", "P12")
+	prod := newSim(t, dp, "app-prod", out)
+	if _, err := prod.release(false, dbSvc("mariadb:12.1")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev = newSim(t, d, "app-dev", out)
+	r1, err := dev.release(false, builtDB("app-dev", "11.8"))
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	failed = dev.e.release(builtDB("app-dev", "12.1"))
+	rel := dev.e.rel(failed)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("check: %v", err)
+	}
+	dev.fetch(dev.e.svcs[failed])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = failed
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.Ran(dev.base(), rel)
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.e.set.SyncData = ""
+	return dev, d, r1, failed
+}
+
+// Bug: source holds a window's digest in the service's own repository,
+// whatever the line names. That is right for a mirror, but a service its
+// release builds has no repository in any registry: the parent's
+// mariadb@<digest> becomes app-dev-database@<digest>, which nothing serves.
+// The restart's last resort (img hold, once get_images failed) writes that
+// into the compose file, so the run step's up cannot pull it and the
+// previous release does not come back. Before the digest moved, the hold
+// was mariadb@<digest>, which the run step pulls.
+func TestLastHoldDigestInBuiltRepository(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dev, d, r1, failed := syncedAndFailed(t, &out)
+	if err := dev.e.set.LastHold(dev.e.rel(r1), dev.e.rel(failed)); err != nil {
+		dev.fail("img hold: %v", err)
+	}
+	imgs, _, _ := composeFacts(dev.e.rel(r1))
+	if img := imgs["database"]; img != "" {
+		if err := d.Pull(img); err != nil {
+			t.Errorf("the restart's up cannot get what the last resort held the service on, %s: %v\n%s", img, err, out.String())
+		}
+	}
+}
+
+// Bug: the same in the restart's last try when the failed release's own
+// image is gone too (allowedHere finds nothing): "held on it anyway, for the
+// run step to pull", on a reference no registry serves.
+func TestAsBuiltDigestInBuiltRepository(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dev, d, r1, failed := syncedAndFailed(t, &out)
+	gone, _ := d.ID("app-dev-database")
+	for n, id := range d.names {
+		if id == gone {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, gone)
+	dev.e.set.Restart, dev.e.set.AsBuilt = true, true
+	if err := dev.e.set.Restore(dev.e.rel(r1), dev.e.rel(failed), false); err != nil {
+		dev.fail("img restore --restart --as-built: %v", err)
+	}
+	imgs, _, _ := composeFacts(dev.e.rel(r1))
+	if img := imgs["database"]; img != "" {
+		if err := d.Pull(img); err != nil {
+			t.Errorf("the restart's up cannot get what its last try held the service on, %s: %v\n%s", img, err, out.String())
+		}
+	}
+}
+
+// Bug: a data service whose only data is a named volume counts as written by
+// a copy (parentData: "a named volume counts as there"), but the push skips a
+// volume the parent's server does not have (syncData). So a parent's service
+// in a profile that was never up writes nothing into the child, and yet
+// parentData, which now goes by every profile and sends a label's line when
+// there is no history, replaces the child's window with that label. Here the
+// child ran search 9 on its data; the parent says 8 of a service that never
+// ran there; the sync writes nothing of it, and the child's data, still
+// upgraded by 9, now reads as 8: a release of 8 goes through, unrefused.
+func TestParentDataNeverMadeVolumeKeepsWindow(t *testing.T) {
+	t.Parallel()
+	search := func(ref, version string) Service {
+		return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: version, EntriesKnown: true, Volumes: []string{"search-data"}}
+	}
+	d := newFake()
+	var out bytes.Buffer
+	d.publish("search:8", "S8")
+	d.publish("search:9", "S9")
+	d.publish("mariadb:11.8", "M1")
+	prod := newSim(t, d, "app-prod", &out)
+	// Its profile is off: every profile's list has it, the release's has not.
+	prod.e.set.ListAll = func(string) ([]Service, error) { return []Service{dbSvc("mariadb:11.8"), search("search:8", "8")}, nil }
+	if _, err := prod.release(false, dbSvc("mariadb:11.8")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	if _, err := dev.release(false, dbSvc("mariadb:11.8"), search("search:9", "9")); err != nil {
+		dev.fail("dev: %v", err)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	rel := dev.e.rel(dev.cur)
+	if err := dev.e.set.CheckLanding(rel, dev.e.set.SyncLanding(data, "")); err != nil {
+		dev.fail("sync-check: %v", err)
+	}
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	id := dev.e.release(dbSvc("mariadb:11.8"), search("search:8", "8"))
+	if err := dev.e.set.Check(dev.e.rel(id)); !errors.Is(err, ErrRefused) {
+		t.Errorf("search 8 on data search 9 upgraded, the sync having written none of it: %v\nwindow %+v\n%s", err, readHistory(dev.base()).window("search"), out.String())
 	}
 }

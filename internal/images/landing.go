@@ -71,6 +71,10 @@ type Landing struct {
 	// whose release's own image is gone stays, said, rather than leave no
 	// way out of the mark (derive).
 	asIs bool
+	// header: its windows are an export's header, whoever made the tar's: a
+	// service its project builds keeps of a line in another repository only
+	// its version and tag, never an image to pull or tag.
+	header bool
 	// words are what its check says.
 	words checkWords
 }
@@ -131,7 +135,7 @@ func (s *Set) ResetLanding() Landing {
 // loaded through the image that runs, it leaves the history and the hold
 // as they were.
 func (s *Set) ImportLanding(data, service string) Landing {
-	l := Landing{windows: parseParentData(DataFor(data, service)), first: Imported, words: checkWords{
+	l := Landing{windows: parseParentData(DataFor(data, service)), first: Imported, header: true, words: checkWords{
 		source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>",
 		builds: "an import builds nothing", rebuild: report.Fix("release it first, which builds its images, then import again:", s.cmd("--release")),
 		fetch: report.Fix("release it first, which fetches them, then import again:", s.cmd("--release"))}}
@@ -441,6 +445,13 @@ func (s *Set) Land(base, rel string, l Landing) error {
 			lines = history{ranOn(o, Forced, img, s.now())}
 		} else {
 			lines = l.lines(w, e.Service, o.Ref, s.now())
+			if l.header && o.Kind == KindOwn {
+				for i, r := range lines {
+					if repoKey(r.Ref) != repoKey(o.Ref) {
+						lines[i].ID, lines[i].Digests = "", nil
+					}
+				}
+			}
 		}
 		h = append(h.without(e.Service), lines...)
 		changed = true

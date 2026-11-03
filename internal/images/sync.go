@@ -63,8 +63,11 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		case svc.Method == CopyVolumes:
 			// A service whose entries are all missing here has nothing a
 			// copy writes: the child keeps its own data and history. A
-			// named volume counts as there.
-			if svc.EntriesKnown && !hasEntry(rel, svc.Entries) && len(svc.Volumes) == 0 {
+			// named volume counts as there once something ran on it: one
+			// nothing ever made is skipped by the copy (review: the child
+			// took the label of a profile never up over its own data's
+			// version).
+			if svc.EntriesKnown && !hasEntry(rel, svc.Entries) && (len(svc.Volumes) == 0 || len(h.window(svc.Name)) == 0) {
 				continue
 			}
 		default:

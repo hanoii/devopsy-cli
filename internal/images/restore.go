@@ -128,14 +128,22 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if !fetched {
 				i := indexOf(old, o)
 				if haveOld && o.held() {
-					// Its bookmark holds the image it was held on, never its
-					// own build (review: a rollback to a release the restart
-					// held ran the failed release's build as its own).
-					if st.asIs = s.AsBuilt; !st.asIs {
-						s.say(report.InfoLevel, "%s's image of %s was held on another image: building its own again", tid, svc.Name)
-						return ErrGone
+					// Its entry's bookmark holds the image it was held on, never
+					// its own build (review: a rollback to a release the restart
+					// held ran the failed release's build as its own): that one
+					// is the entry of no service's (withOwnBuilds).
+					if b := ownBuildBookmark(old, names, o.OwnID); b != "" && !s.changed(ownOf(o), svc, mode) {
+						if _, err := s.Docker.ID(b); err == nil {
+							st.retag = b
+						}
 					}
-					s.say(report.WarnLevel, "%s's own image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+					if st.retag == "" {
+						if st.asIs = s.AsBuilt; !st.asIs {
+							s.say(report.InfoLevel, "%s's image of %s was held on another image: building its own again", tid, svc.Name)
+							return ErrGone
+						}
+						s.say(report.WarnLevel, "%s's own image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+					}
 				} else if !haveOld || o.ID == "" || i < 0 {
 					if st.asIs = s.AsBuilt; !st.asIs {
 						return s.gone(tid, svc)
@@ -204,8 +212,8 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			// Its bookmark, put back: built with what its listing said then,
 			// whatever the variables say now.
 			e := s.entryOf(svc, svc.Ref, mode)
-			if o.Build != "" && e.Build != "" {
-				e.Build = o.Build
+			if b := ownOf(o).Build; b != "" && e.Build != "" {
+				e.Build = b
 			}
 			es = append(es, e)
 		default:
@@ -346,6 +354,17 @@ func (s *Set) rebuilt(tid string, o entry, svc Service) error {
 	return ErrGone
 }
 
+// ownBuildBookmark is the bookmark of a held service's own build, id, in a
+// listing (withOwnBuilds) and its bookmarks; "" without one.
+func ownBuildBookmark(es []entry, names []string, id string) string {
+	for i, e := range es {
+		if e.Service == "" && e.Kind == KindOwn && id != "" && e.ID == id {
+			return names[i]
+		}
+	}
+	return ""
+}
+
 func indexOf(es []entry, e entry) int {
 	for i, x := range es {
 		if x == e {
@@ -416,6 +435,11 @@ func (s *Set) RestoreOwn(rel string) {
 	}
 }
 
+// FetchFailedFile, in a release's directory, says its fetch never finished
+// (Undo): its listing bookmarks what its names held then, under its labels,
+// so no hold takes an image from it (allowedHere).
+const FetchFailedFile = "devopsy-fetch-failed"
+
 // Undo puts the live release's own names back after a release's fetch
 // failed or was interrupted: a new release's own images are bookmarked
 // first, so they go with it; a rollback's are not (the names may hold the
@@ -423,6 +447,9 @@ func (s *Set) RestoreOwn(rel string) {
 func (s *Set) Undo(rel, prev string, rollback bool) {
 	if !rollback {
 		s.Bookmark(rel)
+		if f, err := os.Create(filepath.Join(rel, FetchFailedFile)); err == nil {
+			f.Close()
+		}
 	}
 	if prev != "" {
 		s.RestoreOwn(prev)
