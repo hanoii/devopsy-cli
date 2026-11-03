@@ -18,11 +18,12 @@ it for Claude Code. The project is the directory with `.devopsy/`, found
 as every command finds it; outside one, the current directory.
 `--global` does the same under your home directory.
 
-Run it again after an upgrade. A copy devopsy wrote is replaced while it
-is still as devopsy wrote it: its frontmatter carries the version and a
-checksum. A copy you edited, or any other file there, is left as it is,
-and devopsy says so; remove it to take the new version.
+Run it again after an upgrade. A copy devopsy wrote is replaced as long
+as its checksum, kept in its frontmatter beside the version, still
+matches. A copy you edited, or any other file there, is left as
+it is, and devopsy says so; remove it to take the new version.
 
 `--stub` installs a short form instead, a file that tells the agent to run
-`devopsy --ai-skill`. It suits a template: every copy of it then gets the
-skill matching its devopsy, without carrying the text.
+`devopsy --ai-skill`. It suits a template, since every copy of the
+template then gets the skill matching its devopsy without carrying the
+text.

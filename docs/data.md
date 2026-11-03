@@ -18,7 +18,7 @@ The alternatives:
   the same, and take the ownership of the image's directory. `down
   --volumes` removes them. They are harder to inspect and back up from the
   host.
-- Absolute paths work, but devopsy knows nothing of them: keeping, backing
+- Absolute paths work, but devopsy does not manage them. Keeping, backing
   up and removing them is the project's job.
 
 `--destroy` empties `shared/mnt` as root in `devopsy-util`, and forgets
@@ -34,14 +34,14 @@ copies a child's data from its parent's ([Parent environments and
 syncs](syncs.md)), exports every service with data on the parent and
 imports each on the child.
 
-devopsy knows nothing of what the data is: compose labels say it. Each
-side of a copy reads them from its own release.
+Compose labels tell devopsy what the data is. Each side of a copy reads
+the labels from its own release, so the two sides' labels can differ.
 
 ### `devopsy.data`
 
 `devopsy.data=true` says the service has data. `false`, or no label, says
-it has none: it is neither copied nor touched. An empty value is an
-error, not `false`, so a variable left unset by accident
+it has none, and devopsy neither copies nor touches it. An empty value is
+an error rather than `false`, so a variable left unset by accident
 (`devopsy.data=${HAS_DATA}`) cannot silently stop the copying. Any other
 value is an error too.
 
@@ -58,7 +58,7 @@ carries the data:
   its own entry; `./mnt` whole is refused), and its named volumes.
 - `custom`: the data capability's `export <service>` writes the data to
   stdout (a database dump) and its `import <service>` reads it from stdin
-  (a load), devopsy carrying the bytes between them
+  (a load), and devopsy carries the bytes between them
   ([the data capability](capabilities.md#data)).
 - `none`: no copy carries it. A sync leaves the child's data as it is,
   and `--export` and `--import` refuse the service. It is still the
@@ -74,13 +74,13 @@ place.
 A `volumes` copy:
 
 - A sync copies the entries with rsync (`rsync -a --no-D --delete
-  --numeric-ids --modify-window=-1`, times compared to the nanosecond),
-  so the child's copy equals the parent's, owners and modes included,
-  except that an entry the child owns gets the child's owner
-  (Owners, below). `--export` and `--import` move them as a tar. Both run
+  --numeric-ids --modify-window=-1`, times compared to the nanosecond).
+  The child's copy then equals the parent's, with its owners and modes,
+  except that an entry the child owns gets the child's owner (Owners,
+  below). `--export` and `--import` move them as a tar. Both run
   as root in `devopsy-util`.
 - Device nodes, FIFOs and sockets are never copied, nor given to an
-  owner: as root, rsync and tar would make them on the server, where a
+  owner. As root, rsync and tar would make them on the server, where a
   block device given to the app's UID is its raw disk.
 - Named volumes (a database's datadir in `dbdata:/var/lib/mysql`) are
   copied by their compose key, into the other environment's volume of
@@ -121,11 +121,12 @@ on a service without data or with another copy. An empty value is an
 error.
 
 Use it for mostly static files, added to and rarely rewritten, like
-uploads. Never for a database: it writes its pages in place, so each
-page it writes while a child shares the file lands somewhere else, and
-the parent's files fragment for good (on XFS, 4,000 pages of 16 KiB
-written made some 5,600 extents, where a file written in place keeps
-one; `xfs_fsr` puts them back together).
+uploads. Do not use it for a database. A database writes its pages in
+place, so each page it writes while a child shares the file lands
+somewhere else, and the parent's files fragment for good. On XFS, a
+database writing 4,000 pages of 16 KiB into a file a child shared made
+some 5,600 extents, where a file written in place keeps one; `xfs_fsr`
+puts them back together.
 
 How the clone works:
 
@@ -155,17 +156,17 @@ When devopsy stops the service while data moves:
 | another service's data exported | up      | up    | up       | down     |
 
 A service that `depends_on` a stopped one stops with it, through every
-`depends_on`, `required: false` and Compose's implicit ones included: it
-cannot work without it anyway.
+kind of `depends_on`, including `required: false` and Compose's implicit
+ones, since it cannot work without it.
 
-The values are not a scale: `own` and `import` do not contain each other,
-and `always` is both. A database copied as files and labeled `import`,
-which reads as "stronger than `own`", is tarred while it runs on
-`--export`, which then exits 0 with a corrupt copy.
+The values do not form a scale. `own` and `import` do not contain each
+other, and `always` is both. A database copied as files and labeled
+`import`, which reads as "stronger than `own`", is tarred while it runs
+on `--export`, which then exits 0 with a corrupt copy.
 
-`own` without a `devopsy.data` label is an error, since it would never
+`own` without a `devopsy.data` label is an error, because it would never
 stop anything. With `devopsy.data=false` or a copy of `none` (from a
-variable), it is ignored, since no copy moves that data.
+variable), it is ignored, as no copy moves that data.
 
 Recipes:
 
@@ -198,8 +199,8 @@ How the stops happen:
   depends on an imported one and has no `devopsy.data.stop` label is
   named: label it `import`, or `never` to keep it running and silence the
   notice.
-- Nothing is paused: Traefik drops a paused container's router, and
-  `docker pause` flushes nothing.
+- Services are stopped, not paused. Traefik drops a paused container's
+  router, and `docker pause` flushes nothing.
 - A service kept down (by an import that failed, below, or a sync:
   [When a sync fails](syncs.md#when-a-sync-fails)) that has `restart:
   always` is named: Docker starts it again when its daemon starts, after a
@@ -212,8 +213,8 @@ A container that runs as non-root from its first process cannot write
 into `mnt` on its own. `shared/mnt` starts empty and belongs to the
 deploy user, Docker creates a missing bind mount's directory as root,
 and devopsy copies owners exactly (rsync and tar as root, numeric ids),
-so what an import or a sync brings has another machine's owners. A
-service therefore says who owns the entries it writes:
+which gives what an import or a sync brings another machine's owners. A
+service declares who owns the entries it writes:
 
 ```yaml
 services:
@@ -238,9 +239,9 @@ names cannot be resolved from the host; `010001` is `10001`.
 The label covers every entry of `mnt` the service mounts writable, in any
 profile. A read-only mount (`:ro`, a log reader) claims none. An entry no
 service owns stays as it is, the deploy user's, which is right for what
-is written from the host. Without the label nothing is owned, whatever
-`user:` says: otherwise an image with no `user:`, or tools sharing a
-mount, would each claim it.
+is written from the host. Without the label nothing is owned, even when
+the service has a `user:`. Otherwise an image with no `user:`, or tools
+sharing a mount, would each claim it.
 
 Two services with different owners on one entry are refused. A service
 without the label may write an owned entry (a tool sharing it).
@@ -249,9 +250,8 @@ devopsy gives the entries away as root in `devopsy-util`, without a
 network and never following a symbolic link. Each entry is done in a
 container that mounts that entry alone, so a directory the app swaps for
 a link meanwhile cannot lead anywhere else. Only files, directories and
-links are
-given away: a device node, a FIFO or a socket keeps its owner, the host's
-root, since devopsy never makes one there.
+links are given away. A device node, a FIFO or a socket keeps its owner,
+the host's root, since devopsy never makes one there.
 
 Where owners are applied:
 
@@ -261,8 +261,8 @@ Where owners are applied:
   (0755) and given to its owner, then every owned entry is scanned whole,
   so what devopsy did not write (an upload by hand, data from before the
   label) gets its owner too. A file a running service removes meanwhile
-  is no failure. A failure fails the release as its run step would: the
-  previous one comes back.
+  is no failure. A failure fails the release as its run step would, and
+  the previous one comes back.
   - In a rollback or a restart, labels that cannot be read (names from
     before a change, a compose error) are only a warning and nothing is
     given away: a rollback never fails for its release's labels.
@@ -270,20 +270,21 @@ Where owners are applied:
     the release it restores owns entries, so an image pruned since fails
     it before anything changes.
 - A sync: an entry the child owns lands with the child's owner, by the
-  child's labels (`rsync --chown`), whatever the parent's files have.
+  child's labels (`rsync --chown`), regardless of the owners on the
+  parent's files.
 - An `--import` of a `volumes` service: what it extracted goes to its
   owner before the import completes; locally on macOS, nothing, since
   Docker Desktop's file sharing may refuse the chown.
 - A reset, once it has emptied `mnt`.
 - Locally, before `up`, `start`, `restart`, `run`, `create`, `watch` and
-  `scale`, but not with compose's `--dry-run`. A `--dry-run` after `run`'s
-  service belongs to the container's command, and that run does start,
-  so it gets the owners. A missing owned
-  entry is created. On Linux, an entry whose directory is not its
-  owner's is given away and scanned whole; one whose directory is its
-  owner's is never scanned, since this runs before every such command.
-  On macOS, Docker Desktop and OrbStack let any container user write the
-  Mac's files, so only the directories are made.
+  `scale`, but not with compose's `--dry-run`. A `--dry-run` after
+  `run`'s service belongs to the container's command, and that run does
+  start, so it gets the owners. A missing owned entry is created. On
+  Linux, an entry whose directory is not its owner's is given away and
+  scanned whole; one whose directory is its owner's is never scanned,
+  since this runs before every such command. On macOS, Docker Desktop
+  and OrbStack let any container user write the Mac's files, so only the
+  directories are made.
   - Labels that cannot be read are only a warning: the command goes on,
     and compose says what is wrong with its files. So is an owned entry
     that is a symbolic link (an entry shared between worktrees): it is
@@ -336,16 +337,16 @@ with nothing changed, for:
 That last check also runs outside releases. Rollbacks and restores refuse
 such a link, and a sync whose copy brings one starts nothing on it. On a
 server, nothing in a release starts while one is there (an `up`, a
-`start`, a `run`, a `cp`, devopsy's own starts), whatever brought it.
+`start`, a `run`, a `cp`, devopsy's own starts), however it got there.
 What stops services in order to start them again refuses before it stops
 them: a snapshot, an export, a sync from the environment or into it
 (except a `--reset`), and an `--import` for the entries its tar does not
 replace.
 
 A bind mount's source is checked both as written and as where its
-symbolic links lead, since Docker mounts the latter. So a link in the release to
-below an owned entry, or one in `shared/mnt` into the release, is
-refused as what it leads to. Links into `shared/`, which is outside the
+symbolic links lead, since Docker mounts the latter. A link in the
+release to below an owned entry, or one in `shared/mnt` into the release,
+is refused as what it leads to. Links into `shared/`, which is outside the
 release, are fine.
 
 Labels that the owners' step after the switch could not read (a value it
@@ -377,7 +378,7 @@ devopsy @staging --import database < database.sql   # asks for staging's full na
   and modes kept. An import empties each entry the tar carries first, as
   a sync's `--delete` does, and extracts it in a container without a
   network that mounts that entry alone, so a running service that swaps a
-  directory for a link meanwhile can lead the extraction nowhere else.
+  directory for a link meanwhile cannot lead the extraction anywhere else.
   Volumes go the same way, created first when missing. An entry its
   labels own is given to its owner once extracted.
 - A service without data, or whose copy is `none`, is refused.
@@ -405,8 +406,9 @@ refuses a tar that is:
   link, or a member below a link;
 - carrying a link that makes a service's bind source lead out of its
   entry, judged by where it leads through the tar's other links as the
-  host would resolve it, since Docker follows it there. Any other link is
-  the data's own, wherever it points, as a sync copies it.
+  host would resolve it, since Docker follows it there. Any other link
+  belongs to the data, wherever it points, and is kept as a sync would
+  copy it.
 - carrying a device node or a FIFO anywhere: as root, tar would make
   them on the server. `--export` leaves them out.
 
@@ -432,12 +434,12 @@ what devopsy stopped stays down.
 Until the import starts writing (when devopsy asks Docker to start the
 hook, or starts the first container that empties and extracts), a
 failure, a Ctrl-C or a lost session starts again what was stopped, and
-nothing is imported. On a target, devopsy waits for a word from your
-session right before that write, so a session lost after the data
-arrived imports nothing.
+nothing is imported. On a target, devopsy waits for your session to
+confirm right before that write, so a session lost after the data arrived
+imports nothing.
 
-From then on, on a target, the import goes on whatever happens to your
-session: a Ctrl-C only says so, a second one ends the session, and
+From then on, on a target, the import keeps going if your session is
+cut. A Ctrl-C only prints a message, a second one ends the session, and
 `--status` shows the import. Its output also goes to
 `<environment>/.devopsy-sync.log`. The environment is marked first, and
 what was stopped is recorded, so a devopsy killed or a server rebooted
@@ -445,12 +447,12 @@ mid-load leaves both behind too.
 
 A failure, including a Docker error that started nothing, ends whatever
 may still write and keeps everything down: what was stopped, the
-imported service and what depends on it. Nothing runs on that data: a release or a
-rollback refuses (a release before its upload), the restart after a
-failed release is skipped, `--status` says so, `--export` warns, and only
-that service can be imported until an import completes.
+imported service and what depends on it. Nothing runs on that data: a
+release or a rollback refuses (a release before its upload), the restart
+after a failed release is skipped, `--status` says so, `--export` warns,
+and only that service can be imported until an import completes.
 
-The ways out:
+To clear the mark:
 
 - the import again from a complete file (`devopsy @prod --import
   database < database.sql`), which starts what the import kept down and

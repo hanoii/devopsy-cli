@@ -31,15 +31,14 @@ devopsy @vm2 --environments      # on one server
 
 `--environments` without a target asks each server that `DEVOPSY_SERVER`
 and the environments' `DEVOPSY_SERVER_<ENVIRONMENT>` name (from the
-caller's environment, then `.devopsy/.env`). It lists the project's
-layout only: `<instance>/<environment>` with `instances: true`, else
+caller's environment, then `.devopsy/.env`). It lists only the project's
+layout, `<instance>/<environment>` with `instances: true`, else
 `<environment>`.
 
 ## Server commands
 
 Every command needs an environment, except these, which need only a
-server:
-`--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
+server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
 `--environments`, `--vars-project` and `--upgrade` (`--environments` and
 `--vars-project` with the checkout's project, or an alias's).
 
@@ -77,16 +76,17 @@ What needs attention is a warning, with its fix:
 
 - an older devopsy;
 - a reboot the system asks for;
-- memory Kexec HandOver keeps as CMA: only movable pages may use it, so
-  the kernel's own allocations can run out with memory free (`kho=off`
-  frees it, and devopsy-server's `setup.sh` adds it);
+- memory Kexec HandOver keeps as CMA. Only movable pages may use it, so
+  the kernel's allocations can run out while memory is free. `kho=off`
+  frees it, and devopsy-server's `setup.sh` adds it;
 - a clock out of sync;
-- a kernel with AppArmor and no `apparmor_parser`: no container starts;
+- a kernel with AppArmor and no `apparmor_parser`, on which no container
+  starts;
 - Docker logs that grow without a limit;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
-- a snapshot root on the release root's filesystem: a backup volume not
-  mounted;
+- a snapshot root on the same filesystem as the release root, which
+  usually means the backup volume is not mounted;
 - a tool the server needs, missing;
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
@@ -94,16 +94,17 @@ What needs attention is a warning, with its fix:
   services an operation left stopped, or containers restarting, unhealthy
   or paused.
 
-What is running (a sync, an import, a restore) is said, not warned. What
-kdump keeps is said too, with how to free it (devopsy-server's
-`DEVOPSY_KDUMP=off`), and never warned: crash dumps are a choice.
+What is running (a sync, an import, a restore) is reported as
+information. So is the memory kdump keeps, with how to free it
+(devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check.
 
 ## The server's devopsy
 
 Commands on a server run part of their work in the server's devopsy
-(a release's images, for one), so it must be recent enough for yours. An
+(a release's images, for example), so it must be recent enough for
+yours. An
 older one stops a command that needs what it lacks before anything
 changes, says what is missing, and says to run `devopsy @<target>
 --upgrade`, which always works. Commands that need nothing new still run.
@@ -111,8 +112,8 @@ A sync across servers checks the child's devopsy against the parent's
 the same way, before the parent stops anything.
 
 `DEVOPSY_PROTOCOL_CHECK=warn` turns that stop into a warning and goes on,
-at your own risk: for a local build ahead of the servers, when what you
-run may not need what the server's devopsy lacks.
+at your own risk. It is for a local build ahead of the servers, when what
+you run may not need what the server's devopsy lacks.
 
 ## Shells
 
@@ -121,8 +122,8 @@ run may not need what the server's devopsy lacks.
 - `--shell-host` opens your login shell on the server, in the current
   release (in the release root with `@<server>` alone). It does not depend
   on the project, so it is the way in when the project is broken.
-- `--shell-host --root` opens root's, in its home, whatever user the
-  address or `~/.ssh/config` names (ssh's `-l root`), so root's
+- `--shell-host --root` opens root's, in its home, as root even when the
+  address or `~/.ssh/config` names another user (ssh's `-l root`). Root's
   `authorized_keys` needs your key.
 
 Project commands on a server come from the current release. An
@@ -137,25 +138,24 @@ Set `DEVOPSY_SSH_COMMAND` for SSH options, as git's `GIT_SSH_COMMAND`:
 DEVOPSY_SSH_COMMAND="ssh -i $KEY -o UserKnownHostsFile=$KNOWN_HOSTS" devopsy @vm1:prod --release
 ```
 
-Its options come first, so they win over devopsy's own: ssh keeps the
-first value of each.
+Its options come first, and ssh keeps the first value of each, so they
+win over devopsy's.
 
-devopsy adds `-o ClearAllForwardings=yes` to every session: it never needs
-the host's `LocalForward` lines, and each session would try to bind them
-again while another holds them.
+devopsy adds `-o ClearAllForwardings=yes` to every session. It needs none
+of the host's `LocalForward` lines, and each session would try to bind
+them again while another holds them.
 
 A key for CI is set up with `--ssh-keys` (Keys on a server, below).
 
 ## Keys only
 
-devopsy's sessions never ask for a password (`-o
-PasswordAuthentication=no -o KbdInteractiveAuthentication=no`, over
-`~/.ssh/config`). A devopsy server takes keys only, so a missing key fails
-at once with ssh's `Permission denied (publickey)`, rather than asking in
-the middle of a release's sessions, or while a child's services are
-stopped for a sync. A key's passphrase and a new host key are still asked
-for. For a server you reach by password, set
-`DEVOPSY_SSH_ALLOW_PASSWORD=1`.
+devopsy's sessions never ask for a password (`-o PasswordAuthentication=no
+-o KbdInteractiveAuthentication=no`, over `~/.ssh/config`). A devopsy
+server takes keys only, so a missing key fails at once with ssh's
+`Permission denied (publickey)`. Otherwise ssh would ask in the middle of
+a release's sessions, or while a child's services are stopped for a sync.
+A key's passphrase and a new host key are still asked for. For a server
+you reach by password, set `DEVOPSY_SSH_ALLOW_PASSWORD=1`.
 
 ## Environments nobody releases
 
@@ -173,20 +173,21 @@ activation, its log), each a new connection and handshake, which shows
 through a jump host or a VPN. `devopsy @<server> --ssh-config` prints a
 `Host` block for `~/.ssh/config`: where it connects (`Hostname`, `User`,
 `Port`), then connection sharing (`ControlMaster`, `ControlPersist`) and
-keepalives, commented out. It never connects.
+keepalives, commented out. It does not connect.
 
 ## Keys on a server
 
-Who may log in as the deploy user is up to its `~/.ssh/authorized_keys`.
-`devopsy @<server> --ssh-keys` edits that file over the usual session, as
-that user, without root; any target on the server works too.
+The deploy user's `~/.ssh/authorized_keys` decides who may log in as
+that user. `devopsy @<server> --ssh-keys` edits that file over the usual
+session, as that user, without root; any target on the server works
+too.
 
 - `--ssh-keys` lists the keys: fingerprint, type, comment, options.
 - `--ssh-keys add <file>` authorizes a public key. `add --restricted` is
   for a machine's key: `restrict` (commands only, no shell) plus the agent
   and port forwarding a sync across servers needs.
-- `--ssh-keys remove <fingerprint or comment>` removes one, never the
-  last, which would lock everyone out.
+- `--ssh-keys remove <fingerprint or comment>` removes one. It refuses
+  the last, which would lock everyone out.
 - Without a target, `devopsy --ssh-keys-generate [<name>]` makes an
   ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>` for
   elsewhere), sending nothing anywhere.

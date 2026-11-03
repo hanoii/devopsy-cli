@@ -3,8 +3,8 @@
 A child environment (`develop: {parent: prod}`, see
 [Parents](config.md#parents)) is a clone of its parent. Its first release
 syncs the parent's data. Later, `devopsy @<child> --sync` syncs it again,
-then runs the `run` step of the child's deployed release again, from that
-release's own config on the server, never from your checkout.
+then runs the `run` step of the child's deployed release again, from the
+config stored with that release on the server, not your checkout.
 
 ## Running a sync
 
@@ -51,7 +51,7 @@ What moves is what the labels say ([Data labels](data.md#data-labels)):
   import. Services go one after the other, in compose's `depends_on`
   order, dependencies first.
 
-Each side reads the labels from its own release, so they can differ. To
+The two sides' labels can differ ([Data labels](data.md#data-labels)). To
 keep them alike, put a variable in the label and have the parent pass it
 to its children (`devopsy.data.copy=${DATA_DATABASE:-volumes}` with
 `inherit: [DATA_DATABASE]`). Such a label follows the parent's within the
@@ -75,7 +75,7 @@ A project with no service with data, or whose services have nothing to
 copy, syncs nothing ("nothing to sync"): the parent's `prepare` and
 `finish` do not run, and the child's `run` step still runs. On a child
 whose data comes from a sync that did not complete, such a sync fails,
-since it completes nothing and the earlier copy's data is still there.
+because it completes nothing and the earlier copy's data is still there.
 
 ## What stops
 
@@ -86,9 +86,9 @@ every `always` one. The child stops its `own` services with data and every
 word that differs between the two sides (set in a child's own
 `shared/.env`).
 
-The child stops its set before it knows what the parent copies. When the
-parent has nothing to copy, the child's `import` services were then down
-for a few seconds for nothing.
+The child stops its set before it learns what the parent copies. When the
+parent has nothing to copy, the child's `import` services are down for a
+few seconds for nothing.
 
 ## Order
 
@@ -104,8 +104,8 @@ so syncs from one parent run one at a time. There:
 2. the rsync runs, then each stream's export writes into the child's
    spool;
 3. the parent's services start again;
-4. the child imports the spools. An import reads its spool, never the
-   parent, so the parent is not down through a load;
+4. the child imports the spools. Each import reads its spool, so the
+   parent is not down during a load;
 5. `finish parent go` or `abort` runs.
 
 Then, on the child's server, its services start again, `finish child go`
@@ -119,8 +119,8 @@ On a child's first release, before `finish child go`, devopsy creates the
 child's services with data and its side's set (an `import` app without
 data, an unlabeled app depending on an `own` database), so the hook can
 sanitize the data through them. A service in a profile that is not up
-(`COMPOSE_PROFILES`) is not created, just as the run step's `up` would
-leave it.
+(`COMPOSE_PROFILES`) is not created, as the run step's `up` would leave
+it.
 
 A lock held by something else is announced ("waiting for the release
 running on ...") and then waited for up to 10 minutes, like every release
@@ -130,15 +130,15 @@ lock.
 
 When the parent's entries and volumes are on an XFS or btrfs filesystem
 together with the environment's directory, as for snapshots, the parent's
-side is down only for a clone, which takes seconds whatever the size. Its
+side is down only for a clone, which takes seconds at any size. Its
 set is stopped, its data is cloned into `.devopsy-sync.clone.<id>` beside
 it, and its services start again. The rsync then reads from the clone,
 which is removed afterwards. Across servers it works the same way: the
-daemon serves the clone. devopsy tries whether the data clones before
-anything stops.
+daemon serves the clone. devopsy tests whether the data clones before it
+stops any service.
 
 A `custom` service that the parent's labels stop is exported before the
-services start again, as the labels promise, and so is any `custom`
+services start again, as the labels require, and so is any `custom`
 service while one labeled `always` is stopped. Otherwise the export runs
 after. When nothing that the rsync copies is stopped (a database dumped,
 files under a running app), there is no clone, and the rsync reads the
@@ -147,10 +147,11 @@ live data.
 An `--export` of a `volumes` service on a target clones the same way, and
 makes its tar from the clone.
 
-The cost falls on the parent: the pages a database writes while the clone
+The parent pays for this. The pages a database writes while the clone
 exists go to new places, so its files fragment, and they stay fragmented
-after the clone is gone. On XFS, 200 pages of 16 KiB written meanwhile
-made some 400 extents, where a file written in place keeps one. `xfs_fsr`
+after the clone is gone. On XFS, a database writing 200 pages of 16 KiB
+while a sync's clone existed made some 400 extents, where a file written
+in place keeps one. `xfs_fsr`
 on the database's files puts them back together.
 
 ## How the data travels
@@ -173,15 +174,15 @@ serving only the entries being copied, with no published port) and
 reaches the child's server over SSH through a reverse forward. Your SSH
 agent is forwarded for that session only, and never on to the child. A
 stream also goes to the child's file through an SSH session from the
-parent's server. Data goes from server to server, never through your
-machine.
+parent's server. Data goes directly from server to server, without
+passing through your machine.
 
 The sync's SSH sessions, like every session devopsy opens, send
 keepalives every 15 seconds, so a firewall does not drop a quiet copy.
 The parent gives up within 30 seconds on a child it cannot reach, or that
-refuses its key, rather than keeping its services stopped for minutes.
+refuses its key, so its services are not kept stopped for minutes.
 
-This means, across servers:
+Across servers:
 
 - An agent must run where devopsy runs, with keys both servers accept,
   since the parent's server reaches the child's through it. Before
@@ -217,10 +218,9 @@ A sync's output goes into the log of the release it synced into
 (`--log`), after the release's own output. The parent's side always
 starts its stopped services again.
 
-The child's side knows what the copy did to its data, whatever happened
-to devopsy: the parent marks the child's data right before its first
-write into it and again after its last, and the child goes by those
-marks.
+The parent marks the child's data right before its first write into it
+and again after its last. The child's side reads those marks to tell what
+the copy did, however devopsy went away.
 
 - Nothing written (a prepare or a check failed, the parent's stop failed,
   the first export failed with nothing to rsync): the child's stopped
@@ -236,8 +236,8 @@ marks.
   container (a load through `docker exec`, which a cut never stops) ends
   with the service: devopsy stops the service, and the next sync that
   completes starts it again. devopsy's own copy containers are removed. A
-  database copied raw would not start on such data anyway, and devopsy
-  says which entry was cut.
+  database copied raw would not start on such data, and devopsy says which
+  entry was cut.
 
   Nothing runs on that data until a sync completes: releases and
   rollbacks refuse, the previous release is not restarted after a
@@ -272,10 +272,10 @@ If devopsy itself goes away mid-sync (killed, its connection lost, or
 silent: the parent's side gives up after 30 seconds without devopsy's
 heartbeat, the child's after 90), each side finishes on its own and
 writes what happened to `<environment>/.devopsy-sync.log` on its server.
-When a child's side is killed before it decides, whatever takes its lock
-next decides for it, as not completed: a sync, a release or a rollback. A
-release or a rollback then refuses (a release that syncs counts as a
-sync).
+When a child's side is killed before it settles the outcome, whatever
+takes its lock next settles it as not completed: a sync, a release or a
+rollback. A release or a rollback then refuses (a release that syncs
+counts as a sync).
 
 Starting services again means starting what the sync stopped, which is
 recorded in `<environment>/.devopsy-sync.services` meanwhile. A service
@@ -293,7 +293,7 @@ snapshot, which then starts on the images that release gives it.
 
 Only what the child's side stopped is kept off partial data. A service
 left running during the copy (a `volumes` one labeled `never`, a `custom`
-one imported into while running) sees its data change, as it chose.
+one imported into while running) sees its data change.
 
 ## Starting a child over
 
@@ -314,11 +314,11 @@ data are created before `finish child go`, and the run step starts the
 rest. The release, its images and the child's `shared/.env`, with its
 secrets, stay.
 
-Nothing of the child answers from the wipe until its run step is done. A
-service a sync keeps up to hold visitors goes with the rest, so visitors
-get the proxy's errors meanwhile.
+From the wipe until its run step is done, no service of the child
+answers. A service a sync keeps up to hold visitors goes with the rest,
+so visitors get the proxy's errors meanwhile.
 
-`--reset` is the way out of data nothing else fixes: a sync or an import
+`--reset` fixes data nothing else can: a sync or an import
 that did not complete, or a half-written entry the parent does not have.
 Everything a sync checks runs first, and the child is wiped only at the
 copy's first write, so a parent that refuses or cannot be reached leaves
@@ -331,11 +331,12 @@ release. `--reset` asks for the environment's name, like `--sync`.
 
 ## Inherited variables
 
-`inherit: [KEY, ...]` on the parent (or under `defaults:`) names variables
-its children get, whatever the labels say about the data. What counts is
-the parent's current release: an `inherit:` in a checkout changes nothing
-until the parent is released with it, so no one syncing a child takes
-more of the parent's variables than the parent's own release gives.
+`inherit: [KEY, ...]` on the parent (or under `defaults:`) names
+variables its children get, independently of what the labels say about
+the data. What counts is the parent's current release: an `inherit:` in
+a checkout changes nothing until the parent is released with it, so no
+one syncing a child takes more of the parent's variables than the
+parent's own release gives.
 
 The values are read from the parent's files on its server, nearest
 first: its `shared/.env`, its own `inherit.env` (what it inherited, so a

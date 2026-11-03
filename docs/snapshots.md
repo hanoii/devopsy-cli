@@ -16,8 +16,8 @@ devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   
 `devopsy @<target> --snapshot` takes one of the environment. It holds:
 
 - the data of every service with data (`devopsy.data=true`): its entries
-  of `mnt` and its named volumes, as files, whatever its copy label,
-  except the excluded ones;
+  of `mnt` and its named volumes, as files, for any copy label, except
+  the excluded ones;
 - a copy of the current release: its code, and its images bookmarked so
   they stay on the server;
 - the history of the images that ran on the data;
@@ -26,11 +26,11 @@ devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   
 The data is kept as plain `tar.zst` files, one per entry or volume, so it
 can be restored by hand (`zstd -dc mnt.files.tar.zst | tar -x`). The tars
 hold files, directories, symbolic links and sparse files with their
-holes. Links are kept wherever they lead, an app's absolute ones
-included. A restore makes the links as they were and follows none. It
-refuses a link that would make a path a service bind-mounts lead out of
-its entry, since Docker would follow it. FIFOs, sockets and device nodes
-are left out, since no restore takes them, and hard links come back as
+holes. Links are kept wherever they lead, including an app's absolute
+ones. A restore makes the links as they were and follows none. It refuses
+a link that would make a path a service bind-mounts lead out of its
+entry, because Docker would follow it. FIFOs, sockets and device nodes
+are left out, as no restore takes them, and hard links come back as
 separate files.
 
 ## Taking one
@@ -48,20 +48,18 @@ There are two ways to make that moment shorter:
 - Where the data clones by reflinks (its entries and volumes on an XFS or
   btrfs filesystem together with the environment's directory, with
   Docker's volumes bound onto it), the stopped pass only clones the data.
-  That takes seconds whatever the size, a database included. The services
-  start again, and the tars are made from the clone afterwards, while
-  nobody waits. Then the clone is removed, and so is any mirror left from
-  before. devopsy tries this before anything stops, whatever the
-  settings.
+  That takes seconds for any size, a database too. The services start
+  again, and the tars are made from the clone afterwards, with
+  the services running. Then the clone is removed, and so is any mirror left from
+  before. devopsy tries this before anything stops, with any settings.
 - An environment with `snapshots: {mirror: true}` keeps a mirror of its
   data (`.mirror` among its snapshots, kept between takes). The data is
   first copied into it while everything runs, then copied again with the
   services stopped, this time only what changed. That second copy is the
-  downtime, and the tars are made from the mirror afterwards, while
-  nobody waits. A mirror
-  suits data that stays put between the two passes, like uploaded files.
-  It does not suit a busy database, whose written tables change within
-  minutes and are copied again whole; use reflinks there.
+  downtime, and the tars are made from the mirror afterwards, with the
+  services running. A mirror suits data that stays put between the two passes,
+  like uploaded files. For a busy database, whose written tables change
+  within minutes and are copied again whole, use reflinks.
 
 `--snapshots` says how the last take copied.
 
@@ -90,9 +88,9 @@ A take is refused, with nothing stopped, when:
 
 ## Where they go, and how many stay
 
-Snapshots go in each environment's `snapshots/`, beside `shared/`, never
-inside it, since everything in `shared/` is linked into each release. The
-server's `snapshots: root` can put them elsewhere, under
+Snapshots go in each environment's `snapshots/`, beside `shared/` and
+outside it, because everything in `shared/` is linked into each release.
+The server's `snapshots: root` can put them elsewhere, under
 `<root>/<project>/[<instance>/]<environment>` ([Release
 settings](config.md#release-settings)): on a network volume, for example,
 so the data runs at full speed on the local disk and the backups live off
@@ -111,10 +109,10 @@ of the data as the replaced release left it:
 
 - what a take stops is stopped (with a mirror, its second pass copies only
   what changed while the release fetched its images);
-- the tars are written, or, with a mirror, made from it afterwards, while
-  nobody waits;
+- the tars are written, or, with a mirror, made from it afterwards in the
+  background;
 - the services stay stopped until the new release's run step starts them
-  under its code. devopsy starts whatever the run step leaves stopped, and
+  under its code. devopsy starts what the run step leaves stopped, and
   says so. A restore's run step works the same way.
 
 The downtime is that stop, the switch and the `up`; without a mirror it
@@ -137,12 +135,13 @@ data, after a migration gone wrong for example. With release snapshots
 on, a restore also takes one first, of the data it replaces, so a restore
 can be undone the same way.
 
-No release snapshot is taken by a first release, by a rollback (it
-changes code, not data), on an environment that a sync, an import or a
-restore left incomplete, or on one with no service with data. devopsy
-says so in the last two cases. `releases: {keep: 1}` with release
-snapshots on is an error, since the snapshot would go with its own
-release.
+No release snapshot is taken by a first release, by a rollback, which
+leaves the data as it is ([Rollbacks bring back
+code](images.md#rollbacks-bring-back-code)), on an environment that a
+sync, an import or a restore left incomplete, or on one with no service
+with data. devopsy says so in the last two cases. `releases: {keep: 1}`
+with release snapshots on is an error, because the snapshot would go with
+its release.
 
 ## Restoring
 
@@ -153,19 +152,18 @@ steps, else its `release:` steps. In order:
 
 1. the tars are checked whole before anything stops. A warning says when
    their data may not fit where it goes (sparse files counted at full
-   size), since a disk filled midway leaves the services down and the
+   size). A disk filled midway leaves the services down and the
    environment marked;
-2. the images are fetched: the pulled ones by their names, as whatever
-   the names point to now, and the snapshot's own builds from its
-   bookmarks;
+2. the images are fetched: the pulled ones by their names, as the names
+   point to now, and the snapshot's builds from its bookmarks;
 3. every service with data and its dependents stop;
 4. each entry and volume is emptied and extracted, with its history of the
    images that ran on it. Nothing is checked and `--accept-image` plays no
-   part, since the data and its version come back together;
+   part, as the data and its version come back together;
 5. the switch, and the run step.
 
 The restored release's `devopsy-target.env` keeps this server's lines
-(the target, the imports), since an imported snapshot's would name
+(the target, the imports), because an imported snapshot's would name
 another server.
 
 `--no-code` restores the data alone under the current release, then runs
@@ -196,7 +194,7 @@ of these:
 ## Export and import
 
 `--snapshots export <id>` writes a snapshot as one tar to stdout (`| aws
-s3 cp - s3://...`), since devopsy keeps no storage of its own. Takes,
+s3 cp - s3://...`); devopsy keeps no storage of its own. Takes,
 releases and restores go on meanwhile, and a removal or a pruning leaves
 the snapshot being exported in place, with a message.
 
@@ -211,12 +209,12 @@ secrets).
 
 Import only snapshots you trust. A full restore runs the snapshot's code
 as the deploy user (its steps, its compose file, its Dockerfiles), and
-`--with-env` applies its variables to whatever code runs. A `--no-code`
+`--with-env` applies its variables to any code that runs. A `--no-code`
 restore runs none of its code, and its data is checked as in any restore.
 
-Images stay out of an export: a restore pulls the pulled ones by their
-names, as whatever the names point to now, and builds the built ones
-from the snapshot's code.
+Images stay out of an export. A restore of an imported snapshot fetches
+the pulled ones as in step 2 of [Restoring](#restoring), and builds the
+built ones from the snapshot's code.
 
 ## Removing them
 
