@@ -14,7 +14,7 @@ In order, a release:
 4. checks it: variables, names, networks and mounts;
 5. gets its images;
 6. switches `current` to it, from where it no longer depends on your
-   connection;
+   connection (a release that syncs, once its copy is done);
 7. gives the entries of `mnt` to their owners;
 8. on a child, syncs its parent's data, when it syncs;
 9. runs its `run` step;
@@ -43,9 +43,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
 
 `--release` and `--rollback` refuse without the steps the environment
 names; without any, devopsy prints a starting point. A release's steps
-come from your checkout, which is what it uploads. A rollback's, the
-restart after a failed `run` and `--destroy`'s step come from the release
-they act on, its own `config.yaml` on the server.
+come from your checkout, which is what it uploads. A rollback's remote
+steps, the restart after a failed `run` and `--destroy`'s step come from
+the release they act on, its own `config.yaml` on the server; a
+rollback's local `before` and `after` steps are your checkout's.
 
 The remote steps share one SSH session, under the release lock, so the
 local `before` steps run first and the local `after` steps last. Remote
@@ -114,9 +115,10 @@ The run step's `up` then finds every image there, so a `deploy` needs no
 `build` or `pull` of its own.
 
 A failure leaves `current` as it was, its images included. What the
-failed release got is tagged as its own, so it goes with it. An
-interrupted fetch (Ctrl-C, a lost connection: Dropped connections, below)
-stops the build or pull, and the release is marked failed. A drop the
+failed release got is tagged as its own, so it goes with it, and so does
+what an interrupted one got: a Ctrl-C or a lost connection (Dropped
+connections, below) stops the build or pull, and the release is marked
+failed. A drop the
 server never hears of leaves the release marked fetching until the next
 release, `--destroy` or `--releases remove` marks it failed.
 
@@ -234,8 +236,8 @@ terminal.
 
 ## Rollbacks
 
-`--rollback` goes back to the previous release and runs its rollback
-steps ([Rollbacks bring back code](images.md#rollbacks-bring-back-code)
+`--rollback` goes back to the newest release older than the current
+one that went live and was not rolled back, and runs its rollback steps ([Rollbacks bring back code](images.md#rollbacks-bring-back-code)
 says what comes back). It marks the release it leaves, `ROLLED BACK` in
 `--releases`. Like a failed release, that one never counts toward `keep`,
 and a later rollback never goes back to it, so once a fix is released, the

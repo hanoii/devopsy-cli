@@ -145,7 +145,7 @@ instead of the shell. A project that needs more implements the
 ## Context hashes
 
 `--context-hash [service]` prints a hash of what the service's image is
-built from at `HEAD`, so CI can reuse an image across commits that do not
+built from at `HEAD`, to reuse an image across commits that do not
 change it (`tag=ctx-$(devopsy --context-hash app)`). It covers:
 
 - the build context as git tracks it, minus what Docker's dockerignore

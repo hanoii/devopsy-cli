@@ -89,9 +89,9 @@ To get there it makes choices for you:
   live tree in place.
 - Steps are explicit. `--release` and `--rollback` refuse without the
   steps the environment names. A release's steps come from the checkout,
-  which is what it uploads; a rollback's, the restart after a failed `run`
-  and `--destroy`'s step come from the release they act on, its own
-  `config.yaml` on the server.
+  which is what it uploads; a rollback's remote steps, the restart after
+  a failed `run` and `--destroy`'s step come from the release they act
+  on, its own `config.yaml` on the server.
 - Project behavior lives in the project, as commands in
   `.devopsy/commands/`, not as devopsy features.
 - Capabilities for common needs. Some conveniences are useful to most

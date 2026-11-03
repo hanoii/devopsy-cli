@@ -153,19 +153,20 @@ stdout, the value the environment gets, whatever defines it (inherited,
 the instance's or the project's, from `devopsy-target.env`, imported or
 computed: what `--env` shows), and says where it comes from.
 
-Edits stay in their flag's file, and devopsy warns when another file
-decides the value:
+Edits stay in their flag's file, and devopsy says how the other files
+bear on them:
 
 - A set over a value it now overrides (the environment's own over an
   inherited value, the instance's over the project's) says so, with the
   `unset` that brings the other value back.
 - A set that a nearer file hides (the project's under an environment's
-  own or its inherited one) says which files hide it, for each
+  own and its inherited one) says which files hide it, for each
   environment it reaches. When an inherited value hides it, the warning
   gives the `--vars set` that gives the environment its own value, and
   how the inherited value goes: dropped from the parent's `inherit:`, the
   parent released, then `--inherit`.
-- An `unset` says the value it removed, if any.
+- An `unset` says where the key's value now comes from, if it still has
+  one.
 
 The instance's and the project's `.env` are each server's own: two
 servers of one project each have their own files, which `--vars-instance`
