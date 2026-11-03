@@ -104,6 +104,9 @@ type Docker interface {
 	Pull(ref string) error
 	// Containers are a compose project's containers, stopped ones too.
 	Containers(project string) ([]Container, error)
+	// VolumeExists says whether a named volume is there; true when Docker
+	// cannot tell.
+	VolumeExists(name string) bool
 }
 
 // Container is one of an environment's containers, as the rules read it.

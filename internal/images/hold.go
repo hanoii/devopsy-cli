@@ -293,7 +293,8 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 //   - built under another name (o pulls it, or names it otherwise):
 //     image: that name, put on the image, never a retag of o's pulled
 //     one, the listing recording that image so the release's bookmark
-//     keeps it.
+//     keeps it; a name only the history gives (a parent's), which moves
+//     with its releases: by the release's own bookmark.
 //
 // An image gone that cannot be had: ErrRefused, said; AsBuilt (the
 // restart's last try): a pulled one held all the same, for the run step to
@@ -334,7 +335,13 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 			name, ch.Image = src.Ref, src.Ref
 		}
 		id := cmp.Or(src.ID, h.line.ID)
-		if cur, err := s.Docker.ID(name); err != nil || cur != id {
+		if ch.Image != "" && from == historyHeld && s.imagePresent(id) {
+			// A name only its history gives, a parent's on this server: its
+			// next release moves it, so never by it, by the release's own
+			// bookmark (review: the child's next up ran the parent's newer
+			// build on its data).
+			name, ch.Image, ch.bookmark = o.Ref, "", true
+		} else if cur, err := s.Docker.ID(name); err != nil || cur != id {
 			if _, gerr := s.Docker.ID(id); id == "" || gerr != nil {
 				if !s.AsBuilt {
 					s.say(report.ErrorLevel, "%s: %s, built by the project, is gone from this server", svc, what)
@@ -453,7 +460,7 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 		if !e.held() {
 			// Its own image by bookmark, another environment running its name.
 			if img := imgs[e.Service]; img != "" && wasHeld[e.Service] == "" {
-				kept[e.Service] = composeHold{Image: img}
+				kept[e.Service] = composeHold{bookmark: true}
 			}
 			continue
 		}

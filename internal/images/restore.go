@@ -132,8 +132,17 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 					// its own build (review: a rollback to a release the restart
 					// held ran the failed release's build as its own): that one
 					// is the entry of no service's (withOwnBuilds).
-					if b := ownBuildBookmark(old, names, o.OwnID); b != "" && !s.changed(ownOf(o), svc, mode) {
+					b := ownBuildBookmark(old, names, o.OwnID)
+					if o.OwnID != "" && o.OwnID == o.ID && i >= 0 {
+						b = names[i] // held on the very image: its entry's bookmark
+					}
+					if b != "" {
 						if _, err := s.Docker.ID(b); err == nil {
+							if s.changed(ownOf(o), svc, mode) {
+								if err := s.rebuilt(tid, ownOf(o), svc); err != nil {
+									return err
+								}
+							}
 							st.retag = b
 						}
 					}
@@ -172,7 +181,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	// The changes: pulls, an own image's name put back, the holds, then
 	// the record.
 	es := make([]entry, 0, len(steps))
-	var lines []string
+	var lines, byBookmark []string
 	own := s.own(target)
 	for _, st := range steps {
 		svc := st.svc
@@ -199,6 +208,20 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if cur, err := s.Docker.ID(svc.Ref); err != nil || cur != bid {
 				if err == nil {
 					if who := s.others(cur, own); len(who) > 0 {
+						if svc.Data {
+							// On data its rule judged by its own label, never
+							// another environment's build: by its bookmark, as
+							// unhold does (review: it upgraded the data).
+							s.say(report.InfoLevel, "%s stays on its newer image, which other environments use (%s): %s runs its own by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
+							e := s.entryOf(svc, st.retag, mode)
+							e.Ref = svc.Ref
+							if b := ownOf(o).Build; b != "" && e.Build != "" {
+								e.Build = b
+							}
+							es = append(es, e)
+							byBookmark = append(byBookmark, svc.Name)
+							continue
+						}
 						s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
 						es = append(es, s.entryOf(svc, svc.Ref, mode))
 						continue
@@ -236,6 +259,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		return err
 	}
 	lines = append(heldLines, lines...)
+	for _, svc := range byBookmark {
+		holds[svc] = composeHold{bookmark: true}
+	}
 	// What --accept-image let through: its data's history starts over from
 	// the image it runs, once it runs (Ran).
 	var forced []string

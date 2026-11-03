@@ -104,6 +104,11 @@ func (d CLI) Pull(ref string) error {
 	return err
 }
 
+func (d CLI) VolumeExists(name string) bool {
+	_, err := d.run("volume", "inspect", "--format", "{{.Name}}", name)
+	return err == nil || !strings.Contains(err.Error(), "No such volume")
+}
+
 func (d CLI) Containers(project string) ([]Container, error) {
 	ids, err := d.run("ps", "-a", "-q", "--no-trunc", "--filter", "label=com.docker.compose.project="+project)
 	if err != nil || strings.TrimSpace(ids) == "" {

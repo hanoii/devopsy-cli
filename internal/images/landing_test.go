@@ -1413,3 +1413,274 @@ func TestParentDataNeverMadeVolumeKeepsWindow(t *testing.T) {
 		t.Errorf("search 8 on data search 9 upgraded, the sync having written none of it: %v\nwindow %+v\n%s", err, readHistory(dev.base()).window("search"), out.String())
 	}
 }
+
+// heldThenOver is a child whose r1 (a build at 11.8, key k1) was held on a
+// failed release's 12.1 build, then a release that syncs brought a parent's
+// 11.8 data and failed its run step, so r1's own is allowed again: the
+// restart of r1 is next, r3's build under the name.
+func heldThenOver(t *testing.T, out *bytes.Buffer) (dev *sim, r1, r3, own string) {
+	t.Helper()
+	dp, d := newFake(), newFake()
+	dp.publish("mariadb:11.8", "P11")
+	prod := newSim(t, dp, "app-prod", out)
+	if _, err := prod.release(false, dbSvc("mariadb:11.8")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev = newSim(t, d, "app-dev", out)
+	db := builtDB("app-dev", "11.8")
+	db.BuildKey = "k1;UID=a"
+	r1, err := dev.release(false, db)
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	own = dev.runs("database")
+	if _, err := dev.failRun(false, builtDB("app-dev", "12.1")); err != nil {
+		dev.fail("failed release: %v", err)
+	}
+	if heldIn(dev.e.rel(r1))["database"] == "" {
+		dev.fail("setup: %s is not held", r1)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	r3 = dev.e.release(builtDB("app-dev", "11.8"))
+	rel := dev.e.rel(r3)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("check: %v", err)
+	}
+	dev.fetch(dev.e.svcs[r3])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r3
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.SyncData = ""
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	return dev, r1, r3, own
+}
+
+// Bug: the last try (--as-built) puts a bookmark back even when its build
+// changed since: that is its whole promise (Set.AsBuilt, "never the failed
+// release's image under the name"), and rebuilt says so for a service never
+// held. For one whose hold is over, Restore requires !changed to take the
+// bookmark withOwnBuilds kept, so with a build argument changed since (the
+// rebuild get_images just tried having failed) it says the own image is
+// "gone" and runs what the name holds: the failed release's build, under r1's
+// code and its version, with the bookmark there all along.
+func TestAsBuiltHoldOverBuildChanged(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dev, r1, r3, own := heldThenOver(t, &out)
+	dev.e.svcs[r1][0].BuildKey = "k2;UID=b"
+	dev.e.set.Restart = true
+	if err := dev.e.set.Restore(dev.e.rel(r1), dev.e.rel(r3), false); err == nil {
+		dev.fail("the first try takes the changed build as it is")
+	}
+	dev.e.set.AsBuilt = true
+	out.Reset()
+	if err := dev.e.set.Restore(dev.e.rel(r1), dev.e.rel(r3), false); err != nil {
+		dev.fail("img restore --restart --as-built: %v", err)
+	}
+	if got := labelsIn(dev.e.rel(r1))["database"]; got != own {
+		t.Errorf("%s's last try runs %s, the failed release's build, not its own %s, which its bookmark keeps:\n%s", r1, got, own, out.String())
+	}
+}
+
+// Bug: withOwnBuilds keeps no bookmark of its own when the held image is the
+// release's own build (a label raised over the same cached build: the failed
+// release's image id is r1's), since the entry's bookmark holds it already,
+// and Restore looks only at the entry of no service. So once the hold is over
+// the last try says the image is gone and runs the failed release's build
+// under the name, though the entry's own bookmark holds exactly that build.
+func TestAsBuiltHoldOverSameImage(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	dp, d := newFake(), newFake()
+	dp.publish("mariadb:11.8", "P11")
+	prod := newSim(t, dp, "app-prod", &out)
+	if _, err := prod.release(false, dbSvc("mariadb:11.8")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	r1, err := dev.release(false, builtDB("app-dev", "11.8"))
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	own := dev.runs("database")
+	// The label raised, the build cached: the same image under 12.1.
+	r2 := dev.e.release(builtDB("app-dev", "12.1"))
+	if err := dev.e.set.Check(dev.e.rel(r2)); err != nil {
+		dev.fail("check: %v", err)
+	}
+	if err := dev.e.set.Record(dev.e.rel(r2), dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r2
+	dev.up()
+	dev.e.set.Ran(dev.base(), dev.e.rel(r2))
+	os.WriteFile(filepath.Join(dev.e.rel(r2), failedFile), nil, 0o644)
+	dev.restart(r1, r2)
+	if heldIn(dev.e.rel(r1))["database"] == "" {
+		dev.fail("setup: %s is not held", r1)
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	r3 := dev.e.release(builtDB("app-dev", "11.8"))
+	rel := dev.e.rel(r3)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("check: %v", err)
+	}
+	dev.fetch(dev.e.svcs[r3])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r3
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.SyncData = ""
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.e.set.Restart, dev.e.set.AsBuilt = true, true
+	out.Reset()
+	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); err != nil {
+		dev.fail("img restore --restart --as-built: %v", err)
+	}
+	if got := labelsIn(dev.e.rel(r1))["database"]; got != own {
+		t.Errorf("%s's last try runs %s, the failed release's build, not its own %s, which its entry's bookmark holds:\n%s", r1, got, own, out.String())
+	}
+}
+
+// Bug: a child held on an image its parent built, on one server, is held by
+// image: <the parent's own name> in its compose file (holdOn: "built under
+// another name"), a name the parent's next release moves. Its bookmark holds
+// the right image, and the listing says that image, but the next up in the
+// child (a --reload, any plain up, its run step) follows the name: the
+// parent's newer build, at a version the child's data never had, on the
+// child's data. holdOn guards a name others run from moving, not from a name
+// moving under it.
+func TestHoldOnParentsNameFollowsItsNextBuild(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	d := newFake()
+	prod := newSim(t, d, "app-prod", &out)
+	if _, err := prod.release(false, builtDB("app-prod", "12.1")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	r1, err := dev.release(false, builtDB("app-dev", "11.8"))
+	if err != nil {
+		dev.fail("dev: %v", err)
+	}
+	// A release that syncs, whose run step fails before its database ran.
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData = data
+	failed := dev.e.release(builtDB("app-dev", "12.1"))
+	rel := dev.e.rel(failed)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("check: %v", err)
+	}
+	dev.fetch(dev.e.svcs[failed])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = failed
+	if err := dev.e.set.Land(dev.base(), rel, dev.e.set.SyncLanding(data, "vm1:prod")); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	dev.e.set.SyncData = ""
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.strict = true
+	dev.restart(r1, failed)
+	held := dev.runs("database")
+	if heldIn(dev.e.rel(r1))["database"] == "" || held != prod.runs("database") {
+		dev.fail("setup: %s is not held on the parent's build (%v, runs %s)", r1, heldIn(dev.e.rel(r1)), held)
+	}
+	// The parent's next release builds under its name.
+	if _, err := prod.release(false, builtDB("app-prod", "13")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	// A plain up in the child, as a reload's.
+	dev.up()
+	if got := dev.runs("database"); got != held {
+		imgs, _, _ := composeFacts(filepath.Clean(dev.e.rel(r1)))
+		t.Errorf("the child's up runs the parent's next build %s on its data, not the %s it is held on (image: %s):\n%s", got, held, imgs["database"], out.String())
+	}
+}
+
+// Bug: the fix for a volume nothing ever made stops at a copy (parentData's
+// non-all branch): a snapshot's windows still carry, for a service whose
+// volume did not exist at the take, its label's line. The take writes no tar
+// of it (readSnapshotData), the restore extracts none and leaves the volume as
+// it is, and yet Land replaces its window with that line. Here search was
+// never up when the snapshot was taken (label 8), then ran at 9, upgrading its
+// volume; a full restore leaves that volume alone, forgets 9, and search:8
+// runs on it, unheld and unsaid.
+func TestRestoreNeverMadeVolumeKeepsWindow(t *testing.T) {
+	t.Parallel()
+	search := func(ref, version string) Service {
+		return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: version, EntriesKnown: true, Volumes: []string{"search-data"}}
+	}
+	var out bytes.Buffer
+	d := newFake()
+	d.publish("mariadb:11.8", "M1")
+	d.publish("search:8", "S8")
+	d.publish("search:9", "S9")
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Snapshots = m.base() + "/snapshots"
+	m.e.set.ListAll = func(string) ([]Service, error) { return []Service{dbSvc("mariadb:11.8"), search("search:8", "8")}, nil }
+	if _, err := m.release(false, dbSvc("mariadb:11.8")); err != nil {
+		m.fail("release: %v", err)
+	}
+	snap := m.snapshot("20261017000001")
+	m.e.set.ListAll = nil
+	// Its profile turned on, its label raised.
+	if _, err := m.release(false, dbSvc("mariadb:11.8"), search("search:9", "9")); err != nil {
+		m.fail("release: %v", err)
+	}
+	// The snapshot's code, the profile's variable still on: search at 8.
+	if _, err := m.fullRestore(snap, []Service{dbSvc("mariadb:11.8"), search("search:8", "8")}); err != nil {
+		m.fail("the full restore: %v", err)
+	}
+	if got := m.runs("search"); got != "S9" {
+		t.Errorf("search runs %s on a volume 9 upgraded, which the snapshot does not hold: window %+v\n%s", got, readHistory(m.base()).window("search"), out.String())
+	}
+}
+
+// Bug: a rollback of a built data service whose name another environment's
+// newer build holds keeps the name, as it must, and runs that image: "stays on
+// its newer image ... runs it too". For a data service the rule judged the
+// release's own label, never that image: here stage's 12 build runs on prod's
+// 11.8 data, upgrading it in place, and img ran writes it down as 11.8, so
+// nothing refuses the older image after it. The bookmark that a hold going
+// away runs by in this same case (unhold, ownNameBack) holds the right one.
+func TestRollbackSharedNameRunsOthersBuildOnData(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	d := newFake()
+	db := func(version string) Service {
+		return Service{Name: "database", Ref: "shop-db:latest", Build: true, Data: true, Method: CopyVolumes, DataVersion: version}
+	}
+	prod := newSim(t, d, "app-prod", &out)
+	r1, err := prod.release(false, db("11.8"))
+	if err != nil {
+		prod.fail("prod: %v", err)
+	}
+	own := prod.runs("database")
+	if _, err := prod.release(false, db("11.8")); err != nil {
+		prod.fail("prod: %v", err)
+	}
+	stage := newSim(t, d, "app-stage", &out)
+	stage.n = 100
+	if _, err := stage.release(false, db("12.1")); err != nil {
+		stage.fail("stage: %v", err)
+	}
+	newer := stage.runs("database")
+	out.Reset()
+	if err := prod.rollback(r1, false); err != nil {
+		prod.fail("rollback: %v", err)
+	}
+	if got := prod.runs("database"); got != own {
+		t.Errorf("prod's 11.8 data runs %s, stage's 12.1 build %s, not %s, its own, which its bookmark holds: history %v\n%s", got, newer, own, prod.history("database"), out.String())
+	}
+}

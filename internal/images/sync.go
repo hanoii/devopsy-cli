@@ -58,22 +58,14 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		if !svc.Data || (only != "" && svc.Name != only) {
 			continue
 		}
-		switch {
-		case all:
-		case svc.Method == CopyVolumes:
-			// A service whose entries are all missing here has nothing a
-			// copy writes: the child keeps its own data and history. A
-			// named volume counts as there once something ran on it: one
-			// nothing ever made is skipped by the copy (review: the child
-			// took the label of a profile never up over its own data's
-			// version).
-			if svc.EntriesKnown && !hasEntry(rel, svc.Entries) && (len(svc.Volumes) == 0 || len(h.window(svc.Name)) == 0) {
-				continue
-			}
-		default:
-			continue
+		// A service with none of its entries or volumes here has nothing a
+		// copy or a take writes, as they go by what is there: the receiving
+		// side keeps its own data and history (review: a profile never up
+		// gave the child's data its label's version, a restore forgot what a
+		// volume it never held had run).
+		if (all || svc.Method == CopyVolumes) && s.hasData(rel, svc) {
+			copied = append(copied, svc.Name)
 		}
-		copied = append(copied, svc.Name)
 	}
 	// Each service's newest lines only, ParentHistoryLines in all (10 at
 	// least each): the parent's data rides in a variable inlined in the
@@ -101,6 +93,21 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		}
 	}
 	return b.String()
+}
+
+// hasData says whether any of svc's entries or volumes is there.
+func (s *Set) hasData(rel string, svc Service) bool {
+	if !svc.EntriesKnown || hasEntry(rel, svc.Entries) {
+		return true
+	}
+	for _, key := range svc.Volumes {
+		// A data service's volume is its compose project's, by its key
+		// (external: and a fixed name: are refused on one).
+		if s.Docker.VolumeExists(s.Name + "_" + key) {
+			return true
+		}
+	}
+	return false
 }
 
 // written are the services a copy of rel writes: every profile's, as the

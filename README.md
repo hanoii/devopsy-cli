@@ -960,8 +960,8 @@ release fixes forward. The failed release's `--accept-image` never
 reaches the restart: it accepted the new image, never the old one back
 on the new data. A
 full restore of a snapshot taken during such a hold holds the same way.
-A rollback to a release that was held runs its own image, built again
-when the project builds it, and a `--reload` of one compares the
+A rollback to a release that was held runs its own image, which stays on
+the server through the hold, built again only when gone, and a `--reload` of one compares the
 variables with its own image, not the held one. When the restart's
 images cannot be restored at all (the server's images held by another
 for 10 minutes, Docker failing), a pulled one is still held, by its

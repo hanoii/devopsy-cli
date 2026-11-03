@@ -2576,13 +2576,17 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 }
 
 // snapshotLanding is what the snapshot at snap lands, its windows from its
-// images file and the services its manifest says it writes.
+// images file and the services its manifest holds something of.
 func snapshotLanding(set *images.Set, snap string) images.Landing {
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
 	var services []string
 	if m, err := readManifest(snap); err == nil {
+		// Only what it holds: one with nothing at the take keeps its data
+		// and its history.
 		for _, svc := range m.services {
-			services = append(services, svc.name)
+			if len(svc.entries)+len(svc.volumes) > 0 {
+				services = append(services, svc.name)
+			}
 		}
 	}
 	return set.RestoreLanding(string(data), filepath.Base(snap), services)
