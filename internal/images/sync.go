@@ -24,11 +24,13 @@ const (
 )
 
 // ParentData is what a child's sync needs of a parent's data: per data
-// service whose data the copy writes (devopsy.data.copy volumes or
-// custom, as the parent's config resolves it now, any included: a dump
-// at the parent's version is data of that version; a volumes service
-// whose entries are all missing here, which the copy writes nothing for,
-// left out), the window of its history (window), which the child checks
+// service whose files the copy writes (devopsy.data.copy=volumes, as the
+// parent's config resolves it now, any included; one whose entries are
+// all missing here, which the copy writes nothing for, left out; never a
+// custom one, as for a custom import: a dump is loaded by the image that
+// runs, so the data's files are that image's, never the parent's
+// version, and the child's window and hold stay as they were), the
+// window of its history (window), which the child checks
 // its own version and tag against and takes over with the data (rule,
 // SyncCheck, SyncDone). Lines, tab separated: "data" and the service,
 // then "ran" and a history line, per line of its window.
@@ -60,7 +62,6 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		}
 		switch {
 		case all:
-		case svc.Method == CopyCustom:
 		case svc.Method == CopyVolumes:
 			// A service whose entries are all missing here has nothing a
 			// copy writes: the child keeps its own data and history. A

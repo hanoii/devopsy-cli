@@ -976,9 +976,10 @@ source's data (Parent environments and syncs, `--export` and
 `--import`): the receiving side always runs its release's own image on
 the copy, a hold it had going with its old data, and its history
 becomes the source's. One whose own built image is gone while held is
-refused before anything stops: a copy builds nothing. A `custom`
-import is loaded through the image that runs, so it checks nothing and
-its history and hold stay as they were.
+refused before anything stops: a copy builds nothing. A `custom` copy,
+a sync's or an import's, is loaded through the image that runs, so the
+data's files are that image's, not the source's version: it checks
+nothing, and its history and hold stay as they were.
 
 Image mode needs no git: without it the release just has no commit.
 Either way files arrive with git's modes, whatever the checkout's: 0755
@@ -1366,9 +1367,12 @@ files, is refused the same way (a label the child sets in its own
 **Images with the data.** A copy brings data at the parent's version,
 so before anything stops the child's side checks its own labels against
 the parent's data, as a release checks its own (Data and its images),
-for every service with data the copy writes (`volumes` or `custom`, `any`
+for every service whose files the copy writes (`volumes`, `any`
 included; one whose entries are all missing on the parent writes
-nothing, and keeps the child's history). A child below the parent's
+nothing, and keeps the child's history). A `custom` copy checks nothing
+and keeps the child's history and what it runs, as a `custom` import
+does: its script loads the dump through the image that runs, so the
+data's files are that image's, not the parent's version. A child below the parent's
 version, or on another tag at it, is refused, every sync, unless `--sync
 --accept-image <service>`: the way to try an upgrade path on the parent's
 data, one command per sync, its history starting over. A service the

@@ -1410,9 +1410,13 @@ func TestDataSync(t *testing.T) {
 	}
 }
 
-// A custom copy's data is the parent's too (a dump at its version): the
-// parent sends its window, the child checks and takes it over; one the
-// copy does not carry (none) sends nothing.
+// A custom copy carries no image information, as a custom import does:
+// the dump is loaded by the image that runs, so the data's files are that
+// image's, never the parent's version. The parent sends nothing for it
+// (nor for a copy of none), the child checks nothing, and its window and
+// hold stay as they were: a held child stays held on the image that
+// loaded the dump (review round 3: the parent's 11.8 window was taken
+// over, the hold dropped, and 11.8 ran on the datadir 12.1 had written).
 func TestDataSyncCustom(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1423,12 +1427,29 @@ func TestDataSyncCustom(t *testing.T) {
 		s.Method = CopyCustom
 		return s
 	}
-	d.publish("mariadb:12.1", "J1")
-	prod.release(false, custom("mariadb:12.1"))
 	d.publish("mariadb:11.8", "I1")
+	prod.release(false, custom("mariadb:11.8"))
+	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); data != "" {
+		t.Errorf("ParentData of a custom copy: %q", data)
+	}
+	// dev held on 12.1, its own 11.8.
 	dev.release(false, custom("mariadb:11.8"))
-	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) {
-		dev.fail("a custom copy onto a lower child: %v", err)
+	d.publish("mariadb:12.1", "J1")
+	dev.failRun(false, custom("mariadb:12.1"))
+	if dev.runs("database") != "J1" || heldIn(dev.e.rel(dev.cur))["database"] == "" {
+		dev.fail("setup: dev runs %s, held %v", dev.runs("database"), heldIn(dev.e.rel(dev.cur)))
+	}
+	history := strings.Join(dev.history("database"), " ")
+	compose, _ := os.ReadFile(filepath.Join(dev.e.rel(dev.cur), ComposeFile))
+	out.Reset()
+	if err := syncInto(t, prod, dev, false); err != nil {
+		dev.fail("a custom copy of 11.8 data into the held dev: %v", err)
+	}
+	if got := strings.Join(dev.history("database"), " "); got != history {
+		t.Errorf("the custom copy changed the history: %s, was %s", got, history)
+	}
+	if c, _ := os.ReadFile(filepath.Join(dev.e.rel(dev.cur), ComposeFile)); string(c) != string(compose) || dev.runs("database") != "J1" {
+		dev.fail("the custom copy changed the hold: runs %s\n%s", dev.runs("database"), c)
 	}
 	none := dbSvc("mariadb:12.1")
 	none.Method = "none"
