@@ -2545,13 +2545,11 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		// a service its check refused starts its history over (a full
 		// restore takes none: nothing is checked).
 		set.Accept = acceptedImages()
-		err = set.ImportDone(p.base, rel, string(data))
-		if err == nil && noCode {
-			// A hold the restored data no longer needs goes: the held image
-			// would upgrade it again (a full restore's release decided its
-			// holds against the snapshot's window already).
-			err = set.Unhold(p.base, rel)
-		}
+		// Its holds derived again from the restored history (Rederive): a
+		// hold the restored data no longer needs goes, the held image
+		// would upgrade it again, and one it needs is on the image the
+		// snapshot's window ends on.
+		err = set.RestoreDone(p.base, rel, string(data))
 		unlock()
 		if err != nil {
 			return fail(err.Error())

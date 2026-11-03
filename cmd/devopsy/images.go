@@ -37,11 +37,11 @@ import (
 // <release> <release it replaces> [--fetched] [--as-built] (exit 1 when an
 // own image must be built again, 3 when refused or it cannot; a
 // rollback's checks its data services first; --restart, the restart
-// after a failed run step: none refused, those the rule would refuse held
-// on the failed release's image, --accept-image ignored; --restore, a
-// full restore: nothing checked; as built, the restart's last try,
-// neither exit), hold <release> <failed release> (the restart's last
-// resort once get_images failed: the holds written into the release's
+// after a failed run step: none refused, --accept-image ignored;
+// --restore, a full restore: nothing checked; as built, the restart's
+// last try, neither exit; each derives its holds, images.Set.holdsFor),
+// hold <release> <failed release> (the restart's last resort once
+// get_images failed: the holds derived and written into the release's
 // listing and compose file without the image lock or Docker, exit 3 when
 // one cannot be), ran <environment> <release> [cut] (the history of what
 // ran on the data; cut: of an activation cut off past its switch),

@@ -1,6 +1,7 @@
 package images
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -228,119 +229,175 @@ func parseParentData(data string) map[string]*sourceData {
 
 // SyncCheck checks, before a sync stops anything, each of the child's
 // data services the parent copies (rel, the child's current release, its
-// version and tag as its labels give them now, claims) against the
-// parent's window (rule): the
-// copy replaces the child's data, which then has the parent's version.
-// Refused: ErrRefused, said, nothing changed; --accept-image lets a
-// refused one through, its history starting over (SyncDone). The child
-// always runs its own image on the copy.
+// version and tag as its labels give them now, a held one's the image it
+// is held on) against the parent's window (rule): the copy replaces the
+// child's data, which then has the parent's version. Refused:
+// ErrRefused, said, nothing changed; --accept-image lets a refused one
+// through, its history starting over (SyncDone). The child always runs
+// its own image on the copy.
 func (s *Set) SyncCheck(rel, data string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"}, true, nil)
+	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"}, true, false)
 }
 
 // ImportCheck is SyncCheck for an import of one service's data, the
 // export's (ExportData, DataFor) in place of a parent's, before the
-// import stops anything.
+// import stops anything: by the listing (what its last activation runs).
 func (s *Set) ImportCheck(rel, data, service string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>"}, false, nil)
+	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>"}, false, false)
 }
 
 // RestoreCheck is SyncCheck for a --no-code restore of snapshot, its
 // data (SnapshotData) against the current release (rel), before anything
-// stops.
-//
-// A service held on another release's image (the restart's, a full
-// restore's) that the current release's own label and tag allow on the
-// snapshot's data is judged by them: the data step runs it on its own
-// image again (Unhold), whose build, when the project builds it, must be
-// there (a --no-code restore builds nothing: refused, the full restore
-// the way, which builds).
+// stops: the snapshot's window is the environment's own past, so a
+// service whose release's own image it refuses passes when the image it
+// runs now (held) is allowed: held after, on the image that window ends
+// on, which the snapshot bookmarks. A --no-code restore builds nothing:
+// a built image the data step needs, gone, refuses it, the full restore,
+// which builds, named.
 func (s *Set) RestoreCheck(rel, data, snapshot string) error {
-	ps := parseParentData(data)
-	h := readHistory(baseOf(rel))
-	drop := s.unholdable(rel, func(svc string) []ran {
-		if p := ps[svc]; p != nil {
-			return p.window()
-		}
-		return h.window(svc)
-	})
-	mode := ModeOf(rel)
-	var gone []string
-	for _, e := range readList(rel) {
-		svc, ok := drop[e.Service]
-		if !ok || !svc.own(mode) {
-			continue
-		}
-		if _, err := s.Docker.ID(e.OwnID); e.OwnID == "" || err != nil {
-			gone = append(gone, svc.Name+": the current release's own image of it, built by the project, is gone from this server, and the image it is held on ("+shownData(e)+") would upgrade the snapshot's data again")
-		}
-	}
-	if len(gone) > 0 {
-		s.sayAll(report.ErrorLevel, "a --no-code restore builds nothing: nothing restored", gone,
-			report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot)))
-		return ErrRefused
-	}
-	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code"}, false, drop)
+	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code",
+		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd("--snapshots restore "+snapshot))}, false, true)
 }
 
-// claims are rel's listing with each data service's version and tag as
-// its labels give them now (List: in a sync's holder, with the pending
-// inherited variables, InheritPendingEnv, so a label from an inherited
-// variable never lags one sync: review), but for a service its
-// ComposeFile holds (the restart's, a full restore's), whose held image's
-// own version and tag, the listing's, are what runs. Labels that cannot
-// be read leave the listing's, said.
-func (s *Set) claims(rel string) []entry {
+// writeClaims writes into rel's listing each data service's version and
+// tag as its labels give them now (List: in a sync's holder with the
+// pending inherited variables, InheritPendingEnv, so a label from an
+// inherited variable never lags one sync: review), a held one's as its
+// own (entry.OwnDataVersion): what img ran then records, and every later
+// derivation judges. Labels that cannot be read leave the listing's,
+// said.
+func (s *Set) writeClaims(rel string) error {
 	es := readList(rel)
-	if s.List == nil {
-		return es
+	if s.List == nil || len(es) == 0 {
+		return nil
 	}
 	svcs, err := s.List(rel)
 	if err != nil {
 		s.say(report.WarnLevel, "could not read the labels of %s (%v): its data services' versions are its listing's", filepath.Base(rel), err)
-		return es
+		return nil
 	}
-	held := heldIn(rel)
+	old := append([]entry{}, es...)
 	for i, e := range es {
-		if e.Service == "" || e.DataVersion == "" || held[e.Service] != "" {
-			continue
-		}
 		for _, svc := range svcs {
-			if svc.Name == e.Service && svc.Data {
+			if svc.Name != e.Service || !svc.Data || e.DataVersion == "" && !e.held() {
+				continue
+			}
+			if e.held() {
+				es[i].OwnDataVersion, es[i].OwnTag = svc.DataVersion, svc.tag()
+			} else {
 				es[i].DataVersion, es[i].Tag = svc.DataVersion, svc.tag()
 			}
 		}
 	}
-	return es
+	if slices.Equal(old, es) {
+		return nil
+	}
+	if err := writeList(rel, es); err != nil {
+		s.say(report.ErrorLevel, "could not record the data's versions in %s's listing: %v", filepath.Base(rel), err)
+		return err
+	}
+	return nil
 }
 
-// copyCheck is SyncCheck in w's words: by rel's labels now with labels
-// (a sync, whose run step runs under them), else by its listing (what its
-// last activation runs: an import and a --no-code restore check no image
-// names, so a label changed with its image since would pass), but for the
-// services in own, judged by their own label and tag (RestoreCheck).
-func (s *Set) copyCheck(rel, data string, w checkWords, labels bool, own map[string]Service) error {
+// copyCheck is SyncCheck in w's words: each data service the copy writes
+// (data's) judged by the image it runs now (its labels now with labels, a
+// sync's, whose run step runs under them, but for a held one; else its
+// listing: an import and a --no-code restore check no image names, so a
+// label changed with its image since would pass), or, with running (a
+// --no-code restore), by its release's own image (ownEntries), else by
+// the image it runs now when that one fits (copyRule), then copyNeeds.
+func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) error {
 	ps := parseParentData(data)
-	var js []judged
 	es := readList(rel)
-	if labels {
-		es = s.claims(rel)
-	}
-	for _, e := range es {
-		if p := ps[e.Service]; p != nil && e.DataVersion != "" {
-			// One the data step runs on its own image (Unhold): its own
-			// label and tag, which the data allows.
-			if svc, ok := own[e.Service]; ok {
-				e.DataVersion, e.Tag = svc.DataVersion, svc.tag()
-			}
-			js = append(js, judged{service: e.Service, why: rule(p.window(), e.DataVersion, e.Tag, w.source)})
+	own, svcs := s.ownEntries(rel, labels)
+	var js []judged
+	for i, e := range es {
+		p, o := ps[e.Service], own[i]
+		if p == nil || o.DataVersion == "" {
+			continue
+		}
+		js = append(js, judged{service: e.Service, why: copyRule(p.window(), e, o, w.source, running)})
+		if !running {
+			c := nowOf(e, o)
+			js[len(js)-1].why = rule(p.window(), c.DataVersion, c.Tag, w.source)
 		}
 	}
 	forced, err := s.judge(js, w, rel, false)
+	if err != nil {
+		return err
+	}
 	for _, svc := range forced {
 		s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image on the %s data, its history starting over from it", svc, strings.TrimPrefix(strings.TrimSuffix(w.source, "'s"), "the "))
 	}
-	return err
+	if !running {
+		return nil
+	}
+	return s.copyNeeds(rel, es, own, svcs, ps, forced, w)
+}
+
+// nowOf is the image a service whose entry is e, its release's own o,
+// runs now: e when held, else o.
+func nowOf(e, o entry) entry {
+	if e.held() {
+		return e
+	}
+	return o
+}
+
+// copyRule is the rule a copy's check runs on a data service whose entry
+// is e and its release's own image o, against the copy's window w: by o,
+// or with running (a --no-code restore) by e, the image it runs now, when
+// o is refused and e is held (copyCheck). The take-over forces what it
+// refuses, accepted (syncDone).
+func copyRule(w []ran, e, o entry, source string, running bool) string {
+	why := rule(w, o.DataVersion, o.Tag, source)
+	if why != "" && running && e.held() && rule(w, e.DataVersion, e.Tag, source) == "" {
+		return ""
+	}
+	return why
+}
+
+// copyNeeds refuses, before a copy stops anything, one whose take-over
+// would derive (holdsFor, against the windows the copy leaves: the
+// source's, none for an accepted one)
+// a built image Docker no longer has: the release's own of a held
+// service the copy lets run it again, or the one a hold would be on. A
+// copy builds nothing (w.builds), w.rebuild does.
+func (s *Set) copyNeeds(rel string, es, own []entry, svcs map[string]Service, ps map[string]*sourceData, forced []string, w checkWords) error {
+	base := windows(baseOf(rel), rel)
+	held := holdsFor(own, func(svc string) []ran {
+		if slices.Contains(forced, svc) {
+			return nil
+		}
+		if p := ps[svc]; p != nil {
+			return p.window()
+		}
+		return base(svc)
+	})
+	mode := ModeOf(rel)
+	var gone []string
+	for i, e := range es {
+		o := own[i]
+		if h, ok := held[e.Service]; ok {
+			src, from := s.source(rel, e.Service, h.line)
+			if (src.Kind == KindOwn || src.Digest == "") && !s.imagePresent(cmp.Or(src.ID, h.line.ID)) {
+				gone = append(gone, e.Service+": "+heldWhat(from)+", built by the project, is gone from this server, and its data allows the release's own on it no more")
+			}
+			continue
+		}
+		if !e.held() {
+			continue
+		}
+		svc, listed := svcs[e.Service]
+		if (listed && svc.own(mode) || !listed && o.Kind == KindOwn) && !s.imagePresent(o.ID) {
+			gone = append(gone, e.Service+": the current release's own image of it, built by the project, is gone from this server, and the image it is held on ("+shownData(e)+") would upgrade the "+strings.TrimPrefix(strings.TrimSuffix(w.source, "'s"), "the ")+" data again")
+		}
+	}
+	if len(gone) == 0 {
+		return nil
+	}
+	s.sayAll(report.ErrorLevel, w.builds+": "+w.nothing, gone, w.rebuild)
+	return ErrRefused
 }
 
 // SyncDone takes over the parent's data's history once a sync's copy is
@@ -351,61 +408,91 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels bool, own map[str
 // own image. from is the parent's address. What runs is the child's own
 // image, untouched.
 func (s *Set) SyncDone(base, rel, data, from string) error {
-	return s.syncDone(base, rel, data, SyncedFrom+from, "the parent's", true)
+	return s.syncDone(base, rel, data, SyncedFrom+from, "the parent's", true, false)
 }
 
 // ImportDone is SyncDone for a complete import of the data an export
-// recorded (ImportCheck), or a restore's of a snapshot's: the window the
-// export's, first line Imported, timed at the import (--resolved keeps a
-// history whose first line came since the import's mark).
+// recorded (ImportCheck): the window the export's, first line Imported,
+// timed at the import (--resolved keeps a history whose first line came
+// since the import's mark).
 func (s *Set) ImportDone(base, rel, data string) error {
-	return s.syncDone(base, rel, data, Imported, "the export's", false)
+	return s.syncDone(base, rel, data, Imported, "the export's", false, false)
 }
 
-// syncDone is SyncDone, the window's first line how first. With labels
+// RestoreDone is ImportDone for a restore's data step, of a snapshot's
+// windows (SnapshotData), as RestoreCheck judged them (a --no-code
+// restore's --accept-image forces only what it refused).
+func (s *Set) RestoreDone(base, rel, data string) error {
+	return s.syncDone(base, rel, data, Imported, "the snapshot's", false, true)
+}
+
+// syncDone is SyncDone, the window's first line how first, each service
+// judged as its check judged it (copyRule, running). With labels
 // (a sync), the listing takes the data services' versions and tags as the
-// labels give them now (claims): what img ran then records, so a label
-// from an inherited variable is the copy's version from this sync on.
-func (s *Set) syncDone(base, rel, data, first, source string, labels bool) error {
+// labels give them now (writeClaims): what img ran then records, so a
+// label from an inherited variable is the copy's version from this sync
+// on. A restore's (running) derives rel's holds again (Rederive).
+func (s *Set) syncDone(base, rel, data, first, source string, labels, running bool) error {
 	ps := parseParentData(data)
 	h := readHistory(base)
 	changed := false
 	var cs map[string]Container
-	es := readList(rel)
 	if labels {
-		es = s.claims(rel)
-		if old := readList(rel); !slices.Equal(old, es) {
-			if err := writeList(rel, es); err != nil {
-				s.say(report.ErrorLevel, "could not record the data's versions in %s's listing: %v", filepath.Base(rel), err)
-				return err
-			}
+		if err := s.writeClaims(rel); err != nil {
+			return err
 		}
 	}
-	for _, e := range es {
-		p := ps[e.Service]
-		if p == nil || e.DataVersion == "" {
+	es := readList(rel)
+	own, _ := s.ownEntries(rel, false)
+	for i, e := range es {
+		p, o := ps[e.Service], own[i]
+		if p == nil || o.DataVersion == "" {
 			continue
 		}
 		w := append(history{}, p.window()...)
-		if s.Accept[e.Service] && rule(w, e.DataVersion, e.Tag, source) != "" {
-			// Its own image on the copy, accepted: its history over from it.
+		if !running && s.Accept[e.Service] && rule(w, nowOf(e, o).DataVersion, nowOf(e, o).Tag, source) != "" {
+			// What it runs on the copy, accepted: its history over from it.
+			c := nowOf(e, o)
+			img := Image{ID: c.ID}
 			if cs == nil {
 				cs = s.containers()
 			}
-			img := Image{ID: e.ID}
-			if c, ok := cs[e.Service]; ok && c.started() {
-				if i, err := s.Docker.Inspect(c.Image); err == nil {
+			if ct, ok := cs[e.Service]; ok && ct.started() {
+				if i, err := s.Docker.Inspect(ct.Image); err == nil {
 					img = i
 				}
-			} else if i, err := s.Docker.Inspect(e.ID); err == nil {
+			} else if i, err := s.Docker.Inspect(c.ID); err == nil {
 				img = i
 			}
-			h = append(h.without(e.Service), ranOn(e, Forced, img, s.now()))
+			h = append(h.without(e.Service), ranOn(c, Forced, img, s.now()))
+			changed = true
+			continue
+		}
+		if running && s.Accept[e.Service] && copyRule(w, e, o, source, running) != "" {
+			// Its own image on the copy, accepted: its history over from it.
+			img := Image{ID: o.ID}
+			if e.held() {
+				if i, err := s.Docker.Inspect(o.ID); err == nil {
+					img = i
+				}
+			} else {
+				if cs == nil {
+					cs = s.containers()
+				}
+				if c, ok := cs[e.Service]; ok && c.started() {
+					if i, err := s.Docker.Inspect(c.Image); err == nil {
+						img = i
+					}
+				} else if i, err := s.Docker.Inspect(o.ID); err == nil {
+					img = i
+				}
+			}
+			h = append(h.without(e.Service), ranOn(o, Forced, img, s.now()))
 			changed = true
 			continue
 		}
 		if len(w) == 0 {
-			w = history{{Service: e.Service, Ref: e.Ref}}
+			w = history{{Service: e.Service, Ref: o.Ref}}
 		}
 		w[0].How = first
 		if first == Imported || len(w) == 1 && w[0].Time == 0 {
@@ -414,14 +501,16 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels bool) error
 		h = append(h.without(e.Service), w...)
 		changed = true
 	}
-	if !changed {
+	if changed {
+		if err := h.write(base); err != nil {
+			s.say(report.ErrorLevel, "could not take over %s history of what ran on the data: %v", source, err)
+			return err
+		}
+	}
+	if !running {
 		return nil
 	}
-	if err := h.write(base); err != nil {
-		s.say(report.ErrorLevel, "could not take over %s history of what ran on the data: %v", source, err)
-		return err
-	}
-	return nil
+	return s.Rederive(base, rel)
 }
 
 // Recreate are the services of rel whose container its activation gave
@@ -545,6 +634,9 @@ func FilterImported(snap, cur string) error {
 		}
 		if e.OwnRef != "" {
 			e.OwnRef = repo + e.OwnRef[len(repoOf(e.OwnRef)):]
+		}
+		if e.OwnDigest != "" {
+			e.OwnDigest = repo + e.OwnDigest[len(repoOf(e.OwnDigest)):]
 		}
 		// Its id is the other server's word: bookmarked by it, any local
 		// image of another repository it names would be tagged into the

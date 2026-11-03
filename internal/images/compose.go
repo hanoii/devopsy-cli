@@ -12,23 +12,23 @@ import (
 // beside its code: the facts of its activation a project could not write
 // in advance, and nothing the project chooses. Every service the
 // activation fetched gets DigestLabel, the image it gave it; a data
-// service the restart after a failed run step keeps on the failed
-// release's image (Restore's holds) gets HeldLabel, and image: the
-// reference that holds it (its digest, the failed release's own name, a
-// bookmark) unless its own name was put on it. devopsy runs compose with
+// service held on another image than its release's own (holdsFor: the
+// rule refuses its own against its data's history) gets HeldLabel, and
+// image: the reference that holds it (its digest, another release's own
+// name, a bookmark) unless its own name was put on it. devopsy runs compose with
 // it between the project's compose.yaml and the operator's
 // compose.override.yaml, on the server only.
 const ComposeFile = "devopsy-compose.yaml"
 
-// HeldLabel marks a service the restart holds on the failed release's
-// image, that release's id as its value, or a full restore on the image
-// its snapshot's data ran, "snapshot <id>": --status says so, and a
-// reload takes the hold for the listing's image (ReloadCheck).
+// HeldLabel marks a held service (holdsFor), its value where the image
+// it runs came from (source): the release that ran it on the data, or
+// "snapshot <id>", or historyHeld: --status says so (heldWhat).
 const HeldLabel = "devopsy.held"
 
 // composeHold is how ComposeFile holds a service: Image its image: (""
-// when its own name holds it), From the failed release whose image it is.
-// bookmark: by the release's own bookmark, once known (Restore).
+// when its own name holds it), From HeldLabel's value ("" for an own image
+// by its bookmark, no hold). bookmark: by the release's own bookmark,
+// named once its listing is known (resolveBookmarks).
 type composeHold struct {
 	Image, From string
 	bookmark    bool
@@ -36,6 +36,11 @@ type composeHold struct {
 
 // writeCompose writes rel's ComposeFile: each entry's label, and holds.
 func writeCompose(rel string, es []entry, holds map[string]composeHold) error {
+	return writeFile(filepath.Join(rel, ComposeFile), composeText(es, holds))
+}
+
+// composeText is a ComposeFile's content.
+func composeText(es []entry, holds map[string]composeHold) string {
 	var b strings.Builder
 	b.WriteString("# devopsy's own: the image each service was given by this release's\n" +
 		"# last activation, and the ones it holds. Rewritten by every\n" +
@@ -72,11 +77,10 @@ func writeCompose(rel string, es []entry, holds map[string]composeHold) error {
 	} else {
 		b.WriteString("services:\n" + svcs.String())
 	}
-	return writeFile(filepath.Join(rel, ComposeFile), b.String())
+	return b.String()
 }
 
-// heldIn reads rel's ComposeFile's holds: service to the failed release
-// whose image it runs.
+// heldIn reads rel's ComposeFile's holds: service to HeldLabel's value.
 func heldIn(rel string) map[string]string {
 	_, _, held := composeFacts(rel)
 	return held
@@ -119,9 +123,8 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // another activation's: one cut off past its switch, a rollback's whose
 // newer containers run on; OrbStack cuts, round 8), another image than
 // its activation gave it (DigestLabel: a plain up followed a name another
-// environment's pull moved, or something outside devopsy), or held by
-// the restart after a failed run step on the failed release's image
-// (HeldLabel), own names included.
+// environment's pull moved, or something outside devopsy), or held on
+// another image than the release's own (HeldLabel), own names included.
 func StatusLines(d Docker, project, rel string) []string {
 	_, labels, held := composeFacts(rel)
 	cs, err := d.Containers(project)
@@ -159,11 +162,7 @@ func StatusLines(d Docker, project, rel string) []string {
 			if r := refs[c.Service]; r != "" && digestOf(labels[c.Service]) == "" {
 				on = r + " (" + on + ")"
 			}
-			what := "the image release " + from + " ran on its data"
-			if snap, ok := strings.CutPrefix(from, snapshotHeld); ok {
-				what = "the image its data ran when snapshot " + snap + " was taken"
-			}
-			lines = append(lines, fmt.Sprintf("%s held on %s, %s, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, what))
+			lines = append(lines, fmt.Sprintf("%s held on %s, %s, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, heldWhat(from)))
 		}
 	}
 	return lines

@@ -48,6 +48,11 @@ type checkWords struct {
 	// input follows the command run again: an import's data (" <
 	// <export>", as the README writes an import).
 	input string
+	// builds is what a copy's refusal says when an image its take-over
+	// needs is gone (copyNeeds: "a sync builds nothing"), rebuild what
+	// builds it.
+	builds  string
+	rebuild report.Remedy
 }
 
 // judge says what the rule decided over js in w's words: refused (and
@@ -191,14 +196,22 @@ func (s *Set) Record(rel, prev string) error {
 		return err
 	}
 	old := readList(prev)
+	h := readHistory(baseOf(rel))
+	parent := parseParentData(s.SyncData)
+	// What starts its history over at this release's run: what
+	// --accept-image let through, a service the parent copies by the
+	// sync's own (SyncDone).
+	over := map[string]bool{}
 	var forced []string
-	if len(s.Accept) > 0 {
-		h := readHistory(baseOf(rel))
-		parent := parseParentData(s.SyncData)
-		for _, e := range es {
-			if s.Accept[e.Service] && e.DataVersion != "" && parent[e.Service] == nil && rule(h.window(e.Service), e.DataVersion, e.Tag, "its") != "" {
-				forced = append(forced, e.Service+"\t"+e.ID)
-			}
+	for _, e := range es {
+		if !s.Accept[e.Service] || e.DataVersion == "" {
+			continue
+		}
+		if p := parent[e.Service]; p != nil {
+			over[e.Service] = rule(p.window(), e.DataVersion, e.Tag, "the parent's") != ""
+		} else if rule(h.window(e.Service), e.DataVersion, e.Tag, "its") != "" {
+			over[e.Service] = true
+			forced = append(forced, e.Service+"\t"+e.ID)
 		}
 	}
 	if err := writeForced(rel, forced); err != nil {
@@ -210,13 +223,27 @@ func (s *Set) Record(rel, prev string) error {
 		s.moved(old, es, mode)
 	}
 	s.stale(es, old, mode)
-	if err := s.keep(rel, es); err != nil {
-		s.say(report.ErrorLevel, "could not record the images of %s: %v", filepath.Base(rel), err)
+	// Its holds, derived against the window its data has when it runs (a
+	// copied service's the parent's): none, Check having refused or
+	// accepted it before, which this agrees with.
+	held := holdsFor(es, func(svc string) []ran {
+		switch p := parent[svc]; {
+		case over[svc]:
+			return nil
+		case p != nil:
+			return p.window()
+		}
+		return h.window(svc)
+	})
+	holds, lines, err := s.applyHolds(rel, es, held, nil)
+	if err != nil {
 		return err
 	}
-	if err := writeCompose(rel, es, nil); err != nil {
-		s.say(report.ErrorLevel, "could not write %s's %s: %v", filepath.Base(rel), ComposeFile, err)
+	if err := s.writeHeld(rel, es, holds); err != nil {
 		return err
+	}
+	if len(lines) > 0 {
+		s.sayAll(report.WarnLevel, "images of "+filepath.Base(rel)+" recorded, but for what its data does not allow:", lines)
 	}
 	return nil
 }

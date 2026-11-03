@@ -91,10 +91,9 @@ func buildArgs(key string) (string, map[string]string) {
 // resolves otherwise (naming the arguments that changed), a service its
 // listing lacks (a profile turned on). A reload, and a sync's or a
 // restore's run step, only start what is there: none of these may pull
-// or build, so each needs a release. Nothing when all match. A service
-// the restart after a failed run step holds (HeldLabel) is compared by
-// the release's own name and build (entry.OwnRef): its held image is
-// neither.
+// or build, so each needs a release. Nothing when all match. A held
+// service (holdsFor) is compared by the release's own name and build
+// (entry.OwnRef): its held image is neither.
 func (s *Set) ReloadCheck(rel string) ([]string, error) {
 	recorded := map[string]entry{}
 	listed := readList(rel)
@@ -106,12 +105,11 @@ func (s *Set) ReloadCheck(rel string) ([]string, error) {
 			recorded[e.Service] = e
 		}
 	}
-	// A service the restart holds runs the failed release's image, which
-	// the listing records: its name and build are compared with the
-	// release's own, which the held entry records (entry.OwnRef), so a
-	// variable changing them still needs a release (review: a reload kept
-	// the held image, said to apply it).
-	held := heldIn(rel)
+	// A held service runs another image, which the listing records: its
+	// name and build are compared with the release's own, which the held
+	// entry records (entry.OwnRef), so a variable changing them still
+	// needs a release (review: a reload kept the held image, said to
+	// apply it).
 	svcs, err := s.List(rel)
 	if err != nil {
 		return nil, err
@@ -119,7 +117,7 @@ func (s *Set) ReloadCheck(rel string) ([]string, error) {
 	var out []string
 	for _, svc := range svcs {
 		e, ok := recorded[svc.Name]
-		if ok && (e.held() || held[svc.Name] != "") {
+		if ok && e.held() {
 			e.Ref, e.Build = e.OwnRef, e.OwnBuild
 		}
 		switch {

@@ -266,7 +266,7 @@ func (m *sim) snapshot(id string) string {
 // code (svcs), its record naming the snapshot and its listing the
 // snapshot's (make-release), its images restored checking nothing (img
 // restore --restore, again --fetched when one it builds is gone), then
-// the data step (ImportDone), the run step and img ran.
+// the data step (RestoreDone), the run step and img ran.
 func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 	m.t.Helper()
 	id := m.e.release(svcs...)
@@ -287,7 +287,7 @@ func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 	}
 	m.cur = id
 	data, _ := os.ReadFile(filepath.Join(dir, "data", "images"))
-	m.e.set.ImportDone(m.base(), rel, string(data))
+	m.e.set.RestoreDone(m.base(), rel, string(data))
 	m.up()
 	m.e.set.Ran(m.base(), rel)
 	return id, nil
@@ -295,8 +295,8 @@ func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 
 // noCode restores the snapshot dir's data alone under the current
 // release, as a --no-code restore does: its check against the snapshot's
-// data, the data step (ImportDone, then Unhold), the run step and img
-// ran.
+// data, the data step (RestoreDone, which derives its holds again), the
+// run step and img ran.
 func (m *sim) noCode(dir string) error {
 	m.t.Helper()
 	rel := m.e.rel(m.cur)
@@ -304,11 +304,8 @@ func (m *sim) noCode(dir string) error {
 	if err := m.e.set.RestoreCheck(rel, string(data), filepath.Base(dir)); err != nil {
 		return err
 	}
-	if err := m.e.set.ImportDone(m.base(), rel, string(data)); err != nil {
+	if err := m.e.set.RestoreDone(m.base(), rel, string(data)); err != nil {
 		m.fail("the data step: %v", err)
-	}
-	if err := m.e.set.Unhold(m.base(), rel); err != nil {
-		m.fail("the data step's holds: %v", err)
 	}
 	m.up()
 	return m.e.set.Ran(m.base(), rel)
@@ -1975,15 +1972,19 @@ func dataRandom(t *testing.T, seed int64) {
 			if yes {
 				m.e.set.Accept = map[string]bool{"database": true}
 			}
-			// Held, and the release's own allowed on the snapshot's data: it
-			// runs its own again (its build there, else refused: a --no-code
-			// restore builds nothing).
+			// Held, and the release's own allowed on the snapshot's data, or
+			// accepted where the check refuses: it runs its own again (its
+			// build there, else refused: a --no-code restore builds nothing).
 			rel := m.e.rel(m.cur)
 			own := dbOf(m.e.svcs[m.cur])
 			cur, _ := match(readList(rel), entry{Service: "database"})
-			unhold := heldIn(rel)["database"] != "" && !verdict(sn.model, own)
-			gone := unhold && own.own(m.e.mode) && !d.images[cur.OwnID]
+			held := heldIn(rel)["database"] != ""
+			unhold := held && !verdict(sn.model, own)
 			refused := !unhold && verdict(sn.model, db)
+			if held && yes && refused {
+				unhold, db = true, own
+			}
+			gone := unhold && own.own(m.e.mode) && !d.images[cur.OwnID]
 			err := m.noCode(sn.dir)
 			if gone {
 				if !errors.Is(err, ErrRefused) {

@@ -212,10 +212,11 @@ type Set struct {
 	// failed release's image under the name.
 	AsBuilt bool
 	// Restart: Restore is the restart after a failed run step, which
-	// cannot refuse: a data service the rule would refuse stays on the
-	// failed release's image that ran on its data (holds), and
-	// --accept-image never reaches it. NoCheck: a full restore, whose
-	// data and history come back from its snapshot: nothing checked.
+	// cannot refuse: a data service the rule would refuse is held on the
+	// image its data's history ends on (holdsFor), and --accept-image
+	// never reaches it. NoCheck: a full restore, whose data and history
+	// come back from its snapshot: nothing checked, its holds derived
+	// against the snapshot's window.
 	Restart, NoCheck bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
@@ -278,14 +279,15 @@ type entry struct {
 	// without build: ("" for any other service), as the release runs them:
 	// the restart's hold records the held image's own (holds).
 	DataVersion, Tag string
-	// OwnRef, OwnID and OwnBuild are the release's own image, for an
-	// entry held on another's (the restart's hold, a full restore's): its
-	// name, id and build key as the release fetched them, what a reload
-	// compares the variables now with (ReloadCheck) and a hold dropped
-	// goes back to (Unhold); "" for an entry not held. Set, they also say
-	// the entry's bookmark holds another release's image, never this
-	// one's build (Restore).
-	OwnRef, OwnID, OwnBuild string
+	// OwnRef, OwnID, OwnBuild, OwnDigest, OwnDataVersion and OwnTag are
+	// the release's own image, for an entry held on another (holdsFor):
+	// its name, id, build key and registry digest as the release fetched
+	// them, and the version and tag its labels give it, what the rule
+	// judges each time it is derived again (ownOf), a reload compares the
+	// variables now with (ReloadCheck) and a hold that goes gives back;
+	// "" for an entry not held. Set, they also say the entry's bookmark
+	// holds another image, never this release's build (Restore).
+	OwnRef, OwnID, OwnBuild, OwnDigest, OwnDataVersion, OwnTag string
 }
 
 // held says whether e is an entry held on another release's image.
@@ -415,7 +417,7 @@ func readList(rel string) []entry {
 			return ""
 		}
 		if col(0) != "" {
-			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6), DataVersion: col(7), Tag: col(8), OwnRef: col(9), OwnID: col(10), OwnBuild: col(11)})
+			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6), DataVersion: col(7), Tag: col(8), OwnRef: col(9), OwnID: col(10), OwnBuild: col(11), OwnDigest: col(12), OwnDataVersion: col(13), OwnTag: col(14)})
 		}
 	}
 	return es
@@ -424,7 +426,7 @@ func readList(rel string) []entry {
 func writeList(rel string, es []entry) error {
 	var b strings.Builder
 	for _, e := range es {
-		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag, e.OwnRef, e.OwnID, e.OwnBuild}
+		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag, e.OwnRef, e.OwnID, e.OwnBuild, e.OwnDigest, e.OwnDataVersion, e.OwnTag}
 		for len(cols) > 1 && cols[len(cols)-1] == "" {
 			cols = cols[:len(cols)-1]
 		}

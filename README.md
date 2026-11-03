@@ -28,8 +28,8 @@ code, so every project works the same way.
 - **Not a compose replacement.** It never rewrites your compose files:
   plain `docker compose` sees what devopsy runs, but for the one file of
   devopsy's own a release adds on a server (`devopsy-compose.yaml`: the
-  image each service was given, and what the restart after a failed run
-  step holds).
+  image each service was given, and the data services held on another
+  image than their release's own).
 - **Not a local development tool like DDEV.** No per-framework setup or
   router: it runs the compose project you write.
 - **Not a build system.** Images are built however you like: on the server
@@ -933,36 +933,38 @@ a rollback past a data upgrade (to `mariadb:11.8` after a release of
 snapshot of the older release's data (Snapshots, below) and
 `--accept-image`. `--snapshots restore <id>` brings data, code and
 images back together, checking nothing: the snapshot's data and its
-history come back as the pair they were. A snapshot taken while the
-restart held a data service (below) has the older release's code and
-the newer data: its restore holds that service on the image its data
-ran, as the restart does, said and in `--status`. `--no-code` brings
-back data alone, checked against the current release's labels; a
-service held on another release's image (below) whose own label and
-tag the restored data allows runs on its own image again, the hold
-gone, or the held image would upgrade that data again (a built one
-needs its own build still on the server: without it the full restore,
-which builds, is the way). One the restored data still refuses stays
-held.
+history come back as the pair they were, held as below. `--no-code`
+brings back data alone, checked against the current release's labels
+(or, for a held service, the image it runs: the snapshot's data is the
+environment's own past), held as below against the restored history. A
+built image it would need, gone (it builds nothing), refuses it before
+anything stops, naming the full restore, which builds.
 
-**The restart after a failed run step** is the one place that cannot
-refuse: it runs on its own, past the switch. When the previous release's
-image would be refused on the data, that service stays on the image the
-data ran last: the failed release's when it ran, else the one the
-previous release was held on already (a release failing before its
-database started keeps an earlier hold), by its digest when pulled, by
-its own name when built, the failed release's own name when it built
-what the previous release pulls; said in the release's output and in
-`--status` (`held on`), until a release fixes forward. A rollback to a
-release that was held runs its own image, built again when the project
-builds it, and a `--reload` of one compares the variables with its own
-image, not the held one. When its images
-cannot be restored at all (the server's images held by another for 10
-minutes, Docker failing), a pulled one is still held, by its digest; a
-built one cannot be, and the release's output names it, with the release
-that fixes forward. The release's
-`--accept-image` never reaches it: it accepted the new image, never the
-old one back on the new data.
+**Holds.** A data service is held, run on another image than its
+release's own, exactly when the rule would refuse its release's own
+image against its data's history: on the image that history ends on,
+by its digest when pulled, by its own name when built (the other
+release's own name when it built what this one pulls). devopsy never
+carries a hold from one activation to the next: it derives it again
+from the history wherever it decides what a data service runs (every
+activation, the restart after a failed run step, a full or `--no-code`
+restore), so a hold goes as soon as the data allows the release's own
+image again, and nothing else keeps one.
+A release or a rollback is refused or accepted before it runs, so it
+holds nothing; the restart after a failed run step is the one place
+that cannot refuse: it runs on its own, past the switch, so the
+previous release runs on the image the failed one ran on the data,
+said in the release's output and in `--status` (`held on`), until a
+release fixes forward. Its `--accept-image` never reaches the restart:
+it accepted the new image, never the old one back on the new data. A
+full restore of a snapshot taken during such a hold holds the same way.
+A rollback to a release that was held runs its own image, built again
+when the project builds it, and a `--reload` of one compares the
+variables with its own image, not the held one. When the restart's
+images cannot be restored at all (the server's images held by another
+for 10 minutes, Docker failing), a pulled one is still held, by its
+digest; a built one cannot be, and the release's output names it, with
+the release that fixes forward.
 
 **Syncs and imports** check the receiving side's labels against the
 source's data (Parent environments and syncs, `--export` and
@@ -1002,9 +1004,9 @@ first one too: `devopsy @<target> --destroy` removes an environment that
 never went live, `--releases remove failed` the release alone.
 `devopsy-compose.yaml` is devopsy's own compose file, the only one it
 writes, holding only facts of the release's last activation: the image
-each service was given (a `devopsy.digest` label) and, after the restart
-of a failed run step or a full restore, the services it holds (a
-`devopsy.held` label, the image it holds them by: above). devopsy runs compose with it between the project's
+each service was given (a `devopsy.digest` label) and the data
+services held on another image (a `devopsy.held` label, the image it
+holds them by: Holds, above). devopsy runs compose with it between the project's
 `compose.yaml` and your `compose.override.yaml`, so your override still
 wins; `devopsy -- config` shows the result. Run compose on a server
 through devopsy: a plain `docker compose up` lacks it, recreates every
