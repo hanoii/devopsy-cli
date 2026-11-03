@@ -1123,6 +1123,18 @@ func TestImportDropsHold(t *testing.T) {
 	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, images.HeldLabel) {
 		t.Fatalf("setup: the hold went with the pull failing:\n%s", c)
 	}
+	// --resolved with the registry still out of reach fails, the mark
+	// kept and nothing started (review round 4: it warned, started the
+	// held image on the imported data and cleared the mark).
+	s.logs()
+	_, errs, code = s.runIO(gone, nil, "@prod", "--import", "app", "--resolved", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || readMark(base) == nil || !readMark(base).IsImport() || strings.Contains(docker, " start ") || !strings.Contains(errs, "could not derive what runs on app's imported data") || !strings.Contains(errs, "--import app --resolved") {
+		t.Fatalf("--resolved with its derivation failing (%d), mark %+v:\n%s\n%s", code, readMark(base), errs, docker)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, images.HeldLabel) {
+		t.Fatalf("the failed --resolved changed the hold:\n%s", c)
+	}
 	_, errs, code = s.runIO(env, nil, "@prod", "--import", "app", "--resolved", "--yes")
 	if code != 0 || !strings.Contains(errs, "app runs ") || !strings.Contains(errs, "own image again") {
 		t.Fatalf("--resolved after the import (%d):\n%s", code, errs)

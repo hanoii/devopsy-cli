@@ -1694,7 +1694,8 @@ terminal), gives the entries a `volumes` service's labels own to their
 owners (as the import would have), starts what the import kept down,
 the service included, and only once all of it is healthy removes the
 mark. A start that fails keeps
-it: fix it and run it again. On a target only, and never over a sync's
+it, and so does a failure to derive what runs on the data (a held image
+given back with the registry out of reach): fix it and run it again. On a target only, and never over a sync's
 mark: a sync's partial copy is completed only by a sync, which replaces
 an import's mark when it is cut too. A `--release-sync` of a child marked
 by an import whose parent does not copy that service fails at its push,

@@ -1412,7 +1412,9 @@ func runImport(cwd string, args []string, color bool) int {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
 	if imgs == nil {
-		importedImages(cwd, base, name, services, time.Time{})
+		if err := importedImages(cwd, base, name, services, time.Time{}); err != nil {
+			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
+		}
 	}
 	clearImportMark(base, name)
 	return code
@@ -1451,34 +1453,30 @@ func recreateRunning(cwd, rel, name string) error {
 // imported (mnt), or accepted (--resolved): they came from elsewhere. A
 // stream's import goes through the service's own image, which keeps its
 // history. In a release, under the server's image lock: its hold is
-// derived again (images.Set.Rederive).
-func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) {
-	for _, s := range services {
-		if s.Name != name || s.Copy != cli.CopyVolumes {
-			continue
-		}
-		set, err := serverImages(cwd, composeName(cwd), errOut)
-		if err != nil {
-			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
-			continue
-		}
-		if cli.InRelease(filepath.Join(cwd, cli.ProjectDirName)) {
-			unlock, err := imagesShared(context.Background())
-			if err != nil {
-				report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
-				continue
-			}
-			defer unlock()
-		}
-		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
-		record := set.Imported
-		if !resolvedSince.IsZero() {
-			record = func(base, rel, name string) error { return set.Resolved(base, rel, name, resolvedSince) }
-		}
-		if err := record(base, rel, name); err != nil {
-			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
-		}
+// derived again (images.Set.Rederive). Its error is what could not be
+// recorded or derived, which --resolved fails on (the held image would
+// start on the imported data) and a local import only warns of.
+func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) error {
+	s, ok := cli.SyncFind(services, name)
+	if !ok || s.Copy != cli.CopyVolumes {
+		return nil
 	}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
+	if cli.InRelease(filepath.Join(cwd, cli.ProjectDirName)) {
+		unlock, err := imagesShared(context.Background())
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
+	if !resolvedSince.IsZero() {
+		return set.Resolved(base, rel, name, resolvedSince)
+	}
+	return set.Imported(base, rel, name)
 }
 
 // importFailed is a failure from the first write: whatever may still
@@ -1591,7 +1589,14 @@ func runResolved(cwd, name string) int {
 	if m := readMark(base); m != nil {
 		since, _ = time.Parse(time.DateTime, m.Since)
 	}
-	importedImages(cwd, base, name, services, since)
+	// One that fails keeps the mark, and what the import kept down down
+	// (review round 4: it warned, then started the held image on the
+	// imported data).
+	if err := importedImages(cwd, base, name, services, since); err != nil {
+		report.Fail(fmt.Errorf("could not derive what runs on %s's imported data (%w): the mark stays, and what the import kept down stays down", name, err),
+			report.Fix("once that is fixed (the registry, Docker), run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
+		return 1
+	}
 	// Made again where devopsy's compose file gives a service another
 	// image than its container's (another activation's container, a hold
 	// gone): started, the old container would run its image on the
