@@ -99,13 +99,13 @@ set is stopped. Then the child waits for the parent.
 
 On the parent's server, the sync holds the parent's release lock shared,
 which makes a release of the parent wait for the copy. It also holds a
-sync lock, and syncs from one parent run one at a time. There:
+sync lock, which makes syncs from one parent run one at a time. There:
 
 1. `prepare parent` runs, then the parent side's set is stopped;
 2. the rsync runs, then each stream's export writes into the child's
    spool;
 3. the parent's services start again;
-4. the child imports the spools. Each import reads its spool, and the
+4. the child imports the spools. Each import reads its spool, so the
    parent is not down during a load;
 5. `finish parent go` or `abort` runs.
 
@@ -265,7 +265,7 @@ Interrupting a sync:
   once.
 - A Ctrl-C during the copy ends devopsy's session to the parent's
   server, which stops the copy (an export too) and starts its services
-  again. devopsy then sends the child's server the same abort as above.
+  again. devopsy then has the child's server finish, as above.
 - Once the copy is in and the run step is running, a Ctrl-C only prints
   a message, since the step belongs to the server. A second Ctrl-C ends
   your session while the step runs to its end there (`--log` shows how).
@@ -338,7 +338,7 @@ and a release. `--reset` asks for the environment's name, like `--sync`.
 `inherit: [KEY, ...]` on the parent (or under `defaults:`) names
 variables its children get, independently of what the labels say about
 the data. What counts is the parent's current release. An `inherit:` in
-a checkout changes nothing until the parent is released with it, and no
+a checkout changes nothing until the parent is released with it, so no
 one syncing a child takes more of the parent's variables than the
 parent's release gives.
 

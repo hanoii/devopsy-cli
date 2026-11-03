@@ -201,8 +201,8 @@ From the switch on (step 6 above), the release finishes on its own, or
 fails and brings the previous release back, and `--log` shows how. A
 Ctrl-C then does not stop it. The release goes on to its end (the run
 step, pruning, the remote `after` steps), and devopsy prints that it
-does, at a terminal and in CI. A second Ctrl-C only ends your session.
-To go back, run `--rollback` once the release has ended.
+goes on, at a terminal and in CI. A second Ctrl-C only ends your
+session. To go back, run `--rollback` once the release has ended.
 
 A release that syncs is the exception during its copy: a Ctrl-C there
 aborts the sync, and the release goes back
@@ -218,7 +218,8 @@ and `--status` says so and names what finishes it:
   sync refuses the release.
 - for a rollback, `--rollback` again, which finishes that rollback
   instead of going one release further back. A release leaves the cut
-  rollback as it is, and marks the release it left as rolled back.
+  rollback as it is, and marks the release that rollback left as rolled
+  back.
 - for a restore, the restore again, or on a child a `--sync`.
 
 ## Logs
@@ -410,5 +411,5 @@ run step on its images again.
 With `--with-env`, a `--no-code` restore checks them under the
 snapshot's variables. When the check fails, the restore is refused and
 points to the full restore. A full restore with `--with-env` reads the
-snapshot's variables from its checks on, and its images are fetched for
+snapshot's variables from its checks on, so its images are fetched for
 them.
