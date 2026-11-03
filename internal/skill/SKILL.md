@@ -116,7 +116,9 @@ What devopsy requires:
   runs the data on a lower version, nor a pulled image on another tag at
   the same version, unless `--accept-image <service>` (never `--yes`,
   which only skips prompts): a release, a rollback, a sync, an import
-  and a restore of a snapshot's data alone refuse it. A data service is
+  and a restore of a snapshot's data alone refuse it. A `custom` copy, a
+  sync's or an import's, checks nothing and keeps the history: its dump
+  loads through the image that runs, so the data stays that image's. A data service is
   held on the image its data ran exactly when its release's own would be
   refused there, derived from the data's history wherever devopsy
   decides what runs (the restart after a failed run step, which cannot

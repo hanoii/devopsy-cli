@@ -454,7 +454,8 @@ machine: the parent's server copies into the child's.
                     a data service whose devopsy.data.version is lower
                     than the parent's data's (or another tag at it) runs
                     on the copy anyway, its history starting over:
-                    refused otherwise, every sync
+                    refused otherwise, every sync (a custom copy is
+                    never checked)
   --from @<target>  copy from another environment of the project instead
                     (@vm1:prod, @a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
@@ -477,7 +478,10 @@ parent and an import of each on the child:
                        the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
-                       database dumped and loaded)
+                       database dumped and loaded). No version is checked
+                       and the child's history of its images stays: the
+                       dump loads through the image that runs there, so
+                       the data is that image's
   devopsy.data.copy=none
                        never copied: the child keeps its own
   devopsy.data.exclude=<entry>[,<entry>...]
