@@ -58,7 +58,7 @@ func TestNothingSaysAround(t *testing.T) {
 	}
 }
 
-// Unit tests run in parallel (AGENTS.md, Keeping tests short): every
+// Unit tests run in parallel (AGENTS.md, Checks): every
 // test calls t.Parallel() first, or says why not in its doc comment, on
 // a line starting "Not parallel:" (it sets the environment, a global, or
 // checks a latency the parallel tests would load). A parallel test never

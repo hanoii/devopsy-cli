@@ -16,7 +16,7 @@ import (
 )
 
 // rootDoc is the agents' root file, from the repository's root.
-const rootDoc = "AGENTS.new.md"
+const rootDoc = "AGENTS.md"
 
 // repoRoot is the repository's root, from this package's directory.
 const repoRoot = "../.."

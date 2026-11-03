@@ -4577,7 +4577,7 @@ func TestExportImportKeepsHoles(t *testing.T) {
 // settleStops takes every unmarked stop line of the record for a leftover
 // of an operation killed outright, and --export on a target runs it
 // first. A custom service's export hook that itself runs devopsy --export
-// of another service (the hooks are the project's: AGENTS.md counts on
+// of another service (the hooks are the project's: devopsy counts on
 // one running devopsy --export) runs it inside the outer export, which
 // holds the locks and has its own stops recorded: the inner export's
 // settle starts them, in the middle of the outer copy, so the dump is

@@ -15,7 +15,7 @@ import (
 // a reload does (cutRefusal), nor removes the mark once that run step
 // went through, as the sync's run step does (sync.go): the release has
 // had its run step now, yet --status still says it was cut, and the next
-// --reload refuses it until a release. AGENTS.md's premise for the
+// --reload refuses it until a release. The premise of the
 // reload's refusal ("the others each run a run step or replace it ...
 // and nothing else of devopsy's starts its code") leaves this one out.
 func TestReview6NoCodeRestoreCut(t *testing.T) {
