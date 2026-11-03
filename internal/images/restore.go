@@ -435,9 +435,9 @@ func (s *Set) RestoreOwn(rel string) {
 	own := s.own(rel)
 	for i, e := range es {
 		// (A held service's own build, of no service: withOwnBuilds, holds.
-		// A service held by its bookmark whose own name is pulled: that name
-		// is never retagged.)
-		if e.Service == "" || e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") || e.held() && e.OwnDigest != "" {
+		// A service held by its bookmark under its own pulled name: that name
+		// is never retagged. One held under another name counts on that one.)
+		if e.Service == "" || e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") || e.held() && e.OwnDigest != "" && familiar(e.Ref) == familiar(e.OwnRef) {
 			continue
 		}
 		bid, err := s.Docker.ID(names[i])

@@ -1899,3 +1899,30 @@ func TestLandingSharedNameRunsOthersBuildOnData(t *testing.T) {
 		t.Errorf("prod's run step after a sync runs %s, stage's 12.1 build %s, on 11.8 data, not its own %s: history %v\n%s", got, newer, own, prod.history("database"), out.String())
 	}
 }
+
+// A pulled release held under the failed release's own build name counts on
+// that name: a later fetch that fails moved it, and its undo puts it back (a
+// pulled name of its own it never retags). Else its next up runs what the
+// failed fetch built on the data. Found by TestDataRandom's seed 5283.
+func TestDataUndoRestoresTheNameAHoldIsOn(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11", "I1")
+	r1, _ := m.release(false, dbSvc("mariadb:11"))
+	m.failRun(false, builtDB("app-prod", "11.8"))
+	held := m.runs("database")
+	if imgs, _, marks := composeFacts(m.e.rel(r1)); imgs["database"] != "app-prod-database" || marks["database"] == "" {
+		m.fail("setup: the hold is %v, %v", imgs, marks)
+	}
+	r3 := m.e.release(builtDB("app-prod", "11.8"))
+	m.fetch(m.e.svcs[r3])
+	if got, _ := d.ID("app-prod-database"); got == held {
+		m.fail("setup: the fetch built nothing new")
+	}
+	m.e.set.Undo(m.e.rel(r3), m.e.rel(r1), false)
+	if got, _ := d.ID("app-prod-database"); got != held {
+		t.Errorf("the name the hold is on is %s after the undo, not %s", got, held)
+	}
+}
