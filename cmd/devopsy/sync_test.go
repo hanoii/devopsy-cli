@@ -128,6 +128,8 @@ after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at"
 # FAKE_APP_OWNER: app's devopsy.mnt.owner.
 applab=$(lab "${FAKE_APP:-mnt}")
 dblab=$(lab "${FAKE_DB:-mnt+own}")
+# FAKE_DB_VERSION: db's devopsy.data.version, in place of any.
+[ -z "${FAKE_DB_VERSION:-}" ] || dblab=$(printf '%s' "$dblab" | sed "s/\"devopsy.data.version\":\"any\"/\"devopsy.data.version\":\"$FAKE_DB_VERSION\"/")
 # FAKE_DB_OWNER: db's.
 [ -z "${FAKE_DB_OWNER:-}" ] || dblab="${dblab%\}},\"devopsy.mnt.owner\":\"$FAKE_DB_OWNER\"}"
 if [ -n "${FAKE_APP_OWNER:-}" ]; then
@@ -4627,5 +4629,34 @@ func TestNestedExportKeepsOuterStops(t *testing.T) {
 	}
 	if strings.Contains(errs, "db ran during the export of app") {
 		t.Errorf("the inner export started what the outer stopped (said: %q):\n%s\n%s", strings.TrimSpace(readString(s.log+".inner")), errs, docker)
+	}
+}
+
+// A rollback below the data's version is refused before its before and
+// prepare steps run (img rollback-target, leniently): exit 3, the remote
+// before step's marker never written, nothing changed. Its local before
+// steps run first, before the server is asked (accepted, as releases
+// accept for marks: no session of its own).
+func TestRollbackRefusedBeforeSteps(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	marker := s.log + ".before-marker"
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {rollback: {before: [remote: mark], run: deploy}}\n", 0o644)
+	write(t, filepath.Join(s.dot, "commands", "mark"), "#!/bin/sh\n## Description: leaves a marker\ntouch "+marker+"\n", 0o755)
+	s.releaseProd([]string{"FAKE_DB_VERSION=11"})
+	first := s.current("prod")
+	s.releaseProd([]string{"FAKE_DB_VERSION=12"})
+	second := s.current("prod")
+	// db ran at 12 on its data (img ran, which the fakes' containers do
+	// not make).
+	write(t, filepath.Join(s.root, "shop", "prod", images.HistoryFile), "1\tdb\tran\tshop-prod-db\tsha256:a\t\t11\t\n2\tdb\tran\tshop-prod-db\tsha256:b\t\t12\t\n", 0o644)
+	out, code := s.run([]string{"FAKE_DB_VERSION=11"}, "@prod", "--rollback")
+	if code != 3 || s.current("prod") != second || fileExists(marker) || !strings.Contains(out, "the rollback to "+filepath.Base(first)) || !strings.Contains(out, "devopsy.data.version=11 is lower than its data's version, 12") {
+		t.Errorf("a rollback below the data's version (%d), current %q (want %q), marker %v:\n%s", code, s.current("prod"), second, fileExists(marker), out)
+	}
+	// Accepted, it goes, its before step first.
+	out, code = s.run([]string{"FAKE_DB_VERSION=11"}, "@prod", "--rollback", "--accept-image", "db")
+	if code != 0 || s.current("prod") != first || !fileExists(marker) {
+		t.Errorf("the rollback accepted (%d), current %q (want %q), marker %v:\n%s", code, s.current("prod"), first, fileExists(marker), out)
 	}
 }

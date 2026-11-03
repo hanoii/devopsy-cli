@@ -910,7 +910,9 @@ history last started over):
 | `any` | runs, and its history starts over: a version set later is taken as it is |
 | no version yet (a first release, after `any`, after an import of data of no known version) | runs, its label taken |
 
-A refusal comes before anything is built, pulled or stopped, and names
+A refusal comes before anything is built, pulled or stopped (a
+rollback's before its remote before and prepare steps; its local before
+steps, which run before the server is asked, have run), and names
 the versions or tags and the ways out: raise the label (not for a
 rollback, whose code is the older release's), or `--accept-image
 <service>` (comma separated, or repeated) on the command you ran
