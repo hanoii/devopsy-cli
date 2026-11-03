@@ -1918,8 +1918,9 @@ func TestRollbackAcceptReachesServer(t *testing.T) {
 	s.releaseProd(nil)
 	scripts := filepath.Join(t.TempDir(), "scripts")
 	// The setup's releases have no rollback step: it ends there, after
-	// its check said what it made of --accept-image.
-	if out, _ := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@prod", "--rollback", "--accept-image", "db"); !strings.Contains(out, "db: --accept-image lets through only what the check refuses") {
+	// its lenient check (which says only a refusal: img restore says the
+	// rest, once).
+	if out, _ := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@prod", "--rollback", "--accept-image", "db"); !strings.Contains(out, "gives environment prod no rollback run step") {
 		t.Fatalf("--rollback --accept-image:\n%s", out)
 	}
 	activation := ""

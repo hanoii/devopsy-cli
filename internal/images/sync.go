@@ -235,21 +235,21 @@ func parseParentData(data string) map[string]*sourceData {
 // refused one through, its history starting over (SyncDone). The child
 // always runs its own image on the copy.
 func (s *Set) SyncCheck(rel, data string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"})
+	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"}, true)
 }
 
 // ImportCheck is SyncCheck for an import of one service's data, the
 // export's (ExportData, DataFor) in place of a parent's, before the
 // import stops anything.
 func (s *Set) ImportCheck(rel, data, service string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service})
+	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service}, false)
 }
 
 // RestoreCheck is SyncCheck for a --no-code restore of snapshot, its
 // data (SnapshotData) against the current release (rel), before anything
 // stops.
 func (s *Set) RestoreCheck(rel, data, snapshot string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code"})
+	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code"}, false)
 }
 
 // claims are rel's listing with each data service's version and tag as
@@ -283,11 +283,18 @@ func (s *Set) claims(rel string) []entry {
 	return es
 }
 
-// copyCheck is SyncCheck in w's words.
-func (s *Set) copyCheck(rel, data string, w checkWords) error {
+// copyCheck is SyncCheck in w's words: by rel's labels now with labels
+// (a sync, whose run step runs under them), else by its listing (what its
+// last activation runs: an import and a --no-code restore check no image
+// names, so a label changed with its image since would pass).
+func (s *Set) copyCheck(rel, data string, w checkWords, labels bool) error {
 	ps := parseParentData(data)
 	var js []judged
-	for _, e := range s.claims(rel) {
+	es := readList(rel)
+	if labels {
+		es = s.claims(rel)
+	}
+	for _, e := range es {
 		if p := ps[e.Service]; p != nil && e.DataVersion != "" {
 			js = append(js, judged{service: e.Service, why: rule(p.window(), e.DataVersion, e.Tag, w.source)})
 		}
@@ -307,7 +314,7 @@ func (s *Set) copyCheck(rel, data string, w checkWords) error {
 // own image. from is the parent's address. What runs is the child's own
 // image, untouched.
 func (s *Set) SyncDone(base, rel, data, from string) error {
-	return s.syncDone(base, rel, data, SyncedFrom+from, "the parent's")
+	return s.syncDone(base, rel, data, SyncedFrom+from, "the parent's", true)
 }
 
 // ImportDone is SyncDone for a complete import of the data an export
@@ -315,23 +322,26 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 // export's, first line Imported, timed at the import (--resolved keeps a
 // history whose first line came since the import's mark).
 func (s *Set) ImportDone(base, rel, data string) error {
-	return s.syncDone(base, rel, data, Imported, "the export's")
+	return s.syncDone(base, rel, data, Imported, "the export's", false)
 }
 
-// syncDone is SyncDone, the window's first line how first. The listing
-// takes the data services' versions and tags as the labels give them now
-// (claims): what img ran then records, so a label from an inherited
-// variable is the copy's version from this sync on.
-func (s *Set) syncDone(base, rel, data, first, source string) error {
+// syncDone is SyncDone, the window's first line how first. With labels
+// (a sync), the listing takes the data services' versions and tags as the
+// labels give them now (claims): what img ran then records, so a label
+// from an inherited variable is the copy's version from this sync on.
+func (s *Set) syncDone(base, rel, data, first, source string, labels bool) error {
 	ps := parseParentData(data)
 	h := readHistory(base)
 	changed := false
 	var cs map[string]Container
-	es := s.claims(rel)
-	if old := readList(rel); !slices.Equal(old, es) {
-		if err := writeList(rel, es); err != nil {
-			s.say(report.ErrorLevel, "could not record the data's versions in %s's listing: %v", filepath.Base(rel), err)
-			return err
+	es := readList(rel)
+	if labels {
+		es = s.claims(rel)
+		if old := readList(rel); !slices.Equal(old, es) {
+			if err := writeList(rel, es); err != nil {
+				s.say(report.ErrorLevel, "could not record the data's versions in %s's listing: %v", filepath.Base(rel), err)
+				return err
+			}
 		}
 	}
 	for _, e := range es {
