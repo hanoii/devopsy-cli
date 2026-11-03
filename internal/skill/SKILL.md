@@ -88,7 +88,8 @@ What devopsy requires:
   the release's tree outside `mnt`, `./mnt` mounted whole and writable, an
   entry two services own differently, and a bind below an owned entry.
 - Data labels, per service: `devopsy.data=true` says it has data
-  (unlabeled or `false`: none); `devopsy.data.copy` how a copy carries it
+  (unlabeled or `false`: none), `devopsy.data.version` its data's version
+  (below); `devopsy.data.copy` how a copy carries it
   (`volumes`, the default: its `mnt` entries and named volumes as files;
   `custom`: the project's `data` capability exports and imports it, for a
   database dump; `none`: never copied); `devopsy.data.stop` when it is
@@ -110,10 +111,26 @@ What devopsy requires:
   holding `devopsy.role=proxy`; devopsy-template-traefik is one such proxy.
 - `devopsy.shell=true` names the service `--shell` opens, and
   `devopsy.shell.user` as whom.
-- Images with data only go forward: a service with `devopsy.data=true`
-  whose image is pulled is held by digest on the newest image its data
-  ran; a series bump is `--release --accept-image <service>`, never
-  `--yes` (which only skips prompts).
+- Every service with `devopsy.data=true` sets `devopsy.data.version`
+  (required): a version (`11.8`, dotted numbers) or `any`. devopsy never
+  runs the data on a lower version, nor a pulled image on another tag at
+  the same version, unless `--accept-image <service>` (never `--yes`,
+  which only skips prompts): a release, a rollback, a sync, an import
+  and a restore of a snapshot's data alone refuse it. A `custom` copy, a
+  sync's or an import's, checks nothing and keeps the history: its dump
+  loads through the image that runs, so the data stays that image's. A data service is
+  held on the image its data ran exactly when its release's own would be
+  refused there, derived from the data's history wherever devopsy
+  decides what runs (the restart after a failed run step, which cannot
+  refuse, a full restore of data from such a time); a copy or a restore
+  of data that allows the release's own runs that again. The one
+  exception: a restart whose images cannot be restored at all cannot
+  hold a built one, and says so; fix forward then. A database takes it from the same variable
+  as its image (`image: mariadb:${MARIADB_VERSION:-11.8}`,
+  `devopsy.data.version=${MARIADB_VERSION:-11.8}`), or as its build
+  argument when it is built, so a series bump is raising that variable;
+  an app whose data is files sets `any`. A rollback below the data's
+  version is refused: fix forward, or `--snapshots restore <id>`.
 
 What the templates do, and new projects should: `user: "10001:10001"` (a
 fixed non-root UID shared by all projects; never 1000, the deploy user, in

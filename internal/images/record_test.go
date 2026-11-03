@@ -43,14 +43,19 @@ func writeRecord(rel, mode string) {
 }
 
 var (
-	appSvc   = Service{Name: "app", Ref: "app-prod-app", Build: true, Data: true}
-	dbSvc    = func(ref string) Service { return Service{Name: "database", Ref: ref, Data: true, Method: CopyVolumes} }
+	appSvc = Service{Name: "app", Ref: "app-prod-app", Build: true, Data: true, DataVersion: AnyVersion}
+	// dbSvc's label is its tag's version, one variable for both.
+	dbSvc = func(ref string) Service {
+		return Service{Name: "database", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: VersionHint(ref, false)}
+	}
 	proxySvc = Service{Name: "alwaysup", Ref: "caddy:2-alpine"}
 )
 
 // The listing records each service's kind, digest and version: the app
-// is built (own, whatever its data label), the database a pulled data
-// service, the proxy pulled; a listing from before them still reads.
+// is built (own, whatever its data label), the database and the proxy
+// pulled (data is the labels', never a kind); a data service's version
+// and, without build:, its tag (the built app has none); a listing from
+// before them still reads.
 func TestRecordListing(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -66,8 +71,8 @@ func TestRecordListing(t *testing.T) {
 	}
 	got := readList(e.rel(id))
 	want := []entry{
-		{Ref: "app-prod-app", ID: "sha256:a1", Service: "app", Kind: KindOwn},
-		{Ref: "mariadb:11.8", ID: "sha256:m1", Service: "database", Kind: KindData, Digest: "mariadb@sha256:m1", Version: "11.8.9"},
+		{Ref: "app-prod-app", ID: "sha256:a1", Service: "app", Kind: KindOwn, DataVersion: AnyVersion},
+		{Ref: "mariadb:11.8", ID: "sha256:m1", Service: "database", Kind: KindPulled, Digest: "mariadb@sha256:m1", Version: "11.8.9", DataVersion: "11.8", Tag: "11.8"},
 		{Ref: "caddy:2-alpine", ID: "sha256:c1", Service: "alwaysup", Kind: KindPulled, Digest: "caddy@sha256:c1"},
 	}
 	if len(got) != len(want) {
@@ -208,12 +213,12 @@ func TestParseComposeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, BuildSpec: json.RawMessage(`{"context":"."}`), Data: true, Method: "volumes", Entries: []string{"storage"}, Volumes: []string{"cache"}, EntriesKnown: true},
-		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none", EntriesKnown: true},
-		{Name: "plain", Ref: "busybox", EntriesKnown: true},
-		{Name: "tool", Ref: "local/tool", NeverPull: true, EntriesKnown: true},
-		{Name: "web", Ref: "caddy:2", EntriesKnown: true},
-		{Name: "whole", Ref: "busybox", Data: true, Method: "volumes", Entries: []string{"."}, EntriesKnown: true},
+		{Name: "app", Ref: "x-prod-app", Build: true, BuildSpec: json.RawMessage(`{"context":"."}`), Data: true, Method: "volumes"},
+		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none"},
+		{Name: "plain", Ref: "busybox"},
+		{Name: "tool", Ref: "local/tool", NeverPull: true},
+		{Name: "web", Ref: "caddy:2"},
+		{Name: "whole", Ref: "busybox", Data: true, Method: "volumes"},
 	}
 	if len(svcs) != len(want) {
 		t.Fatalf("%+v", svcs)

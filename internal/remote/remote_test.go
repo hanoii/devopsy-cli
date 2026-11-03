@@ -251,9 +251,9 @@ func allScripts() map[string]string {
 		"role holders":    RoleHoldersScript(tg, "proxy"),
 		"root shell":      RootShellScript(&Target{Host: "h"}),
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
-		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
+		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Again: "--release-sync --from it's:prod"}),
 		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
-		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Inherit: true, ID: "1.2"}, true),
+		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Inherit: true, ID: "1.2", Again: "--reset"}, true),
 		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg, nil),
@@ -274,6 +274,30 @@ func allScripts() map[string]string {
 		"snapshots rm":    SnapshotsRemoveScript(tg, "app-prod", []string{"20261025120000"}),
 		"restore":         RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000", WithEnv: true, By: "me"}),
 		"restore data":    RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+	}
+}
+
+// A refusal of a sync's images names what the operator ran (img's
+// --again): a release that syncs its own flag (--release-sync, or
+// --release for a first one), a sync --sync or --reset, a --from kept.
+func TestImagesAgain(t *testing.T) {
+	t.Parallel()
+	s := allScripts()
+	if !strings.Contains(s["activate+sync"], `img check --again '--release-sync --from it'\''s:prod' "$1"`) {
+		t.Errorf("a release that syncs: no --again on its img check")
+	}
+	if !strings.Contains(s["holder"], `(export `+InheritPendingEnv+`="$base"/'.devopsy-sync.inherit.1.2.env'; img sync-check --again '--reset' "$rel")`) {
+		t.Errorf("a --reset: no --again on its img sync-check")
+	}
+	// A reset's wipe lands on every data service, whatever the parent's
+	// windows (none, every copy custom): its check runs all the same, or
+	// what it derives fails only once the data is wiped.
+	reset := HolderScript(&Target{Name: "dev", Host: "h", Path: "app/dev", Project: &Project{Name: "app"}}, "app-dev", &SyncOptions{ID: "1.2", Reset: true}, true)
+	if !strings.Contains(reset, `if [ -n "${`+images.SyncImagesEnv+`:-}" ] || :; then`) {
+		t.Errorf("a --reset's img sync-check goes by the parent's windows:\n%s", reset)
+	}
+	if strings.Contains(s["holder plain"], "--again") || strings.Contains(s["sync only"], "--again") {
+		t.Errorf("--again where nothing says what the operator ran")
 	}
 }
 
@@ -359,8 +383,8 @@ func TestSyncReceiveOwners(t *testing.T) {
 // A reset needs its feature on both servers: the parent's push wipes at
 // its first write (an older one would sync without wiping), the child's
 // devopsy runs the wipe. A sync needs neither.
-// The images' history and holds: every activation needs them (img
-// names, record, restore, ran), a sync's holder (sync-check, sync-done),
+// The images' history: every activation needs it (img record,
+// restore, ran), a sync's holder (sync-check, sync-done),
 // the parent's check (data), and the removals, whose img passes options
 // an older devopsy refuses.
 func TestDataImagesFeature(t *testing.T) {
@@ -371,6 +395,56 @@ func TestDataImagesFeature(t *testing.T) {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
 	}
+}
+
+// Data following its version: every activation (img check, ran,
+// restore --restart, a rollback's rollback-target, a full restore's
+// restore --restore), a sync's holder and the parent's check, an export
+// and an import (the header's lines, --resolved's too), a reload's img
+// ran, and a --no-code restore (--check-images --restore, ran).
+func TestDataVersionFeature(t *testing.T) {
+	t.Parallel()
+	for name, s := range allScripts() {
+		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "export" || name == "import" || name == "resolved" || name == "reload" || strings.HasPrefix(name, "restore")
+		if got := slices.Contains(Needs(s), DataVersionFeature); got != wants {
+			t.Errorf("%s: needs %v", name, Needs(s))
+		}
+	}
+}
+
+// The checks come before anything is built or pulled, or run: a
+// release's img check before its fetch, a rollback's lenient check (img
+// rollback-target, its refusal exit 3 ending the script) before its
+// before and prepare steps, a full restore's restore --restore, the
+// restart's restore --restart in all three of get_images' tries, and a
+// --no-code restore's --check-images --restore, with --accept-image
+// exported for it and its data step.
+func TestDataChecksFirst(t *testing.T) {
+	t.Parallel()
+	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Mode: ModeImage}
+	order := func(s string, words ...string) {
+		t.Helper()
+		at := 0
+		for _, w := range words {
+			i := strings.Index(s[at:], w)
+			if i < 0 {
+				t.Fatalf("%q missing after offset %d, or out of order", w, at)
+			}
+			at += i + len(w)
+		}
+	}
+	release := ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, nil)
+	order(release, `img check "$1"`, `fetch_images "$1"`, `img record "$1"`)
+	if strings.Contains(release, "img names") {
+		t.Errorf("a release still saves its names")
+	}
+	rollback := ActivateScript(tg, "", true, "app", Phases{Run: []string{"deploy"}}, nil)
+	order(rollback, `id=$(img rollback-target "$base") || { rt=$?; [ "$rt" -ne 3 ] || exit 3;`, `'\''rollback'\'' '\''before'\''`, `'\''rollback'\'' '\''prepare'\''`, `img restore "$1" "$base/$rb_from"`)
+	order(release, `img restore --restart "$1" "$2"`, `img restore --restart --fetched "$1" "$2"`, `img restore --restart --as-built "$1" "$2"`)
+	full := RestoreScript(tg, "app", &RestoreOptions{Snapshot: "20261025120000"})
+	order(full, `img restore --restore "$1" "$base/$rb_from"`, `img restore --restore --fetched "$1"`)
+	data := RestoreDataScript(tg, "app", &RestoreOptions{Snapshot: "20261025120000"})
+	order(data, "export "+ImagesAcceptEnv, `'--check-images' '--restore' '20261025120000'`, `'restore-data'`)
 }
 
 func TestResetFeature(t *testing.T) {
@@ -456,7 +530,7 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", RecordModeFeature, "release-steps", "say"}) {
 		t.Errorf("needs: %v", got)
 	}
-	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataCopyFeature, "export", ExportImagesFeature, MntOwnerFeature, RecordModeFeature, "sync-services"}) {
+	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataCopyFeature, DataVersionFeature, "export", ExportImagesFeature, MntOwnerFeature, RecordModeFeature, "sync-services"}) {
 		t.Errorf("needs, quoted: %v", got)
 	}
 }
@@ -741,7 +815,8 @@ exit 0
 	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
 	// The pending files' path from before the checks (where the sync's
 	// inherited variables and its copy of the parent's server's levels
-	// are read, when they exist), to the run step.
+	// are read, when they exist), to the run step; the record of what
+	// ran on the data after it (img ran) reads the listing, not compose.
 	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
@@ -1067,87 +1142,6 @@ exit 0
 	case <-time.After(30 * time.Second):
 		_ = holder.Process.Kill()
 		t.Fatalf("the holder hangs:\n%s", out.String())
-	}
-}
-
-// Bug: the holder pulls the parent's image (img sync-check) once its
-// watcher is disarmed, then goes on into prepare whatever happened to
-// its session meanwhile: an operator's Ctrl-C (or a cut session) during
-// a long pull stops the child's services, only for the abort to start
-// them again. S73: nothing stops; the holder looks for an early answer
-// after the pull, before its prepare.
-func TestHolderAbortDuringPullStopsNothing(t *testing.T) {
-	t.Parallel()
-	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
-echo "$*" >> "$FAKE_ROOT/calls"
-exit 0
-`)
-	fakeImageTools(t, bin)
-	// A pull that takes until $FAKE_ROOT/pulled exists, then has the image
-	// by its digest.
-	if err := os.Rename(filepath.Join(bin, "docker"), filepath.Join(bin, "docker.fake")); err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
-if [ "$1" = pull ]; then
-  : >"$FAKE_ROOT/pulling"
-  while [ ! -e "$FAKE_ROOT/pulled" ]; do sleep 0.05; done
-  eval "n=\${$#}"
-  echo "${n#*@}" >"$FAKE_ROOT/images/$(echo "$n" | tr '/' '_')"
-  exit 0
-fi
-exec "$(dirname "$0")/docker.fake" "$@"
-`)
-	if err := os.Chmod(filepath.Join(bin, "docker"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev", Mode: ModeImage}
-	root := t.TempDir()
-	base := filepath.Join(root, tg.Path)
-	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-	write(t, filepath.Join(base, "releases", "1", images.ListFile), "mariadb:11.8\tI1\tdb\tdata\tmariadb@I1\n")
-	write(t, filepath.Join(root, "images", "mariadb:11.8"), "I1\n")
-	if err := os.Symlink("releases/1/code", filepath.Join(base, "current")); err != nil {
-		t.Fatal(err)
-	}
-	o := &SyncOptions{From: "vm1:prod", ID: "1.2", Images: "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\n"}
-	holder := exec.Command("sh", "-c", HolderScript(tg, "app-dev", o, true))
-	holder.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	holder.Stdin = r
-	var out bytes.Buffer
-	holder.Stdout, holder.Stderr = &out, &out
-	if err := holder.Start(); err != nil {
-		t.Fatal(err)
-	}
-	r.Close()
-	done := make(chan error, 1)
-	go func() { done <- holder.Wait() }()
-	for start := time.Now(); !fileExists(filepath.Join(root, "pulling")); {
-		if time.Since(start) > startWait {
-			_ = holder.Process.Kill()
-			w.Close()
-			t.Fatalf("the holder never pulled the parent's image:\n%s", out.String())
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	// Ctrl-C during the pull: devopsy says abort and closes the session.
-	_, _ = w.WriteString("abort\n")
-	w.Close()
-	write(t, filepath.Join(root, "pulled"), "")
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		_ = holder.Process.Kill()
-		t.Fatalf("the holder hangs:\n%s", out.String())
-	}
-	if calls := readFile(filepath.Join(root, "calls")); strings.Contains(calls, "--sync-services prepare") {
-		t.Errorf("an abort during the parent image's pull went on into prepare, which stops the child's services:\n%s\n%s", calls, out.String())
 	}
 }
 
@@ -1677,7 +1671,7 @@ exit 0
 		t.Errorf("releases parsed: %+v", rs)
 	}
 	// Each image with its version, else its short digest.
-	write(t, filepath.Join(root, "app/a/prod/releases/2", ImagesFile), "registry/app:abc\tI1\tapp\tpulled\tregistry/app@sha256:0123456789abcdef\t1.2\nmariadb:11\tI2\tdatabase\tdata\tmariadb@sha256:0123456789abcdef\napp-a-prod-x\tI3\tx\town\n")
+	write(t, filepath.Join(root, "app/a/prod/releases/2", ImagesFile), "registry/app:abc\tI1\tapp\tpulled\tregistry/app@sha256:0123456789abcdef\t1.2\nmariadb:11\tI2\tdatabase\tpulled\tmariadb@sha256:0123456789abcdef\napp-a-prod-x\tI3\tx\town\n")
 	out, _ = run(ReleasesScript(target("a")))
 	if rs := ParseReleases(out); len(rs) != 1 || strings.Join(rs[0].Images, " ") != "registry/app:abc=1.2 mariadb:11=sha256:0123456789ab app-a-prod-x" {
 		t.Errorf("images with versions: %+v", rs)
@@ -1745,10 +1739,12 @@ exit 0
 	}
 }
 
-// A release writes devopsy's compose file, its database held by digest;
-// one whose database's name changed to an image its data never ran is
-// refused before its switch, the name its pull made gone again, and goes
-// through with --accept-image, which starts its data's history over (S3, S21).
+// A release writes devopsy's compose file, its database labeled with
+// the image it was given and held by nothing; one whose database's
+// version is lower than its data's is refused before its fetch (its
+// image never pulled), and goes through with --accept-image, which
+// starts its data's history over; a release that syncs from a parent at
+// a higher version is refused before anything of the sync.
 func TestActivateDataImages(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
@@ -1756,7 +1752,7 @@ func TestActivateDataImages(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true"}}}}' "$DB" ;;
+  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true","devopsy.data.version":"%s"}}}}' "$DB" "${DB#*:}" ;;
   "-- --profile * pull --ignore-buildable") echo "$IMG" >"$FAKE_ROOT/images/$DB" ;;
 esac
 exit 0
@@ -1777,32 +1773,32 @@ exit 0
 	if out, err := release("1", "DB=mariadb:11.8", "IMG=I1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("release 1 (%v):\n%s", err, out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `"db":`+"\n"+`    image: "mariadb@I1"`) || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "image:") || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
 		t.Errorf("devopsy's compose file:\n%s", got)
 	}
 	// What ran on the data: none here (no container), so written by hand,
 	// then this one.
-	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n")
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n")
 	out, err := release("2", "DB=mariadb:11.4", "IMG=I0")
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/1/code" || !strings.Contains(out, "db: mariadb:11.4 (mariadb@I0) never ran on its data") || !strings.Contains(out, "release 2 not made current") || !strings.Contains(out, "devopsy @"+HintAddress(tg)+" --release --accept-image db") {
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/1/code" || !strings.Contains(out, "db: devopsy.data.version=11.4 is lower than its data's version, 11.8") || !strings.Contains(out, "release 2 not made current") || !strings.Contains(out, "devopsy @"+HintAddress(tg)+" --release --accept-image db") || strings.Contains(out, "pulling") {
 		t.Fatalf("refused release 2 (%v), current %q:\n%s", err, current(), out)
 	}
 	if fakeImage(root, "mariadb:11.4") != "" {
-		t.Errorf("the refused pull's name stays")
+		t.Errorf("the refused release pulled its image")
 	}
 	if out, err := release("3", "DB=mariadb:11.4", "IMG=I0", ImagesAcceptEnv+"=db"); err != nil || current() != "releases/3/code" || !strings.Contains(out, "accepted (--accept-image): running them anyway") {
 		t.Fatalf("release 3 with --accept-image (%v):\n%s", err, out)
 	}
-	// What --yes let through is the activation's: read after its run
+	// What --accept-image let through is the activation's: read after its run
 	// step, then gone, so a rollback to the release forces nothing.
 	if fileExists(filepath.Join(base, "releases", "3", images.ForcedFile)) {
 		t.Errorf("the forced file outlived its activation")
 	}
-	// A release that syncs from a parent whose data never ran its
-	// database's name: refused at its record, before its switch, before
-	// anything of the sync (S59).
-	parent := "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\nran\t1\tdb\tran\tmariadb:11.8\tP1\tmariadb@P1\n"
+	// A release that syncs from a parent whose data is at a higher
+	// version: refused at its check, before its fetch, before anything of
+	// the sync (S59).
+	parent := "data\tdb\nran\t1\tdb\tran\tmariadb:12.1\tP1\tmariadb@P1\t12.1\t12.1\n"
 	write(t, filepath.Join(base, "releases", "4", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	cmd := exec.Command("sh", "-c", ActivateScript(tg, "4", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Images: parent}))
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "DB=mariadb:11.4", "IMG=I0"}
@@ -1815,7 +1811,7 @@ exit 0
 	cmd.Stdin = r
 	o, err := cmd.CombinedOutput()
 	r.Close()
-	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/3/code" || !strings.Contains(string(o), "db: mariadb:11.4 (mariadb@I0) never ran on the parent's data") || strings.Contains(string(o), SyncMarker) {
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/3/code" || !strings.Contains(string(o), "db: devopsy.data.version=11.4 is lower than the parent's data's version, 12.1") || strings.Contains(string(o), SyncMarker) || strings.Contains(string(o), "pulling") {
 		t.Fatalf("a release syncing from a parent that never ran its image (%v):\n%s", err, o)
 	}
 }
@@ -1834,7 +1830,7 @@ func TestSyncImagesNotInRunStep(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
+  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' ;;
   "-- --profile * pull --ignore-buildable") echo P1 >"$FAKE_ROOT/images/mariadb:11.8" ;;
   deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-} reset=${`+SyncResetEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
 esac
@@ -2904,15 +2900,19 @@ func TestImgOptionsNeedDataImages(t *testing.T) {
 
 // oldHoldsFake is a devopsy for TestRollbackFetchIgnoresOldHolds and
 // TestRestartFetchIgnoresOldHolds: a built app and a pulled data service
-// (db, mariadb:11.8, its image $IMG), whose pull fails, as compose's
-// would, when devopsy's own compose file of the release it runs in holds
+// (db, mariadb:11.8, its image $IMG, its version 11.8 in release 1 and
+// 12.1 in the others), whose pull fails, as compose's would, when
+// devopsy's own compose file of the release it runs in holds
 // mariadb@$GONE, a digest its registry dropped.
 const oldHoldsFake = `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
+  "-- config --format json")
+    # Release 1's database at 11.8, the others' at 12.1.
+    v=12.1; [ "$id" != 1 ] || v=11.8
+    printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"%s"}}}}' "$v" ;;
   "-- --profile * pull --ignore-buildable")
     # devopsy merges the release's own compose file, unless told not to.
     if [ -z "${DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE:-}" ] && [ -n "${GONE:-}" ] && grep -q "image: \"mariadb@$GONE\"" ../devopsy-compose.yaml 2>/dev/null; then
@@ -2921,7 +2921,9 @@ case "$*" in
     fi
     echo "$IMG" >"$FAKE_ROOT/images/mariadb:11.8" ;;
   "-- build --pull") echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
-  deploy) exit ${FAIL_RUN:-0} ;;
+  # LOCK_ON_FAIL: a failing run step leaves the image lock held by
+  # another (the restart's get_images waits for it in vain).
+  deploy) [ -z "${FAIL_RUN:-}" ] || [ -z "${LOCK_ON_FAIL:-}" ] || : >"$FAKE_ROOT/locked"; exit ${FAIL_RUN:-0} ;;
 esac
 exit 0
 `
@@ -2929,12 +2931,12 @@ exit 0
 // Bug: when a rollback's restore finds an image the target builds gone
 // (img restore exits 1), fetch_images runs compose in the target's code,
 // where devopsy merges the target's own devopsy-compose.yaml from its
-// last activation: its old holds. Compose's pull then pulls the database's
-// old held digest, which nothing runs any more (the restore holds the
-// history's last): a registry that no longer serves it fails the rollback,
-// and one that does leaves an image pulled by digest that no release
-// lists. The fake's pull fails, as compose's would, when it sees a hold
-// on mariadb@I1 and the registry dropped it.
+// last activation: a hold the restart after a failed run step left there.
+// Compose's pull then pulls that old digest, which nothing runs any more:
+// a registry that no longer serves it fails the rollback, and one that
+// does leaves an image pulled by digest that no release lists. The fake's
+// pull fails, as compose's would, when it sees a hold on mariadb@I1 and
+// the registry dropped it.
 func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
@@ -2957,14 +2959,13 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	if out, err := run("1", false, "IMG=I1"); err != nil {
 		t.Fatalf("release 1 (%v):\n%s", err, out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I1"`) {
-		t.Fatalf("release 1's compose file:\n%s", got)
-	}
-	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n")
+	// Release 1's compose file as a restart's hold left it.
+	write(t, filepath.Join(base, "releases", "1", images.ComposeFile), "services:\n  \"db\":\n    image: \"mariadb@I1\"\n    labels:\n      \"devopsy.digest\": \"mariadb@I1\"\n      \"devopsy.held\": \"0\"\n")
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n")
 	if out, err := run("2", false, "IMG=I2"); err != nil || current() != "releases/2/code" {
 		t.Fatalf("release 2 (%v):\n%s", err, out)
 	}
-	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\n")
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\t11.8\t11.8\n")
 	// Release 1's app image gone (its bookmark removed by hand): the
 	// rollback builds it again.
 	os.Remove(filepath.Join(root, "images", "app-prod-app:devopsy-app-prod-1"))
@@ -2972,17 +2973,17 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	if err != nil || current() != "releases/1/code" {
 		t.Fatalf("rollback (%v), current %q: its fetch pulled release 1's old hold of the database:\n%s", err, current(), out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) {
-		t.Errorf("release 1's compose file after the rollback:\n%s", got)
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "image:") {
+		t.Errorf("release 1's compose file after the rollback holds what nothing asked for:\n%s", got)
 	}
 }
 
-// Bug: the same in the restart after a failed run: get_images' fetch
-// pulls the previous release's old hold, and when that fails (the
-// registry dropped the digest) the restart goes on "anyway" with the
-// previous release's devopsy-compose.yaml as its last activation wrote
-// it, holding the database on the image before the one the failed
-// release ran on its data: the database goes back.
+// The restart after a failed run step whose database's version the
+// failed release raised (11.8 to 12.1, its image I2 ran on the data) holds
+// release 1's database on I2 by digest, through get_images' fetch too
+// (release 1's app image gone: built again, --fetched), whatever
+// --accept-image the release had; and that fetch never pulls an old hold
+// of release 1's own compose file (GONE).
 func TestRestartFetchIgnoresOldHolds(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
@@ -3002,17 +3003,95 @@ func TestRestartFetchIgnoresOldHolds(t *testing.T) {
 	if out, err := release("1", "IMG=I1"); err != nil {
 		t.Fatalf("release 1 (%v):\n%s", err, out)
 	}
+	write(t, filepath.Join(base, "releases", "1", images.ComposeFile), "services:\n  \"db\":\n    image: \"mariadb@I1\"\n    labels:\n      \"devopsy.digest\": \"mariadb@I1\"\n")
 	// Release 2 pulls I2, its database starts on it, its run step fails
 	// (what ran written as img ran would, no container in the fakes).
-	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\n")
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\t12.1\t11.8\n")
 	// Release 1's app image gone: the restart builds it again.
 	os.Remove(filepath.Join(root, "images", "app-prod-app:devopsy-app-prod-1"))
-	out, err := release("2", "IMG=I2", "FAIL_RUN=4", "GONE=I1")
+	out, err := release("2", "IMG=I2", "FAIL_RUN=4", "GONE=I1", ImagesAcceptEnv+"=db")
 	if err == nil {
 		t.Fatalf("release 2's run step did not fail:\n%s", out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) {
-		t.Errorf("release 1 restarted with its compose file holding the database on an image older than the newest its data ran (I2):\n%s\n%s", got, out)
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) || !strings.Contains(got, `"devopsy.held": "2"`) || !strings.Contains(out, "db stays on the image release 2 ran on its data") || strings.Contains(out, "as built") {
+		t.Errorf("release 1 restarted without its database held on I2, the image its data ran at 12.1:\n%s\n%s", got, out)
+	}
+}
+
+// The restart's last resort: get_images failing (here the image lock,
+// which another holds for 10 minutes) left release 1 restarting on its
+// own compose file, mariadb:11.8 on the data release 2's 12.1 image ran
+// (review). Without the lock or Docker, img hold writes the hold by
+// digest into release 1's compose file and listing, said.
+func TestRestartLastResortHolds(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), oldHoldsFake)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild, Address: "vm1:prod", Project: &Project{Name: "app"}}
+	base := filepath.Join(root, tg.Path)
+	release := func(id string, env ...string) (string, error) {
+		t.Helper()
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := release("1", "IMG=I1"); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+	// Release 2 pulls I2, its database runs on it at 12.1, its run step
+	// fails (what ran written as img ran would, no container in the fakes).
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\t12.1\t11.8\n")
+	out, err := release("2", "IMG=I2", "FAIL_RUN=4", "LOCK_ON_FAIL=1")
+	if err == nil || !strings.Contains(out, "getting the images of 1 failed") {
+		t.Fatalf("release 2's restart did not fail to get its images (%v):\n%s", err, out)
+	}
+	got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile))
+	if !strings.Contains(got, `image: "mariadb@I2"`) || !strings.Contains(got, `"devopsy.held": "2"`) || !strings.Contains(out, "db stays on the image release 2 ran on its data") {
+		t.Errorf("release 1 restarted on its own compose file, 11.8 on the data 12.1 ran:\n%s\n%s", got, out)
+	}
+	if l := readFile(filepath.Join(base, "releases", "1", "devopsy-images")); !strings.Contains(l, "mariadb@I2") || !strings.Contains(l, "12.1") {
+		t.Errorf("release 1's listing does not record the held image:\n%s", l)
+	}
+}
+
+// The restart's hold outlives a later failed release whose database
+// never ran (review): release 1 held on I2 by release 2's restart, then
+// release 3 (I3, 12.1) fails before its database ran, so the history
+// still ends on I2. The rule alone decides: release 1 stays held on I2,
+// its HeldLabel release 2's, never back on its own 11.8 image.
+func TestRestartHoldSurvivesFailure(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), oldHoldsFake)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild, Address: "vm1:prod", Project: &Project{Name: "app"}}
+	base := filepath.Join(root, tg.Path)
+	release := func(id string, env ...string) (string, error) {
+		t.Helper()
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := release("1", "IMG=I1"); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\t12.1\t11.8\n")
+	if out, err := release("2", "IMG=I2", "FAIL_RUN=4"); err == nil || !strings.Contains(out, "db stays on the image release 2 ran on its data") {
+		t.Fatalf("release 2's restart did not hold (%v):\n%s", err, out)
+	}
+	out, err := release("3", "IMG=I3", "FAIL_RUN=4")
+	if err == nil {
+		t.Fatalf("release 3's run step did not fail:\n%s", out)
+	}
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) || !strings.Contains(got, `"devopsy.held": "2"`) || !strings.Contains(out, "db stays on the image release 2 ran on its data") {
+		t.Errorf("release 1 restarted without its earlier hold, 11.8 on the data 12.1 ran:\n%s\n%s", got, out)
 	}
 }
 
@@ -3030,7 +3109,7 @@ id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json")
-    if [ -n "${FAKE_SLOW_LIST:-}" ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
+    if [ -n "${FAKE_SLOW_LIST:-}" ] && [ "$id" = 2 ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
     printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;

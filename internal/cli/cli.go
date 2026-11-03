@@ -451,10 +451,11 @@ machine: the parent's server copies into the child's.
       parent: prod
 
   --accept-image <service>,...
-                    a database that runs an image the parent's data never
-                    ran (another series, a pin) runs its own on the copy,
-                    its history starting over: refused otherwise, every
-                    sync
+                    a data service whose devopsy.data.version is lower
+                    than the parent's data's (or another tag at it) runs
+                    on the copy anyway, its history starting over:
+                    refused otherwise, every sync (a custom copy is
+                    never checked)
   --from @<target>  copy from another environment of the project instead
                     (@vm1:prod, @a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
@@ -477,7 +478,10 @@ parent and an import of each on the child:
                        the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
-                       database dumped and loaded)
+                       database dumped and loaded). No version is checked
+                       and the child's history of its images stays: the
+                       dump loads through the image that runs there, so
+                       the data is that image's
   devopsy.data.copy=none
                        never copied: the child keeps its own
   devopsy.data.exclude=<entry>[,<entry>...]
@@ -609,15 +613,16 @@ does anything change, and the file is removed afterwards.
            entries the service does not mount, or one whose links make
            a bind source lead out of its entry, changes nothing
 
-A volumes tar from --export carries the images that ran on the data. On a
-target, a service whose image is pulled is checked against them before
-anything stops, as a sync checks its parent's: the export's image, or
-the same name, goes on, held on the export's image once the data is in;
-an image the data moved past, or a name (or another repository) it
-never ran, is refused. --accept-image <service> runs its own image on
-the data then, its history starting over. A tar without them (made by
-hand) and every import locally start the history over from the image
-that runs.
+A volumes tar from --export carries its data's history of versions. On a
+target, the service's devopsy.data.version (and a pulled image's tag) is
+checked against it before anything stops, as a sync checks its
+parent's: a version lower than the data's, or another tag at it, is
+refused. --accept-image <service> runs it on the data then, its history
+starting over. Each side runs its own image. A tar without it (made by
+hand) and every import locally start the history over, data of no known
+version: what next runs on it says its version. A custom import
+checks nothing and leaves the history and the image that runs as they
+were: its script loads the dump through that image.
 
 Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
 import or always, every import and always service (an app, a worker),
@@ -734,12 +739,15 @@ The first release of an instance the server does not have yet asks before
 creating it (a typo would otherwise make a new site); --yes skips that, for
 CI.
 
-A database (a service with a devopsy.data label whose image is pulled, or
-built after it was) only goes forward: a release whose image for it is one
-its data moved past, or a name its data never ran (another series, a pin
-bumped), is refused before anything changes. --accept-image <service>
-runs it anyway, its data's history starting over from it: a series bump
-is one --accept-image. --yes never does.
+Every service with data (devopsy.data=true) says its data's version,
+devopsy.data.version (a version like 11.8, or any). A release whose
+version for it is lower than its data's, or, at the same version, a
+pulled image under another tag than the data's (a pin bumped under a
+coarser label), is refused before anything is built or pulled.
+--accept-image <service> (comma separated, or repeated) runs it anyway,
+its data's history starting over from it; a service the check lets
+through runs as it would. --yes never does. A series bump is a higher
+devopsy.data.version, from the variable its image reads too.
 
 The first release of a child (an environment with parent:) syncs its
 parent's data once current, before its run step, so the run step works on
@@ -758,7 +766,7 @@ check, the images (always as build mode: what has a build is built, the
 rest pulled), then run. No upload, no switch and nothing to go back to;
 no before or after steps, which are the operator's side of a deploy.
 `,
-	"--rollback": `Usage: devopsy @<target> --rollback [--yes]
+	"--rollback": `Usage: devopsy @<target> --rollback [--accept-image <service>,...] [--yes]
 
 Makes the release before the current one current again (skipping failed
 ones) and runs its rollback steps, from the restored release's own
@@ -775,8 +783,15 @@ keeps what it had. Usually the same run step as release:
 
 The steps and their commands are the restored release's, so they must
 exist there.
-Rolling back restores that release's files and target env, not data. It
-never asks: --yes is accepted, and changes nothing. A rollback cut off
+Rolling back restores that release's files and target env, not data. A
+rollback whose devopsy.data.version for a service is lower than its
+data's (a release of mariadb 12.1 since), or another tag at it, is
+refused before its steps on the server, naming the ways out: a release that
+fixes forward, the release snapshot of the older release's data
+(--snapshots restore), or --accept-image <service>, which runs it on the
+newer data anyway, its history starting over. A rollback within a
+version and a tag runs what the names give now. It never asks: --yes is
+accepted, and changes nothing. A rollback cut off
 past its switch (--status says so) is finished by --rollback again, never
 followed by one further back.
 `,
@@ -864,7 +879,7 @@ keeping a mirror. The environment's snapshots: manual keep
 they go is the server's snapshots: root, else beside shared/.
 `,
 	"--snapshots": `Usage: devopsy @<target> --snapshots
-       devopsy @<target> --snapshots restore <id> [--no-code] [--with-env] [--yes]
+       devopsy @<target> --snapshots restore <id> [--no-code [--accept-image <service>,...]] [--with-env] [--yes]
        devopsy @<target> --snapshots remove <id>... [--yes]
        devopsy @<target> --snapshots export <id> > <file>
        devopsy @<target> --snapshots import < <file>
@@ -878,11 +893,16 @@ one snapshot starts so.
 restore brings a snapshot back whole: its data, its code and the images
 that ran on them, as a new release (a --rollback after it goes back to
 the release before), every service with data and what depends on it
-stopped while the data is written. The data services run the exact
-images their data ran, the rest as their names give them now. Its steps
-are the restored release's rollback:, else release:. --no-code restores
-the data and its images under the current release, rerunning its run
-step: refused when its labels no longer fit the snapshot's. --with-env
+stopped while the data is written, its data's history with it: nothing
+is checked. Its pulled images run as their names give them now, but a
+data service its data's version refuses them on, held on the snapshot's
+image. Its steps are the restored release's rollback:, else release:.
+--no-code
+restores the data alone under the current release, rerunning its run
+step: refused when its labels no longer fit the snapshot's, or when a
+data service's devopsy.data.version is lower than the snapshot's data's
+(or another tag at it), which --accept-image <service> lets through,
+its history starting over. --with-env
 brings its shared/.env back too (without it, a difference is said).
 Asks for the environment's full name; --yes for scripts and CI. A
 restore that cannot finish keeps the services down, the environment
@@ -899,7 +919,8 @@ import stores one from stdin as a snapshot of the environment, under a
 new id, on this server or another, checked whole. It needs a current
 release: on a new server, release first, then import and restore
 (--with-env). Images are not in an export: a restore pulls the pulled
-ones by digest and builds the built ones from the snapshot's code.
+ones as their names give them now and builds the built ones from the
+snapshot's code.
 `,
 	"--env": `Usage: devopsy @<target> --env [--show]
 

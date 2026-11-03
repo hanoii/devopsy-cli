@@ -40,32 +40,46 @@ func container(t *testing.T, on func(*testing.T, string) (string, int), project,
 	return id, image
 }
 
-// S24: a rollback across a tag that moved keeps the database on the
-// newer image, its container untouched, while the app, whose name
-// changed between the releases, goes back exactly; --status names the
-// hold.
+// imgProject is a project in image mode whose database is
+// server:5000/<name>-db:<DB_TAG>, labeled devopsy.data.version=<DB_VERSION>,
+// and whose app's tag is APP_TAG, each set per release in config.yaml; its
+// deploy fails after its up when FAIL_RUN is set.
+func imgProject(t *testing.T, name string) string {
+	t.Helper()
+	return project(t, name, map[string]string{
+		".devopsy/config.yaml": "project: " + name + "\nenvironments:\n  prod:\n    mode: image\n    release: deploy\n    rollback: deploy\n    env: {APP_TAG: \"1\", DB_TAG: x, DB_VERSION: \"1\", FAIL_RUN: \"\"}\n",
+		".devopsy/compose.yaml": `services:
+  app:
+    image: server:5000/` + name + `-app:${APP_TAG}
+    command: [sleep, infinity]
+  database:
+    image: server:5000/` + name + `-db:${DB_TAG}
+    command: [sleep, infinity]
+    volumes: [./mnt/database:/data]
+    labels: {devopsy.data: "true", devopsy.data.version: "${DB_VERSION}", devopsy.data.stop: own}
+`,
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\ndevopsy up -d --wait || exit\n[ -z \"$FAIL_RUN\" ] || { echo 'deploy fails on purpose'; exit 1; }\n",
+	})
+}
+
+// setVar changes one of imgProject's variables in its config.
+func setVar(t *testing.T, dir, key, value string) {
+	t.Helper()
+	if out, code := op(t, dir, "sed -i 's/"+key+": [^,}]*/"+key+": \""+value+"\"/' .devopsy/config.yaml"); code != 0 {
+		t.Fatalf("setting %s: %s", key, out)
+	}
+}
+
+// A rollback within the data's version and tag goes, the database on
+// what its floating tag holds now (its patch), while the app, whose name
+// changed between the releases, goes back exactly; nothing is held, and
+// the history records each run's version and tag.
 func TestRollbackKeepsData(t *testing.T) {
 	registry(t)
 	pushAs(t, "busybox:1.36", "imgrb-db:x")
 	pushAs(t, "busybox:1.36", "imgrb-app:1")
 	pushAs(t, "busybox:1.37", "imgrb-app:2")
-	files := func(tag string) map[string]string {
-		return map[string]string{
-			".devopsy/config.yaml": "project: imgrb\nenvironments:\n  prod:\n    mode: image\n    release: deploy\n    rollback: deploy\n    env: {APP_TAG: \"" + tag + "\"}\n",
-			".devopsy/compose.yaml": `services:
-  app:
-    image: server:5000/imgrb-app:${APP_TAG}
-    command: [sleep, infinity]
-  database:
-    image: server:5000/imgrb-db:x
-    command: [sleep, infinity]
-    volumes: [./mnt/database:/data]
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
-`,
-			".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
-		}
-	}
-	dir := project(t, "imgrb", files("1"))
+	dir := imgProject(t, "imgrb")
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 		t.Fatalf("r1 (%d):\n%s", code, out)
 	}
@@ -73,49 +87,161 @@ func TestRollbackKeepsData(t *testing.T) {
 	_, db1 := container(t, srv, "imgrb-prod", "database")
 	// The tag moves; the next release names another app.
 	pushAs(t, "busybox:1.37", "imgrb-db:x")
-	op(t, dir, "sed -i 's/APP_TAG: \"1\"/APP_TAG: \"2\"/' .devopsy/config.yaml")
+	setVar(t, dir, "APP_TAG", "2")
 	out, code := op(t, dir, "devopsy @server:prod --release")
-	dbID, db2 := container(t, srv, "imgrb-prod", "database")
+	_, db2 := container(t, srv, "imgrb-prod", "database")
 	if code != 0 || db2 == db1 || !strings.Contains(out, "images that changed:") {
 		t.Fatalf("r2 (%d): database %s, was %s:\n%s", code, db2, db1, out)
 	}
-	if hold, _ := srv(t, "cat imgrb/prod/current/../devopsy-compose.yaml"); !strings.Contains(hold, `image: "server:5000/imgrb-db@sha256:`) {
-		t.Errorf("devopsy's compose file:\n%s", hold)
-	}
 	out, code = op(t, dir, "devopsy @server:prod --rollback")
-	idAfter, dbAfter := container(t, srv, "imgrb-prod", "database")
+	_, dbAfter := container(t, srv, "imgrb-prod", "database")
 	_, appAfter := container(t, srv, "imgrb-prod", "app")
-	if code != 0 || idAfter != dbID || dbAfter != db2 || appAfter != app1 {
-		t.Errorf("rollback (%d): database container %s (was %s) on %s (want %s), app on %s (want %s):\n%s", code, idAfter, dbID, dbAfter, db2, appAfter, app1, out)
+	if code != 0 || dbAfter != db2 || appAfter != app1 {
+		t.Errorf("rollback (%d): database on %s (want %s, what its tag holds now), app on %s (want %s):\n%s", code, dbAfter, db2, appAfter, app1, out)
 	}
-	if !strings.Contains(out, "database stays on server:5000/imgrb-db@sha256:") {
-		t.Errorf("the rollback does not say the database stays:\n%s", out)
+	if hold, _ := srv(t, "cat imgrb/prod/current/../devopsy-compose.yaml"); strings.Contains(hold, "image:") {
+		t.Errorf("devopsy's compose file holds something:\n%s", hold)
 	}
-	if status, _ := op(t, dir, "devopsy @server:prod --status"); !strings.Contains(status, "database held on server:5000/imgrb-db@sha256:") {
-		t.Errorf("--status:\n%s", status)
-	}
-	// The history records both images, oldest first.
-	if h, _ := srv(t, "cut -f2,3,5 imgrb/prod/.devopsy-data-images"); strings.Count(h, "database\tran\t") != 2 {
+	if h, _ := srv(t, "cut -f2,3,7,8 imgrb/prod/.devopsy-data-images"); !strings.Contains(h, "database\tran\t1\tx") {
 		t.Errorf("history:\n%s", h)
 	}
 }
 
-// S68: a child on another server, on the parent's tag's older image,
-// gets the parent's image pulled by its digest before anything stops,
-// and after the copy runs exactly it, its container made again.
-func TestSyncAcrossPullsParentImage(t *testing.T) {
+// A release that raises the data's version goes; the rollback to the
+// release before, below it, is refused before anything changes (the
+// database's container untouched, current the same), naming its ways
+// out, until --rollback --accept-image database lets it through, the
+// data's history starting over from it.
+func TestDataVersionRollbackRefused(t *testing.T) {
+	registry(t)
+	pushAs(t, "busybox:1.36", "imgvr-db:x")
+	pushAs(t, "busybox:1.37", "imgvr-db:y")
+	pushAs(t, "busybox:1.36", "imgvr-app:1")
+	dir := imgProject(t, "imgvr")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("r1 (%d):\n%s", code, out)
+	}
+	setVar(t, dir, "DB_TAG", "y")
+	setVar(t, dir, "DB_VERSION", "2")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("r2 at version 2 (%d):\n%s", code, out)
+	}
+	cur, _ := srv(t, "readlink imgvr/prod/current")
+	dbID, db2 := container(t, srv, "imgvr-prod", "database")
+	out, code := op(t, dir, "devopsy @server:prod --rollback")
+	after, _ := srv(t, "readlink imgvr/prod/current")
+	id, img := container(t, srv, "imgvr-prod", "database")
+	if code == 0 || after != cur || id != dbID || img != db2 || !strings.Contains(out, "devopsy.data.version=1 is lower than its data's version, 2") || !strings.Contains(out, "--rollback --accept-image database") || !strings.Contains(out, "--release") {
+		t.Fatalf("a rollback below the data's version (%d): current %s (was %s), database %s on %s:\n%s", code, after, cur, id, img, out)
+	}
+	if out, code := op(t, dir, "devopsy @server:prod --rollback --accept-image database"); code != 0 {
+		t.Fatalf("the rollback accepted (%d):\n%s", code, out)
+	}
+	if h, _ := srv(t, "cut -f3,7 imgvr/prod/.devopsy-data-images | tail -1"); strings.TrimSpace(h) != "forced\t1" {
+		t.Errorf("the history after the accepted rollback ends on %q", h)
+	}
+}
+
+// A tag changed with the label left as it was is refused before the
+// fetch: the new tag is never pulled, nothing changes.
+func TestDataTagChangedRefused(t *testing.T) {
+	registry(t)
+	pushAs(t, "busybox:1.36", "imgtc-db:x")
+	pushAs(t, "busybox:1.37", "imgtc-db:y")
+	pushAs(t, "busybox:1.36", "imgtc-app:1")
+	dir := imgProject(t, "imgtc")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("r1 (%d):\n%s", code, out)
+	}
+	setVar(t, dir, "DB_TAG", "y")
+	out, code := op(t, dir, "devopsy @server:prod --release")
+	if code == 0 || !strings.Contains(out, "its tag is y, and its data ran x at the same devopsy.data.version=1") {
+		t.Fatalf("a tag changed without the label (%d):\n%s", code, out)
+	}
+	if _, code := srv(t, "docker image inspect server:5000/imgtc-db:y >/dev/null 2>&1"); code == 0 {
+		t.Errorf("the refused release pulled the new tag")
+	}
+	setVar(t, dir, "DB_VERSION", "1.1")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("the tag with its label raised (%d):\n%s", code, out)
+	}
+}
+
+// Data labeled any: devopsy checks nothing, so a rollback across tags
+// goes freely.
+func TestDataAnyRollsBack(t *testing.T) {
+	registry(t)
+	pushAs(t, "busybox:1.36", "imgany-db:x")
+	pushAs(t, "busybox:1.37", "imgany-db:y")
+	pushAs(t, "busybox:1.36", "imgany-app:1")
+	dir := imgProject(t, "imgany")
+	setVar(t, dir, "DB_VERSION", "any")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("r1 (%d):\n%s", code, out)
+	}
+	_, db1 := container(t, srv, "imgany-prod", "database")
+	setVar(t, dir, "DB_TAG", "y")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("r2 (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, "devopsy @server:prod --rollback"); code != 0 {
+		t.Fatalf("the rollback (%d):\n%s", code, out)
+	}
+	if _, db := container(t, srv, "imgany-prod", "database"); db != db1 {
+		t.Errorf("the rollback runs the database on %s, want x's %s", db, db1)
+	}
+}
+
+// A release raising the data's version whose run step fails after its up
+// ran the database: the restart of the release before cannot refuse, so
+// it keeps the database on the failed release's image, by digest, says
+// so, and --status names the hold.
+func TestDataRestartHolds(t *testing.T) {
+	registry(t)
+	pushAs(t, "busybox:1.36", "imgrh-db:x")
+	pushAs(t, "busybox:1.37", "imgrh-db:y")
+	pushAs(t, "busybox:1.36", "imgrh-app:1")
+	dir := imgProject(t, "imgrh")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("r1 (%d):\n%s", code, out)
+	}
+	setVar(t, dir, "DB_TAG", "y")
+	setVar(t, dir, "DB_VERSION", "2")
+	setVar(t, dir, "FAIL_RUN", "1")
+	out, code := op(t, dir, "devopsy @server:prod --release")
+	_, db := container(t, srv, "imgrh-prod", "database")
+	y, _ := srv(t, "docker image inspect -f '{{.Id}}' server:5000/imgrh-db:y")
+	if code == 0 || db != strings.TrimSpace(y) || !strings.Contains(out, "database stays on the image release ") {
+		t.Fatalf("the failed release (%d): the database runs %s, want y's %s:\n%s", code, db, y, out)
+	}
+	if c, _ := srv(t, "cat imgrh/prod/current/../devopsy-compose.yaml"); !strings.Contains(c, `image: "server:5000/imgrh-db@sha256:`) || !strings.Contains(c, `"devopsy.held"`) {
+		t.Errorf("devopsy's compose file:\n%s", c)
+	}
+	if status, _ := op(t, dir, "devopsy @server:prod --status"); !strings.Contains(status, "database held on server:5000/imgrh-db@sha256:") {
+		t.Errorf("--status:\n%s", status)
+	}
+	if out, code := op(t, dir, "devopsy @server:prod --reload"); code != 0 {
+		t.Errorf("a reload of the held release (%d):\n%s", code, out)
+	}
+}
+
+// S68: a child on another server, at the parent's version, syncs: it
+// runs its own image on the copy, never the parent's, its history the
+// parent's from a sync line; a child below the parent's version is
+// refused before anything stops.
+func TestSyncAcrossRunsChildImage(t *testing.T) {
 	secondServer(t)
 	registry(t)
 	pushAs(t, "busybox:1.36", "imgsy-db:x")
 	dir := project(t, "imgsy", map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\nDEVOPSY_SERVER_DEV=server2\n",
-		".devopsy/config.yaml": "project: imgsy\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+		".devopsy/config.yaml": "project: imgsy\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {env: {DB_VERSION: \"1\"}}\n  dev: {parent: prod, env: {DB_VERSION: \"1\"}}\n",
 		".devopsy/compose.yaml": `services:
   database:
     image: server:5000/imgsy-db:x
     command: [sleep, infinity]
     volumes: [./mnt/database:/data]
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: "${DB_VERSION}", devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})
@@ -133,25 +259,24 @@ func TestSyncAcrossPullsParentImage(t *testing.T) {
 		t.Fatalf("prod again (%d):\n%s", code, out)
 	}
 	_, prod2 := container(t, srv, "imgsy-prod", "database")
-	if prod2 == dev1 {
-		t.Fatalf("the tag did not move: %s", prod2)
-	}
-	if _, code := srv2(t, "docker image inspect "+prod2+" >/dev/null 2>&1"); code == 0 {
-		t.Fatalf("server2 has the parent's new image already")
-	}
 	out, code := op(t, dir, agent+" devopsy @dev --sync --yes")
-	devID, dev2 := container(t, srv2, "imgsy-dev", "database")
+	_, dev2 := container(t, srv2, "imgsy-dev", "database")
 	stamp, _ := srv2(t, "cat imgsy/dev/shared/mnt/database/stamp")
-	if code != 0 || dev2 != prod2 || strings.TrimSpace(stamp) != "two" || !strings.Contains(out, "pulled the parent's image") {
-		t.Fatalf("the sync (%d): dev runs %s, prod %s, stamp %q:\n%s", code, dev2, prod2, stamp, out)
+	if code != 0 || dev2 != dev1 || dev2 == prod2 || strings.TrimSpace(stamp) != "two" {
+		t.Fatalf("the sync (%d): dev runs %s (its own %s), prod %s, stamp %q:\n%s", code, dev2, dev1, prod2, stamp, out)
 	}
-	// Bookmarked as the child's: a pruning keeps it while dev runs it.
-	if tags, _ := srv2(t, "docker image inspect -f '{{range .RepoTags}}{{println .}}{{end}}' "+dev2); !strings.Contains(tags, ":devopsy-imgsy-dev-") {
-		t.Errorf("not bookmarked: %s", tags)
+	if h, _ := srv2(t, "cut -f3 imgsy/dev/.devopsy-data-images"); !strings.Contains(h, "sync ") {
+		t.Errorf("dev's history:\n%s", h)
 	}
-	// Its next plain up keeps it: held.
-	srv2(t, "cd imgsy/dev/current && devopsy up -d --wait >/dev/null 2>&1")
-	if id, img := container(t, srv2, "imgsy-dev", "database"); id != devID || img != prod2 {
-		t.Errorf("a plain up moved it: %s on %s", id, img)
+	// prod raises its data's version: dev, still at 1, is refused.
+	op(t, dir, "sed -i 's/prod: {env: {DB_VERSION: \"1\"}}/prod: {env: {DB_VERSION: \"2\"}}/' .devopsy/config.yaml")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod at 2 (%d):\n%s", code, out)
+	}
+	srv(t, "echo three >imgsy/prod/shared/mnt/database/stamp")
+	out, code = op(t, dir, agent+" devopsy @dev --sync --yes")
+	stamp, _ = srv2(t, "cat imgsy/dev/shared/mnt/database/stamp")
+	if code == 0 || strings.TrimSpace(stamp) != "two" || !strings.Contains(out, "devopsy.data.version=1 is lower than the parent's data's version, 2") {
+		t.Fatalf("a sync onto a child below the parent (%d), stamp %q:\n%s", code, stamp, out)
 	}
 }

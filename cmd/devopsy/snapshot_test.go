@@ -433,7 +433,7 @@ func TestSnapshotDestroy(t *testing.T) {
 	if id == "" {
 		t.Fatalf("no snapshot in %s", snaps)
 	}
-	write(t, filepath.Join(snaps, id, images.ListFile), "mariadb@sha256:snap\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
+	write(t, filepath.Join(snaps, id, images.ListFile), "mariadb@sha256:snap\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap\t\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:snap=mariadb@sha256:snap", "FAKE_NAMES=mariadb@sha256:snap=sha256:snap", "FAKE_USERS=shop-other"}
 	out, code = s.run(env, "@prod", "--destroy", "--yes")
 	docker, _ := s.logs()
@@ -486,6 +486,63 @@ func TestSnapshotRestoreNoCode(t *testing.T) {
 	docker, _ = s.logs()
 	if code == 0 || !strings.Contains(out, "snapshot "+id+" does not fit the current release's labels: nothing restored") || !strings.Contains(out, "the snapshot has data for db, which the current release has no service with data of") || strings.Contains(docker, " stop ") {
 		t.Errorf("a mismatch (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// A --no-code restore of a snapshot that records no versions brings back
+// data of no known version: its history starts over, so the next release
+// adopts its label, never compared with what ran on the data it replaced.
+func TestSnapshotRestoreNoVersions(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, "snapshots", m[1], remote.SnapshotData, "images"), "", 0o600)
+	history := filepath.Join(base, images.HistoryFile)
+	write(t, history, "1\tdb\tran\ty\tsha256:new\t\t12\tlatest\n", 0o644)
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 {
+		t.Fatalf("--no-code (%d):\n%s", code, out)
+	}
+	if h := readString(history); strings.Contains(h, "\t12\t") {
+		t.Errorf("the replaced data's version is still in its history:\n%s", h)
+	}
+}
+
+// A --no-code restore --with-env lands under the variables it leaves, as
+// its check reads them (the snapshot's): its listing takes the version
+// they give, never the one in the file it replaces.
+func TestSnapshotRestoreLandsWithItsEnv(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	env := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	write(t, env, "FAKE_DB_VERSION=11\n", 0o600)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, env, "FAKE_DB_VERSION=12\n", 0o600)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--with-env", "--yes")
+	if code != 0 {
+		t.Fatalf("--no-code --with-env (%d):\n%s", code, out)
+	}
+	list := readString(releaseFile(t, filepath.Join(s.root, "shop", "prod", "current"), images.ListFile))
+	var db string
+	for _, l := range strings.Split(list, "\n") {
+		if f := strings.Split(l, "\t"); len(f) > 2 && f[2] == "db" {
+			db = l
+		}
+	}
+	if f := strings.Split(db, "\t"); len(f) < 8 || f[7] != "11" {
+		t.Errorf("db's listing after the restore: %q\n%s", db, out)
 	}
 }
 
@@ -3221,7 +3278,7 @@ func TestSnapshotImportPullsOwnRepository(t *testing.T) {
 		data, _ := io.ReadAll(tr)
 		switch h.Name {
 		case m[1] + "/" + images.ListFile:
-			data = []byte("evil.example/x\tsha256:evilid\tdb\tdata\t" + digest + "\n")
+			data = []byte("evil.example/x\tsha256:evilid\tdb\tpulled\t" + digest + "\n")
 		case m[1] + "/" + remote.SnapshotData + "/images":
 			data = []byte("image\tdb\tevil.example/x@" + digest + "\tsha256:evilid\tevil.example/x@" + digest + "\n")
 		}
@@ -3250,7 +3307,7 @@ func TestSnapshotImportPullsOwnRepository(t *testing.T) {
 }
 
 // A restore holds a pulled data service on the image its data ran when
-// the snapshot was taken (ImportDone, devopsy-compose.yaml), and its
+// the snapshot was taken (Land, devopsy-compose.yaml), and its
 // run step's up makes the container again on it. A run step that leaves
 // that service stopped (one that ups only some services, what
 // startLeftDown is for) leaves its container the one from before, on
@@ -3280,17 +3337,14 @@ func TestRestoredStartsOnHeldImage(t *testing.T) {
 	}
 }
 
-// A restore's data step holds the database on the image the snapshot's
-// data ran and replaces its history with the snapshot's (ImportDone); a
-// run step that leaves the database stopped leaves its container the one
-// from before, on the image the replaced data ran, for restored to make
-// again on the hold (startLeftDown, images.Recreate). img ran, between
-// the run step and restored, must not take that exited container's image
-// for one that ran on the restored data: recorded as the data's newest,
-// a release of that image (here another series, accepted on the data
-// the restore replaced, never run by the snapshot's) passes the next
-// check without --accept-image, and a rollback holds the database on it.
-func TestRestoreRanKeepsHeldImage(t *testing.T) {
+// A restore brings the snapshot's data back with its history (its data
+// step, Land): nothing is held, and the history's window is the
+// snapshot's from an import line. A full restore checks nothing; a
+// --no-code one checks the current release's labels against the
+// snapshot's data first, refusing a lower version before anything stops
+// unless --accept-image, which the operator's command carries to the
+// server's check and data step.
+func TestRestoreDataVersion(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{{"--no-code"}, {}} {
 		s := newSyncSetup(t)
@@ -3302,41 +3356,85 @@ func TestRestoreRanKeepsHeldImage(t *testing.T) {
 		}
 		base := filepath.Join(s.root, "shop", "prod")
 		snap := filepath.Join(base, "snapshots", m[1])
-		// The snapshot: db ran mariadb:11.8 (sha256:snap) when it was taken.
-		write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
-		write(t, filepath.Join(snap, remote.SnapshotData, "images"), "image\tdb\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n", 0o600)
-		// Since: a release of mariadb:12 (sha256:twelve), accepted, ran on
-		// the data; its container, stopped by the restore, is still on it,
-		// as the fake's deploy starts nothing.
+		// The snapshot: db ran mariadb:11.8 at 11.8 when it was taken.
+		write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap\t\t\t11.8\t11.8\n", 0o644)
+		write(t, filepath.Join(snap, remote.SnapshotData, "images"), "data\tdb\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n", 0o600)
+		// Since: the current release runs mariadb:11.4 at 11.4, accepted.
 		current := filepath.Join(base, "current")
-		write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:12\tsha256:twelve\tdb\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+		write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:11.4\tsha256:four\tdb\tpulled\tmariadb@sha256:four\t\t\t11.4\t11.4\n", 0o644)
 		history := filepath.Join(base, images.HistoryFile)
-		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n2\tdb\tforced\tmariadb:12\tsha256:twelve\tmariadb@sha256:twelve\n", 0o644)
-		write(t, s.log+".containers.shop-prod", "db mariadb@sha256:twelve\n", 0o644)
-		// The code's image (the snapshot's, which a full restore runs, says
-		// mariadb:11.8): a full restore lists it again from the compose
-		// config before the data step holds it.
-		// A --no-code restore runs the current code, whose name is the one
-		// the current release fetched.
-		name := "mariadb:11.8"
+		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n2\tdb\tforced\tmariadb:11.4\tsha256:four\tmariadb@sha256:four\t11.4\t11.4\n", 0o644)
+		env := []string{"FAKE_DB_IMAGE=mariadb:11.4", "FAKE_DB_VERSION=11.4", "FAKE_IMAGES=sha256:four=mariadb@sha256:four sha256:snap=mariadb@sha256:snap"}
+		restore := append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)
+		if len(args) == 0 {
+			// A full restore's labels are its snapshot's code's.
+			env = []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_DB_VERSION=11.8", env[2]}
+		}
 		if len(args) > 0 {
-			name = "mariadb:12"
+			// Refused with --with-env, its fix runs it again with it.
+			s.logs()
+			if out, code := s.run(env, append(append([]string{}, restore...), "--with-env")...); code == 0 || !strings.Contains(out, "--snapshots restore "+m[1]+" --no-code --with-env --accept-image db") {
+				t.Fatalf("%v: a --no-code restore --with-env below the snapshot's version (%d):\n%s", args, code, out)
+			}
+			s.logs()
+			out, code = s.run(env, restore...)
+			docker, _ := s.logs()
+			if code == 0 || !strings.Contains(out, "db: devopsy.data.version=11.4 is lower than the snapshot's data's version, 11.8") || !strings.Contains(out, "--snapshots restore "+m[1]+" --no-code --accept-image db") || strings.Contains(docker, " stop ") {
+				t.Fatalf("%v: a --no-code restore below the snapshot's version (%d):\n%s\n%s", args, code, out, docker)
+			}
+			restore = append(restore, "--accept-image", "db")
 		}
-		env := []string{"FAKE_DB_IMAGE=" + name, "FAKE_IMAGES=sha256:db=mariadb@sha256:twelve sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap mariadb:12=mariadb@sha256:twelve"}
-		s.logs()
-		out, code = s.run(env, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
-		docker, _ := s.logs()
-		if code != 0 || !strings.Contains(docker, " up -d --no-deps --wait db\n") {
-			t.Fatalf("%v: the restore (%d), db not made again on the snapshot's image:\n%s\n%s", args, code, out, docker)
+		out, code = s.run(env, restore...)
+		if code != 0 {
+			t.Fatalf("%v: the restore (%d):\n%s", args, code, out)
 		}
-		if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:snap"`) {
-			t.Fatalf("%v: not held on the snapshot's image:\n%s", args, c)
+		if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") {
+			t.Errorf("%v: something held after the restore:\n%s", args, c)
 		}
 		h := readString(history)
-		lines := strings.Split(strings.TrimSpace(h), "\n")
-		if last := lines[len(lines)-1]; strings.Contains(h, "\tsha256:db\t") || !strings.Contains(last, "\tdb\t"+images.Imported+"\tmariadb:11.8\tsha256:snap\t") {
-			t.Errorf("%v: the history after the restore names the image the replaced data ran, from db's exited container, as the newest that ran on the restored data:\n%s", args, h)
+		want := "\tdb\t" + images.Imported + "\tmariadb:11.8\tsha256:snap\t"
+		if len(args) > 0 {
+			want = "\tdb\t" + images.Forced + "\tmariadb:11.4\t"
 		}
+		if !strings.Contains(h, want) || strings.Count(h, "\n") > 3 {
+			t.Errorf("%v: the history after the restore:\n%s", args, h)
+		}
+	}
+}
+
+// A --no-code restore of data from before a hold (db held on 12.1 by a
+// restart, the snapshot's data at 11.8, the release's own label 11.8)
+// runs the release's own image again, its hold gone from its compose
+// file: the held image would upgrade the restored data again (review).
+func TestRestoreDataUnholds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	snap := filepath.Join(base, "snapshots", m[1])
+	write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap\t\t\t11.8\t11.8\n", 0o644)
+	write(t, filepath.Join(snap, remote.SnapshotData, "images"), "data\tdb\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n", 0o600)
+	// Since: the restart held db on release 2's 12.1 image.
+	current := filepath.Join(base, "current")
+	write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:11.8\tsha256:twelve\tdb\tpulled\tmariadb@sha256:twelve\t\t\t12.1\t11.8\tmariadb:11.8\tsha256:snap\n", 0o644)
+	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"db\":\n    image: \"mariadb@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"mariadb@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	history := filepath.Join(base, images.HistoryFile)
+	write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tsha256:twelve\tmariadb@sha256:twelve\t12.1\t11.8\n", 0o644)
+	env := []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_DB_VERSION=11.8", "FAKE_IMAGES=sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap", "FAKE_NAMES=mariadb:11.8=sha256:snap"}
+	out, code = s.run(env, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 || !strings.Contains(out, "db runs ") || !strings.Contains(out, "own image again") {
+		t.Fatalf("the --no-code restore (%d):\n%s", code, out)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "mariadb@sha256:snap") {
+		t.Errorf("still held after the restore:\n%s", c)
+	}
+	if l := readString(releaseFile(t, current, images.ListFile)); !strings.Contains(l, "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap") {
+		t.Errorf("the listing after the restore:\n%s", l)
 	}
 }
 
@@ -3581,8 +3679,8 @@ func TestSettleStopsStartsCurrentImages(t *testing.T) {
 // data, while the history still ended on 11.8 and the release's
 // devopsy-forced stayed; a --rollback then held the database on 11.8,
 // the history's last, and ran it on the data 12.1 had upgraded: data
-// went back, which images only going forward forbids. A floating tag
-// that moved (11.8.9 to 11.8.10) does the same without --accept-image.
+// went back. With versions: the history must end on the version that
+// ran, or a rollback below it would pass.
 // The same when the activation's shell is killed during its run step,
 // after its up made the database on 12.1: img ran never came, the
 // settle after starts nothing, and the next release without
@@ -3618,8 +3716,8 @@ func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
 			// service in its listing; the history's last is y@sha256:old.
 			write(t, filepath.Join(rel, "devopsy-compose.yaml"),
 				"services:\n  \"db\":\n    image: \"y@sha256:new\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:new\"\n", 0o644)
-			write(t, filepath.Join(rel, "devopsy-images"), "y:11\tsha256:new\tdb\tdata\ty@sha256:new\n", 0o644)
-			write(t, filepath.Join(base, ".devopsy-data-images"), "1793000000\tdb\tran\ty:11\tsha256:old\ty@sha256:old\n", 0o644)
+			write(t, filepath.Join(rel, "devopsy-images"), "y:12\tsha256:new\tdb\tpulled\ty@sha256:new\t\t\t12\t12\n", 0o644)
+			write(t, filepath.Join(base, ".devopsy-data-images"), "1793000000\tdb\tran\ty:11\tsha256:old\ty@sha256:old\t11\t11\n", 0o644)
 			write(t, s.log+".containers.shop-prod", c.container, 0o644)
 			if c.record != "" {
 				write(t, filepath.Join(base, ".devopsy-sync.services"), c.record, 0o644)
@@ -3631,8 +3729,8 @@ func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
 			}
 			h := readString(filepath.Join(base, ".devopsy-data-images"))
 			lines := strings.Split(strings.TrimSpace(h), "\n")
-			if last := lines[len(lines)-1]; !strings.Contains(last, "sha256:new") {
-				t.Errorf("db runs y@sha256:new on its data, but after the settle its history still ends on %q: the next release refuses that image as one the data never ran, and a rollback holds db on the older one again\n%s", last, out)
+			if last := lines[len(lines)-1]; !strings.Contains(last, "sha256:new") || !strings.HasSuffix(last, "\t12\t12") {
+				t.Errorf("db runs y@sha256:new (version 12) on its data, but after the settle its history still ends on %q: a rollback to version 11 would pass\n%s", last, out)
 			}
 		})
 	}

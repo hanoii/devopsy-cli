@@ -28,7 +28,8 @@ code, so every project works the same way.
 - **Not a compose replacement.** It never rewrites your compose files:
   plain `docker compose` sees what devopsy runs, but for the one file of
   devopsy's own a release adds on a server (`devopsy-compose.yaml`: the
-  image each service was given, the ones held by digest).
+  image each service was given, and the data services held on another
+  image than their release's own).
 - **Not a local development tool like DDEV.** No per-framework setup or
   router: it runs the compose project you write.
 - **Not a build system.** Images are built however you like: on the server
@@ -707,8 +708,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   entry through a link: then it stays down, what the failed run step
   started running on, said, until a release goes live) with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its images as a rollback gets
-  them (below: what it built back, a database staying on the newest image
-  its data ran). Data changes, like database updates, are the project's
+  them (below: what it built back, a data service held on an image its
+  data allows). Data changes, like database updates, are the project's
   to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
   kept), and `--status` says the release failed. A run step that fails
@@ -776,38 +777,19 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   (`drupal11-prod-app`, `mariadb:11.8`), images pulled by digest included.
   devopsy never moves a pulled name back: another environment, instance or
   project may run it.
-- **Data only goes forward:** a service with `devopsy.data=true` (whatever
-  its copy) whose image Compose pulls rather than builds (a
-  database, in drupal11) changes its data in place, so it must never meet
-  an older image than the newest that ran on it. devopsy keeps, per
-  environment, the images that ran on each such service's data
-  (`.devopsy-data-images`, beside `shared/`), and holds the service on its
-  image by digest in every activation (`devopsy-compose.yaml`, below), so
-  nothing but the environment's own next activation moves it: not another
-  environment's pull, not a plain `up`. A release whose image for it moved
-  under the same name (`mariadb:11.8` patched upstream) runs it, like any
-  pull. One whose image the data moved past (a tag pushed again backward,
-  a stale mirror, a pin lowered to an image that ran before), or whose name
-  changed to an image the data never ran (`mariadb:11.8` to `mariadb:11.4`,
-  a pin bumped, a series switched: devopsy reads no versions, so it cannot
-  tell newer from older there), is refused before anything changes, the
-  names its pull moved put back; `--accept-image <service>` (comma
-  separated, or repeated) runs it anyway, and the data's history starts
-  over from that image. `--yes` never does: it only skips prompts. A
-  database the project builds (`FROM mariadb`) is checked the same way
-  once its data ran a pulled image: switching between pulled and built
-  is one acceptance, its own builds after are not checked (no digest
-  orders them); one always built is never asked.
+- **Data follows its version:** every service with data says its data's
+  version, and devopsy never runs the data on a lower one (Data and its
+  images, below).
 - **Rollbacks bring back code:** a rollback, or the restart after a
   failed `run`, brings back the release's own images exactly (what it
   built, from its tags, without building again), its compose files,
-  variables and commands. Any other pulled image runs what the older
-  release's name gives now: a pin or a commit tag is the image it ran,
-  a floating tag its current, patched one. A data service stays on the
-  newest image its data ran, whatever the older release named. Data is
-  never undone (that is for snapshots). The rollback says each service
-  that does not go back, and why. Pin an image (a tag that never moves,
-  or a digest) when you want a rollback to take it back.
+  variables and commands. Any pulled image runs what the older release's
+  name gives now: a pin or a commit tag is the image it ran, a floating
+  tag its current, patched one. Data is never undone (that is for
+  snapshots), and a rollback the data's version does not allow is
+  refused (below). The rollback says each service that does not go back,
+  and why. Pin an image (a tag that never moves, or a digest) when you
+  want a rollback to take it back.
 - **What changed:** each release says which images changed since the
   one it replaces, a pulled image by its version label
   (`org.opencontainers.image.version`) when it has one, else by short
@@ -877,12 +859,131 @@ Two modes, `mode:` in the config:
 patches (`mariadb:11.8`, `caddy:2-alpine`, `traefik:v3.7`): every release
 pulls them, so fixes arrive with your next release and no commit. Never
 `latest`, and never a major whose data or configuration format changes
-(`mariadb:11`): a plain release would cross series. A series bump is one
-`--release --accept-image <service>` for a service with data. Tag your own images by commit
+(`mariadb:11`): a plain release would cross series. A series bump is a
+higher `devopsy.data.version` for a service with data, from the same
+variable as its tag (below). Tag your own images by commit
 (image mode) or let devopsy build them (build mode). Pin a stateless image
 whose upgrade you test by hand, by tag or by digest, when you want a
 rollback to take it back. An environment nobody releases gets no patches:
 release it on a schedule (below).
+
+#### Data and its images
+
+A service with data (`devopsy.data=true`) changes its data in place: a
+new image may upgrade it (MariaDB 11.8 to 12.1), and an older image may
+then fail on it or damage it. devopsy cannot tell from an image what its
+data needs, so every data service says it, with a label that is
+required (a release refuses one without it, before anything changes):
+
+- `devopsy.data.version=<version>`: its data's version, dotted numbers
+  (`11`, `11.8`, `12.1.3`) compared numerically, missing parts as 0. You
+  keep it up to date; best practice is the image's own version, from one
+  variable:
+
+  ```yaml
+  image: mariadb:${MARIADB_VERSION:-11.8}
+  labels:
+    - devopsy.data.version=${MARIADB_VERSION:-11.8}
+  ```
+
+  and for a database the project builds (`FROM mariadb:${MARIADB_VERSION}`),
+  the same build argument and label.
+- `devopsy.data.version=any`: devopsy checks nothing, for data that does
+  not depend on its image (an app's uploads), or whose versions the
+  project handles itself.
+
+devopsy keeps, per environment, what ran on each data service's data
+(`.devopsy-data-images`, beside `shared/`): each run's version and, for
+a pulled image, its tag (the part after the last `:`, the repository
+never compared: a mirror is no change). Every place data meets an image
+asks one rule against it: a release, a rollback, a sync, an import, a
+`--no-code` restore. Against the data's version (the highest since its
+history last started over):
+
+| the activation's label | |
+|---|---|
+| higher | runs |
+| the same, the same tag (a floating tag moving upstream, its patches) | runs |
+| the same, another tag (a pulled image moved to another tag with the label left as it was: a pin bumped under a coarser label) | refused |
+| the same, built (`build:`, in either mode: no tag is compared) | runs |
+| lower | refused |
+| `any` | runs, and its history starts over: a version set later is taken as it is |
+| no version yet (a first release, after `any`, after an import of data of no known version) | runs, its label taken |
+
+A refusal comes before anything is built, pulled or stopped (a
+rollback's before its remote before and prepare steps; its local before
+steps, which run before the server is asked, have run), and names
+the versions or tags and the ways out: raise the label (not for a
+rollback, whose code is the older release's), or `--accept-image
+<service>` (comma separated, or repeated) on the command you ran
+(`--release-sync`, `--reset`, with its `--from`), which runs it anyway, the
+history of its data starting over from it. `--yes` never does: it only
+skips prompts. `--accept-image` lets through only what was refused; a
+service the rule allows runs as it would. `--release`, `--rollback`,
+`--release-sync`, `--release-no-sync`, `--sync`, `--reset`, `--import`
+and `--snapshots restore <id> --no-code` take it.
+
+Within a version, the release's image is the project's claim: nothing
+is held by digest, and a plain `up` follows the names, as for any
+service. Accepted: a tag pushed again to an older image, or a stale
+mirror, is the same tag, and devopsy does not see it.
+
+**Rollback against restore.** A rollback brings back code, never data:
+a rollback past a data upgrade (to `mariadb:11.8` after a release of
+`12.1`) is refused, naming a release that fixes forward, the release
+snapshot of the older release's data (Snapshots, below) and
+`--accept-image`. `--snapshots restore <id>` brings data, code and
+images back together, checking nothing: the snapshot's data and its
+history come back as the pair they were, held as below. `--no-code`
+brings back data alone, checked against the current release's labels
+(or, for a held service, the image it runs: the snapshot's data is the
+environment's own past), held as below against the restored history. A
+built image it would need, gone (it builds nothing), refuses it before
+anything stops, naming the full restore, which builds.
+
+**Holds.** A data service is held, run on another image than its
+release's own, exactly when the rule would refuse its release's own
+image against its data's history: on the image that history ends on,
+by its digest when pulled, by its own name when built (the other
+release's own name when it built what this one pulls). devopsy never
+carries a hold from one activation to the next: it derives it again
+from the history wherever it decides what a data service runs (every
+activation, the restart after a failed run step, a full or `--no-code`
+restore, a sync, an import, a reset), so a hold goes as soon as the
+data allows the release's own image again, and nothing else keeps one.
+A release or a rollback is refused or accepted before it runs, so it
+holds nothing; the restart after a failed run step is the one place
+that cannot refuse: it runs on its own, past the switch, so the
+previous release runs on the image the failed one ran on the data,
+said in the release's output and in `--status` (`held on`), until a
+release fixes forward. The failed release's `--accept-image` never
+reaches the restart: it accepted the new image, never the old one back
+on the new data. A
+full restore of a snapshot taken during such a hold holds the same way.
+A rollback to a release that was held runs its own image, which stays on
+the server through the hold, built again only when gone, and a `--reload` of one compares the
+variables with its own image, not the held one. When the restart's
+images cannot be restored at all (the server's images held by another
+for 10 minutes, Docker failing), it is still held, a pulled one by its
+digest, a built one by the bookmark of the release that built it; with no
+bookmark, the release's output names it, with the release that fixes
+forward. The same goes for a child after a
+release that syncs whose run step failed before its database ran: its
+data is then the parent's, and a database the parent builds ran on an
+image only the parent's server has, so it runs an image of this server
+that the data allows, the failed release's own usually; with none, the
+previous release's own image runs on it, said, until a release fixes
+forward.
+
+**Syncs and imports** check the receiving side's labels against the
+source's data (Parent environments and syncs, `--export` and
+`--import`): the receiving side always runs its release's own image on
+the copy, a hold it had going with its old data, and its history
+becomes the source's. One whose own built image is gone while held is
+refused before anything stops: a copy builds nothing. A `custom` copy,
+a sync's or an import's, is loaded through the image that runs, so the
+data's files are that image's, not the source's version: it checks
+nothing, and its history and hold stay as they were.
 
 Image mode needs no git: without it the release just has no commit.
 Either way files arrive with git's modes, whatever the checkout's: 0755
@@ -917,8 +1018,9 @@ first one too: `devopsy @<target> --destroy` removes an environment that
 never went live, `--releases remove failed` the release alone.
 `devopsy-compose.yaml` is devopsy's own compose file, the only one it
 writes, holding only facts of the release's last activation: the image
-each service was given (a `devopsy.digest` label) and the images held by
-digest (above). devopsy runs compose with it between the project's
+each service was given (a `devopsy.digest` label) and the data
+services held on another image (a `devopsy.held` label, the image it
+holds them by: Holds, above). devopsy runs compose with it between the project's
 `compose.yaml` and your `compose.override.yaml`, so your override still
 wins; `devopsy -- config` shows the result. Run compose on a server
 through devopsy: a plain `docker compose up` lacks it, recreates every
@@ -1087,7 +1189,8 @@ whose its files are).
 that it has none, neither copied nor touched. An empty value is an
 error, not `false`: a variable left unset by accident
 (`devopsy.data=${HAS_DATA}`) must not stop copying silently. Any other
-value is an error.
+value is an error. A service with data also says its data's version,
+`devopsy.data.version` (Data and its images).
 
 `devopsy.data.copy` says how a copy to another environment (a sync,
 `--export`, `--import`) carries it:
@@ -1117,8 +1220,8 @@ value is an error.
   stdin (a load), devopsy carrying the bytes.
 - `none`: no copy carries it: a sync leaves the child's as it is, and
   `--export` and `--import` refuse it. It is still the service's data:
-  its image only goes forward (Images), and `--reset` empties it with
-  the rest. A variable turns a service's copying off this way
+  its version is checked (Data and its images), and `--reset` empties it
+  with the rest, its history starting over. A variable turns a service's copying off this way
   (`devopsy.data.copy=${DATA_DATABASE:-volumes}`, `DATA_DATABASE=none`).
 
 An empty `devopsy.data.copy` is an error too; on a service without data
@@ -1265,40 +1368,42 @@ child does not, or one the child streams that the parent copies as
 files, is refused the same way (a label the child sets in its own
 `shared/.env` can still differ).
 
-**Images with the data.** A copy of a pulled data service's files
-(`volumes`; a `custom` one goes through the child's own image, which keeps its
-history) brings data the parent's image wrote, so the child takes that
-image with it. Before anything stops, the child's side checks the image
-it runs: the parent's, or another under the same name, is fine (it is
-held on the parent's after the copy); an image the parent's data moved
-past, or a name the parent's data never ran (a child pinned to another
-version), is refused, every sync, unless `--sync --accept-image
-<service>`: then that service runs the child's own image on the copy,
-its history starting over from it, the way to try an upgrade on the
-parent's data (dev on `mariadb:12`, prod on `11.8`), one command per
-sync. The parent's
-image is pulled on the child's server by its digest when missing, never
-taken from a local name, and a sync that cannot pull it is refused,
-nothing changed (one with no build for the child server's platform,
-saying so). Once the copy is complete the child holds the parent's
-exact image, takes over the parent's history of the images that ran on
-that data, and its stopped service is made again on it (`compose start`
-would start the old container on the new data), before `finish child
-go`. A parent released between the sync's start and its copy refuses the
-copy before stopping anything: sync again.
+**Images with the data.** A copy brings data at the parent's version,
+so before anything stops the child's side checks its own labels against
+the parent's data, as a release checks its own (Data and its images),
+for every service whose files the copy writes (`volumes`, `any`
+included; one whose entries are all missing on the parent writes
+nothing, and keeps the child's history). A `custom` copy checks nothing
+and keeps the child's history and what it runs, as a `custom` import
+does: its script loads the dump through the image that runs, so the
+data's files are that image's, not the parent's version. A child below the parent's
+version, or on another tag at it, is refused, every sync, unless `--sync
+--accept-image <service>`: the way to try an upgrade path on the parent's
+data, one command per sync, its history starting over. The
+child always runs its own image on the copy; once the copy is complete it takes over
+the parent's history of that data. A parent released between the sync's
+start and its copy refuses the copy before stopping anything: sync
+again.
 
-An `--export` of a `volumes` service carries the images that ran on its data
-too (on a target, as a sync's parent sends them; locally, the image its
-container runs), in the tar's first header, which `tar` itself skips.
-An `--import` of it on a target checks them the same way before
-anything stops: the export's image, or another under the same name,
-goes on, the service held on the export's image once the data is in and
-made again on it; a name the data never ran, or one from another
-repository (the tar names it, whoever made it, so it never chooses what
-runs), is refused unless `--import <service> --accept-image <service>`,
-which runs its own image on the data, its history starting over. A tar
-without them (made by hand), every import locally, and `--resolved`
-start the service's history over from the image that runs it.
+An `--export` of a `volumes` service carries its data's history too (on
+a target, as a sync's parent sends it; locally, its label's version and
+tag alone), in the tar's first header, which `tar` itself skips. An
+`--import` of it on a target checks the environment's labels against it
+before anything stops, as a sync does, and takes it over once the data
+is in; refused, `--import <service> --accept-image <service>` runs it
+anyway, its history starting over. An import, a sync and a `--no-code`
+restore all read a service's labels as they are now, and refuse one
+whose image they name otherwise than its release fetched (a variable set
+since) until a release fetches it. A tar without the header and a
+`volumes` service's `--resolved` (unless the import took the history over
+before what failed) start the service's history over, data of no known
+version: what next runs on it says its version, the service's own label
+if it runs once the import is in, else the next release's; locally there
+is no history. A `custom` export is its script's output and carries none, and a
+`custom` import, or its `--resolved`, checks nothing and leaves the
+service's history and what it runs as they were: its script loads the
+dump through the image that runs, so the data stays what that image
+made it.
 
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits
@@ -1391,7 +1496,7 @@ So, across servers:
 devopsy @develop --sync                         # asks for the environment's name
 devopsy @develop --sync --yes                   # CI
 devopsy @develop --sync --from @b/prod          # another environment of the project
-devopsy @develop --sync --yes --accept-image database  # its own image on prod's data
+devopsy @develop --sync --yes --accept-image database  # below prod's version, on purpose
 ```
 
 `--sync` asks you to type the environment's full name
@@ -1408,7 +1513,11 @@ everything the labels say; what must never be copied is excluded by label
 `--sync`) is a sync that first throws away everything a sync leaves on
 the child: every container of every profile, its named volumes, and
 every entry of `shared/mnt`, the ones no label copies included (logs,
-an unlabeled service's files). The parent's data then goes in as on a
+an unlabeled service's files). Every data service's history of its
+images starts over with it (Data and its images): what the copy writes
+takes the parent's, and one it writes nothing for (`copy=none`, its
+entries all missing on the parent) has no version until a release
+adopts its label. The parent's data then goes in as on a
 first release, the services with data are created before `finish
 child go`, and the run step starts the rest. The release, its images
 and the child's `shared/.env` (its secrets) stay. Nothing of the child
@@ -1590,7 +1699,8 @@ terminal), gives the entries a `volumes` service's labels own to their
 owners (as the import would have), starts what the import kept down,
 the service included, and only once all of it is healthy removes the
 mark. A start that fails keeps
-it: fix it and run it again. On a target only, and never over a sync's
+it, and so does a failure to derive what runs on the data (a held image
+given back with the registry out of reach): fix it and run it again. On a target only, and never over a sync's
 mark: a sync's partial copy is completed only by a sync, which replaces
 an import's mark when it is cut too. A `--release-sync` of a child marked
 by an import whose parent does not copy that service fails at its push,
@@ -1761,16 +1871,18 @@ restored release's `rollback:`, else `release:`; its tars checked whole
 before anything stops (with a warning when their data may not fit
 where it goes, sparse files counted whole: a disk filled midway leaves
 the services down and the environment marked), then every service with data and its dependents
-stopped, each entry and volume emptied and extracted, the data services
-held on the exact images their data ran (no check, no
-`--accept-image`: data and image come back as the pair that ran
-together), the rest as their names give them now, its own builds from
-the snapshot's bookmarks; then the switch and the run step. Its
+stopped, each entry and volume emptied and extracted, with their
+history of what ran on them (nothing checked, no `--accept-image`: data
+and its version come back together), the pulled images as their names
+give them now, its own builds from the snapshot's bookmarks; then the
+switch and the run step. Its
 `devopsy-target.env` keeps this server's lines (the target, the imports:
 an imported snapshot's would name another server). `--no-code` restores
-the data and its images under the current release and reruns its run
-step, refused when its labels no longer fit the snapshot's (a service
-gone, or an entry another service mounts now): restore it whole then.
+the data alone under the current release and reruns its run step,
+refused when its labels no longer fit the snapshot's (a service gone, or
+an entry another service mounts now), or when its data's versions do not
+allow the snapshot's data (Data and its images; `--accept-image
+<service>` runs it anyway): restore it whole then.
 `shared/.env` comes back only with `--with-env`; without it, the keys
 that differ are named. The prompt asks for the environment's full name
 (`--yes` for CI). A restore completes once its run step went through.
@@ -1797,10 +1909,9 @@ server, release the project first, then import and restore it
 full restore runs the snapshot's code as the deploy user (its steps,
 its compose file, its Dockerfiles), and `--with-env` applies its
 variables to whatever code runs; a `--no-code` restore runs nothing of
-it, its data checked as for any restore and its record of the images
-kept to each service's own repository. Images stay out of it: a restore
-pulls the pulled ones by their digest and builds the built ones from
-the snapshot's code. `--snapshots remove <id>` removes one with the
+it, its data checked as for any restore. Images stay out of it: a
+restore pulls the pulled ones as their names give them now and builds
+the built ones from the snapshot's code. `--snapshots remove <id>` removes one with the
 images only it holds; `--destroy` removes them all, and its prompt says
 how many.
 

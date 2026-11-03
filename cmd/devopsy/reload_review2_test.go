@@ -33,6 +33,11 @@ func TestSyncChecksImagesFix(t *testing.T) {
 	if !strings.Contains(out, fix) {
 		t.Fatalf("the sync's fix is not %q:\n%s", fix, out)
 	}
+	// A --from stays in the fix: copied, it syncs from the same source.
+	s.logs()
+	if out, code := s.run(nil, "@dev", "--sync", "--from", "prod", "--yes"); code == 0 || !strings.Contains(out, "--release-sync --from prod") {
+		t.Fatalf("the sync --from (%d):\n%s", code, out)
+	}
 	s.logs()
 	// The fix as named: a release that syncs, which inherits first.
 	if out, code := s.run(nil, "@dev", "--release-sync", "--yes"); code != 0 {

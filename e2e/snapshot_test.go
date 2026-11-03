@@ -20,13 +20,13 @@ func snapshotProject(t *testing.T, name, prod string) string {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [dbdata:/data]
-    labels: {devopsy.data: "true", devopsy.data.copy: none}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy: none}
   app:
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files]
     depends_on: [db]
-    labels: {devopsy.data: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any}
 volumes:
   dbdata: {}
 `,
@@ -73,7 +73,7 @@ func TestSnapshotTakeRestore(t *testing.T) {
 
 	// Changed, then restored whole: the volume and the entry as they were
 	// (what came since gone), the services running on the restored
-	// release, db held on the image that ran on its data.
+	// release, db's history the snapshot's.
 	if out, code := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d -v \"$PWD/snaptake/prod/shared/mnt/files:/f\" busybox:1.37 sh -c 'echo changed >/d/table && echo later >/f/b.jpg'"); code != 0 {
 		t.Fatalf("changing the data: %s", out)
 	}
@@ -97,8 +97,8 @@ func TestSnapshotTakeRestore(t *testing.T) {
 			t.Errorf("%s after the restore: %s", svc, state)
 		}
 	}
-	if compose, _ := srv(t, "cat snaptake/prod/current/../devopsy-compose.yaml"); !strings.Contains(compose, "busybox@sha256:") {
-		t.Errorf("db not held on its data's image:\n%s", compose)
+	if h, _ := srv(t, "cut -f2,3 snaptake/prod/.devopsy-data-images"); !strings.Contains(h, "db\timport") {
+		t.Errorf("db's history after the restore:\n%s", h)
 	}
 
 	// A tar whose stream goes on past its end-of-archive blocks (made
@@ -220,7 +220,7 @@ func TestSnapshotReflinkE2E(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files]
-    labels: {devopsy.data: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})

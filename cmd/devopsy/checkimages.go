@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -30,14 +32,17 @@ const (
 // name, a build argument, a profile turned on) is refused, naming it,
 // exit 3, the release to run as the fix (address, as the operator typed
 // it; --sync, a sync's holder: a release that syncs, which inherits
-// first; --restore <snapshot>, a --no-code restore --with-env: the full
-// restore, or the restore without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
+// first; --restore <snapshot>, a --no-code restore: its data services
+// checked against the snapshot's data once its images pass
+// (images.Set.CheckLanding, exit 3, its fix --again, what the operator
+// ran), and with --with-env the fixes the full restore, or the restore
+// without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
 // follow-up: "missing <name>" lines, exit 4, when compose requires a
 // variable that is not set; else "image <what>" lines, exit 3, when a
 // release applies the change; else nothing, exit 0: a reload does.
 func runCheckImages(cwd string, args []string) int {
-	hint, sync, address, snapshot := false, false, "", ""
+	hint, sync, address, snapshot, again := false, false, "", "", ""
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--hint":
@@ -47,10 +52,14 @@ func runCheckImages(cwd string, args []string) int {
 		case a == "--restore" && i+1 < len(args):
 			snapshot = args[i+1]
 			i++
+		case a == "--again" && i+1 < len(args):
+			// What the operator ran, for a refusal's fix (images.Set.Again).
+			again = args[i+1]
+			i++
 		case address == "" && !strings.HasPrefix(a, "-"):
 			address = a
 		default:
-			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot>] [<address>]")
+			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot>] [--again <args>] [<address>]")
 			return 2
 		}
 	}
@@ -88,6 +97,19 @@ func runCheckImages(cwd string, args []string) int {
 		return 1
 	}
 	if len(needs) == 0 {
+		if snapshot != "" {
+			// A --no-code restore: the current release's data services against
+			// the snapshot's data's history, as a sync's against the parent's
+			// (images.Landing), the operator's --accept-image letting a refused
+			// one through.
+			s.Address, s.Accept, s.Again = strings.TrimPrefix(address, "@"), acceptedImages(), again
+			if err := s.CheckLanding(rel, snapshotLanding(s, filepath.Join(s.Snapshots, snapshot))); errors.Is(err, images.ErrRefused) {
+				return checkImagesExit
+			} else if err != nil {
+				report.Fail(err)
+				return 1
+			}
+		}
 		return 0
 	}
 	if hint {
@@ -102,10 +124,10 @@ func runCheckImages(cwd string, args []string) int {
 		// A sync's variables are the parent's inherited ones too, which
 		// only a release that syncs takes before it fetches (a plain one
 		// keeps the child's inherit.env: the next sync refused again).
-		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" --release-sync")
+		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" "+images.ReleaseSync(again))
 	}
 	fixes := []report.Remedy{fix}
-	if snapshot != "" {
+	if snapshot != "" && os.Getenv(remote.RestoreEnvEnv) != "" {
 		// A --no-code restore --with-env: the snapshot's variables, which
 		// a release from here would not have; its full restore brings its
 		// code and images with them.
@@ -113,6 +135,10 @@ func runCheckImages(cwd string, args []string) int {
 			report.Fix("restore it with its code and images, which ran on those variables:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --with-env"),
 			report.Fix("or its data alone, under the variables there now:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --no-code"),
 		}
+	}
+	if snapshot != "" && os.Getenv(remote.RestoreEnvEnv) == "" && readMark(filepath.Dir(cwd)) != nil {
+		// A marked environment refuses that release: a full restore fetches.
+		fixes = []report.Remedy{report.Fix("the mark refuses a release: restore it with its code and images, which fetches them:", "devopsy @"+addr+" --snapshots restore "+snapshot)}
 	}
 	report.Fail(&report.Failure{
 		Msg:     "the variables now need another image than the release fetched, and only a release fetches one",

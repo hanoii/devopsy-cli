@@ -55,7 +55,19 @@ var namedFeatures = []struct {
 	// '--images' line, found by its '--name': it passes --address too,
 	// which an older devopsy refuses as usage, removals included, after
 	// taking the locks).
-	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|hold|data|sync-check|sync-done)\b|'--images' '--name'`)},
+	{DataImagesFeature, regexp.MustCompile(`\bimg (record|restore|ran|data|sync-check|sync-done)\b|'--images' '--name'`)},
+	// Data following its version (devopsy.data.version) and tag: a
+	// release's img check before its fetch, a rollback's checks
+	// (rollback-target, restore), the restart's restore --restart and a
+	// full restore's --restore, the words whose history lines carry a
+	// version and a tag (ran, data, sync-check, sync-done), the restart's
+	// last resort (hold, once get_images failed: an older server's held
+	// its data on the newest image by other arguments), --export and
+	// --import, whose header carries them, and a --no-code restore's
+	// --check-images --restore. An older server would check by image
+	// identity, hold every data service by digest, and read or write the
+	// lines without their versions.
+	{DataVersionFeature, regexp.MustCompile(`\bimg (check|rollback-target|ran|data|sync-check|sync-done|hold)\b|\bimg restore --(restart|restore)\b|devopsy[ '\\]{1,8}--(export|import)\b|devopsy[ '\\]{1,8}--check-images[ '\\]{1,8}--restore\b`)},
 	// The server's own images settings: each release's mode from its
 	// record (images.ModeOf), the image lock and the project's record
 	// from the release root, found by the server's devopsy itself
@@ -119,6 +131,10 @@ const MntOwnerFeature = "mnt-owner"
 
 // DataImagesFeature is the images' history and holds' named feature.
 const DataImagesFeature = "data-images"
+
+// DataVersionFeature is the named feature of data following its version
+// (devopsy.data.version) and tag.
+const DataVersionFeature = "data-version"
 
 // ResetFeature is --reset's named feature.
 const ResetFeature = "reset"

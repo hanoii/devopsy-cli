@@ -44,7 +44,7 @@ func TestContent(t *testing.T) {
 // follows a rename, and the skill may name no other (an internal or an
 // old one).
 var publicLabels = []string{
-	"devopsy.data", "devopsy.data.copy", "devopsy.data.stop", "devopsy.data.exclude",
+	"devopsy.data", "devopsy.data.version", "devopsy.data.copy", "devopsy.data.stop", "devopsy.data.exclude",
 	"devopsy.mnt.owner", "devopsy.role", "devopsy.export", "devopsy.import",
 	"devopsy.shell", "devopsy.shell.user",
 }

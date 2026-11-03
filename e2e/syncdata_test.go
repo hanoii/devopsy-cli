@@ -23,7 +23,7 @@ func TestSyncInheritedLabel(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: "true", devopsy.data.copy: "${SYNC_DATA:-volumes}", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy: "${SYNC_DATA:-volumes}", devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy":           "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export":  "#!/bin/sh\nexec cat \"$DEVOPSY_PROJECT_DIR/mnt/data/stamp\"\n",
@@ -150,12 +150,12 @@ func TestSyncRsyncEntries(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files, ./mnt/logs:/logs, ./mnt/gone:/gone]
-    labels: {devopsy.data: "true", devopsy.data.exclude: logs}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.exclude: logs}
   conf:
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/app.ini:/etc/app.ini]
-    labels: {devopsy.data: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any}
 `,
 				".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 			})
@@ -221,7 +221,7 @@ func TestSyncChildGuard(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/db:/all]
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
@@ -276,7 +276,7 @@ func TestSyncReleaseInheritsRequired(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any}
 `
 	dir := project(t, name, map[string]string{
 		".devopsy/.env":            "DEVOPSY_SERVER=server\n",

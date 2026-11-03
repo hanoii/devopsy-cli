@@ -7,6 +7,7 @@
 - `devopsy.data=true|false` (`cli.DataLabel`, `SyncService.HasData`) says whether a service has data; `devopsy.data.copy=volumes|custom|none` (`DataCopyLabel`, `Copy`, `Copies()`) how a copy carries it; `devopsy.data.exclude` (`DataExcludeLabel`) what of it stays out; `devopsy.data.stop=never|own|import|always` (`DataStopLabel`) when the service is stopped around a copy.
 - No label is no data, as `false` is; an empty value on either label is an error: a variable left unset by accident must fail, never silently stop copying.
 - The copy label is ignored on a service without data, so a variable can flip `devopsy.data` and keep it.
+- `devopsy.data.version` (`images.DataVersionLabel`, `SyncService.Version`) is required with data, dotted non-negative integers or `any` (`images.AnyVersion`), ignored without data, refused per service where labels are read, its error saying why with both ways to set it.
 - `copy=none` is data all the same: its images only go forward (`internals/images.md`), `--reset` empties it, a sync leaves the child's own, and `--export` and `--import` refuse it.
 - `custom` makes the copy the project's job, through the data capability's `export` and `import` scripts, both required for it; `volumes` copies the service's entries of `mnt` and its named volumes as files.
 - `stop` defaults to `never` for every copy, so every stop shows in compose.yaml; it applies to services without data too (for example an app needing `import`), and `never` is accepted explicitly, which silences the dependents notice.

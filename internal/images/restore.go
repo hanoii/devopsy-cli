@@ -1,10 +1,12 @@
 package images
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -23,19 +25,27 @@ var ErrRefused = errors.New("refused")
 func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 
 // Restore makes target run in place of against: a rollback (against is
-// the release it leaves), the restart after a failed run (the failed
-// release), and writes what target runs now (its listing, bookmarks and
-// ComposeFile), service by service, as compose resolves target's config
-// now:
+// the release it leaves), the restart after a failed run (Restart: the
+// failed release), a full restore (NoCheck: the release made from a
+// snapshot, against the current one), and writes what target runs now
+// (its listing, bookmarks and ComposeFile), service by service, as
+// compose resolves target's config now:
 //
-//   - a pulled data service runs the newest image its data ran (the
-//     history's last, else what its container runs), held by digest,
-//     whatever target's name: data only goes forward;
-//   - any other pulled service runs what target's name holds now, pulled
-//     when gone, held by nothing: a pin or a commit tag is target's image
-//     anyway, a floating tag its current (patched) one;
+//   - a pulled image runs what target's name holds now, pulled when gone,
+//     held by nothing: a pin or a commit tag is target's image anyway, a
+//     floating tag its current (patched) one;
 //   - an own image is target's, its bookmark put back on its name (no
 //     bookmark: ErrGone; with fetched, the name's just-built image).
+//
+// A data service's image is chosen as any service's, then its hold
+// derived (holdsFor) against the window its data has when target runs:
+// a rollback runs the rule on each (rule, CheckRollback) before any pull,
+// refused, nothing changes (ErrRefused), accepted, its history starts
+// over from the image it runs (ForcedFile), so it holds nothing new; the
+// restart cannot refuse, and holds what the rule refuses on the image
+// its data's history ends on, whatever --accept-image says; a full
+// restore checks nothing, its data and their history coming back from
+// the snapshot, whose window it derives against.
 //
 // Never a pulled name retagged: another environment may run it. Every
 // service that does not go back says why. Every check comes before any
@@ -44,6 +54,10 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // Own against pulled, and whether a build changed, go by target's own
 // mode (ModeOf): it was fetched in it, whatever mode the project is in
 // now.
+//
+// AsBuilt (the restart's last try, after a build failed) never asks for
+// a build and never fails on a pull: an own image gone stays as its name
+// is, a hold that cannot be had is held all the same.
 func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	// What it pulled by digest goes when it fails: a name by digest alone
 	// that no listing names would never be removed.
@@ -61,151 +75,167 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		s.say(report.ErrorLevel, "could not list the images of %s: %v", tid, err)
 		return err
 	}
-	old, ag := readList(target), readList(against)
+	old := readList(target)
 	names := bookmarks(old, s.Name, tid)
-	base := baseOf(target)
-	h := readHistory(base)
 	mode := ModeOf(target)
-	var cs map[string]Container
+	h := readHistory(baseOf(target))
+	window := h.window
+	var accepted []string
+	switch {
+	case s.Restart:
+	case s.NoCheck:
+		// The window the data step brings back with the snapshot's data.
+		window = s.restoreLanding(restoreOf(target)).after(h.window)
+	default:
+		if accepted, err = s.checkRollback(target, svcs, false); err != nil {
+			return err
+		}
+		window = func(svc string) []ran {
+			if slices.Contains(accepted, svc) {
+				return nil
+			}
+			return h.window(svc)
+		}
+	}
+	var claims []entry
+	for _, svc := range svcs {
+		if svc.Data {
+			claims = append(claims, entry{Service: svc.Name, DataVersion: svc.DataVersion, Tag: svc.tag()})
+		}
+	}
+	held := holdsFor(claims, window)
 
 	type step struct {
-		svc   Service
-		kind  string
-		hold  string // a digest name to run, pulled when gone
-		retag string // an own image's bookmark to put back on its name
+		svc  Service
+		kind string
+		// retag is an own image's bookmark to put back on its name.
+		retag string
+		// asIs: as its listing has it, nothing moved (AsBuilt: its
+		// bookmark gone, and nothing to build).
+		asIs bool
 	}
 	var steps []step
 	for _, svc := range svcs {
 		probe := entry{Service: svc.Name, Ref: svc.Ref}
 		o, haveOld := match(old, probe)
-		a, haveAg := match(ag, probe)
-		st := step{svc: svc}
-		own := svc.own(mode)
-		// A pulled data service in the release it leaves stays one, even
-		// where the target builds it or never pulls it: its data ran the
-		// pulled image, which an unordered own image must not replace.
-		data := (!own && ((svc.Data && !svc.Build) || o.Kind == KindData)) || a.Kind == KindData
-		switch {
-		// Built (or never pulled), and either no data service or one whose
-		// data has no history: as the target builds it.
-		case own && (!data || !haveHistory(h, svc.Name)):
+		st := step{svc: svc, kind: KindPulled}
+		if _, ok := held[svc.Name]; ok {
+			steps = append(steps, st)
+			continue
+		}
+		if svc.own(mode) {
 			st.kind = KindOwn
-			if fetched {
-				break
-			}
-			i := indexOf(old, o)
-			if !haveOld || o.ID == "" || i < 0 {
-				return s.gone(tid, svc)
-			}
-			if s.changed(o, svc, mode) {
-				if err := s.rebuilt(tid, o, svc); err != nil {
-					return err
-				}
-			}
-			if _, err := s.Docker.ID(names[i]); err != nil {
-				return s.gone(tid, svc)
-			}
-			st.retag = names[i]
-		case data:
-			st.kind = KindData
-			if last, ok := h.last(svc.Name); ok && last.hold() != "" {
-				st.hold = last.hold()
-				break
-			}
-			if cs == nil {
-				cs = s.containers()
-			}
-			if c, ok := cs[svc.Name]; ok && c.started() {
-				if img, err := s.Docker.Inspect(c.Image); err == nil {
-					if d := digestIn(img, svc.Ref); d != "" {
-						st.hold = d
-					} else if len(img.Digests) > 0 {
-						st.hold = img.Digests[0]
-					}
-				}
-			}
-			if st.hold == "" && haveAg && a.Digest != "" {
-				st.hold = a.Digest
-			}
-			if st.hold == "" && own {
-				// Built, and nothing to hold it by (no registry digest, as on
-				// Docker's classic store): its build, from its bookmark.
-				st.kind = KindOwn
-				if fetched {
-					break
-				}
+			if !fetched {
 				i := indexOf(old, o)
-				if !haveOld || o.ID == "" || i < 0 {
-					return s.gone(tid, svc)
-				}
-				if s.changed(o, svc, mode) {
-					if err := s.rebuilt(tid, o, svc); err != nil {
-						return err
+				if haveOld && o.held() {
+					// Its entry's bookmark holds the image it was held on, never
+					// its own build (review: a rollback to a release the restart
+					// held ran the failed release's build as its own): that one
+					// is the entry of no service's (withOwnBuilds).
+					b := ownBuildBookmark(old, names, o.OwnID)
+					if o.OwnID != "" && o.OwnID == o.ID && i >= 0 {
+						b = names[i] // held on the very image: its entry's bookmark
+					}
+					if b != "" {
+						if _, err := s.Docker.ID(b); err == nil {
+							if s.changed(ownOf(o), svc, mode) {
+								if err := s.rebuilt(tid, ownOf(o), svc); err != nil {
+									return err
+								}
+							}
+							st.retag = b
+						}
+					}
+					if st.retag == "" {
+						if st.asIs = s.AsBuilt; !st.asIs {
+							s.say(report.InfoLevel, "%s's image of %s was held on another image: building its own again", tid, svc.Name)
+							return ErrGone
+						}
+						s.say(report.WarnLevel, "%s's own image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+					}
+				} else if !haveOld || o.ID == "" || i < 0 {
+					if st.asIs = s.AsBuilt; !st.asIs {
+						return s.gone(tid, svc)
+					}
+					s.say(report.WarnLevel, "%s's image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+				} else {
+					if s.changed(o, svc, mode) {
+						if err := s.rebuilt(tid, o, svc); err != nil {
+							return err
+						}
+					}
+					if _, err := s.Docker.ID(names[i]); err != nil {
+						if st.asIs = s.AsBuilt; !st.asIs {
+							return s.gone(tid, svc)
+						}
+						s.say(report.WarnLevel, "%s's image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+					} else {
+						st.retag = names[i]
 					}
 				}
-				if _, err := s.Docker.ID(names[i]); err != nil {
-					return s.gone(tid, svc)
-				}
-				st.retag = names[i]
-			} else if st.hold == "" {
-				// Nothing ever ran on its data that devopsy knows of: like any
-				// other pulled image.
-				st.kind = KindPulled
 			}
-		default:
-			st.kind = KindPulled
 		}
 		steps = append(steps, st)
 	}
 
-	// The changes: pulls, an own image's name put back, then the record.
+	// The changes: pulls, an own image's name put back, the holds, then
+	// the record.
 	es := make([]entry, 0, len(steps))
-	holds := map[string]string{}
-	var lines []string
+	var lines, byBookmark []string
 	own := s.own(target)
 	for _, st := range steps {
 		svc := st.svc
 		o, haveOld := match(old, entry{Service: svc.Name, Ref: svc.Ref})
+		if _, ok := held[svc.Name]; ok {
+			// Its own image as target's listing has it (no build, no pull:
+			// it runs another), held below.
+			e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
+			if haveOld {
+				e = ownOf(o)
+			}
+			if svc.own(mode) {
+				e.Kind = KindOwn
+			}
+			e.DataVersion, e.Tag = svc.DataVersion, svc.tag()
+			es = append(es, e)
+			continue
+		}
 		switch {
+		case st.asIs:
+			es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
 		case st.kind == KindOwn && st.retag != "":
 			bid, _ := s.Docker.ID(st.retag)
-			if cur, err := s.Docker.ID(svc.Ref); err != nil || cur != bid {
-				if err == nil {
-					if who := s.others(cur, own); len(who) > 0 {
-						s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
-						es = append(es, s.entryOf(svc, svc.Ref, mode))
-						continue
-					}
+			who, err := s.putName(svc.Ref, bid, own)
+			if err != nil {
+				s.say(report.ErrorLevel, "could not put %s back on %s's image: %v", svc.Ref, tid, err)
+				return err
+			}
+			if len(who) > 0 {
+				if !svc.Data {
+					s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
+					es = append(es, s.entryOf(svc, svc.Ref, mode))
+					continue
 				}
-				if err := s.Docker.Tag(st.retag, svc.Ref); err != nil {
-					s.say(report.ErrorLevel, "could not put %s back on %s's image: %v", svc.Ref, tid, err)
-					return err
+				// On data its rule judged by its own label, never another
+				// environment's build: by its bookmark (review: it upgraded
+				// the data).
+				s.say(report.InfoLevel, "%s stays on its newer image, which other environments use (%s): %s runs its own by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
+				e := s.entryOf(svc, st.retag, mode)
+				e.Ref = svc.Ref
+				if b := ownOf(o).Build; b != "" && e.Build != "" {
+					e.Build = b
 				}
+				es = append(es, e)
+				byBookmark = append(byBookmark, svc.Name)
+				continue
 			}
 			// Its bookmark, put back: built with what its listing said then,
 			// whatever the variables say now.
 			e := s.entryOf(svc, svc.Ref, mode)
-			if o.Build != "" && e.Build != "" {
-				e.Build = o.Build
+			if b := ownOf(o).Build; b != "" && e.Build != "" {
+				e.Build = b
 			}
 			es = append(es, e)
-		case st.hold != "":
-			if _, err := s.Docker.Inspect(st.hold); err != nil {
-				if err := s.Docker.Pull(st.hold); err != nil {
-					s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s is gone from this server and could not be pulled by its digest", svc.Name, st.hold),
-						[]string{err.Error()}, report.Fix("the newest image its data ran must be there: never one older"))
-					return ErrRefused
-				}
-				pulled = append(pulled, st.hold)
-				s.say(report.InfoLevel, "%s: pulled %s again by its digest", svc.Name, st.hold)
-			}
-			e := s.entryOf(svc, st.hold, mode)
-			e.Kind, e.Digest = KindData, st.hold
-			es = append(es, e)
-			holds[svc.Name] = st.hold
-			if haveOld && o.ID != "" && o.ID != e.ID {
-				lines = append(lines, fmt.Sprintf("%s stays on %s, the newest image its data ran, not %s's (%s): data only goes forward", svc.Name, shownEntry(e), tid, shownEntry(o)))
-			}
 		default:
 			if _, err := s.Docker.ID(svc.Ref); errors.Is(err, ErrNoImage) {
 				s.say(report.InfoLevel, "%s: %s is gone from this server: pulling it", svc.Name, svc.Ref)
@@ -215,29 +245,106 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				}
 			}
 			e := s.entryOf(svc, svc.Ref, mode)
-			if st.kind == KindData {
-				e.Kind = KindData
-			}
 			es = append(es, e)
-			if e.Kind != KindOwn && haveOld && o.ID != "" && o.ID != e.ID {
-				lines = append(lines, fmt.Sprintf("%s runs what %s holds now (%s), not the image %s ran (%s): pin a version for a rollback to take it back", svc.Name, svc.Ref, shownEntry(e), tid, shownEntry(o)))
+			if was := ownOf(o); e.Kind != KindOwn && haveOld && was.ID != "" && was.ID != e.ID {
+				lines = append(lines, fmt.Sprintf("%s runs what %s holds now (%s), not the image %s ran (%s): pin a version for a rollback to take it back", svc.Name, svc.Ref, shownEntry(e), tid, shownEntry(was)))
 			}
 		}
 	}
-	if err := s.keep(target, es); err != nil {
-		s.say(report.ErrorLevel, "could not record the images of %s: %v", tid, err)
+	holds, heldLines, err := s.applyHolds(target, es, held, &pulled)
+	if err != nil {
 		return err
 	}
-	if err := writeCompose(target, es, holds); err != nil {
-		s.say(report.ErrorLevel, "could not write %s's %s: %v", tid, ComposeFile, err)
+	lines = append(heldLines, lines...)
+	for _, svc := range byBookmark {
+		holds[svc] = composeHold{bookmark: true}
+	}
+	// What --accept-image let through: its data's history starts over from
+	// the image it runs, once it runs (Ran).
+	var forced []string
+	for _, e := range es {
+		if slices.Contains(accepted, e.Service) {
+			forced = append(forced, e.Service+"\t"+e.ID)
+		}
+	}
+	if err := writeForced(target, forced); err != nil {
+		s.say(report.ErrorLevel, "could not record what --accept-image let through: %v", err)
 		return err
 	}
-	if len(lines) > 0 {
+	if err := s.writeHeld(target, es, holds); err != nil {
+		return err
+	}
+	switch {
+	case len(heldLines) > 0:
+		s.sayAll(report.WarnLevel, "images of "+tid+" restored, but for what its data does not allow:", lines)
+	case len(lines) > 0:
 		s.sayAll(report.InfoLevel, "images of "+tid+" restored, but for what does not go back:", lines)
-	} else {
+	default:
 		s.say(report.InfoLevel, "images of %s restored", tid)
 	}
 	return nil
+}
+
+// CheckRollback runs the rule on target's data services, as a rollback
+// to it would run them (compose's config in its code now), before
+// anything changes: img rollback-target, ahead of the rollback's before
+// and prepare steps, leniently (a config that cannot be read there, a
+// variable left unset, refuses nothing: --missing-vars says so later);
+// Restore checks for real.
+func (s *Set) CheckRollback(target string) error {
+	svcs, err := s.List(target)
+	if err != nil {
+		return nil
+	}
+	_, err = s.checkRollback(target, svcs, true)
+	return err
+}
+
+// checkRollback is the rollback's check of svcs, target's: the services
+// --accept-image let through (judge), quiet but for a refusal.
+func (s *Set) checkRollback(target string, svcs []Service, quiet bool) ([]string, error) {
+	h := readHistory(baseOf(target))
+	var js []judged
+	for _, svc := range svcs {
+		if svc.Data {
+			js = append(js, judged{service: svc.Name, why: rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its"), version: svc.DataVersion, tag: svc.tag()})
+		}
+	}
+	return s.judge(js, checkWords{source: "its", what: "the rollback to " + filepath.Base(target) + " would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--rollback", rollback: true}, target, quiet)
+}
+
+// snapshotHeld prefixes HeldLabel's value for a hold on an image a
+// snapshot's listing names: the snapshot's id follows.
+const snapshotHeld = "snapshot "
+
+// A snapshot's data directory and its images file (remote's
+// SnapshotData, the take's data/images: SnapshotData's windows).
+const (
+	snapshotDataDir = "data"
+	snapshotImages  = "images"
+)
+
+// restoreLanding is what snapshot snap's data step lands (RestoreLanding),
+// its windows from its images file (SnapshotData): none without it.
+func (s *Set) restoreLanding(snap string) Landing {
+	var data []byte
+	if dir := s.snapshots(); snap != "" && dir != "" {
+		data, _ = os.ReadFile(filepath.Join(dir, snap, snapshotDataDir, snapshotImages))
+	}
+	return s.RestoreLanding(string(data), snap, nil)
+}
+
+// restoreOf is the snapshot a full restore made rel from (its record's
+// restore), "" for any other release.
+func restoreOf(rel string) string {
+	var r struct {
+		Restore string `json:"restore"`
+	}
+	data, err := os.ReadFile(filepath.Join(rel, RecordFile))
+	if err != nil || json.Unmarshal(data, &r) != nil {
+		return ""
+	}
+	return r.Restore
 }
 
 func (s *Set) gone(tid string, svc Service) error {
@@ -270,6 +377,17 @@ func (s *Set) rebuilt(tid string, o entry, svc Service) error {
 	return ErrGone
 }
 
+// ownBuildBookmark is the bookmark of a held service's own build, id, in a
+// listing (withOwnBuilds) and its bookmarks; "" without one.
+func ownBuildBookmark(es []entry, names []string, id string) string {
+	for i, e := range es {
+		if e.Service == "" && e.Kind == KindOwn && id != "" && e.ID == id {
+			return names[i]
+		}
+	}
+	return ""
+}
+
 func indexOf(es []entry, e entry) int {
 	for i, x := range es {
 		if x == e {
@@ -277,6 +395,15 @@ func indexOf(es []entry, e entry) int {
 		}
 	}
 	return -1
+}
+
+// shownData is a data service's version and tag, for messages.
+func shownData(e entry) string {
+	v := DataVersionLabel + "=" + e.DataVersion
+	if e.Tag != "" {
+		v += ", tag " + short(e.Tag)
+	}
+	return v
 }
 
 // shownEntry is an entry's image for messages: its version, else its
@@ -290,40 +417,6 @@ func shownEntry(e entry) string {
 		s += " (" + e.Version + ")"
 	}
 	return s
-}
-
-// HoldData holds rel's pulled data services on the newest image their
-// data ran (the history's last), in its ComposeFile, when nothing else
-// could restore its images (the restart after a failed run whose fetch
-// failed): what its last activation held may be older. An image gone is
-// pulled by compose's up, by its digest. Its listing and bookmark follow
-// the hold (keep), so what holds the image is what rel runs: a snapshot
-// of rel copies both (review: its bookmark held the image the database
-// no longer ran, and nothing the one it did).
-func (s *Set) HoldData(base, rel string) error {
-	h := readHistory(base)
-	holds, _ := composeFacts(rel)
-	if holds == nil {
-		holds = map[string]string{}
-	}
-	es := readList(rel)
-	changed := false
-	for i, e := range es {
-		last, ok := h.last(e.Service)
-		if e.Kind != KindData || !ok || last.hold() == "" || holds[e.Service] == last.hold() {
-			continue
-		}
-		holds[e.Service] = last.hold()
-		es[i].Digest, es[i].ID = last.hold(), last.ID
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	if err := s.keep(rel, es); err != nil {
-		return err
-	}
-	return writeCompose(rel, es, holds)
 }
 
 // RestoreOwn puts a release's own images back on their names, after a
@@ -341,28 +434,29 @@ func (s *Set) RestoreOwn(rel string) {
 	names := bookmarks(es, s.Name, id)
 	own := s.own(rel)
 	for i, e := range es {
-		if e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") {
+		// (A held service's own build, of no service: withOwnBuilds, holds.
+		// A service held by its bookmark under its own pulled name: that name
+		// is never retagged. One held under another name counts on that one.)
+		if e.Service == "" || e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") || e.held() && e.OwnDigest != "" && familiar(e.Ref) == familiar(e.OwnRef) {
 			continue
 		}
 		bid, err := s.Docker.ID(names[i])
 		if err != nil {
 			continue
 		}
-		cur, err := s.Docker.ID(e.Ref)
-		if err == nil && cur == bid {
-			continue
-		}
-		if err == nil {
-			if who := s.others(cur, own); len(who) > 0 {
-				s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
-				continue
-			}
-		}
-		if err := s.Docker.Tag(names[i], e.Ref); err != nil {
+		who, err := s.putName(e.Ref, bid, own)
+		if err != nil {
 			s.say(report.WarnLevel, "could not put %s back on %s's image: %v", e.Ref, id, err)
+		} else if len(who) > 0 {
+			s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
 		}
 	}
 }
+
+// FetchFailedFile, in a release's directory, says its fetch never finished
+// (Undo): its listing bookmarks what its names held then, under its labels,
+// so no hold takes an image from it (allowedHere).
+const FetchFailedFile = "devopsy-fetch-failed"
 
 // Undo puts the live release's own names back after a release's fetch
 // failed or was interrupted: a new release's own images are bookmarked
@@ -371,6 +465,9 @@ func (s *Set) RestoreOwn(rel string) {
 func (s *Set) Undo(rel, prev string, rollback bool) {
 	if !rollback {
 		s.Bookmark(rel)
+		if f, err := os.Create(filepath.Join(rel, FetchFailedFile)); err == nil {
+			f.Close()
+		}
 	}
 	if prev != "" {
 		s.RestoreOwn(prev)
@@ -391,9 +488,4 @@ func (s *Set) Recover(base, prev string) {
 		}
 		os.Remove(m)
 	}
-}
-
-func haveHistory(h history, svc string) bool {
-	_, ok := h.last(svc)
-	return ok
 }

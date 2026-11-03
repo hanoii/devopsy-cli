@@ -817,7 +817,7 @@ const (
 // snapshot's data written in the stretch a sync's copy would be, between
 // the images and the switch: the snapshot's tars checked whole before
 // anything stops, then the set stopped, each entry and volume emptied and
-// extracted, the data services held on the images that ran on it. Never
+// extracted, its history with it. Never
 // marks the release it leaves rolled back: a rollback after it goes back
 // there.
 func RestoreScript(t *Target, projectName string, r *RestoreOptions) string {
@@ -841,11 +841,13 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// of against's (img restore), fetched again when an image it builds
 	// is gone or was built with other build arguments; that build failing,
 	// its bookmarks as they are (--as-built), never the failed release's
-	// image under the name.
+	// image under the name. --restart: nothing refused, a data service the
+	// rule would refuse held on the failed release's image its data ran,
+	// in every one of the three (a fetch keeps the hold).
 	s += `get_images() {
   image_lock shared fetching || return $?
   gi=0
-  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || img restore --as-built "$1" "$2" || gi=$?
+  img restore --restart "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --restart --fetched "$1" "$2"; } || img restore --restart --as-built "$1" "$2" || gi=$?
   image_unlock
   return "$gi"
 }
@@ -912,7 +914,9 @@ if [ -n "$cut_from" ]; then
   devopsy --say info "finishing the rollback to $id from $cut_from, cut off past its switch"
 fi
 if [ -z "$id" ]; then
-  id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
+  # Its data services checked leniently first (exit 3, said): a refused
+  # rollback runs no before or prepare step.
+  id=$(img rollback-target "$base") || { rt=$?; [ "$rt" -ne 3 ] || exit 3; devopsy --say error "no release before the current one"; exit 1; }
   devopsy --say info "rolling back to $id"
 fi
 ` + RollbackNotLive
@@ -1002,8 +1006,8 @@ ln -sfn "` + toBase + `shared/` + ParentEnvFile + `" "$code/.devopsy/` + ParentE
 `
 	}
 	if sync != nil && sync.Images != "" {
-		// The parent's data images, for the check at the end of the fetch
-		// (img record) and the take-over once the copy is complete.
+		// The parent's data's windows, for the check before the fetch (img
+		// check) and the take-over once the copy is complete.
 		s += sync.imagesExport()
 	}
 	if sync != nil {
@@ -1076,16 +1080,22 @@ ln -sfn "` + toBase + `shared/` + ParentEnvFile + `" "$code/.devopsy/` + ParentE
 	if rollback {
 		undo = `img undo --rollback "$1" ${prev:+"$base/$prev"}`
 	}
-	// A new release: what its pulled names held first (a refused one
-	// puts them back), then its fetch and its record (img record: the
-	// listing, the bookmarks, devopsy's compose file, and the checks of
-	// the pulled data services against their data's history, exit 3).
-	// A rollback: its images restored against the release it leaves
-	// (img restore), fetched again only when an image it builds is gone
-	// (exit 1). A signal during either (img ignores it) skips the fetch.
-	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
+	// A new release: its data services against their data's history
+	// first (img check, exit 3: a refused release builds and pulls
+	// nothing), then its fetch and its record (img record: the listing,
+	// the bookmarks, devopsy's compose file). A rollback: its images
+	// restored against the release it leaves (img restore, which checks
+	// its data services before any pull), fetched again only when an image
+	// it builds is gone (exit 1); a full restore checks nothing (--restore:
+	// its data and their history come back from the snapshot). A signal
+	// during either (img ignores it) skips the fetch.
+	fetchStep := `{ [ -z "$fetch_sig" ] && img check ` + sync.againArg() + `"$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
 	if rollback {
-		fetchStep = `{ img restore "$1" "$base/$rb_from" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$rb_from"; }; }`
+		restoreFlag := ""
+		if restore != nil {
+			restoreFlag = "--restore "
+		}
+		fetchStep = `{ img restore ` + restoreFlag + `"$1" "$base/$rb_from" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore ` + restoreFlag + `--fetched "$1" "$base/$rb_from"; }; }`
 	}
 	// A release with snapshots on, replacing a current one, takes the
 	// snapshot of what it replaces (part 4 of snapshots): its locks and
@@ -1252,10 +1262,11 @@ exec 7<&-
     fi
     get_images "$base/$prev" "$rel" || {
       gi_s=$?
-      # Its data services still held on the newest image their data ran,
-      # never on what its last activation held (img hold).
-      img hold "$base" "$base/$prev" || true
-      devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway, its data services on the newest image their data ran"
+      devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway"
+      # Its data services still held where the failed release's image ran
+      # on their data, without the image lock or Docker (img hold):
+      # never its old compose file's older image on that data.
+      img hold "$base/$prev" "$rel" || true
     }
 `
 	// Its entries of mnt to their owners, by its own labels: the new
@@ -1272,6 +1283,7 @@ exec 7<&-
 `
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
     (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
+    img ran "$base" "$base/$prev" || true
 `
 	if releaseSnap {
 		restart += `    [ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
@@ -1538,9 +1550,10 @@ fi
 `
 
 // ImagesAcceptEnv names, space-separated, the services whose image an
-// activation or a sync's holder lets through the checks against their
-// data's history (img record, sync-check, sync-done): the operator's
-// --accept-image.
+// activation, a sync's holder, an import or a --no-code restore lets
+// through the checks against their data's history when they refuse it
+// (img check, record, restore, sync-check, sync-done; --check-images
+// --restore and the restore's data step): the operator's --accept-image.
 const ImagesAcceptEnv = "DEVOPSY_INTERNAL_IMAGES_ACCEPT"
 
 // WatchEnv tells an activation that its stdin stays open for as long as

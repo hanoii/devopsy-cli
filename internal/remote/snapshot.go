@@ -3,6 +3,8 @@ package remote
 import (
 	"strconv"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 // A snapshot is a copy of an environment's data (every service with
@@ -45,8 +47,9 @@ const (
 	// pass completed it: a holder of the snapshot lock finding that
 	// snapshot's .tmp finishes its tars from the mirror.
 	SnapshotComplete = ".devopsy-complete"
-	// SnapshotManifest is a snapshot's manifest (SnapshotFormat first).
-	SnapshotManifest = "manifest"
+	// SnapshotManifest is a snapshot's manifest (SnapshotFormat first),
+	// images' too: a rollback's refusal names a release snapshot.
+	SnapshotManifest = images.SnapshotManifest
 	// SnapshotFormat is the manifest's format: a restore refuses one it
 	// does not know, naming the upgrade.
 	SnapshotFormat = "1"
@@ -235,13 +238,22 @@ export ` + RestoreByEnv + `=` + Quote(r.By)
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 `
 	// Its run step starts the current release's images on the variables
-	// it leaves: with --with-env, the snapshot's.
-	env, flags := "", []string(nil)
+	// it leaves: with --with-env, the snapshot's. And the current
+	// release's data services must take the snapshot's data (--restore:
+	// against the snapshot's history), --accept-image letting a refused
+	// one through, here and in the data step (exported for both).
+	env := ""
 	if r.WithEnv {
 		env = DotenvPendingEnv + `="$snap/` + SnapshotData + `/shared.env" ` + InheritPendingEnv + `="$snap/` + SnapshotData + `/inherit.env" `
-		flags = []string{"--restore", r.Snapshot}
 	}
-	s += checkImages(t, projectName, true, env, "nothing restored", flags...)
+	// A refusal's fix runs it again as the operator did, --with-env
+	// included (review: it named the restore without it).
+	again := "--snapshots restore " + r.Snapshot + " --no-code"
+	if r.WithEnv {
+		again += " --with-env"
+	}
+	s += `[ -z "${` + ImagesAcceptEnv + `:-}" ] || export ` + ImagesAcceptEnv + `
+` + checkImages(t, projectName, true, env, "nothing restored", "--restore", r.Snapshot, "--again", again)
 	// With release snapshots on, the data it replaces first, as a
 	// release's: what it stops stays down for the data step, and anything
 	// that ends this before it starts them again (rd_unsnap).

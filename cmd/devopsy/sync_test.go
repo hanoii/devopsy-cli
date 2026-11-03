@@ -91,9 +91,9 @@ absent() {
 # it), none (false); any other is devopsy.data's value as it is.
 dl() {
   case $1 in
-    mnt) echo '"devopsy.data":"true"' ;;
-    stream) echo '"devopsy.data":"true","devopsy.data.copy":"custom"' ;;
-    keep) echo '"devopsy.data":"true","devopsy.data.copy":"none"' ;;
+    mnt) echo '"devopsy.data":"true","devopsy.data.version":"any"' ;;
+    stream) echo '"devopsy.data":"true","devopsy.data.version":"any","devopsy.data.copy":"custom"' ;;
+    keep) echo '"devopsy.data":"true","devopsy.data.version":"any","devopsy.data.copy":"none"' ;;
     none) echo '"devopsy.data":"false"' ;;
     *) echo "\"devopsy.data\":\"$1\"" ;;
   esac
@@ -128,6 +128,10 @@ after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at"
 # FAKE_APP_OWNER: app's devopsy.mnt.owner.
 applab=$(lab "${FAKE_APP:-mnt}")
 dblab=$(lab "${FAKE_DB:-mnt+own}")
+# FAKE_APP_VERSION: app's devopsy.data.version, in place of any.
+[ -z "${FAKE_APP_VERSION:-}" ] || applab=$(printf '%s' "$applab" | sed "s/\"devopsy.data.version\":\"any\"/\"devopsy.data.version\":\"$FAKE_APP_VERSION\"/")
+# FAKE_DB_VERSION: db's devopsy.data.version, in place of any.
+[ -z "${FAKE_DB_VERSION:-}" ] || dblab=$(printf '%s' "$dblab" | sed "s/\"devopsy.data.version\":\"any\"/\"devopsy.data.version\":\"$FAKE_DB_VERSION\"/")
 # FAKE_DB_OWNER: db's.
 [ -z "${FAKE_DB_OWNER:-}" ] || dblab="${dblab%\}},\"devopsy.mnt.owner\":\"$FAKE_DB_OWNER\"}"
 if [ -n "${FAKE_APP_OWNER:-}" ]; then
@@ -148,6 +152,8 @@ dbvol= appvol= topvols=
 # code, its argument APP_UID FAKE_APP_UID (10001 by default).
 appbuild=
 [ -z "${FAKE_APP_BUILD:-}" ] || appbuild=$(printf '"build":{"context":"%s/..","dockerfile":".devopsy/Dockerfile","args":{"APP_UID":"%s"}},' "${dir:-}" "${FAKE_APP_UID:-10001}")
+# FAKE_APP_IMAGE: app's image: (none by default: compose names a build).
+[ -z "${FAKE_APP_IMAGE:-}" ] || appbuild="$appbuild$(printf '"image":"%s",' "$FAKE_APP_IMAGE")"
 # FAKE_DB_IMAGE: db's image: (none by default: compose names a build).
 dbimg=
 [ -z "${FAKE_DB_IMAGE:-}" ] || dbimg=$(printf '"image":"%s",' "$FAKE_DB_IMAGE")
@@ -163,7 +169,9 @@ vols="$DOCKER_LOG.vol"
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    # FAIL_CONFIG: this project's compose config fails.
+    [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
+    printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "${FAKE_APP_SOURCE:-$dir/mnt${FAKE_APP_MOUNT-/storage}}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
@@ -272,16 +280,23 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; *:/vol/*:ro) v=${a%:ro}; echo "${v##*/} ${a%%:*}" >> "$DOCKER_LOG.daemonvols" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   # Images as devopsy's images rules inspect them (images.CLI): FAKE_IMAGES,
-  # space separated <id>=<registry digest>, found by id or by digest.
+  # space separated <id>=<registry digest>, found by id or by digest, or
+  # by a name FAKE_NAMES points to the id.
   "image inspect --format {{json .}} "*)
+    q=$5
+    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$q" ] || q=${n#*=}; done
     for i in ${FAKE_IMAGES:-}; do
-      case $5 in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
+      case $q in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
     done
     echo "Error: No such image: $5" >&2; exit 1 ;;
+  # FAIL_PULL: every pull fails, as with the registry out of reach, and
+  # a name FAKE_NAMES does not list is no image.
+  "pull "*) [ -z "${FAIL_PULL:-}" ] || { echo "Error response from daemon: registry unreachable" >&2; exit 1; } ;;
   # FAKE_NAMES: space separated <name>=<id>, the image a name points to
   # (images.CLI's ID); any other name answers nothing.
   "image inspect --format {{.Id}} "*)
-    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done ;;
+    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done
+    [ -z "${FAIL_PULL:-}" ] || { echo "Error: No such image: $5" >&2; exit 1; } ;;
   # FAKE_USERS: the compose projects whose containers use any image
   # (images.CLI's Users: a container's id, then its project), none by
   # default.
@@ -1878,7 +1893,7 @@ func TestSyncRunStepDeployed(t *testing.T) {
 	}
 }
 
-// --sync --accept-image, the fix SyncCheck's refusal names, reaches the
+// --sync --accept-image, the fix a sync's refusal names, reaches the
 // holder's img sync-check with the services named, each once.
 func TestSyncAcceptReachesHolder(t *testing.T) {
 	t.Parallel()
@@ -1903,6 +1918,32 @@ func TestSyncAcceptReachesHolder(t *testing.T) {
 	// Inside sh -c's quotes: 'db app' quoted again.
 	if !strings.Contains(holder, remote.ImagesAcceptEnv+`='\''db app'\''`) {
 		t.Errorf("the holder's img sync-check does not get --accept-image's services (%s):\n%s", remote.ImagesAcceptEnv, holder[:min(600, len(holder))])
+	}
+}
+
+// A rollback takes --accept-image (refused before the data's versions
+// came): it reaches the activation's img, whose rollback-target and
+// restore check the restored release against its data.
+func TestRollbackAcceptReachesServer(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	s.releaseProd(nil)
+	scripts := filepath.Join(t.TempDir(), "scripts")
+	// The setup's releases have no rollback step: it ends there, after
+	// its lenient check (which says only a refusal: img restore says the
+	// rest, once).
+	if out, _ := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@prod", "--rollback", "--accept-image", "db"); !strings.Contains(out, "gives environment prod no rollback run step") {
+		t.Fatalf("--rollback --accept-image:\n%s", out)
+	}
+	activation := ""
+	for _, sc := range strings.Split(readString(scripts), "----\n") {
+		if strings.Contains(sc, "img rollback-target") {
+			activation = sc
+		}
+	}
+	if !strings.Contains(activation, remote.ImagesAcceptEnv+`='\''db'\''`) {
+		t.Errorf("the rollback's activation does not get --accept-image's services (%s):\n%s", remote.ImagesAcceptEnv, activation[:min(600, len(activation))])
 	}
 }
 
@@ -4125,6 +4166,51 @@ func parentChanged(docker string) bool {
 	return false
 }
 
+// A complete copy makes again what ran through it (devopsy.data.stop
+// never, a volumes service the child guard lets run) when its image
+// changed, as it makes what was stopped: its hold gone with the data, it
+// would go on running the held image on the copy until the run step, the
+// finish hook first. A service without data keeps its container.
+func TestSyncFinishRecreatesRunning(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, filepath.Join(s.root, "shop", "dev", s.current("dev"), "devopsy-compose.yaml"),
+		"services:\n  \"app\":\n    labels:\n      \"devopsy.digest\": \"y@sha256:own\"\n  \"worker\":\n    labels:\n      \"devopsy.digest\": \"y@sha256:own\"\n", 0o644)
+	write(t, s.log+".containers.shop-dev", "app y@sha256:held\nworker y@sha256:held\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_WORKER=none\n", 0o644)
+	cmd := exec.Command(binary, "--sync-services", "finish", "go")
+	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
+	out, err := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	if err != nil || !strings.Contains(docker, "up -d --no-deps --wait app") || strings.Contains(docker, "--wait app worker") || strings.Contains(docker, "--wait worker") {
+		t.Errorf("finish go (%v): app must be made again, worker left:\n%s\n%s", err, out, docker)
+	}
+}
+
+// Labels of the parent that cannot be read refuse a sync in its preflight,
+// before anything stops: no window would land as data of no version.
+func TestSyncParentLabelsUnreadable(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, s.log+".shop-prod", "FAIL_CONFIG=shop-prod\n", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "could not read the labels of") || strings.Contains(docker, "shop-dev compose") && strings.Contains(docker, " stop ") {
+		t.Errorf("a sync whose parent's labels cannot be read (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
 // Bug: finish abort recreates, like finish go, every stopped service
 // whose container's devopsy.digest differs from the current release's
 // devopsy-compose.yaml (images.Recreate). In a release that syncs,
@@ -4602,5 +4688,34 @@ func TestNestedExportKeepsOuterStops(t *testing.T) {
 	}
 	if strings.Contains(errs, "db ran during the export of app") {
 		t.Errorf("the inner export started what the outer stopped (said: %q):\n%s\n%s", strings.TrimSpace(readString(s.log+".inner")), errs, docker)
+	}
+}
+
+// A rollback below the data's version is refused before its before and
+// prepare steps run (img rollback-target, leniently): exit 3, the remote
+// before step's marker never written, nothing changed. Its local before
+// steps run first, before the server is asked (accepted, as releases
+// accept for marks: no session of its own).
+func TestRollbackRefusedBeforeSteps(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	marker := s.log + ".before-marker"
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {rollback: {before: [remote: mark], run: deploy}}\n", 0o644)
+	write(t, filepath.Join(s.dot, "commands", "mark"), "#!/bin/sh\n## Description: leaves a marker\ntouch "+marker+"\n", 0o755)
+	s.releaseProd([]string{"FAKE_DB_VERSION=11"})
+	first := s.current("prod")
+	s.releaseProd([]string{"FAKE_DB_VERSION=12"})
+	second := s.current("prod")
+	// db ran at 12 on its data (img ran, which the fakes' containers do
+	// not make).
+	write(t, filepath.Join(s.root, "shop", "prod", images.HistoryFile), "1\tdb\tran\tshop-prod-db\tsha256:a\t\t11\t\n2\tdb\tran\tshop-prod-db\tsha256:b\t\t12\t\n", 0o644)
+	out, code := s.run([]string{"FAKE_DB_VERSION=11"}, "@prod", "--rollback")
+	if code != 3 || s.current("prod") != second || fileExists(marker) || !strings.Contains(out, "the rollback to "+filepath.Base(first)) || !strings.Contains(out, "devopsy.data.version=11 is lower than its data's version, 12") {
+		t.Errorf("a rollback below the data's version (%d), current %q (want %q), marker %v:\n%s", code, s.current("prod"), second, fileExists(marker), out)
+	}
+	// Accepted, it goes, its before step first.
+	out, code = s.run([]string{"FAKE_DB_VERSION=11"}, "@prod", "--rollback", "--accept-image", "db")
+	if code != 0 || s.current("prod") != first || !fileExists(marker) {
+		t.Errorf("the rollback accepted (%d), current %q (want %q), marker %v:\n%s", code, s.current("prod"), first, fileExists(marker), out)
 	}
 }

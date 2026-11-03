@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -194,6 +195,9 @@ type SyncService struct {
 	StopLabeled    bool
 	Dirs, Excluded []string
 	HasData        bool
+	// Version is its images.DataVersionLabel, required with data: a
+	// version or images.AnyVersion.
+	Version string
 	// Reflink is its DataCopyReflinkLabel: a child on the same server
 	// clones its entries and volumes from the parent's by reflinks.
 	Reflink   bool
@@ -337,6 +341,8 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			Labels     map[string]string `json:"labels"`
 		} `json:"volumes"`
 		Services map[string]struct {
+			Image     string                     `json:"image"`
+			Build     json.RawMessage            `json:"build"`
 			Labels    map[string]string          `json:"labels"`
 			User      string                     `json:"user"`
 			DependsOn map[string]json.RawMessage `json:"depends_on"`
@@ -361,6 +367,25 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	// The project's tree, its links resolved: on servers a release's
 	// code/, where shared/'s entries are links out of it.
 	tree := resolvePath(filepath.Dir(projectDir))
+	// Every data service without its version, each its own message, by
+	// name, so the same project always says the same (drupal11 had two).
+	names := make([]string, 0, len(config.Services))
+	for name := range config.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var missing []*report.Failure
+	for _, name := range names {
+		s := config.Services[name]
+		if _, ok := s.Labels[images.DataVersionLabel]; !ok && s.Labels[DataLabel] == "true" {
+			msg, details := images.LabelMissing(name, len(s.Build) > 0 && string(s.Build) != "null")
+			missing = append(missing, &report.Failure{Msg: msg, Details: details})
+		}
+	}
+	if len(missing) > 0 {
+		missing[0].Also = missing[1:]
+		return nil, missing[0]
+	}
 	var services []SyncService
 	for name, s := range config.Services {
 		cs := SyncService{Name: name, Copy: CopyNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart, Profiles: s.Profiles}
@@ -389,6 +414,20 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			}
 		} else if cs.HasData {
 			cs.Copy = CopyVolumes
+		}
+		if cs.HasData {
+			// Required (missing: above): how the data follows its image is
+			// the project's to say, never a default.
+			v := s.Labels[images.DataVersionLabel]
+			built := len(s.Build) > 0 && string(s.Build) != "null"
+			switch {
+			case v == images.AnyVersion, images.IsVersion(v):
+				cs.Version = v
+			case v == "":
+				return nil, fmt.Errorf("service %s: %s is empty: a version like %s, or %s (a variable left unset?)", name, images.DataVersionLabel, images.VersionHint(s.Image, built), images.AnyVersion)
+			default:
+				return nil, fmt.Errorf("service %s: %s=%s: a version of dotted numbers like %s, or %s", name, images.DataVersionLabel, v, images.VersionHint(s.Image, built), images.AnyVersion)
+			}
 		}
 		if v, ok := s.Labels[DataCopyReflinkLabel]; ok && cs.HasData && cs.Copy == CopyVolumes {
 			switch v {

@@ -64,11 +64,11 @@ func syncProjectWith(t *testing.T, name string, files map[string]string) string 
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.data: "true", devopsy.data.copy: custom}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy: custom}
 `,
 		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
@@ -118,11 +118,11 @@ func TestSyncNothingToCopy(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: "${SYNC_DATA-true}", devopsy.data.stop: own}
+    labels: {devopsy.data: "${SYNC_DATA-true}", devopsy.data.version: any, devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.data: "${SYNC_DB-true}", devopsy.data.copy: custom}
+    labels: {devopsy.data: "${SYNC_DB-true}", devopsy.data.version: any, devopsy.data.copy: custom}
 `,
 		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
@@ -155,7 +155,7 @@ func TestSyncDependents(t *testing.T) {
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
     healthcheck: {test: [CMD, "true"], interval: 1s, timeout: 2s, retries: 3}
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.stop: own}
   app:
     image: busybox:1.37
     command: [sleep, infinity]

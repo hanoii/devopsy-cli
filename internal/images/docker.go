@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -119,9 +118,12 @@ func (d CLI) Containers(project string) ([]Container, error) {
 			continue
 		}
 		var v struct {
-			Name   string
-			Image  string
-			State  struct{ Status string }
+			Name  string
+			Image string
+			State struct {
+				Status    string
+				StartedAt time.Time
+			}
 			Config struct {
 				Image  string
 				Labels map[string]string
@@ -131,7 +133,7 @@ func (d CLI) Containers(project string) ([]Container, error) {
 			return nil, fmt.Errorf("docker inspect: %w", err)
 		}
 		l := v.Config.Labels
-		cs = append(cs, Container{Name: strings.TrimPrefix(v.Name, "/"), Service: l["com.docker.compose.service"], Image: v.Image, Ref: v.Config.Image, State: v.State.Status, OneOff: l["com.docker.compose.oneoff"] == "True", Digest: l[DigestLabel]})
+		cs = append(cs, Container{Name: strings.TrimPrefix(v.Name, "/"), Service: l["com.docker.compose.service"], Image: v.Image, Ref: v.Config.Image, State: v.State.Status, Started: v.State.StartedAt, OneOff: l["com.docker.compose.oneoff"] == "True", Digest: l[DigestLabel]})
 	}
 	return cs, nil
 }
@@ -151,8 +153,18 @@ const NoReleaseComposeEnv = "DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE"
 // command there), with the release script's variables, without devopsy's
 // own file and without profiles.
 func ListCompose(rel string) ([]Service, error) {
+	return listCompose(rel, "--", "config", "--format", "json")
+}
+
+// ListComposeAll is ListCompose of every profile's services: the labels of
+// what a copy, a take and an export write (parentData).
+func ListComposeAll(rel string) ([]Service, error) {
+	return listCompose(rel, "--", "--profile", "*", "config", "--format", "json")
+}
+
+func listCompose(rel string, args ...string) ([]Service, error) {
 	var out bytes.Buffer
-	cmd := exec.Command("devopsy", "--", "config", "--format", "json")
+	cmd := exec.Command("devopsy", args...)
 	cmd.Dir = filepath.Join(rel, codeDir)
 	cmd.Env = append(os.Environ(), NoReleaseComposeEnv+"=1")
 	cmd.Stdout, cmd.Stderr = &out, os.Stderr
@@ -177,7 +189,6 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 			Build      json.RawMessage
 			Labels     map[string]string
 			PullPolicy string `json:"pull_policy"`
-			Volumes    []struct{ Type, Source string }
 		}
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -200,36 +211,11 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 			method = cmp.Or(c.Labels[DataCopyLabel], CopyVolumes)
 		}
 		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", BuildSpec: c.Build, Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
+		if data {
+			svc.DataVersion = c.Labels[DataVersionLabel]
+		}
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
-		}
-		// The entries of mnt it bind-mounts (. for mnt whole), and its
-		// named volumes, less those its exclude label names: what a sync
-		// copies for it.
-		svc.EntriesKnown = true
-		excluded := map[string]bool{}
-		for _, x := range strings.FieldsFunc(c.Labels[DataExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' }) {
-			excluded[x] = true
-		}
-		for _, v := range c.Volumes {
-			if v.Type == "volume" && v.Source != "" && !excluded[v.Source] && !slices.Contains(svc.Volumes, v.Source) {
-				svc.Volumes = append(svc.Volumes, v.Source)
-			}
-			if v.Type != "bind" {
-				continue
-			}
-			src := filepath.ToSlash(v.Source)
-			i := strings.Index(src+"/", "/.devopsy/mnt/")
-			if i < 0 {
-				continue
-			}
-			entry := strings.SplitN(strings.TrimPrefix(src[i+len("/.devopsy/mnt"):], "/"), "/", 2)[0]
-			if entry == "" {
-				entry = "."
-			}
-			if !excluded[entry] && !slices.Contains(svc.Entries, entry) {
-				svc.Entries = append(svc.Entries, entry)
-			}
 		}
 		svcs = append(svcs, svc)
 	}
@@ -237,11 +223,12 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 }
 
 // DataLabel and DataCopyLabel are cli's, which this package cannot
-// import, and CopyVolumes the copy of the service's files
-// (cli.CopyVolumes).
+// import, CopyVolumes the copy of the service's files and CopyCustom the
+// data capability's (cli.CopyVolumes, cli.CopyCustom).
 const (
 	DataLabel        = "devopsy.data"
 	DataCopyLabel    = "devopsy.data.copy"
 	CopyVolumes      = "volumes"
+	CopyCustom       = "custom"
 	DataExcludeLabel = "devopsy.data.exclude"
 )

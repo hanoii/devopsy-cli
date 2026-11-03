@@ -211,7 +211,7 @@ func runMntOwners(cwd string, args []string) int {
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	owners, mnt, err := projectOwners(cwd)
 	if err != nil && restored {
-		report.Warn("the entries of mnt keep their owners: the restored release's labels cannot be read", err.Error())
+		report.Warn("the entries of mnt keep their owners: the restored release's labels cannot be read", report.Messages(err)...)
 		return 0
 	}
 	// Under the release lock no other owners' step of this environment
@@ -246,7 +246,7 @@ func checkStartBinds(cwd string) error {
 		return nil
 	}
 	if err != nil {
-		report.Warn("the release's labels cannot be read: its bind sources are not checked before the start", err.Error())
+		report.Warn("the release's labels cannot be read: its bind sources are not checked before the start", report.Messages(err)...)
 		return nil
 	}
 	bad, fixes := cli.LeavingLines(services, nil)
@@ -256,6 +256,15 @@ func checkStartBinds(cwd string) error {
 	// The message whole in its first line: callers wrap it (docker
 	// compose start: ...), which keeps only that.
 	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": " + strings.Join(fixes, "; or ")}
+}
+
+// failErr says err whole (report.Fail: its details, fixes and the
+// failures it carries, each data service without its version among them)
+// and is a command's exit 1: never err.Error() alone, which keeps only
+// the first message.
+func failErr(err error) int {
+	report.Fail(err)
+	return 1
 }
 
 // mntOwnersRestored is --mnt-owners' word for a restored release
@@ -317,12 +326,19 @@ func runCheckMounts(cwd string, args []string) int {
 	}
 	switch {
 	case restored && err != nil:
-		report.Warn("the restored release's labels cannot be read: the entries of mnt will keep their owners", err.Error())
+		report.Warn("the restored release's labels cannot be read: the entries of mnt will keep their owners", report.Messages(err)...)
 		return 0
 	case errors.Is(err, cli.ErrComposeConfig):
 		return 0
 	case err != nil:
-		err = &report.Failure{Msg: "the mounts check refuses the release, whose labels cannot be read: it does not go live", Details: []string{err.Error()}}
+		// A Failure (each data service without its version) is said whole,
+		// its details and the services after the first included (review:
+		// flattened into one detail, only the first's message reached the
+		// release).
+		var f *report.Failure
+		if !errors.As(err, &f) {
+			err = &report.Failure{Msg: "the mounts check refuses the release, whose labels cannot be read: it does not go live", Details: []string{err.Error()}}
+		}
 	case !restored:
 		err = cli.CheckMounts(services)
 	default:
@@ -396,7 +412,7 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 func localMnt(cwd string) error {
 	owners, mnt, err := projectOwners(cwd)
 	if err != nil {
-		report.Warn("the entries of mnt are left as they are: the labels cannot be read", err.Error())
+		report.Warn("the entries of mnt are left as they are: the labels cannot be read", report.Messages(err)...)
 		return nil
 	}
 	if len(owners) == 0 {

@@ -59,7 +59,7 @@ type syncJob struct {
 	// (remote.ParentEnvHeader), resolved anew by later refreshes.
 	from     bool
 	fromAddr string
-	// images are the parent's data images (images.Set.ParentData), read
+	// images are the parent's data's windows (images.Set.ParentData), read
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
 	images string
@@ -79,6 +79,15 @@ func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 		o.SameServerKeep = job.from
 	}
 	return o
+}
+
+// again is flag as the operator ran it, its --from kept, for a refusal's
+// fix (remote.SyncOptions.Again).
+func (job *syncJob) again(flag string) string {
+	if job.from {
+		return flag + " --from " + job.fromAddr
+	}
+	return flag
 }
 
 // sourceRef is what the child's copy names as its source: a --from's
@@ -732,8 +741,8 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0})
-	// --yes also lets the child's images through the check against the
+	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0, Again: job.again(flag)})
+	// --accept-image lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
@@ -1036,7 +1045,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}()
 
-	// The data images the child's side checked and takes over: this
+	// The data's history the child's side checked and takes over: this
 	// side's must be the ones the preflight read (a release of this
 	// environment since would copy data another image wrote).
 	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
@@ -1046,12 +1055,12 @@ func runSyncPush(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
-			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
+			return fail("this environment's data's history changed since the sync started (a release of it): nothing copied; sync again")
 		}
 	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	streams, err := cli.SyncCustomServices(services)
 	if err != nil {
@@ -1243,7 +1252,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		// What it stopped before failing comes back: restoring reads the
 		// containers' state, not what stopping did.
 		code := fail(err.Error())
-		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set), nil); err != nil {
 			fail(err.Error())
 		}
 		return finish(code, false)
@@ -1319,7 +1328,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	var restoreErr error
 	restore := func() {
 		restored = true
-		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set), nil); err != nil {
 			restoreErr = err
 		}
 	}
@@ -1713,7 +1722,7 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
 	}
 	needs := remote.Needs(script)
-	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature} {
+	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature, remote.DataVersionFeature} {
 		if !slices.Contains(needs, f) {
 			needs = append(needs, f)
 		}
@@ -2486,10 +2495,10 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		if args[0] != "settle" {
-			return fail(err.Error())
+			return failErr(err)
 		}
 		// What is down then is what the record says.
-		report.Warn("settling with the record alone: " + err.Error())
+		report.Warn("settling with the record alone: "+err.Error(), report.Messages(err)[1:]...)
 		if projectDir, err = cli.FindProjectDir(cwd); err != nil {
 			return fail(err.Error())
 		}
@@ -2692,13 +2701,19 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	case "go":
 		// Complete: whatever an earlier sync or import left is replaced.
 		_ = os.Remove(incomplete)
-		if err := restoreServices(cwd, services, true, true, cli.StoppedNames(set)); err != nil {
+		var written []string
+		for _, s := range services {
+			if s.Copy == cli.CopyVolumes {
+				written = append(written, s.Name)
+			}
+		}
+		if err := restoreServices(cwd, services, true, true, cli.StoppedNames(set), written); err != nil {
 			code = fail(err.Error())
 		}
 	case "abort":
 		// A first release's services are not created on empty data: it
 		// does not go live.
-		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set), nil); err != nil {
 			code = fail(err.Error())
 		}
 	case "partial":
@@ -2763,7 +2778,10 @@ func markIncomplete(base, from, code, why string, keep bool) error {
 		if keep && !m.IsImport() {
 			return nil
 		}
-		if m.Since != "" {
+		// An import's mark is timed at its latest write: --resolved keeps a
+		// window that landed since, never one from an import before that a
+		// retry then wrote over (review).
+		if m.Since != "" && code != remote.IncompleteImport {
 			since = m.Since
 		}
 	}
@@ -3239,8 +3257,10 @@ func startSyncState(cwd string, first bool) error {
 // wipeData takes the child at cwd (base its directory) down for a
 // reset, right after the reset's first claim: what an import a killed
 // devopsy left may still extract, every container of every profile and
-// the named volumes, every entry of mnt emptied as root; its shared/.env
-// and its release, images included, stay. The record then says first
+// the named volumes, every entry of mnt emptied as root, every data
+// service's history started over (images.Set.ResetLanding, its holds
+// derived again); its shared/.env and
+// its release, images included, stay. The record then says first
 // release, nothing stopped: finish go creates the services with data
 // and the child side's set, and the run step the rest.
 func wipeData(cwd, projectDir, base string) error {
@@ -3261,6 +3281,17 @@ func wipeData(cwd, projectDir, base string) error {
 	wipe := container{remote.SyncContainerPrefix + id + "-wipe", composeName(cwd), remote.SyncTask(id)}
 	if err := emptyMnt(context.Background(), projectDir, wipe); err != nil {
 		return err
+	}
+	// The data is gone: every data service's history starts over, the
+	// ones the copy writes nothing for included (the holder's sync-done
+	// takes the copied ones over once the copy is complete). Under the
+	// holder's release lock.
+	set, err := copyImages(cwd)
+	if err != nil {
+		return err
+	}
+	if err := land(set, base, remote.ReleaseFile(projectDir, ""), set.ResetLanding()); err != nil {
+		return fmt.Errorf("the data is wiped, but %w", err)
 	}
 	// Its owned entries back, as a release left them: finish go creates
 	// the services with data, and a stream's import brings its service
@@ -3326,7 +3357,7 @@ const healthyTimeout = 5 * time.Minute
 // With create, a child's first release gets its data services and the
 // child side's set created (finish go): never on an abort, which leaves
 // it not live.
-func restoreServices(cwd string, services []cli.SyncService, create, recreate bool, fallback []string) error {
+func restoreServices(cwd string, services []cli.SyncService, create, recreate bool, fallback, written []string) error {
 	stop := fallback
 	var errs []error
 	// A child's first release had no containers: nothing was stopped,
@@ -3375,44 +3406,60 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 		}
 		stop = intersect(rec.stops, names)
 	}
+	var start []string
 	if len(stop) > 0 {
 		exited, err := servicesIn(cwd, "exited")
 		if err != nil {
 			errs = append(errs, err)
 		}
-		start := intersect(stop, exited)
-		// On a complete copy (recreate: a sync's finish go, an import
-		// holding the export's image), a service whose image devopsy's
-		// compose file changed since its container was made (the copy
-		// took over the parent's or the export's image) is made again,
-		// with no other: compose start would run the old image on the new
-		// data. Never otherwise: an abort in a release that syncs
-		// restores the child's own data, which the release's images, not
-		// live, must not touch (the release goes back).
-		var again []string
-		if recreate {
-			again = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
-		}
-		if len(again) > 0 {
-			report.Info("recreating " + strings.Join(again, " ") + " on the image its release gives it now")
-			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
-				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
-			}
-			var rest []string
-			for _, s := range start {
-				if !slices.Contains(again, s) {
-					rest = append(rest, s)
-				}
-			}
-			start = rest
-		}
-		if len(start) > 0 {
-			report.Info("starting " + strings.Join(start, " "))
-			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
-				errs = append(errs, fmt.Errorf("docker compose start: %w", err))
-			} else if err := waitHealthy(cwd, start); err != nil {
+		start = intersect(stop, exited)
+	}
+	// On a complete copy (recreate: a sync's finish go, a complete
+	// import), a service whose image devopsy's compose file changed since
+	// its container was made (another activation's container, a hold) is
+	// made again, with no other: compose start would run the old image on
+	// the new data, and one the copy's data landed under as it ran
+	// (devopsy.data.stop never: written, what this copy wrote) would run on
+	// with it, never one it did not touch (review: an import made a release
+	// cut past its switch live on another service, without its run step).
+	// Never otherwise: an abort in a release that syncs restores the
+	// child's own data, which the release's images, not live, must not
+	// touch (the release goes back).
+	var again []string
+	if recreate {
+		changed := images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""))
+		again = intersect(start, changed)
+		if through := intersect(written, changed); len(through) > 0 {
+			running, err := servicesIn(cwd, "running")
+			if err != nil {
 				errs = append(errs, err)
 			}
+			for _, s := range intersect(through, running) {
+				if !slices.Contains(again, s) {
+					again = append(again, s)
+				}
+			}
+		}
+	}
+	if len(again) > 0 {
+		report.Info("recreating " + strings.Join(again, " ") + " on the image its release gives it now")
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
+			errs = append(errs, fmt.Errorf("docker compose up: %w", err))
+		}
+		var rest []string
+		for _, s := range start {
+			if !slices.Contains(again, s) {
+				rest = append(rest, s)
+			}
+		}
+		start = rest
+	}
+	if len(start) > 0 {
+		report.Info("starting " + strings.Join(start, " "))
+		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+			errs = append(errs, fmt.Errorf("docker compose start: %w", err))
+		} else if err := waitHealthy(cwd, start); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if len(errs) == 0 {

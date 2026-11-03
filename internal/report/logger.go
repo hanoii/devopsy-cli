@@ -110,6 +110,9 @@ func (l *Logger) Error(msg string, details ...string) { l.Say(ErrorLevel, msg, d
 func (l *Logger) Fail(err error, more ...Remedy) {
 	fixes := Fixes(err)
 	l.Say(ErrorLevel, err.Error(), Details(err), append(fixes[:len(fixes):len(fixes)], more...))
+	for _, f := range Also(err) {
+		l.Say(ErrorLevel, f.Msg, f.Details, f.Fixes)
+	}
 }
 
 // Debug says what devopsy runs, shown with -v.

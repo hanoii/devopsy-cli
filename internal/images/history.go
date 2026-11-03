@@ -14,26 +14,33 @@ import (
 // HistoryFile, in an environment's directory beside shared/ (never in a
 // release, which pruning removes, nor in shared/, whose entries are
 // linked into the project's tree and so into build contexts), is the
-// history of the images that ran on each pulled data service's data
-// (KindData): what keeps that data from ever meeting an image older than
-// the newest it ran. One line per image change, oldest first, tab
+// history of what ran on each data service's data (devopsy.data=true,
+// built or pulled): what the one rule (rule) compares an activation's
+// version and tag with. One line per change, oldest first, tab
 // separated: time (Unix seconds), service, how (Ran, Forced, Imported,
-// or "sync <parent's address>"), the reference it ran as, the image id,
-// and its registry digests (<repository>@sha256:..., space separated).
-// Unbounded: a pin lowered to an image that ran long ago must still be
-// found. Written only under the environment's release lock, whole, by a
-// rename.
+// AnyRan, or "sync <parent's address>"), the reference it ran as, the
+// image id, its registry digests (<repository>@sha256:..., space
+// separated), the version (DataVersionLabel; "" for any, or data of no
+// known version) and the tag (TagOf; "" for a service with build:, which
+// has no tag check). A line of the format before the version, without
+// those two columns, reads as one of no version: the first release after
+// it adopts its label. Unbounded. Written only under the environment's
+// release lock, whole, by a rename.
 const HistoryFile = ".devopsy-data-images"
 
-// How an image came to run on a service's data. Every one but Ran starts
-// the history over: a forced image, or data that came from elsewhere,
-// makes what ran before stop counting.
+// How something came to run on a service's data. Every one but Ran
+// starts the window over (window): a forced image, an any run, or data
+// that came from elsewhere makes what ran before stop counting.
 const (
 	Ran      = "ran"
 	Forced   = "forced"
 	Imported = "import"
+	// AnyRan is a run under devopsy.data.version=any: devopsy checks
+	// nothing, so a version set later is adopted, never compared with one
+	// from before.
+	AnyRan = "any"
 	// SyncedFrom prefixes the parent's address: the copy brought the
-	// parent's data, and its history with it.
+	// parent's data, and its window with it.
 	SyncedFrom = "sync "
 )
 
@@ -43,50 +50,29 @@ type ran struct {
 	Service, How string
 	Ref, ID      string
 	Digests      []string
+	Version, Tag string
 }
 
 func (r ran) line() string {
-	return strings.Join([]string{strconv.FormatInt(r.Time, 10), r.Service, r.How, r.Ref, r.ID, strings.Join(r.Digests, " ")}, "\t") + "\n"
+	return strings.Join([]string{strconv.FormatInt(r.Time, 10), r.Service, r.How, r.Ref, r.ID, strings.Join(r.Digests, " "), r.Version, r.Tag}, "\t") + "\n"
 }
 
-// is says whether img is the image of the line: the same id, or a
-// registry digest in common, whatever the repository (a digest names one
-// manifest anywhere: a mirror that keeps digests serves the same image).
-func (r ran) is(img Image) bool {
-	if img.ID != "" && img.ID == r.ID {
-		return true
-	}
-	for _, a := range r.Digests {
-		for _, b := range img.Digests {
-			if digestOf(a) != "" && digestOf(a) == digestOf(b) {
-				return true
-			}
-		}
-	}
-	return false
+// same says whether r and o say the same of the data: the same image,
+// version and tag.
+func (r ran) same(o ran) bool {
+	return r.ID == o.ID && r.Version == o.Version && r.Tag == o.Tag
 }
 
-// hold is the line's image as a name compose can run: its digest in the
-// line's reference's repository, else its first.
-func (r ran) hold() string {
-	for _, d := range r.Digests {
-		if repoKey(d) == repoKey(r.Ref) {
-			return d
-		}
-	}
-	if len(r.Digests) > 0 {
-		return r.Digests[0]
-	}
-	return ""
-}
-
-// shown is the line's image for messages.
+// shown is the line's version and tag, for messages.
 func (r ran) shown() string {
-	d := r.hold()
-	if d == "" {
-		return short(r.ID)
+	v := r.Version
+	if v == "" {
+		v = "no version"
 	}
-	return repoOf(d) + "@" + short(digestOf(d))
+	if r.Tag != "" {
+		v += " (" + short(r.Tag) + ")"
+	}
+	return v
 }
 
 type history []ran
@@ -102,21 +88,23 @@ func readHistory(base string) history {
 	return parseHistory(string(data))
 }
 
-// parseHistory reads history lines: a line cut short counts once it has
-// its image.
+// parseHistory reads history lines: one without its service or how is
+// none.
 func parseHistory(text string) history {
 	var h history
 	for _, line := range strings.Split(text, "\n") {
 		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
-		if len(f) < 5 || f[1] == "" || f[4] == "" {
+		if len(f) < 3 || f[1] == "" || f[2] == "" {
 			continue
 		}
-		t, _ := strconv.ParseInt(f[0], 10, 64)
-		r := ran{Time: t, Service: f[1], How: f[2], Ref: f[3], ID: f[4]}
-		if len(f) > 5 {
-			r.Digests = strings.Fields(f[5])
+		col := func(i int) string {
+			if i < len(f) {
+				return f[i]
+			}
+			return ""
 		}
-		h = append(h, r)
+		t, _ := strconv.ParseInt(f[0], 10, 64)
+		h = append(h, ran{Time: t, Service: f[1], How: f[2], Ref: col(3), ID: col(4), Digests: strings.Fields(col(5)), Version: col(6), Tag: col(7)})
 	}
 	return h
 }
@@ -145,7 +133,7 @@ func (h history) window(svc string) []ran {
 	return w
 }
 
-// last is the newest image that ran on a service's data.
+// last is the newest line of a service's history.
 func (h history) last(svc string) (ran, bool) {
 	w := h.window(svc)
 	if len(w) == 0 {
@@ -154,25 +142,87 @@ func (h history) last(svc string) (ran, bool) {
 	return w[len(w)-1], true
 }
 
-// movedPast says whether the data moved past img: it ran before the
-// newest, which is another image.
-func (h history) movedPast(svc string, img Image) bool {
-	w := h.window(svc)
-	if len(w) == 0 || w[len(w)-1].is(img) {
-		return false
-	}
-	for _, r := range w[:len(w)-1] {
-		if r.is(img) {
-			return true
+// without is h less svc's lines.
+func (h history) without(svc string) history {
+	var kept history
+	for _, r := range h {
+		if r.Service != svc {
+			kept = append(kept, r)
 		}
 	}
-	return false
+	return kept
 }
 
-// ranOn makes a line for img running as ref on a service's data.
-func ranOn(svc, how, ref string, img Image, now time.Time) ran {
-	ds := append([]string{}, img.Digests...)
-	return ran{Time: now.Unix(), Service: svc, How: how, Ref: ref, ID: img.ID, Digests: ds}
+// rule is the one rule over a service's data and the image an activation
+// gives it, which every place data meets an image runs (a release, a
+// rollback, a sync, an import, a --no-code restore, a release that
+// syncs, and the restart after a failed run step, which holds rather
+// than refuses): w is the data's window (window), version the
+// activation's DataVersionLabel and tag its TagOf ("" for a service with
+// build:, which has no tag check in either mode: image mode's tag is
+// usually the commit's, new every release). source is whose data it is,
+// for the reason ("its", "the parent's"). "" when allowed, else why not:
+//
+//   - any (or no version at all, a release from before the label):
+//     nothing checked;
+//   - no version in the window (its first run, after any, after data of
+//     unknown version): allowed, the label adopted;
+//   - higher than the window's, the highest of its lines: allowed;
+//   - lower: refused;
+//   - the same: allowed, unless pulled and its tag differs from the tag
+//     of the window's newest line at that version (a line without one, a
+//     built service's, means no tag check): an image moved to another tag
+//     with the label left as it was is a version forgotten. A floating
+//     tag moving upstream is the same tag.
+func rule(w []ran, version, tag, source string) string {
+	if !IsVersion(version) {
+		return ""
+	}
+	dv := windowVersion(w)
+	if dv == "" {
+		return ""
+	}
+	switch c := CompareVersions(version, dv); {
+	case c > 0:
+		return ""
+	case c < 0:
+		return fmt.Sprintf("%s=%s is lower than %s data's version, %s", DataVersionLabel, version, source, dv)
+	}
+	if tag == "" {
+		return ""
+	}
+	var at ran
+	for _, r := range w {
+		if IsVersion(r.Version) && CompareVersions(r.Version, dv) == 0 {
+			at = r
+		}
+	}
+	if at.Tag == "" || at.Tag == tag {
+		return ""
+	}
+	return fmt.Sprintf("its tag is %s, and %s data ran %s at the same %s=%s: an image moved to another tag with the label left as it was", short(tag), source, short(at.Tag), DataVersionLabel, version)
+}
+
+// windowVersion is the data's version: the highest of the window's lines,
+// those without one ignored; "" without any.
+func windowVersion(w []ran) string {
+	v := ""
+	for _, r := range w {
+		if IsVersion(r.Version) && (v == "" || CompareVersions(r.Version, v) > 0) {
+			v = r.Version
+		}
+	}
+	return v
+}
+
+// ranOn makes a line for img running as e (its reference, version and
+// tag) on its service's data.
+func ranOn(e entry, how string, img Image, now time.Time) ran {
+	r := ran{Time: now.Unix(), Service: e.Service, How: how, Ref: e.Ref, ID: img.ID, Digests: append([]string{}, img.Digests...), Version: e.DataVersion, Tag: e.Tag}
+	if e.DataVersion == AnyVersion {
+		r.How, r.Version = AnyRan, ""
+	}
+	return r
 }
 
 // started says whether a container ever ran: created alone runs nothing
@@ -196,16 +246,20 @@ func (s *Set) containers() map[string]Container {
 	return m
 }
 
-// Ran appends to the environment's history the image each pulled data
-// service's container runs, once started, when it is not the last one
-// there: after a run step (failed or not), a sync, an import. A service
-// running the very image a --yes let through (ForcedFile) starts its
+// Ran appends to the environment's history what each data service of
+// rel runs (its listing's version and tag, DataVersion, Tag), for every
+// one whose container, once started, runs the image rel's activation
+// gave it (its DigestLabel against rel's ComposeFile, as Recreate
+// compares), when the last line differs (another image, version or tag):
+// after a run step (failed or not), a sync, an import. A container down
+// that last started before its data landed (the window's first line) ran
+// nothing on that data, whatever it ran on what it replaced (review: a
+// service left down through an import recorded its image as the data's
+// version). One running counts whenever it started: it runs on it now. A
+// service running
+// the very image --accept-image let through (ForcedFile) starts its
 // history over from it; the file is the activation's and goes once read,
-// so a later rollback to the release forces nothing. One that runs an
-// image its data moved past went
-// back outside devopsy: said, never written, so the history keeps the
-// newest. rel is the release whose listing names the data services;
-// those with a history count too.
+// so a later rollback to the release forces nothing.
 func (s *Set) Ran(base, rel string) error { return s.ran(base, rel, false) }
 
 // RanCut is Ran on a release whose activation was cut off past its
@@ -216,30 +270,27 @@ func (s *Set) Ran(base, rel string) error { return s.ran(base, rel, false) }
 func (s *Set) RanCut(base, rel string) error { return s.ran(base, rel, true) }
 
 func (s *Set) ran(base, rel string, cut bool) error {
-	svcs := map[string]bool{}
+	var data []entry
 	for _, e := range readList(rel) {
-		if e.Kind == KindData {
-			svcs[e.Service] = true
+		if e.DataVersion != "" {
+			data = append(data, e)
 		}
 	}
-	h := readHistory(base)
-	for _, r := range h {
-		svcs[r.Service] = true
-	}
-	if len(svcs) == 0 {
+	forced := readForced(rel)
+	if len(data) == 0 {
+		if forced != nil && !cut {
+			os.Remove(filepath.Join(rel, ForcedFile))
+		}
 		return nil
 	}
-	forced := readForced(rel)
+	h := readHistory(base)
 	cs := s.containers()
-	refs := map[string]string{}
-	for _, e := range readList(rel) {
-		refs[e.Service] = e.Ref
-	}
+	labels := labelsIn(rel)
 	changed := false
 	ranForced := map[string]bool{}
-	for _, svc := range sortedKeys(svcs) {
-		c, ok := cs[svc]
-		if !ok || !c.started() {
+	for _, e := range data {
+		c, ok := cs[e.Service]
+		if !ok || !c.started() || labels[e.Service] == "" || c.Digest != labels[e.Service] || ranBefore(c, h.window(e.Service)) {
 			continue
 		}
 		img, err := s.Docker.Inspect(c.Image)
@@ -247,24 +298,16 @@ func (s *Set) ran(base, rel string, cut bool) error {
 			s.say(report.WarnLevel, "could not read the image of %s (%v): its data's history misses it", c.Name, err)
 			continue
 		}
-		ref := refs[svc]
-		if ref == "" {
-			ref = repoOf(c.Digest)
-		}
 		how := Ran
-		if id := forced[svc]; id != "" && id == img.ID {
+		if id := forced[e.Service]; id != "" && id == img.ID {
 			how = Forced
-			ranForced[svc] = true
+			ranForced[e.Service] = true
 		}
-		if last, ok := h.last(svc); ok && last.is(img) {
-			if how != Forced || last.How == Forced {
-				continue
-			}
-		} else if how == Ran && h.movedPast(svc, img) {
-			s.say(report.WarnLevel, "%s runs %s, older than the newest image its data ran (%s): it went back outside devopsy, and the next activation brings the newest back", svc, shownImage(ref, img), mustLast(h, svc).shown())
+		r := ranOn(e, how, img, s.now())
+		if last, ok := h.last(e.Service); ok && last.same(r) && (r.How == Ran || r.How == last.How) {
 			continue
 		}
-		h = append(h, ranOn(svc, how, ref, img, s.now()))
+		h = append(h, r)
 		changed = true
 	}
 	if changed {
@@ -300,24 +343,16 @@ func (s *Set) keepForced(rel string, forced map[string]string, ran map[string]bo
 	}
 }
 
-func mustLast(h history, svc string) ran {
-	r, _ := h.last(svc)
-	return r
-}
-
-// shownImage is an image for messages: its digest in ref's repository,
-// short, else its short id.
-func shownImage(ref string, img Image) string {
-	if d := digestIn(img, ref); d != "" {
-		return repoOf(d) + "@" + short(digestOf(d))
-	}
-	return short(img.ID)
+// ranBefore says c, not running, last started before the data w describes
+// landed.
+func ranBefore(c Container, w []ran) bool {
+	return c.State != "running" && !c.Started.IsZero() && len(w) > 0 && w[0].How != Ran && c.Started.Unix() < w[0].Time
 }
 
 // ForcedFile, in a release's directory, names each service whose image
-// a --yes let through its checks (Record), with that image's id, tab
-// separated: its history starts over from it once that image runs (Ran),
-// after the activation that wrote it, never later.
+// --accept-image let through a check that refused it, with that image's
+// id, tab separated: its history starts over from it once that image
+// runs (Ran), after the activation that wrote it, never later.
 const ForcedFile = "devopsy-forced"
 
 func readForced(rel string) map[string]string {
@@ -332,6 +367,17 @@ func readForced(rel string) map[string]string {
 		}
 	}
 	return m
+}
+
+func writeForced(rel string, lines []string) error {
+	path := filepath.Join(rel, ForcedFile)
+	if len(lines) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return writeFile(path, strings.Join(lines, "\n")+"\n")
 }
 
 func sortedKeysOf(m map[string]string) []string {
