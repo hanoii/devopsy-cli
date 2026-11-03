@@ -216,8 +216,9 @@ type Set struct {
 	// image its data's history ends on (holdsFor), and --accept-image
 	// never reaches it. NoCheck: a full restore, whose data and history
 	// come back from its snapshot: nothing checked, its holds derived
-	// against the snapshot's window.
-	Restart, NoCheck bool
+	// against the snapshot's window. Reset: a sync that starts the child
+	// over (--reset), whose wipe starts every history over (copyNeeds).
+	Restart, NoCheck, Reset bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
 	// exports them): a snapshot's directory holds a release's listing

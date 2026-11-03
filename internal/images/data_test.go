@@ -1394,6 +1394,118 @@ func TestDataImport(t *testing.T) {
 	}
 }
 
+// A sync or an import of lower-version data into an environment the
+// restart holds runs its release's own image on the copy, the hold gone:
+// the hold is derived from the history, which the copy's window replaced
+// (it ran the held 12.1 image on the parent's 11.8 copy before). A copy
+// without a record of its history (an import of no header) starts it over,
+// which drops the hold too, as a reset's wipe does. One whose own build is gone is refused before
+// anything stops: a copy builds nothing.
+func TestDataCopyDropsHold(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	held := func(m *sim) (string, Service) {
+		t.Helper()
+		m.release(false, db118)
+		d.publish("mariadb:12.1", "J1")
+		m.failRun(false, dbSvc("mariadb:12.1"))
+		if m.runs("database") != "J1" || heldIn(m.e.rel(m.cur))["database"] == "" {
+			m.fail("setup: %s runs %s, held %v", m.e.set.Name, m.runs("database"), heldIn(m.e.rel(m.cur)))
+		}
+		return m.cur, db118
+	}
+	dropped := func(m *sim, what string) {
+		t.Helper()
+		rel := m.e.rel(m.cur)
+		imgs, _, h := composeFacts(rel)
+		e, _ := match(readList(rel), entry{Service: "database"})
+		if m.runs("database") != "I1" || imgs["database"] != "" || h["database"] != "" || e.held() || e.ID != "I1" || e.DataVersion != "11.8" {
+			m.fail("after %s: runs %s, compose %v %v, listing %+v", what, m.runs("database"), imgs, h, e)
+		}
+		if !strings.Contains(out.String(), "database runs "+m.cur+"'s own image again") {
+			m.fail("after %s: the hold's end is not said", what)
+		}
+	}
+
+	stage := newSim(t, d, "app-stage", &out)
+	held(stage)
+	out.Reset()
+	if err := syncInto(t, prod, stage, false); err != nil {
+		stage.fail("the sync of 11.8 data into the held stage: %v", err)
+	}
+	dropped(stage, "the sync")
+	if l, _ := readHistory(stage.base()).last("database"); l.ID != "I1" || l.Version != "11.8" {
+		t.Errorf("stage's history ends on %+v", l)
+	}
+
+	dev := newSim(t, d, "app-dev", &out)
+	held(dev)
+	data := DataFor(prod.e.set.ExportData(prod.base(), prod.e.rel(prod.cur), "database"), "database")
+	out.Reset()
+	if err := dev.e.set.ImportCheck(dev.e.rel(dev.cur), data, "database"); err != nil {
+		dev.fail("the import of 11.8 data into the held dev: %v", err)
+	}
+	if err := dev.e.set.ImportDone(dev.base(), dev.e.rel(dev.cur), data); err != nil {
+		dev.fail("ImportDone: %v", err)
+	}
+	dev.up()
+	dropped(dev, "the import")
+
+	test := newSim(t, d, "app-test", &out)
+	held(test)
+	out.Reset()
+	if err := test.e.set.ImportCheck(test.e.rel(test.cur), "", "database"); err != nil {
+		test.fail("the import of no record into the held test: %v", err)
+	}
+	if err := test.e.set.Imported(test.base(), test.e.rel(test.cur), "database"); err != nil {
+		test.fail("Imported: %v", err)
+	}
+	test.up()
+	dropped(test, "the import of no record")
+
+	// A reset's wipe starts every history over: the hold goes with it.
+	ci := newSim(t, d, "app-ci", &out)
+	held(ci)
+	out.Reset()
+	if err := ci.e.set.Wiped(ci.base(), ci.e.rel(ci.cur)); err != nil {
+		ci.fail("Wiped: %v", err)
+	}
+	ci.up()
+	dropped(ci, "the wipe")
+
+	// Built: its own build gone while held, a sync and an import refuse
+	// before anything stops.
+	qa := newSim(t, d, "app-qa", &out)
+	qa.release(false, builtDB("app-qa", "11.8"))
+	own := qa.runs("database")
+	qa.failRun(false, builtDB("app-qa", "12.1"))
+	for n, id := range d.names {
+		if id == own {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, own)
+	out.Reset()
+	if err := qa.e.set.SyncCheck(qa.e.rel(qa.cur), prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "a sync builds nothing: nothing changed") || !strings.Contains(out.String(), "devopsy @vm1:qa --release-sync\n") {
+		qa.fail("a sync into a held qa whose own build is gone (%v)", err)
+	}
+	out.Reset()
+	if err := qa.e.set.ImportCheck(qa.e.rel(qa.cur), "", "database"); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "an import builds nothing: nothing imported") {
+		qa.fail("an import into a held qa whose own build is gone (%v)", err)
+	}
+	// A reset starts every history over: refused alike, whatever the
+	// parent copies.
+	qa.e.set.Reset = true
+	out.Reset()
+	if err := qa.e.set.SyncCheck(qa.e.rel(qa.cur), ""); !errors.Is(err, ErrRefused) {
+		qa.fail("a reset of a held qa whose own build is gone (%v)", err)
+	}
+}
+
 // A --no-code restore checks the current release's labels against the
 // snapshot's window, as a sync checks the parent's.
 func TestDataRestoreCheck(t *testing.T) {
@@ -1725,6 +1837,15 @@ func dataRandom(t *testing.T, seed int64) {
 		return err == nil
 	}
 	var m *sim
+	// copyNeedsGone says whether a copy into m that its check lets
+	// through (ok: refused but accepted, or not refused; a refusal is the
+	// model's) needs m's own build of the database back and it is gone: m
+	// held, its own built (a copy builds nothing).
+	copyNeedsGone := func(m *sim, own Service, _ bool) bool {
+		rel := m.e.rel(m.cur)
+		cur, _ := match(readList(rel), entry{Service: "database"})
+		return heldIn(rel)["database"] != "" && own.own(m.e.mode) && !d.images[cur.OwnID]
+	}
 	svcs := func() []Service {
 		var db Service
 		if rng.Intn(5) == 0 {
@@ -1870,11 +1991,19 @@ func dataRandom(t *testing.T, seed int64) {
 				continue
 			}
 			yes := rng.Intn(3) == 0
-			// What runs: a hold's claim, the failed release's or the
-			// snapshot's.
-			db := running[m]
+			// Judged by the release's own image, which runs on the copy
+			// whether or not it was held (the hold, derived after, goes:
+			// the copy's window is the parent's); refused before anything
+			// stops when it is a build gone.
+			db := dbOf(m.e.svcs[m.cur])
 			refused := verdict(model[o], db)
-			if expect("sync from "+o.e.set.Name, syncInto(t, o, m, yes), refused, yes) {
+			gone := copyNeedsGone(m, db, refused && yes)
+			err := syncInto(t, o, m, yes)
+			if gone {
+				if !errors.Is(err, ErrRefused) {
+					t.Fatalf("after %v: a sync into %s whose own build is gone: %v\n%s", log, m.e.set.Name, err, out.String())
+				}
+			} else if expect("sync from "+o.e.set.Name, err, refused, yes) {
 				if yes && refused {
 					model[m] = history{claim(db, Forced)}
 				} else {
@@ -1884,8 +2013,11 @@ func dataRandom(t *testing.T, seed int64) {
 					}
 					w[0].How = SyncedFrom + "x"
 					model[m] = w
-					run(m, m.runs("database"), db, false)
 				}
+				if heldIn(m.e.rel(m.cur))["database"] != "" {
+					t.Fatalf("after %v: a sync into %s left it held %v\n%s", log, m.e.set.Name, heldIn(m.e.rel(m.cur)), out.String())
+				}
+				run(m, m.runs("database"), db, yes && refused)
 			}
 			check(m.e.set.Name + " sync from " + o.e.set.Name)
 		case 10: // a complete import of the other's export, or of none
@@ -1893,23 +2025,52 @@ func dataRandom(t *testing.T, seed int64) {
 			if m.cur == "" {
 				continue
 			}
+			// Judged by the release's own image, as a sync; then what the
+			// import stopped is made again on what its compose file gives it
+			// now (restoreServices' recreate), which the next activation's
+			// img ran records.
+			db := dbOf(m.e.svcs[m.cur])
+			after := func(accepted bool) {
+				t.Helper()
+				if heldIn(m.e.rel(m.cur))["database"] != "" {
+					t.Fatalf("after %v: an import into %s left it held %v\n%s", log, m.e.set.Name, heldIn(m.e.rel(m.cur)), out.String())
+				}
+				m.up()
+				m.e.set.Ran(m.base(), m.e.rel(m.cur))
+				run(m, m.runs("database"), db, accepted)
+			}
 			if o.cur == "" || rng.Intn(3) == 0 {
+				if copyNeedsGone(m, db, true) {
+					if err := m.e.set.ImportCheck(m.e.rel(m.cur), "", "database"); !errors.Is(err, ErrRefused) {
+						t.Fatalf("after %v: an import of no record into %s whose own build is gone: %v\n%s", log, m.e.set.Name, err, out.String())
+					}
+					check(m.e.set.Name + " import refused")
+					continue
+				}
+				if err := m.e.set.ImportCheck(m.e.rel(m.cur), "", "database"); err != nil {
+					t.Fatalf("after %v: an import of no record: %v\n%s", log, err, out.String())
+				}
 				if err := m.e.set.Imported(m.base(), m.e.rel(m.cur), "database"); err != nil {
 					t.Fatal(err)
 				}
 				model[m] = history{{Service: "database", How: Imported}}
+				after(false)
 				check(m.e.set.Name + " import")
 				continue
 			}
 			data := DataFor(o.e.set.ExportData(o.base(), o.e.rel(o.cur), "database"), "database")
-			db := running[m]
 			yes := rng.Intn(3) == 0
 			if yes {
 				m.e.set.Accept = map[string]bool{"database": true}
 			}
 			refused := verdict(model[o], db)
+			gone := copyNeedsGone(m, db, refused && yes)
 			err := m.e.set.ImportCheck(m.e.rel(m.cur), data, "database")
-			if expect("import of "+o.e.set.Name+"'s export", err, refused, yes) {
+			if gone {
+				if !errors.Is(err, ErrRefused) {
+					t.Fatalf("after %v: an import into %s whose own build is gone: %v\n%s", log, m.e.set.Name, err, out.String())
+				}
+			} else if expect("import of "+o.e.set.Name+"'s export", err, refused, yes) {
 				m.e.set.ImportDone(m.base(), m.e.rel(m.cur), data)
 				if yes && refused {
 					model[m] = history{claim(db, Forced)}
@@ -1921,6 +2082,8 @@ func dataRandom(t *testing.T, seed int64) {
 					w[0].How = Imported
 					model[m] = w
 				}
+				m.e.set.Accept = nil
+				after(yes && refused)
 			}
 			m.e.set.Accept = nil
 			check(m.e.set.Name + " import of " + o.e.set.Name + "'s export")

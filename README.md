@@ -948,8 +948,8 @@ release's own name when it built what this one pulls). devopsy never
 carries a hold from one activation to the next: it derives it again
 from the history wherever it decides what a data service runs (every
 activation, the restart after a failed run step, a full or `--no-code`
-restore), so a hold goes as soon as the data allows the release's own
-image again, and nothing else keeps one.
+restore, a sync, an import, a reset), so a hold goes as soon as the
+data allows the release's own image again, and nothing else keeps one.
 A release or a rollback is refused or accepted before it runs, so it
 holds nothing; the restart after a failed run step is the one place
 that cannot refuse: it runs on its own, past the switch, so the
@@ -968,8 +968,10 @@ the release that fixes forward.
 
 **Syncs and imports** check the receiving side's labels against the
 source's data (Parent environments and syncs, `--export` and
-`--import`): the receiving side always runs its own image on the copy,
-and its history becomes the source's.
+`--import`): the receiving side always runs its release's own image on
+the copy, a hold it had going with its old data, and its history
+becomes the source's. One whose own built image is gone while held is
+refused before anything stops: a copy builds nothing.
 
 Image mode needs no git: without it the release just has no commit.
 Either way files arrive with git's modes, whatever the checkout's: 0755

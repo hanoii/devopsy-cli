@@ -120,8 +120,8 @@ What devopsy requires:
   held on the image its data ran exactly when its release's own would be
   refused there, derived from the data's history wherever devopsy
   decides what runs (the restart after a failed run step, which cannot
-  refuse, a full restore of data from such a time); a restore of data
-  that allows the release's own runs that again. The one
+  refuse, a full restore of data from such a time); a copy or a restore
+  of data that allows the release's own runs that again. The one
   exception: a restart whose images cannot be restored at all cannot
   hold a built one, and says so; fix forward then. A database takes it from the same variable
   as its image (`image: mariadb:${MARIADB_VERSION:-11.8}`,

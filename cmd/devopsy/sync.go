@@ -3249,7 +3249,8 @@ func startSyncState(cwd string, first bool) error {
 // reset, right after the reset's first claim: what an import a killed
 // devopsy left may still extract, every container of every profile and
 // the named volumes, every entry of mnt emptied as root, every data
-// service's history started over (images.Set.Wiped); its shared/.env and
+// service's history started over (images.Set.Wiped, its holds derived
+// again); its shared/.env and
 // its release, images included, stay. The record then says first
 // release, nothing stopped: finish go creates the services with data
 // and the child side's set, and the run step the rest.
@@ -3276,9 +3277,18 @@ func wipeData(cwd, projectDir, base string) error {
 	// ones the copy writes nothing for included (the holder's sync-done
 	// takes the copied ones over once the copy is complete). Under the
 	// holder's release lock.
-	if set, err := serverImages(cwd, composeName(cwd), errOut); err != nil {
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
 		return err
-	} else if err := set.Wiped(base, remote.ReleaseFile(projectDir, "")); err != nil {
+	}
+	// Under the server's image lock: their holds are derived again.
+	unlock, err := imagesShared(context.Background())
+	if err != nil {
+		return err
+	}
+	err = set.Wiped(base, remote.ReleaseFile(projectDir, ""))
+	unlock()
+	if err != nil {
 		return fmt.Errorf("starting the history of the data's images over: %w", err)
 	}
 	// Its owned entries back, as a release left them: finish go creates

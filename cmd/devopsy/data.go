@@ -1222,28 +1222,29 @@ func runImport(cwd string, args []string, color bool) int {
 	// version and tag are checked against it before anything stops, as a
 	// sync checks its parent's (images.ImportCheck), and it is taken over
 	// once the data is in, on a target. A tar without it (made by hand, a
-	// custom export) starts the history over.
+	// custom export) starts the history over. Either way the service's
+	// hold is derived again from it (images.Set.Rederive), and checked
+	// first for a built image that would need (a copy builds nothing).
 	var imgs *images.Set
 	var record string
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 	if s.Copy == cli.CopyVolumes && onTarget {
-		if record = images.DataFor(tarRecord(spool), name); record != "" {
-			var err error
-			if imgs, err = serverImages(cwd, composeName(cwd), errOut); err != nil {
-				return fail(err.Error() + ": nothing imported")
-			}
-			imgs.Address, imgs.Accept = targetAddress(cwd), acceptedImages()
-			unlock, err := imagesShared(ctx)
-			if err != nil {
-				return fail(err.Error() + ": nothing imported")
-			}
-			err = imgs.ImportCheck(rel, record, name)
-			unlock()
-			if errors.Is(err, images.ErrRefused) {
-				return 1
-			} else if err != nil {
-				return fail(err.Error() + ": nothing imported")
-			}
+		record = images.DataFor(tarRecord(spool), name)
+		var err error
+		if imgs, err = serverImages(cwd, composeName(cwd), errOut); err != nil {
+			return fail(err.Error() + ": nothing imported")
+		}
+		imgs.Address, imgs.Accept = targetAddress(cwd), acceptedImages()
+		unlock, err := imagesShared(ctx)
+		if err != nil {
+			return fail(err.Error() + ": nothing imported")
+		}
+		err = imgs.ImportCheck(rel, record, name)
+		unlock()
+		if errors.Is(err, images.ErrRefused) {
+			return 1
+		} else if err != nil {
+			return fail(err.Error() + ": nothing imported")
 		}
 	}
 
@@ -1374,13 +1375,18 @@ func runImport(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 	}
-	// The export's history of its data taken over (ImportDone) before
-	// anything starts on it: the data's version is the export's now,
-	// which the next check compares; the service runs its own image.
+	// The export's history of its data taken over (ImportDone), or
+	// started over without its record (Imported), before anything starts
+	// on it: the data's version is the export's now, which the next check
+	// compares; the service runs its own image, its hold derived again.
 	if imgs != nil {
 		unlock, err := imagesShared(context.Background())
 		if err == nil {
-			err = imgs.ImportDone(base, rel, record)
+			if record != "" {
+				err = imgs.ImportDone(base, rel, record)
+			} else {
+				err = imgs.Imported(base, rel, name)
+			}
 			unlock()
 		}
 		if err != nil {
@@ -1437,7 +1443,8 @@ func recreateRunning(cwd, rel, name string) error {
 // data service's data over (images.Set.Imported) once its files were
 // imported (mnt), or accepted (--resolved): they came from elsewhere. A
 // stream's import goes through the service's own image, which keeps its
-// history.
+// history. In a release, under the server's image lock: its hold is
+// derived again (images.Set.Rederive).
 func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) {
 	for _, s := range services {
 		if s.Name != name || s.Copy != cli.CopyVolumes {
@@ -1447,6 +1454,14 @@ func importedImages(cwd, base, name string, services []cli.SyncService, resolved
 		if err != nil {
 			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
 			continue
+		}
+		if cli.InRelease(filepath.Join(cwd, cli.ProjectDirName)) {
+			unlock, err := imagesShared(context.Background())
+			if err != nil {
+				report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
+				continue
+			}
+			defer unlock()
 		}
 		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 		record := set.Imported
@@ -1562,19 +1577,22 @@ func runResolved(cwd, name string) int {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	// Made again where devopsy's compose file gives a service another
-	// image than its container's (another activation's container):
-	// started, the old container would run its image on the imported
-	// data.
-	if err := restoreServices(cwd, services, false, true, nil); err != nil {
-		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
-		return 1
-	}
+	// The data accepted as it is: its history started over (unless the
+	// import took the export's over since its mark), its hold derived
+	// again, before anything starts on it.
 	since := time.Time{}
 	if m := readMark(base); m != nil {
 		since, _ = time.Parse(time.DateTime, m.Since)
 	}
 	importedImages(cwd, base, name, services, since)
+	// Made again where devopsy's compose file gives a service another
+	// image than its container's (another activation's container, a hold
+	// gone): started, the old container would run its image on the
+	// imported data.
+	if err := restoreServices(cwd, services, false, true, nil); err != nil {
+		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
+		return 1
+	}
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0

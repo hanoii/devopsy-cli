@@ -228,22 +228,31 @@ func parseParentData(data string) map[string]*sourceData {
 }
 
 // SyncCheck checks, before a sync stops anything, each of the child's
-// data services the parent copies (rel, the child's current release, its
-// version and tag as its labels give them now, a held one's the image it
-// is held on) against the parent's window (rule): the copy replaces the
-// child's data, which then has the parent's version. Refused:
-// ErrRefused, said, nothing changed; --accept-image lets a refused one
-// through, its history starting over (SyncDone). The child always runs
-// its own image on the copy.
+// data services the parent copies (rel, the child's current release: its
+// release's own image, its version and tag as its labels give them now)
+// against the parent's window (rule): the copy replaces the child's data,
+// which then has the parent's version, and the child runs its own image
+// on it, never one it is held on (the hold derived after would be on the
+// parent's image). Refused: ErrRefused, said, nothing changed;
+// --accept-image lets a refused one through, its history starting over
+// (SyncDone). A held service the copy lets run its own image again needs
+// that image (copyNeeds).
 func (s *Set) SyncCheck(rel, data string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync"}, true, false)
+	return s.copyCheck(rel, data, checkWords{source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync",
+		builds: "a sync builds nothing", rebuild: report.Fix("release it with the sync, which builds its images:", s.cmd("--release-sync"))}, true, false)
 }
 
 // ImportCheck is SyncCheck for an import of one service's data, the
 // export's (ExportData, DataFor) in place of a parent's, before the
-// import stops anything: by the listing (what its last activation runs).
+// import stops anything: by the listing's own image (what its last
+// activation runs). Without a record of it (data ""), the import starts
+// the history over, and only copyNeeds checks.
 func (s *Set) ImportCheck(rel, data, service string) error {
-	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>"}, false, false)
+	if DataFor(data, service) == "" {
+		data = "data\t" + service + "\n"
+	}
+	return s.copyCheck(rel, data, checkWords{source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>",
+		builds: "an import builds nothing", rebuild: report.Fix("release it first, which builds its images, then import again:", s.cmd("--release"))}, false, false)
 }
 
 // RestoreCheck is SyncCheck for a --no-code restore of snapshot, its
@@ -300,12 +309,12 @@ func (s *Set) writeClaims(rel string) error {
 }
 
 // copyCheck is SyncCheck in w's words: each data service the copy writes
-// (data's) judged by the image it runs now (its labels now with labels, a
-// sync's, whose run step runs under them, but for a held one; else its
-// listing: an import and a --no-code restore check no image names, so a
-// label changed with its image since would pass), or, with running (a
-// --no-code restore), by its release's own image (ownEntries), else by
-// the image it runs now when that one fits (copyRule), then copyNeeds.
+// (data's) judged by its release's own image (ownEntries: its labels now
+// with labels, a sync's, whose run step runs under them; else its
+// listing's own, what its last activation runs: an import and a --no-code
+// restore check no image names, so a label changed with its image since
+// would pass), or, with running (a --no-code restore), by the image it
+// runs now when that one fits. Then copyNeeds.
 func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) error {
 	ps := parseParentData(data)
 	es := readList(rel)
@@ -317,10 +326,6 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) er
 			continue
 		}
 		js = append(js, judged{service: e.Service, why: copyRule(p.window(), e, o, w.source, running)})
-		if !running {
-			c := nowOf(e, o)
-			js[len(js)-1].why = rule(p.window(), c.DataVersion, c.Tag, w.source)
-		}
 	}
 	forced, err := s.judge(js, w, rel, false)
 	if err != nil {
@@ -329,19 +334,7 @@ func (s *Set) copyCheck(rel, data string, w checkWords, labels, running bool) er
 	for _, svc := range forced {
 		s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image on the %s data, its history starting over from it", svc, strings.TrimPrefix(strings.TrimSuffix(w.source, "'s"), "the "))
 	}
-	if !running {
-		return nil
-	}
 	return s.copyNeeds(rel, es, own, svcs, ps, forced, w)
-}
-
-// nowOf is the image a service whose entry is e, its release's own o,
-// runs now: e when held, else o.
-func nowOf(e, o entry) entry {
-	if e.held() {
-		return e
-	}
-	return o
 }
 
 // copyRule is the rule a copy's check runs on a data service whose entry
@@ -359,7 +352,7 @@ func copyRule(w []ran, e, o entry, source string, running bool) string {
 
 // copyNeeds refuses, before a copy stops anything, one whose take-over
 // would derive (holdsFor, against the windows the copy leaves: the
-// source's, none for an accepted one)
+// source's, none for an accepted one, none for every one under a reset)
 // a built image Docker no longer has: the release's own of a held
 // service the copy lets run it again, or the one a hold would be on. A
 // copy builds nothing (w.builds), w.rebuild does.
@@ -371,6 +364,9 @@ func (s *Set) copyNeeds(rel string, es, own []entry, svcs map[string]Service, ps
 		}
 		if p := ps[svc]; p != nil {
 			return p.window()
+		}
+		if s.Reset {
+			return nil
 		}
 		return base(svc)
 	})
@@ -406,7 +402,7 @@ func (s *Set) copyNeeds(rel string, es, own []entry, svcs map[string]Service, ps
 // version when the parent's has none: the next release adopts its label),
 // or, refused and let through by --accept-image, one Forced line of its
 // own image. from is the parent's address. What runs is the child's own
-// image, untouched.
+// image: its holds derived again (Rederive).
 func (s *Set) SyncDone(base, rel, data, from string) error {
 	return s.syncDone(base, rel, data, SyncedFrom+from, "the parent's", true, false)
 }
@@ -431,7 +427,7 @@ func (s *Set) RestoreDone(base, rel, data string) error {
 // (a sync), the listing takes the data services' versions and tags as the
 // labels give them now (writeClaims): what img ran then records, so a
 // label from an inherited variable is the copy's version from this sync
-// on. A restore's (running) derives rel's holds again (Rederive).
+// on. Then rel's holds are derived again (Rederive).
 func (s *Set) syncDone(base, rel, data, first, source string, labels, running bool) error {
 	ps := parseParentData(data)
 	h := readHistory(base)
@@ -450,25 +446,7 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels, running bo
 			continue
 		}
 		w := append(history{}, p.window()...)
-		if !running && s.Accept[e.Service] && rule(w, nowOf(e, o).DataVersion, nowOf(e, o).Tag, source) != "" {
-			// What it runs on the copy, accepted: its history over from it.
-			c := nowOf(e, o)
-			img := Image{ID: c.ID}
-			if cs == nil {
-				cs = s.containers()
-			}
-			if ct, ok := cs[e.Service]; ok && ct.started() {
-				if i, err := s.Docker.Inspect(ct.Image); err == nil {
-					img = i
-				}
-			} else if i, err := s.Docker.Inspect(c.ID); err == nil {
-				img = i
-			}
-			h = append(h.without(e.Service), ranOn(c, Forced, img, s.now()))
-			changed = true
-			continue
-		}
-		if running && s.Accept[e.Service] && copyRule(w, e, o, source, running) != "" {
+		if s.Accept[e.Service] && copyRule(w, e, o, source, running) != "" {
 			// Its own image on the copy, accepted: its history over from it.
 			img := Image{ID: o.ID}
 			if e.held() {
@@ -507,9 +485,6 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels, running bo
 			return err
 		}
 	}
-	if !running {
-		return nil
-	}
 	return s.Rederive(base, rel)
 }
 
@@ -540,7 +515,8 @@ func Recreate(d Docker, project, rel string) []string {
 // Imported starts a service's history over, once a complete import of
 // its data without a record of it (a custom one, a tar without the
 // header, a local one) or --resolved is in: the data came from elsewhere,
-// of no known version, so the next release adopts its label.
+// of no known version, so the next release adopts its label, and its
+// release's own image runs on it (Rederive: under the image lock).
 func (s *Set) Imported(base, rel, service string) error {
 	e, ok := match(readList(rel), entry{Service: service})
 	if !ok || e.DataVersion == "" {
@@ -555,7 +531,10 @@ func (s *Set) Imported(base, rel, service string) error {
 	h := readHistory(base)
 	r := ranOn(e, Imported, img, s.now())
 	r.How, r.Version, r.Tag = Imported, "", ""
-	return append(h, r).write(base)
+	if err := append(h, r).write(base); err != nil {
+		return err
+	}
+	return s.Rederive(base, rel)
 }
 
 // Wiped starts every data service's history over, once a reset wiped
@@ -564,8 +543,9 @@ func (s *Set) Imported(base, rel, service string) error {
 // devopsy.data.copy=none service, one whose entries are all missing on
 // the parent), so the next release adopts their labels (review: a reset
 // kept their windows, and a later lower label was refused for data that
-// no longer existed). The copy's own take over theirs (SyncDone) once it
-// is complete.
+// no longer existed), and their release's own images run on it
+// (Rederive: under the image lock). The copy's own take over theirs
+// (SyncDone) once it is complete.
 func (s *Set) Wiped(base, rel string) error {
 	h := readHistory(base)
 	changed := false
@@ -581,10 +561,12 @@ func (s *Set) Wiped(base, rel string) error {
 		h = append(h, r)
 		changed = true
 	}
-	if !changed {
-		return nil
+	if changed {
+		if err := h.write(base); err != nil {
+			return err
+		}
 	}
-	return h.write(base)
+	return s.Rederive(base, rel)
 }
 
 // Resolved is Imported for --resolved, since the time of the import's

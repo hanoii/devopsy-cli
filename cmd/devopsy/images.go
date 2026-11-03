@@ -193,6 +193,8 @@ func runImages(args []string, color bool) int {
 		return 1
 	}
 	s.Address, s.Accept, s.AsBuilt, s.Restart, s.NoCheck, s.Again = address, accept, asBuilt, restart, fullRestore, again
+	// A reset's wipe starts every history over (images.Set.Reset).
+	s.Reset = os.Getenv(remote.SyncResetEnv) != ""
 	if restart {
 		// The release accepted its new image, never the old one back on
 		// the new data: the restart holds what the rule refuses.

@@ -1063,6 +1063,42 @@ func TestImportExportImages(t *testing.T) {
 	}
 }
 
+// An import of lower-version data into an environment the restart holds
+// (app held on 12.1, its release's own 11.8) runs the release's own image
+// on it, its hold gone from its compose file and listing: the hold is
+// derived from the history, which the import's took over (it ran the held
+// image on the imported data before).
+func TestImportDropsHold(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	base := filepath.Join(s.root, "shop", "prod")
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "shop-prod-app\tsha256:own\tapp\tpulled\tshop-prod-app@sha256:own\t\t\t11.8\tlatest\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "at 11.8\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAKE_NAMES=shop-prod-app=sha256:own"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	// Since: the restart held app on release 2's 12.1 image.
+	write(t, list, "shop-prod-app\tsha256:twelve\tapp\tpulled\tshop-prod-app@sha256:twelve\t\t\t12.1\tlatest\tshop-prod-app\tsha256:own\t\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
+	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"app\":\n    image: \"shop-prod-app@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"shop-prod-app@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n2\tapp\tran\tshop-prod-app\tsha256:twelve\tshop-prod-app@sha256:twelve\t12.1\tlatest\n", 0o644)
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	if code != 0 || !strings.Contains(errs, "app runs ") || !strings.Contains(errs, "own image again") {
+		t.Fatalf("the import of 11.8 data into the held environment (%d):\n%s", code, errs)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "shop-prod-app@sha256:own") {
+		t.Errorf("still held after the import:\n%s", c)
+	}
+	if l := readString(list); !strings.Contains(l, "shop-prod-app\tsha256:own\tapp\tpulled\tshop-prod-app@sha256:own") {
+		t.Errorf("the listing after the import:\n%s", l)
+	}
+}
+
 // An import that pulls and bookmarks the export's image and holds its
 // service on it changes the server's images, as a sync's img sync-check
 // and sync-done do: under the server's image lock, shared, so a removal
