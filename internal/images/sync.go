@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,7 +228,8 @@ func parseParentData(data string) map[string]*sourceData {
 
 // SyncCheck checks, before a sync stops anything, each of the child's
 // data services the parent copies (rel, the child's current release, its
-// listing's version and tag) against the parent's window (rule): the
+// version and tag as its labels give them now, claims) against the
+// parent's window (rule): the
 // copy replaces the child's data, which then has the parent's version.
 // Refused: ErrRefused, said, nothing changed; --accept-image lets a
 // refused one through, its history starting over (SyncDone). The child
@@ -250,11 +252,42 @@ func (s *Set) RestoreCheck(rel, data, snapshot string) error {
 	return s.copyCheck(rel, data, checkWords{source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code"})
 }
 
+// claims are rel's listing with each data service's version and tag as
+// its labels give them now (List: in a sync's holder, with the pending
+// inherited variables, InheritPendingEnv, so a label from an inherited
+// variable never lags one sync: review), but for a service its
+// ComposeFile holds (the restart's, a full restore's), whose held image's
+// own version and tag, the listing's, are what runs. Labels that cannot
+// be read leave the listing's, said.
+func (s *Set) claims(rel string) []entry {
+	es := readList(rel)
+	if s.List == nil {
+		return es
+	}
+	svcs, err := s.List(rel)
+	if err != nil {
+		s.say(report.WarnLevel, "could not read the labels of %s (%v): its data services' versions are its listing's", filepath.Base(rel), err)
+		return es
+	}
+	held := heldIn(rel)
+	for i, e := range es {
+		if e.Service == "" || e.DataVersion == "" || held[e.Service] != "" {
+			continue
+		}
+		for _, svc := range svcs {
+			if svc.Name == e.Service && svc.Data {
+				es[i].DataVersion, es[i].Tag = svc.DataVersion, svc.tag()
+			}
+		}
+	}
+	return es
+}
+
 // copyCheck is SyncCheck in w's words.
 func (s *Set) copyCheck(rel, data string, w checkWords) error {
 	ps := parseParentData(data)
 	var js []judged
-	for _, e := range readList(rel) {
+	for _, e := range s.claims(rel) {
 		if p := ps[e.Service]; p != nil && e.DataVersion != "" {
 			js = append(js, judged{service: e.Service, why: rule(p.window(), e.DataVersion, e.Tag, w.source)})
 		}
@@ -285,13 +318,23 @@ func (s *Set) ImportDone(base, rel, data string) error {
 	return s.syncDone(base, rel, data, Imported, "the export's")
 }
 
-// syncDone is SyncDone, the window's first line how first.
+// syncDone is SyncDone, the window's first line how first. The listing
+// takes the data services' versions and tags as the labels give them now
+// (claims): what img ran then records, so a label from an inherited
+// variable is the copy's version from this sync on.
 func (s *Set) syncDone(base, rel, data, first, source string) error {
 	ps := parseParentData(data)
 	h := readHistory(base)
 	changed := false
 	var cs map[string]Container
-	for _, e := range readList(rel) {
+	es := s.claims(rel)
+	if old := readList(rel); !slices.Equal(old, es) {
+		if err := writeList(rel, es); err != nil {
+			s.say(report.ErrorLevel, "could not record the data's versions in %s's listing: %v", filepath.Base(rel), err)
+			return err
+		}
+	}
+	for _, e := range es {
 		p := ps[e.Service]
 		if p == nil || e.DataVersion == "" {
 			continue

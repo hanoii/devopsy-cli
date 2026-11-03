@@ -1008,6 +1008,33 @@ func syncInto(t *testing.T, parent, child *sim, yes bool) error {
 	return child.e.set.Ran(child.base(), rel)
 }
 
+// A label from an inherited variable never lags one sync: the check and
+// the listing img ran records go by the labels as they read now (in the
+// holder, with the sync's pending inherited variables), never the
+// version the child's last activation listed; a held service keeps its
+// held image's.
+func TestDataSyncInheritedVersion(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:12.1", "J1")
+	prod.release(false, dbSvc("mariadb:12.1"))
+	dev.release(false, builtDB("app-dev", "11.8"))
+	// The parent's inherit: raised the child's label, its image the same.
+	dev.e.svcs[dev.cur][0].DataVersion = "12.1"
+	out.Reset()
+	if err := syncInto(t, prod, dev, false); err != nil {
+		dev.fail("a sync at the version the inherited label gives: %v", err)
+	}
+	if e, _ := match(readList(dev.e.rel(dev.cur)), entry{Service: "database"}); e.DataVersion != "12.1" {
+		t.Errorf("the listing after the sync: %+v", e)
+	}
+	if l, _ := readHistory(dev.base()).last("database"); l.Version != "12.1" {
+		t.Errorf("the history ends on %+v, not the label's version", l)
+	}
+}
+
 // A sync checks the child against the parent's window and runs the
 // child's own image on the copy, its history the parent's window from a
 // sync line; a child below the parent's version, or on another tag at

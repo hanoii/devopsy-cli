@@ -821,12 +821,13 @@ fi
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
 ` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the child's data services'
-# versions and tags must allow the parent's data (img sync-check): an
-# abort or a session gone meanwhile ends this, nothing stopped.
+# versions and tags must allow the parent's data (img sync-check), as
+# their labels read with the pending inherited variables: an abort or a
+# session gone meanwhile ends this, nothing stopped.
 if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
   image_lock shared syncing || exit $?
   sc=0
-  img sync-check ` + o.againArg() + `"$rel" || sc=$?
+  (export ` + InheritPendingEnv + `="$base"/` + Quote(SyncInheritPending(o.ID)) + `; img sync-check ` + o.againArg() + `"$rel") || sc=$?
   image_unlock
   [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
 fi

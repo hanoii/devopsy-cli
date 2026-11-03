@@ -286,7 +286,7 @@ func TestImagesAgain(t *testing.T) {
 	if !strings.Contains(s["activate+sync"], `img check --again '--release-sync --from it'\''s:prod' "$1"`) {
 		t.Errorf("a release that syncs: no --again on its img check")
 	}
-	if !strings.Contains(s["holder"], `img sync-check --again '--reset' "$rel"`) {
+	if !strings.Contains(s["holder"], `(export `+InheritPendingEnv+`="$base"/'.devopsy-sync.inherit.1.2.env'; img sync-check --again '--reset' "$rel")`) {
 		t.Errorf("a --reset: no --again on its img sync-check")
 	}
 	if strings.Contains(s["holder plain"], "--again") || strings.Contains(s["sync only"], "--again") {
