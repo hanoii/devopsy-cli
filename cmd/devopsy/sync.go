@@ -1188,8 +1188,8 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if !copied {
 			answer = "abort"
 		}
-		if err := runDataHook(context.Background(), cwd, projectDir, env, nil, nil, nil, "finish", "parent", answer); err != nil && code == 0 {
-			code = fail("the data capability's finish parent go: " + err.Error())
+		if err := runDataHook(context.Background(), cwd, projectDir, env, nil, nil, nil, "finish", "parent", answer); err != nil {
+			code = fail("the data capability's finish parent " + answer + ": " + err.Error())
 		}
 		return code
 	}

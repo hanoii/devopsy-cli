@@ -1459,6 +1459,24 @@ func TestSyncParentRestoreFails(t *testing.T) {
 	}
 }
 
+// A failing finish parent abort is said by devopsy too, naming its word:
+// the sync has failed already, and the hook's own failure must not pass
+// without a line.
+func TestSyncParentFinishAbortFails(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "data", "finish"), "#!/bin/sh\n[ \"$1 $2\" != \"parent abort\" ] || exit 7\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes")
+	if code == 0 || !strings.Contains(out, "the data capability's finish parent abort: exit status 7") {
+		t.Errorf("a failing finish parent abort (%d):\n%s", code, out)
+	}
+}
+
 // Stream services: the parent's export spooled into the child's
 // directory, the child's import reading it once the export exited 0, in
 // depends_on order; the hooks on both sides with their side and lists;
