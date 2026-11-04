@@ -170,6 +170,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.
 ```
 
 - CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for completion, the race detector and shellcheck) and on macOS; run them on macOS too (`go vet ./... && go test -count=1 ./...`) for a change to what runs locally, where owners are never checked and there is no GNU `tail`.
+- Run `TestActivationCuts` (`DEVOPSY_TEST_CUTS=1`, on Linux, nightly in `e2e.yml`) for a change to an activation's order or failure paths: it cuts each docker call in turn, too slow for every run.
 - End to end (`e2e/`, build tag `e2e`) runs servers in Docker: `go test -tags e2e -count=1 -v -timeout 40m ./e2e` runs the suite on four lanes, `-run '^TestName$'` one test; read `internals/e2e.md` before writing or changing one.
 - Never sleep for something to happen: poll for it (`eventually` in `e2e/`, 250 ms; a loop on the file or the state in a unit test), so a test takes as long as the behavior, not the worst case.
 - A wait the heartbeat or a quiet time bounds is shortened through `DEVOPSY_INTERNAL_HEARTBEAT_EVERY` (`HeartbeatEnv=1` in unit tests, `fast()` and `quiet()` in `e2e/`), never by a constant of the test's own: `E2E_BEAT=5` runs the suite with the real timeouts.

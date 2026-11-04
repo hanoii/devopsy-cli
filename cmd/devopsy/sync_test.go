@@ -47,6 +47,25 @@ const syncFakeDocker = `#!/bin/sh
 # devopsy's own compose file (images.ComposeFile) is left out of the log:
 # the tests here match the project's compose commands.
 echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
+# FAKE_CUT_COUNT: docker's calls counted in this file; the one FAKE_CUT_AT
+# names fails (FAKE_CUT_HOW=fail) or kills outright the script of the session
+# it runs under (kill, on Linux: /proc, as FAKE_KILL_RUN finds it).
+if [ -n "${FAKE_CUT_COUNT:-}" ]; then
+  echo "${COMPOSE_PROJECT_NAME:-} $*" >>"$FAKE_CUT_COUNT"
+  if [ "$(wc -l <"$FAKE_CUT_COUNT" | tr -d ' ')" = "${FAKE_CUT_AT:-}" ]; then
+    case ${FAKE_CUT_HOW:-} in
+      fail) exit 1 ;;
+      kill)
+        p=$PPID; k=
+        while [ "$p" -gt 1 ]; do
+          [ "$(tr '\0' '\n' </proc/$p/cmdline | sed -n 3p | cut -c1-14)" != devopsy_needs= ] || k=$p
+          p=$(cut -d' ' -f4 /proc/$p/stat)
+        done
+        [ -z "$k" ] || kill -KILL "$k"
+        exit 137 ;;
+    esac
+  fi
+fi
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 # The project directory, the first -f's; --env-file, compose's .env in
 # its place.
@@ -249,6 +268,10 @@ case "$*" in
     for s in $svcs; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
     for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
     for s in ${FAKE_ONEOFF:-}; do printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.project=%s,com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" "${COMPOSE_PROJECT_NAME:-}"; done ;;
+  # A run step's plain up: everything runs.
+  *" up -d")
+    [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
+    : >"$stopped" ;;
   # up -d --wait [--no-deps] <svc>... (upFor, a first release's create)
   # and up -d --no-deps --wait <svc>... (a recreate on the image the data
   # now needs).

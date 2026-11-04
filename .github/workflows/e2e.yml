@@ -60,3 +60,30 @@ jobs:
           E2E_LANES: "2"
           E2E_SHARD: ${{ matrix.shard }}/2
         run: go test -tags e2e -count=1 -v -timeout 35m ./e2e
+
+  # An activation cut at each docker call it makes (TestActivationCuts):
+  # hundreds of runs, so here rather than in ci's tests.
+  cuts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - id: last
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list -R "$GITHUB_REPOSITORY" --workflow e2e.yml --status success --limit 1 --json headSha -q '.[0].headSha')
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "nothing new since $last"
+            echo skip=1 >>"$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.last.outputs.skip != '1'
+      - uses: actions/setup-go@v7
+        if: steps.last.outputs.skip != '1'
+        with:
+          go-version-file: go.mod
+      - if: steps.last.outputs.skip != '1'
+        env:
+          DEVOPSY_TEST_CUTS: "1"
+        run: go test -count=1 -timeout 25m -run '^TestActivationCuts$' ./cmd/devopsy
