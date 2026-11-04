@@ -103,8 +103,7 @@ func run() int {
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 
 	// Built-ins are flags, so they never clash with project commands or
@@ -139,8 +138,7 @@ func run() int {
 			err = cli.NetworkConflicts(cwd, os.Environ())
 		}
 		if err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		return 0
 	}
@@ -201,8 +199,7 @@ func run() int {
 		if len(names) > 0 {
 			details = append(details, "targets: "+strings.Join(names, ", "))
 		}
-		report.Fail(&report.Failure{Msg: args[0] + " needs a target", Details: details, Fixes: []report.Remedy{report.Fix("", "devopsy @<target> "+args[0])}})
-		return 1
+		return failErr(&report.Failure{Msg: args[0] + " needs a target", Details: details, Fixes: []report.Remedy{report.Fix("", "devopsy @<target> "+args[0])}})
 	}
 
 	plan, err := cli.Build(cwd, args, os.Environ())
@@ -220,8 +217,7 @@ func run() int {
 		report.Fail(exitErr)
 		return exitErr.Code
 	case err != nil:
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 
 	for _, line := range plan.Verbose {
@@ -253,14 +249,12 @@ func run() int {
 	// entries first (cli.MntOwnerLabel).
 	if plan.Starts {
 		if err := localMnt(cwd); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	if plan.StartsInRelease {
 		if err := checkStartBinds(cwd); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	if notice := plan.Notice; notice != "" {

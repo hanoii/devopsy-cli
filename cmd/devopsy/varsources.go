@@ -28,8 +28,7 @@ func runEnvTrace(cwd string, args []string) int {
 	}
 	out, err := cli.EnvTrace(cwd, os.Environ(), args)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	fmt.Println(string(out))
 	return 0

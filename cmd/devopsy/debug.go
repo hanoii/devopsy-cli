@@ -251,16 +251,14 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			if err := value.Encode(&yamlTarget{Address: t.Address, Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
 				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Reload: t.Reload, Keep: t.Keep,
 				Parent: parent, Inherit: t.Inherit, Env: t.Env}); err != nil {
-				report.Fail(err)
-				return 1
+				return failErr(err)
 			}
 			out.Content = append(out.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: n}, &value)
 		}
 		enc := yaml.NewEncoder(os.Stdout)
 		enc.SetIndent(2)
 		if err := enc.Encode(out); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		return 0
 	}
@@ -366,8 +364,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 	}
 	projectDir, vars, secrets, err := cli.TraceEnv(cwd, os.Environ(), names)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if show {
 		secrets = nil
@@ -486,8 +483,7 @@ func debugLabels(st style, projectDir string, color bool) int {
 	}
 	labels, err := cli.DevopsyLabels(projectDir)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	fmt.Println(st.head("Labels devopsy reads, on compose services:"))
 	for _, l := range [][2]string{
@@ -589,8 +585,7 @@ func debugHost(st style, projectDir string) {
 func debugImports(st style, color bool) int {
 	host, err := cli.Running()
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	states := host.ImportStates()
 	fmt.Println(st.head("Imports of the compose projects running on this host:"))

@@ -92,13 +92,11 @@ func runLocalReload(cwd string, args []string, color bool) int {
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	step, err := reloadStep(projectDir)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	a := reloadArgs(step)
 	if step != "" {

@@ -109,8 +109,7 @@ func runStdinGuard() int {
 		report.Error(fmt.Sprintf("nothing came for %s: the session is gone", dataQuiet()))
 		return 1
 	case err != nil:
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }

@@ -606,8 +606,7 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 		return fail(fmt.Sprintf("@%s is not a child: no parent: in its config", t.Address))
 	}
 	if t.ParentErr != nil {
-		report.Fail(t.ParentErr)
-		return 1
+		return failErr(t.ParentErr)
 	}
 	p := t.ParentTarget
 	job := &syncJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
@@ -693,8 +692,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	p := t.ParentTarget
 	if from == "" && t.ParentErr != nil {
-		report.Fail(t.ParentErr, report.Fix("sync from an address instead:", "devopsy @"+targetRef(t)+" "+flag+" --from "+parentGuess(t)))
-		return 1
+		return failErr(t.ParentErr, report.Fix("sync from an address instead:", "devopsy @"+targetRef(t)+" "+flag+" --from "+parentGuess(t)))
 	}
 	if from != "" {
 		var err error
@@ -713,8 +711,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			confirm = typeToGoOn(fmt.Sprintf("this throws away all of @%s's data (%s:%s: every container and volume, all of shared/mnt, data no copy carries included; shared/.env stays) and copies @%s's (%s:%s) into it, then reruns its release's run step there", t.Address, t.Host, t.Path, p.Address, p.Host, p.Path), confirmWord(t), "nothing reset", false)
 		}
 		if err := confirm; err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 
@@ -961,8 +958,7 @@ func buildUtilImage(ctx context.Context, refresh bool) error {
 // a script about to use the image.
 func runUtilImage() int {
 	if err := ensureUtilImage(context.Background()); err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }
@@ -1301,10 +1297,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 		}
 		if missing, ok := copiesService(ctx, projectDir, services, streams, mark, childDirs, childVols); !ok {
 			ref := os.Getenv(remote.SyncToTargetEnv)
-			var fixes []report.Remedy
-			for _, f := range remote.ImportFixes(ref, mark, true) {
-				fixes = append(fixes, report.Fix(f[0], f[1]))
-			}
+			fixes := report.FixPairs(remote.ImportFixes(ref, mark, true))
 			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
 			if len(missing) > 0 {
 				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy " + strings.Join(missing, ", ") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
@@ -2676,8 +2669,7 @@ func childPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []
 	// is the parent's to say: one there is refused too, said.
 	if os.Getenv(remote.SyncResetEnv) == "" {
 		if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied (or start the child over without it: devopsy @"+cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")+" --reset)"); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	// The volumes a copy writes into, made when missing (a first

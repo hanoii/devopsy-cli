@@ -82,6 +82,15 @@ type Remedy struct {
 // commands say it all), cmds are shown after CmdMark, to copy.
 func Fix(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds} }
 
+// FixPairs is one Remedy per text and command to copy.
+func FixPairs(pairs [][2]string) []Remedy {
+	var rs []Remedy
+	for _, f := range pairs {
+		rs = append(rs, Fix(f[0], f[1]))
+	}
+	return rs
+}
+
 // Lines formats msg at level l: msg's first line after Head(l), then
 // msg's other lines, the details and the fixes, each on a Bar line
 // (every string split at its newlines). One fix reads "to fix it:" and

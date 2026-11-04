@@ -37,12 +37,11 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return fail(err.Error())
 	}
 	if c.Defaults == nil || c.Defaults.Release == nil {
-		report.Fail(report.Errorf([]string{
+		return failErr(report.Errorf([]string{
 			"without a target, --release runs the release steps under defaults: in .devopsy/config.yaml, in place",
 		}, "the project has no release steps under defaults:"),
 			report.Fix("add them to .devopsy/config.yaml, like:\ndefaults:\n  release: {prepare: secrets, run: deploy}"),
 			report.Fix("release to a target instead:", "devopsy @<target> --release"))
-		return 1
 	}
 	steps := c.Defaults.Release
 	// Every step runs here: a command that only runs on a target says so
@@ -96,8 +95,7 @@ func runInPlace(root, phase string, a []string) int {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode()
 		}
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }
@@ -150,8 +148,7 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 		}
 		if err := typeToGoOn(fmt.Sprintf("this %stakes %s's containers, volumes and built images down and empties %s", what, name, filepath.Join(projectDir, "mnt")),
 			name, "nothing removed", false); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	return destroyData(root, step, color)
@@ -187,8 +184,7 @@ func runDestroyData(cwd string, args []string, color bool) int {
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	step, err := destroyStep(projectDir)
 	if err != nil {
@@ -209,8 +205,7 @@ func runReleaseInherit(cwd string, args []string) int {
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	t, err := remote.ReleaseEnvironment(projectDir)
 	if err != nil {
