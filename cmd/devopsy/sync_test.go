@@ -2876,6 +2876,12 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries db, which app neither bind-mounts from mnt (storage) nor mounts as a volume (none): nothing imported") {
 		t.Errorf("foreign entry (%d):\n%s", code, errs)
 	}
+	// An empty tar is a tar: what it does is the extraction's, never the
+	// import hook's, however few entries it carries.
+	if _, errs, _ := s.runIO(nil, tarOf(t, nil), "--import", "app"); !strings.Contains(errs, "importing app: mnt/") || strings.Contains(errs, "capabilities/data/import") {
+		t.Errorf("an empty tar:\n%s", errs)
+	}
+	s.logs()
 	if _, errs, code := s.runIO([]string{"FAKE_APP_EXCLUDE=storage"}, tarOf(t, map[string]string{"storage/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries storage, which app's "+cli.DataExcludeLabel+" leaves out here: nothing imported") {
 		t.Errorf("an excluded entry (%d):\n%s", code, errs)
 	}

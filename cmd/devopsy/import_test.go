@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -261,6 +262,53 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	}
 	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {
 		t.Errorf("the next import (%d), record %q, stopped %v:\n%s", code, s.record(), s.stopped(), out)
+	}
+}
+
+// What a tar carries against the service's labels: a name in mnt, a volume,
+// or the refusal.
+func TestImportEntries(t *testing.T) {
+	t.Parallel()
+	s := cli.SyncService{Name: "app", Dirs: []string{"storage"}, Excluded: []string{"private"}, Volumes: []cli.Volume{{Key: "dbdata"}}}
+	for _, c := range []struct {
+		name, member string
+		names        []string
+		volume       string
+		refused      string
+	}{
+		{name: "an entry in mnt", member: "storage/x", names: []string{"storage"}},
+		{name: "a volume", member: "dbdata/x", volume: "dbdata"},
+		{name: "a volume as a file", member: "dbdata", refused: "the tar carries dbdata as a file, and it is the volume dbdata here: nothing imported"},
+		{name: "excluded", member: "private/x", refused: "the tar carries private, which app's " + cli.DataExcludeLabel + " leaves out here: nothing imported"},
+		{name: "foreign", member: "other/x", refused: "the tar carries other, which app neither bind-mounts from mnt (storage) nor mounts as a volume (dbdata): nothing imported"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			entries, err := tarEntriesIn(bytes.NewReader(tarOf(t, map[string]string{c.member: "x"})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			names, err := importEntries(entries, s, []cli.SyncService{s})
+			if c.refused != "" {
+				if err == nil || err.Error() != c.refused {
+					t.Errorf("refusal %v, want %q", err, c.refused)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(names, c.names) {
+				t.Errorf("names %v, want %v", names, c.names)
+			}
+			got := ""
+			if entries[0].volume != nil {
+				got = entries[0].volume.Key
+			}
+			if got != c.volume {
+				t.Errorf("volume %q, want %q", got, c.volume)
+			}
+		})
 	}
 }
 
