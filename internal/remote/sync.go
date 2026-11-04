@@ -995,6 +995,11 @@ export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(pro
   # A devopsy killed outright leaves its spool too, which only the next
   # import, --resolved or sync would remove.
   rm -f "$base/` + StreamSpoolPrefix + `"` + Quote(service) + `.*
+  # Past its mark nothing else stops what runs on the data: a release is
+  # refused before anything would, so only the next import of the service.
+  if [ "$im_status" -gt 128 ] && [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteImport + ` ]; then
+    ` + devopsyCall(projectName, []string{"--sync-services", "end-import", service}, false) + ` || devopsy --say warning "ending the import failed ($?): what ran on its data may still run"
+  fi
 ` + killedSays(t, projectName, "im_status", "nothing imported") + `  exit "$im_status"
 }
 `
