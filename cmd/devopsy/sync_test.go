@@ -1459,6 +1459,31 @@ func TestSyncParentRestoreFails(t *testing.T) {
 	}
 }
 
+// A push's copy order: the parent is never down through an import, the
+// child's last write is the one its holder waits for, and from a clone the
+// rsync comes last, the exports before the start only when what is stopped
+// must be of one moment with them.
+func TestCopyOrder(t *testing.T) {
+	t.Parallel()
+	files, export, start, imports := copyStep{do: copyFilesStep}, copyStep{do: exportStep}, copyStep{do: startStep}, copyStep{do: importStep}
+	last := func(s copyStep) copyStep { s.last = true; return s }
+	for _, c := range []struct {
+		name                  string
+		cloned, held, streams bool
+		want                  []copyStep
+	}{
+		{"files alone", false, false, false, []copyStep{last(files), export, start, last(imports)}},
+		{"held makes no difference without a clone", false, true, false, []copyStep{last(files), export, start, last(imports)}},
+		{"files and streams", false, false, true, []copyStep{files, export, start, last(imports)}},
+		{"a clone, held", true, true, true, []copyStep{export, start, imports, last(files)}},
+		{"a clone, not held", true, false, true, []copyStep{start, {do: exportStep, nothingStopped: true}, imports, last(files)}},
+	} {
+		if got := copyOrder(c.cloned, c.held, c.streams); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
 // A failing finish parent abort is said by devopsy too, naming its word:
 // the sync has failed already, and the hook's own failure must not pass
 // without a line.

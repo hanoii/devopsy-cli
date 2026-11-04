@@ -1127,15 +1127,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	}
 	// The child's side writes remote.SyncStartedFile before its first
 	// change and SyncDoneFile after the last (the rsync's or the last
-	// import's): what its holder decides from, answer or not. Every stream
-	// is exported into the child's spools first, then the parent's
-	// services start, then the child imports them: an import reads its
-	// spool, never the parent, so the parent is not down through a load.
-	// From a clone the rsync comes last, and the exports come before the
-	// start only when the set holds a stream or a service stopped for
-	// every copy (always: down while another's data is exported, so its
-	// files and the dump are of one moment); after it otherwise, told
-	// nothing is stopped.
+	// import's): what its holder decides from, answer or not.
 	copyFiles := func(last bool) {
 		if code == 0 && len(dirs)+len(vols) > 0 {
 			if ctx.Err() != nil {
@@ -1176,39 +1168,64 @@ func runSyncPush(cwd string, args []string, color bool) int {
 			}
 		}
 	}
-	restored := false
 	var restoreErr error
-	restore := func() {
-		restored = true
-		if err := restoreServices(cwd, services, restoreOpts{fallback: cli.StoppedNames(set)}); err != nil {
-			restoreErr = err
-		}
-	}
-	if !cloned {
-		copyFiles(len(streams) == 0)
-	}
-	if !cloned || slices.ContainsFunc(stopped, func(name string) bool {
+	for _, step := range copyOrder(cloned, slices.ContainsFunc(stopped, func(name string) bool {
 		s, _ := cli.SyncFind(services, name)
 		return slices.Contains(streams, name) || s.Stop == cli.StopAlways
-	}) {
-		exportStreams(env)
-		restore()
-	} else {
-		restore()
-		exportStreams(dataHookEnv(services, nil))
-	}
-	importStreams(!cloned)
-	if cloned {
-		copyFiles(true)
+	}), len(streams) > 0) {
+		switch step.do {
+		case copyFilesStep:
+			copyFiles(step.last)
+		case exportStep:
+			if step.nothingStopped {
+				exportStreams(dataHookEnv(services, nil))
+			} else {
+				exportStreams(env)
+			}
+		case startStep:
+			restoreErr = restoreServices(cwd, services, restoreOpts{fallback: cli.StoppedNames(set)})
+		case importStep:
+			importStreams(step.last)
+		}
 	}
 	copied := code == 0
-	if !restored {
-		restore()
-	}
 	if restoreErr != nil {
 		code = fail(restoreErr.Error())
 	}
 	return finish(code, copied)
+}
+
+// A copy's steps, in the order copyOrder gives them.
+const (
+	copyFilesStep = iota
+	exportStep
+	startStep
+	importStep
+)
+
+// copyStep is one step of a push's copy: last says it is the child's last
+// write, nothingStopped that an export runs told nothing is stopped.
+type copyStep struct {
+	do                   int
+	last, nothingStopped bool
+}
+
+// copyOrder is the order of a push's copy. Every stream is exported into
+// the child's spools first, then the parent's services start, then the
+// child imports them: an import reads its spool, never the parent, so the
+// parent is not down through a load. From a clone the rsync comes last, and
+// the exports come before the start only when the set holds a stream or a
+// service stopped for every copy (held: down while another's data is
+// exported, so its files and the dump are of one moment); after it
+// otherwise, told nothing is stopped.
+func copyOrder(cloned, held, streams bool) []copyStep {
+	if !cloned {
+		return []copyStep{{do: copyFilesStep, last: !streams}, {do: exportStep}, {do: startStep}, {do: importStep, last: true}}
+	}
+	if held {
+		return []copyStep{{do: exportStep}, {do: startStep}, {do: importStep}, {do: copyFilesStep, last: true}}
+	}
+	return []copyStep{{do: startStep}, {do: exportStep, nothingStopped: true}, {do: importStep}, {do: copyFilesStep, last: true}}
 }
 
 // pushInputs is what a push copies, as its checks read it.
