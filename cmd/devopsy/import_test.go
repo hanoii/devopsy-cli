@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -189,7 +190,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 	s.logs()
 
 	// One whose restore fails keeps both.
-	if _, errs, code := s.runIO(append(s.env, "FAIL_START=shop-prod"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || s.mark() == nil || s.record() == "" {
+	if _, errs, code := s.runIO(append(s.env, "FAIL_START=shop-prod"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || s.mark() == nil || s.record() == "" || !strings.Contains(errs, "the import completed, and what it stopped did not all come back: the mark stays until it does") {
 		t.Errorf("a complete import whose restore fails (%d), mark %+v, record %q:\n%s", code, s.mark(), s.record(), errs)
 	}
 	// The retry, complete: what the record holds starts (db up alone for
@@ -261,6 +262,93 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	}
 	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {
 		t.Errorf("the next import (%d), record %q, stopped %v:\n%s", code, s.record(), s.stopped(), out)
+	}
+}
+
+// What a tar carries against the service's labels: a name in mnt, a volume,
+// or the refusal.
+func TestImportEntries(t *testing.T) {
+	t.Parallel()
+	s := cli.SyncService{Name: "app", Dirs: []string{"storage"}, Excluded: []string{"private"}, Volumes: []cli.Volume{{Key: "dbdata"}}}
+	for _, c := range []struct {
+		name, member string
+		names        []string
+		volume       string
+		refused      string
+	}{
+		{name: "an entry in mnt", member: "storage/x", names: []string{"storage"}},
+		{name: "a volume", member: "dbdata/x", volume: "dbdata"},
+		{name: "a volume as a file", member: "dbdata", refused: "the tar carries dbdata as a file, and it is the volume dbdata here: nothing imported"},
+		{name: "excluded", member: "private/x", refused: "the tar carries private, which app's " + cli.DataExcludeLabel + " leaves out here: nothing imported"},
+		{name: "foreign", member: "other/x", refused: "the tar carries other, which app neither bind-mounts from mnt (storage) nor mounts as a volume (dbdata): nothing imported"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			entries, err := tarEntriesIn(bytes.NewReader(tarOf(t, map[string]string{c.member: "x"})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			names, err := importEntries(entries, s, []cli.SyncService{s})
+			if c.refused != "" {
+				if err == nil || err.Error() != c.refused {
+					t.Errorf("refusal %v, want %q", err, c.refused)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(names, c.names) {
+				t.Errorf("names %v, want %v", names, c.names)
+			}
+			got := ""
+			if entries[0].volume != nil {
+				got = entries[0].volume.Key
+			}
+			if got != c.volume {
+				t.Errorf("volume %q, want %q", got, c.volume)
+			}
+		})
+	}
+}
+
+// A Ctrl-C while stdin is still coming imports nothing: no stop, no spool
+// left, its words.
+func TestImportInterruptedReadingStdin(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	cmd := exec.Command(binary, "--import", "app")
+	cmd.Dir, cmd.Env, cmd.Stdin = s.project, s.env, r
+	var errs bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &errs, &errs
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(startWait); len(importSpools(s.dot)) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("no spool:\n%s", errs.String())
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	// Bounded: stdin stays open, so an interrupt that does nothing would
+	// hang here, and the package's results with it.
+	timer := time.AfterFunc(10*time.Second, func() { _ = cmd.Process.Kill() })
+	defer timer.Stop()
+	_ = cmd.Wait()
+	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "interrupted while reading stdin: nothing imported") || len(importSpools(s.dot)) != 0 {
+		t.Errorf("a Ctrl-C reading stdin (%d), spools %v:\n%s", code, importSpools(s.dot), errs.String())
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
+		t.Errorf("stopped something:\n%s", docker)
 	}
 }
 

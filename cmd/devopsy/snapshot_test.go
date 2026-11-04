@@ -3879,3 +3879,36 @@ func TestKilledRestoreBeforeFirstWriteStartsSet(t *testing.T) {
 		t.Errorf("killed before its first write: %q left down, record %q, said:\n%s", down, readString(filepath.Join(base, ".devopsy-sync.services")), out)
 	}
 }
+
+// A --no-code restore runs the current release's run step again
+// (--release-steps release run, as a sync's holder does), so on a release
+// cut off past its switch (ActivatingFile) it removes the mark once that
+// run step went through, as the sync's run step does: the release has had
+// its run step, and neither --status nor the next --reload (cutRefusal)
+// may still take it for cut.
+func TestNoCodeRestoreCut(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	s.logs()
+	base := filepath.Join(s.root, "shop", "prod")
+	id := strings.TrimPrefix(s.current("prod"), "releases/")
+	cut := filepath.Join(base, remote.ActivatingFile)
+	write(t, cut, id+"\trelease\t\t\n", 0o644)
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 || !strings.Contains(out, "deploy in shop-prod") {
+		t.Fatalf("the --no-code restore (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(cut); err == nil {
+		t.Errorf("the cut release's run step ran (the restore's), and it still counts as cut:\n%s", out)
+	}
+	reload, rcode := s.run(nil, "@prod", "--reload")
+	if rcode != 0 || strings.Contains(reload, "cut off past its switch") {
+		t.Errorf("the reload after the restore's run step is refused (%d):\n%s", rcode, reload)
+	}
+}

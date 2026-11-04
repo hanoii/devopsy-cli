@@ -401,7 +401,7 @@ func TestCutRollbackFinishedLogSaved(t *testing.T) {
 // run step fails), but everything before its switch that means "current"
 // reads $prev too: a failure there says "nothing changed: current is
 // still <the release the cut rollback left>", while current is the cut
-// rollback's target (internal/remote/remote.go, RollbackNotLive after
+// rollback's target (internal/remote/activate.go, RollbackNotLive after
 // the cut check); img undo --rollback there puts that release's own
 // names back as if it were current.
 func TestCutRollbackFinishingSaysCurrent(t *testing.T) {
