@@ -2413,13 +2413,13 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 				}
 			}
 			for _, v := range s.Volumes {
-				if _, ok := m.volumes[v.Key]; ok || slices.Contains(bad, "the volume "+v.Key) {
+				if _, ok := m.volumes[v.Key]; ok || slices.Contains(bad, "volume "+v.Key) {
 					continue
 				}
 				if there, err := volumeExists(ctx, v.Name); err != nil {
 					return fail(err.Error() + ": nothing restored")
 				} else if there {
-					bad = append(bad, "the volume "+v.Key)
+					bad = append(bad, "volume "+v.Key)
 				}
 			}
 		}
