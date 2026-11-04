@@ -331,11 +331,7 @@ func TestImportInterruptedReadingStdin(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	spools := func() []string {
-		m, _ := filepath.Glob(filepath.Join(s.dot, ".devopsy-sync.stream.*"))
-		return m
-	}
-	for deadline := time.Now().Add(startWait); len(spools()) == 0; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(startWait); len(importSpools(s.dot)) == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
@@ -343,9 +339,13 @@ func TestImportInterruptedReadingStdin(t *testing.T) {
 		}
 	}
 	_ = cmd.Process.Signal(syscall.SIGINT)
+	// Bounded: stdin stays open, so an interrupt that does nothing would
+	// hang here, and the package's results with it.
+	timer := time.AfterFunc(10*time.Second, func() { _ = cmd.Process.Kill() })
+	defer timer.Stop()
 	_ = cmd.Wait()
-	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "interrupted while reading stdin: nothing imported") || len(spools()) != 0 {
-		t.Errorf("a Ctrl-C reading stdin (%d), spools %v:\n%s", code, spools(), errs.String())
+	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "interrupted while reading stdin: nothing imported") || len(importSpools(s.dot)) != 0 {
+		t.Errorf("a Ctrl-C reading stdin (%d), spools %v:\n%s", code, importSpools(s.dot), errs.String())
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
 		t.Errorf("stopped something:\n%s", docker)

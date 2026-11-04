@@ -2636,6 +2636,12 @@ func (s *syncSetup) runIO(extra []string, stdin []byte, args ...string) (stdout 
 	return o.Bytes(), e.String(), cmd.ProcessState.ExitCode()
 }
 
+// importSpools are the import spools left in dir.
+func importSpools(dir string) []string {
+	m, _ := filepath.Glob(filepath.Join(dir, ".devopsy-sync.stream.*"))
+	return m
+}
+
 // tarOf is a tar of files (path: content), directories implied.
 func tarOf(t *testing.T, files map[string]string) []byte {
 	t.Helper()
@@ -2672,10 +2678,6 @@ func TestExportImport(t *testing.T) {
 	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME custom=$DEVOPSY_DATA_CUSTOM stop=$DEVOPSY_DATA_STOP\"\n", 0o755)
 	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
 	env := []string{"FAKE_IMPORTED=" + imported}
-	spools := func(dir string) []string {
-		m, _ := filepath.Glob(filepath.Join(dir, ".devopsy-sync.stream.*"))
-		return m
-	}
 
 	// A stream, own: stopped around the export with what depends on it,
 	// said with why, its stdout the data.
@@ -2696,7 +2698,7 @@ func TestExportImport(t *testing.T) {
 	if docker, _ := s.logs(); strings.Contains(docker, "up -d --wait db") || !strings.Contains(docker, " stop db") {
 		t.Errorf("stopped stream import:\n%s", docker)
 	}
-	if m := spools(s.dot); len(m) > 0 {
+	if m := importSpools(s.dot); len(m) > 0 {
 		t.Errorf("spools left: %v", m)
 	}
 	os.Remove(imported)
@@ -2876,19 +2878,19 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries db, which app neither bind-mounts from mnt (storage) nor mounts as a volume (none): nothing imported") {
 		t.Errorf("foreign entry (%d):\n%s", code, errs)
 	}
-	// An empty tar is a tar: what it does is the extraction's, never the
-	// import hook's, however few entries it carries.
-	if _, errs, _ := s.runIO(nil, tarOf(t, nil), "--import", "app"); !strings.Contains(errs, "importing app: mnt/") || strings.Contains(errs, "capabilities/data/import") {
-		t.Errorf("an empty tar:\n%s", errs)
-	}
-	s.logs()
 	if _, errs, code := s.runIO([]string{"FAKE_APP_EXCLUDE=storage"}, tarOf(t, map[string]string{"storage/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries storage, which app's "+cli.DataExcludeLabel+" leaves out here: nothing imported") {
 		t.Errorf("an excluded entry (%d):\n%s", code, errs)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-import-") && strings.Contains(docker, "sh -c") {
 		t.Errorf("extracted a refused tar:\n%s", docker)
 	}
-	if m := spools(s.dot); len(m) > 0 {
+	// An empty tar is a tar: what it does is the extraction's, never the
+	// import hook's, however few entries it carries.
+	if _, errs, _ := s.runIO(nil, tarOf(t, nil), "--import", "app"); !strings.Contains(errs, "importing app: mnt/") || strings.Contains(errs, "capabilities/data/import") {
+		t.Errorf("an empty tar:\n%s", errs)
+	}
+	s.logs()
+	if m := importSpools(s.dot); len(m) > 0 {
 		t.Errorf("spools left: %v", m)
 	}
 	// A tar whose members reach past the entries it names is refused
@@ -3038,7 +3040,7 @@ func TestExportImport(t *testing.T) {
 	if docker, _ := s.logs(); !strings.Contains(docker, " stop db app") || strings.Contains(docker, " start ") {
 		t.Errorf("failing import, db and app restarted:\n%s", docker)
 	}
-	if m := spools(s.dot); len(m) > 0 {
+	if m := importSpools(s.dot); len(m) > 0 {
 		t.Errorf("spools left after a failing import: %v", m)
 	}
 	if fileExists(filepath.Join(s.project, remote.SyncIncompleteFile)) || fileExists(filepath.Join(s.dot, remote.SyncIncompleteFile)) {
@@ -3160,7 +3162,7 @@ func TestExportImport(t *testing.T) {
 	if docker, _ := s.logs(); !strings.Contains(docker, "flock -n 9\n") || strings.Contains(docker, "flock -n -s 9") {
 		t.Errorf("@prod --import lock:\n%s", docker)
 	}
-	if m := spools(filepath.Join(s.root, "shop", "prod")); len(m) > 0 {
+	if m := importSpools(filepath.Join(s.root, "shop", "prod")); len(m) > 0 {
 		t.Errorf("spools left on the server: %v", m)
 	}
 	// The server's side only imports what ends with the end line, found
