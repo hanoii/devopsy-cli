@@ -2477,43 +2477,11 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	base := filepath.Dir(cwd)
 	set := cli.DataStops(services, cli.SyncChild, "")
 	// The hooks' DEVOPSY_DATA_STOP: the labels' set, but what the record
-	// says is down at finish child partial and settle.
+	// says is down at finish child partial and settle (recordHookEnv).
 	env := dataHookEnv(services, cli.StoppedNames(set))
-	recordEnv := func() []string {
-		rec, _ := readSyncRecord(cwd)
-		return dataHookEnv(services, rec.stops)
-	}
 	switch args[0] {
 	case "list":
-		states, err := serviceStates(cwd)
-		if err != nil {
-			return fail(err.Error())
-		}
-		// Two owners on one entry would leave the parent to pick one.
-		if _, err := cli.MntOwners(services); err != nil {
-			return fail(err.Error())
-		}
-		for _, s := range services {
-			reflink := ""
-			if s.Reflink {
-				reflink = listReflink
-			}
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink)
-		}
-		if m := readMark(base); m.IsImport() {
-			fmt.Printf("%s\t%s\n", listMark, m.From)
-		} else if m.IsRestore() {
-			// The services the snapshot holds data of, each line one: all
-			// of it a sync must copy to clear the mark.
-			mf, err := readManifest(filepath.Join(snapshotPathsOf(cwd).snaps, m.From))
-			if err != nil {
-				return fail("the snapshot a restore's mark names (" + m.From + "): " + err.Error())
-			}
-			for _, ms := range mf.services {
-				fmt.Printf("%s\t%s\t%s\t%s\n", listRestore, ms.name, strings.Join(ms.entries, " "), strings.Join(ms.volumes, " "))
-			}
-		}
-		return 0
+		return syncList(cwd, base, services)
 	case "import":
 		return syncImport(cwd, projectDir, base, args[1], len(args) == 3, services, set, env)
 	case "wipe":
@@ -2526,118 +2494,171 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	// A session gone is no reason to die halfway: the holder restores
 	// what this stopped.
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
-	// settle marks an environment whose sync's files no holder decided
-	// on: its data may be anything from untouched to complete, never
-	// finished by finish child go.
-	settle := func() int {
-		// What a take killed outright left stopped starts again first,
-		// unless the environment is marked.
-		if err := settleStops(cwd, base); err != nil {
-			return fail(err.Error())
-		}
-		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
-		if !fileExists(started) && !fileExists(taken) {
-			return 0
-		}
-		report.Info("an earlier sync into " + base + " left its files (its holder was killed before it was done): its data counts as a partial copy")
-		code := 0
-		// Taken first, as a holder deciding would: nothing appends any
-		// more, and what its record names is ended before anything else.
-		if fileExists(started) {
-			_ = os.Rename(started, taken)
-		}
-		if err := endWriters(cwd, base, services); err != nil {
-			code = fail(err.Error())
-		}
-		// A holder killed after marking it said why already; an import's
-		// mark is replaced: the data is partly a sync's now.
-		if err := markIncomplete(base, "", remote.IncompleteSettled, "a sync's holder ended before it decided: the data may be anything from untouched to complete", true); err != nil {
-			code = fail(err.Error())
-		}
-		_ = os.Remove(taken)
-		gates, _ := filepath.Glob(filepath.Join(base, remote.SyncOpenPrefix+"*"))
-		for _, g := range gates {
-			_ = os.Remove(g)
-		}
-		syncLeftovers(base)
-		if err := runDataHook(context.Background(), cwd, projectDir, recordEnv(), nil, nil, nil, "finish", "child", "partial"); err != nil {
-			code = fail("the data capability's finish child partial: " + err.Error())
-		}
-		return code
+	switch args[0] {
+	case "settle":
+		return syncSettle(cwd, projectDir, base, services)
+	case "prepare":
+		return syncPrepare(cwd, projectDir, base, services, set, env, len(args) == 2)
 	}
-	if args[0] == "settle" {
-		return settle()
+	return syncFinish(cwd, projectDir, base, services, set, env, args[1])
+}
+
+// recordHookEnv is the hooks' environment with what the record says is down.
+func recordHookEnv(cwd string, services []cli.SyncService) []string {
+	rec, _ := readSyncRecord(cwd)
+	return dataHookEnv(services, rec.stops)
+}
+
+// syncList prints the child's services for the parent's push, and its mark.
+func syncList(cwd, base string, services []cli.SyncService) int {
+	states, err := serviceStates(cwd)
+	if err != nil {
+		return fail(err.Error())
 	}
-	if args[0] == "prepare" {
-		if code := settle(); code != 0 {
-			return code
+	// Two owners on one entry would leave the parent to pick one.
+	if _, err := cli.MntOwners(services); err != nil {
+		return fail(err.Error())
+	}
+	for _, s := range services {
+		reflink := ""
+		if s.Reflink {
+			reflink = listReflink
 		}
-		// The child refuses before anything stops anywhere: its holder
-		// runs this before the parent's push starts.
-		// The record first: whatever fails from here, finish abort then
-		// restores only what this sync stopped. A child without any
-		// container is on its first release, said in the record now:
-		// imports create containers before finish looks.
-		states, err := serviceStates(cwd)
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink)
+	}
+	if m := readMark(base); m.IsImport() {
+		fmt.Printf("%s\t%s\n", listMark, m.From)
+	} else if m.IsRestore() {
+		// The services the snapshot holds data of, each line one: all
+		// of it a sync must copy to clear the mark.
+		mf, err := readManifest(filepath.Join(snapshotPathsOf(cwd).snaps, m.From))
 		if err != nil {
-			return fail(err.Error())
+			return fail("the snapshot a restore's mark names (" + m.From + "): " + err.Error())
 		}
-		// A release with nothing current says so: a first one that
-		// failed may have left containers (an import's).
-		if err := startSyncState(cwd, len(states) == 0 || len(args) == 2); err != nil {
-			return fail(err.Error())
+		for _, ms := range mf.services {
+			fmt.Printf("%s\t%s\t%s\t%s\n", listRestore, ms.name, strings.Join(ms.entries, " "), strings.Join(ms.volumes, " "))
 		}
-		// An import a killed devopsy left may still load: ended, and what
-		// it stops recorded, before anything streams into it; a restore's
-		// extracting containers likewise.
-		if m := readMark(base); m.IsImport() {
-			if err := endLeftoverImport(cwd, base, services, m.From); err != nil {
-				return fail(err.Error())
-			}
-		} else if m.IsRestore() {
-			if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
-				return fail(err.Error())
-			}
-		}
-		if streams, _ := cli.SyncCustomServices(services); len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "import")) {
-			return fail(fmt.Sprintf("%s labeled %s=%s: the child's release needs an executable .devopsy/capabilities/%s/import", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
-		}
-		if err := runDataHook(context.Background(), cwd, projectDir, env, nil, nil, nil, "prepare", "child"); err != nil {
-			return fail("the data capability's prepare child: " + err.Error())
-		}
-		// What depends on the child's data services and runs on during
-		// the copy, unlabeled: named (the parent's labels say what is
-		// copied, unknown here).
-		var data []string
-		for _, s := range services {
-			if s.Copies() {
-				data = append(data, s.Name)
-			}
-		}
-		dependentNotices(cwd, services, data, set)
-		// A link in the child's data making a bind source lead out of its
-		// entry would have finish go refuse the copy, the parent stopped
-		// for nothing: refused before anything stops (review), but under
-		// --reset, whose wipe removes it. Which entries the copy replaces
-		// is the parent's to say: one there is refused too, said.
-		if os.Getenv(remote.SyncResetEnv) == "" {
-			if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied (or start the child over without it: devopsy @"+cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")+" --reset)"); err != nil {
-				report.Fail(err)
-				return 1
-			}
-		}
-		// The volumes a copy writes into, made when missing (a first
-		// release, a volume added since) as compose would: the parent's
-		// rsync never makes one.
-		if err := ensureVolumes(context.Background(), composeName(cwd), copiedVolumes(services)); err != nil {
-			return fail(err.Error())
-		}
-		if _, err := stopServices(cwd, set); err != nil {
-			return fail(err.Error())
-		}
+	}
+	return 0
+}
+
+// syncSettle marks an environment whose sync's files no holder decided
+// on: its data may be anything from untouched to complete, never
+// finished by finish child go.
+func syncSettle(cwd, projectDir, base string, services []cli.SyncService) int {
+	// What a take killed outright left stopped starts again first,
+	// unless the environment is marked.
+	if err := settleStops(cwd, base); err != nil {
+		return fail(err.Error())
+	}
+	started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
+	if !fileExists(started) && !fileExists(taken) {
 		return 0
 	}
-	word, code := args[1], 0
+	report.Info("an earlier sync into " + base + " left its files (its holder was killed before it was done): its data counts as a partial copy")
+	code := 0
+	// Taken first, as a holder deciding would: nothing appends any
+	// more, and what its record names is ended before anything else.
+	if fileExists(started) {
+		_ = os.Rename(started, taken)
+	}
+	if err := endWriters(cwd, base, services); err != nil {
+		code = fail(err.Error())
+	}
+	// A holder killed after marking it said why already; an import's
+	// mark is replaced: the data is partly a sync's now.
+	if err := markIncomplete(base, "", remote.IncompleteSettled, "a sync's holder ended before it decided: the data may be anything from untouched to complete", true); err != nil {
+		code = fail(err.Error())
+	}
+	_ = os.Remove(taken)
+	gates, _ := filepath.Glob(filepath.Join(base, remote.SyncOpenPrefix+"*"))
+	for _, g := range gates {
+		_ = os.Remove(g)
+	}
+	syncLeftovers(base)
+	if err := runDataHook(context.Background(), cwd, projectDir, recordHookEnv(cwd, services), nil, nil, nil, "finish", "child", "partial"); err != nil {
+		code = fail("the data capability's finish child partial: " + err.Error())
+	}
+	return code
+}
+
+// syncPrepare readies the child for a copy, settling first; first says the
+// release has nothing current. Whatever fails, finish abort restores only
+// what it stopped.
+func syncPrepare(cwd, projectDir, base string, services []cli.SyncService, set []cli.Stopped, env []string, first bool) int {
+	if code := syncSettle(cwd, projectDir, base, services); code != 0 {
+		return code
+	}
+	// The child refuses before anything stops anywhere: its holder
+	// runs this before the parent's push starts.
+	// The record first: whatever fails from here, finish abort then
+	// restores only what this sync stopped. A child without any
+	// container is on its first release, said in the record now:
+	// imports create containers before finish looks.
+	states, err := serviceStates(cwd)
+	if err != nil {
+		return fail(err.Error())
+	}
+	// A release with nothing current says so: a first one that
+	// failed may have left containers (an import's).
+	if err := startSyncState(cwd, len(states) == 0 || first); err != nil {
+		return fail(err.Error())
+	}
+	// An import a killed devopsy left may still load: ended, and what
+	// it stops recorded, before anything streams into it; a restore's
+	// extracting containers likewise.
+	if m := readMark(base); m.IsImport() {
+		if err := endLeftoverImport(cwd, base, services, m.From); err != nil {
+			return fail(err.Error())
+		}
+	} else if m.IsRestore() {
+		if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
+			return fail(err.Error())
+		}
+	}
+	if streams, _ := cli.SyncCustomServices(services); len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "import")) {
+		return fail(fmt.Sprintf("%s labeled %s=%s: the child's release needs an executable .devopsy/capabilities/%s/import", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
+	}
+	if err := runDataHook(context.Background(), cwd, projectDir, env, nil, nil, nil, "prepare", "child"); err != nil {
+		return fail("the data capability's prepare child: " + err.Error())
+	}
+	// What depends on the child's data services and runs on during
+	// the copy, unlabeled: named (the parent's labels say what is
+	// copied, unknown here).
+	var data []string
+	for _, s := range services {
+		if s.Copies() {
+			data = append(data, s.Name)
+		}
+	}
+	dependentNotices(cwd, services, data, set)
+	// A link in the child's data making a bind source lead out of its
+	// entry would have finish go refuse the copy, the parent stopped
+	// for nothing: refused before anything stops (review), but under
+	// --reset, whose wipe removes it. Which entries the copy replaces
+	// is the parent's to say: one there is refused too, said.
+	if os.Getenv(remote.SyncResetEnv) == "" {
+		if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied (or start the child over without it: devopsy @"+cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")+" --reset)"); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
+	// The volumes a copy writes into, made when missing (a first
+	// release, a volume added since) as compose would: the parent's
+	// rsync never makes one.
+	if err := ensureVolumes(context.Background(), composeName(cwd), copiedVolumes(services)); err != nil {
+		return fail(err.Error())
+	}
+	if _, err := stopServices(cwd, set); err != nil {
+		return fail(err.Error())
+	}
+	return 0
+}
+
+// syncFinish ends the child's side of a sync on the holder's word (go, abort
+// or partial).
+func syncFinish(cwd, projectDir, base string, services []cli.SyncService, set []cli.Stopped, env []string, word string) int {
+	code := 0
 	incomplete := filepath.Join(base, remote.SyncIncompleteFile)
 	if word == "abort" && fileExists(incomplete) {
 		// Nothing written this time, but the data is an earlier sync's
@@ -2663,7 +2684,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 				if err := markIncomplete(base, "", remote.IncompleteFinish, why, false); err != nil {
 					fail(err.Error())
 				}
-				word, hookEnv = "partial", recordEnv()
+				word, hookEnv = "partial", recordHookEnv(cwd, services)
 			}
 		}
 	}
@@ -2709,7 +2730,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			report.Info(strings.Join(rec.stops, " ") + " stay down: the data is partial until a sync completes")
 			restartAlwaysNotice(services, rec.stops)
 		}
-		hookEnv = recordEnv()
+		hookEnv = recordHookEnv(cwd, services)
 	}
 	// Whatever the word: this sync's imports took their spools.
 	syncLeftovers(base)
