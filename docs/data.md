@@ -210,11 +210,12 @@ How the stops happen:
 ## Owners
 
 A container that runs as non-root from its first process cannot write
-into `mnt` on its own, nor write what an import or a sync brings in. `shared/mnt` starts empty and belongs to the
-deploy user, Docker creates a missing bind mount's directory as root,
-and devopsy copies owners exactly (rsync and tar as root, numeric ids),
-which gives what an import or a sync brings another machine's owners. A
-service declares who owns the entries it writes:
+into `mnt` on its own, nor write what an import or a sync brings in.
+`shared/mnt` starts empty and belongs to the deploy user, Docker creates
+a missing bind mount's directory as root, and devopsy copies owners
+exactly (rsync and tar as root, numeric ids), which gives what an import
+or a sync brings another machine's owners. A service declares who owns
+the entries it writes:
 
 ```yaml
 services:

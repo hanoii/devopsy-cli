@@ -227,10 +227,10 @@ what the copy did, however devopsy went away.
 
 - Nothing written (a prepare or a check failed, the parent's stop
   failed, the first export failed with nothing to rsync): the child's
-  stopped services come back and the run step is skipped. `finish
-  child abort` runs, or `finish child partial` if an earlier sync or an
-  import had left the data partial, which then stays partial and what was down for it stays down; only
-  what this sync stopped comes back.
+  stopped services come back and the run step is skipped. `finish child
+  abort` runs, or `finish child partial` if an earlier sync or an import
+  had left the data partial, which then stays partial and what was down
+  for it stays down; only what this sync stopped comes back.
 - Written in part (the rsync or an import failed or was cut, a Ctrl-C
   mid-copy, a lost connection): the child's data is part old and part
   the parent's, so its stopped services stay down, the run step is
@@ -309,9 +309,9 @@ every container of every profile, its named volumes, and every entry of
 `shared/mnt`, including the ones no label copies (logs, an unlabeled
 service's files).
 
-Every data service's history of its images starts over with it ([Data and its
-images](images.md#data-and-its-images)). What the copy writes takes the
-parent's history, and a service the copy writes nothing for
+Every data service's history of its images starts over with it ([Data
+and its images](images.md#data-and-its-images)). What the copy writes
+takes the parent's history, and a service the copy writes nothing for
 (`copy=none`, or its entries all missing on the parent) has no version
 until a release takes its label.
 

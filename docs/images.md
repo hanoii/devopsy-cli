@@ -163,10 +163,10 @@ both are still the same tag; that limit is accepted.
 ## Rollback against restore
 
 Since a rollback brings back code alone, a rollback past a data upgrade
-(back to `mariadb:11.8` after a release of `12.1`) is refused. The refusal names three ways forward: a new
-release with the fix, the release snapshot of the older release's data
-([Release snapshots](snapshots.md#release-snapshots)), or
-`--accept-image`.
+(back to `mariadb:11.8` after a release of `12.1`) is refused. The
+refusal names three ways forward: a new release with the fix, the
+release snapshot of the older release's data ([Release
+snapshots](snapshots.md#release-snapshots)), or `--accept-image`.
 
 `--snapshots restore <id>` brings data, code and images back together
 and checks nothing. The snapshot's data and its history come back as the

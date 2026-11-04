@@ -135,9 +135,10 @@ copy carries them:
 - `DEVOPSY_DATA_STOP`: what the operation stops on that side by the
   labels. They are up again by `finish ... go|abort`, and at `finish
   child partial` they are what stays down. A stopped `custom` service is
-  in both `DEVOPSY_DATA_CUSTOM` and `DEVOPSY_DATA_STOP`. A script reaches a stopped service with
-  `devopsy run --rm --no-deps -T <service> ...` instead of `exec`, and a
-  script whose service must be running should refuse.
+  in both `DEVOPSY_DATA_CUSTOM` and `DEVOPSY_DATA_STOP`. A script
+  reaches a stopped service with `devopsy run --rm --no-deps -T
+  <service> ...` instead of `exec`, and a script whose service must be
+  running should refuse.
 
 In a sync, the actions also get `DEVOPSY_SYNC_FROM_TARGET` and
 `DEVOPSY_SYNC_TO_TARGET`, the parent's and the child's addresses. The
