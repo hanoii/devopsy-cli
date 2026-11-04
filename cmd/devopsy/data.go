@@ -1103,7 +1103,7 @@ func runImport(cwd string, args []string, color bool) int {
 	var prior syncRecord
 	if onTarget {
 		var err error
-		if prior, err = importMarkCheck(cwd, base, name, services); err != nil {
+		if prior, err = importOnTarget(cwd, base, name, services); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -1177,7 +1177,7 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
 	// Up to the first write, a failure brings back what was stopped (and
-	// a stream's up undone).
+	// a stream's up undone), as a local import's end does.
 	down := func() error { return nil }
 	before := func(code int) int {
 		if err := down(); err != nil {
@@ -1225,22 +1225,23 @@ func runImport(cwd string, args []string, color bool) int {
 			return before(fail(err.Error()))
 		}
 	}
-	run := importRun{cwd: cwd, base: base, projectDir: projectDir, name: name, spool: spool, services: services, custom: s.Copy == cli.CopyCustom, onTarget: onTarget, tar: it}
-	if err := run.write(ctx, owners, set, wasUp); err != nil {
-		err = interrupted(ctx, err)
-		return importFailed(cwd, base, name, services, stopped, onTarget, wasUp, err)
+	run := importRun{cwd: cwd, base: base, projectDir: projectDir, name: name, spool: spool, rel: rel, record: record,
+		services: services, custom: s.Copy == cli.CopyCustom, onTarget: onTarget, wasUp: wasUp,
+		tar: it, owners: owners, set: set, stopped: stopped, imgs: imgs, prior: prior}
+	if err := run.write(ctx); err != nil {
+		return run.failed(interrupted(ctx, err))
 	}
 	if !onTarget {
 		return before(0)
 	}
-	return run.complete(rel, imgs, record, prior, down, wasUp)
+	return run.complete(down)
 }
 
-// importMarkCheck is what a target's import does holding the release lock
-// before it reads stdin: the fds its children must not keep, and what an
-// earlier copy's mark refuses or left running. It returns the record as
-// the mark left it.
-func importMarkCheck(cwd, base, name string, services []cli.SyncService) (syncRecord, error) {
+// importOnTarget is what a target's import does under the release lock
+// before it reads stdin: the fds its children must not keep, composeLock,
+// the refusals of an earlier copy's mark, and an end to what a killed import
+// of this service left running. It returns the record as that leaves it.
+func importOnTarget(cwd, base, name string, services []cli.SyncService) (syncRecord, error) {
 	// The writer never holds the release lock (fd 9, from
 	// ImportScript), nor fd 8, a script's image lock should one that
 	// holds it run this: one a killed devopsy left would block every
@@ -1312,7 +1313,8 @@ type importTar struct {
 }
 
 // checkImportTar reads the spool and refuses a tar that does not fit the
-// service, before anything stops. Each error is the whole message.
+// service, before anything stops, making sure of the image that will extract
+// it on the way. Each error is the whole message.
 func checkImportTar(ctx context.Context, s cli.SyncService, services []cli.SyncService, projectDir, spool string) (importTar, error) {
 	var it importTar
 	var err error
@@ -1345,9 +1347,9 @@ func checkImportTar(ctx context.Context, s cli.SyncService, services []cli.SyncS
 	return it, nil
 }
 
-// importEntries judges what a tar carries against the service's labels,
-// reading nothing but them: each entry a volume (set on it), or a name in
-// mnt (returned), or the refusal.
+// importEntries judges what a tar carries against the service's labels and
+// every service's binds, touching nothing: each entry a volume (set on it), or
+// a name in mnt (returned), or the refusal.
 func importEntries(entries []tarEntry, s cli.SyncService, services []cli.SyncService) ([]string, error) {
 	var names []string
 	for i, t := range entries {
@@ -1399,15 +1401,20 @@ func importLandingCheck(ctx context.Context, cwd, base, rel, name, spool string)
 
 // importRun is what an import's first write and its end read.
 type importRun struct {
-	cwd, base, projectDir, name, spool string
-	services                           []cli.SyncService
-	custom, onTarget                   bool
-	tar                                importTar
+	cwd, base, projectDir, name, spool, rel, record string
+	services                                        []cli.SyncService
+	custom, onTarget, wasUp                         bool
+	tar                                             importTar
+	owners                                          map[string]string
+	set                                             []cli.Stopped
+	stopped                                         []string
+	imgs                                            *images.Set
+	prior                                           syncRecord
 }
 
 // write puts the data in: the import hook, or the tar's extraction and its
 // entries to their owners.
-func (r importRun) write(ctx context.Context, owners map[string]string, set []cli.Stopped, wasUp bool) error {
+func (r importRun) write(ctx context.Context) error {
 	in2, err := os.Open(r.spool)
 	if err != nil {
 		return err
@@ -1419,9 +1426,9 @@ func (r importRun) write(ctx context.Context, owners map[string]string, set []cl
 		// the next lock-taker can end it (endLeftoverImport).
 		var started func(pid int) error
 		if r.onTarget {
-			started = func(pid int) error { return recordWriter(r.cwd, pid, true, !wasUp) }
+			started = func(pid int) error { return recordWriter(r.cwd, pid, true, !r.wasUp) }
 		}
-		err = runDataHook(ctx, r.cwd, r.projectDir, dataHookEnv(r.services, cli.StoppedNames(set)), in2, nil, started, "import", r.name)
+		err = runDataHook(ctx, r.cwd, r.projectDir, dataHookEnv(r.services, cli.StoppedNames(r.set)), in2, nil, started, "import", r.name)
 		if r.onTarget {
 			_ = recordWriter(r.cwd, 0, false, false)
 		}
@@ -1436,7 +1443,7 @@ func (r importRun) write(ctx context.Context, owners map[string]string, set []cl
 	// sharing may refuse the chown, and both it and OrbStack let
 	// any container user write the Mac's files anyway.
 	if err == nil && (r.onTarget || runtime.GOOS != "darwin") {
-		err = ownMnt(ctx, r.tar.mnt, ownedEntries(owners, r.tar.names), cname.with("-owners"))
+		err = ownMnt(ctx, r.tar.mnt, ownedEntries(r.owners, r.tar.names), cname.with("-owners"))
 	}
 	return err
 }
@@ -1446,9 +1453,9 @@ func (r importRun) write(ctx context.Context, owners map[string]string, set []cl
 // failure), and only once all of it is healthy do the mark and the record
 // go. A service in the record that was down before stays up: the earlier
 // import stopped it.
-func (r importRun) complete(rel string, imgs *images.Set, record string, prior syncRecord, down func() error, wasUp bool) int {
+func (r importRun) complete(down func() error) int {
 	code := 0
-	if !slices.Contains(prior.stops, r.name) {
+	if !slices.Contains(r.prior.stops, r.name) {
 		if err := down(); err != nil {
 			code = fail(err.Error())
 		}
@@ -1459,22 +1466,22 @@ func (r importRun) complete(rel string, imgs *images.Set, record string, prior s
 	// again, running or not). A failure ends what still runs on the data,
 	// as a failed write does (endImport), and keeps the mark (one policy:
 	// images.Landing).
-	if imgs != nil {
-		if err := land(imgs, r.base, rel, imgs.ImportLanding(record, r.name)); err != nil {
-			if _, stopErr := endImport(r.cwd, r.name, r.services, true, wasUp); stopErr != nil {
+	if r.imgs != nil {
+		if err := land(r.imgs, r.base, r.rel, r.imgs.ImportLanding(r.record, r.name)); err != nil {
+			if _, stopErr := endImport(r.cwd, r.name, r.services, true, r.wasUp); stopErr != nil {
 				report.Error(stopErr.Error())
 			}
 			return failErr(fmt.Errorf("the import of %s completed, but %w: what it stopped stays down, and the mark until an import of %s completes", r.name, err, r.name),
 				report.Fix("once that is fixed (the registry, Docker), accept the data and start them:", "devopsy @"+targetAddress(r.cwd)+" "+cli.ImportFlag+" "+r.name+" --resolved"))
 		}
 	}
-	if err := restoreServices(r.cwd, r.services, restoreOpts{recreate: imgs != nil, written: []string{r.name}}); err != nil {
+	if err := restoreServices(r.cwd, r.services, restoreOpts{recreate: r.imgs != nil, written: []string{r.name}}); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(r.cwd) + " --import " + r.name + " --resolved starts them)")
 	}
-	if imgs != nil {
+	if r.imgs != nil {
 		// What runs on the data now, for whatever reads its history next
 		// (an export, a parent's sync, a snapshot), as after a run step.
-		_ = imgs.RanCut(r.base, rel)
+		_ = r.imgs.RanCut(r.base, r.rel)
 	}
 	clearImportMark(r.base, r.name)
 	return code
@@ -1527,40 +1534,40 @@ func resolvedLanding(cwd, base, name string, services []cli.SyncService, since t
 	return land(set, base, remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), set.ResolvedLanding(name, since))
 }
 
-// importFailed is a failure from the first write: whatever may still
+// failed is a failure from the first write: whatever may still
 // write ends (endImport), and what was stopped stays down, the imported
 // service and what depends on it stopped too; on a target recorded and
 // marked, with the ways out.
-func importFailed(cwd, base, name string, services []cli.SyncService, stopped []string, onTarget, wasUp bool, cause error) int {
-	report.Error("import " + name + ": " + cause.Error())
-	more, err := endImport(cwd, name, services, onTarget, wasUp)
+func (r importRun) failed(cause error) int {
+	report.Error("import " + r.name + ": " + cause.Error())
+	more, err := endImport(r.cwd, r.name, r.services, r.onTarget, r.wasUp)
 	if err != nil {
 		report.Error(err.Error())
 	}
-	down := slices.Clone(stopped)
+	down := slices.Clone(r.stopped)
 	for _, s := range more {
-		if !slices.Contains(down, s) && (s != name || wasUp) {
+		if !slices.Contains(down, s) && (s != r.name || r.wasUp) {
 			down = append(down, s)
 		}
 	}
-	if onTarget {
-		if rec, ok := readSyncRecord(cwd); ok {
+	if r.onTarget {
+		if rec, ok := readSyncRecord(r.cwd); ok {
 			down = rec.stops
 		}
 	}
-	restartAlwaysNotice(services, down)
+	restartAlwaysNotice(r.services, down)
 	what := "nothing was stopped"
 	if len(down) > 0 {
 		what = strings.Join(down, ", ") + " stay down"
 	}
-	if !onTarget {
-		fixes := []report.Remedy{report.Fix("import it again, from a complete file:", "devopsy "+cli.ImportFlag+" "+name+" < <file>")}
+	if !r.onTarget {
+		fixes := []report.Remedy{report.Fix("import it again, from a complete file:", "devopsy "+cli.ImportFlag+" "+r.name+" < <file>")}
 		if len(down) > 0 {
 			fixes = append(fixes, report.Fix("or start them on the data as it is:", "devopsy start "+strings.Join(down, " ")))
 		}
-		return failErr(&report.Failure{Msg: "the import of " + name + " did not complete: its data may be partial, and " + what, Fixes: fixes})
+		return failErr(&report.Failure{Msg: "the import of " + r.name + " did not complete: its data may be partial, and " + what, Fixes: fixes})
 	}
-	report.Error("the import of "+name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+name+" completes", "devopsy @"+targetAddress(cwd)+" --status shows it, and the ways out")
+	report.Error("the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", "devopsy @"+targetAddress(r.cwd)+" --status shows it, and the ways out")
 	return 1
 }
 
