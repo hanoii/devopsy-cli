@@ -13,7 +13,6 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
-	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runStatus implements devopsy --status in a project: its containers
@@ -21,10 +20,6 @@ import (
 // project's status capability prints (capabilities/status/show), its
 // URL for one. On a server, --status runs it in the current release.
 func runStatus(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	for _, a := range args {
 		if a == "--help" || a == "-h" {
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--status"]))
@@ -97,10 +92,6 @@ func runStatus(cwd string, args []string, color bool) int {
 // the server (its record, how many are kept, the last sync), then what
 // --status prints there.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	for _, a := range args {
 		if a == "--help" || a == "-h" {
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--status"]))

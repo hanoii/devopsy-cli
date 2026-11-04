@@ -226,10 +226,6 @@ func readSnapshotData(ctx context.Context, cwd string) (*snapshotData, error) {
 // runSnapshotStep implements the hidden --snapshot-step <word>: leftovers,
 // check, mirror, stopped <id> <release>, tar <id>.
 func runSnapshotStep(cwd string, args []string) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) == 0 {
 		return fail("usage: devopsy " + remote.SnapshotStepFlag + " leftovers|check|mirror|stopped <id> <release>|tar <id>")
 	}
@@ -617,10 +613,6 @@ func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, c contain
 // release's images bookmarked for it. A signal or a session gone before
 // the services are back cancels it, the services started again.
 func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	ctx, stopSig := interruptible()
 	defer stopSig()
 	if err := settleStops(cwd, p.base); err != nil {
@@ -2346,10 +2338,6 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 // mark goes (it covers every service with data the restored code runs),
 // and so do its stop lines: the run step starts them.
 func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 	ctx := context.Background()
 	id := filepath.Base(snap)

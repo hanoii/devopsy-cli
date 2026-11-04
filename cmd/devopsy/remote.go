@@ -27,11 +27,6 @@ import (
 
 // runRemote handles `devopsy @target ...`.
 func runRemote(cwd string, args []string, color bool, verbose int) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
-
 	// Outside a project only aliases exist.
 	projectDir, _ := cli.FindProjectDir(cwd)
 	// The project's .env can name the server and instance (DEVOPSY_SERVER,

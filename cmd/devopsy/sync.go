@@ -601,10 +601,6 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 // runInherit implements devopsy @<child> --inherit: the parent's inherited
 // variables into the child, nothing copied, no run step.
 func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) > 0 {
 		return fail("usage: devopsy @" + targetRef(t) + " --inherit")
 	}
@@ -670,10 +666,6 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 // [-- args...]: the parent's data into the child's current release, then
 // its run step.
 func runSync(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, reset bool, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	flag := "--sync"
 	if reset {
 		flag = "--reset"
@@ -1002,10 +994,6 @@ func syncEnv(flag string) (toDir, toProject string, err error) {
 // in the child's directory and imported there, the stopped services
 // started again, and finish parent go|abort.
 func runSyncPush(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
 		return fail(err.Error())
 	}
@@ -2422,10 +2410,6 @@ func cleanEnv(projectName string) []string {
 // Across servers over SSH (the forwarded agent); on the same one with a
 // clean environment.
 func runSyncExec(args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	toDir, toProject, err := syncEnv(cli.SyncExecFlag)
 	if err != nil {
 		return fail(err.Error())
@@ -2478,10 +2462,6 @@ func runSyncExec(args []string, color bool) int {
 //     one service per line, then the service of an import's mark
 //     (listMark).
 func runSyncServices(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare [first] | finish go|abort|partial | settle | import <service> [last] | list | wipe"
 	switch {
 	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list" || args[0] == "settle" || args[0] == "wipe"):
@@ -2545,7 +2525,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		return 0
 	case "import":
-		return syncImport(cwd, projectDir, base, args[1], len(args) == 3, services, set, env, fail)
+		return syncImport(cwd, projectDir, base, args[1], len(args) == 3, services, set, env)
 	case "wipe":
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 		if err := wipeData(cwd, projectDir, base); err != nil {
@@ -2893,7 +2873,7 @@ func recordWrite(base, line string) error {
 // exited 0) into the child's service, through the data capability's
 // import. The service is brought up unless the child's side stops it
 // (set). The spool goes whatever happens, an interrupt included.
-func syncImport(cwd, projectDir, base, name string, last bool, services []cli.SyncService, set []cli.Stopped, env []string, fail func(string) int) (code int) {
+func syncImport(cwd, projectDir, base, name string, last bool, services []cli.SyncService, set []cli.Stopped, env []string) (code int) {
 	spool := remote.StreamSpool(base, name, os.Getenv(remote.SyncIDEnv))
 	defer os.Remove(spool)
 	ctx, stop := interruptible()

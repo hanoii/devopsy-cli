@@ -21,10 +21,6 @@ import (
 // (a local image-mode project has no image of its own in a registry), then
 // run. Nothing to switch or go back to: a failure stops there.
 func runLocalRelease(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--release"]))
 		return 0
@@ -112,10 +108,6 @@ func runInPlace(root, phase string, a []string) int {
 // server devopsy then removes the environment's directory, which locally
 // is the checkout.
 func runLocalDestroy(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--destroy"]))
 		return 0
@@ -250,10 +242,6 @@ func reloadArgs(step string) []string {
 // rollback: run step, else its release: one, a sync's its release:
 // one. Before and after are the remote ones. The first failure ends it, with its code.
 func runReleaseSteps(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) < 2 || len(args) > 3 {
 		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release|reload before|prepare|run|after [<release>]")
 	}
@@ -323,10 +311,6 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 // every profile's; then mnt emptied as root in UtilImage, since container
 // users own its files. A failed step changes nothing.
 func destroyData(cwd string, step []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
 		return fail(err.Error())

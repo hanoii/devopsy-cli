@@ -258,6 +258,12 @@ func checkStartBinds(cwd string) error {
 	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": " + strings.Join(fixes, "; or ")}
 }
 
+// fail says msg as an error, for a command to return its code.
+func fail(msg string) int {
+	report.Error(msg)
+	return 1
+}
+
 // failErr says err whole (report.Fail: its details, fixes and the
 // failures it carries, each data service without its version among them)
 // and is a command's exit 1: never err.Error() alone, which keeps only

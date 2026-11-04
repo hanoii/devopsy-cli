@@ -28,10 +28,6 @@ import (
 // targets), a prompt (hidden unless --show), or stdin. --help and --show can
 // go anywhere after --vars: names never start with "-".
 func runVars(t *remote.Target, flag string, args []string, lookup func(string) (string, bool), color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--show | get KEY | set [--show] KEY... | unset KEY...]"
 	show := false
 	var words []string

@@ -21,10 +21,6 @@ import (
 // target's server, edited over the usual session, as that user. Public
 // keys only ever travel; runSSHKeysGenerate makes a local pair.
 func runSSHKeys(t *remote.Target, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	say := func(msg string, details ...string) { report.Info(msg, details...) }
 	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a local key pair, no target)"
 	restricted := false
@@ -202,10 +198,6 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 // or a machine, to authorize with devopsy @<target> --ssh-keys add. The
 // private key stays where it was made.
 func runSSHKeysGenerate(args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	usage := "usage: devopsy --ssh-keys-generate [<name>] [--out <file>]"
 	name, out := "", ""
 	for i := 0; i < len(args); i++ {

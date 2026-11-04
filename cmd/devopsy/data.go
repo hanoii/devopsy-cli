@@ -241,10 +241,6 @@ func dockerRunIO(ctx context.Context, c container, stdin io.Reader, stdout io.Wr
 // runExport implements devopsy --export <service>: its data on stdout,
 // everything said on stderr.
 func runExport(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[cli.ExportFlag]))
 		return 0
@@ -1039,10 +1035,6 @@ func readyEntry(mnt string, e tarEntry) error {
 // service or --resolved. Locally there is no mark: the error says what
 // stays down.
 func runImport(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) >= 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[cli.ImportFlag]))
 		return 0
@@ -1511,10 +1503,6 @@ func readMark(base string) *remote.Incomplete {
 // record holds and only once all of it is healthy removes the mark and
 // the record. Locally there is neither: refused.
 func runResolved(cwd, name string) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
 		return fail(err.Error())
@@ -1771,10 +1759,6 @@ func importArgs(args []string) (name string, yes, resolved bool, accept []string
 // session running devopsy --export in the current release, its stdout
 // through as it is (never colored).
 func runRemoteExport(t *remote.Target, projectName string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		return fail("usage: devopsy @" + targetRef(t) + " " + cli.ExportFlag + " <service>")
 	}
@@ -1808,10 +1792,6 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 // interrupted: a Ctrl-C before it imports nothing, and after it the
 // import goes on on the server, said; a second ends the session.
 func runRemoteImport(t *remote.Target, projectName string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	name, yes, resolved, accept, err := importArgs(args)
 	if err != nil {
 		return fail(strings.Replace(err.Error(), "[@<target>]", "@"+targetRef(t), 1))
@@ -1960,10 +1940,6 @@ wait:
 // restore's, or the import still running), asks for the environment's full name, then
 // a session under the release lock checks again and starts them.
 func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.ResolvedCheckScript(t), bytes.NewReader(nil), &out, false)
 	if err != nil {
