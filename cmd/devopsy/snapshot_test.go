@@ -2152,30 +2152,56 @@ func TestReleaseSnapshotCases(t *testing.T) {
 // ps -E (their environment, the setup's DOCKER_LOG).
 func (s *syncSetup) waitReleaseTars() {
 	s.t.Helper()
-	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
-		busy := false
-		procs, _ := filepath.Glob("/proc/[0-9]*")
-		for _, p := range procs {
-			cmd, _ := os.ReadFile(filepath.Join(p, "cmdline"))
-			cwd, _ := os.Readlink(filepath.Join(p, "cwd"))
-			if strings.Contains(string(cmd), "release-tar") && strings.HasPrefix(cwd, s.root) {
-				busy = true
-			}
-		}
-		if len(procs) == 0 {
-			out, _ := exec.Command("ps", "-E", "-A", "-o", "command=").Output()
-			for _, line := range strings.Split(string(out), "\n") {
-				if strings.Contains(line, "release-tar") && strings.Contains(line, "DOCKER_LOG="+s.log) {
-					busy = true
-				}
-			}
-		}
-		if !busy {
-			return
-		}
+	for start := time.Now(); s.releaseTarRuns(); time.Sleep(100 * time.Millisecond) {
 		if time.Since(start) > startWait {
 			s.t.Fatal("a release's detached tar still runs")
 		}
+	}
+}
+
+// releaseTarRuns says a detached release-tar of the setup's environments
+// runs.
+func (s *syncSetup) releaseTarRuns() bool {
+	procs, _ := filepath.Glob("/proc/[0-9]*")
+	for _, p := range procs {
+		cmd, _ := os.ReadFile(filepath.Join(p, "cmdline"))
+		cwd, _ := os.Readlink(filepath.Join(p, "cwd"))
+		if strings.Contains(string(cmd), "release-tar") && strings.HasPrefix(cwd, s.root) {
+			return true
+		}
+	}
+	if len(procs) == 0 {
+		out, _ := exec.Command("ps", "-E", "-A", "-o", "command=").Output()
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "release-tar") && strings.Contains(line, "DOCKER_LOG="+s.log) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// A test ending while its release's detached tar still writes under the
+// test's directory fails its cleanup ("directory not empty") or leaves the
+// tar running into the next: a setup waits for them whatever the test does.
+func TestSetupWaitsForReleaseTars(t *testing.T) {
+	t.Parallel()
+	started := filepath.Join(t.TempDir(), "started")
+	var s *syncSetup
+	t.Run("setup", func(t *testing.T) {
+		s = newSyncSetup(t)
+		s.envConfig("prod", "{snapshots: {release: true, mirror: true}}")
+		s.releaseProd(nil)
+		if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started}, "@prod", "--release"); code != 0 {
+			t.Fatalf("the release (%d):\n%s", code, out)
+		}
+		waitFile(t, started, "the release's tar", startWait, func() string { return readString(s.log) })
+		// Runs before the setup's own cleanups: the tar goes on only as the
+		// test ends.
+		t.Cleanup(func() { write(t, started+".go", "", 0o644) })
+	})
+	if s.releaseTarRuns() {
+		t.Errorf("the setup's cleanup left a release's tar running")
 	}
 }
 

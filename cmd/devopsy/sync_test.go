@@ -596,6 +596,9 @@ func newSyncSetup(t *testing.T) *syncSetup {
 		t.Fatal(err)
 	}
 	s := &syncSetup{t: t, root: filepath.Join(tmp, "srv"), project: filepath.Join(tmp, "app"), sshLog: filepath.Join(tmp, "ssh.log"), log: filepath.Join(tmp, "docker.log")}
+	// Last among its cleanups but the directory's, so whatever a test does,
+	// no detached tar writes under it as it goes.
+	t.Cleanup(s.waitReleaseTars)
 	home := filepath.Join(tmp, "home")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\n", 0o644)
 	s.dot = filepath.Join(s.project, ".devopsy")
