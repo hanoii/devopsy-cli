@@ -1031,6 +1031,10 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	services, streams, dirs, vols, child := in.services, in.streams, in.dirs, in.vols, in.child
 
 	set := cli.DataStops(services, cli.SyncParent, "")
+	// What it stopped comes back: restoring reads the containers' state.
+	restoreParent := func() error {
+		return restoreServices(cwd, services, restoreOpts{fallback: cli.StoppedNames(set)})
+	}
 	env := dataHookEnv(services, cli.StoppedNames(set))
 	// finish parent runs whatever happened, after the services are back,
 	// and never with the sync's context: it restores too. Its word is the
@@ -1105,7 +1109,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		// What it stopped before failing comes back: restoring reads the
 		// containers' state, not what stopping did.
 		code := fail(err.Error())
-		if err := restoreServices(cwd, services, restoreOpts{fallback: cli.StoppedNames(set)}); err != nil {
+		if err := restoreParent(); err != nil {
 			fail(err.Error())
 		}
 		return finish(code, false)
@@ -1140,33 +1144,29 @@ func runSyncPush(cwd string, args []string, color bool) int {
 			}
 		}
 	}
-	exportStreams := func(env []string) {
-		for _, name := range streams {
-			if code != 0 {
-				break
-			}
-			if ctx.Err() != nil {
-				code = fail("interrupted: " + name + " not exported")
-				break
-			}
-			if err := exportStream(ctx, cwd, projectDir, name, env); err != nil {
-				code = fail(err.Error())
-			}
-		}
-	}
-	importStreams := func(last bool) {
+	eachStream := func(verb string, do func(i int, name string) error) {
 		for i, name := range streams {
 			if code != 0 {
 				break
 			}
 			if ctx.Err() != nil {
-				code = fail("interrupted: " + name + " not imported")
+				code = fail("interrupted: " + name + " not " + verb)
 				break
 			}
-			if err := importStream(ctx, name, last && i == len(streams)-1); err != nil {
+			if err := do(i, name); err != nil {
 				code = fail(err.Error())
 			}
 		}
+	}
+	exportStreams := func(env []string) {
+		eachStream("exported", func(_ int, name string) error {
+			return exportStream(ctx, cwd, projectDir, name, env)
+		})
+	}
+	importStreams := func(last bool) {
+		eachStream("imported", func(i int, name string) error {
+			return importStream(ctx, name, last && i == len(streams)-1)
+		})
 	}
 	var restoreErr error
 	for _, step := range copyOrder(cloned, slices.ContainsFunc(stopped, func(name string) bool {
@@ -1183,7 +1183,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 				exportStreams(env)
 			}
 		case startStep:
-			restoreErr = restoreServices(cwd, services, restoreOpts{fallback: cli.StoppedNames(set)})
+			restoreErr = restoreParent()
 		case importStep:
 			importStreams(step.last)
 		}
@@ -2512,19 +2512,19 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		services = nil
 	}
 	base := filepath.Dir(cwd)
-	p := place{cwd: cwd, projectDir: projectDir, base: base, compose: composeName(cwd)}
+	p := place{cwd: cwd, projectDir: projectDir, base: base}
 	set := cli.DataStops(services, cli.SyncChild, "")
 	// The hooks' DEVOPSY_DATA_STOP: the labels' set, but what the record
 	// says is down at finish child partial and settle (recordHookEnv).
 	env := dataHookEnv(services, cli.StoppedNames(set))
 	switch args[0] {
 	case "list":
-		return syncList(p, services)
+		return childList(p, services)
 	case "import":
-		return syncImport(cwd, projectDir, base, args[1], len(args) == 3, services, set, env)
+		return syncImport(p, args[1], len(args) == 3, services, set, env)
 	case "wipe":
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
-		if err := wipeData(cwd, projectDir, base); err != nil {
+		if err := wipeData(p); err != nil {
 			return fail(err.Error())
 		}
 		return 0
@@ -2534,17 +2534,17 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 	switch args[0] {
 	case "settle":
-		return syncSettle(p, services)
+		return childSettle(p, services)
 	case "prepare":
-		return syncPrepare(p, services, set, env, len(args) == 2)
+		return childPrepare(p, services, set, env, len(args) == 2)
 	}
-	return syncFinish(p, services, set, env, args[1])
+	return childFinish(p, services, set, env, args[1])
 }
 
 // place is where a sync's child-side word runs: its directory in the
-// release (cwd), its project, the environment's directory and its compose
-// name, which stay the same for the whole command.
-type place struct{ cwd, projectDir, base, compose string }
+// release (cwd), its project and the environment's directory, which stay
+// the same for the whole command.
+type place struct{ cwd, projectDir, base string }
 
 // recordHookEnv is the hooks' environment with what the record says is down.
 func recordHookEnv(cwd string, services []cli.SyncService) []string {
@@ -2552,8 +2552,8 @@ func recordHookEnv(cwd string, services []cli.SyncService) []string {
 	return dataHookEnv(services, rec.stops)
 }
 
-// syncList prints the child's services for the parent's push, and its mark.
-func syncList(p place, services []cli.SyncService) int {
+// childList prints the child's services for the parent's push, and its mark.
+func childList(p place, services []cli.SyncService) int {
 	states, err := serviceStates(p.cwd)
 	if err != nil {
 		return fail(err.Error())
@@ -2585,10 +2585,10 @@ func syncList(p place, services []cli.SyncService) int {
 	return 0
 }
 
-// syncSettle marks an environment whose sync's files no holder decided
+// childSettle marks an environment whose sync's files no holder decided
 // on: its data may be anything from untouched to complete, never
 // finished by finish child go.
-func syncSettle(p place, services []cli.SyncService) int {
+func childSettle(p place, services []cli.SyncService) int {
 	// What a take killed outright left stopped starts again first,
 	// unless the environment is marked.
 	if err := settleStops(p.cwd, p.base); err != nil {
@@ -2625,11 +2625,11 @@ func syncSettle(p place, services []cli.SyncService) int {
 	return code
 }
 
-// syncPrepare readies the child for a copy, settling first; first says the
+// childPrepare readies the child for a copy, settling first; first says the
 // release has nothing current. Whatever fails, finish abort restores only
 // what it stopped.
-func syncPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []string, first bool) int {
-	if code := syncSettle(p, services); code != 0 {
+func childPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []string, first bool) int {
+	if code := childSettle(p, services); code != 0 {
 		return code
 	}
 	// The child refuses before anything stops anywhere: its holder
@@ -2683,7 +2683,7 @@ func syncPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []s
 	// The volumes a copy writes into, made when missing (a first
 	// release, a volume added since) as compose would: the parent's
 	// rsync never makes one.
-	if err := ensureVolumes(context.Background(), p.compose, copiedVolumes(services)); err != nil {
+	if err := ensureVolumes(context.Background(), composeName(p.cwd), copiedVolumes(services)); err != nil {
 		return fail(err.Error())
 	}
 	if _, err := stopServices(p.cwd, set); err != nil {
@@ -2692,9 +2692,9 @@ func syncPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []s
 	return 0
 }
 
-// syncFinish ends the child's side of a sync on the holder's word (go, abort
+// childFinish ends the child's side of a sync on the holder's word (go, abort
 // or partial).
-func syncFinish(p place, services []cli.SyncService, set []cli.Stopped, env []string, word string) int {
+func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []string, word string) int {
 	code := 0
 	incomplete := filepath.Join(p.base, remote.SyncIncompleteFile)
 	if word == "abort" && fileExists(incomplete) {
@@ -2825,8 +2825,8 @@ func wipeChild(ctx context.Context) error {
 // exited 0) into the child's service, through the data capability's
 // import. The service is brought up unless the child's side stops it
 // (set). The spool goes whatever happens, an interrupt included.
-func syncImport(cwd, projectDir, base, name string, last bool, services []cli.SyncService, set []cli.Stopped, env []string) (code int) {
-	spool := remote.StreamSpool(base, name, os.Getenv(remote.SyncIDEnv))
+func syncImport(p place, name string, last bool, services []cli.SyncService, set []cli.Stopped, env []string) (code int) {
+	spool := remote.StreamSpool(p.base, name, os.Getenv(remote.SyncIDEnv))
 	defer os.Remove(spool)
 	ctx, stop := interruptible()
 	defer stop()
@@ -2845,17 +2845,17 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	// A reset's first write wipes the child before anything is brought up
 	// for this import.
 	if os.Getenv(remote.SyncResetEnv) != "" {
-		first, err := claimWrite(base)
+		first, err := claimWrite(p.base)
 		if err != nil {
 			return fail(err.Error())
 		}
 		if first {
 			// Recorded first, so a holder deciding meanwhile ends this
 			// devopsy, which wipes.
-			if err := recordWrite(base, remote.WriterLine(name, os.Getpid(), "none")); err != nil {
+			if err := recordWrite(p.base, remote.WriterLine(name, os.Getpid(), "none")); err != nil {
 				return fail(err.Error())
 			}
-			if err := wipeData(cwd, projectDir, base); err != nil {
+			if err := wipeData(p); err != nil {
 				return fail(err.Error())
 			}
 		}
@@ -2869,8 +2869,8 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		// not up; otherwise one down before the sync goes down again.
 		// A first release creates what the service needs, but what the
 		// sync stopped (a retried one finds containers) stays down.
-		rec, _ := readSyncRecord(cwd)
-		down, state, err := upFor(ctx, cwd, name, rec.first && s.Active(composeProfiles(cwd)), !rec.first || len(rec.stops) > 0)
+		rec, _ := readSyncRecord(p.cwd)
+		down, state, err := upFor(ctx, p.cwd, name, rec.first && s.Active(composeProfiles(p.cwd)), !rec.first || len(rec.stops) > 0)
 		if err != nil {
 			code := fail(err.Error())
 			if err := down(); err != nil {
@@ -2887,16 +2887,16 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	}
 	// The service's data changes from here: claimed, and recorded, so a
 	// holder that decides while this runs ends it (endWriters).
-	if _, err := claimWrite(base); err != nil {
+	if _, err := claimWrite(p.base); err != nil {
 		return fail(err.Error())
 	}
-	if err := recordWrite(base, remote.WriterLine(name, os.Getpid(), was)); err != nil {
+	if err := recordWrite(p.base, remote.WriterLine(name, os.Getpid(), was)); err != nil {
 		return fail(err.Error())
 	}
-	if err := runDataHook(ctx, cwd, projectDir, env, f, nil, nil, "import", name); err != nil {
+	if err := runDataHook(ctx, p.cwd, p.projectDir, env, f, nil, nil, "import", name); err != nil {
 		code = fail("the data capability's import " + name + ": " + err.Error())
 	} else if last {
-		if err := recordWrite(base, remote.DoneLine(os.Getenv(remote.SyncIDEnv))); err != nil {
+		if err := recordWrite(p.base, remote.DoneLine(os.Getenv(remote.SyncIDEnv))); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -2912,57 +2912,57 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 // its release, images included, stay. The record then says first
 // release, nothing stopped: finish go creates the services with data
 // and the child side's set, and the run step the rest.
-func wipeData(cwd, projectDir, base string) error {
-	who := base
+func wipeData(p place) error {
+	who := p.base
 	if to := os.Getenv(remote.SyncToTargetEnv); to != "" {
 		who = "@" + to
 	}
 	report.Info("resetting " + who + ": every container and volume goes and mnt is emptied; its shared/.env stays")
-	if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
+	if err := removeLeft(composeName(p.cwd), remote.TaskImport); err != nil {
 		return err
 	}
-	if err := compose(cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
+	if err := compose(p.cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
 		return fmt.Errorf("docker compose down: %w", err)
 	}
 	// The sync's task, so a holder deciding meanwhile removes it
 	// (endWriters): no write outlives its sync.
 	id := os.Getenv(remote.SyncIDEnv)
-	wipe := container{remote.SyncContainerPrefix + id + "-wipe", composeName(cwd), remote.SyncTask(id)}
-	if err := emptyMnt(context.Background(), projectDir, wipe); err != nil {
+	wipe := container{remote.SyncContainerPrefix + id + "-wipe", composeName(p.cwd), remote.SyncTask(id)}
+	if err := emptyMnt(context.Background(), p.projectDir, wipe); err != nil {
 		return err
 	}
 	// The data is gone: every data service's history starts over, the
 	// ones the copy writes nothing for included (the holder's sync-done
 	// takes the copied ones over once the copy is complete). Under the
 	// holder's release lock.
-	set, err := copyImages(cwd)
+	set, err := copyImages(p.cwd)
 	if err != nil {
 		return err
 	}
-	if err := land(set, base, remote.ReleaseFile(projectDir, ""), set.ResetLanding()); err != nil {
+	if err := land(set, p.base, remote.ReleaseFile(p.projectDir, ""), set.ResetLanding()); err != nil {
 		return fmt.Errorf("the data is wiped, but %w", err)
 	}
 	// Its owned entries back, as a release left them: finish go creates
 	// the services with data, and a stream's import brings its service
 	// up, on entries Docker would otherwise make root's. Its volumes
 	// too, for the rsync to write into.
-	owners, mnt, err := projectOwners(cwd)
+	owners, mnt, err := projectOwners(p.cwd)
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, container{remote.SyncContainerPrefix + id + "-owners", composeName(cwd), remote.SyncTask(id)})
+		err = ownMnt(context.Background(), mnt, owners, container{remote.SyncContainerPrefix + id + "-owners", composeName(p.cwd), remote.SyncTask(id)})
 	}
 	if err != nil {
 		return err
 	}
-	_, services, err := cli.SyncServices(cwd, os.Environ())
+	_, services, err := cli.SyncServices(p.cwd, os.Environ())
 	if err == nil {
-		err = ensureVolumes(context.Background(), composeName(cwd), copiedVolumes(services))
+		err = ensureVolumes(context.Background(), composeName(p.cwd), copiedVolumes(services))
 	}
 	if err != nil {
 		return err
 	}
-	rec, _ := readSyncRecord(cwd)
+	rec, _ := readSyncRecord(p.cwd)
 	rec.first, rec.stops, rec.own, rec.snaps = true, nil, nil, nil
-	return rec.write(cwd)
+	return rec.write(p.cwd)
 }
 
 // agentHasKeys asks the local agent for its keys before anything starts:

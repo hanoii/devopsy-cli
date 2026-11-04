@@ -79,7 +79,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - What a killed devopsy left is found by these labels alone, never by a name, through one remover (`removeLeft(env, task)`, a `docker ps` filter on both): each guarantee is then a filter value, so a holder's can never match another sync's or the parent's clone, and an environment's never another environment's.
 - Who removes which:
   - the child's holder (`endWriters`) its own `sync-<id>`, never another sync's and never the parent's clone of that very sync (`source`, the parent's env);
-  - the next lock-taker an import's or a restore's `import` (the next import of that service, `--resolved`, a reset's wipe, the next restore on a restore's mark, a child's prepare on an import's or a restore's mark);
+  - the next lock-taker (`endMarkedWriters`) an import's or a restore's `import` (the next import of that service, `--resolved`, a reset's wipe, the next restore on a restore's mark, a child's prepare on an import's or a restore's mark);
   - `--mnt-owners` the `owners` ones, before it scans;
   - the next holder of the parent's sync lock (a push, an export) the `source` ones;
   - `--destroy-data` every task of its environment, never another environment's, since it holds every lock.
