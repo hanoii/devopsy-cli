@@ -118,9 +118,7 @@ func endWriters(cwd, base string, services []cli.SyncService) error {
 						was[s] = "running"
 					}
 				}
-				if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
-					errs = append(errs, fmt.Errorf("docker compose stop: %w", err))
-				} else if err := recordStops(cwd, stop, was); err != nil {
+				if err := stopRecording(cwd, stop, was); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -131,6 +129,22 @@ func endWriters(cwd, base string, services []cli.SyncService) error {
 		return fmt.Errorf("ending the sync's writers: %w", errors.Join(errs...))
 	}
 	return nil
+}
+
+// stopRecording stops services, recording them first (recordStops, unless
+// was is nil): a stop can fail partway with some stopped, and what the record
+// leaves out no completing copy starts again.
+func stopRecording(cwd string, stop []string, was map[string]string) error {
+	var errs []error
+	if was != nil {
+		if err := recordStops(cwd, stop, was); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
+		errs = append(errs, fmt.Errorf("docker compose stop: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // recordStops adds to the sync's record (syncState) the services it
@@ -333,18 +347,17 @@ func endImport(cwd, name string, services []cli.SyncService, record, wasRunning 
 	}
 	if len(stop) > 0 {
 		report.Info("stopping " + strings.Join(stop, " ") + ": the import may still write, and its data may be partial")
-		if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
-			errs = append(errs, fmt.Errorf("docker compose stop: %w", err))
-		} else if record {
-			was := map[string]string{}
+		var was map[string]string
+		if record {
+			was = map[string]string{}
 			for _, s := range stop {
 				if s != name || wasRunning {
 					was[s] = "running"
 				}
 			}
-			if err := recordStops(cwd, stop, was); err != nil {
-				errs = append(errs, err)
-			}
+		}
+		if err := stopRecording(cwd, stop, was); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return stop, errors.Join(errs...)

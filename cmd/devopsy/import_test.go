@@ -265,6 +265,49 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	}
 }
 
+// An import failing whose end's own stop then fails partway (FAIL_STOP: its
+// services stopped all the same, as a stop cut off can be) still records
+// what it stopped: the retry that completes starts what the record holds,
+// and what it left out would stay down with the mark gone.
+func TestImportEndStopFailsStillRecorded(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	settings := s.log + ".shop-prod"
+	before := readString(settings)
+	failing := filepath.Join(s.tmp, "failing")
+	write(t, failing, "", 0o644)
+	write(t, filepath.Join(s.base, "current", ".devopsy", "capabilities", "data", "import"), "#!/bin/sh\nif [ -e "+failing+" ]; then cat >/dev/null; echo FAIL_STOP=shop-prod >>"+settings+"; exit 4; fi\n"+strings.TrimPrefix(importHook, "#!/bin/sh\n"), 0o755)
+	s.logs()
+	_, errs, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || s.mark() == nil {
+		t.Fatalf("the failed import (%d), mark %+v:\n%s\n%s", code, s.mark(), errs, docker)
+	}
+	down := s.stopped()
+	if len(down) == 0 {
+		t.Fatalf("nothing stopped by the failed import's end:\n%s\n%s", errs, docker)
+	}
+	for _, d := range down {
+		if !strings.Contains(s.record(), "stop "+d+"\n") {
+			t.Errorf("%s is down, and not in the record %q:\n%s", d, s.record(), errs)
+		}
+		if !strings.Contains(errs, d) || !strings.Contains(errs, "stay down") {
+			t.Errorf("%s is down, and not said to stay down:\n%s", d, errs)
+		}
+	}
+	if err := os.Remove(failing); err != nil {
+		t.Fatal(err)
+	}
+	write(t, settings, before, 0o644)
+	_, errs, code = s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	if code != 0 || s.mark() != nil {
+		t.Fatalf("the retry (%d), mark %+v:\n%s", code, s.mark(), errs)
+	}
+	if left := s.stopped(); len(left) != 0 {
+		t.Errorf("the import completed and its mark went, with %v left down:\n%s", left, errs)
+	}
+}
+
 // What a tar carries against the service's labels: a name in mnt, a volume,
 // or the refusal.
 func TestImportEntries(t *testing.T) {
