@@ -346,6 +346,45 @@ func TestImportLandingAndEndFail(t *testing.T) {
 	}
 }
 
+// A stop that fails before the first write, with the start bringing them back
+// failing too: nothing imported and no mark, what is down recorded, and the next
+// import that completes starts it.
+func TestImportBeforeWriteStartFails(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	s.logs()
+	_, errs, code := s.runIO(append([]string{"FAIL_STOP=shop-prod", "FAIL_START=shop-prod"}, s.env...), []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || s.mark() != nil || fileExists(s.imported) {
+		t.Fatalf("(%d), mark %+v, imported %v:\n%s\n%s", code, s.mark(), fileExists(s.imported), errs, docker)
+	}
+	if !strings.Contains(errs, "docker compose stop: exit status 1: nothing imported") || !strings.Contains(errs, "app stay down: the next release or import starts them") {
+		t.Errorf("what it says:\n%s", errs)
+	}
+	down := s.stopped()
+	if len(down) == 0 {
+		t.Fatalf("nothing down, nothing to test:\n%s\n%s", errs, docker)
+	}
+	for _, d := range down {
+		if !strings.Contains(s.record(), "stop "+d+"\n") {
+			t.Errorf("%s is down, and not in the record %q", d, s.record())
+		}
+	}
+	_, errs, code = s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	if code != 0 || s.mark() != nil || len(s.stopped()) != 0 {
+		t.Errorf("the next import (%d), mark %+v, down %v:\n%s", code, s.mark(), s.stopped(), errs)
+	}
+
+	// The next release too, as it says.
+	s = newImportSetup(t)
+	if _, errs, code := s.runIO(append([]string{"FAIL_STOP=shop-prod", "FAIL_START=shop-prod"}, s.env...), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || len(s.stopped()) == 0 {
+		t.Fatalf("(%d), down %v:\n%s", code, s.stopped(), errs)
+	}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 || len(s.stopped()) != 0 {
+		t.Errorf("the next release (%d), down %v:\n%s", code, s.stopped(), out)
+	}
+}
+
 // The session lost once the load runs: the operator is told it was under way
 // and how to see how it ends, and the import completes on the server.
 func TestImportSessionLostWhileRunning(t *testing.T) {

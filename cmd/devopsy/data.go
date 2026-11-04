@@ -1176,20 +1176,31 @@ func runImport(cwd string, args []string, color bool) int {
 		}
 	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
-	// Up to the first write, a failure brings back what was stopped (and
-	// a stream's up undone), as a local import's end does.
+	// What was stopped comes back (and a stream's up undone), as a local
+	// import's end does; what does not is said, with who starts it.
 	down := func() error { return nil }
-	before := func(code int) int {
+	bringBack := func() int {
+		code := 0
 		if err := down(); err != nil {
 			code = fail(err.Error())
 		}
 		if err := restore(); err != nil {
-			code = fail(err.Error())
+			who := "devopsy start " + strings.Join(stopped, " ")
+			if onTarget {
+				who = "the next release or import starts them"
+			}
+			code = fail(err.Error() + ": " + strings.Join(stopped, ", ") + " stay down: " + who)
 		}
 		return code
 	}
+	// Up to the first write, a failure brings them back.
+	before := func(msg string) int {
+		code := fail(msg + ": nothing imported")
+		bringBack()
+		return code
+	}
 	if err != nil {
-		return before(fail(err.Error()))
+		return before(err.Error())
 	}
 	// A stream not stopped is up for its import, never its dependencies
 	// (one the set stopped, or a failed import left down), and down again
@@ -1200,7 +1211,7 @@ func runImport(cwd string, args []string, color bool) int {
 	if s.Copy == cli.CopyCustom && !slices.Contains(cli.StoppedNames(set), name) {
 		var was string
 		if down, was, err = upFor(ctx, cwd, name, false, true); err != nil {
-			return before(fail(err.Error()))
+			return before(err.Error())
 		}
 		wasUp = was == "running"
 	}
@@ -1211,18 +1222,18 @@ func runImport(cwd string, args []string, color bool) int {
 		// A marker for the operator's devopsy, never a message.
 		_, _ = io.WriteString(errOut, remote.ImportMarker+"\n")
 		if !awaitByte(ctx, in, rest, quiet) {
-			return before(fail("the session ended before the import started: nothing imported"))
+			return before("the session ended before the import started")
 		}
 	}
 	if ctx.Err() != nil {
-		return before(fail("interrupted: nothing imported"))
+		return before("interrupted")
 	}
 	if onTarget {
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGINT)
 		errOut.keep(base)
 		report.Info("from here the import of " + name + " goes on whatever happens to the session (its output also goes to " + filepath.Join(base, syncLog) + ")")
 		if err := markIncomplete(base, name, remote.IncompleteImport, "it failed or was cut after its first write: its data may be partial", false); err != nil {
-			return before(fail(err.Error()))
+			return before(err.Error())
 		}
 	}
 	run := importRun{cwd: cwd, base: base, projectDir: projectDir, name: name, spool: spool, rel: rel, record: record,
@@ -1232,7 +1243,7 @@ func runImport(cwd string, args []string, color bool) int {
 		return run.failed(interrupted(ctx, err))
 	}
 	if !onTarget {
-		return before(0)
+		return bringBack()
 	}
 	return run.complete(down)
 }
