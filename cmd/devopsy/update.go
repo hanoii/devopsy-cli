@@ -20,10 +20,6 @@ import (
 
 // runUpgrade handles `devopsy --upgrade [tag]`.
 func runUpgrade(args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) > 1 {
 		return fail("usage: devopsy --upgrade [vX.Y.Z]")
 	}

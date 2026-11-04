@@ -350,6 +350,18 @@ func endImport(cwd, name string, services []cli.SyncService, record, wasRunning 
 	return stop, errors.Join(errs...)
 }
 
+// endMarkedWriters ends what a killed import or restore left writing, by
+// the kind of the mark at base; a sync's mark has its own (endWriters).
+func endMarkedWriters(cwd, base string, services []cli.SyncService) error {
+	switch m := readMark(base); {
+	case m.IsImport():
+		return endLeftoverImport(cwd, base, services, m.From)
+	case m.IsRestore():
+		return removeLeft(composeName(cwd), remote.TaskImport)
+	}
+	return nil
+}
+
 // endLeftoverImport ends what an import of name a killed devopsy left may
 // still write, before anything else under the release lock (a retry of
 // it, --resolved, a sync's prepare): the hook's process group the record

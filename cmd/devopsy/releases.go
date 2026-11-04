@@ -52,8 +52,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if code != 0 {
 		return code
@@ -66,8 +65,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	releases := remote.ParseReleases(out.String())
 	chosen, err := chooseReleases(t, releases, words[1:])
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if len(chosen) == 0 {
 		report.Info("no failed releases: nothing to remove")
@@ -76,11 +74,10 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	where := t.Host + ":" + t.Path
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			report.Fail(&report.Failure{
+			return failErr(&report.Failure{
 				Msg:   "--releases remove asks first, and there is no terminal to ask at",
 				Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --releases "+strings.Join(args, " ")+" --yes")},
 			})
-			return 1
 		}
 		var lines []string
 		for _, r := range chosen {
@@ -102,8 +99,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	}
 	code, err = remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.ReleasesRemoveScript(t, projectName, ids, slices.Contains(words[1:], "failed")), strings.NewReader(remote.AckInput), nil, false, nil)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return code
 }
@@ -191,8 +187,7 @@ func runReleaseID(args []string) int {
 	}
 	entries, err := os.ReadDir(args[0])
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {

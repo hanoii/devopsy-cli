@@ -51,16 +51,14 @@ var serverTools = []struct{ name, without string }{
 func runServerFacts() int {
 	info, err := serverFacts()
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	// Last, so only the way to the operator is between it and the
 	// operator's clock.
 	info.Time = time.Now().UnixNano()
 	out, err := json.Marshal(info)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	fmt.Println(string(out))
 	return 0
@@ -498,8 +496,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 		}
 		info, err := serverFacts()
 		if err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		head := "local"
 		if name, err := os.Hostname(); err == nil {
@@ -512,8 +509,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 	out := &firstWrite{}
 	code, err := remote.SSH(t, remote.ServerInfoScript(t), bytes.NewReader(nil), out, false)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if code != 0 {
 		return code

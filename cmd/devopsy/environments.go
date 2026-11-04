@@ -16,10 +16,6 @@ import (
 // environments on every server its variables name (remote.Servers), as
 // addresses. On one server: devopsy @<server> --environments.
 func runEnvironments(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) > 0 {
 		return fail("usage: devopsy --environments, or on one server: devopsy @<server> --environments")
 	}

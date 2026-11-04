@@ -17,10 +17,6 @@ import (
 // .devopsy/ there. An
 // existing config is never touched: --debug schema documents every key.
 func runInit(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) > 1 {
 		return fail("usage: devopsy --init [project]")
 	}

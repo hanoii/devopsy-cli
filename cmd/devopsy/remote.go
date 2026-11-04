@@ -27,11 +27,6 @@ import (
 
 // runRemote handles `devopsy @target ...`.
 func runRemote(cwd string, args []string, color bool, verbose int) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
-
 	// Outside a project only aliases exist.
 	projectDir, _ := cli.FindProjectDir(cwd)
 	// The project's .env can name the server and instance (DEVOPSY_SERVER,
@@ -252,438 +247,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return code
 
 	case "--release", "--release-sync", "--release-no-sync", "--rollback":
-		// --release-sync and --release-no-sync are releases that sync
-		// whatever the child's state, or never; what is recorded, run and
-		// said is a release.
-		rollback := args[0] == "--rollback"
-		syncFlag, noSync := args[0] == "--release-sync", args[0] == "--release-no-sync"
-		kind := "release"
-		if rollback {
-			kind = "rollback"
-		}
-		yes, from := false, ""
-		var accept []string
-		for i := 1; i < len(args); i++ {
-			switch a := args[i]; {
-			// A rollback never asks: --yes is accepted, for scripts that
-			// pass it to every command.
-			case a == "--yes" || a == "-y":
-				yes = true
-			case a == "--accept-image":
-				// The services whose image the release's or the rollback's
-				// checks let through against their data's history when they
-				// refuse it.
-				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", remote.HintAddress(t), args[0]))
-				}
-				accept = acceptImage(accept, args[i+1])
-				i++
-			case !rollback && a == "--from":
-				// Where a syncing release copies from, instead of the
-				// parent: an address, its @ optional.
-				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", remote.HintAddress(t), args[0]))
-				}
-				from = strings.TrimPrefix(args[i+1], "@")
-				i++
-			default:
-				return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], kind, t.File))
-			}
-		}
-		if noSync && from != "" {
-			return fail("--from: --release-no-sync never syncs: devopsy @" + remote.HintAddress(t) + " --release-sync --from @" + from + " syncs from it")
-		}
-		if (syncFlag || from != "") && t.Parent == "" {
-			flag := args[0]
-			if from != "" {
-				flag = "--from"
-			}
-			return fail(fmt.Sprintf("%s: @%s is not a child: environment %s has no parent: in %s", flag, t.Address, t.Name, cmp.Or(t.File, "the project's config")))
-		}
-		steps := t.Release
-		if rollback {
-			// What the server runs is the restored release's rollback:,
-			// read there (ActivateScript); the checkout's gives only its
-			// local before and after steps, which run here.
-			steps = t.Rollback
-			if steps == nil {
-				steps = &remote.Steps{}
-			}
-		} else if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
-			return fail(missingSteps(t, kind))
-		}
-		// A release carries its reload: and destroy: steps too, which run
-		// on the server: a command that only runs locally fails them only
-		// once they run, past a reload's checks.
-		scoped := []*remote.Steps{steps}
-		if !rollback {
-			scoped = append(scoped, &remote.Steps{Run: t.Reload}, &remote.Steps{Run: t.Destroy})
-		}
-		if err := checkStepScopes(projectDir, scoped...); err != nil {
-			return fail(err.Error())
-		}
-		phases := remote.RemotePhases(steps)
-		if rollback {
-			phases = remote.Phases{}
-		}
-
-		// The whole run is recorded and saved on the server once it has
-		// been touched: devopsy @<target> --log.
-		what := kind
-		rlog := newReleaseLog(what, t)
-		log := report.Default().Tee(rlog.Line)
-		stop := func(err error) int {
-			log.Fail(err)
-			return 1
-		}
-		session := func(script string) int {
-			return liveSession(t, script, rlog, log, releaseWords(t, kind))
-		}
-		// save ends the log with code and saves it in release id's
-		// directory on the server: a rollback's is appended to the log of
-		// the release it restores, which its script names.
-		save := func(id string, code int) int {
-			rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("%s exited %d", what, code)))
-			text := rlog.Text()
-			rollback := id == ""
-			if rollback {
-				m := rollingBackTo.FindSubmatch(text)
-				if m == nil {
-					return code
-				}
-				id = string(m[1])
-				text = append([]byte("\n"), text...)
-			}
-			if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
-				why := fmt.Sprint(c)
-				if err != nil {
-					why = err.Error()
-				}
-				report.Warn(fmt.Sprintf("could not save the %s log on the server (%s)", what, why))
-			}
-			return code
-		}
-		local := func(phase string, list []string, commit string) int {
-			for _, step := range list {
-				log.Info(fmt.Sprintf("running 'devopsy %s' locally (%s)", step, phase))
-				if code := runLocalStep(t, projectDir, remote.StepArgs(step), commit); code != 0 {
-					rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("'devopsy %s' exited %d", step, code)))
-					return code
-				}
-			}
-			return 0
-		}
-
-		if rollback {
-			if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
-				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
-			}
-			log.Info(fmt.Sprintf("rolling back %s (%s:%s)", t.Address, t.Host, t.Path))
-			if code := session(imagesAccept(accept) + remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
-				return save("", code)
-			}
-			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
-				log.Error(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
-				return save("", 1)
-			}
-			return save("", 0)
-		}
-
-		// What the release uploads, listed before any session: build mode's
-		// list is git's, so outside a repository it fails here, not after
-		// the checks on the server.
-		projectRoot := filepath.Dir(projectDir)
-		files, err := remote.Files(projectRoot, t.Mode)
-		if err != nil {
-			report.Fail(err, report.Fix("make it one, or release .devopsy/ only and pull images (mode: image):", "git init "+projectRoot))
-			return 1
-		}
-
-		// Variables named like secrets that secrets: does not list: the
-		// compose files' and the environment's env:, asked about before
-		// anything runs.
-		names, err := cli.ComposeVariables(projectDir)
-		if err != nil {
-			return fail(err.Error())
-		}
-		for k := range t.Env {
-			names = append(names, k)
-		}
-		if err := confirmUnnamedSecrets(names, t.Project, yes); err != nil {
-			report.Fail(err)
-			return 1
-		}
-
-		// What the release's activation needs is checked in the first
-		// session to the server too, so a server lacking it refuses before
-		// a new instance is asked about or a child's inherited variables
-		// are written (review); a release opening none before its upload
-		// is checked there, its local before steps run first (accepted:
-		// no session of its own for it).
-		// The activation's own: a sync's are checked where it is decided
-		// (the child's current), and a release that does not sync runs on a
-		// server lacking them.
-		early := remote.WithAlsoNeeds(context.Background(), remote.ActivateScript(t, "0", false, projectName, phases, nil))
-
-		// A role taken by another compose project on the server fails before
-		// anything is uploaded (--prepare-release checks it again, under the
-		// release lock).
-		if role, _, err := cli.ProjectRoles(projectDir); err != nil {
-			return fail(err.Error())
-		} else if role != "" {
-			var out bytes.Buffer
-			if code, err := remote.SSHContext(early, t, nil, remote.RoleHoldersScript(t, role), bytes.NewReader(nil), &out, false, nil); err != nil {
-				return fail(err.Error())
-			} else if code != 0 {
-				return code
-			}
-			for _, holder := range strings.Fields(out.String()) {
-				if holder != projectName {
-					return fail(fmt.Sprintf("role %s is held by %s on %s: one compose project per role (%s=%s), nothing changed", role, holder, t.Host, cli.RoleLabel, role))
-				}
-			}
-		}
-
-		// A new instance is a new site: confirm it, unless --yes.
-		if t.Instance != "" && !yes {
-			var out bytes.Buffer
-			code, err := remote.SSHContext(early, t, nil, remote.InstanceExistsScript(t), bytes.NewReader(nil), &out, false, nil)
-			if err != nil {
-				return fail(err.Error())
-			}
-			if code != 0 {
-				return code
-			}
-			if strings.TrimSpace(out.String()) != "yes" {
-				q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
-				creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
-				if !atTerminal() {
-					report.Fail(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+remote.HintAddress(t)+" --release --yes")}})
-					return 1
-				}
-				report.Info(q, creates)
-				if !report.Default().Confirm(stdinReader, "create it?") {
-					return fail("nothing released")
-				}
-			}
-		}
-
-		// A child's first release syncs its parent's data once current,
-		// before its run step, so deploy runs on that data and no empty
-		// site is ever served; --sync does it on any release. Decided and
-		// checked before anything changes, so a release never goes live on
-		// empty data after a late failure.
-		var job *syncJob
-		// The first line of the child's copy of its parent's server's
-		// levels, read in this check, for its refresh below.
-		var parentEnv *string
-		if t.Parent != "" {
-			var out bytes.Buffer
-			code, err := remote.SSHContext(early, t, nil, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false, nil)
-			if err != nil {
-				return fail(err.Error())
-			}
-			if code != 0 {
-				return code
-			}
-			cur := remote.ParseCurrent(out.String())
-			parentEnv = &cur.ParentEnv
-			current := cur.Current
-			first := !current
-			syncs := !noSync && (syncFlag || first)
-			if cur.Importing {
-				return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, remote.HintAddress(t)))
-			}
-			// A partial copy from a sync is never run on: only a sync
-			// completes it (the activation checks again); a sync is one
-			// of the ways out of an import's too.
-			if cur.Mark != nil && !syncs {
-				reset := remote.ResetFix(remote.HintAddress(t))
-				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+remote.HintAddress(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+remote.HintAddress(t)+" --sync"), report.Fix(reset[0], reset[1])}
-				msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
-				if cur.Mark.IsImport() {
-					msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
-					fixes = nil
-					for _, f := range remote.ImportFixes(remote.HintAddress(t), cur.Mark.From, true) {
-						fixes = append(fixes, report.Fix(f[0], f[1]))
-					}
-				} else if cur.Mark.IsRestore() {
-					msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
-					fixes = nil
-					for _, f := range remote.RestoreFixes(remote.HintAddress(t), cur.Mark.From, t.Parent != "") {
-						fixes = append(fixes, report.Fix(f[0], f[1]))
-					}
-				} else if !current {
-					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
-				}
-				report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
-				return 1
-			}
-			// A sync reads the data labels, which an older devopsy takes
-			// for none: refused here, before the upload; a release that
-			// does not sync goes on.
-			if syncs && !cur.DataLabels {
-				msg := "the server's devopsy lacks what this needs (" + remote.DataCopyFeature + "): upgrade it (" + remote.UpgradeHint(t) + ")"
-				if os.Getenv(remote.ProtocolCheckEnv) != "warn" {
-					report.Fail(&report.Failure{Msg: msg + ", or set " + remote.ProtocolCheckEnv + "=warn to go on at your own risk: nothing changed"})
-					return 1
-				}
-				report.Warn(msg + ": going on anyway (" + remote.ProtocolCheckEnv + "=warn), and it may fail halfway")
-			}
-			if !noSync {
-				if from != "" && !syncFlag && !first {
-					report.Fail(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", remote.HintAddress(t), from))}})
-					return 1
-				}
-				if syncFlag || first {
-					p := t.ParentTarget
-					if from != "" {
-						if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
-							return fail("--from: " + err.Error())
-						}
-					} else if t.ParentErr != nil {
-						return failParent(t, color, args[0])
-					}
-					if job, err = syncPreflight(t, p, projectName, false); err != nil {
-						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync"))
-						return 1
-					}
-					job.first, job.from, job.fromAddr = first, from != "", from
-				}
-				// Replacing a live child's data asks, as --sync does; a first
-				// release has none to lose.
-				if syncFlag && !first && !yes {
-					if err := confirmSync(t, job.parent, "the release's run step runs on it", "nothing released"); err != nil {
-						report.Fail(err)
-						return 1
-					}
-				}
-			}
-		}
-
-		record := remote.NewRecord(projectRoot, t.Mode, time.Now())
-		commit := record.Commit
-		if v := t.Env["DEVOPSY_RELEASE_COMMIT"]; v != "" {
-			commit = v
-		}
-		if code := local("before", remote.Commands(steps.Before, false), commit); code != 0 {
-			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
-		}
-		// What a sync inherits, after the local before steps and before
-		// the upload: a first release's into shared/inherit.env, so the
-		// variables check finds it; a later one's into the pending file
-		// the sync reads, moved into place once the copy is in; and its
-		// copy of the parent's server's levels. A child's release that
-		// does not sync copies those again, from where its last sync did.
-		if job != nil {
-			if err := inheritVars(context.Background(), job, rlog, color, !job.first, true); err != nil {
-				return stop(fmt.Errorf("inherit: %w: nothing released", err))
-			}
-		} else if t.Parent != "" {
-			refreshParentEnv(context.Background(), t, projectDir, projectEnv, parentEnv, log)
-		}
-		src := record.Mode
-		if record.Commit != "" {
-			src += ", " + record.Branch + "@" + record.Commit[:min(10, len(record.Commit))]
-			if record.Dirty {
-				src += " with uncommitted changes"
-			}
-		}
-		size, err := remote.Size(projectRoot, files)
-		if err != nil {
-			return stop(err)
-		}
-		log.Info(fmt.Sprintf("releasing to %s (%s:%s): %d files, %s, %s",
-			t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
-		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
-			log.Warn(fmt.Sprintf("uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s)",
-				record.Commit[:min(10, len(record.Commit))]))
-		}
-
-		// The upload's progress, on a terminal only; the log gets its
-		// summary.
-		var progressOut io.Writer
-		if term.IsTerminal(int(os.Stderr.Fd())) {
-			progressOut = os.Stderr
-		}
-		progress := newUploadProgress(progressOut, color, size)
-		pr, pw := io.Pipe()
-		go func() {
-			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
-				remote.RecordFile:    record.JSON(),
-				remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
-			}, progress.add))
-		}()
-		// What the server says (a refusal, an error) starts on a line of
-		// its own, and no redraw follows it.
-		var errOut io.Writer = os.Stderr
-		var colored *report.ColorWriter
-		if remote.Color {
-			colored = report.Colorize(os.Stderr)
-			errOut = colored
-		}
-		// Interrupted, the session ends: what the upload left (its .tmp)
-		// goes with the next release.
-		upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		// Gated: the project goes once the server holds the release lock.
-		// The server names the release (remote.UploadScript), on stdout.
-		var idOut bytes.Buffer
-		// What its activation needs is checked here too, before anything
-		// is uploaded (its id is the server's: any one gives the same
-		// needs).
-		var syncOpts *remote.SyncOptions
-		if job != nil {
-			syncOpts = &remote.SyncOptions{}
-		}
-		upSession := remote.WithAlsoNeeds(remote.WithGate(remote.WithoutInterrupt(upCtx)), remote.ActivateScript(t, "0", false, projectName, phases, syncOpts))
-		code, err := remote.SSHStreams(upSession, t, nil, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
-		id := strings.TrimSpace(idOut.String())
-		pr.Close()
-		upInterrupted := upCtx.Err() != nil
-		upStop()
-		if colored != nil {
-			colored.Flush()
-		}
-		progress.clear()
-		if upInterrupted {
-			log.Error("interrupted during the upload: nothing changed on @" + t.Address)
-			return 130
-		}
-		if err == nil && code == 0 && !remote.ReleaseIDFormat.MatchString(id) {
-			err = fmt.Errorf("the server named no release (%q)", id)
-		}
-		if err == nil && code == 0 {
-			log.Info(progress.done(id))
-		}
-		if err != nil || code != 0 {
-			if err != nil {
-				return stop(err)
-			}
-			if code == sshLost {
-				log.Error(lostSays(t, "during the upload", "nothing changed there"))
-			}
-			return code
-		}
-		if job == nil {
-			if code := session(imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
-				return save(id, code)
-			}
-		} else {
-			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			flag := "--release-sync"
-			if job.first {
-				flag = "--release"
-			}
-			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, job.sameServer(&remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, NoInherit: len(job.inherit) == 0, Again: job.again(flag)}))
-			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
-				return save(id, code)
-			}
-		}
-		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
-			log.Error(fmt.Sprintf("an after step failed (%d): the release stays", code))
-			return save(id, 1)
-		}
-		return save(id, 0)
+		return runRemoteRelease(cwd, t, projectName, projectDir, projectEnv, args, color)
 
 	default:
 		// A local command that needs an address runs locally, given it as
@@ -702,14 +266,436 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	}
 }
 
+// runRemoteRelease is @<target> --release, --release-sync, --release-no-sync
+// and --rollback.
+func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir string, projectEnv func(string) (string, bool), args []string, color bool) int {
+	// --release-sync and --release-no-sync are releases that sync
+	// whatever the child's state, or never; what is recorded, run and
+	// said is a release.
+	rollback := args[0] == "--rollback"
+	syncFlag, noSync := args[0] == "--release-sync", args[0] == "--release-no-sync"
+	kind := "release"
+	if rollback {
+		kind = "rollback"
+	}
+	yes, from := false, ""
+	var accept []string
+	for i := 1; i < len(args); i++ {
+		switch a := args[i]; {
+		// A rollback never asks: --yes is accepted, for scripts that
+		// pass it to every command.
+		case a == "--yes" || a == "-y":
+			yes = true
+		case a == "--accept-image":
+			// The services whose image the release's or the rollback's
+			// checks let through against their data's history when they
+			// refuse it.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", remote.HintAddress(t), args[0]))
+			}
+			accept = acceptImage(accept, args[i+1])
+			i++
+		case !rollback && a == "--from":
+			// Where a syncing release copies from, instead of the
+			// parent: an address, its @ optional.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", remote.HintAddress(t), args[0]))
+			}
+			from = strings.TrimPrefix(args[i+1], "@")
+			i++
+		default:
+			return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], kind, t.File))
+		}
+	}
+	if noSync && from != "" {
+		return fail("--from: --release-no-sync never syncs: devopsy @" + remote.HintAddress(t) + " --release-sync --from @" + from + " syncs from it")
+	}
+	if (syncFlag || from != "") && t.Parent == "" {
+		flag := args[0]
+		if from != "" {
+			flag = "--from"
+		}
+		return fail(fmt.Sprintf("%s: @%s is not a child: environment %s has no parent: in %s", flag, t.Address, t.Name, cmp.Or(t.File, "the project's config")))
+	}
+	steps := t.Release
+	if rollback {
+		// What the server runs is the restored release's rollback:,
+		// read there (ActivateScript); the checkout's gives only its
+		// local before and after steps, which run here.
+		steps = t.Rollback
+		if steps == nil {
+			steps = &remote.Steps{}
+		}
+	} else if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
+		return fail(missingSteps(t, kind))
+	}
+	// A release carries its reload: and destroy: steps too, which run
+	// on the server: a command that only runs locally fails them only
+	// once they run, past a reload's checks.
+	scoped := []*remote.Steps{steps}
+	if !rollback {
+		scoped = append(scoped, &remote.Steps{Run: t.Reload}, &remote.Steps{Run: t.Destroy})
+	}
+	if err := checkStepScopes(projectDir, scoped...); err != nil {
+		return fail(err.Error())
+	}
+	phases := remote.RemotePhases(steps)
+	if rollback {
+		phases = remote.Phases{}
+	}
+
+	// The whole run is recorded and saved on the server once it has
+	// been touched: devopsy @<target> --log.
+	what := kind
+	rlog := newReleaseLog(what, t)
+	log := report.Default().Tee(rlog.Line)
+	stop := func(err error) int {
+		log.Fail(err)
+		return 1
+	}
+	session := func(script string) int {
+		return liveSession(t, script, rlog, log, releaseWords(t, kind))
+	}
+	// save ends the log with code and saves it in release id's
+	// directory on the server: a rollback's is appended to the log of
+	// the release it restores, which its script names.
+	save := func(id string, code int) int {
+		rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("%s exited %d", what, code)))
+		text := rlog.Text()
+		rollback := id == ""
+		if rollback {
+			m := rollingBackTo.FindSubmatch(text)
+			if m == nil {
+				return code
+			}
+			id = string(m[1])
+			text = append([]byte("\n"), text...)
+		}
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+			why := fmt.Sprint(c)
+			if err != nil {
+				why = err.Error()
+			}
+			report.Warn(fmt.Sprintf("could not save the %s log on the server (%s)", what, why))
+		}
+		return code
+	}
+	local := func(phase string, list []string, commit string) int {
+		for _, step := range list {
+			log.Info(fmt.Sprintf("running 'devopsy %s' locally (%s)", step, phase))
+			if code := runLocalStep(t, projectDir, remote.StepArgs(step), commit); code != 0 {
+				rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("'devopsy %s' exited %d", step, code)))
+				return code
+			}
+		}
+		return 0
+	}
+
+	if rollback {
+		if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
+			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
+		}
+		log.Info(fmt.Sprintf("rolling back %s (%s:%s)", t.Address, t.Host, t.Path))
+		if code := session(imagesAccept(accept) + remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
+			return save("", code)
+		}
+		if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
+			log.Error(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
+			return save("", 1)
+		}
+		return save("", 0)
+	}
+
+	// What the release uploads, listed before any session: build mode's
+	// list is git's, so outside a repository it fails here, not after
+	// the checks on the server.
+	projectRoot := filepath.Dir(projectDir)
+	files, err := remote.Files(projectRoot, t.Mode)
+	if err != nil {
+		return failErr(err, report.Fix("make it one, or release .devopsy/ only and pull images (mode: image):", "git init "+projectRoot))
+	}
+
+	// Variables named like secrets that secrets: does not list: the
+	// compose files' and the environment's env:, asked about before
+	// anything runs.
+	names, err := cli.ComposeVariables(projectDir)
+	if err != nil {
+		return fail(err.Error())
+	}
+	for k := range t.Env {
+		names = append(names, k)
+	}
+	if err := confirmUnnamedSecrets(names, t.Project, yes); err != nil {
+		return failErr(err)
+	}
+
+	// What the release's activation needs is checked in the first
+	// session to the server too, so a server lacking it refuses before
+	// a new instance is asked about or a child's inherited variables
+	// are written (review); a release opening none before its upload
+	// is checked there, its local before steps run first (accepted:
+	// no session of its own for it).
+	// The activation's own: a sync's are checked where it is decided
+	// (the child's current), and a release that does not sync runs on a
+	// server lacking them.
+	early := remote.WithAlsoNeeds(context.Background(), remote.ActivateScript(t, "0", false, projectName, phases, nil))
+
+	// A role taken by another compose project on the server fails before
+	// anything is uploaded (--prepare-release checks it again, under the
+	// release lock).
+	if role, _, err := cli.ProjectRoles(projectDir); err != nil {
+		return fail(err.Error())
+	} else if role != "" {
+		var out bytes.Buffer
+		if code, err := remote.SSHContext(early, t, nil, remote.RoleHoldersScript(t, role), bytes.NewReader(nil), &out, false, nil); err != nil {
+			return fail(err.Error())
+		} else if code != 0 {
+			return code
+		}
+		for _, holder := range strings.Fields(out.String()) {
+			if holder != projectName {
+				return fail(fmt.Sprintf("role %s is held by %s on %s: one compose project per role (%s=%s), nothing changed", role, holder, t.Host, cli.RoleLabel, role))
+			}
+		}
+	}
+
+	// A new instance is a new site: confirm it, unless --yes.
+	if t.Instance != "" && !yes {
+		var out bytes.Buffer
+		code, err := remote.SSHContext(early, t, nil, remote.InstanceExistsScript(t), bytes.NewReader(nil), &out, false, nil)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if code != 0 {
+			return code
+		}
+		if strings.TrimSpace(out.String()) != "yes" {
+			q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
+			creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
+			if !atTerminal() {
+				return failErr(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+remote.HintAddress(t)+" --release --yes")}})
+			}
+			report.Info(q, creates)
+			if !report.Default().Confirm(stdinReader, "create it?") {
+				return fail("nothing released")
+			}
+		}
+	}
+
+	// A child's first release syncs its parent's data once current,
+	// before its run step, so deploy runs on that data and no empty
+	// site is ever served; --sync does it on any release. Decided and
+	// checked before anything changes, so a release never goes live on
+	// empty data after a late failure.
+	var job *syncJob
+	// The first line of the child's copy of its parent's server's
+	// levels, read in this check, for its refresh below.
+	var parentEnv *string
+	if t.Parent != "" {
+		var out bytes.Buffer
+		code, err := remote.SSHContext(early, t, nil, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false, nil)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if code != 0 {
+			return code
+		}
+		cur := remote.ParseCurrent(out.String())
+		parentEnv = &cur.ParentEnv
+		current := cur.Current
+		first := !current
+		syncs := !noSync && (syncFlag || first)
+		if cur.Importing {
+			return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, remote.HintAddress(t)))
+		}
+		// A partial copy from a sync is never run on: only a sync
+		// completes it (the activation checks again); a sync is one
+		// of the ways out of an import's too.
+		if cur.Mark != nil && !syncs {
+			reset := remote.ResetFix(remote.HintAddress(t))
+			fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+remote.HintAddress(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+remote.HintAddress(t)+" --sync"), report.Fix(reset[0], reset[1])}
+			msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
+			if cur.Mark.IsImport() {
+				msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
+				fixes = report.FixPairs(remote.ImportFixes(remote.HintAddress(t), cur.Mark.From, true))
+			} else if cur.Mark.IsRestore() {
+				msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
+				fixes = report.FixPairs(remote.RestoreFixes(remote.HintAddress(t), cur.Mark.From, t.Parent != ""))
+			} else if !current {
+				fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
+			}
+			return failErr(&report.Failure{Msg: msg, Fixes: fixes})
+		}
+		// A sync reads the data labels, which an older devopsy takes
+		// for none: refused here, before the upload; a release that
+		// does not sync goes on.
+		if syncs && !cur.DataLabels {
+			msg := "the server's devopsy lacks what this needs (" + remote.DataCopyFeature + "): upgrade it (" + remote.UpgradeHint(t) + ")"
+			if os.Getenv(remote.ProtocolCheckEnv) != "warn" {
+				return failErr(&report.Failure{Msg: msg + ", or set " + remote.ProtocolCheckEnv + "=warn to go on at your own risk: nothing changed"})
+			}
+			report.Warn(msg + ": going on anyway (" + remote.ProtocolCheckEnv + "=warn), and it may fail halfway")
+		}
+		if !noSync {
+			if from != "" && !syncFlag && !first {
+				return failErr(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", remote.HintAddress(t), from))}})
+			}
+			if syncFlag || first {
+				p := t.ParentTarget
+				if from != "" {
+					if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
+						return fail("--from: " + err.Error())
+					}
+				} else if t.ParentErr != nil {
+					return failParent(t, color, args[0])
+				}
+				if job, err = syncPreflight(t, p, projectName, false); err != nil {
+					return failErr(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync"))
+				}
+				job.first, job.from, job.fromAddr = first, from != "", from
+			}
+			// Replacing a live child's data asks, as --sync does; a first
+			// release has none to lose.
+			if syncFlag && !first && !yes {
+				if err := confirmSync(t, job.parent, "the release's run step runs on it", "nothing released"); err != nil {
+					return failErr(err)
+				}
+			}
+		}
+	}
+
+	record := remote.NewRecord(projectRoot, t.Mode, time.Now())
+	commit := record.Commit
+	if v := t.Env["DEVOPSY_RELEASE_COMMIT"]; v != "" {
+		commit = v
+	}
+	if code := local("before", remote.Commands(steps.Before, false), commit); code != 0 {
+		return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
+	}
+	// What a sync inherits, after the local before steps and before
+	// the upload: a first release's into shared/inherit.env, so the
+	// variables check finds it; a later one's into the pending file
+	// the sync reads, moved into place once the copy is in; and its
+	// copy of the parent's server's levels. A child's release that
+	// does not sync copies those again, from where its last sync did.
+	if job != nil {
+		if err := inheritVars(context.Background(), job, rlog, color, !job.first, true); err != nil {
+			return stop(fmt.Errorf("inherit: %w: nothing released", err))
+		}
+	} else if t.Parent != "" {
+		refreshParentEnv(context.Background(), t, projectDir, projectEnv, parentEnv, log)
+	}
+	src := record.Mode
+	if record.Commit != "" {
+		src += ", " + record.Branch + "@" + record.Commit[:min(10, len(record.Commit))]
+		if record.Dirty {
+			src += " with uncommitted changes"
+		}
+	}
+	size, err := remote.Size(projectRoot, files)
+	if err != nil {
+		return stop(err)
+	}
+	log.Info(fmt.Sprintf("releasing to %s (%s:%s): %d files, %s, %s",
+		t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
+	if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
+		log.Warn(fmt.Sprintf("uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s)",
+			record.Commit[:min(10, len(record.Commit))]))
+	}
+
+	// The upload's progress, on a terminal only; the log gets its
+	// summary.
+	var progressOut io.Writer
+	if term.IsTerminal(int(os.Stderr.Fd())) {
+		progressOut = os.Stderr
+	}
+	progress := newUploadProgress(progressOut, color, size)
+	pr, pw := io.Pipe()
+	go func() {
+		pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
+			remote.RecordFile:    record.JSON(),
+			remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
+		}, progress.add))
+	}()
+	// What the server says (a refusal, an error) starts on a line of
+	// its own, and no redraw follows it.
+	var errOut io.Writer = os.Stderr
+	var colored *report.ColorWriter
+	if remote.Color {
+		colored = report.Colorize(os.Stderr)
+		errOut = colored
+	}
+	// Interrupted, the session ends: what the upload left (its .tmp)
+	// goes with the next release.
+	upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Gated: the project goes once the server holds the release lock.
+	// The server names the release (remote.UploadScript), on stdout.
+	var idOut bytes.Buffer
+	// What its activation needs is checked here too, before anything
+	// is uploaded (its id is the server's: any one gives the same
+	// needs).
+	var syncOpts *remote.SyncOptions
+	if job != nil {
+		syncOpts = &remote.SyncOptions{}
+	}
+	upSession := remote.WithAlsoNeeds(remote.WithGate(remote.WithoutInterrupt(upCtx)), remote.ActivateScript(t, "0", false, projectName, phases, syncOpts))
+	code, err := remote.SSHStreams(upSession, t, nil, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
+	id := strings.TrimSpace(idOut.String())
+	pr.Close()
+	upInterrupted := upCtx.Err() != nil
+	upStop()
+	if colored != nil {
+		colored.Flush()
+	}
+	progress.clear()
+	if upInterrupted {
+		log.Error("interrupted during the upload: nothing changed on @" + t.Address)
+		return 130
+	}
+	if err == nil && code == 0 && !remote.ReleaseIDFormat.MatchString(id) {
+		err = fmt.Errorf("the server named no release (%q)", id)
+	}
+	if err == nil && code == 0 {
+		log.Info(progress.done(id))
+	}
+	if err != nil || code != 0 {
+		if err != nil {
+			return stop(err)
+		}
+		if code == sshLost {
+			log.Error(lostSays(t, "during the upload", "nothing changed there"))
+		}
+		return code
+	}
+	if job == nil {
+		if code := session(imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
+			return save(id, code)
+		}
+	} else {
+		log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
+		flag := "--release-sync"
+		if job.first {
+			flag = "--release"
+		}
+		script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, job.sameServer(&remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, NoInherit: len(job.inherit) == 0, Again: job.again(flag)}))
+		if code := runSyncSession(job, script, true, rlog, color); code != 0 {
+			return save(id, code)
+		}
+	}
+	if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
+		log.Error(fmt.Sprintf("an after step failed (%d): the release stays", code))
+		return save(id, 1)
+	}
+	return save(id, 0)
+}
+
 // failParent reports a child whose parent could not be resolved
 // (ParentErr), with the way around it: a release without the parent's
 // data, then a sync from an address.
 func failParent(t *remote.Target, color bool, flag string) int {
-	report.Fail(t.ParentErr,
+	return failErr(t.ParentErr,
 		report.Fix("name "+t.Parent+"'s address for this release:", "devopsy @"+remote.HintAddress(t)+" "+flag+" --from "+parentGuess(t)),
 		report.Fix("release without "+t.Parent+"'s data for now, and sync it whenever you are ready:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync", "devopsy @"+remote.HintAddress(t)+" --sync --from "+parentGuess(t)))
-	return 1
 }
 
 // parentGuess is the parent's address on the child's server, for a hint
@@ -736,12 +722,10 @@ func needsServer(projectDir, name string) bool {
 func runAddressed(root, address string, args []string, verbose int) int {
 	self, err := os.Executable()
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if err := os.Chdir(root); err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	argv := []string{self}
 	for range verbose {
@@ -858,8 +842,7 @@ func runLocalStep(t *remote.Target, projectDir string, args []string, commit str
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode()
 		}
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }
@@ -980,14 +963,12 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		}
 		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)%s", t.Name, where, snaps),
 			confirmWord(t), "nothing removed", false); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.DestroyScript(t, projectName), strings.NewReader(remote.AckInput), nil, false, nil)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if code == sshLost {
 		report.Error(lostSays(t, "", "the destroy may have stopped halfway there"), "to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy")
@@ -1021,8 +1002,7 @@ func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
 	}
 	code, err := remote.SSH(t, remote.LeftoverScript(t, true), bytes.NewReader(nil), nil, false)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return code
 }

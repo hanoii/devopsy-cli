@@ -226,10 +226,6 @@ func readSnapshotData(ctx context.Context, cwd string) (*snapshotData, error) {
 // runSnapshotStep implements the hidden --snapshot-step <word>: leftovers,
 // check, mirror, stopped <id> <release>, tar <id>.
 func runSnapshotStep(cwd string, args []string) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) == 0 {
 		return fail("usage: devopsy " + remote.SnapshotStepFlag + " leftovers|check|mirror|stopped <id> <release>|tar <id>")
 	}
@@ -248,8 +244,7 @@ func runSnapshotStep(cwd string, args []string) int {
 			return failErr(interrupted(ctx, err))
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
-			report.Fail(interrupted(ctx, err))
-			return 1
+			return failErr(interrupted(ctx, err))
 		}
 		return 0
 	case "mirror":
@@ -317,8 +312,7 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-fit <snapshot>")
 		}
 		if err := snapshotCheckFit(cwd, p, args[1]); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		return 0
 	case "check-tars":
@@ -326,8 +320,7 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-tars <snapshot>")
 		}
 		if err := snapshotCheckTars(cwd, p, args[1], true); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		return 0
 	case "restore-data":
@@ -366,8 +359,7 @@ func runSnapshotStep(cwd string, args []string) int {
 			return 3
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
-			report.Fail(interrupted(ctx, err))
-			return 1
+			return failErr(interrupted(ctx, err))
 		}
 		return 0
 	case "release-stopped":
@@ -617,10 +609,6 @@ func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, c contain
 // release's images bookmarked for it. A signal or a session gone before
 // the services are back cancels it, the services started again.
 func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	ctx, stopSig := interruptible()
 	defer stopSig()
 	if err := settleStops(cwd, p.base); err != nil {
@@ -659,8 +647,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 		gated = filepath.Join(next, remote.CodeDir)
 	}
 	if err := gateBeforeStop(cwd, gated, set); err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	stopped, restore, err := stopSetFor(cwd, set, true, id)
 	switch {
@@ -1563,8 +1550,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		}
 		code, err := remote.SSHWith(t, nil, remote.SnapshotExportScript(t, id), bytes.NewReader(nil), os.Stdout, false, nil)
 		if err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		if code == sshLost {
 			report.Error(lostSays(t, "", "the export of snapshot "+id+" is incomplete"))
@@ -1582,8 +1568,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		}
 		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.SnapshotImportScript(t, projectName), os.Stdin, nil, false, nil)
 		if err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		if code == sshLost {
 			// The server keeps a snapshot only once it read the whole tar.
@@ -1598,8 +1583,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if code != 0 {
 		return code
@@ -1678,11 +1662,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		}
 		switch {
 		case len(match) == 0:
-			report.Fail(&report.Failure{Msg: fmt.Sprintf("%s has no snapshot %s: nothing removed", t.Address, w), Details: []string{"its snapshots: " + cmp.Or(strings.Join(ids, " "), "none")}})
-			return 1
+			return failErr(&report.Failure{Msg: fmt.Sprintf("%s has no snapshot %s: nothing removed", t.Address, w), Details: []string{"its snapshots: " + cmp.Or(strings.Join(ids, " "), "none")}})
 		case len(match) > 1:
-			report.Fail(&report.Failure{Msg: fmt.Sprintf("%s starts several snapshots (%s): nothing removed", w, strings.Join(match, " "))})
-			return 1
+			return failErr(&report.Failure{Msg: fmt.Sprintf("%s starts several snapshots (%s): nothing removed", w, strings.Join(match, " "))})
 		}
 		if !slices.Contains(picked, match[0]) {
 			picked = append(picked, match[0])
@@ -1690,11 +1672,10 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	}
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			report.Fail(&report.Failure{
+			return failErr(&report.Failure{
 				Msg:   "--snapshots remove asks first, and there is no terminal to ask at",
 				Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --snapshots "+strings.Join(args, " ")+" --yes")},
 			})
-			return 1
 		}
 		what := "this snapshot"
 		if len(picked) > 1 {
@@ -1708,8 +1689,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	}
 	code, err = remote.SSH(t, remote.SnapshotsRemoveScript(t, projectName, picked), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return code
 }
@@ -2346,10 +2326,6 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 // mark goes (it covers every service with data the restored code runs),
 // and so do its stop lines: the run step starts them.
 func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 	ctx := context.Background()
 	id := filepath.Base(snap)
@@ -2373,15 +2349,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	if err != nil {
 		return failErr(err)
 	}
-	switch mk := readMark(p.base); {
-	case mk.IsImport():
-		if err := endLeftoverImport(cwd, p.base, services, mk.From); err != nil {
-			return fail(err.Error())
-		}
-	case mk != nil && mk.Code == remote.IncompleteRestore:
-		if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
-			return fail(err.Error())
-		}
+	if err := endMarkedWriters(cwd, p.base, services); err != nil {
+		return fail(err.Error())
 	}
 	mnt, err := dataMnt(projectDir)
 	if err != nil {
@@ -2393,8 +2362,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// anything stops.
 	_, restored, err := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
 	if err != nil {
-		report.Fail(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
-		return 1
+		return failErr(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
 	}
 	entries, volumes := map[string]bool{}, map[string]cli.Volume{}
 	for _, s := range restored {
@@ -2409,8 +2377,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	owners, err := cli.MntOwners(restored)
 	if err != nil {
-		report.Fail(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
-		return 1
+		return failErr(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
 	}
 	tars := snapshotTars(m)
 	for _, t := range tars {
@@ -2425,11 +2392,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		if e := symlinkEntry(mnt, []string{t.name}); e != "" {
 			return fail("mnt/" + e + " is a symlink: the restore would not reach what it points to: make it a directory, mounting that there: nothing restored")
 		}
-		if fi, err := os.Stat(filepath.Join(mnt, t.name)); err == nil && fi.IsDir() == t.isFile {
-			as, is := "a directory", "a file"
-			if t.isFile {
-				as, is = is, as
-			}
+		if as, is, differs := entryKindDiffers(mnt, t.name, t.isFile); differs {
 			return fail(fmt.Sprintf("snapshot %s holds mnt/%s as %s, and it is %s here: make it %s first: nothing restored", id, t.name, as, is, as))
 		}
 	}
@@ -2492,8 +2455,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// From the mark on, the restore rule: whatever fails keeps the set
 	// down under the mark, its ways out a restore again or another.
 	stayDown := func(msg string) int {
-		report.Fail(&report.Failure{Msg: msg + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
-		return 1
+		return failErr(&report.Failure{Msg: msg + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
 	}
 	// Its release snapshot's stopped set is the restore's once its mark is
 	// there: a mark that cannot be written leaves the snapshot's lines, which
@@ -2524,13 +2486,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	// What it extracted goes to its owner, as an import's does: the tar
 	// carries the owners of when it was taken, or of another server.
-	owned := map[string]string{}
-	for _, e := range m.entries {
-		if o := owners[e]; o != "" {
-			owned[e] = o
-		}
-	}
-	if err := ownMnt(ctx, mnt, owned, cname.with("-owners")); err != nil {
+	if err := ownMnt(ctx, mnt, ownedEntries(owners, m.entries), cname.with("-owners")); err != nil {
 		return stayDown(err.Error())
 	}
 	if os.Getenv(remote.RestoreEnvEnv) != "" {
@@ -2658,11 +2614,7 @@ func (l *lenientWriter) Write(p []byte) (int, error) {
 // restoreRemedies are a restore mark's ways out, as commands that work
 // copied (the environment's address).
 func restoreRemedies(cwd, id string) []report.Remedy {
-	var rs []report.Remedy
-	for _, f := range remote.RestoreFixes(targetAddress(cwd), id, projectVar(cwd, "DEVOPSY_PARENT") != "") {
-		rs = append(rs, report.Fix(f[0], f[1]))
-	}
-	return rs
+	return report.FixPairs(remote.RestoreFixes(targetAddress(cwd), id, projectVar(cwd, "DEVOPSY_PARENT") != ""))
 }
 
 // snapshotRestored completes a restore once its run step went through:
@@ -2838,8 +2790,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 			how = ""
 		}
 		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes; devopsy @%s --snapshot first keeps it", t.Address, what, how, t.Host, t.Path, targetRef(t)), confirmWord(t), "nothing restored", false); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	rlog := newReleaseLog("restore", t)

@@ -28,10 +28,6 @@ import (
 // targets), a prompt (hidden unless --show), or stdin. --help and --show can
 // go anywhere after --vars: names never start with "-".
 func runVars(t *remote.Target, flag string, args []string, lookup func(string) (string, bool), color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--show | get KEY | set [--show] KEY... | unset KEY...]"
 	show := false
 	var words []string
@@ -165,8 +161,7 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		}
 		if t.Project != nil && t.Project.Dir != "" {
 			if err := confirmUnnamedSecrets(args, t.Project, false); err != nil {
-				report.Fail(err)
-				return 1
+				return failErr(err)
 			}
 		}
 		var lines strings.Builder
@@ -219,8 +214,7 @@ func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string,
 	// Gated: the values go once the server holds the release lock.
 	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, script, strings.NewReader(remote.GatedInput(stdin)), &out, false, nil)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if code != 0 {
 		return code

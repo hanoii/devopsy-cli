@@ -86,8 +86,7 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 		report.Info(s)
 	}
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }
@@ -100,8 +99,7 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 func runReleaseSettings(color bool) int {
 	r, err := remote.ReleaseSettings()
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(), remote.Protocol, remote.FeaturesList())
 	return 0

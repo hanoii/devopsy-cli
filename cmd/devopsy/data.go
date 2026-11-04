@@ -201,6 +201,32 @@ func symlinkEntry(mnt string, entries []string) string {
 	return ""
 }
 
+// entryKindDiffers says whether mnt's entry is of another kind than what a
+// tar or a snapshot brings, file or directory, naming each: a mount point
+// of another kind would fail the extraction once the entry was emptied.
+func entryKindDiffers(mnt, name string, file bool) (as, is string, differs bool) {
+	fi, err := os.Stat(filepath.Join(mnt, name))
+	if err != nil || fi.IsDir() != file {
+		return "", "", false
+	}
+	as, is = "a directory", "a file"
+	if file {
+		as, is = is, as
+	}
+	return as, is, true
+}
+
+// ownedEntries are the owners of entries, those that have one.
+func ownedEntries(owners map[string]string, entries []string) map[string]string {
+	owned := map[string]string{}
+	for _, e := range entries {
+		if o := owners[e]; o != "" {
+			owned[e] = o
+		}
+	}
+	return owned
+}
+
 // dataMnt is the project's mnt, its link resolved (on servers it is
 // shared/mnt): what the util image mounts.
 func dataMnt(projectDir string) (string, error) {
@@ -241,10 +267,6 @@ func dockerRunIO(ctx context.Context, c container, stdin io.Reader, stdout io.Wr
 // runExport implements devopsy --export <service>: its data on stdout,
 // everything said on stderr.
 func runExport(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[cli.ExportFlag]))
 		return 0
@@ -341,8 +363,7 @@ func runExport(cwd string, args []string, color bool) int {
 	// before anything stops when that start would be (checkStartBinds).
 	if cli.InRelease(projectDir) {
 		if err := gateBeforeStop(cwd, cwd, set); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	// On a target recorded, as a push's stops are: an export killed
@@ -1039,10 +1060,6 @@ func readyEntry(mnt string, e tarEntry) error {
 // service or --resolved. Locally there is no mark: the error says what
 // stays down.
 func runImport(cwd string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) >= 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[cli.ImportFlag]))
 		return 0
@@ -1210,11 +1227,7 @@ func runImport(cwd string, args []string, color bool) int {
 			if e.volume != nil {
 				continue
 			}
-			if fi, err := os.Stat(filepath.Join(mnt, e.name)); err == nil && fi.IsDir() == e.file {
-				as, is := "a directory", "a file"
-				if e.file {
-					as, is = is, as
-				}
+			if as, is, differs := entryKindDiffers(mnt, e.name, e.file); differs {
 				return fail(fmt.Sprintf("the tar carries mnt/%s as %s, and it is %s here: nothing imported", e.name, as, is))
 			}
 		}
@@ -1262,8 +1275,7 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		}
 		if err := cli.CheckLeavingBinds(services, carried, "the import: nothing imported"); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
@@ -1340,14 +1352,8 @@ func runImport(cwd string, args []string, color bool) int {
 			// Not locally on macOS, as localMnt: Docker Desktop's file
 			// sharing may refuse the chown, and both it and OrbStack let
 			// any container user write the Mac's files anyway.
-			owned := map[string]string{}
-			for _, e := range names {
-				if o := owners[e]; o != "" && (onTarget || runtime.GOOS != "darwin") {
-					owned[e] = o
-				}
-			}
-			if err == nil {
-				err = ownMnt(ctx, mnt, owned, cname.with("-owners"))
+			if err == nil && (onTarget || runtime.GOOS != "darwin") {
+				err = ownMnt(ctx, mnt, ownedEntries(owners, names), cname.with("-owners"))
 			}
 		}
 	}
@@ -1385,12 +1391,11 @@ func runImport(cwd string, args []string, color bool) int {
 			if _, stopErr := endImport(cwd, name, services, true, wasUp); stopErr != nil {
 				report.Error(stopErr.Error())
 			}
-			report.Fail(fmt.Errorf("the import of %s completed, but %w: what it stopped stays down, and the mark until an import of %s completes", name, err, name),
+			return failErr(fmt.Errorf("the import of %s completed, but %w: what it stopped stays down, and the mark until an import of %s completes", name, err, name),
 				report.Fix("once that is fixed (the registry, Docker), accept the data and start them:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
-			return 1
 		}
 	}
-	if err := restoreServices(cwd, services, false, imgs != nil, nil, []string{name}); err != nil {
+	if err := restoreServices(cwd, services, restoreOpts{recreate: imgs != nil, written: []string{name}}); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
 	if imgs != nil {
@@ -1480,8 +1485,7 @@ func importFailed(cwd, base, name string, services []cli.SyncService, stopped []
 		if len(down) > 0 {
 			fixes = append(fixes, report.Fix("or start them on the data as it is:", "devopsy start "+strings.Join(down, " ")))
 		}
-		report.Fail(&report.Failure{Msg: "the import of " + name + " did not complete: its data may be partial, and " + what, Fixes: fixes})
-		return 1
+		return failErr(&report.Failure{Msg: "the import of " + name + " did not complete: its data may be partial, and " + what, Fixes: fixes})
 	}
 	report.Error("the import of "+name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+name+" completes", "devopsy @"+targetAddress(cwd)+" --status shows it, and the ways out")
 	return 1
@@ -1511,17 +1515,12 @@ func readMark(base string) *remote.Incomplete {
 // record holds and only once all of it is healthy removes the mark and
 // the record. Locally there is neither: refused.
 func runResolved(cwd, name string) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
 		return fail(err.Error())
 	}
 	if !cli.InRelease(projectDir) {
-		report.Fail(&report.Failure{Msg: "--resolved works on a target only: locally nothing records what a failed import kept down", Fixes: []report.Remedy{report.Fix("start what it kept down (the import's error names it):", "devopsy start <service>...")}})
-		return 1
+		return failErr(&report.Failure{Msg: "--resolved works on a target only: locally nothing records what a failed import kept down", Fixes: []report.Remedy{report.Fix("start what it kept down (the import's error names it):", "devopsy start <service>...")}})
 	}
 	base := filepath.Dir(cwd)
 	m := readMark(base)
@@ -1549,8 +1548,7 @@ func runResolved(cwd, name string) int {
 	// a complete import does: a tar made anywhere carries its maker's
 	// owners, and the services would start on them.
 	if err := resolvedOwners(cwd, projectDir, services, name); err != nil {
-		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
-		return 1
+		return failErr(fmt.Errorf("%w: the mark stays", err), again)
 	}
 	// The data accepted as it is: its history started over (unless the
 	// import took the export's over since its mark), its hold derived
@@ -1563,17 +1561,15 @@ func runResolved(cwd, name string) int {
 	// (review round 4: it warned, then started the held image on the
 	// imported data).
 	if err := resolvedLanding(cwd, base, name, services, since); err != nil {
-		report.Fail(fmt.Errorf("%s's imported data did not land, as %w: the mark stays, and what the import kept down stays down", name, err),
+		return failErr(fmt.Errorf("%s's imported data did not land, as %w: the mark stays, and what the import kept down stays down", name, err),
 			report.Fix("once that is fixed (the registry, Docker), run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
-		return 1
 	}
 	// Made again where devopsy's compose file gives a service another
 	// image than its container's (another activation's container, a hold
 	// gone): started, the old container would run its image on the
 	// imported data.
-	if err := restoreServices(cwd, services, false, true, nil, []string{name}); err != nil {
-		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
-		return 1
+	if err := restoreServices(cwd, services, restoreOpts{recreate: true, written: []string{name}}); err != nil {
+		return failErr(fmt.Errorf("%w: the mark stays", err), again)
 	}
 	// What runs on the data now, as after an import that completed.
 	if s, ok := cli.SyncFind(services, name); ok && s.Copy == cli.CopyVolumes {
@@ -1598,12 +1594,7 @@ func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name str
 	if err != nil {
 		return err
 	}
-	owned := map[string]string{}
-	for _, e := range s.Dirs {
-		if o := owners[e]; o != "" {
-			owned[e] = o
-		}
-	}
+	owned := ownedEntries(owners, s.Dirs)
 	if len(owned) == 0 {
 		return nil
 	}
@@ -1771,10 +1762,6 @@ func importArgs(args []string) (name string, yes, resolved bool, accept []string
 // session running devopsy --export in the current release, its stdout
 // through as it is (never colored).
 func runRemoteExport(t *remote.Target, projectName string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		return fail("usage: devopsy @" + targetRef(t) + " " + cli.ExportFlag + " <service>")
 	}
@@ -1808,10 +1795,6 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 // interrupted: a Ctrl-C before it imports nothing, and after it the
 // import goes on on the server, said; a second ends the session.
 func runRemoteImport(t *remote.Target, projectName string, args []string, color bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	name, yes, resolved, accept, err := importArgs(args)
 	if err != nil {
 		return fail(strings.Replace(err.Error(), "[@<target>]", "@"+targetRef(t), 1))
@@ -1824,8 +1807,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 	}
 	if !yes {
 		if err := confirmImport(t, name); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	// stdin through, then the end line only once it ended cleanly: the
@@ -1960,10 +1942,6 @@ wait:
 // restore's, or the import still running), asks for the environment's full name, then
 // a session under the release lock checks again and starts them.
 func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int {
-	fail := func(msg string) int {
-		report.Error(msg)
-		return 1
-	}
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.ResolvedCheckScript(t), bytes.NewReader(nil), &out, false)
 	if err != nil {
@@ -1996,19 +1974,13 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
 	case mark.IsRestore():
-		var fixes []report.Remedy
-		for _, f := range remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "") {
-			fixes = append(fixes, report.Fix(f[0], f[1]))
-		}
-		report.Fail(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Fixes: fixes})
-		return 1
+		fixes := report.FixPairs(remote.RestoreFixes(targetRef(t), mark.From, t.Parent != ""))
+		return failErr(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Fixes: fixes})
 	case !mark.IsImport() || settle:
 		reset := remote.ResetFix(targetRef(t))
-		report.Fail(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), report.Fix(reset[0], reset[1])}})
-		return 1
+		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), report.Fix(reset[0], reset[1])}})
 	case mark.From != name:
-		report.Fail(&report.Failure{Msg: "the import that did not complete on @" + t.Address + " is " + mark.From + "'s, not " + name + "'s: nothing resolved", Fixes: []report.Remedy{report.Fix("resolve that one:", "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+mark.From+" --resolved")}})
-		return 1
+		return failErr(&report.Failure{Msg: "the import that did not complete on @" + t.Address + " is " + mark.From + "'s, not " + name + "'s: nothing resolved", Fixes: []report.Remedy{report.Fix("resolve that one:", "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+mark.From+" --resolved")}})
 	}
 	if !yes {
 		// What the record holds is what starts: the imported service only
@@ -2027,8 +1999,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		}
 		what := fmt.Sprintf("the import of %s into %s did not complete; %s: this starts them on the data the import left", name, confirmWord(t), left)
 		if err := typeToGoOn(what, confirmWord(t), "nothing resolved", false); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 	}
 	code, err = remote.SSH(t, remote.ResolvedScript(t, projectName, name), bytes.NewReader(nil), nil, false)

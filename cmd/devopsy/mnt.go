@@ -224,8 +224,7 @@ func runMntOwners(cwd string, args []string) int {
 		err = ownMnt(context.Background(), mnt, owners, ownersContainer(cwd))
 	}
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }
@@ -258,12 +257,18 @@ func checkStartBinds(cwd string) error {
 	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": " + strings.Join(fixes, "; or ")}
 }
 
+// fail says msg as an error, for a command to return its code.
+func fail(msg string) int {
+	report.Error(msg)
+	return 1
+}
+
 // failErr says err whole (report.Fail: its details, fixes and the
 // failures it carries, each data service without its version among them)
 // and is a command's exit 1: never err.Error() alone, which keeps only
 // the first message.
-func failErr(err error) int {
-	report.Fail(err)
+func failErr(err error, more ...report.Remedy) int {
+	report.Fail(err, more...)
 	return 1
 }
 
@@ -309,8 +314,7 @@ func runCheckMounts(cwd string, args []string) int {
 	case len(args) == 2:
 		var err error
 		if m, err = readManifest(args[1]); err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		what = "the restore: nothing restored"
 	}
@@ -348,8 +352,7 @@ func runCheckMounts(cwd string, args []string) int {
 		err = checkOwned(projectDir, services)
 	}
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	return 0
 }

@@ -73,13 +73,11 @@ installed.
 		}
 	}
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	path, link, notes, err := skill.Install(dir, version, stub)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if link != "" {
 		report.Info("wrote "+path+", linked from "+link, notes...)

@@ -65,19 +65,16 @@ func runCheckImages(cwd string, args []string) int {
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	rel := remote.ReleaseFile(projectDir, "")
 	if rel == "" {
-		report.Fail(errors.New(cli.CheckImagesFlag + " only runs in a release"))
-		return 1
+		return failErr(errors.New(cli.CheckImagesFlag + " only runs in a release"))
 	}
 	if hint {
 		missing, err := cli.MissingVarsIn(cwd, os.Environ())
 		if err != nil {
-			report.Fail(err)
-			return 1
+			return failErr(err)
 		}
 		for _, m := range missing {
 			fmt.Println("missing " + m[0])
@@ -88,13 +85,11 @@ func runCheckImages(cwd string, args []string) int {
 	}
 	s, err := serverImages(cwd, composeName(cwd), os.Stderr)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	needs, err := s.ReloadCheck(rel)
 	if err != nil {
-		report.Fail(err)
-		return 1
+		return failErr(err)
 	}
 	if len(needs) == 0 {
 		if snapshot != "" {
@@ -106,8 +101,7 @@ func runCheckImages(cwd string, args []string) int {
 			if err := s.CheckLanding(rel, snapshotLanding(s, filepath.Join(s.Snapshots, snapshot))); errors.Is(err, images.ErrRefused) {
 				return checkImagesExit
 			} else if err != nil {
-				report.Fail(err)
-				return 1
+				return failErr(err)
 			}
 		}
 		return 0
