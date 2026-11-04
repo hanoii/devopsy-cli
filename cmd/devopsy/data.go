@@ -390,6 +390,7 @@ func runExport(cwd string, args []string, color bool) int {
 		_ = os.Remove(checked)
 		return fail("export " + name + ": interrupted: nothing exported")
 	}
+	timer := report.Default().Timer()
 	stopped, restore, err := stopSet(cwd, set, onTarget)
 	if err != nil {
 		if canClone {
@@ -468,6 +469,9 @@ func runExport(cwd string, args []string, color bool) int {
 	if restoreErr != nil {
 		code = fail(restoreErr.Error())
 	}
+	if code == 0 {
+		timer.Stop("exported " + name)
+	}
 	return code
 }
 
@@ -511,13 +515,17 @@ func localServices(cwd string) ([]images.Service, error) {
 // never runs between them. Waits up to 10 minutes, saying so.
 func imagesShared(ctx context.Context) (unlock func(), err error) {
 	deadline := time.Now().Add(10 * time.Minute)
-	for said := false; ; said = true {
+	var timer *report.Timer
+	for {
 		unlock, ok, err := imagesLockNow(syscall.LOCK_SH)
 		if err != nil || ok {
+			if timer != nil && ok {
+				timer.Stop("done waiting for the server's images")
+			}
 			return unlock, err
 		}
-		if !said {
-			report.Info("waiting for the server's images, held by a removal, up to 10 minutes")
+		if timer == nil {
+			timer = report.Start("waiting for the server's images, held by a removal, up to 10 minutes")
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			return nil, errors.New("the server's images are still held after 10 minutes")
@@ -1239,13 +1247,20 @@ func runImport(cwd string, args []string, color bool) int {
 	run := importRun{cwd: cwd, base: base, projectDir: projectDir, name: name, spool: spool, rel: rel, record: record,
 		services: services, custom: s.Copy == cli.CopyCustom, onTarget: onTarget, wasUp: wasUp,
 		tar: it, owners: owners, set: set, stopped: stopped, imgs: imgs, prior: prior}
+	timer := report.Default().Timer()
 	if err := run.write(ctx); err != nil {
 		return run.failed(interrupted(ctx, err))
 	}
+	var code int
 	if !onTarget {
-		return bringBack()
+		code = bringBack()
+	} else {
+		code = run.complete(down)
 	}
-	return run.complete(down)
+	if code == 0 {
+		timer.Stop("imported " + name)
+	}
+	return code
 }
 
 // importOnTarget is what a target's import does under the release lock

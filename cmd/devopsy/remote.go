@@ -382,11 +382,12 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 	}
 	local := func(phase string, list []string, commit string) int {
 		for _, step := range list {
-			log.Info(fmt.Sprintf("running 'devopsy %s' locally (%s)", step, phase))
+			timer := log.Start(fmt.Sprintf("running 'devopsy %s' locally (%s)", step, phase))
 			if code := runLocalStep(t, projectDir, remote.StepArgs(step), commit); code != 0 {
 				rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("'devopsy %s' exited %d", step, code)))
 				return code
 			}
+			timer.Stop(fmt.Sprintf("'devopsy %s' done", step))
 		}
 		return 0
 	}
@@ -395,7 +396,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
 			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 		}
-		log.Info(fmt.Sprintf("rolling back %s (%s:%s)", t.Address, t.Host, t.Path))
+		total := log.Start(fmt.Sprintf("rolling back %s (%s:%s)", t.Address, t.Host, t.Path))
 		if code := session(imagesAccept(accept) + remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
 			return save("", code)
 		}
@@ -403,6 +404,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 			log.Error(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
 			return save("", 1)
 		}
+		total.Stop("rolled back " + t.Address)
 		return save("", 0)
 	}
 
@@ -596,7 +598,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 	if err != nil {
 		return stop(err)
 	}
-	log.Info(fmt.Sprintf("releasing to %s (%s:%s): %d files, %s, %s",
+	total := log.Start(fmt.Sprintf("releasing to %s (%s:%s): %d files, %s, %s",
 		t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
 	if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
 		log.Warn(fmt.Sprintf("uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s)",
@@ -686,6 +688,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		log.Error(fmt.Sprintf("an after step failed (%d): the release stays", code))
 		return save(id, 1)
 	}
+	total.Stop("released " + id)
 	return save(id, 0)
 }
 

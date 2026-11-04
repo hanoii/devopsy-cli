@@ -65,13 +65,14 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 	if code := run("", []string{"--missing-vars"}); code != 0 {
 		return code
 	}
-	report.Info("pulling and building images")
+	timer := report.Start("pulling and building images")
 	if code := run("", append([]string{"--"}, remote.ProfilePull...)); code != 0 {
 		return code
 	}
 	if code := run("", []string{"--", "build", "--pull"}); code != 0 {
 		return code
 	}
+	timer.Stop("images ready")
 	if a := remote.StepArgs(steps.Run); len(a) > 0 {
 		return run("run", a)
 	}
@@ -81,8 +82,9 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 // runInPlace runs devopsy a in the project's root, as a server runs a
 // step in the release, saying so for a phase's step.
 func runInPlace(root, phase string, a []string) int {
+	var timer *report.Timer
 	if phase != "" {
-		report.Info(fmt.Sprintf("running 'devopsy %s' (%s)", strings.Join(a, " "), phase))
+		timer = report.Start(fmt.Sprintf("running 'devopsy %s' (%s)", strings.Join(a, " "), phase))
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -96,6 +98,9 @@ func runInPlace(root, phase string, a []string) int {
 			return exitErr.ExitCode()
 		}
 		return failErr(err)
+	}
+	if timer != nil {
+		timer.Stop(fmt.Sprintf("'devopsy %s' done", strings.Join(a, " ")))
 	}
 	return 0
 }

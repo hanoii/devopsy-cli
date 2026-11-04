@@ -63,6 +63,12 @@ func snapshotsOf(base string) string {
 	return snaps
 }
 
+// snapshotTaken says id is taken, with the take's time when its script
+// keeps a clock (a release's snapshot, part of the release, has none).
+func snapshotTaken(id string) {
+	report.Info(report.SinceEpoch("snapshot "+id+" taken", os.Getenv(remote.SnapshotSinceEnv)))
+}
+
 // takeMirror says whether a take keeps a mirror: its environment asks
 // (remote.SnapshotMirrorEnv, snapshots: {mirror: true}) and the server
 // does not turn mirrors off (its snapshots: {mirror: false}); refused
@@ -731,7 +737,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 		if err := os.Rename(tmp, filepath.Join(p.snaps, id)); err != nil {
 			return fail(err.Error())
 		}
-		report.Info("snapshot " + id + " taken")
+		snapshotTaken(id)
 	}
 	return 0
 }
@@ -932,7 +938,7 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 			report.Warn("removing snapshot " + id + "'s clone: " + err.Error())
 		}
 	}
-	report.Info("snapshot " + id + " taken")
+	snapshotTaken(id)
 	return nil
 }
 
