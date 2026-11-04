@@ -1,6 +1,6 @@
 # Sessions, drops and signals
 
-How a release notices its operator gone, what a signal may stop, and how a release goes on past its switch whatever happens to its session. Code: `cmd/devopsy/watch.go`, `cmd/devopsy/heartbeat.go`, `internal/remote/heartbeat.go`, and `watchSession`, `with_tty`, `followOutput` and the signal traps in `internal/remote/remote.go`.
+How a release notices its operator gone, what a signal may stop, and how a release goes on past its switch whatever happens to its session. Code: `cmd/devopsy/watch.go`, `cmd/devopsy/heartbeat.go`, `internal/remote/heartbeat.go`, and `watchSession`, `with_tty` and `followOutput` in `internal/remote/remote.go`, and the signal traps there and in `internal/remote/activate.go`.
 
 ## The session
 

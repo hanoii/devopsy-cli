@@ -107,19 +107,38 @@ func (a *activation) releaseSnap() bool {
 	return a.newRelease() && a.t.SnapshotsRelease.Enabled
 }
 
-// undo puts the live release's image names back after a failed fetch, its
-// release as "$1".
-func (a *activation) undo() string {
+// undo puts the live release's image names back after a failed fetch of rel.
+func (a *activation) undo(rel string) string {
 	if a.rollback {
-		return `img undo --rollback "$1" ${prev:+"$base/$prev"}`
+		return `img undo --rollback ` + rel + ` ${prev:+"$base/$prev"}`
 	}
-	return `img undo "$1" ${prev:+"$base/$prev"}`
+	return `img undo ` + rel + ` ${prev:+"$base/$prev"}`
+}
+
+// undoLocked is undo past the fetch, whose image lock is gone: under the
+// lock taken again.
+func (a *activation) undoLocked() string {
+	return `  if image_lock shared undoing; then
+    ` + a.undo(`"$rel"`) + `
+    image_unlock
+  fi
+`
 }
 
 // step runs one of the phases' steps, on a pseudo-terminal when the operator
 // has one (with_tty), as the fetch and the run step: activations are never -t.
 func (a *activation) step(phase, dir string, args []string, onFail string) string {
-	return runningLine(args, phase) + fmt.Sprintf("(cd %s && with_tty %s) || %s\n", dir, Quote(devopsyCall(a.project, args, false)), onFail)
+	return runningLine(args, phase) + inTTY(dir, devopsyCall(a.project, args, false), onFail)
+}
+
+// inTTY runs cmd in dir through with_tty, onFail when it fails.
+func inTTY(dir, cmd, onFail string) string {
+	return fmt.Sprintf("(cd %s && with_tty %s) || %s\n", dir, Quote(cmd), onFail)
+}
+
+// snapStep is a --snapshot-step in the current release, args as they are.
+func (a *activation) snapStep(word string, args ...string) string {
+	return "(cd \"$base/current\" && " + devopsyCall(a.project, []string{SnapshotStepFlag, word}, false) + " " + strings.Join(args, " ") + ")"
 }
 
 // steps reads a phase's steps from the restored release's own config.
@@ -189,7 +208,8 @@ fi
 	return s
 }
 
-// pick says which release this activation makes live.
+// pick says which release this activation makes live, with not_live for all
+// that follows: for a restore also its locks, and the release it makes.
 func (a *activation) pick() string {
 	s := ""
 	switch {
@@ -197,9 +217,6 @@ func (a *activation) pick() string {
 		// A restore goes through a mark (a complete one clears it), as a
 		// release that syncs does. Its release: made from the snapshot's
 		// copy, pending until the switch, failed if it never goes live.
-		snapStep := func(word string, args ...string) string {
-			return "(cd \"$base/current\" && " + devopsyCall(a.project, []string{SnapshotStepFlag, word}, false) + " " + strings.Join(args, " ") + ")"
-		}
 		s += `snap="$snaps"/` + Quote(a.restore.Snapshot) + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + a.restore.Snapshot + `"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
@@ -209,7 +226,7 @@ func (a *activation) pick() string {
 export ` + RestoreByEnv + `=` + Quote(a.restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[a.restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 devopsy --say info "restoring snapshot ` + a.restore.Snapshot + ` as release $id"
-` + NotLive + snapStep("make-release", `"$snap"`, `"$base/releases/$id"`) + ` || { rm -rf "$base/releases/$id"; exit 1; }
+` + NotLive + a.snapStep("make-release", `"$snap"`, `"$base/releases/$id"`) + ` || { rm -rf "$base/releases/$id"; exit 1; }
 `
 	case a.rollback:
 		s += partialGuard(a.t, a.project, "exit 1")
@@ -238,7 +255,8 @@ fi
 	return s
 }
 
-// guards are what ends the activation before its first step.
+// guards say where the release is, end the activation when it is gone, and
+// hold its pending file until the switch.
 func (a *activation) guards() string {
 	s := `rel="$base/releases/$id"
 code="$rel/` + CodeDir + `"
@@ -273,8 +291,7 @@ func (a *activation) beforeSteps() string {
 	// release:, as a restart's are.
 	if a.rollback {
 		s += `rb_code="$rel/` + CodeDir + `"; export rb_code
-(cd "$base/current" && with_tty ` + Quote(a.steps("before")+` "$rb_code"`) + `) || not_live $?
-unset rb_code
+` + inTTY(`"$base/current"`, a.steps("before")+` "$rb_code"`, "not_live $?") + `unset rb_code
 `
 	} else if len(a.p.Before) > 0 {
 		s += "if [ -n \"$prev\" ]; then\n"
@@ -344,8 +361,7 @@ func (a *activation) checks() string {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(a.project, []string{"--prepare-release"}, false))
 	}
 	if a.rollback {
-		s += `(cd "$code" && with_tty ` + Quote(a.steps("prepare")) + `) || not_live $?
-`
+		s += inTTY(`"$code"`, a.steps("prepare"), "not_live $?")
 	}
 	for _, args := range a.p.Prepare {
 		s += a.step("prepare", `"$code"`, args, "not_live $?")
@@ -474,7 +490,7 @@ func (a *activation) fetch() string {
       devopsy --say warning "the session is gone: undoing the fetch"
     fi
     [ -z "$fetch_sig" ] || devopsy --say error "the images' fetch was interrupted"
-    ` + a.undo() + `
+    ` + a.undo(`"$1"`) + `
   fi
   image_unlock
   return "$fr"
@@ -504,11 +520,7 @@ out="$rel/` + ServerLogFile + `"
 # release not live, rather than at the log's first write after it.
 if ! (umask 077; : >>"$out"); then
   set +e
-  if image_lock shared undoing; then
-    ` + strings.ReplaceAll(a.undo(), `"$1"`, `"$rel"`) + `
-    image_unlock
-  fi
-  not_live 1
+` + a.undoLocked() + `  not_live 1
 fi
 `
 	return s
@@ -528,17 +540,13 @@ func (a *activation) restoreData() string {
 ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
 [ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
 rd_status=0
-(cd "$base/current" && ` + devopsyCall(a.project, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
+` + a.snapStep("restore-data", `"$snap"`, `"$rel"`) + ` || rd_status=$?
 if [ "$rd_status" != 0 ]; then
   set +e
   # The images' names back first: what the settle below starts again, or
   # makes again (images.Recreate), must run the current release's images,
   # never the ones the restore's fetch gave the names.
-  if image_lock shared undoing; then
-    ` + strings.ReplaceAll(a.undo(), `"$1"`, `"$rel"`) + `
-    image_unlock
-  fi
-` + killedSays(a.t, a.project, "rd_status", "nothing restored") + `  not_live 1
+` + a.undoLocked() + `` + killedSays(a.t, a.project, "rd_status", "nothing restored") + `  not_live 1
 fi
 `
 	}
@@ -570,7 +578,7 @@ exec 7<&-
 	s += `make_current "releases/$id"
 `
 	if a.releaseSnap() {
-		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(a.project, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
+		s += `[ -z "${rs_id:-}" ] || ` + a.snapStep("release-record", Quote("live"), `"$rel"`) + ` || true
 ` + `[ -z "${rs_id:-}" ] || export ` + HeldStopsEnv + `=1
 `
 	}
@@ -624,11 +632,10 @@ func (a *activation) restartPrevious() string {
     fi
 `
 	s += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
-    (cd "$base/current" && with_tty ` + Quote(devopsyCall(a.project, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
-    img ran "$base" "$base/$prev" || true
+    ` + inTTY(`"$base/current"`, devopsyCall(a.project, []string{"--release-steps", "restart", "run"}, false), `devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"`) + `    img ran "$base" "$base/$prev" || true
 `
 	if a.releaseSnap() {
-		s += `    [ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(a.project, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+		s += `    [ -z "${rs_id:-}" ] || ` + a.snapStep("release-record", Quote("done"), `"$rel"`) + ` || true
 `
 	}
 	return s
@@ -677,13 +684,11 @@ fi
 	}
 	if a.rollback {
 		s += `if [ "$status" = 0 ]; then
-  (cd "$base/current" && with_tty ` + Quote(a.steps("run")) + `) || status=$?
-fi
+  ` + inTTY(`"$base/current"`, a.steps("run"), "status=$?") + `fi
 `
 	} else {
 		s += `if [ "$status" = 0 ]; then
-` + runningLine(a.p.Run, "run") + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(a.project, a.p.Run, false)) + `) || status=$?
-fi
+` + runningLine(a.p.Run, "run") + `  ` + inTTY(`"$base/current"`, devopsyCall(a.project, a.p.Run, false), "status=$?") + `fi
 `
 	}
 	// What ran on the data, failed or not, before a restart replaces it:
@@ -692,7 +697,7 @@ fi
 		// Only once something started them: the run step, else the restart
 		// of the release before (below). A cut sync's copy or a failed
 		// restore keeps them down, its record saying so.
-		s += `[ -z "${rs_id:-}" ] || [ "$status" != 0 ] || (cd "$base/current" && ` + devopsyCall(a.project, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+		s += `[ -z "${rs_id:-}" ] || [ "$status" != 0 ] || ` + a.snapStep("release-record", Quote("done"), `"$rel"`) + ` || true
 `
 	}
 	// A restore records what ran only once restored started its set on
@@ -754,7 +759,7 @@ func (a *activation) complete() string {
 	s := ""
 	if a.restore != nil {
 		// Its mark and record go once the run step started the set.
-		s += "(cd \"$base/current\" && " + devopsyCall(a.project, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || { rm -f \"$base/" + ActivatingFile + "\"; exit 1; }\n"
+		s += a.snapStep("restored", `"$snap"`) + " || { rm -f \"$base/" + ActivatingFile + "\"; exit 1; }\n"
 		s += `img ran "$base" "$rel" || true
 `
 	}
@@ -812,7 +817,7 @@ func (a *activation) afterSteps() string {
 	s := ""
 	afterFail := `{ s=$?; devopsy --say error "an after step failed ($s): it stays live"; exit "$s"; }`
 	if a.rollback {
-		s += `(cd "$base/current" && with_tty ` + Quote(a.steps("after")) + `) || ` + afterFail + "\n"
+		s += inTTY(`"$base/current"`, a.steps("after"), afterFail)
 	}
 	for _, args := range a.p.After {
 		s += a.step("after", `"$base/current"`, args, afterFail)
