@@ -189,7 +189,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 	s.logs()
 
 	// One whose restore fails keeps both.
-	if _, errs, code := s.runIO(append(s.env, "FAIL_START=shop-prod"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || s.mark() == nil || s.record() == "" {
+	if _, errs, code := s.runIO(append(s.env, "FAIL_START=shop-prod"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || s.mark() == nil || s.record() == "" || !strings.Contains(errs, "the import completed, and what it stopped did not all come back: the mark stays until it does") {
 		t.Errorf("a complete import whose restore fails (%d), mark %+v, record %q:\n%s", code, s.mark(), s.record(), errs)
 	}
 	// The retry, complete: what the record holds starts (db up alone for
@@ -261,6 +261,46 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	}
 	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {
 		t.Errorf("the next import (%d), record %q, stopped %v:\n%s", code, s.record(), s.stopped(), out)
+	}
+}
+
+// A Ctrl-C while stdin is still coming imports nothing: no stop, no spool
+// left, its words.
+func TestImportInterruptedReadingStdin(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	cmd := exec.Command(binary, "--import", "app")
+	cmd.Dir, cmd.Env, cmd.Stdin = s.project, s.env, r
+	var errs bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &errs, &errs
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	spools := func() []string {
+		m, _ := filepath.Glob(filepath.Join(s.dot, ".devopsy-sync.stream.*"))
+		return m
+	}
+	for deadline := time.Now().Add(startWait); len(spools()) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("no spool:\n%s", errs.String())
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	_ = cmd.Wait()
+	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "interrupted while reading stdin: nothing imported") || len(spools()) != 0 {
+		t.Errorf("a Ctrl-C reading stdin (%d), spools %v:\n%s", code, spools(), errs.String())
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
+		t.Errorf("stopped something:\n%s", docker)
 	}
 }
 

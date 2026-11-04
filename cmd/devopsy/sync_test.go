@@ -137,6 +137,10 @@ dblab=$(lab "${FAKE_DB:-mnt+own}")
 if [ -n "${FAKE_APP_OWNER:-}" ]; then
   case $applab in '{}') applab="{\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; *) applab="${applab%\}},\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; esac
 fi
+# FAKE_APP_EXCLUDE: app's devopsy.data.exclude.
+if [ -n "${FAKE_APP_EXCLUDE:-}" ]; then
+  case $applab in '{}') applab="{\"devopsy.data.exclude\":\"$FAKE_APP_EXCLUDE\"}" ;; *) applab="${applab%\}},\"devopsy.data.exclude\":\"$FAKE_APP_EXCLUDE\"}" ;; esac
+fi
 # FAKE_APP_REFLINK: app's devopsy.data.copy.reflink.
 if [ -n "${FAKE_APP_REFLINK:-}" ]; then
   case $applab in '{}') applab="{\"devopsy.data.copy.reflink\":\"$FAKE_APP_REFLINK\"}" ;; *) applab="${applab%\}},\"devopsy.data.copy.reflink\":\"$FAKE_APP_REFLINK\"}" ;; esac
@@ -2871,6 +2875,9 @@ func TestExportImport(t *testing.T) {
 	}
 	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries db, which app neither bind-mounts from mnt (storage) nor mounts as a volume (none): nothing imported") {
 		t.Errorf("foreign entry (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO([]string{"FAKE_APP_EXCLUDE=storage"}, tarOf(t, map[string]string{"storage/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries storage, which app's "+cli.DataExcludeLabel+" leaves out here: nothing imported") {
+		t.Errorf("an excluded entry (%d):\n%s", code, errs)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-import-") && strings.Contains(docker, "sh -c") {
 		t.Errorf("extracted a refused tar:\n%s", docker)
