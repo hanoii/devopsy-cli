@@ -2627,14 +2627,8 @@ func syncPrepare(cwd, projectDir, base string, services []cli.SyncService, set [
 	// An import a killed devopsy left may still load: ended, and what
 	// it stops recorded, before anything streams into it; a restore's
 	// extracting containers likewise.
-	if m := readMark(base); m.IsImport() {
-		if err := endLeftoverImport(cwd, base, services, m.From); err != nil {
-			return fail(err.Error())
-		}
-	} else if m.IsRestore() {
-		if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
-			return fail(err.Error())
-		}
+	if err := endMarkedWriters(cwd, base, services); err != nil {
+		return fail(err.Error())
 	}
 	if streams, _ := cli.SyncCustomServices(services); len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "import")) {
 		return fail(fmt.Sprintf("%s labeled %s=%s: the child's release needs an executable .devopsy/capabilities/%s/import", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))

@@ -2361,15 +2361,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	if err != nil {
 		return failErr(err)
 	}
-	switch mk := readMark(p.base); {
-	case mk.IsImport():
-		if err := endLeftoverImport(cwd, p.base, services, mk.From); err != nil {
-			return fail(err.Error())
-		}
-	case mk != nil && mk.Code == remote.IncompleteRestore:
-		if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
-			return fail(err.Error())
-		}
+	if err := endMarkedWriters(cwd, p.base, services); err != nil {
+		return fail(err.Error())
 	}
 	mnt, err := dataMnt(projectDir)
 	if err != nil {
@@ -2413,11 +2406,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		if e := symlinkEntry(mnt, []string{t.name}); e != "" {
 			return fail("mnt/" + e + " is a symlink: the restore would not reach what it points to: make it a directory, mounting that there: nothing restored")
 		}
-		if fi, err := os.Stat(filepath.Join(mnt, t.name)); err == nil && fi.IsDir() == t.isFile {
-			as, is := "a directory", "a file"
-			if t.isFile {
-				as, is = is, as
-			}
+		if as, is, differs := entryKindDiffers(mnt, t.name, t.isFile); differs {
 			return fail(fmt.Sprintf("snapshot %s holds mnt/%s as %s, and it is %s here: make it %s first: nothing restored", id, t.name, as, is, as))
 		}
 	}
@@ -2512,13 +2501,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	// What it extracted goes to its owner, as an import's does: the tar
 	// carries the owners of when it was taken, or of another server.
-	owned := map[string]string{}
-	for _, e := range m.entries {
-		if o := owners[e]; o != "" {
-			owned[e] = o
-		}
-	}
-	if err := ownMnt(ctx, mnt, owned, cname.with("-owners")); err != nil {
+	if err := ownMnt(ctx, mnt, ownedEntries(owners, m.entries), cname.with("-owners")); err != nil {
 		return stayDown(err.Error())
 	}
 	if os.Getenv(remote.RestoreEnvEnv) != "" {

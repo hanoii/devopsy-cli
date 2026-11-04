@@ -201,6 +201,32 @@ func symlinkEntry(mnt string, entries []string) string {
 	return ""
 }
 
+// entryKindDiffers says whether mnt's entry is of another kind than what a
+// tar or a snapshot brings, file or directory, naming each: a mount point
+// of another kind would fail the extraction once the entry was emptied.
+func entryKindDiffers(mnt, name string, file bool) (as, is string, differs bool) {
+	fi, err := os.Stat(filepath.Join(mnt, name))
+	if err != nil || fi.IsDir() != file {
+		return "", "", false
+	}
+	as, is = "a directory", "a file"
+	if file {
+		as, is = is, as
+	}
+	return as, is, true
+}
+
+// ownedEntries are the owners of entries, those that have one.
+func ownedEntries(owners map[string]string, entries []string) map[string]string {
+	owned := map[string]string{}
+	for _, e := range entries {
+		if o := owners[e]; o != "" {
+			owned[e] = o
+		}
+	}
+	return owned
+}
+
 // dataMnt is the project's mnt, its link resolved (on servers it is
 // shared/mnt): what the util image mounts.
 func dataMnt(projectDir string) (string, error) {
@@ -1202,11 +1228,7 @@ func runImport(cwd string, args []string, color bool) int {
 			if e.volume != nil {
 				continue
 			}
-			if fi, err := os.Stat(filepath.Join(mnt, e.name)); err == nil && fi.IsDir() == e.file {
-				as, is := "a directory", "a file"
-				if e.file {
-					as, is = is, as
-				}
+			if as, is, differs := entryKindDiffers(mnt, e.name, e.file); differs {
 				return fail(fmt.Sprintf("the tar carries mnt/%s as %s, and it is %s here: nothing imported", e.name, as, is))
 			}
 		}
@@ -1332,14 +1354,8 @@ func runImport(cwd string, args []string, color bool) int {
 			// Not locally on macOS, as localMnt: Docker Desktop's file
 			// sharing may refuse the chown, and both it and OrbStack let
 			// any container user write the Mac's files anyway.
-			owned := map[string]string{}
-			for _, e := range names {
-				if o := owners[e]; o != "" && (onTarget || runtime.GOOS != "darwin") {
-					owned[e] = o
-				}
-			}
-			if err == nil {
-				err = ownMnt(ctx, mnt, owned, cname.with("-owners"))
+			if err == nil && (onTarget || runtime.GOOS != "darwin") {
+				err = ownMnt(ctx, mnt, ownedEntries(owners, names), cname.with("-owners"))
 			}
 		}
 	}
@@ -1586,12 +1602,7 @@ func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name str
 	if err != nil {
 		return err
 	}
-	owned := map[string]string{}
-	for _, e := range s.Dirs {
-		if o := owners[e]; o != "" {
-			owned[e] = o
-		}
-	}
+	owned := ownedEntries(owners, s.Dirs)
 	if len(owned) == 0 {
 		return nil
 	}
