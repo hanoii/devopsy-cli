@@ -862,6 +862,41 @@ func TestSnapshotRestoreCut(t *testing.T) {
 	}
 }
 
+// A restore's failure after its mark says the services stay down and
+// gives the ways out, whichever step failed: moving --with-env's files into
+// place, and reading what the data lands with.
+func TestSnapshotRestoreFailsAfterMark(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	said := func(what string, env []string, args ...string) {
+		t.Helper()
+		out, code := s.run(env, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		if code == 0 || !strings.Contains(readString(filepath.Join(base, remote.SyncIncompleteFile)), "\t"+m[1]+"\trestore\t") {
+			t.Errorf("%s (%d), no mark:\n%s", what, code, out)
+		}
+		if !strings.Contains(out, ": the services stay down") || !regexp.MustCompile(`restore it again:\n.*\$ devopsy @\S+ --snapshots restore `+m[1]).MatchString(out) {
+			t.Errorf("%s: the services staying down, or the ways out, not said:\n%s", what, out)
+		}
+	}
+	// A directory where the file it moves into place goes.
+	restoring := filepath.Join(base, "shared", ".env.restoring")
+	if err := os.MkdirAll(restoring, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	said("the --with-env copy", nil, "--with-env")
+	if err := os.Remove(restoring); err != nil {
+		t.Fatal(err)
+	}
+	said("the landing's settings", []string{"FAKE_EXTRACT_BREAK=" + filepath.Join(filepath.Dir(s.root), "home", "config.yaml")})
+}
+
 // A take that would not fit refuses before anything stops, naming the
 // sizes.
 func TestSnapshotSpace(t *testing.T) {

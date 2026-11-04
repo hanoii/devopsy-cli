@@ -2476,17 +2476,24 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	set := cli.WithDependents(services, names, "restore")
 	_, restore, err := stopSet(cwd, set, true)
-	if err != nil {
+	// Up to the mark, a failure starts again what was stopped.
+	before := func(err error) int {
 		if rerr := restore(); rerr != nil {
 			report.Error(rerr.Error())
 		}
 		return fail(err.Error() + ": nothing restored")
 	}
+	if err != nil {
+		return before(err)
+	}
 	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
-		if rerr := restore(); rerr != nil {
-			report.Error(rerr.Error())
-		}
-		return fail(err.Error() + ": nothing restored")
+		return before(err)
+	}
+	// From the mark on, the restore rule: whatever fails keeps the set
+	// down under the mark, its ways out a restore again or another.
+	stayDown := func(msg string) int {
+		report.Fail(&report.Failure{Msg: msg + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
+		return 1
 	}
 	// Its release snapshot's stopped set is the restore's once its mark is
 	// there: a mark that cannot be written leaves the snapshot's lines, which
@@ -2500,11 +2507,9 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		}
 		rec.snaps, rec.snapID = nil, ""
 		if err := rec.write(cwd); err != nil {
-			return fail(err.Error() + ": the services stay down: restore it again")
+			return stayDown(err.Error())
 		}
 	}
-	// From the mark on, the restore rule: whatever fails keeps the set
-	// down under the mark, its ways out a restore again or another.
 	cname := importContainer(cwd)
 	for i, t := range tars {
 		e := tarEntry{name: t.name, forms: []string{t.name}, file: t.isFile}
@@ -2514,8 +2519,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
 		if err := extractEntry(ctx, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd)); err != nil {
-			report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
-			return 1
+			return stayDown(err.Error())
 		}
 	}
 	// What it extracted goes to its owner, as an import's does: the tar
@@ -2527,17 +2531,16 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		}
 	}
 	if err := ownMnt(ctx, mnt, owned, cname.with("-owners")); err != nil {
-		report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
-		return 1
+		return stayDown(err.Error())
 	}
 	if os.Getenv(remote.RestoreEnvEnv) != "" {
 		for from, to := range map[string]string{"shared.env": ".env", "inherit.env": remote.InheritFile} {
 			if src := filepath.Join(snap, remote.SnapshotData, from); fileExists(src) {
 				if err := copyFile(src, filepath.Join(p.base, "shared", to+".restoring")); err != nil {
-					return fail(err.Error())
+					return stayDown(err.Error())
 				}
 				if err := os.Rename(filepath.Join(p.base, "shared", to+".restoring"), filepath.Join(p.base, "shared", to)); err != nil {
-					return fail(err.Error())
+					return stayDown(err.Error())
 				}
 				report.Info("shared/" + to + " restored from the snapshot")
 			}
@@ -2563,11 +2566,10 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// a --no-code restore's) forces a service its check refused.
 	imgs, err := copyImages(cwd)
 	if err != nil {
-		return fail(err.Error())
+		return stayDown(err.Error())
 	}
 	if err := land(imgs, p.base, rel, snapshotLanding(imgs, snap)); err != nil {
-		report.Fail(&report.Failure{Msg: "the snapshot's data is in, but " + err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
-		return 1
+		return stayDown("the snapshot's data is in, but " + err.Error())
 	}
 	// The mark and the record stay until the run step has started the set
 	// (restored): a shell killed before it leaves the set down, marked.

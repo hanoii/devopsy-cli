@@ -483,6 +483,9 @@ case "$*" in
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    # FAKE_EXTRACT_BREAK: a file ruined as the data is written (what
+    # devopsy reads next fails).
+    [ -z "${FAKE_EXTRACT_BREAK:-}" ] || echo '{' >"$FAKE_EXTRACT_BREAK"
     # FAKE_KILL_IMPORT: the devopsy that started the extraction killed
     # outright (SIGKILL, the OOM killer) as it writes.
     [ -z "${FAKE_KILL_IMPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
