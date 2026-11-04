@@ -61,18 +61,12 @@ n=$(grep -cxF -- "$src|$dst" "$CP_LOG")
 	}
 }
 
-// Bug: cloneCheck (round 1 moved it before the stop) makes the clone's
-// directory, $base/.devopsy-sync.clone.<id>, through reflinks'
-// os.MkdirAll, and nothing removes it when the stop that follows fails:
-// runSyncPush's stopServices error path (sync.go, after cloneCheck) and
-// runExport's stopSet error path (data.go) return without the os.Remove
-// the other paths do (no clone made, a clone that failed). The directory
-// then reads as what a push or an export killed outright left: the next
-// push or export says "removing .devopsy-sync.clone.<id>, a clone an
-// earlier copy left", removes the parent's containers by label and runs
-// an unclone container as root, for an empty directory a clean failure
-// left; --destroy-data does the same. Here: db's stop fails on the
-// parent (FAIL_STOP), for a sync and for an export.
+// cloneCheck makes the clone's directory, $base/.devopsy-sync.clone.<id>,
+// before the stop, and a stop that fails removes it, for a sync and for an
+// export (here db's stop fails on the parent, FAIL_STOP): left there, it
+// would read as what a killed copy left, and the next push, export or
+// --destroy-data would remove the parent's containers by label and run an
+// unclone container as root for an empty directory.
 func TestCloneDirGoneAfterStopFailure(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -119,16 +113,12 @@ func TestCloneDirGoneAfterStopFailure(t *testing.T) {
 	}
 }
 
-// Bug: where the parent's data clones, a custom service its labels do
-// not stop is exported after the set started again (restore, then
-// copyStreams), but with the environment computed for the stopped set
-// (env := dataHookEnv(services, cli.StoppedNames(set))): the export hook
-// is told in DEVOPSY_DATA_STOP that app is stopped while app runs. The
-// docs/capabilities.md's contract says "A service in DEVOPSY_DATA_STOP is stopped:
-// reach it with devopsy run --rm --no-deps -T <service>, not exec": a
-// script following it runs a second container of a running service on
-// prod's data, and one that dumps without a transaction because its
-// writer is down dumps under the writer.
+// Where the parent's data clones, a custom service its labels do not stop
+// is exported after the set started again, so its hook's DEVOPSY_DATA_STOP
+// names nothing that runs: docs/capabilities.md says a service named there
+// is stopped, to reach with devopsy run --rm --no-deps -T, and a script
+// following it would run a second container on the parent's data, or dump
+// without a transaction under the writer.
 func TestCloneStreamExportToldWhatIsStopped(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -165,13 +155,10 @@ func TestCloneStreamExportToldWhatIsStopped(t *testing.T) {
 	}
 }
 
-// Bug: the reflink check (cloneCheck: a docker run, then du over all of
-// the data) now runs between the last refusal and the stop. A push
-// cancelled while it runs (Ctrl-C, the session gone: the check's
-// container killed with the push's context) finds reflinks false and
-// goes on to stopServices anyway: prod's db is stopped and started again
-// for a sync that was cancelled before anything changed, and copies
-// nothing. Nothing should stop once the push's context is done.
+// A push cancelled during the reflink check (cloneCheck: a docker run,
+// then du over the data; Ctrl-C or the session gone kills its container)
+// finds reflinks false, and stops nothing: the parent's db stays up once
+// the push's context is done.
 func TestCloneCheckCancelStopsNothing(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -228,17 +215,10 @@ func logLineAt(log, prefix, sub string) (string, int) {
 	return "", -1
 }
 
-// Bug: with the clone, a custom service NOT in the set is exported after
-// the parent's set is started again (runSyncPush: restore(), then
-// copyStreams), so a service labeled devopsy.data.stop=always runs
-// while another service's data is exported. docs/data.md's table says an
-// `always` service is down while "another service's data exported", and
-// the label's text "while any data is exported or imported". Here: db is
-// custom with stop=never (a hot dump, the recipe), app is volumes with
-// stop=always (its files must match the dump): the clone takes app's
-// files, app is started, and db is dumped while app writes it, so the
-// dump no longer matches the files the child gets, which is the one
-// thing `always` buys. Before the branch the dump ran with app down.
+// A service labeled devopsy.data.stop=always stays down while a custom
+// service is exported after the clone, as docs/data.md's table says: db is
+// custom with stop=never (a hot dump), app is volumes with stop=always
+// (its files must match the dump), so app starts only after db's export.
 func TestCloneStreamExportKeepsAlwaysDown(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -270,14 +250,11 @@ func TestCloneStreamExportKeepsAlwaysDown(t *testing.T) {
 	}
 }
 
-// Bug: the reflink check and the space check run while the parent's
-// services are stopped (syncClone, called after stopServices: a docker
-// run for `reflinks`, then duData's `du -sk` over every entry and
-// volume, then the clone), so the downtime the clone was meant to make
-// "seconds whatever the size" includes a du over the whole data set,
-// minutes cold on a large tree, for a warning. A snapshot's take runs
-// both before anything stops (snapshotCheck, takeCopy); the push should
-// too: only the clone belongs between the stop and the start.
+// The reflink check and the space check run before the parent's services
+// stop, as a snapshot's take does (snapshotCheck, takeCopy): only the
+// clone belongs between the stop and the start, whose downtime must stay
+// seconds whatever the size, and a du over the data set can take minutes
+// for a warning.
 func TestCloneChecksBeforeTheStop(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -304,14 +281,12 @@ func TestCloneChecksBeforeTheStop(t *testing.T) {
 	}
 }
 
-// Bug: the copy into a child by reflinks (shareInto) is cp -a as root,
-// which makes FIFOs, sockets and device nodes in the child's entry on
-// the host, where bind mounts are not nodev: what a sync's rsync never
-// does (--no-D, decided in review round 4) and an import and a
-// snapshot's tars refuse. Run here as devopsy runs it (shareScript,
-// the parent's and the child's data this test's directories), it copied
-// the parent's FIFO. A FIFO stands for every special file: it needs no
-// root and no reflink.
+// The copy into a child by reflinks (shareInto) is cp -a as root on the
+// host, where bind mounts are not nodev, so it leaves out FIFOs, sockets
+// and device nodes, as a sync's rsync does (--no-D) and an import and a
+// snapshot's tars refuse. Run here as devopsy runs it (shareScript, the
+// parent's and the child's data this test's directories). A FIFO stands
+// for every special file: it needs no root and no reflink.
 func TestShareLeavesSpecialFiles(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS != "linux" {
@@ -338,16 +313,11 @@ func TestShareLeavesSpecialFiles(t *testing.T) {
 	}
 }
 
-// Bug: where the child's mnt does not clone the parent's (ext4, or
-// another filesystem: every server without XFS, and drupal11 labels its
-// app), each sync of a service labeled devopsy.data.copy.reflink=true
-// first empties the child's entry (shareInto's find ... rm -rf, as root),
-// then finds cp --reflink=always failing, then rsyncs the whole entry
-// again: every resync a full copy of the uploads instead of what
-// changed, and a child app left running (its own labels) sees its
-// entry empty meanwhile. The plan has a reflinks check against the
-// child's mnt first, rsync for all when it fails, said once: nothing
-// should empty the child's entry when the filesystem cannot clone.
+// Where the child's mnt does not clone the parent's (ext4, or another
+// filesystem), a service labeled devopsy.data.copy.reflink=true is
+// rsynced, said once, after one check against the child's mnt: nothing
+// empties the child's entry first, which would make every resync a full
+// copy and show a running child an empty entry.
 func TestShareChecksBeforeEmptying(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -396,15 +366,12 @@ func TestShareChecksBeforeEmptying(t *testing.T) {
 	}
 }
 
-// Bug: shareInto mounts the child's entry by its path (-v
-// <child mnt>/<entry>:/d), which Docker resolves on the host, and
-// empties it as root: a child entry that is a symbolic link (an entry
-// nobody owns may be one, the deploy user's: the data on another disk,
-// or uploads shared with another environment) has its target emptied
-// and written, where the rsync mounts the child's mnt whole and never
-// leaves it, and an import, a restore and the owners' step (makeEntry)
-// refuse an entry that is a link before writing anything. Nothing should
-// mount a linked entry by its path.
+// A child's entry that is a symbolic link (an entry nobody owns may be
+// one: the data on another disk, or uploads shared with another
+// environment) is left to the rsync, which mounts the child's mnt whole
+// and never leaves it: shareInto would mount it by its path, which Docker
+// resolves on the host, and empty its target as root. An import, a restore
+// and the owners' step (makeEntry) refuse such an entry too.
 func TestShareLeavesLinkedEntry(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)

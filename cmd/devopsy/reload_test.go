@@ -289,13 +289,10 @@ func TestLocalReloadInRelease(t *testing.T) {
 	}
 }
 
-// Bug (review 1): --vars set's follow-up reads compose's required
-// variables without the env capability (cli.MissingVarsIn loads the
-// project but never runs computeEnv), where --missing-vars, a release's
-// and a reload's, runs it first. A project whose compose requires a
-// variable its env capability computes gets, on every --vars set, the
-// warning that the next reload or release refuses until it is set, and
-// no --reload line; the reload then goes through.
+// --vars set's follow-up reads compose's required variables with the env
+// capability run first, as --missing-vars does for a release and a reload:
+// a variable the capability computes is not missing, and the hint names
+// --reload, since the reload goes through.
 func TestVarsHintComputedRequired(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -316,11 +313,9 @@ func TestVarsHintComputedRequired(t *testing.T) {
 	}
 }
 
-// Bug (review 1): --vars set on a plain directory, or on an environment
-// with nothing released yet, ends with "devopsy @<environment> --reload
-// applies it" (editVars' default case), a placeholder for an address it
-// knows, naming a command that refuses there: a reload needs a current
-// release. The plan says nothing on a plain directory.
+// --vars set on a plain directory, or on an environment with nothing
+// released yet, names no --reload, which needs a current release and
+// refuses there.
 func TestVarsHintWithoutRelease(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -366,11 +361,9 @@ esac
 `, 0o644)
 }
 
-// Bug (review 1): --vars unset of a variable the environment set over
-// an import (so its release imported nothing for it) warns that compose
-// now requires it and the next reload refuses: the hint reads the
-// release's imports as they were, where a reload reads them again and
-// imports it.
+// --vars unset of a variable the environment set over an import warns of
+// nothing: its release imported nothing for it, but a reload reads the
+// imports again and imports it, so the next reload goes through.
 func TestVarsHintImportUnset(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -395,15 +388,14 @@ func TestVarsHintImportUnset(t *testing.T) {
 	}
 }
 
-// Bug (review 2): the fix a sync's images check names does not fix it
-// when the variable that needs another image is an inherited one (the
-// parent's inherit:, the usual case: the check reads the pending inherit
-// file): "devopsy @<child> --release" fetches under the child's
-// shared/inherit.env as it is (a plain release of a released child
-// inherits nothing: inheritVars runs for a release that syncs and for
-// --inherit), so the next --sync is refused again, in a loop; on a marked
-// child the plain release is refused outright. What applies the parent's
-// value is --release-sync, or --inherit then --release.
+// When the variable that needs another image is an inherited one (the
+// parent's inherit:, the usual case: the images check reads the pending
+// inherit file), the fix a sync's images check names must fix it: a plain
+// "devopsy @<child> --release" fetches under the child's
+// shared/inherit.env as it is and inherits nothing, so the next --sync
+// would be refused again, in a loop, and a marked child refuses a plain
+// release outright. What applies the parent's value is --release-sync, or
+// --inherit then --release.
 func TestSyncChecksImagesFix(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -438,13 +430,13 @@ func TestSyncChecksImagesFix(t *testing.T) {
 	}
 }
 
-// Bug (review 3): a --no-code restore --with-env refused by the images
-// check names "devopsy @<target> --release" as the fix, which does not
-// fix it: the check reads the snapshot's shared.env, a release fetches
-// under the environment's own shared/.env as it is, so the same restore
-// is refused again after it, in a loop (as the sync's --release was,
-// review 2). What applies the snapshot's variables is a full restore
-// (its code, its images, --with-env), or the restore without --with-env.
+// A --no-code restore --with-env refused by the images check names a fix
+// that fixes it: "devopsy @<target> --release" would not, since the check
+// reads the snapshot's shared.env and a release fetches under the
+// environment's own shared/.env, so the same restore would be refused
+// again, in a loop. What applies the snapshot's variables is a full
+// restore (its code, its images, --with-env), or the restore without
+// --with-env.
 func TestRestoreWithEnvRefusalFix(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -479,15 +471,12 @@ func TestRestoreWithEnvRefusalFix(t *testing.T) {
 	}
 }
 
-// Bug (review 3): a full restore --with-env starts the restored release
-// on variables that need another image than it fetched, unchecked: its
-// images are restored (img restore, before the switch) under the
-// environment's shared/.env as it is, then its data step puts the
-// snapshot's in place and the run step starts the services on them (an
-// up pulls the other name outside any release, held by no bookmark).
-// The --no-code restore and a sync check this (--check-images); the full
-// restore does neither, so the environment it leaves is one its own
-// --reload refuses at once.
+// A full restore --with-env never goes live on variables that need another
+// image than it fetched: its images are restored under the environment's
+// shared/.env as it is, then its data step puts the snapshot's in place,
+// and the run step would start the services on them (an up pulling the
+// other name outside any release, held by no bookmark), leaving an
+// environment its own --reload refuses at once.
 func TestFullRestoreWithEnvChecksImages(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -516,12 +505,9 @@ func TestFullRestoreWithEnvChecksImages(t *testing.T) {
 	}
 }
 
-// Bug (review 3): on a marked environment (an import, a sync or a
-// restore that did not complete), --vars set says "to apply it now:
-// devopsy @<target> --reload", which refuses there before anything
-// (markRefusal), as a release that does not sync does: the hint reads
-// marks nowhere, where review 1 kept it from naming --reload on a plain
-// directory and before any release for the same reason.
+// On a marked environment (an import, a sync or a restore that did not
+// complete), --vars set names no --reload, which refuses there before
+// anything (markRefusal).
 func TestVarsHintMarkedNoReload(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -540,18 +526,18 @@ func TestVarsHintMarkedNoReload(t *testing.T) {
 	}
 }
 
-// Bug (review 3): a --no-code restore --with-env checks its images with
-// the snapshot's shared.env standing in for the environment's .env
-// (DotenvPendingEnv, read by devopsy alone), but compose reads the .env
-// beside the compose file itself, .devopsy/.env, the environment's
-// shared/.env as it is, for every variable devopsy's environment leaves
-// unset (checked by hand with compose v5.5.0: `devopsy -- config` with
-// DEVOPSY_INTERNAL_DOTENV_FILE naming an empty file still interpolates
-// .devopsy/.env's values). A key the environment's file has and the
-// snapshot's lacks so passes the check with its current value, then the
-// restore puts the snapshot's file in place and the run step starts the
-// services without it: on another image than the release fetched. The
-// fake reads that .env as compose does (FAKE_DOTENV).
+// A --no-code restore --with-env checks its images with the snapshot's
+// shared.env standing in for the environment's .env (DotenvPendingEnv,
+// read by devopsy alone), and compose reads the .env beside the compose
+// file itself, .devopsy/.env, the environment's shared/.env as it is, for
+// every variable devopsy's environment leaves unset (checked by hand with
+// compose v5.5.0: `devopsy -- config` with DEVOPSY_INTERNAL_DOTENV_FILE
+// naming an empty file still interpolates .devopsy/.env's values). A key
+// the environment's file has and the snapshot's lacks must not pass the
+// check on its current value: the restore then puts the snapshot's file in
+// place and the run step starts the services without it, on another image
+// than the release fetched. The fake reads that .env as compose does
+// (FAKE_DOTENV).
 func TestRestoreWithEnvComposeReadsDotenv(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -576,15 +562,11 @@ func TestRestoreWithEnvComposeReadsDotenv(t *testing.T) {
 	}
 }
 
-// Bug (review 4): --vars set, --vars unset and --inherit on a marked
-// environment (a sync, an import or a restore that did not complete)
-// name --reload as what applies the change, and the reload refuses there
-// (markRefusal, before its checks), as review 1's plain directory and
-// unreleased environment did: varsApply only tells plain, first and the
-// images check's exit, never a mark, and runInherit says --reload
-// unconditionally. The follow-up should be the mark's way out (the
-// import again, --resolved, --sync, --reset), which clears it; a release
-// (the images check's fix) refuses there too (UploadScript).
+// --vars set, --vars unset and --inherit on a marked environment name the
+// mark's way out (the import again, --resolved, --sync, --reset), which
+// clears it, never --reload, which refuses there (markRefusal, before its
+// checks); a release, the images check's fix, refuses there too
+// (UploadScript).
 func TestVarsHintMarkedWayOut(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -626,12 +608,10 @@ func TestVarsHintMarkedWayOut(t *testing.T) {
 	}
 }
 
-// Bug (review 4): a reload of an environment never released (no
-// directory on the server yet) fails with "<path> is gone", the release
-// lock's words for a directory removed while it waited (releaseLock
-// without create, in prelude): ReloadScript checks for a current release
-// only past the lock. The holder's words apply, before the lock: no
-// current release, release it first.
+// A reload of an environment never released (no directory on the server
+// yet) says the holder's words before the lock, no current release,
+// release it first, never "<path> is gone", the release lock's words for a
+// directory removed while it waited.
 func TestReloadNeverReleased(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -644,15 +624,10 @@ func TestReloadNeverReleased(t *testing.T) {
 	}
 }
 
-// Bug (review 5): --vars set and --inherit on an environment whose
-// activation was cut off past its switch (ActivatingFile, nothing holding
-// the lock) name --reload as what applies the change, and the reload
-// refuses there now (cutRefusal), as reviews 1, 3 and 4 found for a plain
-// directory, an unreleased and a marked environment: varsApply tells
-// plain, first, marked and the images check's exit, never a cut
-// activation, and runInherit says --reload whatever the child is. The
-// follow-up should be what finishes the cut activation (--release here),
-// as the reload's refusal and --status say.
+// --vars set and --inherit on an environment whose activation was cut off
+// past its switch (ActivatingFile, nothing holding the lock) name what
+// finishes it (--release here), as the reload's refusal (cutRefusal) and
+// --status say, never --reload, which refuses there.
 func TestVarsHintCut(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -688,14 +663,12 @@ func TestVarsHintCut(t *testing.T) {
 	}
 }
 
-// Bug (review 5): devopsy --reload typed in a release on a server checks
-// its reload: step's command as one run locally without an address
-// (cli.Bare in runLocalReload), so a step whose command runs only on a
-// target (## Run: target) is refused there ("runs only on a target:
-// devopsy @<target> apply"), though that is where it is: the release's
-// own --reload (--release-steps reload run) runs it, a release checks it
-// as a remote step (checkStepScopes, cli.OnServer), and where a command
-// runs is decided by the directory (cli.InRelease).
+// devopsy --reload typed in a release on a server accepts a reload: step
+// whose command runs only on a target (## Run: target), since that is
+// where it is: the release's own --reload (--release-steps reload run)
+// runs it, a release checks it as a remote step (checkStepScopes,
+// cli.OnServer), and where a command runs is decided by the directory
+// (cli.InRelease).
 func TestLocalReloadInReleaseRunTarget(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())

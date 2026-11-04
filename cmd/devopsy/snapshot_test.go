@@ -3880,15 +3880,12 @@ func TestKilledRestoreBeforeFirstWriteStartsSet(t *testing.T) {
 	}
 }
 
-// Bug (review 6): a --no-code restore runs the current release's run step
-// again (--release-steps release run, as a sync's holder does), but on a
-// release cut off past its switch (ActivatingFile) it neither refuses, as
-// a reload does (cutRefusal), nor removes the mark once that run step
-// went through, as the sync's run step does (sync.go): the release has
-// had its run step now, yet --status still says it was cut, and the next
-// --reload refuses it until a release. The premise of the
-// reload's refusal ("the others each run a run step or replace it ...
-// and nothing else of devopsy's starts its code") leaves this one out.
+// A --no-code restore runs the current release's run step again
+// (--release-steps release run, as a sync's holder does), so on a release
+// cut off past its switch (ActivatingFile) it removes the mark once that
+// run step went through, as the sync's run step does: the release has had
+// its run step, and neither --status nor the next --reload (cutRefusal)
+// may still take it for cut.
 func TestNoCodeRestoreCut(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)

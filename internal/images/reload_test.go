@@ -181,18 +181,14 @@ func TestRestoreAsBuilt(t *testing.T) {
 	}
 }
 
-// Bug (review 5): a restore that builds an image again because its build:
-// section changed (Restore's changed, then the script's fetch and
-// Restore with fetched) records the key the image was built with before,
-// not the one it was just built with, when the build comes out as the
-// same image: keep carries an old key over to a listing again of the same
-// image id, which is right for a bookmark put back but not for a fresh
-// build. A build input that does not reach the image (an argument the
-// Dockerfile never declares, cache_from, a build secret) gives the same
-// image fully cached. The release then lists the old key: every reload is
-// refused ("its build changed since the release built its image") though
-// it was just built with today's values, and every later restore of it
-// builds it again.
+// A restore that builds an image again because its build: section changed
+// (Restore's changed, then the script's fetch and Restore with fetched)
+// records the key it was just built with, even when the build comes out as
+// the same image, as a build input that does not reach the image gives (an
+// argument the Dockerfile never declares, cache_from, a build secret,
+// fully cached). keep carrying the old key over would refuse every reload
+// ("its build changed since the release built its image") and build it
+// again at every later restore.
 func TestRestoreRebuiltSameImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -237,15 +233,13 @@ func TestRestoreRebuiltSameImage(t *testing.T) {
 	}
 }
 
-// Bug (review 5): in image mode a service with a build: section and
-// pull_policy: never is own (restored from its bookmark), and its listing
-// carries its build key, but the fetch never builds it (image mode's is
-// compose's pull, which skips it). A rollback whose build key changed asks
-// for a build anyway (ErrGone, "building it again"): the script's fetch
-// builds nothing, and the restore with fetched takes whatever the name
-// holds now, the newer release's image, in place of the one its bookmark
-// holds. Before the build key was checked, the rollback put its bookmark
-// back: it ran the code it built.
+// In image mode a service with a build: section and pull_policy: never is
+// own (restored from its bookmark), and its listing carries its build key,
+// but the fetch never builds it (image mode's is compose's pull, which
+// skips it). A rollback whose build key changed puts its bookmark back,
+// the code it built: asking for a build (ErrGone) would build nothing, and
+// the restore with fetched would take whatever the name holds now, the
+// newer release's image.
 func TestRestoreImageModeNeverPull(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -276,17 +270,12 @@ func TestRestoreImageModeNeverPull(t *testing.T) {
 	}
 }
 
-// Bug (review 6): a restore that builds an image again because its
-// build: section changed (Restore's changed, the script's fetch, then
-// Restore with fetched) leaves the image the release ran before with no
-// name at all: keep moves the release's bookmark to the new image (the
-// same bookmark name, another id), the service's name moved with the
-// build, and nothing records or removes the old image, which stays on
-// the server as a dangling image that no listing, bookmark or removal
-// ever reaches ("Every image a release runs stays until its last release
-// goes"; "A removal frees only what nothing else holds": here nothing
-// holds it, and nothing frees it). Before build keys a restore only
-// fetched when the image was gone, so there was nothing to leave.
+// A restore that builds an image again because its build: section changed
+// leaves the image the release ran before reachable: keep moves the
+// release's bookmark to the new image, the service's name moves with the
+// build, and the old image must still be recorded, or it stays on the
+// server as a dangling image that no listing, bookmark or removal ever
+// reaches. Once every release is gone, no image is left.
 func TestRestoreRebuiltLeavesOldImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
