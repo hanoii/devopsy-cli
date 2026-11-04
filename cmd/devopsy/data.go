@@ -1398,7 +1398,7 @@ func runImport(cwd string, args []string, color bool) int {
 			return 1
 		}
 	}
-	if err := restoreServices(cwd, services, false, imgs != nil, nil, []string{name}); err != nil {
+	if err := restoreServices(cwd, services, restoreOpts{recreate: imgs != nil, written: []string{name}}); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
 	if imgs != nil {
@@ -1575,7 +1575,7 @@ func runResolved(cwd, name string) int {
 	// image than its container's (another activation's container, a hold
 	// gone): started, the old container would run its image on the
 	// imported data.
-	if err := restoreServices(cwd, services, false, true, nil, []string{name}); err != nil {
+	if err := restoreServices(cwd, services, restoreOpts{recreate: true, written: []string{name}}); err != nil {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}

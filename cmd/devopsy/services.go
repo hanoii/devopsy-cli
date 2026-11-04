@@ -203,16 +203,28 @@ func stopServices(cwd string, set []cli.Stopped) (stopped []string, err error) {
 // healthyTimeout is how long restoreServices waits for a started service.
 const healthyTimeout = 5 * time.Minute
 
+// restoreOpts are restoreServices' choices.
+type restoreOpts struct {
+	// create makes a child's first release's services.
+	create bool
+	// recreate brings what was written back on its own image.
+	recreate bool
+	// fallback is what to start when there is no record.
+	fallback []string
+	// written are the services whose data the copy wrote.
+	written []string
+}
+
 // restoreServices starts what a sync or an import stopped and waits
 // until it runs and is healthy, whatever happened before: what the
-// record holds (syncState), else fallback (a sync's side's set; nothing
+// record holds (syncState), else o.fallback (a sync's side's set; nothing
 // for an import, whose mark and record are written together). It reads
 // the containers' state, so it also recovers after an interrupted sync.
-// With create, a child's first release gets its data services and the
+// With o.create, a child's first release gets its data services and the
 // child side's set created (finish go): never on an abort, which leaves
 // it not live.
-func restoreServices(cwd string, services []cli.SyncService, create, recreate bool, fallback, written []string) error {
-	stop := fallback
+func restoreServices(cwd string, services []cli.SyncService, o restoreOpts) error {
+	stop := o.fallback
 	var errs []error
 	// A child's first release had no containers: nothing was stopped,
 	// and the finish hook expects the services up (an app to sanitize
@@ -234,7 +246,7 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 		first = len(states) == 0
 	}
 	var created []string
-	if first && create {
+	if first && o.create {
 		children := cli.StoppedNames(cli.DataStops(services, cli.SyncChild, ""))
 		profiles := composeProfiles(cwd)
 		for _, s := range services {
@@ -280,10 +292,10 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 	// child's own data, which the release's images, not live, must not
 	// touch (the release goes back).
 	var again []string
-	if recreate {
+	if o.recreate {
 		changed := images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""))
 		again = intersect(start, changed)
-		if through := intersect(written, changed); len(through) > 0 {
+		if through := intersect(o.written, changed); len(through) > 0 {
 			running, err := servicesIn(cwd, "running")
 			if err != nil {
 				errs = append(errs, err)
