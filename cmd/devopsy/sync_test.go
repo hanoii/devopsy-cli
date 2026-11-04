@@ -271,7 +271,7 @@ case "$*" in
   # A run step's plain up: everything runs.
   *" up -d")
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
-    : >"$stopped" ;;
+    : >"$stopped"; rm -f "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}" ;;
   # up -d --wait [--no-deps] <svc>... (upFor, a first release's create)
   # and up -d --no-deps --wait <svc>... (a recreate on the image the data
   # now needs).

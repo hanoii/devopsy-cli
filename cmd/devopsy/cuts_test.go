@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,50 @@ func cutRun(s *syncSetup, extra []string, args ...string) (string, int) {
 	cmd.WaitDelay = 2 * time.Second
 	out, _ := cmd.CombinedOutput()
 	return string(out), cmd.ProcessState.ExitCode()
+}
+
+// fakeDown is what the fake docker has not running for a compose project: stopped,
+// or its container removed by a down and no up since.
+func fakeDown(s *syncSetup, project string) []string {
+	down := strings.Fields(readString(s.log + ".stopped." + project))
+	up := strings.Fields(readString(s.log + ".up." + project))
+	for _, name := range strings.Fields(readString(s.log + ".down." + project)) {
+		if !slices.Contains(up, name) && !slices.Contains(down, name) {
+			down = append(down, name)
+		}
+	}
+	return down
+}
+
+// A restore failing past its switch takes its containers down, so what it
+// stopped has none when it runs again: a run step that does not up every service
+// leaves those to the restore, which brings them up as what it stopped, a start
+// finding nothing to start.
+func TestRestoreAgainBringsBackRemoved(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if out, code := s.run([]string{"FAKE_FAIL_DEPLOY=1"}, "@prod", "--snapshots", "restore", m[1], "--yes"); code == 0 {
+		t.Fatalf("the restore whose run step fails went through:\n%s", out)
+	}
+	if down := readString(s.log + ".down.shop-prod"); !strings.Contains(down, "db") {
+		t.Fatalf("its failure took nothing down: %q", down)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	if code != 0 || readMark(base) != nil {
+		t.Fatalf("the restore again (%d), mark %+v:\n%s\n%s", code, readMark(base), out, docker)
+	}
+	if left := fakeDown(s, "shop-prod"); len(left) != 0 {
+		t.Errorf("the restore completed with %v not running:\n%s\n%s", left, out, docker)
+	}
 }
 
 // What a release snapshot or a restore stopped and could not start again past
@@ -114,10 +159,7 @@ func TestActivationCuts(t *testing.T) {
 			s.logs()
 			return []string{"--release-sync", "--yes"}
 		}},
-		// A run step that ups what it runs, as a project's does: a restore's
-		// failure past its switch takes the containers down, which only an
-		// up brings back.
-		"restore": {"{release: up -d}", "prod", func(s *syncSetup) []string {
+		"restore": {"", "prod", func(s *syncSetup) []string {
 			out, code := s.run(nil, "@prod", "--snapshot")
 			m := snapshotID.FindStringSubmatch(out)
 			if code != 0 || m == nil {
@@ -210,7 +252,7 @@ func TestActivationCuts(t *testing.T) {
 						s.waitReleaseTars()
 					}
 					for _, p := range []string{"shop-prod", "shop-dev"} {
-						if left := strings.Fields(readString(s.log + ".stopped." + p)); len(left) != 0 {
+						if left := fakeDown(s, p); len(left) != 0 {
 							t.Errorf("after the next release, %s has %v left down:\n%s\n%s", p, left, next, said())
 						}
 					}

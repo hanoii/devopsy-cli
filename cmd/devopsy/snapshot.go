@@ -1252,12 +1252,23 @@ func startLeftDown(cwd string, names []string) (down []string) {
 	for _, s := range services {
 		have = append(have, s.Name)
 	}
-	exited, err := servicesIn(cwd, "exited")
+	states, err := serviceStates(cwd)
 	if err != nil {
 		report.Warn(err.Error())
 		return names
 	}
-	left := intersect(intersect(names, have), exited)
+	// Exited, or with no container: a restore's failure past its switch took
+	// them down, and devopsy stopping them says they ran.
+	var left, removed []string
+	for _, s := range intersect(names, have) {
+		switch state, there := states[s]; {
+		case !there:
+			removed = append(removed, s)
+			left = append(left, s)
+		case state == "exited":
+			left = append(left, s)
+		}
+	}
 	if len(left) == 0 {
 		return nil
 	}
@@ -1266,6 +1277,11 @@ func startLeftDown(cwd string, names []string) (down []string) {
 	// made (another activation's) is made again, as restoreServices does:
 	// compose start would run the old image on that data (review).
 	again := intersect(left, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+	for _, s := range removed {
+		if !slices.Contains(again, s) {
+			again = append(again, s)
+		}
+	}
 	var start []string
 	for _, s := range left {
 		if !slices.Contains(again, s) {
