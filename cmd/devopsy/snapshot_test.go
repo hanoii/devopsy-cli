@@ -3867,6 +3867,14 @@ func TestKilledDataStepSaysMark(t *testing.T) {
 				if spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*")); len(spools) > 0 {
 					t.Errorf("the killed import left its spool: %v", spools)
 				}
+				// Nothing runs on its data, as it says: the script ends it, since
+				// only the next import of the service would.
+				if down := strings.Fields(readString(s.log + ".stopped.shop-prod")); !slices.Contains(down, "app") {
+					t.Errorf("the killed import said nothing runs on its data, and %v alone is down:\n%s", down, errs)
+				}
+				if rec := readString(filepath.Join(base, syncState)); !strings.Contains(rec, "stop app\n") {
+					t.Errorf("app is not in the record %q:\n%s", rec, errs)
+				}
 			} else {
 				out, code := s.run(nil, "@prod", "--snapshot")
 				m := snapshotID.FindStringSubmatch(out)

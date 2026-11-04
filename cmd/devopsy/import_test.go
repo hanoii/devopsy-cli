@@ -591,6 +591,56 @@ func TestImportHookWaitsForItsRecord(t *testing.T) {
 	}
 }
 
+// killWithScript kills the import's devopsy and its script outright, as a
+// shell killed with it: while the script lives it ends the import itself.
+func killWithScript(t *testing.T, server int) {
+	t.Helper()
+	parent, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(server)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, _ := strconv.Atoi(strings.TrimSpace(string(parent)))
+	_ = syscall.Kill(script, syscall.SIGKILL)
+	_ = syscall.Kill(server, syscall.SIGKILL)
+}
+
+// An import's devopsy killed outright on the server, its hook still loading:
+// its script, which lives on, ends the hook and stops the service and what
+// depends on it, recorded, so what the mark says is so. The next import of that
+// service would otherwise be all that does, and a release is refused before it.
+func TestImportKilledScriptEndsWriter(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	wait := filepath.Join(s.tmp, "hook")
+	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	waitFile(t, wait, "the import's hook", startWait, errs.String)
+	hook, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
+	server, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
+	defer func(pid int) { _ = syscall.Kill(-pid, syscall.SIGKILL) }(hook)
+	_ = syscall.Kill(server, syscall.SIGKILL)
+	_ = s.wait(cmd, errs, "the killed import's session")
+	if !s.mark().IsImport() || !strings.Contains(errs.String(), "did not complete") {
+		t.Fatalf("after the kill: mark %+v:\n%s", s.mark(), errs)
+	}
+	if err := syscall.Kill(hook, 0); err == nil && isDataImport(hook, "shop-prod") {
+		t.Errorf("the hook still loads:\n%s", errs)
+	}
+	down := s.stopped()
+	for _, want := range []string{"db", "app"} {
+		if !slices.Contains(down, want) {
+			t.Errorf("%s runs on a data the mark says may be partial (down: %v):\n%s", want, down, errs)
+		}
+	}
+	if strings.Contains(s.record(), "writer ") {
+		t.Errorf("the record still names a writer: %q", s.record())
+	}
+	// The way out still is one.
+	os.Remove(wait)
+	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || s.mark() != nil || len(s.stopped()) != 0 {
+		t.Errorf("the next import (%d), mark %+v, down %v:\n%s", code, s.mark(), s.stopped(), out)
+	}
+}
+
 // A devopsy killed outright mid-load leaves the mark and the record, its
 // hook loading on; the next import of that service ends that hook (on
 // Linux, by its process group, recorded) and the project's import
@@ -604,7 +654,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	hook, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
 	server, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
 	defer func(pid int) { _ = syscall.Kill(-pid, syscall.SIGKILL) }(hook)
-	_ = syscall.Kill(server, syscall.SIGKILL)
+	killWithScript(t, server)
 	_ = cmd.Wait()
 	if !s.mark().IsImport() || !strings.Contains(s.record(), "writer "+strconv.Itoa(hook)+"\n") {
 		t.Fatalf("after a kill: mark %+v, record %q:\n%s", s.mark(), s.record(), errs)
@@ -657,7 +707,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	hook, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
 	server, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
 	defer func(pid int) { _ = syscall.Kill(-pid, syscall.SIGKILL) }(hook)
-	_ = syscall.Kill(server, syscall.SIGKILL)
+	killWithScript(t, server)
 	_ = cmd.Wait()
 	if !strings.Contains(s.record(), "writer "+strconv.Itoa(hook)+" down\n") {
 		t.Fatalf("a killed import of a db down before: record %q:\n%s", s.record(), errs)

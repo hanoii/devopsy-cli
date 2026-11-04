@@ -2478,17 +2478,20 @@ func runSyncExec(args []string, color bool) int {
 //   - import <service> [last]: the stream's spool into the service (the
 //     capability's import), the spool removed whatever happens; with
 //     last, the copy's last write, remote.SyncDoneFile once it went;
+//   - end-import <service>: what an import of it killed outright left, ended
+//     by its script, which lives on (importOnTarget);
 //   - list: name, label (<method>+<stop word>), state and entries of mnt,
 //     one service per line, then the service of an import's mark
 //     (listMark).
 func runSyncServices(cwd string, args []string, color bool) int {
-	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare [first] | finish go|abort|partial | settle | import <service> [last] | list | wipe"
+	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare [first] | finish go|abort|partial | settle | import <service> [last] | end-import <service> | list | wipe"
 	switch {
 	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list" || args[0] == "settle" || args[0] == "wipe"):
 	case len(args) == 2 && args[0] == "prepare" && args[1] == "first":
 	case len(args) == 2 && args[0] == "finish" && slices.Contains([]string{"go", "abort", "partial"}, args[1]):
 	case len(args) == 2 && args[0] == "import":
 	case len(args) == 3 && args[0] == "import" && args[2] == "last":
+	case len(args) == 2 && args[0] == "end-import":
 	default:
 		return fail(usage)
 	}
@@ -2518,6 +2521,12 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	case "wipe":
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 		if err := wipeData(p); err != nil {
+			return fail(err.Error())
+		}
+		return 0
+	case "end-import":
+		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP, syscall.SIGINT)
+		if _, err := importOnTarget(cwd, base, args[1], services); err != nil {
 			return fail(err.Error())
 		}
 		return 0
