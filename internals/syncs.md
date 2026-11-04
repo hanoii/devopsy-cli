@@ -1,6 +1,6 @@
 # Syncs
 
-`cmd/devopsy/sync.go`, `cmd/devopsy/writers.go`, `cmd/devopsy/clone.go` (shared with snapshots), `internal/remote/sync.go` (the scripts), `internal/images/sync.go` (the data images); the labels are in `internals/data-labels.md`, inherited variables in `internals/inherit.md`.
+`cmd/devopsy/sync.go`, `cmd/devopsy/record.go` (the record and the mark), `cmd/devopsy/services.go` (stops, starts, compose calls), `cmd/devopsy/writers.go`, `cmd/devopsy/clone.go` (shared with snapshots), `internal/remote/sync.go` (the scripts), `internal/images/sync.go` (the data images); the labels are in `internals/data-labels.md`, inherited variables in `internals/inherit.md`.
 
 ## Parents and when
 
