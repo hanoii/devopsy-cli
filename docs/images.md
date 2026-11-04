@@ -158,7 +158,7 @@ an image: it only skips prompts.
 Within one version, image names are taken as they are. Nothing is held
 by digest, and a plain `up` follows the names, as for any service. A tag
 pushed again onto an older image, or a stale mirror, goes unseen, since
-both are still the same tag.
+both are still the same tag; that limit is accepted.
 
 ## Rollback against restore
 
@@ -193,8 +193,8 @@ instead).
 A hold is never carried over. devopsy works it out again from the
 history whenever it picks the image for a service with data: at every
 activation, the restart after a failed run step, a full or a `--no-code`
-restore, a sync, an import and a reset. A hold ends as soon as the data allows the
-release's image again.
+restore, a sync, an import and a reset. A hold ends as soon as the data
+allows the release's image again, and nothing else keeps one.
 
 A release or a rollback is refused or accepted before it runs, so it
 holds nothing. The restart after a failed run step is the one place that

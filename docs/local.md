@@ -120,8 +120,8 @@ There is no upload and no switch, and a failure stops the release with
 nothing to go back to. There are no `before` or `after` steps either,
 since those are the operator's side of a deploy (pushing an image,
 announcing it). A step whose command runs only on a target (`## Run:
-target`) refuses before anything runs. A project's `deploy` only starts
-what is there, here as on a server.
+target`) refuses before anything runs. Since step 4 gets the images, a
+project's `deploy` only starts what is there, here as on a server.
 
 ## Starting over
 

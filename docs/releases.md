@@ -248,7 +248,8 @@ that went live and was not rolled back, and runs its rollback steps
 ([Rollbacks bring back code](images.md#rollbacks-bring-back-code) says
 what comes back). It marks the release it leaves, shown as `ROLLED BACK`
 in `--releases`. Like a failed release, that release never counts toward
-`keep`, and a later rollback never goes back to it. Its log stays until
+`keep`, and a later rollback never goes back to it, so once a fix is
+released, the next rollback skips the bad release. Its log stays until
 pruning removes it.
 
 ## Build and image modes

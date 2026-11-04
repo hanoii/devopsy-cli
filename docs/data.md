@@ -132,7 +132,7 @@ How the clone works:
 
 - devopsy first tries one file. Where nothing clones (another
   filesystem), everything is rsynced instead, with a message, and the
-  child's entries are left untouched until then.
+  child's entries are not emptied first.
 - Otherwise the child's entry is emptied, never removed, then cloned, and
   an owned one is given to its owner.
 - An entry that is a symbolic link on either side, and one holding device
@@ -210,7 +210,7 @@ How the stops happen:
 ## Owners
 
 A container that runs as non-root from its first process cannot write
-into `mnt` on its own. `shared/mnt` starts empty and belongs to the
+into `mnt` on its own, nor write what an import or a sync brings in. `shared/mnt` starts empty and belongs to the
 deploy user, Docker creates a missing bind mount's directory as root,
 and devopsy copies owners exactly (rsync and tar as root, numeric ids),
 which gives what an import or a sync brings another machine's owners. A

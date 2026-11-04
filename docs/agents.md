@@ -21,7 +21,8 @@ as every command finds it; outside one, the current directory.
 Run it again after an upgrade. A copy devopsy wrote is replaced as long
 as its checksum, kept in its frontmatter beside the version, still
 matches. A copy you edited, or any other file there, is left as
-it is, and devopsy says so; remove it to take the new version.
+it is, and devopsy says so, so nothing of yours is overwritten; remove it
+to take the new version.
 
 `--stub` installs a short form instead, a file that tells the agent to run
 `devopsy --ai-skill`. It suits a template, since every copy of the

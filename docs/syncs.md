@@ -49,7 +49,7 @@ What moves is what the labels say ([Data labels](data.md#data-labels)):
   (`.devopsy-sync.stream.<service>.<sync id>`). Only once the export has
   exited 0 does the child's `import <service>` read the file, with the
   child's service up: devopsy starts it alone, unless it stopped it. The
-  file is removed afterwards, so an export cut short never reaches the
+  file is removed afterwards. An export cut short never reaches the
   import. Services go one after the other, in compose's `depends_on`
   order, dependencies first.
 
@@ -227,9 +227,9 @@ what the copy did, however devopsy went away.
 
 - Nothing written (a prepare or a check failed, the parent's stop
   failed, the first export failed with nothing to rsync): the child's
-  stopped services come back, `finish child abort` runs, and the run
-  step is skipped. If an earlier sync or an import had left the data
-  partial, it stays partial and what was down for it stays down; only
+  stopped services come back and the run step is skipped. `finish
+  child abort` runs, or `finish child partial` if an earlier sync or an
+  import had left the data partial, which then stays partial and what was down for it stays down; only
   what this sync stopped comes back.
 - Written in part (the rsync or an import failed or was cut, a Ctrl-C
   mid-copy, a lost connection): the child's data is part old and part
@@ -309,7 +309,7 @@ every container of every profile, its named volumes, and every entry of
 `shared/mnt`, including the ones no label copies (logs, an unlabeled
 service's files).
 
-Every service's history of its images starts over with it ([Data and its
+Every data service's history of its images starts over with it ([Data and its
 images](images.md#data-and-its-images)). What the copy writes takes the
 parent's history, and a service the copy writes nothing for
 (`copy=none`, or its entries all missing on the parent) has no version

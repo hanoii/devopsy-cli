@@ -135,7 +135,7 @@ copy carries them:
 - `DEVOPSY_DATA_STOP`: what the operation stops on that side by the
   labels. They are up again by `finish ... go|abort`, and at `finish
   child partial` they are what stays down. A stopped `custom` service is
-  in both of the last two. A script reaches a stopped service with
+  in both `DEVOPSY_DATA_CUSTOM` and `DEVOPSY_DATA_STOP`. A script reaches a stopped service with
   `devopsy run --rm --no-deps -T <service> ...` instead of `exec`, and a
   script whose service must be running should refuse.
 

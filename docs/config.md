@@ -82,7 +82,7 @@ No server from any of them is an error.
 
 Instances are opt in. In a project with `instances: true`, every target
 names one, by the address, `DEVOPSY_INSTANCE` or an alias's `to:`. Any
-other project refuses them. A project's environments on a server all
+other project refuses them, so a project's environments on a server all
 have instances, or none do.
 
 The project does not list its instances, and any name works (lowercase,
