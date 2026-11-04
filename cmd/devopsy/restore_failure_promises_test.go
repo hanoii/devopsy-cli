@@ -44,4 +44,7 @@ func TestRestoreFailureKeepsItsPromises(t *testing.T) {
 		t.Fatal(err)
 	}
 	said("the landing's settings", []string{"FAKE_EXTRACT_BREAK=" + filepath.Join(filepath.Dir(s.root), "home", "config.yaml")})
+	home := filepath.Join(filepath.Dir(s.root), "home", "config.yaml")
+	write(t, home, "releases:\n  root: "+s.root+"\n", 0o644)
+	said("the owners", []string{"FAKE_APP_OWNER=10001:10001", "FAIL_OWNERS=3"})
 }
