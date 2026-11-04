@@ -1,6 +1,6 @@
 # Releases
 
-A release uploads the project as a new directory, then one activation session switches `current` to it; a rollback switches back to an older one. Code: `cmd/devopsy/remote.go` (the operator's side), `cmd/devopsy/release_local.go` (a release in place), `internal/remote/remote.go` (the scripts), `internal/remote/features.go` (the gate), `internal/remote/vars.go` (`--vars`).
+A release uploads the project as a new directory, then one activation session switches `current` to it; a rollback switches back to an older one. Code: `cmd/devopsy/remote.go` (the operator's side), `cmd/devopsy/release_local.go` (a release in place), `internal/remote/remote.go` (the scripts), `internal/remote/activate.go` (the activation, its steps in order in `activateScript`), `internal/remote/features.go` (the gate), `internal/remote/vars.go` (`--vars`).
 
 ## The gate
 
