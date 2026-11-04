@@ -3075,6 +3075,35 @@ func TestReleaseSnapshotReadyWriteFails(t *testing.T) {
 	}
 }
 
+// A marked environment is refused a restore whose snapshot lacks a volume there:
+// that volume would stay as the cut copy left it, under a restore that says
+// it completed. Before anything stops.
+func TestRestoreMarkedSnapshotLacksVolume(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_DB_VOLUME=dbdata")
+	if err := os.MkdirAll(filepath.Join(s.log+".vol", "shop-prod_dbdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-22 10:00:00", "vm1:live", remote.IncompleteCopy, "the copy was cut"), 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "has no volume dbdata, which would stay as the cut copy left it: nothing restored") {
+		t.Errorf("a restore into a marked environment, its snapshot lacking a volume (%d):\n%s", code, out)
+	}
+	if strings.Contains(docker, " stop ") || strings.Contains(docker, "-extract-") {
+		t.Errorf("it stopped or wrote before refusing:\n%s", docker)
+	}
+}
+
 // A restore with release snapshots on whose data step cannot write its
 // mark (a disk full right there; here the mark's path is a directory)
 // after it turned the release snapshot's lines into its own stop lines:

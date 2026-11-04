@@ -195,7 +195,10 @@ case "$*" in
     if [ -n "${FAKE_STOP_WAIT:-}" ]; then echo $PPID >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     after stop "$@" >> "$stopped"
     # FAIL_STOP: a stop that fails partway, its services stopped.
-    [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
+    [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
+    # FAIL_STOP_IF: the same once this file exists (a stop that fails only
+    # after the data is written: FAKE_EXTRACT_BREAK makes it).
+    [ -z "${FAIL_STOP_IF:-}" ] || [ ! -e "$FAIL_STOP_IF" ] || exit 1 ;;
   *" start "*)
     # FAKE_START_WAIT: a start that takes until $FAKE_START_WAIT.go exists.
     if [ -n "${FAKE_START_WAIT:-}" ]; then : >"$FAKE_START_WAIT"; n=0; while [ ! -e "$FAKE_START_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
@@ -546,6 +549,18 @@ case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_LOST_PUSH:-}" ]; then sh -c "$s"
 # FAKE_SSH_LOST_IMPORT: an --import's session lost on the way (a network
 # gone during the upload), as ssh says it.
 case "$s" in *"--import "*) [ -z "${FAKE_SSH_LOST_IMPORT:-}" ] || { echo "Read from remote host one: Operation timed out" >&2; exit 255; } ;; esac
+# FAKE_SSH_LOST_RUNNING: an --import's session lost once this file exists,
+# its script going on with nobody reading it.
+case "$s" in *"--import "*) if [ -n "${FAKE_SSH_LOST_RUNNING:-}" ]; then
+  fifo=$FAKE_SSH_LOST_RUNNING.out; mkfifo "$fifo"
+  sh -c "$s" <&3 >"$fifo" 2>&1 &
+  cat "$fifo" >&2 &
+  reader=$!
+  while [ ! -e "$FAKE_SSH_LOST_RUNNING" ]; do sleep 0.1; done
+  kill $reader 2>/dev/null
+  echo "Read from remote host one: Operation timed out" >&2
+  exit 255
+fi ;; esac
 # FAKE_SSH_LOST: any session whose script holds this text lost on the
 # way, as ssh says it (its 255).
 if [ -n "${FAKE_SSH_LOST:-}" ]; then case "$s" in *"$FAKE_SSH_LOST"*) echo "Read from remote host one: Operation timed out" >&2; exit 255 ;; esac; fi
@@ -4010,6 +4025,44 @@ func TestSyncFirstAbortCreatesNothing(t *testing.T) {
 	}
 	if strings.Contains(out, "devopsy: creating") || strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait") {
 		t.Errorf("services created on an aborted first release:\n%s\n%s", out, docker)
+	}
+}
+
+// A sync's end stopping its writers still records them when that stop fails
+// partway (FAIL_STOP: its services stopped all the same): a completing sync
+// starts what the record holds, and what it left out would stay down.
+func TestSyncEndWritersStopFailsStillRecorded(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", gone.Process.Pid, "running")+"\n", 0o644)
+	write(t, s.log+".shop-dev", "FAIL_STOP=shop-dev\n", 0o644)
+	s.logs()
+	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
+	cmd.Dir = filepath.Join(dev, "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
+	out, _ := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	if !strings.Contains(docker, " stop ") {
+		t.Fatalf("nothing stopped:\n%s\n%s", out, docker)
+	}
+	down := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+	record := readString(filepath.Join(dev, syncState))
+	for _, d := range down {
+		if d != "db" && !strings.Contains(record, "stop "+d+"\n") {
+			t.Errorf("%s is down, and not in the record %q:\n%s", d, record, out)
+		}
+	}
+	if len(down) < 2 {
+		t.Errorf("only %v down, nothing that depends on db to record:\n%s", down, out)
 	}
 }
 
