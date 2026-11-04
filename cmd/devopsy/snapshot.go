@@ -1215,8 +1215,10 @@ func releaseRecord(cwd, how, next string) error {
 	case "done":
 		data, _ := os.ReadFile(filepath.Join(next, releaseStoppedFile))
 		names := strings.Fields(string(data))
-		startLeftDown(cwd, intersect(names, rec.stops))
-		rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool { return slices.Contains(names, s) })
+		// What it could not start stays in the record, for whatever takes
+		// the lock next: nothing else would start it.
+		down := startLeftDown(cwd, intersect(names, rec.stops))
+		rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool { return slices.Contains(names, s) && !slices.Contains(down, s) })
 	}
 	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
 		return removeIfThere(filepath.Join(filepath.Dir(cwd), syncState))
@@ -1228,15 +1230,17 @@ func releaseRecord(cwd, how, next string) error {
 // restore stopped, so running before) the run step left down, as
 // far as the current release has them: a project's run step need not
 // up every service, and nothing else would start them (review). Said,
-// and a start that fails only warns: the release is live.
-func startLeftDown(cwd string, names []string) {
+// and a start that fails only warns: the release is live. It returns what it
+// could not start, which the caller keeps in the record for the next
+// lock-taker.
+func startLeftDown(cwd string, names []string) (down []string) {
 	if len(names) == 0 {
-		return
+		return nil
 	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		report.Warn("reading the release's services: "+err.Error(), report.Messages(err)[1:]...)
-		return
+		return names
 	}
 	var have []string
 	for _, s := range services {
@@ -1245,11 +1249,11 @@ func startLeftDown(cwd string, names []string) {
 	exited, err := servicesIn(cwd, "exited")
 	if err != nil {
 		report.Warn(err.Error())
-		return
+		return names
 	}
 	left := intersect(intersect(names, have), exited)
 	if len(left) == 0 {
-		return
+		return nil
 	}
 	report.Warn("the run step left " + strings.Join(left, ", ") + " stopped, which devopsy stopped before it: starting them")
 	// One whose container another image than the release now gives it
@@ -1266,19 +1270,21 @@ func startLeftDown(cwd string, names []string) {
 	if len(again) > 0 {
 		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
 			report.Warn("docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", fix...)
+			down = again
 		}
 	}
 	if len(start) == 0 {
-		return
+		return down
 	}
 	if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
 		report.Warn("docker compose start: "+err.Error()+": they stay stopped", fix...)
-		return
+		return append(down, start...)
 	}
 	left = start
 	if err := waitHealthy(cwd, left); err != nil {
 		report.Warn(err.Error())
 	}
+	return down
 }
 
 // removeIfThere removes path, nothing when it is gone.
@@ -2630,9 +2636,17 @@ func snapshotRestored(cwd string, p snapshotPaths, snap string) error {
 	}
 	// What the restore stopped and its run step left down (a run step
 	// need not up every service) is started, said, as a release
-	// snapshot's set is: the record goes next, and nothing else would.
+	// snapshot's set is. What it could not start stays in the record, for
+	// whatever takes the lock next: nothing else would start it.
 	if rec, ok := readSyncRecord(cwd); ok {
-		startLeftDown(cwd, rec.stops)
+		if down := startLeftDown(cwd, rec.stops); len(down) > 0 {
+			rec.stops = down
+			if err := rec.write(cwd); err != nil {
+				return err
+			}
+			report.Info("the restore of snapshot " + id + " is complete")
+			return nil
+		}
 	}
 	if err := os.Remove(filepath.Join(p.base, syncState)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
