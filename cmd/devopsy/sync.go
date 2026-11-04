@@ -1023,137 +1023,11 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}()
 
-	// The data's history the child's side checked and takes over: this
-	// side's must be the ones the preflight read (a release of this
-	// environment since would copy data another image wrote).
-	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
-		rel := remote.ReleaseFile(projectDir, "")
-		set, err := serverImages(cwd, composeName(cwd), errOut)
-		if err != nil {
-			return fail(err.Error())
-		}
-		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
-			return fail("this environment's data's history changed since the sync started (a release of it): nothing copied; sync again")
-		}
+	in, code := pushChecks(ctx, cwd, projectDir, reset)
+	if in == nil {
+		return code
 	}
-	_, services, err := cli.SyncServices(cwd, os.Environ())
-	if err != nil {
-		return failErr(err)
-	}
-	streams, err := cli.SyncCustomServices(services)
-	if err != nil {
-		return fail(err.Error())
-	}
-	dirs := cli.SyncDirs(services)
-	vols := copiedVolumes(services)
-	// What the rsync would change under a running service of the child,
-	// left running by its own labels, and a stream the child would not
-	// import, are mismatches, not a sync: refused before anything stops.
-	// So is an import's mark on the child for a service this side does
-	// not copy: only a sync that writes it may clear it. Asked even with
-	// nothing to copy here, for that mark.
-	child, mark, restoreMark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
-	if err != nil {
-		return fail(err.Error())
-	}
-	// A restore that did not complete on the child: a sync clears its
-	// mark only by copying every service of the snapshot, all of each.
-	if len(restoreMark) > 0 && !reset {
-		var missing []string
-		for _, r := range restoreMark {
-			if m, ok := copiesService(ctx, projectDir, services, streams, r.Name, r.Dirs, r.Volumes); !ok {
-				missing = append(missing, r.Name+cmp.Or(" ("+strings.Join(m, ", ")+")", ""))
-			}
-		}
-		if len(missing) > 0 {
-			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
-				Fixes: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
-					report.Fix("or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
-			return 1
-		}
-	}
-	// A reset wipes the child whatever its mark: completed, it starts
-	// over from this side's data.
-	if mark != "" && !reset {
-		var childDirs, childVols []string
-		for _, c := range child {
-			if c.Name == mark {
-				childDirs, childVols = c.Dirs, c.Volumes
-			}
-		}
-		if missing, ok := copiesService(ctx, projectDir, services, streams, mark, childDirs, childVols); !ok {
-			ref := os.Getenv(remote.SyncToTargetEnv)
-			var fixes []report.Remedy
-			for _, f := range remote.ImportFixes(ref, mark, true) {
-				fixes = append(fixes, report.Fix(f[0], f[1]))
-			}
-			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
-			if len(missing) > 0 {
-				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy " + strings.Join(missing, ", ") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
-			}
-			report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
-			return 1
-		}
-	}
-	nothing := !slices.ContainsFunc(services, cli.SyncService.Copies) || len(dirs) == 0 && len(vols) == 0 && len(streams) == 0
-	if reset && !nothing && len(streams) == 0 {
-		// The rsync skips an entry or a volume missing here: with none
-		// present it would write nothing, and nothing wipes without a
-		// write.
-		mnt, _ := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
-		nothing = (mnt == "" || !slices.ContainsFunc(dirs, func(d string) bool { return fileExists(filepath.Join(mnt, d)) })) &&
-			!slices.ContainsFunc(vols, func(v cli.Volume) bool { ok, _ := volumeExists(ctx, v.Name); return ok })
-	}
-	if nothing && reset {
-		// It would only empty the child: --destroy and a release do that.
-		return fail("the parent has no data to start the child over from (no service with " + cli.DataLabel + "=true whose copy carries entries of mnt or named volumes, or runs its scripts): nothing reset")
-	}
-	if !slices.ContainsFunc(services, cli.SyncService.Copies) {
-		report.Info("nothing to sync: no service has data a copy carries (" + cli.DataLabel + "=true, " + cli.DataCopyLabel + " not " + cli.CopyNone + ")")
-		return 0
-	}
-	if len(dirs) == 0 && len(vols) == 0 && len(streams) == 0 {
-		report.Info("nothing to sync: no bind mounts under .devopsy/mnt or named volumes for the services copied as " + cli.DataCopyLabel + "=" + cli.CopyVolumes)
-		return 0
-	}
-	// Everything that can refuse, before anything changes on this side.
-	if len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "export")) {
-		return fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/%s/export", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
-	}
-	// A reset takes the child's services down before it copies: none
-	// runs under the copy.
-	var conflicts []string
-	if !reset {
-		conflicts = syncConflicts(services, child)
-	}
-	mismatches := streamMismatches(services, streams, child)
-	if len(conflicts)+len(mismatches) > 0 {
-		// A label from a variable the parent's inherit: names follows in
-		// the same sync (the child reads the pending inherited file); one
-		// in the child's own shared/.env wins over it.
-		fixes := []report.Remedy{report.Fix("label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)")}
-		if len(conflicts) > 0 {
-			fixes = append(fixes, report.Fix(cli.DataStopLabel+"="+cli.StopImport+" on the child's service, to stop it for the sync"), report.Fix(cli.DataLabel+"=true on the child's service ("+cli.DataCopyLabel+"="+cli.CopyVolumes+"), to copy under it running"))
-		}
-		report.Fail(&report.Failure{Msg: "the child's data labels do not match the parent's: nothing changed", Details: append(conflicts, mismatches...), Fixes: fixes})
-		return 1
-	}
-	for _, msg := range stopMismatches(services, child) {
-		report.Warn(msg)
-	}
-	if len(dirs)+len(vols) > 0 {
-		if err := ensureUtilImage(ctx); err != nil {
-			return fail(err.Error())
-		}
-		// Across servers the child's too, before anything stops here: a
-		// weekly rebuild there (a pull of its base) would otherwise lengthen
-		// this side's downtime, in its receive script.
-		if os.Getenv(remote.SyncToEnv) != "" {
-			if err := childUtilImage(ctx); err != nil {
-				return fail(err.Error())
-			}
-		}
-	}
+	services, streams, dirs, vols, child := in.services, in.streams, in.dirs, in.vols, in.child
 
 	set := cli.DataStops(services, cli.SyncParent, "")
 	env := dataHookEnv(services, cli.StoppedNames(set))
@@ -1261,7 +1135,6 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// every copy (always: down while another's data is exported, so its
 	// files and the dump are of one moment); after it otherwise, told
 	// nothing is stopped.
-	code := 0
 	copyFiles := func(last bool) {
 		if code == 0 && len(dirs)+len(vols) > 0 {
 			if ctx.Err() != nil {
@@ -1335,6 +1208,153 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		code = fail(restoreErr.Error())
 	}
 	return finish(code, copied)
+}
+
+// pushInputs is what a push copies, as its checks read it.
+type pushInputs struct {
+	services []cli.SyncService
+	streams  []string
+	dirs     []string
+	vols     []cli.Volume
+	child    []childService
+}
+
+// pushChecks is everything that can refuse a push before it changes
+// anything on this side. A nil result ends the push with the code: a
+// refusal, or nothing to copy.
+func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushInputs, int) {
+	// The data's history the child's side checked and takes over: this
+	// side's must be the ones the preflight read (a release of this
+	// environment since would copy data another image wrote).
+	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
+		rel := remote.ReleaseFile(projectDir, "")
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			return nil, fail(err.Error())
+		}
+		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
+			return nil, fail("this environment's data's history changed since the sync started (a release of it): nothing copied; sync again")
+		}
+	}
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
+		return nil, failErr(err)
+	}
+	streams, err := cli.SyncCustomServices(services)
+	if err != nil {
+		return nil, fail(err.Error())
+	}
+	dirs := cli.SyncDirs(services)
+	vols := copiedVolumes(services)
+	// What the rsync would change under a running service of the child,
+	// left running by its own labels, and a stream the child would not
+	// import, are mismatches, not a sync: refused before anything stops.
+	// So is an import's mark on the child for a service this side does
+	// not copy: only a sync that writes it may clear it. Asked even with
+	// nothing to copy here, for that mark.
+	child, mark, restoreMark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
+	if err != nil {
+		return nil, fail(err.Error())
+	}
+	// A restore that did not complete on the child: a sync clears its
+	// mark only by copying every service of the snapshot, all of each.
+	if len(restoreMark) > 0 && !reset {
+		var missing []string
+		for _, r := range restoreMark {
+			if m, ok := copiesService(ctx, projectDir, services, streams, r.Name, r.Dirs, r.Volumes); !ok {
+				missing = append(missing, r.Name+cmp.Or(" ("+strings.Join(m, ", ")+")", ""))
+			}
+		}
+		if len(missing) > 0 {
+			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
+				Fixes: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
+					report.Fix("or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
+			return nil, 1
+		}
+	}
+	// A reset wipes the child whatever its mark: completed, it starts
+	// over from this side's data.
+	if mark != "" && !reset {
+		var childDirs, childVols []string
+		for _, c := range child {
+			if c.Name == mark {
+				childDirs, childVols = c.Dirs, c.Volumes
+			}
+		}
+		if missing, ok := copiesService(ctx, projectDir, services, streams, mark, childDirs, childVols); !ok {
+			ref := os.Getenv(remote.SyncToTargetEnv)
+			var fixes []report.Remedy
+			for _, f := range remote.ImportFixes(ref, mark, true) {
+				fixes = append(fixes, report.Fix(f[0], f[1]))
+			}
+			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
+			if len(missing) > 0 {
+				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy " + strings.Join(missing, ", ") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
+			}
+			report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
+			return nil, 1
+		}
+	}
+	nothing := !slices.ContainsFunc(services, cli.SyncService.Copies) || len(dirs) == 0 && len(vols) == 0 && len(streams) == 0
+	if reset && !nothing && len(streams) == 0 {
+		// The rsync skips an entry or a volume missing here: with none
+		// present it would write nothing, and nothing wipes without a
+		// write.
+		mnt, _ := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
+		nothing = (mnt == "" || !slices.ContainsFunc(dirs, func(d string) bool { return fileExists(filepath.Join(mnt, d)) })) &&
+			!slices.ContainsFunc(vols, func(v cli.Volume) bool { ok, _ := volumeExists(ctx, v.Name); return ok })
+	}
+	if nothing && reset {
+		// It would only empty the child: --destroy and a release do that.
+		return nil, fail("the parent has no data to start the child over from (no service with " + cli.DataLabel + "=true whose copy carries entries of mnt or named volumes, or runs its scripts): nothing reset")
+	}
+	if !slices.ContainsFunc(services, cli.SyncService.Copies) {
+		report.Info("nothing to sync: no service has data a copy carries (" + cli.DataLabel + "=true, " + cli.DataCopyLabel + " not " + cli.CopyNone + ")")
+		return nil, 0
+	}
+	if len(dirs) == 0 && len(vols) == 0 && len(streams) == 0 {
+		report.Info("nothing to sync: no bind mounts under .devopsy/mnt or named volumes for the services copied as " + cli.DataCopyLabel + "=" + cli.CopyVolumes)
+		return nil, 0
+	}
+	// Everything that can refuse, before anything changes on this side.
+	if len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "export")) {
+		return nil, fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/%s/export", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
+	}
+	// A reset takes the child's services down before it copies: none
+	// runs under the copy.
+	var conflicts []string
+	if !reset {
+		conflicts = syncConflicts(services, child)
+	}
+	mismatches := streamMismatches(services, streams, child)
+	if len(conflicts)+len(mismatches) > 0 {
+		// A label from a variable the parent's inherit: names follows in
+		// the same sync (the child reads the pending inherited file); one
+		// in the child's own shared/.env wins over it.
+		fixes := []report.Remedy{report.Fix("label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)")}
+		if len(conflicts) > 0 {
+			fixes = append(fixes, report.Fix(cli.DataStopLabel+"="+cli.StopImport+" on the child's service, to stop it for the sync"), report.Fix(cli.DataLabel+"=true on the child's service ("+cli.DataCopyLabel+"="+cli.CopyVolumes+"), to copy under it running"))
+		}
+		report.Fail(&report.Failure{Msg: "the child's data labels do not match the parent's: nothing changed", Details: append(conflicts, mismatches...), Fixes: fixes})
+		return nil, 1
+	}
+	for _, msg := range stopMismatches(services, child) {
+		report.Warn(msg)
+	}
+	if len(dirs)+len(vols) > 0 {
+		if err := ensureUtilImage(ctx); err != nil {
+			return nil, fail(err.Error())
+		}
+		// Across servers the child's too, before anything stops here: a
+		// weekly rebuild there (a pull of its base) would otherwise lengthen
+		// this side's downtime, in its receive script.
+		if os.Getenv(remote.SyncToEnv) != "" {
+			if err := childUtilImage(ctx); err != nil {
+				return nil, fail(err.Error())
+			}
+		}
+	}
+	return &pushInputs{services, streams, dirs, vols, child}, 0
 }
 
 // cloneContainer starts the containers of a push's or an export's clone
