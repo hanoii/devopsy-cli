@@ -123,6 +123,7 @@
 - At the switch `release-record live` turns the `snapshot` lines into the release's `stop` lines, kept down by a mark and by a settle inside its own activation (`HeldStopsEnv`; any other settle starts them as leftovers, internals/syncs.md).
 - Once something started them, the run step or the restart of the release before, `release-record done` removes those lines, first starting what of them the run step left exited (`startLeftDown`, said, since a run step need not `up` every service), one whose container another image than the release's holds made again (`images.Recreate`, as `restoreServices` does).
 - What `startLeftDown` could not start stays in the record, past a release snapshot and past a restore, for whatever takes the lock next: the warning alone leaves it down for good.
+- `startLeftDown` brings up what it finds with no container, since devopsy stopping it says it ran (for example after a restore's failure past its switch took them down), where an unrecorded service with no container was removed on purpose.
 - A start there that fails only warns, the release live; a cut sync's copy or a failed restore keeps the lines down, the record saying so.
 - A restore's data step turns them into its own once its mark is written, kept down under it; a mark that cannot be written leaves them the snapshot's, which the hook starts.
 - A `--no-code` restore traps INT, TERM and HUP around its release snapshot, so a cancel starts the set again (`rd_unsnap`) rather than killing the shell.
