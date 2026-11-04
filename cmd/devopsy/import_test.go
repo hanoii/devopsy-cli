@@ -308,6 +308,66 @@ func TestImportEndStopFailsStillRecorded(t *testing.T) {
 	}
 }
 
+// An import whose landing fails and whose end's stop then fails too says both,
+// keeps the mark and records what it stopped: never a quiet completion.
+func TestImportLandingAndEndFail(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	base := filepath.Join(s.root, "shop", "prod")
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "shop-prod-app\tsha256:own\tapp\tpulled\tshop-prod-app@sha256:own\t\t\t11.8\tlatest\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "at 11.8\n", 0o644)
+	env := []string{"FAKE_APP_VERSION=11.8", "FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAKE_NAMES=shop-prod-app=sha256:own"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	// Since: the restart held app on release 2's 12.1 image.
+	write(t, list, "shop-prod-app\tsha256:twelve\tapp\tpulled\tshop-prod-app@sha256:twelve\t\t\t12.1\tlatest\tshop-prod-app\tsha256:own\t\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
+	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"app\":\n    image: \"shop-prod-app@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"shop-prod-app@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n2\tapp\tran\tshop-prod-app\tsha256:twelve\tshop-prod-app@sha256:twelve\t12.1\tlatest\n", 0o644)
+	// Its own name gone and the registry out of reach: the history taken
+	// over, the hold not derived, which the failure says and --resolved
+	// derives (review: --resolved found the history taken over and
+	// derived nothing, the held image starting on the imported data).
+	gone := []string{"FAKE_APP_VERSION=11.8", "FAKE_IMAGES=sha256:own=shop-prod-app@sha256:own sha256:twelve=shop-prod-app@sha256:twelve", "FAIL_PULL=1"}
+	flag := filepath.Join(t.TempDir(), "written")
+	s.logs()
+	_, errs, code = s.runIO(append(gone, "FAKE_EXTRACT_BREAK="+flag, "FAIL_STOP_IF="+flag), out, "@prod", "--import", "app", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || readMark(base) == nil || !strings.Contains(errs, "the import of app completed, but") || !strings.Contains(errs, "docker compose stop") {
+		t.Errorf("a landing and a stop both failing (%d), mark %+v:\n%s\n%s", code, readMark(base), errs, docker)
+	}
+	if rec := readString(filepath.Join(base, syncState)); !strings.Contains(rec, "stop app\n") {
+		t.Errorf("app left out of the record %q:\n%s\n%s", rec, errs, docker)
+	}
+}
+
+// The session lost once the load runs: the operator is told it was under way
+// and how to see how it ends, and the import completes on the server.
+func TestImportSessionLostWhileRunning(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	wait := filepath.Join(s.tmp, "hook")
+	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait, "FAKE_SSH_LOST_RUNNING=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	_ = s.wait(cmd, errs, "a session lost during the load")
+	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "the import was under way there") || !strings.Contains(errs.String(), "--status shows how it ends") {
+		t.Errorf("a session lost during the load (%d):\n%s", code, errs)
+	}
+	write(t, wait+".go", "", 0o644)
+	for deadline := time.Now().Add(10 * time.Second); s.mark() != nil || fileExists(filepath.Join(s.base, remote.SyncImportingFile)); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the import did not complete once its session was lost: mark %+v, record %q", s.mark(), s.record())
+		}
+	}
+	if readString(s.imported) != "import db into shop-prod\nrows\n" || slices.Contains(s.stopped(), "app") {
+		t.Errorf("after its session was lost: %q, stopped %v", readString(s.imported), s.stopped())
+	}
+}
+
 // What a tar carries against the service's labels: a name in mnt, a volume,
 // or the refusal.
 func TestImportEntries(t *testing.T) {
@@ -428,6 +488,30 @@ func TestImportSession(t *testing.T) {
 	}
 	if strings.Contains(errs.String(), remote.ImportMarker) {
 		t.Errorf("the marker shows:\n%s", errs)
+	}
+	os.Remove(wait)
+	os.Remove(wait + ".go")
+	os.Remove(s.imported)
+
+	// A second Ctrl-C during the load ends the session, and only that.
+	cmd, errs = s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	waitFile(t, wait, "the import's hook", startWait, errs.String)
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	for deadline := time.Now().Add(startWait); !strings.Contains(errs.String(), "goes on on"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the first Ctrl-C said nothing:\n%s", errs)
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	_ = s.wait(cmd, errs, "a second Ctrl-C during the load")
+	if !strings.Contains(errs.String(), "the session is ended: the import of db goes on on @devopsy@one:prod") {
+		t.Errorf("a second Ctrl-C during the load:\n%s", errs)
+	}
+	write(t, wait+".go", "", 0o644)
+	for deadline := time.Now().Add(10 * time.Second); s.mark() != nil || fileExists(filepath.Join(s.base, remote.SyncImportingFile)); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the import did not complete after a second Ctrl-C: mark %+v, record %q", s.mark(), s.record())
+		}
 	}
 	os.Remove(wait)
 	os.Remove(wait + ".go")
