@@ -131,6 +131,7 @@ cd "$base/current"
 	s += `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 id=$(devopsy ` + ReleaseIDFlag + ` "$snaps")
 devopsy --say info "taking snapshot $id of ${cur#releases/}"
+` + timerStart(SnapshotSinceEnv) + `export ` + SnapshotSinceEnv + `
 ` + strings.Replace(step("stopped", `"$id"`, `"$base/$cur"`), `[ "$sb" = 0 ] || exit "$sb"`, `if [ "$sb" -gt 128 ]; then
   # Killed outright (SIGKILL, the OOM killer): what it stopped starts
   # again now, under the locks it held, rather than at the next settle.
@@ -159,6 +160,11 @@ const SnapshotKeepEnv = "DEVOPSY_INTERNAL_SNAPSHOT_KEEP"
 func snapshotEnv(t *Target, keep int) string {
 	return SnapshotKeepEnv + "=" + strconv.Itoa(keep) + " " + SnapshotReleaseKeepEnv + "=" + strconv.Itoa(t.SnapshotsRelease.Keep) + " " + SnapshotMirrorEnv + "=" + map[bool]string{true: "1", false: "0"}[t.SnapshotsMirror]
 }
+
+// SnapshotSinceEnv is a take's clock (timerStart), started by its script
+// and read by the step that says it is taken: a process of its own, and
+// the take's first pass is another.
+const SnapshotSinceEnv = "DEVOPSY_INTERNAL_SNAPSHOT_SINCE"
 
 // RestoreSnapshotEnv names a restore's own release snapshot (taken right
 // before, in the same session), whose stopped services its data step keeps
@@ -234,7 +240,7 @@ export ` + RestoreByEnv + `=` + Quote(r.By)
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + settleSync(projectName) + snapshotLock(false) + `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 ` + releaseImages(projectName, t) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
-` + step("check-fit", `"$snap"`) + ` || exit 1
+` + timerStart("restore_t") + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 `
 	// Its run step starts the current release's images on the variables
@@ -308,7 +314,7 @@ out="$base/$cur/` + ServerLogFile + `"
   set +e
 ` + killedSays(t, projectName, "rd_status", "nothing restored") + `  ` + unsnap + `exit 1
 }
-exec 6>&- 5>&-
+` + sayTook("restore_t", `"snapshot `+r.Snapshot+`'s data restored"`) + `exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?
 if [ "$rs" = 0 ]; then

@@ -8,6 +8,10 @@ import "github.com/hanoii/devopsy-cli/internal/report"
 // the server's devopsy has it (Protocol 5).
 const SayFlag = "--say"
 
+// SaySinceFlag adds to --say's message the time since a script's clock
+// (timerStart).
+const SaySinceFlag = "--since"
+
 // SayLevels are --say's levels, by name.
 var SayLevels = map[string]report.Level{
 	"info":    report.InfoLevel,
@@ -24,6 +28,21 @@ func sayQuoted(lv report.Level, msg string) string {
 		name = "info"
 	}
 	return "devopsy " + SayFlag + " " + name + " " + Quote(msg) + " >&2\n"
+}
+
+// timerStart is a script's line starting a clock in the variable name.
+// A date that fails leaves it empty, and the line that says the time goes
+// without one.
+func timerStart(name string) string {
+	return name + "=$(date +%s) || " + name + "=\n"
+}
+
+// sayTook is a script's line saying msg, a shell word, with the time since
+// timerStart's clock in name. It never fails the script, before or past
+// the switch: a time decides nothing, and later lines notice a session
+// gone.
+func sayTook(name, msg string) string {
+	return "devopsy " + SayFlag + " info " + SaySinceFlag + ` "${` + name + `:-}" ` + msg + " || true\n"
 }
 
 // echoLine is a script's command saying msg at level lv without the

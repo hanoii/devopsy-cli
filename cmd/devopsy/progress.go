@@ -91,7 +91,7 @@ func (p *uploadProgress) done(id string) string {
 	p.mu.Lock()
 	d := p.last.Sub(p.first)
 	p.mu.Unlock()
-	return fmt.Sprintf("uploaded %s: %s in %s (%s/s)", id, humanBytes(p.total), d.Round(100*time.Millisecond), humanBytes(rate(p.total, d)))
+	return fmt.Sprintf("uploaded %s: %s in %s (%s/s)", id, humanBytes(p.total), report.Took(d), humanBytes(rate(p.total, d)))
 }
 
 func rate(n int64, d time.Duration) int64 {

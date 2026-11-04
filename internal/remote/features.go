@@ -110,7 +110,13 @@ var namedFeatures = []struct {
 	// parent would start it unlabeled, and a write could outlive its
 	// sync; an older child finds it by its name, still the same.
 	{ContainerLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push\b`)},
+	// --say --since (sayTook): an older --say would print "--since" as
+	// the message, and the rest as details.
+	{SaySinceFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `[ '\\]{1,8}info[ '\\]{1,8}` + SaySinceFlag + `\b`)},
 }
+
+// SaySinceFeature is the named feature of --say --since.
+const SaySinceFeature = "say-since"
 
 // ContainerLabelsFeature is the named feature of devopsy's containers'
 // labels (EnvLabel, TaskLabel).

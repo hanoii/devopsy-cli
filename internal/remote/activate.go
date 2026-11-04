@@ -226,7 +226,7 @@ func (a *activation) pick() string {
 export ` + RestoreByEnv + `=` + Quote(a.restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[a.restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 devopsy --say info "restoring snapshot ` + a.restore.Snapshot + ` as release $id"
-` + NotLive + a.snapStep("make-release", `"$snap"`, `"$base/releases/$id"`) + ` || { rm -rf "$base/releases/$id"; exit 1; }
+` + timerStart("restore_t") + NotLive + a.snapStep("make-release", `"$snap"`, `"$base/releases/$id"`) + ` || { rm -rf "$base/releases/$id"; exit 1; }
 `
 	case a.rollback:
 		s += partialGuard(a.t, a.project, "exit 1")
@@ -548,7 +548,7 @@ if [ "$rd_status" != 0 ]; then
   # never the ones the restore's fetch gave the names.
 ` + a.undoLocked() + `` + killedSays(a.t, a.project, "rd_status", "nothing restored") + `  not_live 1
 fi
-`
+` + sayTook("restore_t", `"snapshot `+a.restore.Snapshot+`'s data restored"`)
 	}
 	return s
 }
@@ -688,7 +688,7 @@ fi
 `
 	} else {
 		s += `if [ "$status" = 0 ]; then
-` + runningLine(a.p.Run, "run") + `  ` + inTTY(`"$base/current"`, devopsyCall(a.project, a.p.Run, false), "status=$?") + `fi
+` + runningLine(a.p.Run, "run") + `  ` + timerStart("run_t") + `  ` + inTTY(`"$base/current"`, devopsyCall(a.project, a.p.Run, false), "status=$?") + `  [ "$status" != 0 ] || ` + sayTook("run_t", Quote("'devopsy "+strings.Join(a.p.Run, " ")+"' done")) + `fi
 `
 	}
 	// What ran on the data, failed or not, before a restart replaces it:

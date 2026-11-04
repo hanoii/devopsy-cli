@@ -119,6 +119,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - Prompts (`Logger.Confirm`, `Input`, `ConfirmName`) run only at a terminal; without one the command fails, naming `--yes`.
 - A server script says things through the hidden `devopsy --say <level> <message> [<detail>...]`, and `echo`es a line built by `report` (`echoLine`) only where it cannot rely on the server's devopsy (`basePrelude`'s checks, the `--ssh-keys` scripts).
 - `--say` fails when its write fails, as `echo` does: a release's script relies on that before its switch.
+- A stretch likely to take long (for example a fetch, a copy, a lock wait) says its time on a new line once it went through, never on a failure, through `report.Timer` locally and `sayTook` in a script: a line the code or a test matches stops matching with a time on it.
 - A session's script, and an argument of several lines in the "running" notice, show only at `-vv`; below it the notice counts the argument's lines (`Plan.running`).
 - A hint names the address as typed, the alias, else the resolved address (`targetRef`), and a hint to release, roll back, sync or restore, locally or in a script, the alias only with `source:` (`remote.HintAddress`): the command works when copied, and an alias with `source:` releases only from its checkout.
 - Color only at a terminal without `NO_COLOR`, or when forced (`cli.ColorForced`).

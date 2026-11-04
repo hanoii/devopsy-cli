@@ -146,8 +146,9 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // everything else stay as they are. Releases take the release lock, so this
 // never interleaves with a deploy writing its own secrets. stdin is gated
 // (gated_read): devopsy sends it once the lock is held.
-// (fmt.Sprintf takes it: gatedRead's printf escaped.)
-var varsEdit = strings.ReplaceAll(gatedRead, "%", "%%") + `if [ -z "$plain" ]; then
+// mode is set or unset.
+func varsEdit(mode string) string {
+	return gatedRead + `if [ -z "$plain" ]; then
   ` + releaseLock(false, true) + `  mkdir -p "$(dirname "$file")"
 fi
 umask 077
@@ -155,7 +156,7 @@ umask 077
 # What a link points to: the result goes beside it.
 t=$(readlink -f "$file")
 gated_read "$file.vars"
-awk -v mode=%s -v sq="'" '
+awk -v mode=` + mode + ` -v sq="'" '
   # closes: s has quote q unescaped, which ends a quoted value.
   function closes(s, q) { gsub(/\\\\/, "", s); gsub("\\\\" q, "", s); return index(s, q) > 0 }
   NR == FNR {
@@ -187,22 +188,23 @@ awk -v mode=%s -v sq="'" '
 ' "$file.vars" "$file" > "$t.tmp"
 # Into place in one rename, with the file's mode, so nothing reads it
 # empty or cut, whoever owned it (nothing makes one another user's).
-chmod "$(stat -c %%a "$t" 2>/dev/null || stat -f %%Lp "$t")" "$t.tmp"
+chmod "$(stat -c %a "$t" 2>/dev/null || stat -f %Lp "$t")" "$t.tmp"
 mv -f "$t.tmp" "$t"
 rm -f "$file.vars" "$t.tmp"
-printf '%%s\n' "$file"
+printf '%s\n' "$file"
 `
+}
 
 // VarsSetScript sets the KEY=value lines given on stdin, keys their
 // names.
 func VarsSetScript(t *Target, level *Level, keys []string) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set") + varsTrace(t, level, keys) + varsApply(t, level)
+	return varsPrelude(t, level) + varsEdit("set") + varsTrace(t, level, keys) + varsApply(t, level)
 }
 
 // VarsUnsetScript removes the keys given on stdin, one per line, keys
 // their names.
 func VarsUnsetScript(t *Target, level *Level, keys []string) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset") + varsTrace(t, level, keys) + varsApply(t, level)
+	return varsPrelude(t, level) + varsEdit("unset") + varsTrace(t, level, keys) + varsApply(t, level)
 }
 
 // VarsTrace starts the lines a --vars set or unset prints after the

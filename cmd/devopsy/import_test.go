@@ -1468,6 +1468,9 @@ func TestImportExportImagesImageLock(t *testing.T) {
 		if err != nil || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 			t.Errorf("the import, once the lock was free (%v):\n%s", err, readString(errFile))
 		}
+		if !strings.Contains(readString(errFile), "done waiting for the server's images (") {
+			t.Errorf("the import never said how long it waited:\n%s", readString(errFile))
+		}
 	case <-time.After(20 * time.Second):
 		_ = cmd.Process.Kill()
 		t.Fatalf("the import never went on once the lock was free:\n%s", readString(errFile))

@@ -728,7 +728,7 @@ func syncBlock(projectName, failed string, release bool) string {
 	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
 	// (DoneLine).
-	return syncFinish(projectName) + `sync_id=$` + SyncIDEnv + `
+	return syncFinish(projectName) + timerStart("sync_t") + `sync_id=$` + SyncIDEnv + `
 : >"$base/` + SyncHoldingFile + `"
 ` + syncPrepare(projectName, release) + `if [ "$status" = 0 ]; then
   printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
@@ -796,7 +796,7 @@ func syncBlock(projectName, failed string, release bool) string {
   rm -f ` + taken + `
 fi
 rm -f "$base/` + SyncHoldingFile + `"
-` + syncRestorePipe
+[ "$status" != 0 ] || ` + sayTook("sync_t", `"data synced"`) + syncRestorePipe
 }
 
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run

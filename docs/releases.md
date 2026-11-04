@@ -241,6 +241,11 @@ final state: the most recent release's, or one release's with `--log
 <id>`. The local steps' output stays on your screen only, so they keep
 their terminal.
 
+What is likely to take long says its time when it goes through, on a line
+of its own and in the log too: `images fetched (1m12s)`, `'devopsy deploy'
+done (45s)`, `done waiting for ... (12s)`, and at the end `released <id>
+(3m04s)`. A step that fails says its failure and no time.
+
 ## Rollbacks
 
 `--rollback` goes back to the newest release older than the current one

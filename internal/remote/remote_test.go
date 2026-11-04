@@ -464,6 +464,40 @@ func TestResetFeature(t *testing.T) {
 	}
 }
 
+// A script saying a time needs --since from the server's devopsy, whose
+// older --say would print "--since" as the line.
+func TestSaySinceFeature(t *testing.T) {
+	t.Parallel()
+	tg := &Target{Path: "app/prod"}
+	if got := Needs(ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, nil)); !slices.Contains(got, SaySinceFeature) {
+		t.Errorf("an activation's needs: %v", got)
+	}
+	if slices.Contains(Needs("devopsy --say info 'x'\n"), SaySinceFeature) {
+		t.Errorf("a plain --say needs %s", SaySinceFeature)
+	}
+}
+
+// A lock wait says its time once it ends, and nothing when there was no
+// wait, or when the wait gave up, which says its error.
+func TestLockWaitSaysItsTime(t *testing.T) {
+	t.Parallel()
+	run := func(flock string) string {
+		t.Helper()
+		out, _ := exec.Command("sh", "-c", "set -eu\ndevopsy() { echo \"$*\"; }\nflock() { "+flock+"; }\n"+lockWaitOr(9, false, "x", "exit 75")).CombinedOutput()
+		return string(out)
+	}
+	if out := run("true"); out != "" {
+		t.Errorf("a free lock said:\n%s", out)
+	}
+	waited := regexp.MustCompile(`^--say info waiting for x, up to 10 minutes\n--say info --since [0-9]+ done waiting for x\n$`)
+	if out := run(`[ "$1" != -n ]`); !waited.MatchString(out) {
+		t.Errorf("a wait that ended said:\n%s", out)
+	}
+	if out := run("false"); strings.Contains(out, "done waiting") || !strings.Contains(out, "x did not end in 10 minutes") {
+		t.Errorf("a wait that gave up said:\n%s", out)
+	}
+}
+
 // devopsy's containers found by their labels: only the push needs it,
 // since its receive script labels the child's rsync, which the child's
 // holder removes by them; the receive's container is labeled so.

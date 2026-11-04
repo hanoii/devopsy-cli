@@ -484,7 +484,7 @@ func lockWaitOr(fd int, shared bool, what, timeout string) string {
 	if shared {
 		opt = "-s "
 	}
-	return fmt.Sprintf(`flock -n %s%d || { devopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; %s; }; }`, opt, fd, what, opt, fd, what, timeout)
+	return fmt.Sprintf(`flock -n %s%d || { %sdevopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; %s; }; %s}`, opt, fd, timerStart("lw_t"), what, opt, fd, what, timeout, sayTook("lw_t", `"done waiting for `+what+`"`))
 }
 
 // releaseLock takes the environment's release lock on fd 9 (lockWait,
@@ -1199,7 +1199,7 @@ image_lock() {
       exec 8>&-
       return 75
     fi
-    devopsy --say info "waiting for the server's images, held by $(image_holders), up to 10 minutes"
+    ` + timerStart("il_t") + `    devopsy --say info "waiting for the server's images, held by $(image_holders), up to 10 minutes"
     il_s=0
     flock -w 600 $il_opt 8 || il_s=$?
     if [ "$il_s" -ne 0 ]; then
@@ -1209,7 +1209,7 @@ image_lock() {
       exec 8>&-
       return 75
     fi
-  fi
+    ` + sayTook("il_t", `"done waiting for the server's images"`) + `  fi
   if [ "$1" = exclusive ] && ! docker version >/dev/null 2>&1; then
     il_busy="Docker is not answering"
     [ "${3:-}" = now ] || devopsy --say warning "$il_busy"
@@ -1258,15 +1258,15 @@ func fetchImages(projectName string) string {
 	// image nothing runs any more (the restore decides the holds after).
 	return `fetch_images() {
   fi_mode=$(img mode "$1") || return
-  if [ "$fi_mode" = ` + ModeImage + ` ]; then
+  ` + timerStart("fi_t") + `  if [ "$fi_mode" = ` + ModeImage + ` ]; then
     devopsy --say info "pulling images (image mode)"
     fi_cmd=` + Quote(image) + `
   else
     devopsy --say info "pulling and building images (build mode)"
     fi_cmd=` + Quote(build) + `
   fi
-  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty "$fi_cmd")
-}
+  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty "$fi_cmd") || return
+  ` + sayTook("fi_t", `"images fetched"`) + `}
 `
 }
 
