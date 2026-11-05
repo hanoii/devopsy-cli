@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -1725,7 +1727,7 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, args)
 	}
 	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, toProject, nil, len(streams) == 0, wipeScript())
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, toProject, nil, len(streams) == 0, wipeScript(), false)
 	}
 	if os.Getenv(remote.SyncResetEnv) != "" {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
@@ -2138,7 +2140,7 @@ func shareInto(ctx context.Context, c container, src, dst, what string) (ok, clo
 // the directory of a service without data). The daemon lives for one
 // copy and publishes no port.
 func rsyncdConf(entries, files, volumes []string) string {
-	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
+	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n"
 	for _, e := range entries {
 		if slices.Contains(files, e) {
 			// A module is a directory: mnt, filtered down to the file.
@@ -2314,8 +2316,22 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
 		keys = append(keys, v.Key)
 	}
-	id, err := dockerOut(ctx, append(daemon, "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), remote.UtilImage,
-		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)...)
+	// On the host's loopback, which a local user reaches, so with a password of this
+	// sync's: a project user must not read another's data as it is copied, and a rule by
+	// its group keeps it off Docker's networks, this push's user included.
+	secret := make([]byte, 16)
+	if _, err := crand.Read(secret); err != nil {
+		return err
+	}
+	password := hex.EncodeToString(secret)
+	start := append(daemon, "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), "-e", "RSYNC_SECRET", remote.UtilImage,
+		"sh", "-c", rsyncDaemonScript)
+	trace(append([]string{"docker"}, start...))
+	startCmd := exec.CommandContext(ctx, "docker", start...)
+	startCmd.Env = append(os.Environ(), "RSYNC_SECRET="+password)
+	startCmd.Stderr = errOut
+	out, err := startCmd.Output()
+	id := strings.TrimSpace(string(out))
 	if err != nil || id == "" {
 		return fmt.Errorf("starting the rsync daemon: %v", err)
 	}
@@ -2327,10 +2343,12 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		cmd.Stderr = errOut // stdout: the id again
 		_ = cmd.Run()
 	}()
-	ip, err := dockerOut(ctx, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", id)
-	if err != nil || ip == "" {
+	address, err := dockerOut(ctx, "port", id, "873")
+	if err != nil || address == "" {
 		return fmt.Errorf("the rsync daemon's address: %v", err)
 	}
+	// Its first line, the one on the loopback: never more than one here.
+	address, _, _ = strings.Cut(address, "\n")
 	ready := false
 	for i := 0; i < 50 && !ready; i++ {
 		if err := ctx.Err(); err != nil {
@@ -2349,13 +2367,19 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, toBase, syncID, port, present, files, keys, toProject, owners, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, toBase, syncID, port, present, files, keys, toProject, owners, last, wipeScript(), true), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+address)
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
-		cmd.Stdin = nil
+		// On stdin, since a command line shows to every user of the server.
+		secretIn, err := filledPipe(password + "\n")
+		if err != nil {
+			return err
+		}
+		cmd.Stdin = secretIn
 		cmd.Stdout = errOut
 		cmd.Stderr = io.MultiWriter(errOut, &stderr)
-		err := cmd.Run()
+		err = cmd.Run()
+		secretIn.Close()
 		if err == nil {
 			return nil
 		}

@@ -175,7 +175,7 @@ func startLane(l lane) error {
 	}
 	// The operator's key, authorized for the deploy user of both servers,
 	// and an agent holding it, for syncs across servers (agent()).
-	if out, err := docker("exec", l.operator, "sh", "-c", `ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519 && printf 'Host server server2\n  User devopsy\n  StrictHostKeyChecking accept-new\n' >/root/.ssh/config && chmod 600 /root/.ssh/config && ssh-agent -a /tmp/agent.sock >/dev/null && SSH_AUTH_SOCK=/tmp/agent.sock ssh-add -q`); err != nil {
+	if out, err := docker("exec", l.operator, "sh", "-c", `ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519 && printf 'Host server server2 doorsrv\n  User devopsy\nHost *\n  StrictHostKeyChecking accept-new\n' >/root/.ssh/config && chmod 600 /root/.ssh/config && ssh-agent -a /tmp/agent.sock >/dev/null && SSH_AUTH_SOCK=/tmp/agent.sock ssh-add -q`); err != nil {
 		return fmt.Errorf("%v: %s", err, out)
 	}
 	return l.startServer(l.server, "server")

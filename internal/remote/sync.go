@@ -1220,7 +1220,8 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // --chown); then one per named volume (volumes, by key), from the
 // module of its key into the child's volume of that key
 // (<toProject>_<key>), which must be there before anything is written
-// (the child's prepare, or a reset's wipe, makes it).
+// (the child's prepare, or a reset's wipe, makes it). secret says the first line of
+// stdin is the daemon's password, which a command line would show.
 // SyncStartedFile goes first, and with last (no stream follows)
 // a DoneLine once every entry is copied.
 //
@@ -1230,7 +1231,7 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []string, toProject string, owners map[string]string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []string, toProject string, owners map[string]string, last bool, wipe string, secret bool) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
 	if wipe == "" {
@@ -1247,12 +1248,18 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []stri
 		open := Quote(path.Join(base, SyncOpenFile(id)))
 		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
 	}
-	// Labeled as the holder of sync id finds what writes its copy.
+	// Labeled as the holder of sync id finds what writes its copy. The password is this
+	// sync's, for the parent's daemon behind the forward, which any local user reaches.
 	labels := ""
 	for _, a := range ContainerLabels(toProject, SyncTask(id)) {
 		labels += " " + Quote(a)
 	}
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
+	pass, readPass := "", ""
+	if secret {
+		pass = " -e RSYNC_PASSWORD"
+		readPass = "IFS= read -r RSYNC_PASSWORD\nexport RSYNC_PASSWORD\n"
+	}
+	script := "set -eu\n" + readPass + "mnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
 		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
 mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
 ( while sleep 1; do
@@ -1263,7 +1270,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name"` + labels + ` --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
+  docker run --rm --name "$rs_name"` + labels + ` --network host` + pass + ` -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -1271,7 +1278,7 @@ copy() {
 copyvol() {
   mine || { devopsy --say error "the child's side decided already: the volume $1 not copied"; exit 1; }
   devopsy --say info "rsync volume $1"
-  docker run --rm --name "$rs_name"` + labels + ` --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
+  docker run --rm --name "$rs_name"` + labels + ` --network host` + pass + ` -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "the volume $1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync volume $1: ` + RsyncVanishedNotice + `"
   }

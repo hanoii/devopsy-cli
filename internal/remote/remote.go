@@ -665,7 +665,8 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" "take them down, remove it, then release again:" "` + report.CmdMark + `docker compose -p <project> down" "` + report.CmdMark + `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current"
   exit 1
 fi
-` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared/mnt"
+` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared"
+devopsy ` + MntReadyFlag + ` "$base"
 # An upload cut off leaves its .tmp, none running while the lock is held.
 # A watcher's file goes with its script: a sync's holder arms its own
 # before it waits for this lock.

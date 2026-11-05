@@ -346,6 +346,7 @@ case "$*" in
       ci=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f3)
       printf '{"Name":"/%s-%s-1","Image":"%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "${ci:-sha256:$cs}" "$p" "$cs" "$cl"
     done ;;
+  "port "*) echo 127.0.0.1:32768 ;;
   "inspect "*) echo 172.17.0.9 ;;
   # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
   # none with FAKE_UTIL_MISSING; a build fails with FAIL_UTIL_BUILD, else
@@ -1303,7 +1304,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	// The parent's sessions to the child: never the forwarded agent, no
 	// password prompt, and a short connect timeout.
 	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -T -R 127.0.0.1:") || !strings.Contains(receive, ":127.0.0.1:32768 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
 	// Every session of the release bounds its connection and keeps itself
@@ -1315,7 +1316,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "port cid123 873", " --network host -e RSYNC_PASSWORD -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
