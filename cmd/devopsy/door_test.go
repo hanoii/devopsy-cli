@@ -519,10 +519,13 @@ func TestDoorTakesDuOfANamedVolume(t *testing.T) {
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 	_, logged := doorFakes(t)
-	mnt, dev := "/space/mnt/shop-prod", "/space/mnt/shop-dev"
-	clone := "/space/clones/shop/abc/1"
+	// The probe and the clone make their directory before docker: one this test may write as
+	// any user, as CI's is no root.
+	space := t.TempDir()
+	mnt, dev := space+"/mnt/shop-prod", space+"/mnt/shop-dev"
+	clone := space + "/clones/shop/abc/1"
 	tree := "/home/devopsy-shop/shop/prod"
-	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: "/home/devopsy-shop/shop"}
 	c := container{"devopsy-x-1", "shop-prod", remote.TaskExport}
 	ctx := context.Background()
 	d := dataSet{mnt: mnt, entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
