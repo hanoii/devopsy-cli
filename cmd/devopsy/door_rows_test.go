@@ -15,6 +15,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // A caller's PATH would choose the docker the door runs, and its HOME the config it obeys.
@@ -105,7 +106,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	}
 	seen := filepath.Join(dir, "seen")
 	vet := filepath.Join(dir, "vet")
-	if err := os.WriteFile(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho no >&2\nexit 2\n"), 0o755); err != nil {
+	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho no >&2\nexit 2\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	file := func(label string) map[string]any {
@@ -150,7 +151,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 func TestDoorTakesTheFileOnce(t *testing.T) {
 	bin := t.TempDir()
 	sudo := "#!/bin/sh\nshift 6\ncat \"$1\" && rm \"$1\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte(sudo), 0o755); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "sudo"), []byte(sudo), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -254,7 +255,7 @@ case "$1" in
     esac ;;
 esac
 `
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+	if err := testfile.Write(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return fake
@@ -492,7 +493,7 @@ func TestDoorSecretHasOneForm(t *testing.T) {
 	t.Cleanup(func() { os.Stdin = saved })
 	logged := filepath.Join(t.TempDir(), "ran")
 	fake := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$RSYNC_PASSWORD\" >"+logged+"\n"), 0o755); err != nil {
+	if err := testfile.Write(fake, []byte("#!/bin/sh\necho \"$RSYNC_PASSWORD\" >"+logged+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ask := func(t *testing.T, value string) int {

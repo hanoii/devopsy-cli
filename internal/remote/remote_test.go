@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"io"
 	"os"
 	"os/exec"
@@ -32,7 +33,7 @@ func write(t *testing.T, path, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := testfile.Write(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -589,7 +590,7 @@ func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
 	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return "PATH=" + bin + ":/usr/bin:/bin"
@@ -642,7 +643,7 @@ func TestPlainDirectories(t *testing.T) {
 
 	// --shell opens $SHELL where commands run.
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "fakeshell"), []byte("#!/bin/sh\necho \"shell $* in $PWD\"\n"), 0o755); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "fakeshell"), []byte("#!/bin/sh\necho \"shell $* in $PWD\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for dir, tg := range map[string]*Target{plain: tg, released + "/current": tr} {
@@ -702,7 +703,7 @@ func TestPrepareScript(t *testing.T) {
 	bin := t.TempDir()
 	// The fake devopsy records where it ran, and fails in a FAIL directory.
 	fake := "#!/bin/sh\n" + sayCase() + "pwd > ran\n[ ! -f .devopsy/FAIL ]\n"
-	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script := NotLive + fmt.Sprintf(PrepareScript, "devopsy --prepare-release")

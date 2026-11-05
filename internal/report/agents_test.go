@@ -33,6 +33,7 @@ var projectFiles = []string{"config.yaml", "config.local.yaml", "devopsy-compose
 // for its rules, in the words it uses, with the heading that must exist.
 var rootRules = map[string]string{
 	"the Areas index in AGENTS.md":        "## Areas",
+	"the Checks in AGENTS.md":             "## Checks",
 	"the Output conventions in AGENTS.md": "### Output",
 }
 

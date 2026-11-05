@@ -12,6 +12,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // project creates dir/<name>/.devopsy with the given files (path: content)
@@ -38,7 +39,7 @@ func project(t *testing.T, name string, files map[string]string) string {
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(full, []byte(content), mode); err != nil {
+		if err := testfile.Write(full, []byte(content), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -526,7 +527,7 @@ func TestEnvCapability(t *testing.T) {
 		"[ -z \"$DEVOPSY_INTERNAL_ENV_COMPUTE\" ] && exit 9\n" +
 		"echo \"SITE_HOST='$COMPOSE_PROJECT_NAME.localhost'\"\n" +
 		"echo \"SITE_URL='https://$COMPOSE_PROJECT_NAME.localhost'\"\n"
-	if err := os.WriteFile(compute, []byte(script), 0o755); err != nil {
+	if err := testfile.Write(compute, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	plan, err := build(root, []string{"ps"}, nil)
@@ -556,7 +557,7 @@ func TestEnvCapability(t *testing.T) {
 		t.Error("ran inside itself")
 	}
 	// A failure names the script and says what it printed.
-	if err := os.WriteFile(compute, []byte("#!/bin/sh\necho broken >&2\nexit 3\n"), 0o755); err != nil {
+	if err := testfile.Write(compute, []byte("#!/bin/sh\necho broken >&2\nexit 3\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var e *ExitError

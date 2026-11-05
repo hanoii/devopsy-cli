@@ -17,6 +17,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // utilScripts are the util containers' scripts by name, as the code calls them: what
@@ -212,7 +213,7 @@ func TestDoorCopiesHoldNoLink(t *testing.T) {
 		"sudo":    "#!/bin/sh\nexec tar -C " + tree + " -cf - x\n",
 		"setfacl": "#!/bin/sh\nexit 0\n",
 	} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+		if err := testfile.Write(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -327,7 +328,7 @@ esac
 		"setfacl": "#!/bin/sh\necho \"$*\" >>" + acl + "\n",
 		"docker":  "#!/bin/sh\nprintf '%s\\n' \"$@\" >" + docker + "\nprintf '1\\t/m\\n'\n",
 	} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+		if err := testfile.Write(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -436,7 +437,7 @@ func TestDoorRefusalLeavesNoWork(t *testing.T) {
 func TestDoorStreamEndsWithItsContainer(t *testing.T) {
 	doorFakes(t)
 	fail := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(fail, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	if err := testfile.Write(fail, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop"}, real: fail}

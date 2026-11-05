@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // Every script that reads a snapshot's directory holds the snapshot lock
@@ -204,7 +206,7 @@ func TestReleaseSnapshotLockWaitFails(t *testing.T) {
 	bin := strings.SplitN(strings.TrimPrefix(path, "PATH="), ":", 2)[0]
 	for _, busy := range []string{"5", "6"} {
 		// flock: only the lock on fd busy never comes.
-		if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nfor a; do last=$a; done\n[ \"$last\" != "+busy+" ]\n"), 0o755); err != nil {
+		if err := testfile.Write(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nfor a; do last=$a; done\n[ \"$last\" != "+busy+" ]\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		dir := t.TempDir()

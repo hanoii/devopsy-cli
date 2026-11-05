@@ -11,13 +11,11 @@ import (
 	"time"
 )
 
-// Bug: a fake a test writes (write, fakeImageTools) and runs at once
-// through sh fails now and then with "Text file busy" at its first call,
-// so the test fails in a hundredth of a second: a fork another parallel
-// test makes while the fake is open for writing inherits that fd until
-// the child execs (go.dev/issue/22315), and on Linux no file open for
-// writing may be executed. Linux only, and hundreds of thousands of runs,
-// so only when DEVOPSY_TEST_FORKS is set.
+// TestWrittenFakeRunsBesideForks keeps a fake written through write runnable
+// at once beside parallel tests' forks: written otherwise, its first call
+// fails now and then with "Text file busy" (testfile.Write), and the test
+// with it in a hundredth of a second. Linux only, and it forks without a
+// pause for 10 seconds, so only when DEVOPSY_TEST_FORKS is set.
 func TestWrittenFakeRunsBesideForks(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("DEVOPSY_TEST_FORKS") == "" {
