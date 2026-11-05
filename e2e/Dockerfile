@@ -2,7 +2,7 @@
 # up: Debian 13, Docker from docker.com with buildx (BuildKit), sshd,
 # util-linux, the deploy user in the docker group; xfsprogs and e2fsprogs
 # for tests of reflinks on an XFS loop device, and of their absence on an
-# ext4 one. Run privileged with a
+# ext4 one; sudo, acl and rsync for a project user's door (door_test.go). Run privileged with a
 # volume on /var/lib/docker; its own dockerd starts with it. The operator runs the
 # same image as "operator": an ssh client, no daemons.
 #
@@ -13,7 +13,7 @@
 # changes what the suite tests from one host to the next.
 FROM debian:trixie
 RUN apt-get update -q \
- && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client git util-linux iptables iproute2 procps xfsprogs e2fsprogs \
+ && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client git util-linux iptables iproute2 procps xfsprogs e2fsprogs sudo acl rsync openssl \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
  && echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" >/etc/apt/sources.list.d/docker.list \

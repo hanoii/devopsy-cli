@@ -13,6 +13,7 @@ Code: `e2e/` (`main_test.go` holds the lanes, the containers and the helpers; `D
 - Lanes (`E2E_LANES`, default 4; `runLanes`) run the tests at once: each a network, an operator and a server (a second one when a test asks), each test a process of its own on the first lane free, the slowest first by its last time (`timesFile`, in the user's cache directory); within a lane they run one at a time, and `resetLane` undoes between them what a test may leave.
 - `E2E_LANES=1` is one process running every test in order; CI runs two jobs of two lanes, half the tests each (`E2E_SHARD`, round robin by name).
 - `E2E_KEEP=1` keeps the containers after the run.
+- A project user's door has a server of its own (`doorServer`), started once per lane by the tests that need it, since its sudo rules and `docker` link are the whole server's.
 
 ## Writing one
 

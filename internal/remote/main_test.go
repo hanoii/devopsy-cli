@@ -42,7 +42,8 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// sayCase is a fake devopsy's line passing --say to the real one.
+// sayCase is a fake devopsy's lines passing --say to the real one, and readying
+// shared/mnt as the real one does for whoever has the socket.
 func sayCase() string {
-	return "[ \"$1\" != " + SayFlag + " ] || exec " + Quote(realDevopsy) + " \"$@\"\n"
+	return "if [ \"$1\" = --mnt-ready ]; then mkdir -p \"$2/shared/mnt\"; exit 0; fi\n" + "[ \"$1\" != " + SayFlag + " ] || exec " + Quote(realDevopsy) + " \"$@\"\n"
 }

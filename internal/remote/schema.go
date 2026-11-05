@@ -166,6 +166,27 @@ aliases:
     project: shop
     to: vm1:demo/prod
 
+# On a server, its deploy user's: project users with no Docker socket, whose
+# compose goes through devopsy's checks. Never from a project.
+door:
+  # The deploy user's directory for it, on a mount of its own with nosuid and nodev.
+  space: /var/lib/devopsy/door
+  # Asked about labels under prefix: its stdin the rendered file, exit 0 allows.
+  vet:
+    prefix: proxy.
+    command: /usr/local/bin/vet-labels
+  users:
+    devopsy-shop:
+      project: shop
+      # Default: its home, then the project.
+      tree: /srv/shop
+      # Shared networks it may join.
+      joinable: [tunnel]
+      # Roles it was given.
+      roles: []
+      # Lets it read every container and network, secrets included.
+      read_all: false
+
 # Settings for releases landing on this machine: on a server, its own
 # file. Never from a project.
 releases:

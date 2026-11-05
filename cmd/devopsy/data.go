@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -455,7 +456,7 @@ func runExport(cwd string, args []string, color bool) int {
 			for _, v := range vols {
 				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
-			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
+			run = append(append(run, remote.UtilImage, "sh", "-c", exportTarScript, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
 			err = dockerRunIO(ctx, container{fmt.Sprintf("devopsy-export-%d", os.Getpid()), composeName(cwd), remote.TaskExport}, nil, os.Stdout, run...)
 		}
 	}
@@ -1045,7 +1046,15 @@ func readyEntry(mnt string, e tarEntry) error {
 		return makeEntry(mnt, e.name)
 	}
 	f, err := os.OpenFile(filepath.Join(mnt, e.name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	// A project user's mnt is the deploy user's: the door makes its entries, and a
+	// directory there may be its own, made before it knew this one is a file.
+	if errors.Is(err, fs.ErrPermission) && !reachesDocker() {
+		return doorEntry(mnt, e.name, true)
+	}
 	if errors.Is(err, os.ErrExist) {
+		if fi, serr := os.Lstat(filepath.Join(mnt, e.name)); serr == nil && fi.IsDir() && !reachesDocker() {
+			return doorEntry(mnt, e.name, true)
+		}
 		return nil
 	}
 	if err != nil {

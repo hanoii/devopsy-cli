@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -160,7 +161,12 @@ func snapshotCloneData(ctx context.Context, cwd string, p snapshotPaths, d *snap
 	if err := cloneData(ctx, snapshotContainer(cwd, "-"+id+"-clone"), dir, d.dataSet); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
+	err := os.WriteFile(filepath.Join(dir, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
+	// A project user's clone is the deploy user's: the door marks it.
+	if errors.Is(err, fs.ErrPermission) {
+		_, err = doorAsk(true, "mark", dir, id)
+	}
+	return err
 }
 
 // snapshotRemoveClone removes the clone of id (every clone, id "").
@@ -984,7 +990,7 @@ func tarInto(ctx context.Context, c container, file string, mounts []string, dir
 		// to a symbolic link (tarLinks), and every take's tars are alike.
 		// Holes stay holes (--sparse): a database's punched pages came back
 		// as zeros, more disk than the data took.
-		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
+		"sh", "-c", snapshotTarScript,
 		"sh", dir, entry, filepath.Base(file), fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
 	if err := dockerRun(ctx, c, args...); err != nil {
 		_ = os.Remove(file)
@@ -1936,7 +1942,7 @@ func unzstd(ctx context.Context, snap, file string, c container) (r io.ReadClose
 		return fail(err)
 	}
 	args := append(append([]string{"run", "--rm"}, c.runArgs()...), "--network", "none", "-v", filepath.Join(snap, remote.SnapshotData)+":/s:ro", "-v", dir+":/o", remote.UtilImage,
-		"sh", "-c", `zstd -dcq -- "/s/$1" >/o/tar`, "sh", file)
+		"sh", "-c", restoreStreamScript, "sh", file)
 	trace(append([]string{"docker"}, args...))
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout, cmd.Stderr = errOut, errOut
@@ -2101,10 +2107,7 @@ func restoreSpace(ctx context.Context, cwd, id, projectDir string, services []cl
 		return
 	}
 	sort.Strings(paths)
-	// Per path: its filesystem (its parent's while missing), that one's
-	// free kilobytes, and the path's own use.
-	script := `for p; do d=$p; [ -e "$d" ] || d=${d%/*}; set -- $(df -Pk "$d" | tail -n 1); u=0; [ ! -e "$p" ] || u=$(du -sk "$p" | cut -f1); printf '%s\t%s\t%s\t%s\n' "$p" "$1" "$4" "$u"; done`
-	args := append(append(append(append([]string{"run", "--rm"}, snapshotContainer(cwd, "-"+id+"-space").runArgs()...), "--network", "none"), run...), append([]string{remote.UtilImage, "sh", "-c", script, "sh"}, paths...)...)
+	args := append(append(append(append([]string{"run", "--rm"}, snapshotContainer(cwd, "-"+id+"-space").runArgs()...), "--network", "none"), run...), append([]string{remote.UtilImage, "sh", "-c", spaceProbeScript, "sh"}, paths...)...)
 	trace(append([]string{"docker"}, args...))
 	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {

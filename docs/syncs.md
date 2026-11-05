@@ -171,10 +171,10 @@ without SSH, and a stream is written straight into the child's
 directory.
 
 Across servers, the parent's server starts an rsync daemon (read-only,
-serving only the entries being copied, with no published port) and
-reaches the child's server over SSH through a reverse forward. Your SSH
-agent is forwarded for that session only, and never on to the child. A
-stream also goes to the child's file through an SSH session from the
+serving only the entries being copied, on its loopback only, with a
+password made for that sync) and reaches the child's server over SSH
+through a reverse forward. Your SSH agent is forwarded for that session
+only, and never on to the child. A stream also goes to the child's file through an SSH session from the
 parent's server. Data goes from server to server, never through your
 machine.
 

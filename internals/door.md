@@ -1,0 +1,48 @@
+# Door
+
+A project user has no Docker socket: what it finds as `docker` asks the deploy user through sudo. Code: `internal/door/` (the decisions, touching nothing), `cmd/devopsy/door_client.go` (the project user's side of sudo), `door.go` (the deploy user's), `utilscripts.go`, `internal/remote/door.go`. `e2e/door_test.go` runs what needs a real kernel, Docker and sudo, each with a control that the attack works where the rule is off.
+
+- A server's `door:` is read only from the deploy user's own config: a project's could grant itself.
+- Who asks comes from `SUDO_USER`, and every word of the request is treated as hostile.
+- Who the socket lets in has no door (`runDocker`): the deploy user, and a project an admin put in the docker group.
+- `--door` and `--door-read` are dispatched first in `run`, before anything loads a project or reads the environment.
+- The deploy user never reads a project's tree: what it needs comes from `--door-read`, run as that project's user, so no link or swap there can show it anything of the deploy user's.
+- A project user's answer about a path is believed only for a path whose every part is the deploy user's (`Paths.Real`).
+- Compose runs on a file the project user rendered, never on the project's own: compose reads `env_file` and `extends` and runs `provider` as whoever runs it.
+- A rendered file and each verb's flags are checked deny by default (`CheckFile`, `CheckVerb`), so a key compose adds later fails closed.
+- A compose upgrade is tried against the rules before devopsy-server moves its pin: a key it starts writing by default refuses every `up`.
+- A bind holds no path with a part the project user can change, since the daemon resolves a bind at each start: an entry by its real path under `<space>/mnt/<compose name>`, a read-only part of a release as a sealed copy under `<space>/sealed/<project>`.
+- A firewall rule by the project users' group blocks Docker's address pools and the metadata service, never private ranges whole: a sync reaches another server over those.
+- `<space>` is on a mount of its own with `nosuid` and `nodev`: a container's setuid file or a crafted tar there otherwise crosses projects, or reaches root.
+- A project user's `shared/mnt` is a link into `<space>`, made at a release's start (`--mnt-ready`), and a compose name comes from where an environment is in that user's tree, never from a caller (`Policy.NameOf`).
+- Entries are made by the door, so a project user can write inside one and never replace it: when devopsy's own mkdir is refused (`makeEntry`), and what a file binds, at `compose config`, since a step writes in an entry before anything starts (`entries`), and at `up` (`bindEntries`).
+- An entry the door made a directory, not knowing it is a file, is replaced while empty: the two are told apart only by an import or a sync.
+- A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.
+- Of another project's labels, only its role, compose project and exports are ever read (`exportedLabel`).
+- A util container is one of the forms in `internal/door/forms.go`, its command, its arguments and its mounts checked together, never one a caller gives: it is root on the host's files, and a command paired with another's mounts writes where a bind goes by.
+- A new util container gets a form and a line in `TestDoorTakesWhatDevopsyRuns`, which runs devopsy's own against a fake docker: else a project user's release fails on it at runtime.
+- An rsync that names a whole mnt holds only the entry it writes (`narrow`): what it copies could otherwise leave a link where a bind's source goes by.
+- A word in a util container's arguments never starts with a dash: `find "$@"` would take it as code.
+- A Docker command devopsy calls has an answer here, or a reason in `doorVerbs` (`TestDoorKnowsDevopsysDockerCommands`, which sees `exec.Command`'s and scripts' lines, not a helper's).
+- An image's own labels under `devopsy.` or a vet's prefix refuse it: they land in its containers' labels, past any check of a file's, and an image not here yet is pulled first so they are read.
+- A build writes only a tag of this project's, and holds no labels of its own.
+- The deploy user is who owns the binary (`deployUser`): an install of it as root would point the door at root.
+- No container runs as the deploy user's ids, the door's users' or the socket's group (`hostIDs`): it would be that user's to reach through `/proc`.
+- `read_all` is an admin's grant of reads of everything, secrets included, and nothing else.
+- A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).
+- A root container holds no path a project user can change: input is copied in and output collected by that user's rights, and a restore streams through a container with no mounts.
+- A project's registry login reaches compose as its `auth` values alone, in the door's own directory: Docker's CLI loads plugins and helpers from a `DOCKER_CONFIG`, which would run the project's program as the deploy user.
+- A rendered file holds only `$$`: compose interpolates what it reads, after these checks, so a `$` not doubled refuses it (`variableIn`).
+- A util container's mounts sit only where devopsy's own commands look (`mountTarget`), and its sources hold nothing of `--mount`'s or `-v`'s syntax (`mountSource`).
+- `<space>/mnt/<name>` and `clones/<project>` are closed to every other user, and `sealed/<project>` to all but the deploy user, whatever modes a container gives its files.
+- Nothing stays in `<space>/work` after its container, and sealed copies go once no container holds them, an hour old (`pruneSealed`).
+- A compose name is a project's only while no other project's name extends its own, on the server's list and in its release root (`Policy.OwnName`).
+- A secret reaches the door and a container by name, its value on stdin: a command line shows to every user of the server.
+- The door's environment is its own (`doorEnvironment`): a caller's PATH would choose its docker, and a HOME the config it obeys.
+- The door rewrites the file compose runs (a build's block, sources pinned or sealed), which `devopsy -- config` does not show: accepted for a project user, whose committed file still works anywhere.
+- A reflink clone lives in `<space>/clones/<project>`, on the data's filesystem, reached through a link in the project's tree: it holds other uids' files, and the project user reads it and cannot change a part of a path to it (`cloneDirReady`).
+- A sync's rsync daemon listens on the host's loopback with a password of that sync's: a local user reaches it, and a rule by the project users' group keeps them off Docker's networks.
+- The door sets its own umask: a caller's comes through sudo.
+- A rendered file goes to compose as an unlinked file (`unlinkedFile`), so nothing of a project's environment stays on disk.
+- What the door refuses goes to `<space>/refused.log`, a vet's refusal too: a real release asks for nothing refused, and `image prune`, the admin's, does nothing here.
+- Labels under `door: vet: prefix` go to the admin's program, on stdin, and exit 0 allows: devopsy knows no URL (Principles).

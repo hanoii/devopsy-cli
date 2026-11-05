@@ -35,7 +35,7 @@ func reflinks(ctx context.Context, c container, into string, d dataSet) bool {
 	if len(d.entries)+len(d.volumes) == 0 {
 		return false
 	}
-	if err := os.MkdirAll(into, 0o700); err != nil {
+	if err := cloneDirReady(into); err != nil {
 		return false
 	}
 	mounts, srcs := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", into + ":/c"}, []string{}
@@ -46,13 +46,7 @@ func reflinks(ctx context.Context, c container, into string, d dataSet) bool {
 		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
 		srcs = append(srcs, "/m/volumes/"+v.Key)
 	}
-	args := append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", `t=/c/.reflink.$$
-for src; do
-  f=$(find "$src" -type f -print -quit 2>/dev/null) || f=
-  [ -n "$f" ] || continue
-  cp --reflink=always "$f" "$t" 2>/dev/null || { rm -f "$t"; exit 1; }
-  rm -f "$t"
-done`, "sh")
+	args := append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", reflinkProbeScript, "sh")
 	return dockerRun(ctx, c, append(args, srcs...)...) == nil
 }
 
@@ -66,7 +60,7 @@ func cloneData(ctx context.Context, c container, into string, d dataSet) error {
 	for _, v := range d.volumes {
 		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
 	}
-	if err := os.MkdirAll(into, 0o700); err != nil {
+	if err := cloneDirReady(into); err != nil {
 		return err
 	}
 	if err := dockerRun(ctx, c, append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", cloneScript(d))...); err != nil {

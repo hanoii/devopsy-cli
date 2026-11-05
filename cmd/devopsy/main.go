@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,21 @@ func main() {
 func run() int {
 	color := styleFor(os.Stderr).on
 	args := os.Args[1:]
+	// Before anything reads a project or the environment: every word here is a
+	// project user's, on the deploy user's rights (door.go).
+	if filepath.Base(os.Args[0]) == "docker" {
+		report.SetDefault(report.New(errOut, color, 0))
+		return runDocker(args)
+	}
+	if len(args) > 0 && (args[0] == doorFlag || args[0] == doorReadFlag) {
+		report.SetDefault(report.New(errOut, color, 0))
+		if args[0] == doorFlag {
+			return runDoor(args[1:])
+		}
+		// Wherever the deploy user was is not this user's to read.
+		_ = os.Chdir("/")
+		return runDoorRead(args[1:])
+	}
 
 	// -v or -vv goes before everything else, and is passed on through
 	// DEVOPSY_VERBOSE to nested devopsy calls: project commands calling
@@ -82,6 +98,8 @@ func run() int {
 			}
 		case "--release-settings":
 			return runReleaseSettings(color)
+		case remote.MntReadyFlag:
+			return runMntReady(args[1:])
 		case remote.ServerFactsFlag:
 			return runServerFacts()
 		case "--server-info":

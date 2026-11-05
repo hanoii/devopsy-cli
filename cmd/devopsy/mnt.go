@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"os/signal"
@@ -154,6 +155,10 @@ func makeEntry(mnt, e string) error {
 		return err
 	}
 	if err := os.Mkdir(p, 0o755); err != nil {
+		// A project user's mnt is the deploy user's: the door makes its entries.
+		if errors.Is(err, fs.ErrPermission) && !reachesDocker() {
+			return doorEntry(mnt, e, false)
+		}
 		return err
 	}
 	return os.Chmod(p, 0o755)

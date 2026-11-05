@@ -465,6 +465,7 @@ type configFile struct {
 	public        []string
 	releases      *Releases
 	snapshots     *ServerSnapshots
+	door          *Door
 	defaults      *Target
 	defaultsNulls map[string]bool
 	environments  map[string]*Target
@@ -526,6 +527,12 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: releases: keep and max_keep are at least 1", file)
 			}
 			f.releases, f.keep = &r, r.Keep
+		case key == "door" && user:
+			d, err := decodeDoor(node)
+			if err != nil {
+				return nil, fmt.Errorf("%s: door: %w", file, err)
+			}
+			f.door = d
 		case key == "snapshots" && !user:
 			return nil, fmt.Errorf("%s: snapshots: goes under defaults: or an environment (snapshots: {manual: ...}); root and max_keep belong to each machine's user-level config", file)
 		case key == "snapshots":
