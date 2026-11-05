@@ -159,14 +159,17 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 ## Checks
 
 - Unit tests are Go tests, and `cmd/devopsy` and `internal/remote` also run the server scripts against a fake `docker` and `ssh` (`fakeBin`): a script bug shows in seconds there, in minutes end to end.
-- Run the checks on Linux in Docker, what servers run, since macOS hides differences that matter (internals/gotchas.md) and runs them slower; the caches keep reruns fast:
+- Run the checks on Linux in Docker as a plain user, what servers run and how CI runs them, since macOS hides differences that matter (internals/gotchas.md) and runs them slower, and root passes what fails for any other user; the caches keep reruns fast:
 
 ```sh
-docker run --rm -v "$PWD:/src" -w /src -e GOFLAGS=-buildvcs=false \
-  -v devopsy-gocache:/root/.cache -v devopsy-gomod:/go/pkg/mod \
-  golang:1.26-trixie sh -c 'go vet ./... &&
+docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false \
+  -v devopsy-gocache-runner:/home/runner/.cache -v devopsy-gomod:/go/pkg/mod \
+  golang:1.26-trixie sh -c 'useradd runner &&
+  chown runner /home/runner /home/runner/.cache && go mod download &&
+  HOME=/home/runner setpriv --reuid runner --regid runner --clear-groups sh -c "
+  go vet ./... &&
   go test -count=1 ./cmd/devopsy ./internal/remote &&
-  go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)'
+  go test -count=1 -race \$(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)"'
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
 
