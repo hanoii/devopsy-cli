@@ -53,17 +53,36 @@ func TestReleasesStates(t *testing.T) {
 
 // --destroy takes the containers, the data written as root by a
 // container, the images and the directory, the levels' leftovers with
-// --purge.
+// --purge, and the networks and volumes only an older release named.
 func TestDestroy(t *testing.T) {
 	dir := project(t, "gone", map[string]string{
 		".devopsy/config.yaml":     "project: gone\nenvironments:\n  prod:\n    mode: image\n    release: deploy\n    rollback: deploy\n",
-		".devopsy/compose.yaml":    "services:\n  app:\n    image: busybox:1.37\n    command: [sh, -c, 'echo root >/data/stamp && exec sleep infinity']\n    volumes: [./mnt/data:/data]\n",
-		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+		".devopsy/compose.yaml":    "services:\n  app:\n    image: busybox:1.37\n    command: [sh, -c, 'echo root >/data/stamp && exec sleep infinity']\n    volumes: [./mnt/data:/data, old:/old]\n    networks: [default, old]\nvolumes:\n  old:\nnetworks:\n  old:\n",
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait --remove-orphans\n",
 	})
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	eventually(t, 30*time.Second, "the container's write", func() bool { return exists(t, "gone/prod/shared/mnt/data/stamp") })
+	// The next release names neither, nor default, as a project moved to
+	// networks of its own does.
+	if out, code := op(t, dir, `cat >.devopsy/compose.yaml <<'EOF'
+services:
+  app:
+    image: busybox:1.37
+    command: [sh, -c, 'echo root >/data/stamp && exec sleep infinity']
+    volumes: [./mnt/data:/data]
+    networks: [own]
+networks:
+  own:
+EOF
+devopsy @server:prod --release`); code != 0 {
+		t.Fatalf("second release (%d):\n%s", code, out)
+	}
+	const owned = "label=com.docker.compose.project=gone-prod"
+	if out, _ := srv(t, "docker volume ls -q --filter "+owned+"; docker network ls -q --filter name=gone-prod_old --filter name=gone-prod_default"); len(strings.Fields(out)) != 3 {
+		t.Fatalf("the older release's volume and networks, before --destroy: %q", out)
+	}
 	if out, code := op(t, dir, "devopsy @server:prod --destroy --yes --purge"); code != 0 {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
 	}
@@ -73,6 +92,9 @@ func TestDestroy(t *testing.T) {
 	}
 	if out, _ := srv(t, "docker ps -aq --filter label=com.docker.compose.project=gone-prod; docker image ls -q --filter reference='*:devopsy-gone-prod-*'"); strings.TrimSpace(out) != "" {
 		t.Errorf("containers or bookmarks left: %s", out)
+	}
+	if out, _ := srv(t, "docker volume ls -q --filter "+owned+"; docker network ls -q --filter "+owned); strings.TrimSpace(out) != "" {
+		t.Errorf("networks or volumes left: %s", out)
 	}
 }
 

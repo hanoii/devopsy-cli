@@ -197,6 +197,9 @@ func TestDoorProjectsLife(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @dev --destroy --yes"); code != 0 {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
 	}
+	if out, _ := doorRoot(t, "docker ps -aq --filter label=com.docker.compose.project=doorlife-dev; docker network ls -q --filter label=com.docker.compose.project=doorlife-dev"); strings.TrimSpace(out) != "" {
+		t.Errorf("containers or networks left by --destroy: %s", out)
+	}
 	// A real release asks for nothing it would be refused, and leaves nothing behind.
 	if out, _ := doorRoot(t, "cat "+doorSpace+"/refused.log 2>/dev/null | grep doorlife"); out != "" {
 		t.Errorf("refused:\n%s", out)
