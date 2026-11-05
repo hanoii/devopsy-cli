@@ -87,3 +87,7 @@ jobs:
         env:
           DEVOPSY_TEST_CUTS: "1"
         run: go test -count=1 -timeout 25m -run '^TestActivationCuts$' ./cmd/devopsy
+      - if: steps.last.outputs.skip != '1'
+        env:
+          DEVOPSY_TEST_FORKS: "1"
+        run: go test -count=1 -run '^TestWrittenFakeRunsBesideForks$' ./internal/remote

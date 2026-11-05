@@ -12,6 +12,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // End-to-end: build the binary and run it against a fake docker that prints
@@ -62,7 +63,7 @@ var fakeBinOnce = sync.OnceValues(func() (string, error) {
 		return "", err
 	}
 	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  version) [ -z \"${FAKE_DOCKER_DOWN:-}\" ] || exit 1 ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
 		return "", err
 	}
 	// The custom commands below call devopsy recursively.
@@ -119,7 +120,7 @@ func write(t *testing.T, path, content string, mode os.FileMode) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+	if err := testfile.Write(path, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
 }

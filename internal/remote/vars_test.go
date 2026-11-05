@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // runVarsScript runs a --vars script locally, as sh on a server would, with
@@ -31,11 +33,11 @@ var varsBin = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o555); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o555); err != nil {
 		return "", err
 	}
 	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o555); err != nil {
+	if err := testfile.Write(filepath.Join(bin, "devopsy"), []byte(settings), 0o555); err != nil {
 		return "", err
 	}
 	return bin, os.Chmod(bin, 0o555)
