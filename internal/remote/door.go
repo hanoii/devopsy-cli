@@ -18,8 +18,8 @@ type Door struct {
 	// Space is the deploy user's directory for it, on a mount of its own with nosuid
 	// and nodev.
 	Space string `yaml:"space"`
-	// Vet, if set, asks a program of the admin's about what a compose file claims.
-	Vet *DoorVet `yaml:"vet"`
+	// Vets ask programs of the admin's about what a compose file claims.
+	Vets []DoorVet `yaml:"vets"`
 	// Users are the project users, by Unix name.
 	Users map[string]DoorUser `yaml:"users"`
 }
@@ -44,17 +44,17 @@ type DoorUser struct {
 	Roles []string `yaml:"roles"`
 	// ReadAll lets it read every container and network, secrets included.
 	ReadAll bool `yaml:"read_all"`
-	// Space, Vet, Others and Users are the server's, filled in by DoorSettingsOf.
-	Space  string   `yaml:"-"`
-	Vet    *DoorVet `yaml:"-"`
-	Others []string `yaml:"-"`
-	Users  []string `yaml:"-"`
+	// Space, Vets, Others and Users are the server's, filled in by DoorSettingsOf.
+	Space  string    `yaml:"-"`
+	Vets   []DoorVet `yaml:"-"`
+	Others []string  `yaml:"-"`
+	Users  []string  `yaml:"-"`
 }
 
 func decodeDoor(node yaml.Node) (*Door, error) {
 	var keys struct {
 		Space string               `yaml:"space"`
-		Vet   *DoorVet             `yaml:"vet"`
+		Vets  []DoorVet            `yaml:"vets"`
 		Users map[string]yaml.Node `yaml:"users"`
 	}
 	if err := node.Decode(&keys); err != nil {
@@ -65,11 +65,11 @@ func decodeDoor(node yaml.Node) (*Door, error) {
 		return nil, err
 	}
 	for k := range top {
-		if k != "space" && k != "users" && k != "vet" {
-			return nil, fmt.Errorf("unknown key %q (space, vet, users)", k)
+		if k != "space" && k != "users" && k != "vets" {
+			return nil, fmt.Errorf("unknown key %q (space, vets, users)", k)
 		}
 	}
-	d := &Door{Space: keys.Space, Vet: keys.Vet, Users: map[string]DoorUser{}}
+	d := &Door{Space: keys.Space, Vets: keys.Vets, Users: map[string]DoorUser{}}
 	for name, n := range keys.Users {
 		var fields map[string]yaml.Node
 		if err := n.Decode(&fields); err != nil {
@@ -111,7 +111,7 @@ func DoorSettingsOf(who string) (DoorUser, error) {
 	if !ok {
 		return DoorUser{}, errors.New("not under door: users")
 	}
-	u.Space, u.Vet = f.door.Space, f.door.Vet
+	u.Space, u.Vets = f.door.Space, f.door.Vets
 	for name, other := range f.door.Users {
 		u.Users = append(u.Users, name)
 		if name != who && other.Project != u.Project {

@@ -323,9 +323,14 @@ func decideImage(args []string, p Policy) (*Action, error) {
 	case "rm":
 		// A hold, or a name it built. `image prune` is server-wide: the admin's.
 		for _, t := range args[1:] {
+			if strings.HasPrefix(t, "-") {
+				return nil, refuse("docker image rm %s", t)
+			}
 			repo, _, _ := strings.Cut(t, ":")
-			if strings.HasPrefix(t, "-") || (!p.ownHold(t) && !p.OwnName(repo)) {
-				return nil, refuse("docker image rm %s: not this project's", t)
+			// A plain name is the server's: its pruning asks, and the name may be others'.
+			// Nothing to do, and nothing a release should hear as a failure.
+			if !p.ownHold(t) && !p.OwnName(repo) {
+				return &Action{}, nil
 			}
 		}
 		return &Action{Docker: append([]string{"image"}, args...)}, nil
@@ -650,12 +655,14 @@ func decideRestore(cmd []string, mounts []mount, out []string, p Policy, h Host,
 	if from == "" || to == "" {
 		return nil, refuse("docker run: a restore's stream")
 	}
-	var keep []string
-	for _, a := range out {
-		if a != "-i" {
-			keep = append(keep, a)
+	// Its name and labels, and nothing else of the caller's: no network, and no mounts.
+	keep := []string{"--rm"}
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--name" || out[i] == "--label" {
+			keep = append(keep, out[i], out[i+1])
+			i++
 		}
 	}
-	docker := append(append([]string{"run", "-i"}, keep...), "--cap-drop", "ALL", "--security-opt", "no-new-privileges", known.Image, "zstd", "-dcq")
+	docker := append(append([]string{"run", "-i"}, keep...), "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", known.Image, "zstd", "-dcq")
 	return &Action{Stream: &Stream{From: from, To: to, Docker: docker}}, nil
 }

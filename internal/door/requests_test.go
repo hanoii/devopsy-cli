@@ -94,8 +94,6 @@ func TestDecideRefuses(t *testing.T) {
 		{"a network holding its name later", []string{"network", "inspect", "x-shop-prod"}},
 		{"connect", []string{"network", "connect", "traefik", "mine"}},
 		{"a name that only starts the same", []string{"network", "inspect", "shopx-prod_default"}},
-		{"image rm of a name others use", []string{"image", "rm", "busybox:1.37"}},
-		{"image rm of another's", []string{"image", "rm", "other-prod-app"}},
 		{"image rm, forced", []string{"image", "rm", "-f", "shop-prod-app"}},
 		{"volume of another", []string{"volume", "inspect", "other-prod_data"}},
 		{"volume rm", []string{"volume", "rm", "shop-prod_data"}},
@@ -472,13 +470,15 @@ func TestDecideRunRemovals(t *testing.T) {
 	}
 }
 
-// Image prune is the admin's: for a project user there is nothing to do, and nothing
-// was refused for it, so a release says nothing about it.
-func TestDecideImagePruneDoesNothing(t *testing.T) {
+// What of the image store is the server's is the admin's: for a project user there is
+// nothing to do, nothing was refused for it, and a release says nothing about it.
+func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	t.Parallel()
-	a, err := decide(t, "image", "prune", "-f")
-	if err != nil || len(a.Docker) != 0 || a.Exit != 0 {
-		t.Errorf("%+v, %v", a, err)
+	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}} {
+		a, err := decide(t, argv...)
+		if err != nil || len(a.Docker) != 0 || a.Exit != 0 {
+			t.Errorf("%q: %+v, %v", argv, a, err)
+		}
 	}
 }
 

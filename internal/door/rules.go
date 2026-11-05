@@ -300,12 +300,17 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 			fail("%s: %s", svc, k)
 		}
 	}
+	// The name goes to Docker's commands as a word, so it is none of their flags.
+	if image, ok := s["image"].(string); ok && strings.HasPrefix(image, "-") {
+		fail("%s: an image named like a flag: %s", svc, image)
+	}
 	checkIdentity(svc, s, p, fail)
+	checkLimits(svc, s, fail)
 	if nm, _ := s["network_mode"].(string); nm != "" && nm != "none" && nm != "bridge" {
 		fail("%s: network_mode %s", svc, nm)
 	}
 	if len(list(s["ports"])) > 0 {
-		fail("%s: ports", svc)
+		fail("%s: ports: a project publishes none, Traefik reaches it", svc)
 	}
 	if d, ok := s["deploy"].(map[string]any); ok {
 		for _, k := range sortedKeys(d) {
@@ -363,10 +368,37 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	}
 }
 
+// ulimitKeys are limits, deny by default: rtprio and nice are the opposite, a priority
+// over every other project's container on the host.
+var ulimitKeys = []string{"as", "core", "cpu", "data", "fsize", "locks", "memlock", "msgqueue", "nofile", "nproc", "rss", "sigpending", "stack"}
+
+// resourceKeys are a limit's or a reservation's: a device is the host's, whatever key.
+var resourceKeys = []string{"cpus", "memory", "pids"}
+
+func checkLimits(svc string, s map[string]any, fail func(string, ...any)) {
+	if v := s["ulimits"]; v != nil {
+		if !isMap(v) {
+			fail("%s: ulimits must be a map", svc)
+		} else if k := unknownKey(mapOf(v), ulimitKeys); k != "" {
+			fail("%s: ulimits: %s", svc, k)
+		}
+	}
+	resources := mapOf(mapOf(s["deploy"])["resources"])
+	for _, key := range sortedKeys(resources) {
+		if key != "limits" && key != "reservations" {
+			fail("%s: deploy resources: %s", svc, key)
+			continue
+		}
+		if k := unknownKey(mapOf(resources[key]), resourceKeys); k != "" {
+			fail("%s: deploy resources: %s", svc, k)
+		}
+	}
+}
+
 func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	user, _ := s["user"].(string)
 	if m := numericUser.FindStringSubmatch(user); m == nil {
-		fail("%s: user must be <uid>:<gid>", svc)
+		fail(`%s: user must be <uid>:<gid> in numbers, for example user: "10001:10001"`, svc)
 	} else {
 		uid, _ := strconv.Atoi(m[1])
 		gid, _ := strconv.Atoi(m[2])
@@ -377,7 +409,7 @@ func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...
 	// Without no-new-privileges a setuid image writes a root binary onto the host.
 	opts := list(s["security_opt"])
 	if len(opts) != 1 || (opts[0] != "no-new-privileges" && opts[0] != "no-new-privileges:true") {
-		fail("%s: security_opt must be no-new-privileges alone", svc)
+		fail("%s: security_opt must be no-new-privileges alone, as security_opt: [no-new-privileges]", svc)
 	}
 	for _, c := range list(s["cap_add"]) {
 		if c != "NET_BIND_SERVICE" {
@@ -413,6 +445,10 @@ func checkAliases(file map[string]any, svc string, s map[string]any, fail func(s
 		if truthy(top["external"]) && len(list(opts["aliases"])) > 0 {
 			fail("%s: an alias on the shared network %s", svc, net)
 		}
+		// So is another's address: its owner's next start then fails on it.
+		if truthy(top["external"]) && (opts["ipv4_address"] != nil || opts["ipv6_address"] != nil) {
+			fail("%s: a fixed address on the shared network %s", svc, net)
+		}
 	}
 }
 
@@ -425,6 +461,11 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 	real, err := paths.Real(src)
 	if err != nil {
 		fail("%s: %s: %v", svc, src, err)
+		return
+	}
+	// Believed only clean: a `..` in it would mean something else to the daemon.
+	if !cleanPath(real) {
+		fail("%s: a host path: %s", svc, src)
 		return
 	}
 	if filepath.Dir(real) == p.Mnt(name) {
@@ -440,7 +481,7 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 		v["source"] = sealed
 		return
 	}
-	fail("%s: a host path: %s", svc, src)
+	fail("%s: a host path: %s: a bind is an entry of mnt (./mnt/<name>), or read-only in the release", svc, src)
 }
 
 func checkBuild(svc string, b map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
@@ -498,6 +539,10 @@ func list(v any) []any {
 func mapOf(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
+}
+
+func cleanPath(p string) bool {
+	return filepath.IsAbs(p) && filepath.Clean(p) == p
 }
 
 func isMap(v any) bool {

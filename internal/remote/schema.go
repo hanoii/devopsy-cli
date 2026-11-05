@@ -172,9 +172,9 @@ door:
   # The deploy user's directory for it, on a mount of its own with nosuid and nodev.
   space: /var/lib/devopsy/door
   # Asked about labels under prefix: its stdin the rendered file, exit 0 allows.
-  vet:
-    prefix: proxy.
-    command: /usr/local/bin/vet-labels
+  vets:
+    - prefix: proxy.
+      command: /usr/local/bin/vet-labels
   users:
     devopsy-shop:
       project: shop

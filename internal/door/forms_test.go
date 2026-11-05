@@ -1,0 +1,271 @@
+package door
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// Each form, taken as devopsy asks it, and refused for each word changed: the pair is what
+// says a row is refused for that word, and not for some other part of the request.
+func TestFormsRefuseOneWordChanged(t *testing.T) {
+	t.Parallel()
+	const (
+		mnt, dev = "/space/mnt/shop-prod", "/space/mnt/shop-dev"
+		entry    = mnt + "/data"
+		tree     = "/home/devopsy-shop/shop/prod"
+		clone    = "/space/clones/shop/abc"
+	)
+	cloneScript := "set -e\nmkdir -p /c/mnt /c/volumes\ncp -a --reflink=always '/m/mnt/data' '/c/mnt/' || cp -a --reflink=always '/m/mnt/data' '/c/mnt/'\n"
+	conf := "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n"
+	tests := []struct {
+		name string
+		ok   []string
+		// bad are the same request with one word swapped: from, to.
+		bad map[string][2]string
+	}{
+		{"owners", []string{"run", "-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "1:2"}, map[string][2]string{
+			"the whole mnt":     {entry + ":/mnt/data", mnt + ":/mnt/data"},
+			"a path of its own": {entry + ":/mnt/data", tree + "/x:/mnt/data"},
+			"a name as owner":   {"1:2", "root"},
+			"a walking word":    {"sh\x00data", "sh\x00../x"},
+			"deeper than one":   {entry + ":/mnt/data", entry + ":/mnt/data/x"},
+		}},
+		{"export", []string{"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "data"}, map[string][2]string{
+			"written":           {entry + ":/x/data:ro", entry + ":/x/data"},
+			"the whole mnt":     {entry + ":/x/data:ro", mnt + ":/x/data:ro"},
+			"a path of its own": {entry + ":/x/data:ro", tree + "/x:/x/data:ro"},
+			"a walking word":    {"sh\x00data", "sh\x00../x"},
+			"elsewhere":         {entry + ":/x/data:ro", entry + ":/y/data:ro"},
+		}},
+		{"import", []string{"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "data"}, map[string][2]string{
+			"its stream written": {tree + "/t:/in/t:ro", tree + "/t:/in/t"},
+			"the whole mnt":      {entry + ":/mnt/data", mnt + ":/mnt/data"},
+			"a stream elsewhere": {"sh\x00/in/t", "sh\x00/etc/t"},
+			"a walking member":   {"/in/t\x00data\x00data", "/in/t\x00data\x00../x"},
+			"an absolute member": {"/in/t\x00data\x00data", "/in/t\x00data\x00/etc/x"},
+		}},
+		{"probe", []string{"run", "-v", mnt + ":/m/mnt:ro", "-v", clone + ":/c", "util:1", "sh", "-c", "probe", "sh", "/m/mnt/data"}, map[string][2]string{
+			"its source written": {mnt + ":/m/mnt:ro", mnt + ":/m/mnt"},
+			"another's clones":   {clone + ":/c", "/space/clones/other/abc:/c"},
+			"an entry for /c":    {clone + ":/c", entry + ":/c"},
+			"a path elsewhere":   {"/m/mnt/data", "/etc"},
+			"a walking path":     {"/m/mnt/data", "/m/mnt/.."},
+		}},
+		{"clone", []string{"run", "-v", mnt + ":/m/mnt:ro", "-v", clone + ":/c", "util:1", "sh", "-c", cloneScript}, map[string][2]string{
+			"its source written":  {mnt + ":/m/mnt:ro", mnt + ":/m/mnt"},
+			"its tree for /c":     {clone + ":/c", tree + "/x:/c"},
+			"an entry for /c":     {clone + ":/c", entry + ":/c"},
+			"another's for /m":    {mnt + ":/m/mnt:ro", "/space/mnt/other-prod:/m/mnt:ro"},
+			"the script's source": {"'/m/mnt/data'", "'/m/mnt/..'"},
+		}},
+		{"snapshot tar", []string{"run", "-v", mnt + ":/m/mnt:ro", "-v", tree + "/o:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "f.zst", "1:2"}, map[string][2]string{
+			"its source written": {mnt + ":/m/mnt:ro", mnt + ":/m/mnt"},
+			"an entry for /o":    {tree + "/o:/o", entry + ":/o"},
+			"a kind of its own":  {"sh\x00mnt", "sh\x00etc"},
+			"a walking name":     {"mnt\x00data", "mnt\x00../x"},
+			"a walking output":   {"f.zst", "../f"},
+			"a name as owner":    {"1:2", "root"},
+		}},
+		{"space", []string{"run", "-v", mnt + ":/m:ro", "util:1", "sh", "-c", "space script", "sh", "/m/data"}, map[string][2]string{
+			"written":          {mnt + ":/m:ro", mnt + ":/m"},
+			"a path elsewhere": {"/m/data", "/etc"},
+			"a walking path":   {"/m/data", "/m/.."},
+			"another's mnt":    {mnt + ":/m:ro", "/space/mnt/other-prod:/m:ro"},
+		}},
+		{"du", []string{"run", "-v", mnt + ":/m:ro", "util:1", "du", "-sk", "/m/data"}, map[string][2]string{
+			"written":         {mnt + ":/m:ro", mnt + ":/m"},
+			"a flag of du's":  {"/m/data", "--files0-from=/etc/shadow"},
+			"a path of /etc":  {"/m/data", "/etc"},
+			"a walking path":  {"/m/data", "/m/.."},
+			"another program": {"util:1\x00du", "util:1\x00dd"},
+		}},
+		{"empty", []string{"run", "-v", mnt + ":/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"}, map[string][2]string{
+			"another's mnt":     {mnt + ":/mnt", "/space/mnt/other-prod:/mnt"},
+			"a path of its own": {mnt + ":/mnt", tree + "/x:/mnt"},
+			"an entry alone":    {mnt + ":/mnt", entry + ":/mnt"},
+			"more of find's":    {"-delete", "-print"},
+			"its depth":         {"-mindepth", "-maxdepth"},
+		}},
+		{"share", []string{"run", "-v", entry + ":/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"}, map[string][2]string{
+			"its source written": {entry + ":/s:ro", entry + ":/s"},
+			"the whole mnt":      {dev + "/data:/d", dev + ":/d"},
+			"a path of its own":  {dev + "/data:/d", tree + "/x:/d"},
+			"its order":          {"/s\x00/d", "/d\x00/s"},
+		}},
+		{"rsync", []string{"run", "-v", mnt + ":/src:ro", "-v", dev + ":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, map[string][2]string{
+			"its source written":    {mnt + ":/src:ro", mnt + ":/src"},
+			"another's mnt":         {dev + ":/dst", "/space/mnt/other-prod:/dst"},
+			"a path of its own":     {dev + ":/dst", tree + "/x:/dst"},
+			"a program for its ssh": {"/src/data/", "--rsh=/x"},
+			"a program on the far":  {"/src/data/", "--rsync-path=/x"},
+			"names from a file":     {"/src/data/", "--files-from=/x"},
+			"a source elsewhere":    {"/src/data/", "/etc/"},
+			"a walking source":      {"/src/data/", "/src/../"},
+			"a walking destination": {"/dst/data/", "/dst/../"},
+			"a far source":          {"/src/data/", "evil:/data/"},
+		}},
+		{"receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt + ":/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}, map[string][2]string{
+			"another's mnt":     {mnt + ":/mnt", "/space/mnt/other-prod:/mnt"},
+			"another host":      {"rsync://127.0.0.1:9000/data/", "rsync://evil:9000/data/"},
+			"a name like it":    {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1.evil:9000/data/"},
+			"no port":           {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1/data/"},
+			"a walking module":  {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1:9000/../"},
+			"no host's network": {"host", "none"},
+			"no password":       {"RSYNC_PASSWORD", "RSYNC_SECRET"},
+			"elsewhere":         {"/mnt/data/", "/etc/data/"},
+		}},
+		{"daemon", []string{"run", "-p", "127.0.0.1::873", "-e", conf, "-e", "RSYNC_SECRET", "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
+			"written":            {mnt + ":/mnt:ro", mnt + ":/mnt"},
+			"another's mnt":      {mnt + ":/mnt:ro", "/space/mnt/other-prod:/mnt:ro"},
+			"a port for anyone":  {"127.0.0.1::873", "0.0.0.0::873"},
+			"a walking path":     {"path = /mnt/data", "path = /mnt/.."},
+			"a path of its own":  {"path = /mnt/data", "path = /etc"},
+			"a setting appended": {"path = /mnt/data\n", "path = /mnt/data\nread only = no\n"},
+			"the host's network": {"-p\x00127.0.0.1::873", "--network\x00host\x00-p\x00127.0.0.1::873"},
+		}},
+		{"restore", []string{"run", "-v", tree + "/s:/s:ro", "-v", tree + "/f:/o", "util:1", "sh", "-c", "restore script", "sh", "f.zst"}, map[string][2]string{
+			"another's file": {tree + "/s:/s:ro", "/home/devopsy-other/other/s:/s:ro"},
+			"another's fifo": {tree + "/f:/o", "/home/devopsy-other/other/f:/o"},
+			"a walking file": {"f.zst", "../f"},
+			"its shell word": {"sh\x00f.zst", "x\x00f.zst"},
+		}},
+		{"a removal", []string{"run", "-v", tree + "/s:/s", "util:1", "rm", "-rf", "/s/x"}, map[string][2]string{
+			"a walking path":   {"/s/x", "/s/../x"},
+			"a path elsewhere": {"/s/x", "/etc"},
+			"another's mount":  {tree + "/s:/s", "/home/devopsy-other/other/s:/s"},
+			"an entry":         {tree + "/s:/s", entry + ":/s"},
+			"another target":   {tree + "/s:/s", tree + "/s:/d"},
+			"its flags":        {"-rf", "-rfv"},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if a, err := decide(t, tt.ok...); err != nil {
+				t.Fatalf("the control is refused, so nothing below says why it refuses: %v, %+v", err, a)
+			}
+			joined := strings.Join(tt.ok, "\x00")
+			for what, swap := range tt.bad {
+				bad := strings.Replace(joined, swap[0], swap[1], 1)
+				if bad == joined {
+					t.Errorf("%s: nothing swapped: %q", what, swap[0])
+					continue
+				}
+				a, err := decide(t, strings.Split(bad, "\x00")...)
+				var r *Refusal
+				if !errors.As(err, &r) {
+					t.Errorf("%s: not refused: %+v", what, a)
+				}
+			}
+		})
+	}
+}
+
+// BUG: word starts `[A-Za-z0-9_-]`, so a word may start with a dash, against "A word in a
+// util container's arguments never starts with a dash". TestDoorScriptArgumentsAreNotCode
+// does not show it: it is refused for its `.` and `;`, and takes no `-delete` alone. In this
+// image nothing writes for find past its read-only mounts, so no code runs yet (run by hand).
+func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
+	t.Parallel()
+	entry := "/space/mnt/shop-prod/data"
+	if !wordOnly.MatchString("data") {
+		t.Fatal("the control: a plain word is refused")
+	}
+	if wordOnly.MatchString("-delete") {
+		t.Error("-delete is a word")
+	}
+	for what, argv := range map[string][]string{
+		"export":       {"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "-delete"},
+		"snapshot tar": {"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", "/home/devopsy-shop/shop/prod/o:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "-delete", "f.zst", "1:2"},
+		"owners":       {"run", "-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "-x", "1:2"},
+	} {
+		if a, err := decide(t, argv...); err == nil {
+			t.Errorf("%s: %q", what, a.Docker)
+		}
+	}
+}
+
+// BUG: narrow says "" for a receive into a volume, and decideForm then puts the mnt back
+// whole: rw in a root rsync on the host's network, against "An rsync that names a whole mnt
+// holds only the entry it writes". Worse, it is asked to make that "entry", which is the mnt
+// itself: where the mnt is new, makeEntry gives this user rwX on it, so it can replace an
+// entry, and a bind's next start follows the link (TestDoorReceiveLeavesTheMntClosed).
+func TestDecideRunReceiveIntoAVolumeHoldsNoMnt(t *testing.T) {
+	t.Parallel()
+	mnt := "/space/mnt/shop-new"
+	a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt+":/mnt", "-v", "shop-new_db:/vol/db",
+		"util:1", "rsync", "-a", "rsync://127.0.0.1:9/db/", "/vol/db/")
+	if err != nil {
+		return
+	}
+	if slices.Contains(a.Docker, mnt+":/mnt") {
+		t.Errorf("a whole mnt, rw, in a root rsync: %q", a.Docker)
+	}
+	for _, e := range a.Entries {
+		if e.Path == mnt {
+			t.Errorf("the mnt is made as an entry, for this user to write: %+v", e)
+		}
+	}
+}
+
+// BUG: classify takes any depth under its clones as a clone, and what is below a clone's top
+// is an entry's copy: its directories are the project's, against "A root container holds no
+// path a project user can change" and "believed only for a path whose every part is the
+// deploy user's". A link there, behind a directory its user cannot read, comes back from
+// `realpath -m` as written, and the daemon follows it (TestDoorCloneHoldsNoLinkForRoot).
+func TestDecideRunTakesNoPathInsideAClone(t *testing.T) {
+	t.Parallel()
+	export := func(source string) []string {
+		return []string{"run", "-v", source + ":/x/h:ro", "util:1", "sh", "-c", "export script", "sh", "h"}
+	}
+	clone := "/space/clones/shop/abc/1"
+	// What devopsy asks of a clone, its copied entry and volume at most.
+	if _, err := decide(t, export(clone+"/mnt/data")...); err != nil {
+		t.Fatalf("the control: an entry's copy is refused: %v", err)
+	}
+	if a, err := decide(t, export(clone+"/mnt/data/hide/link")...); err == nil {
+		t.Errorf("a path inside an entry's copy, for root: %q", a.Docker)
+	}
+}
+
+// BUG: Real's answer is believed for a path it says is under the clones, or in a mnt, with
+// no look at its words: `..` there walks out, and Docker binds where it ends. realpath never
+// says that by itself, but its process is the project user's, to trace (kernel.yama permitting).
+func TestPathsAnswerIsCleanBeforeItIsBelieved(t *testing.T) {
+	t.Parallel()
+	link := "/home/devopsy-shop/shop/prod/link"
+	for _, end := range []string{"/space/clones/shop/../../../etc", "/space/mnt/shop-prod/../other-prod"} {
+		host := &fakeHost{fakePaths: fakePaths{links: map[string]string{link: end}}}
+		a, err := Decide([]string{"run", "-v", link + ":/x/h:ro", "util:1", "sh", "-c", "export script", "sh", "h"}, testPolicy, testDaemon, host, testKnown)
+		if err == nil {
+			t.Errorf("%s: %q", end, a.Docker)
+		}
+	}
+	paths := &fakePaths{links: map[string]string{link: "/space/mnt/shop-prod/.."}}
+	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"`+link+`","target":"/d"}]`)+`}}`)
+	if errs := CheckFile(file, testPolicy, "up", paths); len(errs) == 0 {
+		t.Errorf("a bind of every project's mnt: %v", file["services"].(map[string]any)["web"].(map[string]any)["volumes"])
+	}
+}
+
+// BUG: a restore keeps every option of the caller's and sets no network: `--network host`,
+// a published port and a default bridge for a root zstd reading the caller's bytes, where any
+// other form is `none` unless it says so.
+func TestDecideRestoreTakesNoNetwork(t *testing.T) {
+	t.Parallel()
+	tree := "/home/devopsy-shop/shop/prod"
+	restore := []string{"-v", tree + "/s:/s:ro", "-v", tree + "/f:/o", "util:1", "sh", "-c", "restore script", "sh", "f.zst"}
+	a, err := decide(t, append([]string{"run", "--name", "shop-prod-x"}, restore...)...)
+	if err != nil || a.Stream == nil {
+		t.Fatalf("the control: %+v, %v", a, err)
+	}
+	if !strings.Contains(strings.Join(a.Stream.Docker, " "), "--network none") {
+		t.Errorf("no --network none: %q", a.Stream.Docker)
+	}
+	a, err = decide(t, append([]string{"run", "--network", "host", "-p", "127.0.0.1::873"}, restore...)...)
+	if err == nil && (slices.Contains(a.Stream.Docker, "host") || slices.Contains(a.Stream.Docker, "127.0.0.1::873")) {
+		t.Errorf("the caller's network: %q", a.Stream.Docker)
+	}
+}

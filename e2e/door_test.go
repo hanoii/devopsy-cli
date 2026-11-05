@@ -85,7 +85,7 @@ echo '    `+user+`: {project: `+project+`, joinable: [shared]}' >>/var/lib/door-
 { cat <<'C'
 door:
   space: `+doorSpace+`
-  vet: {prefix: vetted., command: /usr/local/bin/door-vet}
+  vets: [{prefix: vetted., command: /usr/local/bin/door-vet}]
   users:
 C
 cat /var/lib/door-users.yaml; } >/home/devopsy/.config/devopsy/config.yaml

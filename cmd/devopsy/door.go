@@ -45,6 +45,9 @@ func doorEnvironment() (home string, err error) {
 	return u.HomeDir, nil
 }
 
+// doorNotHere is the door's exit when it has nothing to say of this user.
+const doorNotHere = 3
+
 // doorLog, once the server's space is known, keeps what was refused and who asked:
 // what a leaked key tried is worth having, and a real release asks for nothing refused.
 var doorLog string
@@ -60,7 +63,8 @@ func doorRecord(what string) {
 		return
 	}
 	if f, err := os.OpenFile(doorLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-		fmt.Fprintf(f, "%s\t%s\t%q\n", doorWho, what, os.Args[1:])
+		// Who is sudo's word. The rest quoted, so a caller's cannot make a line of their own.
+		fmt.Fprintf(f, "%s\t%q\t%q\n", doorWho, what, os.Args[1:])
 		f.Close()
 	}
 }
@@ -156,7 +160,7 @@ type doorSide struct {
 	policy door.Policy
 	real   string
 	env    []string
-	vet    *remote.DoorVet
+	vets   []remote.DoorVet
 	// made are this request's work directories, so that a refusal leaves none behind.
 	made []string
 }
@@ -368,7 +372,8 @@ func (s *doorSide) pruneSealed() {
 	}
 	for _, e := range entries {
 		fi, err := e.Info()
-		if err == nil && !held[e.Name()] && !strings.HasPrefix(e.Name(), ".") && time.Since(fi.ModTime()) > time.Hour {
+		// A killed door's half-made copy too, by the same age.
+		if err == nil && !held[e.Name()] && time.Since(fi.ModTime()) > time.Hour {
 			_ = os.RemoveAll(filepath.Join(sealed, e.Name()))
 		}
 	}
@@ -440,6 +445,12 @@ func (s *doorSide) removeWork(dir string) {
 	_ = s.docker("run", "--rm", "--network", "none", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "-v", root+":/w", remote.UtilImage, "rm", "-rf", "/w/"+filepath.Base(dir)).Run()
 }
 
+// ownWork says whether a work directory is this project's, by its name (workDir): not one
+// of a project whose name extends this one's, whose prefix it also has.
+func (s *doorSide) ownWork(name string) bool {
+	return strings.HasPrefix(name, s.policy.Project+"-") && s.policy.OwnName(name)
+}
+
 // sweepWork removes what a door killed mid-way left of this project's, a day old: nothing
 // runs that long from one, and a signal through sudo ends it before it tidies up.
 func (s *doorSide) sweepWork() {
@@ -450,7 +461,7 @@ func (s *doorSide) sweepWork() {
 	}
 	for _, e := range entries {
 		fi, err := e.Info()
-		if err == nil && strings.HasPrefix(e.Name(), s.policy.Project+"-") && time.Since(fi.ModTime()) > 24*time.Hour {
+		if err == nil && s.ownWork(e.Name()) && time.Since(fi.ModTime()) > 24*time.Hour {
 			s.removeWork(filepath.Join(root, e.Name()))
 		}
 	}
@@ -522,14 +533,17 @@ func runDoor(args []string) int {
 	}
 	settings, err := remote.DoorSettingsOf(doorWho)
 	if err != nil {
-		return doorRefused(fmt.Errorf("refused: %s is not a project user here: %w", doorWho, err))
+		// Not the door saying no: there is none for this user, which a question whose failure
+		// has a plain way on takes as such (doorRefusedIt).
+		report.Error(fmt.Sprintf("refused: %s is not a project user here: %v", doorWho, err))
+		return doorNotHere
 	}
 	policy, err := doorPolicy(doorWho, settings)
 	if err != nil {
 		return doorRefused(err)
 	}
 	doorLog = filepath.Join(policy.Space, "refused.log")
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vet: settings.Vet}
+	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets}
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))
 	}
@@ -876,14 +890,19 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return doorRefused(err)
 	}
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
-	if starts && s.vet != nil && carriesLabel(file, s.vet.Prefix) {
-		var said bytes.Buffer
-		c := exec.Command(s.vet.Command)
-		c.Stdin, c.Stderr = bytes.NewReader(checked), io.MultiWriter(os.Stderr, &said)
-		c.Env = append(slices.Clone(s.env), "DOOR_PROJECT="+s.policy.Project, "DOOR_JOINABLE="+strings.Join(s.policy.Joinable, ","))
-		if err := c.Run(); err != nil {
-			doorRecord("refused by the vet: " + strings.TrimSpace(said.String()))
-			return 2
+	if starts {
+		for _, v := range s.vets {
+			if !carriesLabel(file, v.Prefix) {
+				continue
+			}
+			var said bytes.Buffer
+			c := exec.Command(v.Command)
+			c.Stdin, c.Stderr = bytes.NewReader(checked), io.MultiWriter(os.Stderr, &said)
+			c.Env = append(slices.Clone(s.env), "DEVOPSY_DOOR_PROJECT="+s.policy.Project, "DEVOPSY_DOOR_JOINABLE="+strings.Join(s.policy.Joinable, ","))
+			if err := c.Run(); err != nil {
+				doorRecord("refused by the vet: " + strings.TrimSpace(said.String()))
+				return 2
+			}
 		}
 	}
 	if starts {
@@ -960,7 +979,11 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 		for k := range labels {
 			low := strings.ToLower(k)
 			// Compose stamps its own on what it builds, and overrides them on a container.
-			if strings.HasPrefix(low, "devopsy.") || (s.vet != nil && strings.HasPrefix(low, strings.ToLower(s.vet.Prefix))) {
+			reserved := strings.HasPrefix(low, "devopsy.")
+			for _, v := range s.vets {
+				reserved = reserved || strings.HasPrefix(low, strings.ToLower(v.Prefix))
+			}
+			if reserved {
 				return fmt.Errorf("refused: %s: its image %s labels its containers %s", svc, image, k)
 			}
 		}
