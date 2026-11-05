@@ -1251,7 +1251,7 @@ func TestSyncReset(t *testing.T) {
 	s.logs()
 	out, code = s.run(nil, "@dev", "--reset", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || readMark(dev) != nil || fileExists(filepath.Join(dev, syncState)) || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" --profile * down --volumes --remove-orphans\n") || !strings.Contains(docker, " up -d --wait app db\n") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(out, "devopsy: resetting @devopsy@one:dev: every container and volume goes and mnt is emptied; its shared/.env stays\n") {
+	if code != 0 || readMark(dev) != nil || fileExists(filepath.Join(dev, syncState)) || !strings.Contains(docker, "shop-dev compose -p shop-dev down --volumes --remove-orphans\n") || !strings.Contains(docker, " up -d --wait app db\n") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(out, "devopsy: resetting @devopsy@one:dev: every container and volume goes and mnt is emptied; its shared/.env stays\n") {
 		t.Errorf("a reset (%d), mark %+v:\n%s\n%s", code, readMark(dev), out, docker)
 	}
 	if kept() || fileExists(filepath.Join(s.mnt("dev"), "storage", "old.txt")) || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {

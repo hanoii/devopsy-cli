@@ -91,8 +91,9 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 // composeDownProject takes the project at cwd down by its name alone, -p and no
 // -f, whatever else args say: compose then finds by its own label what any
 // release made, where with files it goes only by what they name. Its directory
-// is none of the project's, whose .env compose would read.
-func composeDownProject(ctx context.Context, cwd string, stdout io.Writer, args ...string) error {
+// is none of the project's, whose .env compose would read. detach as in
+// composeRun.
+func composeDownProject(ctx context.Context, cwd string, stdout io.Writer, detach bool, args ...string) error {
 	plan, err := cli.Build(cwd, []string{"--", "down"}, os.Environ())
 	if err != nil {
 		return err
@@ -106,7 +107,7 @@ func composeDownProject(ctx context.Context, cwd string, stdout io.Writer, args 
 		argv = append(argv, "--ansi", "always")
 	}
 	argv = append(append(argv, "-p", name, "down"), args...)
-	return runCompose(ctx, argv, plan.Env, "/", stdout, false)
+	return runCompose(ctx, argv, plan.Env, "/", stdout, detach)
 }
 
 // envValue is key in env, a list of KEY=value, "" when unset.
