@@ -1211,7 +1211,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	// environment.
 	write(t, filepath.Join(root, "shop", "c", ".env"), "REGION=eu\n", 0o644)
 	out, code = run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes")
-	if code != 0 || !strings.Contains(out, "destroy env=pr-12") || !strings.Contains(out, "[down][--volumes][--remove-orphans][--rmi][local]") || !strings.Contains(out, "[find][/mnt][-mindepth][1][-delete]") || !strings.Contains(out, "removed") {
+	if code != 0 || !strings.Contains(out, "destroy env=pr-12") || !strings.Contains(out, "[-p][shop-c-pr-12][down][--volumes][--remove-orphans][--rmi][local]") || !strings.Contains(out, "[find][/mnt][-mindepth][1][-delete]") || !strings.Contains(out, "removed") {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12")); !os.IsNotExist(err) {

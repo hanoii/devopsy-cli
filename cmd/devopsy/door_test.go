@@ -246,6 +246,27 @@ func TestDoorKeepsTheStarProfile(t *testing.T) {
 	}
 }
 
+// A down by name, with no file to check, takes only this project's name and the flags a
+// down may have: with another's it would take that project's containers and data.
+func TestDoorDownsOnlyItsOwnName(t *testing.T) {
+	t.Parallel()
+	side := &doorSide{policy: door.Policy{Project: "shop", Others: []string{"shop-two"}}, real: "/nonexistent"}
+	for _, c := range []struct {
+		name  string
+		flags []string
+	}{
+		{"other-prod", nil},
+		{"shop-two-prod", nil},
+		{"../shop-prod", nil},
+		{"shop-prod", []string{"--rmi", "all"}},
+		{"shop-prod", []string{"--project-directory", "/"}},
+	} {
+		if code := side.downProject(c.name, c.flags); code == 0 {
+			t.Errorf("%s %v: not refused", c.name, c.flags)
+		}
+	}
+}
+
 // With nothing behind the door, shared/mnt is a plain directory, as ever, and one
 // already there stays what it is.
 func TestRunMntReady(t *testing.T) {

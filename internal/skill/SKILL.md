@@ -66,9 +66,9 @@ What devopsy requires:
   its own compose project), which wins over a `name:`; leave it out so
   the file says what runs.
 - Networks the project owns are named from its compose project
-  (`${COMPOSE_PROJECT_NAME}_default`). To reach another project, join its
-  network as `external` (the proxy's `traefik`); never a third, shared
-  name: a release refuses a network another project owns.
+  (`${COMPOSE_PROJECT_NAME}_proxy`). To reach another project, join its
+  network as `external`; never a third, shared name: a release refuses a
+  network another project owns.
 - Data lives in `mnt` entries: `./mnt/<entry>` bind mounts, one per
   concern (`storage`, `database`, `logs`), never `./mnt` whole. On servers
   `mnt` is a link to the environment's `shared/mnt`, so releases and
@@ -140,8 +140,9 @@ float on a series (`mariadb:11.8`), never `latest`; in image mode the
 project's own images are tagged with the commit
 (`${DEVOPSY_RELEASE_COMMIT}`), never a fixed tag.
 
-A site's routing is the project's, through labels on the `traefik`
-network, as in whoami's compose.yaml: `traefik.enable=true`, a router rule
+A site's routing is the project's, through labels and a network of its
+own, as in whoami's compose.yaml: `traefik.enable=true`,
+`traefik.docker.network=${COMPOSE_PROJECT_NAME}_proxy`, a router rule
 `${SITE_HOST_RULE:-...}` computed by the `env` capability from
 `COMPOSE_PROJECT_NAME`, the imported `PROXY_BASE_DOMAIN` and the target's
 `PROXY_DOMAINS`, and a certificate resolver only when the target sets

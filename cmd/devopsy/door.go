@@ -577,6 +577,10 @@ func runDoor(args []string) int {
 			return doorRefused(renderErr)
 		}
 		return side.compose(args[1], rendered, args[3], args[4], args[5:])
+	case "down":
+		if len(args) >= 2 {
+			return side.downProject(args[1], args[2:])
+		}
 	case "request":
 		if len(args) >= 3 {
 			return side.request(args[1], args[2:])
@@ -937,6 +941,20 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 	}
 	err = syscall.Exec(s.real, append(cmd, argv...), env)
+	return doorRefused(err)
+}
+
+// downProject takes this project's compose name down by that name alone, no file to
+// check: compose finds what it holds by its own label (composeDownProject).
+func (s *doorSide) downProject(name string, flags []string) int {
+	if !s.policy.OwnName(name) {
+		return doorRefused(errors.New("refused: not this project's name: " + name))
+	}
+	argv := append([]string{"down"}, flags...)
+	if err := door.CheckVerb(argv); err != nil {
+		return doorRefused(err)
+	}
+	err := syscall.Exec(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)
 	return doorRefused(err)
 }
 

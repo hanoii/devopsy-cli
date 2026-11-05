@@ -349,8 +349,10 @@ release lock, in the current release (else the newest one), it runs:
 
 1. the environment's `destroy:` step, if it has one: one devopsy
    command, run before anything is stopped (a last dump, for example);
-2. `docker compose down --volumes --remove-orphans --rmi local`, every
-   profile, so the images built without an `image:` name go too;
+2. `docker compose -p <name> down --volumes --remove-orphans --rmi local`,
+   by the project's name alone, so it takes every profile, the images
+   built without an `image:` name, and the networks and volumes only an
+   older release named;
 3. `shared/mnt` emptied as root in `devopsy-util`, since its files
    belong to container users;
 4. each release's images, as pruning removes them;

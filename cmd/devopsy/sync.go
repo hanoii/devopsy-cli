@@ -2931,7 +2931,7 @@ func syncImport(p place, name string, last bool, services []cli.SyncService, set
 // wipeData takes the child at cwd (base its directory) down for a
 // reset, right after the reset's first claim: what an import a killed
 // devopsy left may still extract, every container of every profile and
-// the named volumes, every entry of mnt emptied as root, every data
+// the named volumes, an older release's too, every entry of mnt emptied as root, every data
 // service's history started over (images.Set.ResetLanding, its holds
 // derived again); its shared/.env and
 // its release, images included, stay. The record then says first
@@ -2946,7 +2946,7 @@ func wipeData(p place) error {
 	if err := removeLeft(composeName(p.cwd), remote.TaskImport); err != nil {
 		return err
 	}
-	if err := compose(p.cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
+	if err := composeDownProject(context.Background(), p.cwd, errOut, true, "--volumes", "--remove-orphans"); err != nil {
 		return fmt.Errorf("docker compose down: %w", err)
 	}
 	// The sync's task, so a holder deciding meanwhile removes it

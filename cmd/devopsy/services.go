@@ -85,9 +85,45 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 			return err
 		}
 	}
-	trace(plan.Args)
-	cmd := exec.CommandContext(ctx, "docker", plan.Args[1:]...)
-	cmd.Env = plan.Env
+	return runCompose(ctx, plan.Args, plan.Env, "", stdout, detach)
+}
+
+// composeDownProject takes the project at cwd down by its name alone, -p and no
+// -f, whatever else args say: compose then finds by its own label what any
+// release made, where with files it goes only by what they name. Its directory
+// is none of the project's, whose .env compose would read. detach as in
+// composeRun.
+func composeDownProject(ctx context.Context, cwd string, stdout io.Writer, detach bool, args ...string) error {
+	plan, err := cli.Build(cwd, []string{"--", "down"}, os.Environ())
+	if err != nil {
+		return err
+	}
+	name := envValue(plan.Env, "COMPOSE_PROJECT_NAME")
+	if name == "" {
+		return errors.New("no compose project name")
+	}
+	argv := []string{"docker", "compose"}
+	if slices.Contains(plan.Args, "--ansi") {
+		argv = append(argv, "--ansi", "always")
+	}
+	argv = append(append(argv, "-p", name, "down"), args...)
+	return runCompose(ctx, argv, plan.Env, "/", stdout, detach)
+}
+
+// envValue is key in env, a list of KEY=value, "" when unset.
+func envValue(env []string, key string) string {
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, key+"="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func runCompose(ctx context.Context, argv, env []string, dir string, stdout io.Writer, detach bool) error {
+	trace(argv)
+	cmd := exec.CommandContext(ctx, "docker", argv[1:]...)
+	cmd.Env, cmd.Dir = env, dir
 	cmd.Stdout, cmd.Stderr = stdout, errOut
 	if composeLock != nil {
 		// As fd 9 (ExtraFiles[i] is fd 3+i; nil ones are closed).

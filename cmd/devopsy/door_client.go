@@ -223,6 +223,12 @@ loop:
 	if (len(rest) > 0 && rest[0] == "version") || slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
 		return doorExec(real, append([]string{"compose"}, args...))
 	}
+	// A whole project by its name (composeDownProject): no file to render.
+	if len(rest) > 0 && rest[0] == "down" && !slices.Contains(global, "-f") {
+		if i := slices.Index(global, "-p"); i >= 0 {
+			return doorHandOver(append([]string{"down", global[i+1]}, rest[1:]...))
+		}
+	}
 	render := func() (string, error) {
 		f, err := os.CreateTemp("", "devopsy-door-*")
 		if err != nil {

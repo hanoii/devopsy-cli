@@ -305,7 +305,8 @@ left running during the copy (a `volumes` one labeled `never`, a
 
 `devopsy @develop --reset` takes the same options as `--sync`. It is a
 sync that first throws away everything a sync would leave on the child:
-every container of every profile, its named volumes, and every entry of
+every container of every profile, its named volumes and networks,
+those only an older release named included, and every entry of
 `shared/mnt`, including the ones no label copies (logs, an unlabeled
 service's files).
 

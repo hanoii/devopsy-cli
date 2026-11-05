@@ -9,6 +9,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - The deploy user never reads a project's tree: what it needs comes from `--door-read`, run as that project's user, so no link or swap there can show it anything of the deploy user's.
 - A project user's answer about a path is believed only for a path whose every part is the deploy user's (`Paths.Real`).
 - Compose runs on a file the project user rendered, never on the project's own: compose reads `env_file` and `extends` and runs `provider` as whoever runs it.
+- A whole project's `down` (`--destroy`, `--reset`) runs by its name alone, which `OwnName` checks, with no file: compose finds what it holds by its own label, an older release's included.
 - A rendered file and each verb's flags are checked deny by default (`CheckFile`, `CheckVerb`), so a key compose adds later fails closed.
 - A compose upgrade is tried against the rules before devopsy-server moves its pin: a key it starts writing by default refuses every `up`.
 - A bind holds no path with a part the project user can change, since the daemon resolves a bind at each start: an entry by its real path under `<space>/mnt/<compose name>`, a read-only part of a release as a sealed copy under `<space>/sealed/<project>`.

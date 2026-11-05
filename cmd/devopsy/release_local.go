@@ -362,7 +362,7 @@ func destroyData(cwd string, step []string, color bool) int {
 		report.Error(msg+": the destroy stopped halfway, its containers and volumes perhaps gone", "to finish it:", report.CmdMark+again)
 		return 1
 	}
-	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
+	if err := composeDownProject(ctx, root, errOut, false, "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
 		return half("docker compose down: " + err.Error())
 	}
 	destroy := container{fmt.Sprintf("devopsy-destroy-%d", os.Getpid()), composeName(root), remote.TaskDestroy}
