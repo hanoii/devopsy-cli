@@ -49,7 +49,9 @@ type form struct {
 }
 
 var (
-	word      = `(?:[A-Za-z0-9_-]|\.[A-Za-z0-9_-])[A-Za-z0-9_.-]*`
+	// A word of a path or an argument: never `.`, `..`, nor a leading dash, which
+	// `find "$@"` and rsync would take for a flag.
+	word      = `(?:[A-Za-z0-9_]|\.[A-Za-z0-9_-])[A-Za-z0-9_.-]*`
 	wordOnly  = regexp.MustCompile(`^` + word + `$`)
 	ownerArg  = regexp.MustCompile(`^\d+:\d+$`)
 	kindDir   = regexp.MustCompile(`^(mnt|volumes)$`)
@@ -58,6 +60,10 @@ var (
 	probePath = regexp.MustCompile(`^/m/(mnt|volumes)/` + word + `$`)
 	duArg     = regexp.MustCompile(`^(/m/` + word + `|/v/` + word + `)$`)
 )
+
+// cloneShape is a path in a project's clones: its directory, a take's in it, and from
+// either the clone's mnt or volumes, or one thing in those.
+var cloneShape = regexp.MustCompile(`^` + word + `(/` + word + `)?(/(mnt|volumes)(/` + word + `)?)?$`)
 
 func target(pattern string) *regexp.Regexp { return regexp.MustCompile(`^` + pattern + `$`) }
 
@@ -234,10 +240,15 @@ func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 	if err != nil {
 		return 0, "", refuse("docker run: %s: %v", m.source, err)
 	}
-	if !mountSource.MatchString(real) {
+	if !mountSource.MatchString(real) || !cleanPath(real) {
 		return 0, "", refuse("docker run: a path it cannot hand on: %s", real)
 	}
-	if real != p.Clones() && strings.HasPrefix(real, p.Clones()+"/") {
+	if rest, ok := strings.CutPrefix(real, p.Clones()+"/"); ok {
+		// As deep as devopsy's own clones go: what is below is a container's to have
+		// made, and a root container handed that holds whatever it says.
+		if !cloneShape.MatchString(rest) {
+			return 0, "", refuse("docker run: a path inside a clone: %s", m.source)
+		}
 		return kindClone, real, nil
 	}
 	mntRoot := filepath.Join(p.Space, "mnt") + "/"
@@ -336,8 +347,12 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 			placed[i] = dir
 		case kindMnt:
 			placed[i] = real
-			// An rsync's mnt is narrowed to the one entry it writes.
+			// An rsync's mnt is narrowed to the one entry it writes, and has no place
+			// where it writes a volume.
 			if !m.readOnly && f.narrow != nil {
+				if entry == "" {
+					return nil, refuse("docker run: %s writing a volume holds no mnt", f.name)
+				}
 				placed[i] = filepath.Join(real, entry)
 				mounts[i].target = filepath.Join(m.target, entry)
 				action.Entries = append(action.Entries, EntryToMake{Path: placed[i], File: file})

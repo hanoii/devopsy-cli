@@ -235,8 +235,7 @@ func TestDecideRefusesOtherSpellings(t *testing.T) {
 		{"image", "tag", "x", "busybox:1.37"},
 		{"image", "rm", "--force", "shop-prod-app"},
 		{"image", "rm", "--no-prune", "shop-prod-app"},
-		{"image", "rm", "sha256:abc"},
-		{"image", "rm", "registry.example/shop-prod-app:1"},
+
 		{"volume", "ls"},
 		{"volume", "prune", "-f"},
 		{"volume", "create", "--driver", "x", "--label", "com.docker.compose.project=shop-prod", "--label", "com.docker.compose.volume=d", "shop-prod_d"},

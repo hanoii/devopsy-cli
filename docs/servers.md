@@ -197,3 +197,7 @@ For CI: generate a pair, `add` the `.pub` on each server with
 in the job run `eval "$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY"` before
 `devopsy @prod --release`. To rotate it, generate another, add it, then
 remove the old one.
+
+## Project users with no Docker socket
+
+A deploy user's key is root on the server, since its group reaches Docker's socket. A project can have a Unix user of its own that does not: it finds devopsy as `docker`, and asks the deploy user through sudo for what its compose file needs, each request checked. A leaked key of that user then reaches its project, not the server or the others. Nothing sets this up yet: a server takes `door:` in its deploy user's config, shown by `devopsy --debug schema`, and what `internals/door.md` lists. Everything else stays as it is on a server without it.

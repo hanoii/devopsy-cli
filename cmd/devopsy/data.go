@@ -206,9 +206,17 @@ func symlinkEntry(mnt string, entries []string) string {
 // tar or a snapshot brings, file or directory, naming each: a mount point
 // of another kind would fail the extraction once the entry was emptied.
 func entryKindDiffers(mnt, name string, file bool) (as, is string, differs bool) {
-	fi, err := os.Stat(filepath.Join(mnt, name))
+	p := filepath.Join(mnt, name)
+	fi, err := os.Stat(p)
 	if err != nil || fi.IsDir() != file {
 		return "", "", false
+	}
+	// A project user's empty directory the door made as Docker would, not knowing: the
+	// door replaces it (readyEntry). That user could not, where anyone else can rmdir.
+	if file && !reachesDocker() {
+		if entries, err := os.ReadDir(p); err == nil && len(entries) == 0 {
+			return "", "", false
+		}
 	}
 	as, is = "a directory", "a file"
 	if file {

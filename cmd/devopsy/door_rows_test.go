@@ -117,7 +117,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	}
 	side := func(command string) *doorSide {
 		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
-			vet: &remote.DoorVet{Prefix: "vetted.", Command: command}, real: "/bin/false"}
+			vets: []remote.DoorVet{{Prefix: "vetted.", Command: command}}, real: "/bin/false"}
 	}
 	for _, label := range []string{"vetted.x", "VETTED.X", "Vetted.Host"} {
 		if err := os.Remove(seen); err != nil && !errors.Is(err, os.ErrNotExist) {

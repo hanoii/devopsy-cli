@@ -28,6 +28,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A build writes only a tag of this project's, and holds no labels of its own.
 - The deploy user is who owns the binary (`deployUser`): an install of it as root would point the door at root.
 - No container runs as the deploy user's ids, the door's users' or the socket's group (`hostIDs`): it would be that user's to reach through `/proc`.
+- A server with project users also needs what `e2e/door_test.go`'s `doorServer` sets up: `sudo`, `acl`, the `devopsy-projects` group holding them, the two sudo rules (`%devopsy-projects` to the deploy user for `devopsy --door *`, the deploy user to them for `devopsy --door-read *`), `<space>` on its own mount, and the `docker` link to devopsy.
 - `read_all` is an admin's grant of reads of everything, secrets included, and nothing else.
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).
 - A root container holds no path a project user can change: input is copied in and output collected by that user's rights, and a restore streams through a container with no mounts.
@@ -39,10 +40,11 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A compose name is a project's only while no other project's name extends its own, on the server's list and in its release root (`Policy.OwnName`).
 - A secret reaches the door and a container by name, its value on stdin: a command line shows to every user of the server.
 - The door's environment is its own (`doorEnvironment`): a caller's PATH would choose its docker, and a HOME the config it obeys.
-- The door rewrites the file compose runs (a build's block, sources pinned or sealed), which `devopsy -- config` does not show: accepted for a project user, whose committed file still works anywhere.
+- The door rewrites the file compose runs (a build's block, sources pinned or sealed), which `devopsy -- config` does not show, and a server with project users needs more than Docker, devopsy and a few tools: both accepted, against their Principles, for a project user only.
+- Of the image store, only a hold or a built name is a project user's to remove: a plain name may be others', and `image prune` is server-wide, so both do nothing for it.
 - A reflink clone lives in `<space>/clones/<project>`, on the data's filesystem, reached through a link in the project's tree: it holds other uids' files, and the project user reads it and cannot change a part of a path to it (`cloneDirReady`).
 - A sync's rsync daemon listens on the host's loopback with a password of that sync's: a local user reaches it, and a rule by the project users' group keeps them off Docker's networks.
 - The door sets its own umask: a caller's comes through sudo.
 - A rendered file goes to compose as an unlinked file (`unlinkedFile`), so nothing of a project's environment stays on disk.
 - What the door refuses goes to `<space>/refused.log`, a vet's refusal too: a real release asks for nothing refused, and `image prune`, the admin's, does nothing here.
-- Labels under `door: vet: prefix` go to the admin's program, on stdin, and exit 0 allows: devopsy knows no URL (Principles).
+- Labels under a `door: vets:` prefix go to the admin's program, the rendered file on stdin and the project in `DEVOPSY_DOOR_PROJECT`, and exit 0 allows: devopsy knows no URL (Principles).

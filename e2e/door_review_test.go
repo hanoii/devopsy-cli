@@ -130,9 +130,8 @@ volumes:
 	// A file entry, which only an import or a sync tells from a directory: the door made
 	// it a directory at the first release's `compose config`, as Docker would at `up`.
 	must("a tar with a file entry", `rm -rf /tmp/fe && mkdir -p /tmp/fe && echo ini >/tmp/fe/settings.ini && tar -C /tmp/fe -cf /tmp/fe.tar settings.ini`)
-	// BUG: the import's kind check (entryKindDiffers) refuses before readyEntry, where the
-	// door would replace the empty directory with a file (internals/door.md): a project user
-	// can neither import a file entry nor remove the directory, which is the deploy user's.
+	// The door replaces its own empty directory (entryKindDiffers, readyEntry): a project user
+	// could not, the directory being the deploy user's.
 	fileEntry := true
 	if out, code := op(t, dir, "devopsy @prod --import web --yes </tmp/fe.tar 2>&1"); code != 0 {
 		fileEntry = false
@@ -154,6 +153,8 @@ volumes:
 	}
 	volume("new data", "vol3")
 	if fileEntry {
+		// A running container holds what it was started with: a directory, until recreated.
+		must("the file entry in its container", "devopsy @prod up -d --force-recreate --wait")
 		must("new data in the file", "devopsy @prod exec -T web sh -c 'echo ini3 >/etc/settings.ini'")
 	}
 	must("--sync of a live child", "devopsy @dev --sync --yes")
@@ -178,10 +179,8 @@ volumes:
 		t.Errorf("after --destroy: %s", out)
 	}
 	must("a release after --destroy", "devopsy @prod --release")
-	// BUG: --destroy's `img remove` asks `docker image rm busybox:1.37` for a release's image
-	// no container uses, which the door refuses as not this project's (ownHold, OwnName): the
-	// image stays, recorded as left for every later pruning to retry, and refused.log fills
-	// on each --destroy, where a real release should leave nothing.
+	// --destroy's `img remove` asks `docker image rm busybox:1.37` for a release's image no
+	// container uses, which is the server's: nothing to do, and nothing refused.
 	if out, _ := doorRoot(t, "cat "+doorSpace+"/refused.log 2>/dev/null | grep doorflow"); out != "" {
 		t.Errorf("refused:\n%s", out)
 	}
