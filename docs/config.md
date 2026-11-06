@@ -71,7 +71,7 @@ devopsy @[<server>:][<instance>/]<environment> ...
 
 The server ends at the last `:`, since the instance and environment
 have none. An IPv6 address with a port needs its brackets, and zsh needs
-them quoted.
+them quoted, as the commands devopsy suggests write them.
 
 What the address leaves out comes from your environment or the project's
 `.devopsy/.env`, the most specific first:

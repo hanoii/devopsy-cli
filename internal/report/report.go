@@ -100,6 +100,9 @@ func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 	out := []string{Head(l) + head}
 	add := func(s string) {
 		for _, x := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+			if strings.Contains(x, CmdMark) {
+				x = copyable(x)
+			}
 			out = append(out, strings.TrimRight(Bar+x, " "))
 		}
 	}
@@ -139,6 +142,19 @@ func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 		}
 	}
 	return out
+}
+
+// copyable quotes, in a line with a command to copy, each address word
+// holding a bracket (@'[2001:db8::1]:22:prod', an IPv6 server with a
+// port), which zsh would take for a glob and refuse.
+func copyable(line string) string {
+	words := strings.Split(line, " ")
+	for i, w := range words {
+		if strings.HasPrefix(w, "@") && strings.ContainsAny(w, "[]") && !strings.ContainsAny(w, `'"`) {
+			words[i] = "@'" + w[1:] + "'"
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // Failure is an error with details (why it happens) and fixes (what to
