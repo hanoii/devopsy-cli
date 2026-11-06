@@ -51,8 +51,8 @@ func runEnvironments(cwd string, args []string, color bool) int {
 func listEnvironments(project *remote.Project, servers []string, color bool) int {
 	code := 0
 	for _, server := range servers {
-		if strings.Contains(server, ":") {
-			report.Error(fmt.Sprintf("server %q: no ':' in a server; use an ~/.ssh/config alias for ports", server))
+		if err := remote.ServerError(server); err != nil {
+			report.Fail(err)
 			code = 1
 			continue
 		}

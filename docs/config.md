@@ -76,7 +76,9 @@ DEVOPSY_SERVER=vm1             # any environment's
 DEVOPSY_INSTANCE=b
 ```
 
-No server from any of them is an error.
+No server from any of them is an error. A server has no port, since a
+`:` separates it from the environment: the port goes in `~/.ssh/config`,
+or to ssh in `DEVOPSY_SSH_COMMAND` ([CI](servers.md#ci)).
 
 ## Instances
 

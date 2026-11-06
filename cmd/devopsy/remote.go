@@ -90,7 +90,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return 0
 			}
 		}
-		return fail(err.Error())
+		return failErr(err)
 	}
 	args = args[1:]
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {

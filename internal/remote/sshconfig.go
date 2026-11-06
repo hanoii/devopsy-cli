@@ -6,20 +6,62 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// SSHDestination splits a target's host, an SSH destination
-// ([user@]host or ssh://[user@]host[:port]), into its parts.
-func SSHDestination(dest string) (user, host, port string) {
-	if strings.HasPrefix(dest, "ssh://") {
-		if u, err := url.Parse(dest); err == nil {
-			return u.User.Username(), u.Hostname(), u.Port()
-		}
-	}
+// SSHDestination splits a target's host, [user@]host (ServerError
+// refuses anything with a port), into its parts.
+func SSHDestination(dest string) (user, host string) {
 	if i := strings.LastIndex(dest, "@"); i >= 0 {
-		return dest[:i], dest[i+1:], ""
+		return dest[:i], dest[i+1:]
 	}
-	return "", dest, ""
+	return "", dest
+}
+
+// ServerError refuses a server with a ':' (a port, ssh://...), and is nil
+// for any other: in an address the ':' separates the server from the
+// environment, and devopsy writes addresses back that way. Its fixes say
+// the server without the ':' and, when it had one, the port for ssh.
+func ServerError(server string) error {
+	if !strings.Contains(server, ":") {
+		return nil
+	}
+	f := &report.Failure{
+		Msg:     fmt.Sprintf("server %q: no ':' in a server", server),
+		Details: []string{"in an address it separates the server from the environment (@vm1:prod)"},
+	}
+	switch dest, port, ok := serverPort(server); {
+	case ok && port != "":
+		f.Fixes = append(f.Fixes, report.Fix("the server as "+dest+", and the port for ssh (for example in CI)", `export DEVOPSY_SSH_COMMAND="ssh -p `+port+`"`))
+	case ok:
+		f.Fixes = append(f.Fixes, report.Fix("the server as "+dest))
+	default:
+		f.Fixes = append(f.Fixes, report.Fix("the server as [user@]host"))
+	}
+	f.Fixes = append(f.Fixes, report.Fix("a Host of ~/.ssh/config, its Port included, as the server"))
+	return f
+}
+
+// serverPort splits ssh://[user@]host[:port] or [user@]host:port into
+// [user@]host and the port; ok is false for anything else.
+func serverPort(server string) (dest, port string, ok bool) {
+	if strings.HasPrefix(server, "ssh://") {
+		u, err := url.Parse(server)
+		if err != nil || u.Hostname() == "" || strings.Trim(u.Path, "/") != "" {
+			return "", "", false
+		}
+		dest = u.Hostname()
+		if name := u.User.Username(); name != "" {
+			dest = name + "@" + dest
+		}
+		return dest, u.Port(), true
+	}
+	dest, port, _ = strings.Cut(server, ":")
+	if dest == "" || port == "" || strings.Trim(port, "0123456789") != "" {
+		return "", "", false
+	}
+	return dest, port, true
 }
 
 // SSHEffective is ssh's resolved configuration for a destination, ssh -G
@@ -50,7 +92,7 @@ var SSHEffective = func(dest string) (map[string]string, error) {
 // host: where it connects (from the target and ssh -G, when effective is
 // not nil), then optional settings, commented out.
 func SSHConfig(t *Target, effective map[string]string) string {
-	user, host, port := SSHDestination(t.Host)
+	user, host := SSHDestination(t.Host)
 	hostname := host
 	if v := effective["hostname"]; v != "" {
 		hostname = v
@@ -58,9 +100,7 @@ func SSHConfig(t *Target, effective map[string]string) string {
 	if user == "" {
 		user = effective["user"]
 	}
-	if port == "" {
-		port = effective["port"]
-	}
+	port := effective["port"]
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# For @%s (%s). devopsy already passes ClearAllForwardings=yes, and\n# PasswordAuthentication=no unless %s is set.\n", t.Name, t.Host, SSHAllowPasswordEnv)

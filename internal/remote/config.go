@@ -1532,8 +1532,10 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, true)
 		if err != nil && strict {
 			t.ParentErr = fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
-			if re := (*report.Failure)(nil); errors.As(err, &re) {
-				// Reported as a sentence: "dev's parent, prod, has no server".
+			if re := (*report.Failure)(nil); errors.As(err, &re) && strings.HasPrefix(re.Msg, "has ") {
+				// A predicate reads as a sentence: "dev's parent, prod, has
+				// no server". Any other failure stays wrapped, its details
+				// and fixes with it.
 				t.ParentErr = &report.Failure{Msg: fmt.Sprintf("%s's parent, %s, %s", t.Name, t.Parent, re.Msg), Details: re.Details, Fixes: re.Fixes}
 			}
 		}
@@ -1629,8 +1631,8 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 			}
 		}
 	}
-	if strings.Contains(t.Host, ":") {
-		return nil, fmt.Errorf("server %q: no ':' in a server; use an ~/.ssh/config alias for ports", t.Host)
+	if err := ServerError(t.Host); err != nil {
+		return nil, err
 	}
 	if strict && t.Host == "" {
 		if parent {

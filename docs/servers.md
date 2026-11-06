@@ -139,7 +139,12 @@ DEVOPSY_SSH_COMMAND="ssh -i $KEY -o UserKnownHostsFile=$KNOWN_HOSTS" devopsy @vm
 ```
 
 Its options come first, and ssh keeps the first value of each, so they
-win over devopsy's.
+win over devopsy's. A port other than 22 goes there too, since a server
+never has one:
+
+```sh
+DEVOPSY_SERVER=devopsy@203.0.113.7 DEVOPSY_SSH_COMMAND="ssh -p 5369" devopsy @prod --release
+```
 
 devopsy adds `-o ClearAllForwardings=yes` to every session. It needs none
 of the host's `LocalForward` lines, and each session would try to bind

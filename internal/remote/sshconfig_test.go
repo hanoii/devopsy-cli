@@ -7,16 +7,14 @@ import (
 
 func TestSSHDestination(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ in, user, host, port string }{
-		{"vm1", "", "vm1", ""},
-		{"devopsy@vm1", "devopsy", "vm1", ""},
-		{"devopsy@vm1.example.org", "devopsy", "vm1.example.org", ""},
-		{"ssh://devopsy@vm1:2222", "devopsy", "vm1", "2222"},
-		{"ssh://vm1", "", "vm1", ""},
+	for _, c := range []struct{ in, user, host string }{
+		{"vm1", "", "vm1"},
+		{"devopsy@vm1", "devopsy", "vm1"},
+		{"devopsy@vm1.example.org", "devopsy", "vm1.example.org"},
 	} {
-		user, host, port := SSHDestination(c.in)
-		if user != c.user || host != c.host || port != c.port {
-			t.Errorf("%s: %q %q %q", c.in, user, host, port)
+		user, host := SSHDestination(c.in)
+		if user != c.user || host != c.host {
+			t.Errorf("%s: %q %q", c.in, user, host)
 		}
 	}
 }
@@ -45,9 +43,9 @@ func TestSSHConfig(t *testing.T) {
 		t.Errorf("from ssh -G:\n%s", got)
 	}
 
-	// Without ssh -G: the destination alone.
-	got = SSHConfig(&Target{Name: "prod", Host: "ssh://vm1:2200"}, nil)
-	if !strings.Contains(got, "Host vm1\n  Hostname vm1\n  Port 2200\n") || strings.Contains(got, "  User ") {
+	// Without ssh -G: the destination alone, no port.
+	got = SSHConfig(&Target{Name: "prod", Host: "devopsy@vm1"}, nil)
+	if !strings.Contains(got, "Host vm1\n  Hostname vm1\n  User devopsy\n\n") || strings.Contains(got, "  Port ") {
 		t.Errorf("without ssh -G:\n%s", got)
 	}
 }

@@ -1,6 +1,8 @@
 package remote
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +89,28 @@ func TestServerAndInstanceVariables(t *testing.T) {
 	if tg := load("b/prod"); tg.Instance != "b" || tg.Host != "vm1" {
 		t.Errorf("address instance: %+v", tg)
 	}
+	// A ':' in a server (a port, ssh://) is refused: in an address it
+	// separates the server from the environment. The fixes say the server
+	// without it and give ssh the port, ready to copy, when there is one.
+	for _, c := range []struct{ server, want, not string }{
+		{"devopsy@vm1:5369", `the server as devopsy@vm1, and the port for ssh (for example in CI) [export DEVOPSY_SSH_COMMAND="ssh -p 5369"]`, ""},
+		{"ssh://devopsy@vm1:5369", `the server as devopsy@vm1, and the port for ssh (for example in CI) [export DEVOPSY_SSH_COMMAND="ssh -p 5369"]`, ""},
+		{"ssh://vm1", "the server as vm1", "ssh -p"},
+		{"vm1:prod", "the server as [user@]host", "ssh -p"},
+	} {
+		env["DEVOPSY_SERVER"] = c.server
+		_, err := LoadTarget(dir, "prod", projectEnv)
+		var f *report.Failure
+		if !errors.As(err, &f) || f.Msg != fmt.Sprintf("server %q: no ':' in a server", c.server) {
+			t.Errorf("%s: %v", c.server, err)
+			continue
+		}
+		got := fmt.Sprint(f.Details, f.Fixes)
+		if !strings.Contains(got, c.want) || !strings.Contains(got, "~/.ssh/config") || c.not != "" && strings.Contains(got, c.not) {
+			t.Errorf("%s: want %q and ~/.ssh/config, not %q, in %s", c.server, c.want, c.not, got)
+		}
+	}
+	env["DEVOPSY_SERVER"] = "vm1"
 	t.Setenv("DEVOPSY_SERVER", "caller")
 	if tg := load("prod"); tg.Host != "caller" {
 		t.Errorf("caller over .env: %s", tg.Host)
