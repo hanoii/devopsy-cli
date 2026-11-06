@@ -8,13 +8,19 @@ import (
 	"time"
 )
 
-// acrossProject is syncProject with dev on the second server: the
-// parent's server reaches the child's with the operator's agent, the
-// rsync through a reverse forward, the streams through --sync-exec.
+// acrossProject is syncProject with dev on the second server, on its
+// sshd's other port: the parent's server reaches the child's with the
+// operator's agent, at the port the child's server names (port 22 closed
+// to it), the rsync through a reverse forward, the streams through
+// --sync-exec.
 func acrossProject(t *testing.T, name string) string {
 	secondServer(t)
 	dir := syncProject(t, name)
-	op(t, dir, "echo DEVOPSY_SERVER_DEV=server2 >>.devopsy/.env")
+	op(t, dir, "echo DEVOPSY_SERVER_DEV=server2:2222 >>.devopsy/.env")
+	if out, code := asRoot(t, server2, `ip=$(getent hosts server | cut -d' ' -f1) && iptables -A INPUT -p tcp --dport 22 -s "$ip" -j REJECT`); code != 0 {
+		t.Fatalf("closing port 22 to the parent's server (%d): %s", code, out)
+	}
+	t.Cleanup(func() { asRoot(t, server2, "iptables -F") })
 	return dir
 }
 
@@ -330,7 +336,7 @@ func TestParentEnvAcrossServersE2E(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 || !strings.Contains(out, "copied 3 variables of @server:prod's instance and project .env into @server2:dev's shared/parent.env") {
+	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 || !strings.Contains(out, "copied 3 variables of @server:prod's instance and project .env into @server2:2222:dev's shared/parent.env") {
 		t.Fatalf("dev's first release (%d):\n%s", code, out)
 	}
 	copied, _ := srv2(t, "cat parentenv/dev/shared/parent.env")
