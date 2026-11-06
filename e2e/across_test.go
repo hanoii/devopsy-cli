@@ -20,7 +20,7 @@ func acrossProject(t *testing.T, name string) string {
 	if out, code := asRoot(t, server2, `ip=$(getent hosts server | cut -d' ' -f1) && iptables -A INPUT -p tcp --dport 22 -s "$ip" -j REJECT`); code != 0 {
 		t.Fatalf("closing port 22 to the parent's server (%d): %s", code, out)
 	}
-	t.Cleanup(func() { asRoot(t, server2, "iptables -F") })
+	t.Cleanup(func() { asRoot(t, server2, "iptables -F INPUT") })
 	return dir
 }
 
