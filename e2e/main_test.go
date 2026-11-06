@@ -279,10 +279,11 @@ func runLanes(n int) (int, error) {
 // resetLane undoes on l what a test before may have left that the next
 // one would trip on, whatever their order: devopsy, ssh and terminals
 // still running on the operator, a dropped or slowed connection, the
-// deploy user's login shell.
+// deploy user's login shell, a port closed on the second server.
 func resetLane(l lane) {
 	_, _ = docker("exec", l.operator, "sh", "-c", "pkill -x devopsy; pkill -x ssh; pkill -x script; iptables -F; tc qdisc del dev eth0 root 2>/dev/null; true")
 	_, _ = docker("exec", l.server, "sh", "-c", "tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; for m in $(awk '$2 ~ \"^/home/devopsy/\" {print $2}' /proc/mounts); do umount -l \"$m\"; done; true")
+	_, _ = docker("exec", l.server2(), "iptables", "-F", "INPUT")
 }
 
 // listTests lists the tests -test.run selects, never -test.skip's.

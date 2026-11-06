@@ -11,6 +11,8 @@ if [ "${1:-server}" = server ]; then
   install -d -m 700 /home/devopsy/.ssh
   chown -R devopsy:devopsy /home/devopsy
   dockerd >/var/log/dockerd.log 2>&1 &
-  /usr/sbin/sshd
+  # Port 2222 too: a server with a port, reached by its address
+  # (TestSyncAcrossServers' child).
+  /usr/sbin/sshd -p 22 -p 2222
 fi
 exec sleep infinity

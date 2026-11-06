@@ -200,7 +200,9 @@ what `config.yaml` sets.
   `devopsy --destroy` takes it all down, `mnt` emptied.
 - A target is `@[<server>:][<instance>/]<environment>`: `@vm1:prod`,
   `@prod` with `DEVOPSY_SERVER` in `.devopsy/.env` or CI's environment,
-  or an alias from `~/.config/devopsy/config.yaml`.
+  or an alias from `~/.config/devopsy/config.yaml`. The server ends at
+  the last `:`, so it may hold a port (`@vm1:5369:prod`); an IPv6
+  address with a port is in brackets (`@'[2001:db8::1]:22:prod'`).
 - `devopsy @t --release` uploads a release, builds or pulls, switches
   `current` and runs the run step; a failure before the switch changes
   nothing live, one after switches back. `--rollback` goes back one;

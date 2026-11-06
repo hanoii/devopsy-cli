@@ -61,10 +61,17 @@ How the keys combine:
 ```
 devopsy @[<server>:][<instance>/]<environment> ...
 
-@vm1:prod                     on vm1: an SSH destination or ~/.ssh/config alias, no ":"
+@vm1:prod                     on vm1: an SSH destination or ~/.ssh/config alias
 @vm1:b/prod                   instance b of the project, on vm1
+@devopsy@vm1:5369:prod        as devopsy, on port 5369
+@2001:db8::1:prod             an IPv6 address
+@'[2001:db8::1]:5369:prod'    an IPv6 address with a port, in brackets
 @prod                         server and instance from variables
 ```
+
+The server ends at the last `:`, since the instance and environment
+have none. An IPv6 address with a port needs its brackets, and zsh needs
+them quoted, as the commands devopsy suggests write them.
 
 What the address leaves out comes from your environment or the project's
 `.devopsy/.env`, the most specific first:
@@ -76,9 +83,8 @@ DEVOPSY_SERVER=vm1             # any environment's
 DEVOPSY_INSTANCE=b
 ```
 
-No server from any of them is an error. A server has no port, since a
-`:` separates it from the environment: the port goes in `~/.ssh/config`,
-or to ssh in `DEVOPSY_SSH_COMMAND` ([CI](servers.md#ci)).
+No server from any of them is an error. A server in a variable takes
+the same forms, a port included (`DEVOPSY_SERVER=devopsy@vm1:5369`).
 
 ## Instances
 

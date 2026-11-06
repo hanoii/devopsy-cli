@@ -265,8 +265,8 @@ func targetRef(t *remote.Target) string {
 	case t.Alias != "":
 		return t.Alias
 	case t.Name == "":
-		// A server named alone.
-		return t.Host
+		// A server named alone, as typed back: <host>:.
+		return remote.ServerRef(t)
 	}
 	// Resolved, so a hint works when copied (an instance, a server from
 	// variables).

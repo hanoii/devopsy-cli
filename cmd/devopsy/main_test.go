@@ -330,8 +330,6 @@ func TestUserTargets(t *testing.T) {
 // Every session, a compose command's too, bounds its connection (a
 // connect timeout, keepalives counted in beats), after
 // DEVOPSY_SSH_COMMAND's own options, which win: ssh keeps the first value.
-// A host with a port is refused before connecting, saying why and its
-// fixes.
 func TestTargetHostFromDotenv(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -347,12 +345,30 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
+	// A server's port goes to ssh as -p, after DEVOPSY_SSH_COMMAND's
+	// options: one there that sets another port (ssh -G says so) is
+	// refused before connecting.
+	// As ssh: -G resolves the port to -p's, else 22, so a -G without the
+	// server's -p would be refused; a session prints its arguments.
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv:5369\n", 0o644)
-	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
-	if code == 0 || strings.Contains(out, "sh -c") ||
-		!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\": no ':' in a server\ndevopsy: | in an address it separates the server from the environment (@vm1:prod)\n") ||
-		!strings.Contains(out, "devopsy: | 1. the server as devopsy@from-dotenv, and the port for ssh (for example in CI)\ndevopsy: |    $ export DEVOPSY_SSH_COMMAND=\"ssh -p 5369\"\n") {
+	gssh := filepath.Join(tmp, "gssh")
+	write(t, gssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) port=22; prev=; for a; do [ \"$prev\" = -p ] && port=$a; prev=$a; done; echo \"port $port\"; exit 0 ;; esac\necho \"$@\"\n", 0o755)
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + gssh}, "@prod", "ps")
+	if code != 0 || !strings.Contains(out, " -T -p 5369 devopsy@from-dotenv sh -c") || strings.Contains(out, "names port") {
 		t.Errorf("a port (%d):\n%s", code, out)
+	}
+	ssh := filepath.Join(tmp, "ssh")
+	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) echo 'port 22' ;; *) echo \"$@\" ;; esac\n", 0o755)
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + ssh + " -p 22"}, "@prod", "ps")
+	if code == 0 || strings.Contains(out, "sh -c") ||
+		!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\" names port 5369, and ssh would connect to 22\n") ||
+		!strings.Contains(out, "take the port out of DEVOPSY_SSH_COMMAND, or out of the server") {
+		t.Errorf("a port DEVOPSY_SSH_COMMAND overrides (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=ssh://devopsy@from-dotenv\n", 0o644)
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
+	if code == 0 || strings.Contains(out, "sh -c") || !strings.Contains(out, "devopsy: error: server \"ssh://devopsy@from-dotenv\": not [user@]host[:port]\n") {
+		t.Errorf("not a server (%d):\n%s", code, out)
 	}
 }
 
@@ -1079,6 +1095,14 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(nil, "@devopsy@server", "--vars-instance"); code == 0 || !strings.Contains(out, "(for a server: --vars-instance needs an environment, devopsy @devopsy@server:<environment> --vars-instance)") {
 		t.Fatalf("@server --vars-instance (%d):\n%s", code, out)
 	}
+	// A server with a port, its : left out, reads as an environment: the
+	// error says how to name the server.
+	if out, code := run(nil, "@devopsy@server:5369", "--vars-instance"); code == 0 || !strings.Contains(out, "(for a server with a port: --vars-instance needs an environment, devopsy @devopsy@server:5369:<environment> --vars-instance)") {
+		t.Fatalf("@server:port --vars-instance (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@devopsy@server:5369", "--ssh-keys"); code == 0 || !strings.Contains(out, "(for a server with a port: devopsy @devopsy@server:5369: --ssh-keys)") {
+		t.Fatalf("@server:port --ssh-keys (%d):\n%s", code, out)
+	}
 	if out, code := run(nil, "@devopsy@server", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
 		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
 	}
@@ -1191,6 +1215,10 @@ func TestInstancesEndToEnd(t *testing.T) {
 	// On the server .env names, as addresses; or on the one given.
 	if out, code := run(nil, "--environments"); code != 0 || !strings.HasSuffix(out, "devopsy@server:b/prod\ndevopsy@server:c/pr-12\n") {
 		t.Fatalf("--environments (%d):\n%s", code, out)
+	}
+	// A server it cannot take is said with its fix, the others listed.
+	if out, code := run([]string{"DEVOPSY_SERVER_PROD=ssh://bad"}, "--environments"); code != 1 || !strings.Contains(out, "devopsy: error: server \"ssh://bad\": not [user@]host[:port]\n") || !strings.Contains(out, "or a Host of ~/.ssh/config") || !strings.Contains(out, "devopsy@server:b/prod\n") {
+		t.Errorf("--environments with a server that is none (%d):\n%s", code, out)
 	}
 	// On one server, named alone or through an environment.
 	if out, code := run(nil, "@other", "--environments"); code != 0 || !strings.Contains(out, "other:b/prod\n") {
@@ -1417,6 +1445,13 @@ func TestRemoteSSHKeys(t *testing.T) {
 	}
 	if out, code := run("", "--ssh-keys"); code == 0 || !strings.Contains(out, "needs a target") {
 		t.Errorf("list without a target (%d):\n%s", code, out)
+	}
+	// A server alone is named back as <host>:, which copies as typed: a
+	// port or an IPv6 address would otherwise read as an environment.
+	for _, server := range []string{"devopsy@server:5369", "[2001:db8::1]:22"} {
+		if out, code := run("", "@"+server+":", "--ssh-keys", "bogus"); code == 0 || !strings.Contains(out, "usage: devopsy @"+strings.ReplaceAll("@"+server+":", "@[", "@'[")[1:]) {
+			t.Errorf("%s: the usage (%d):\n%s", server, code, out)
+		}
 	}
 	out, code = run("", "@prod", "--ssh-keys", "add", priv+".pub", "--restricted")
 	if code != 0 || !strings.Contains(out, "devopsy: authorized SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "devopsy: | restricted:") {

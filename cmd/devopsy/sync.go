@@ -699,12 +699,12 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if from != "" {
 		var err error
 		if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
-			return fail("--from: " + err.Error())
+			return failErr(fmt.Errorf("--from: %w", err))
 		}
 	}
 	job, err := syncPreflight(t, p, projectName, reset)
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	job.from, job.fromAddr = from != "", from
 	if !yes {

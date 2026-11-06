@@ -1330,8 +1330,8 @@ func ChildCheck(address, script string, extra []string) string {
 	if os.Getenv(ProtocolCheckEnv) == "warn" {
 		check = ProtocolCheckEnv + "=warn\n" + check
 	}
-	server, _, _ := strings.Cut(address, ":")
-	return check + serverCheck(server+":") + script
+	a, _ := parseAddress(address)
+	return check + serverCheck(a.server+":") + script
 }
 
 // SyncExecScript runs devopsy args in the child's current release (toDir

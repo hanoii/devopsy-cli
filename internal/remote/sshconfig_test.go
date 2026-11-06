@@ -5,17 +5,31 @@ import (
 	"testing"
 )
 
-func TestSSHDestination(t *testing.T) {
+// A server goes to ssh as [user@]host, an IPv6 address without its
+// brackets, after -p and its port when it names one.
+func TestSSHArgs(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ in, user, host string }{
-		{"vm1", "", "vm1"},
-		{"devopsy@vm1", "devopsy", "vm1"},
-		{"devopsy@vm1.example.org", "devopsy", "vm1.example.org"},
+	for in, want := range map[string]string{
+		"vm1":                       "vm1",
+		"devopsy@vm1.example.org":   "devopsy@vm1.example.org",
+		"devopsy@vm1:5369":          "-p 5369 devopsy@vm1",
+		"vm1:022":                   "-p 22 vm1",
+		"2001:db8::1":               "2001:db8::1",
+		"devopsy@::1":               "devopsy@::1",
+		"devopsy@[2001:db8::1]":     "devopsy@2001:db8::1",
+		"[2001:db8::1]:5369":        "-p 5369 2001:db8::1",
+		"devopsy@[fe80::1%eth0]:22": "-p 22 devopsy@fe80::1%eth0",
 	} {
-		user, host := SSHDestination(c.in)
-		if user != c.user || host != c.host {
-			t.Errorf("%s: %q %q", c.in, user, host)
+		if got := strings.Join(SSHArgs(in), " "); got != want {
+			t.Errorf("%s: %s", in, got)
 		}
+		if ServerError(in) != nil {
+			t.Errorf("%s refused", in)
+		}
+	}
+	// A port as ssh -G prints it, a number, which PortError compares.
+	if user, host, port := SSHDestination("devopsy@[::1]:0022"); user != "devopsy" || host != "::1" || port != "22" {
+		t.Errorf("SSHDestination: %q %q %q", user, host, port)
 	}
 }
 
@@ -43,9 +57,9 @@ func TestSSHConfig(t *testing.T) {
 		t.Errorf("from ssh -G:\n%s", got)
 	}
 
-	// Without ssh -G: the destination alone, no port.
-	got = SSHConfig(&Target{Name: "prod", Host: "devopsy@vm1"}, nil)
-	if !strings.Contains(got, "Host vm1\n  Hostname vm1\n  User devopsy\n\n") || strings.Contains(got, "  Port ") {
+	// Without ssh -G: the destination alone, its port included.
+	got = SSHConfig(&Target{Name: "prod", Host: "devopsy@vm1:2200"}, nil)
+	if !strings.Contains(got, "Host vm1\n  Hostname vm1\n  User devopsy\n  Port 2200\n") {
 		t.Errorf("without ssh -G:\n%s", got)
 	}
 }

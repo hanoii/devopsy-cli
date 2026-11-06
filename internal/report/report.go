@@ -23,6 +23,7 @@ package report
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 )
 
@@ -97,10 +98,10 @@ func FixPairs(pairs [][2]string) []Remedy {
 // the fix; more read "to fix it, do one of these:" and each numbered.
 func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 	head, rest, _ := strings.Cut(strings.TrimRight(msg, "\n"), "\n")
-	out := []string{Head(l) + head}
+	out := []string{Head(l) + Copyable(head)}
 	add := func(s string) {
 		for _, x := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
-			out = append(out, strings.TrimRight(Bar+x, " "))
+			out = append(out, strings.TrimRight(Bar+Copyable(x), " "))
 		}
 	}
 	if rest != "" {
@@ -139,6 +140,38 @@ func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 		}
 	}
 	return out
+}
+
+// Copyable quotes each address in line holding an IPv6 address in
+// brackets (@'[2001:db8::1]:22:prod', a server with a port), which zsh
+// would take for a glob and refuse, so a command devopsy names copies as
+// shown, wherever it is in the line. An address already in quotes (a
+// word holding one, or between words opening and closing them) stays as
+// it is, and so do the punctuation after it and brackets of another kind
+// (a placeholder, @[<server>:]<env>).
+func Copyable(line string) string {
+	words := strings.Split(line, " ")
+	quoted := false
+	for i, w := range words {
+		if !quoted && strings.HasPrefix(w, "@") && bracketsIPv6(w) && !strings.ContainsAny(w, `'"`) {
+			addr := strings.TrimRight(w, ",;.)")
+			words[i] = "@'" + addr[1:] + "'" + w[len(addr):]
+		}
+		if strings.HasPrefix(strings.TrimLeft(w, "("), "'") {
+			quoted = true
+		}
+		if strings.HasSuffix(strings.TrimRight(w, ",;.)"), "'") {
+			quoted = false
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func bracketsIPv6(w string) bool {
+	_, after, ok := strings.Cut(w, "[")
+	inner, _, closed := strings.Cut(after, "]")
+	a, err := netip.ParseAddr(inner)
+	return ok && closed && err == nil && a.Is6()
 }
 
 // Failure is an error with details (why it happens) and fixes (what to

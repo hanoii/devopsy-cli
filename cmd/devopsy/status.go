@@ -13,6 +13,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runStatus implements devopsy --status in a project: its containers
@@ -109,15 +110,18 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	}
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
 	st := styleFor(os.Stdout)
-	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
+	// Each line names commands to copy, an address in brackets quoted.
+	say := func(s string) { fmt.Println(report.Copyable(s)) }
+	bad := func(s string) { fmt.Println(st.bad(report.Copyable(s))) }
+	fmt.Println(st.name(report.Copyable(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path))))
 	h := parseStatus(header)
 	switch {
 	case h.plain:
-		fmt.Println("release     none: a plain devopsy directory")
+		say("release     none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		fmt.Printf("release     none: %s failed, devopsy @%s --log shows why\n", h.failed, targetRef(t))
+		say(fmt.Sprintf("release     none: %s failed, devopsy @%s --log shows why", h.failed, targetRef(t)))
 	case h.none:
-		fmt.Println("release     none: not released yet")
+		say("release     none: not released yet")
 	}
 	if h.id != "" {
 		line := "release     " + h.id
@@ -142,11 +146,11 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		if h.kept != "" {
 			line += "  (" + h.kept + " kept)"
 		}
-		fmt.Println(line)
+		say(line)
 	}
 	if h.cut != nil {
 		what, fix := h.cut.Cut(targetRef(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
-		fmt.Println(st.bad("release     " + what + ": " + fix))
+		bad("release     " + what + ": " + fix)
 	}
 	if t.Parent != "" {
 		line := "parent      " + t.Parent
@@ -157,46 +161,46 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		} else {
 			line += "  never synced"
 		}
-		fmt.Println(line)
+		say(line)
 	}
 	if h.syncing {
-		fmt.Println("data        a sync into it is running")
+		say("data        a sync into it is running")
 	}
 	if h.source {
-		fmt.Println("data        a sync or an export from it is running")
+		say("data        a sync or an export from it is running")
 	}
 	if h.snapshotting {
-		fmt.Println("data        a snapshot of it is being taken")
+		say("data        a snapshot of it is being taken")
 	}
 	switch {
 	case h.mark.IsImport() && h.importing:
-		fmt.Println(st.bad("data        importing " + h.mark.From + ": what it stopped stays down until it completes"))
+		bad("data        importing " + h.mark.From + ": what it stopped stays down until it completes")
 	case h.importing:
-		fmt.Println("data        an import into it is running")
+		say("data        an import into it is running")
 	case h.mark.IsImport():
 		var fixes []string
 		for _, f := range remote.ImportFixes(targetRef(t), h.mark.From, t.Parent != "") {
 			fixes = append(fixes, f[1])
 		}
-		fmt.Println(st.bad("data        the import of " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+		bad("data        the import of " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or "))
 	case h.mark.IsRestore() && h.busy:
 		// Its mark is there from its first write to its run step, the
 		// release lock held all along.
-		fmt.Println(st.bad("data        restoring snapshot " + h.mark.From + ": what it stopped stays down until it completes"))
+		bad("data        restoring snapshot " + h.mark.From + ": what it stopped stays down until it completes")
 	case h.mark.IsRestore():
 		var fixes []string
 		for _, f := range remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "") {
 			fixes = append(fixes, f[1])
 		}
-		fmt.Println(st.bad("data        the restore of snapshot " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+		bad("data        the restore of snapshot " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or "))
 	case h.partial != "":
 		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
 		if h.id == "" {
 			fix = "devopsy @" + remote.HintAddress(t) + " --release: a first release syncs"
 		}
-		fmt.Println(st.bad("data        from a sync that did not complete: " + h.partial + ": nothing runs on it until one does: " + fix))
+		bad("data        from a sync that did not complete: " + h.partial + ": nothing runs on it until one does: " + fix)
 	case h.left != "":
-		fmt.Println(st.bad("data        an operation cut off recorded " + h.left + " as stopped: the next release, sync, import or snapshot here starts what of them is down"))
+		bad("data        an operation cut off recorded " + h.left + " as stopped: the next release, sync, import or snapshot here starts what of them is down")
 	}
 	fmt.Print(rest)
 	return 0

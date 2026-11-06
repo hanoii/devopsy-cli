@@ -65,10 +65,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return fail(msg)
 	}
 	load := remote.LoadTarget
+	serverOnly := false
 	switch {
 	case len(args) > 1 && (slices.Contains(cli.ServerScope, args[1]) || needsServer(projectDir, args[1])):
 		// Only its server: @<server> works too.
-		load = remote.ServerTarget
+		load, serverOnly = remote.ServerTarget, true
 	case help:
 		load = remote.DescribeTarget
 	case len(args) > 1 && strings.HasSuffix(addr, ":"):
@@ -78,8 +79,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	if err != nil && !help && len(args) > 1 {
 		// Maybe a server named alone, for a command that needs an
 		// environment: the error stays, a typo in a name being as likely.
+		// Or a server with a port, its : left out (@vm1:5369).
 		if st, serr := remote.ServerTarget(projectDir, addr, projectEnv); serr == nil && st.Name == "" {
 			err = fmt.Errorf("%w\n(for a server: %s needs an environment, devopsy @%s:<environment> %s)", err, args[1], st.Host, args[1])
+		} else if st, serr := remote.ServerTarget(projectDir, addr+":", projectEnv); strings.Contains(addr, ":") && serr == nil && st.Name == "" {
+			if serverOnly {
+				err = fmt.Errorf("%w\n(for a server with a port: devopsy @%s: %s)", err, st.Host, args[1])
+			} else {
+				err = fmt.Errorf("%w\n(for a server with a port: %s needs an environment, devopsy @%s:<environment> %s)", err, args[1], st.Host, args[1])
+			}
 		}
 	}
 	if err != nil {
@@ -91,6 +99,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 		return failErr(err)
+	}
+	// A target with an environment was checked as it loaded (LoadTarget);
+	// a server alone is checked here, help never.
+	if serverOnly && !help {
+		if err := remote.PortError(t.Host); err != nil {
+			return failErr(err)
+		}
 	}
 	args = args[1:]
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
@@ -546,7 +561,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 				p := t.ParentTarget
 				if from != "" {
 					if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
-						return fail("--from: " + err.Error())
+						return failErr(fmt.Errorf("--from: %w", err))
 					}
 				} else if t.ParentErr != nil {
 					return failParent(t, color, args[0])

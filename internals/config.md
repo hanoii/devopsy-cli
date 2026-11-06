@@ -16,7 +16,9 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 ## Targets
 
-- A target is an address, `@[<server>:][<instance>/]<environment>` (`parseAddress`): the server ends at the first `:`, the instance before the last `/`, an empty part meaning none.
+- A target is an address, `@[<server>:][<instance>/]<environment>` (`parseAddress`): the server ends at the last `:`, the instance before the last `/`, an empty part meaning none.
+- A server is `[user@]host[:port]` or an IPv6 address, in brackets with a port (`remote.ParseServer`), from an address or a variable alike, and anything else is refused (`ServerError`), a user or host starting with `-` or holding a shell's special characters included: every address devopsy writes back (`<host>:<path>`, hints, a server alone as `<host>:`) splits again at its last `:`, and ssh never takes a server for an option.
+- A server's port reaches ssh as `-p` after `DEVOPSY_SSH_COMMAND`'s options (`SSHArgs`), `ssh -G` included, and a server whose port ssh -G resolves to another is refused as its target loads strictly (`PortError` in `resolveTarget`, a parent's into `ParentErr`, a server alone in `runRemote`), never for help: ssh keeps the first value, so a `-p` there would win without a word.
 - A missing part comes from `DEVOPSY_SERVER_<ENVIRONMENT>`, the pattern's variable (`PatternVar`, `pr-*` gives `DEVOPSY_SERVER_PR`), `DEVOPSY_SERVER` and `DEVOPSY_INSTANCE`, read from the caller's environment, then the project's `.env`, never for an alias; no server is an error.
 - An explicit none (`@vm1:/prod`) only parses: it is the default.
 - `instances: true` makes every target name an instance (an alias's from its `to:`), and without it none may: a project's environments never mix `<project>/<env>` and `<project>/<instance>/<env>` on a server, so `--environments` lists one layout.

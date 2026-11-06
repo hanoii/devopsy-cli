@@ -45,7 +45,9 @@ server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
 They take `@<server>` alone, or any target, whose server they use, with
 no instance needed. A bare name is still the project's environment or an
 alias first, as for every target, and a server only otherwise; when a
-name is both, `@<server>:` says it is the server.
+name is both, `@<server>:` says it is the server. A server with a port
+or an IPv6 address always ends with `:` (`@vm1:5369:`,
+`@2001:db8::1:`), since without it the last part is an environment.
 
 ```sh
 devopsy @vm1 --ssh-keys          # vm1's deploy user's keys, from anywhere
@@ -139,12 +141,11 @@ DEVOPSY_SSH_COMMAND="ssh -i $KEY -o UserKnownHostsFile=$KNOWN_HOSTS" devopsy @vm
 ```
 
 Its options come first, and ssh keeps the first value of each, so they
-win over devopsy's. A port other than 22 goes there too, since a server
-never has one:
-
-```sh
-DEVOPSY_SERVER=devopsy@203.0.113.7 DEVOPSY_SSH_COMMAND="ssh -p 5369" devopsy @prod --release
-```
+win over devopsy's. A port goes in the server instead
+(`DEVOPSY_SERVER=devopsy@203.0.113.7:5369`, [Targets](config.md#targets)),
+since a `-p` there applies to every server a command reaches, a parent's
+on another server included. devopsy refuses a server whose port
+`DEVOPSY_SSH_COMMAND` overrides.
 
 devopsy adds `-o ClearAllForwardings=yes` to every session. It needs none
 of the host's `LocalForward` lines, and each session would try to bind

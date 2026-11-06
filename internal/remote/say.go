@@ -50,5 +50,5 @@ func sayTook(name, msg string) string {
 // without it (the --ssh-keys scripts): msg is shell text in double
 // quotes, so its $f expands.
 func echoLine(lv report.Level, msg string) string {
-	return `echo "` + report.Head(lv) + msg + `" >&2`
+	return `echo "` + report.Head(lv) + report.Copyable(msg) + `" >&2`
 }
