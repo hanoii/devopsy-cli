@@ -92,6 +92,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		}
 		return failErr(err)
 	}
+	if !help && t.Host != "" {
+		if err := remote.PortError(t.Host); err != nil {
+			return failErr(err)
+		}
+	}
 	args = args[1:]
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Print(styleFor(os.Stdout).help(cli.Usage(projectDir)))
@@ -546,7 +551,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 				p := t.ParentTarget
 				if from != "" {
 					if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
-						return fail("--from: " + err.Error())
+						return failErr(fmt.Errorf("--from: %w", err))
 					}
 				} else if t.ParentErr != nil {
 					return failParent(t, color, args[0])

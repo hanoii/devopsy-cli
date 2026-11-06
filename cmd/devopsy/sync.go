@@ -126,6 +126,9 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	if c.Release == nil || len(remote.StepArgs(c.Release.Run)) == 0 {
 		return nil, errors.New(missingSteps(c, "release"))
 	}
+	if err := remote.PortError(p.Host); err != nil {
+		return nil, err
+	}
 	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), id: newSyncID(), reset: reset}
 	job.sameHost = sameHost(c.Host, p.Host)
 	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
@@ -699,12 +702,12 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if from != "" {
 		var err error
 		if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
-			return fail("--from: " + err.Error())
+			return failErr(fmt.Errorf("--from: %w", err))
 		}
 	}
 	job, err := syncPreflight(t, p, projectName, reset)
 	if err != nil {
-		return fail(err.Error())
+		return failErr(err)
 	}
 	job.from, job.fromAddr = from != "", from
 	if !yes {

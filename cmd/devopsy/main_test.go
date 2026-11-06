@@ -330,8 +330,6 @@ func TestUserTargets(t *testing.T) {
 // Every session, a compose command's too, bounds its connection (a
 // connect timeout, keepalives counted in beats), after
 // DEVOPSY_SSH_COMMAND's own options, which win: ssh keeps the first value.
-// A host with a port is refused before connecting, saying why and its
-// fixes.
 func TestTargetHostFromDotenv(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -347,12 +345,26 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
+	// A server's port goes to ssh as -p, after DEVOPSY_SSH_COMMAND's
+	// options: one there that sets another port (ssh -G says so) is
+	// refused before connecting.
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv:5369\n", 0o644)
 	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
-	if code == 0 || strings.Contains(out, "sh -c") ||
-		!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\": no ':' in a server\ndevopsy: | in an address it separates the server from the environment (@vm1:prod)\n") ||
-		!strings.Contains(out, "devopsy: | 1. the server as devopsy@from-dotenv, and the port for ssh (for example in CI)\ndevopsy: |    $ export DEVOPSY_SSH_COMMAND=\"ssh -p 5369\"\n") {
+	if code != 0 || !strings.Contains(out, " -T -p 5369 devopsy@from-dotenv sh -c") {
 		t.Errorf("a port (%d):\n%s", code, out)
+	}
+	ssh := filepath.Join(tmp, "ssh")
+	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) echo 'port 22' ;; *) echo \"$@\" ;; esac\n", 0o755)
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + ssh + " -p 22"}, "@prod", "ps")
+	if code == 0 || strings.Contains(out, "sh -c") ||
+		!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\" names port 5369, and ssh would connect to 22\n") ||
+		!strings.Contains(out, "take the port out of DEVOPSY_SSH_COMMAND, or out of the server") {
+		t.Errorf("a port DEVOPSY_SSH_COMMAND overrides (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=ssh://devopsy@from-dotenv\n", 0o644)
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
+	if code == 0 || strings.Contains(out, "sh -c") || !strings.Contains(out, "devopsy: error: server \"ssh://devopsy@from-dotenv\": not [user@]host[:port]\n") {
+		t.Errorf("not a server (%d):\n%s", code, out)
 	}
 }
 

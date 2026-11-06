@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ func runEnvironments(cwd string, args []string, color bool) int {
 func listEnvironments(project *remote.Project, servers []string, color bool) int {
 	code := 0
 	for _, server := range servers {
-		if err := remote.ServerError(server); err != nil {
+		if err := cmp.Or(remote.ServerError(server), remote.PortError(server)); err != nil {
 			report.Fail(err)
 			code = 1
 			continue

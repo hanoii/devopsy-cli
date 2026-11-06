@@ -967,6 +967,12 @@ func TestReleaseFrom(t *testing.T) {
 	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") {
 		t.Fatalf("--release-no-sync --from (%d):\n%s", code, out)
 	}
+	// An address --from cannot take says why, its fix with it.
+	for _, flag := range []string{"--sync", "--release-sync"} {
+		if out, code := s.run(nil, "@devopsy@one:dev", flag, "--from", "@ssh://one:prod", "--yes"); code == 0 || !strings.Contains(out, "devopsy: error: --from: server \"ssh://one\": not [user@]host[:port]\n") || !strings.Contains(out, "or a Host of ~/.ssh/config") {
+			t.Errorf("%s --from a server that is none (%d):\n%s", flag, code, out)
+		}
+	}
 }
 
 // Where the parent's data clones by reflinks, the services a sync stops

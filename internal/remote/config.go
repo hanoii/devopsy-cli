@@ -1379,7 +1379,9 @@ type address struct {
 func parseAddress(s string) (address, error) {
 	var a address
 	rest := s
-	if i := strings.Index(s, ":"); i >= 0 {
+	// The last ':', since the instance and environment have none: a
+	// server may (a port, an IPv6 address).
+	if i := strings.LastIndex(s, ":"); i >= 0 {
 		a.server, rest = s[:i], s[i+1:]
 		if a.server == "" {
 			return a, fmt.Errorf("@%s: the server before : is empty", s)
@@ -1421,9 +1423,12 @@ func ServerTarget(projectDir, addr string, projectEnv func(string) (string, bool
 		return nil, err
 	}
 	server := ""
-	if s, ok := strings.CutSuffix(addr, ":"); ok && !strings.ContainsAny(s, ":/") {
+	if s, ok := strings.CutSuffix(addr, ":"); ok && !strings.Contains(s, "/") {
 		if s == "" {
 			return nil, fmt.Errorf("@%s: no server before the :", addr)
+		}
+		if err := ServerError(s); err != nil {
+			return nil, err
 		}
 		server = s
 	} else if !strings.ContainsAny(addr, ":/") {
@@ -1532,11 +1537,11 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, true)
 		if err != nil && strict {
 			t.ParentErr = fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
-			if re := (*report.Failure)(nil); errors.As(err, &re) && strings.HasPrefix(re.Msg, "has ") {
-				// A predicate reads as a sentence: "dev's parent, prod, has
-				// no server". Any other failure stays wrapped, its details
-				// and fixes with it.
-				t.ParentErr = &report.Failure{Msg: fmt.Sprintf("%s's parent, %s, %s", t.Name, t.Parent, re.Msg), Details: re.Details, Fixes: re.Fixes}
+			if ns := (noParentServer{}); errors.As(err, &ns) {
+				// Reported as a sentence: "dev's parent, prod, has no
+				// server". Any other failure stays wrapped, its details and
+				// fixes with it.
+				t.ParentErr = &report.Failure{Msg: fmt.Sprintf("%s's parent, %s, %s", t.Name, t.Parent, ns.Msg), Details: ns.Details, Fixes: ns.Fixes}
 			}
 		}
 		t.ParentTarget = p
@@ -1548,6 +1553,10 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 // (nil for an alias without source), for loadTarget; addr is how errors
 // show it. A parent's server comes from its variables only, never from
 // its child's: a guess would copy the wrong data.
+// noParentServer is a parent's missing server, which loadTarget says as a
+// sentence about the child.
+type noParentServer struct{ *report.Failure }
+
 func resolveTarget(project *Project, envs map[string]*Target, a address, addr string, alias *Alias, aliasName string, projectEnv func(string) (string, bool), strict, parent bool) (*Target, error) {
 	// The environment: defined, or matched by a pattern. An alias without
 	// source has no config: any environment, nothing to release.
@@ -1637,11 +1646,11 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	if strict && t.Host == "" {
 		if parent {
 			// Never the child's server: a guess could sync the wrong data.
-			return nil, &report.Failure{
+			return nil, noParentServer{&report.Failure{
 				Msg:     "has no server",
 				Details: []string{"devopsy reads a parent's server from variables only: it never takes it from the child's address, since the parent can live on another server"},
 				Fixes:   []report.Remedy{report.Fix("set " + a.env + "'s server in .devopsy/.env, as the templates do: " + EnvironmentVar(a.env) + "=<server> (or " + ServerVar + " for every environment)")},
-			}
+			}}
 		}
 		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))
 	}

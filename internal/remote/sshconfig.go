@@ -3,65 +3,117 @@ package remote
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"fmt"
-	"net/url"
+	"net/netip"
+	"strconv"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// SSHDestination splits a target's host, [user@]host (ServerError
-// refuses anything with a port), into its parts.
-func SSHDestination(dest string) (user, host string) {
+// SSHDestination splits a target's host (ParseServer) into ssh's user,
+// host and port, the port "" for ssh's own.
+func SSHDestination(server string) (user, host, port string) {
+	dest, port, _ := ParseServer(server)
 	if i := strings.LastIndex(dest, "@"); i >= 0 {
-		return dest[:i], dest[i+1:]
+		return dest[:i], dest[i+1:], port
 	}
-	return "", dest
+	return "", dest, port
 }
 
-// ServerError refuses a server with a ':' (a port, ssh://...), and is nil
-// for any other: in an address the ':' separates the server from the
-// environment, and devopsy writes addresses back that way. Its fixes say
-// the server without the ':' and, when it had one, the port for ssh.
-func ServerError(server string) error {
-	if !strings.Contains(server, ":") {
-		return nil
+// SSHArgs are ssh's arguments for a server: -p and its port when it names
+// one, then [user@]host, an IPv6 address without its brackets.
+func SSHArgs(server string) []string {
+	dest, port, ok := ParseServer(server)
+	if !ok {
+		return []string{server}
 	}
-	f := &report.Failure{
-		Msg:     fmt.Sprintf("server %q: no ':' in a server", server),
-		Details: []string{"in an address it separates the server from the environment (@vm1:prod)"},
+	if port != "" {
+		return []string{"-p", port, dest}
 	}
-	switch dest, port, ok := serverPort(server); {
-	case ok && port != "":
-		f.Fixes = append(f.Fixes, report.Fix("the server as "+dest+", and the port for ssh (for example in CI)", `export DEVOPSY_SSH_COMMAND="ssh -p `+port+`"`))
-	case ok:
-		f.Fixes = append(f.Fixes, report.Fix("the server as "+dest))
-	default:
-		f.Fixes = append(f.Fixes, report.Fix("the server as [user@]host"))
-	}
-	f.Fixes = append(f.Fixes, report.Fix("a Host of ~/.ssh/config, its Port included, as the server"))
-	return f
+	return []string{dest}
 }
 
-// serverPort splits ssh://[user@]host[:port] or [user@]host:port into
-// [user@]host and the port; ok is false for anything else.
-func serverPort(server string) (dest, port string, ok bool) {
-	if strings.HasPrefix(server, "ssh://") {
-		u, err := url.Parse(server)
-		if err != nil || u.Hostname() == "" || strings.Trim(u.Path, "/") != "" {
+// ParseServer splits a server into [user@]host and its port ("" for
+// none): [user@]host, [user@]host:port, an IPv6 address alone
+// ([user@]2001:db8::1) or in brackets, which a port needs
+// ([user@][2001:db8::1]:port). ok is false for anything else.
+func ParseServer(server string) (dest, port string, ok bool) {
+	user, rest := "", server
+	if i := strings.LastIndex(server, "@"); i >= 0 {
+		user, rest = server[:i+1], server[i+1:]
+		if i == 0 {
 			return "", "", false
 		}
-		dest = u.Hostname()
-		if name := u.User.Username(); name != "" {
-			dest = name + "@" + dest
-		}
-		return dest, u.Port(), true
 	}
-	dest, port, _ = strings.Cut(server, ":")
-	if dest == "" || port == "" || strings.Trim(port, "0123456789") != "" {
+	host, hasPort := rest, false
+	switch {
+	case strings.HasPrefix(rest, "["):
+		var after string
+		host, after, ok = strings.Cut(rest[1:], "]")
+		if !ok || !isIPv6(host) {
+			return "", "", false
+		}
+		if after != "" {
+			if port, hasPort = strings.CutPrefix(after, ":"); !hasPort {
+				return "", "", false
+			}
+		}
+	case strings.Count(rest, ":") > 1:
+		if !isIPv6(rest) {
+			return "", "", false
+		}
+	default:
+		host, port, hasPort = strings.Cut(rest, ":")
+	}
+	if host == "" || strings.ContainsAny(user, "[]/: ") || strings.ContainsAny(host, "[]/ ") || hasPort && !validPort(port) {
 		return "", "", false
 	}
-	return dest, port, true
+	return user + host, port, true
+}
+
+func isIPv6(s string) bool {
+	a, err := netip.ParseAddr(s)
+	return err == nil && a.Is6()
+}
+
+func validPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n > 0 && n < 65536 && strings.Trim(s, "0123456789") == ""
+}
+
+// ServerError refuses a server ParseServer does not take (for example
+// ssh://..., vm1:prod), and is nil for any other or none.
+func ServerError(server string) error {
+	if _, _, ok := ParseServer(server); ok || server == "" {
+		return nil
+	}
+	return &report.Failure{
+		Msg:     fmt.Sprintf("server %q: not [user@]host[:port]", server),
+		Details: []string{"an IPv6 address goes alone (2001:db8::1), or in brackets with a port ([2001:db8::1]:22)"},
+		Fixes:   []report.Remedy{report.Fix("the server as [user@]host[:port], or a Host of ~/.ssh/config")},
+	}
+}
+
+// PortError refuses a server whose port ssh would not connect to, which
+// ssh -G resolves to another: a -p or Port in DEVOPSY_SSH_COMMAND, whose
+// options come first on the command line, and ssh keeps the first value.
+// Nil for a server without a port, or when ssh -G says none.
+func PortError(server string) error {
+	_, port, ok := ParseServer(server)
+	if !ok || port == "" {
+		return nil
+	}
+	eff, err := SSHEffective(server)
+	if err != nil || eff["port"] == "" || eff["port"] == port {
+		return nil
+	}
+	return &report.Failure{
+		Msg:     fmt.Sprintf("server %q names port %s, and ssh would connect to %s", server, port, eff["port"]),
+		Details: []string{"DEVOPSY_SSH_COMMAND's options come first, and ssh keeps the first value of each: a -p there applies to every server a command reaches"},
+		Fixes:   []report.Remedy{report.Fix("take the port out of DEVOPSY_SSH_COMMAND, or out of the server")},
+	}
 }
 
 // SSHEffective is ssh's resolved configuration for a destination, ssh -G
@@ -69,7 +121,7 @@ func serverPort(server string) (dest, port string, ok bool) {
 // it never connects. Keys are lowercase, as ssh prints them. Replaceable in
 // tests.
 var SSHEffective = func(dest string) (map[string]string, error) {
-	out, err := SSHCommand("-G", dest).Output()
+	out, err := SSHCommand(append([]string{"-G"}, SSHArgs(dest)...)...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +144,7 @@ var SSHEffective = func(dest string) (map[string]string, error) {
 // host: where it connects (from the target and ssh -G, when effective is
 // not nil), then optional settings, commented out.
 func SSHConfig(t *Target, effective map[string]string) string {
-	user, host := SSHDestination(t.Host)
+	user, host, port := SSHDestination(t.Host)
 	hostname := host
 	if v := effective["hostname"]; v != "" {
 		hostname = v
@@ -100,7 +152,7 @@ func SSHConfig(t *Target, effective map[string]string) string {
 	if user == "" {
 		user = effective["user"]
 	}
-	port := effective["port"]
+	port = cmp.Or(effective["port"], port)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# For @%s (%s). devopsy already passes ClearAllForwardings=yes, and\n# PasswordAuthentication=no unless %s is set.\n", t.Name, t.Host, SSHAllowPasswordEnv)

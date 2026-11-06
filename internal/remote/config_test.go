@@ -89,25 +89,37 @@ func TestServerAndInstanceVariables(t *testing.T) {
 	if tg := load("b/prod"); tg.Instance != "b" || tg.Host != "vm1" {
 		t.Errorf("address instance: %+v", tg)
 	}
-	// A ':' in a server (a port, ssh://) is refused: in an address it
-	// separates the server from the environment. The fixes say the server
-	// without it and give ssh the port, ready to copy, when there is one.
-	for _, c := range []struct{ server, want, not string }{
-		{"devopsy@vm1:5369", `the server as devopsy@vm1, and the port for ssh (for example in CI) [export DEVOPSY_SSH_COMMAND="ssh -p 5369"]`, ""},
-		{"ssh://devopsy@vm1:5369", `the server as devopsy@vm1, and the port for ssh (for example in CI) [export DEVOPSY_SSH_COMMAND="ssh -p 5369"]`, ""},
-		{"ssh://vm1", "the server as vm1", "ssh -p"},
-		{"vm1:prod", "the server as [user@]host", "ssh -p"},
+	// A server may hold a port or an IPv6 address, from a variable or
+	// the address, which splits at its last ':'; an IPv6 address with a
+	// port takes brackets. The address written back splits the same way.
+	for addr, want := range map[string][2]string{
+		"devopsy@vm1:5369:prod":          {"devopsy@vm1:5369", "devopsy@vm1:5369:a/prod"},
+		"vm1:5369:b/prod":                {"vm1:5369", "vm1:5369:b/prod"},
+		"devopsy@2001:db8::1:prod":       {"devopsy@2001:db8::1", "devopsy@2001:db8::1:a/prod"},
+		"[2001:db8::1]:5369:prod":        {"[2001:db8::1]:5369", "[2001:db8::1]:5369:a/prod"},
+		"devopsy@[fe80::1%eth0]:22:prod": {"devopsy@[fe80::1%eth0]:22", "devopsy@[fe80::1%eth0]:22:a/prod"},
 	} {
-		env["DEVOPSY_SERVER"] = c.server
-		_, err := LoadTarget(dir, "prod", projectEnv)
-		var f *report.Failure
-		if !errors.As(err, &f) || f.Msg != fmt.Sprintf("server %q: no ':' in a server", c.server) {
-			t.Errorf("%s: %v", c.server, err)
-			continue
+		if tg := load(addr); tg.Host != want[0] || tg.Address != want[1] {
+			t.Errorf("%s: %s %s", addr, tg.Host, tg.Address)
+		} else if again := load(tg.Address); again.Host != tg.Host || again.Address != tg.Address {
+			t.Errorf("%s written back: %s %s", tg.Address, again.Host, again.Address)
 		}
-		got := fmt.Sprint(f.Details, f.Fixes)
-		if !strings.Contains(got, c.want) || !strings.Contains(got, "~/.ssh/config") || c.not != "" && strings.Contains(got, c.not) {
-			t.Errorf("%s: want %q and ~/.ssh/config, not %q, in %s", c.server, c.want, c.not, got)
+	}
+	if got := ChildCheck("devopsy@vm1:5369:b/dev", "true", nil); !strings.Contains(got, "devopsy @devopsy@vm1:5369: --upgrade") {
+		t.Errorf("the child's server in its check:\n%s", got)
+	}
+	env["DEVOPSY_SERVER"] = "devopsy@vm1:5369"
+	if tg := load("b/prod"); tg.Host != "devopsy@vm1:5369" || tg.Address != "devopsy@vm1:5369:b/prod" {
+		t.Errorf("a port from a variable: %+v", tg)
+	}
+	// Anything else with a ':' is refused, its fix the forms a server
+	// takes.
+	for _, server := range []string{"ssh://devopsy@vm1:5369", "vm1:prod", "vm1:", "vm1:99999", "2001:db8:", "[vm1]:22", "[::1]5369", "@vm1", "ssh://u@[::1]:22", "vm1 x"} {
+		env["DEVOPSY_SERVER"] = server
+		_, err := LoadTarget(dir, "b/prod", projectEnv)
+		var f *report.Failure
+		if !errors.As(err, &f) || f.Msg != fmt.Sprintf("server %q: not [user@]host[:port]", server) || !strings.Contains(fmt.Sprint(f.Fixes), "~/.ssh/config") {
+			t.Errorf("%s: %v", server, err)
 		}
 	}
 	env["DEVOPSY_SERVER"] = "vm1"
@@ -759,6 +771,9 @@ func TestServerTarget(t *testing.T) {
 		"vm3:prod":   "vm3",
 		"vm3:b/prod": "vm3",
 		"box":        "vm9", // an alias's
+		"vm3:5369:":  "vm3:5369",
+		"::1:":       "::1",
+		"[::1]:22:":  "[::1]:22",
 	} {
 		tg, err := ServerTarget(dir, addr, projectEnv)
 		if err != nil || tg.Host != want {
@@ -773,6 +788,9 @@ func TestServerTarget(t *testing.T) {
 	}
 	if _, err := ServerTarget(dir, ":", projectEnv); err == nil {
 		t.Error(": alone")
+	}
+	if _, err := ServerTarget(dir, "vm3:prod:", projectEnv); err == nil || !strings.Contains(err.Error(), `server "vm3:prod": not`) {
+		t.Errorf("a server alone that is none: %v", err)
 	}
 	delete(env, "DEVOPSY_SERVER")
 	if _, err := ServerTarget(dir, "prod", projectEnv); err == nil || !strings.Contains(err.Error(), "no server for @prod") {

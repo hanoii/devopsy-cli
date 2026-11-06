@@ -1330,7 +1330,10 @@ func ChildCheck(address, script string, extra []string) string {
 	if os.Getenv(ProtocolCheckEnv) == "warn" {
 		check = ProtocolCheckEnv + "=warn\n" + check
 	}
-	server, _, _ := strings.Cut(address, ":")
+	server := address
+	if i := strings.LastIndex(address, ":"); i >= 0 {
+		server = address[:i]
+	}
 	return check + serverCheck(server+":") + script
 }
 
