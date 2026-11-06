@@ -45,7 +45,9 @@ server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
 They take `@<server>` alone, or any target, whose server they use, with
 no instance needed. A bare name is still the project's environment or an
 alias first, as for every target, and a server only otherwise; when a
-name is both, `@<server>:` says it is the server.
+name is both, `@<server>:` says it is the server. A server with a port
+or an IPv6 address always ends with `:` (`@vm1:5369:`,
+`@2001:db8::1:`), since without it the last part is an environment.
 
 ```sh
 devopsy @vm1 --ssh-keys          # vm1's deploy user's keys, from anywhere

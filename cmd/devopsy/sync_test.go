@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"errors"
 	"io"
 	"os"
@@ -540,13 +541,15 @@ exit 0
 `
 
 // syncFakeSSH runs a session's script here (its last argument), logging
-// the options of each, and answers ssh -G from the destination. Like a
-// server, it forwards the agent only when asked, and never with
-// FAKE_RESTRICT (a restricted key).
+// the options of each, and answers ssh -G from the destination and its
+// -p. Like a server, it forwards the agent only when asked, and never
+// with FAKE_RESTRICT (a restricted key).
 const syncFakeSSH = `#!/bin/sh
 if [ "$1" = -G ]; then
+  port=22
+  [ "$2" != -p ] || { port=$3; shift 2; }
   case $2 in *@*) echo "user ${2%@*}" ;; esac
-  echo "hostname ${2#*@}"; echo port 22; echo "proxyjump ${FAKE_PROXYJUMP:-none}"
+  echo "hostname ${2#*@}"; echo "port $port"; echo "proxyjump ${FAKE_PROXYJUMP:-none}"
   exit 0
 fi
 opts=
@@ -749,6 +752,34 @@ func TestBeatMarkerAnswered(t *testing.T) {
 		out, code := s.run(beat, args...)
 		if took := time.Since(start); code != 0 || took > 20*time.Second || strings.Contains(out, remote.BeatMarker) {
 			t.Fatalf("%v (%d) in %s:\n%s", args, code, took, out)
+		}
+	}
+}
+
+// sameHost tells servers apart by ssh's user, hostname and port, so two
+// sshd on one machine are two servers, and a port written or ssh's
+// default the same one.
+//
+// Not parallel: it sets remote.SSHEffective.
+func TestSameHostPorts(t *testing.T) {
+	old := remote.SSHEffective
+	defer func() { remote.SSHEffective = old }()
+	// As ssh -G: the port named, else 22.
+	remote.SSHEffective = func(server string) (map[string]string, error) {
+		user, host, port := remote.SSHDestination(server)
+		return map[string]string{"user": cmp.Or(user, "op"), "hostname": host, "port": cmp.Or(port, "22")}, nil
+	}
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"vm1:2201", "vm1:2202", false},
+		{"vm1", "vm1:22", true},
+		{"devopsy@vm1:5369", "vm1:5369", false},
+		{"[2001:db8::1]:22", "2001:db8::1", true},
+	} {
+		if got := sameHost(c.a, c.b); got != c.same {
+			t.Errorf("sameHost(%s, %s) = %v", c.a, c.b, got)
 		}
 	}
 }
@@ -1846,6 +1877,24 @@ func TestSyncGuards(t *testing.T) {
 // server's files, written at the same level on the child's side, before the
 // upload of a first release and before a --sync's copy; never with
 // --release-no-sync.
+// --inherit refuses a parent whose port DEVOPSY_SSH_COMMAND overrides
+// (ssh -G says 22, the parent names 5369) before connecting: it would
+// read the variables of whatever answers on port 22.
+func TestInheritRefusesParentPortOverridden(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	ssh := filepath.Join(t.TempDir(), "ssh")
+	// As ssh -p 22 resolves any destination; every session logged, none
+	// answered.
+	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) echo 'hostname one'; echo 'port 22'; exit 0 ;; esac\necho \"$*\" | head -n 1 >> '"+sessions+"'\nexit 1\n", 0o755)
+	out, code := s.run([]string{"DEVOPSY_SSH_COMMAND=" + ssh, "DEVOPSY_SERVER_PROD=devopsy@one:5369"}, "@dev", "--inherit")
+	got, _ := os.ReadFile(sessions)
+	if code == 0 || !strings.Contains(out, `server "devopsy@one:5369" names port 5369, and ssh would connect to 22`) || strings.Contains(string(got), "-p 5369") {
+		t.Errorf("--inherit from a parent whose port DEVOPSY_SSH_COMMAND overrides (%d):\n%s\nsessions:\n%s", code, out, got)
+	}
+}
+
 func TestSyncInherit(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -3619,6 +3668,10 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
 	if out, code := s.run(nil, "@dev", "--status"); code != 0 || len(entries) != 1 || !strings.Contains(out, "release     none: "+entries[0].Name()+" failed, devopsy @devopsy@one:dev --log shows why") {
 		t.Errorf("--status after a failed first release (%d):\n%s", code, out)
+	}
+	// The command it names copies as shown, a server in brackets quoted.
+	if out, code := s.run(nil, "@devopsy@[::1]:22:dev", "--status"); code != 0 || !strings.Contains(out, "failed, devopsy @'devopsy@[::1]:22:dev' --log shows why") {
+		t.Errorf("--status naming a server in brackets (%d):\n%s", code, out)
 	}
 	os.Remove(s.log + ".failimport")
 	s.logs()

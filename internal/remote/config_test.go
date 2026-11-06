@@ -113,8 +113,10 @@ func TestServerAndInstanceVariables(t *testing.T) {
 		t.Errorf("a port from a variable: %+v", tg)
 	}
 	// Anything else with a ':' is refused, its fix the forms a server
-	// takes.
-	for _, server := range []string{"ssh://devopsy@vm1:5369", "vm1:prod", "vm1:", "vm1:99999", "2001:db8:", "[vm1]:22", "[::1]5369", "@vm1", "ssh://u@[::1]:22", "vm1 x"} {
+	// takes, and so is a server ssh would take for an option (a project's
+	// .env setting -oProxyCommand=...) or a shell would read in a hint.
+	for _, server := range []string{"ssh://devopsy@vm1:5369", "vm1:prod", "vm1:", "vm1:99999", "2001:db8:", "[vm1]:22", "[::1]5369", "@vm1", "ssh://u@[::1]:22", "vm1 x",
+		"-oProxyCommand=x", "-oProxyCommand=x@vm1", "-F@vm1:22", "vm1$(x)", "a`b`@vm1", "u$@vm1"} {
 		env["DEVOPSY_SERVER"] = server
 		_, err := LoadTarget(dir, "b/prod", projectEnv)
 		var f *report.Failure

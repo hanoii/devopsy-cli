@@ -13,6 +13,7 @@ func TestSSHArgs(t *testing.T) {
 		"vm1":                       "vm1",
 		"devopsy@vm1.example.org":   "devopsy@vm1.example.org",
 		"devopsy@vm1:5369":          "-p 5369 devopsy@vm1",
+		"vm1:022":                   "-p 22 vm1",
 		"2001:db8::1":               "2001:db8::1",
 		"devopsy@::1":               "devopsy@::1",
 		"devopsy@[2001:db8::1]":     "devopsy@2001:db8::1",
@@ -26,7 +27,8 @@ func TestSSHArgs(t *testing.T) {
 			t.Errorf("%s refused", in)
 		}
 	}
-	if user, host, port := SSHDestination("devopsy@[::1]:22"); user != "devopsy" || host != "::1" || port != "22" {
+	// A port as ssh -G prints it, a number, which PortError compares.
+	if user, host, port := SSHDestination("devopsy@[::1]:0022"); user != "devopsy" || host != "::1" || port != "22" {
 		t.Errorf("SSHDestination: %q %q %q", user, host, port)
 	}
 }

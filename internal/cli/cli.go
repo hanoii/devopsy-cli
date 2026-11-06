@@ -1213,8 +1213,8 @@ Usage:
 
 Where each runs:
     @t   on a target: @[<server>:][<instance>/]<environment>, or an alias
-    @s   on a server: @<server> (@<server>: when a name is ambiguous), or any
-         target's
+    @s   on a server: @<server> (@<server>: when a name is ambiguous, and
+         always with a port or an IPv6 address), or any target's
   [@t]   optional: without it, on your machine, in the project you are in
 
 `)

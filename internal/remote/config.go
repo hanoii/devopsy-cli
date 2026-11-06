@@ -1549,14 +1549,14 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 	return t, nil
 }
 
-// resolveTarget resolves address a of project, whose environments are envs
-// (nil for an alias without source), for loadTarget; addr is how errors
-// show it. A parent's server comes from its variables only, never from
-// its child's: a guess would copy the wrong data.
 // noParentServer is a parent's missing server, which loadTarget says as a
 // sentence about the child.
 type noParentServer struct{ *report.Failure }
 
+// resolveTarget resolves address a of project, whose environments are envs
+// (nil for an alias without source), for loadTarget; addr is how errors
+// show it. A parent's server comes from its variables only, never from
+// its child's: a guess would copy the wrong data.
 func resolveTarget(project *Project, envs map[string]*Target, a address, addr string, alias *Alias, aliasName string, projectEnv func(string) (string, bool), strict, parent bool) (*Target, error) {
 	// The environment: defined, or matched by a pattern. An alias without
 	// source has no config: any environment, nothing to release.
@@ -1642,6 +1642,15 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	}
 	if err := ServerError(t.Host); err != nil {
 		return nil, err
+	}
+	// Strict only: help resolves leniently, and never refuses for ssh's
+	// settings. A parent's refusal goes into its child's ParentErr, so
+	// whatever reaches the parent (a sync, --inherit, the parent.env
+	// refresh) is refused, and nothing else is.
+	if strict {
+		if err := PortError(t.Host); err != nil {
+			return nil, err
+		}
 	}
 	if strict && t.Host == "" {
 		if parent {

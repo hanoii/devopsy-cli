@@ -6,8 +6,10 @@ import (
 	"cmp"
 	"fmt"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -36,9 +38,11 @@ func SSHArgs(server string) []string {
 }
 
 // ParseServer splits a server into [user@]host and its port ("" for
-// none): [user@]host, [user@]host:port, an IPv6 address alone
-// ([user@]2001:db8::1) or in brackets, which a port needs
-// ([user@][2001:db8::1]:port). ok is false for anything else.
+// none, else as a number, 022 giving 22): [user@]host, [user@]host:port,
+// an IPv6 address alone ([user@]2001:db8::1) or in brackets, which a port
+// needs ([user@][2001:db8::1]:port). ok is false for anything else, a
+// user or host starting with - (ssh would take it for an option) or
+// holding a shell's special characters included.
 func ParseServer(server string) (dest, port string, ok bool) {
 	user, rest := "", server
 	if i := strings.LastIndex(server, "@"); i >= 0 {
@@ -67,11 +71,20 @@ func ParseServer(server string) (dest, port string, ok bool) {
 	default:
 		host, port, hasPort = strings.Cut(rest, ":")
 	}
-	if host == "" || strings.ContainsAny(user, "[]/: ") || strings.ContainsAny(host, "[]/ ") || hasPort && !validPort(port) {
+	if host == "" || strings.HasPrefix(user, "-") || strings.HasPrefix(host, "-") ||
+		strings.ContainsAny(user, "[]/:"+shellSpecial) || strings.ContainsAny(host, "[]/"+shellSpecial) || hasPort && !validPort(port) {
 		return "", "", false
+	}
+	if hasPort {
+		n, _ := strconv.Atoi(port)
+		port = strconv.Itoa(n)
 	}
 	return user + host, port, true
 }
+
+// shellSpecial are the characters no user or host holds, which a shell
+// would read in a hint or a script.
+const shellSpecial = " \t'\"`$\\;&|<>(){}*?!#~,="
 
 func isIPv6(s string) bool {
 	a, err := netip.ParseAddr(s)
@@ -121,6 +134,13 @@ func PortError(server string) error {
 // it never connects. Keys are lowercase, as ssh prints them. Replaceable in
 // tests.
 var SSHEffective = func(dest string) (map[string]string, error) {
+	// Once per destination and ssh (DEVOPSY_SSH_COMMAND, else PATH's): a
+	// sync asks for its two servers' several times (the ports, sameHost,
+	// ChildAddress).
+	key := os.Getenv("DEVOPSY_SSH_COMMAND") + "\x00" + os.Getenv("PATH") + "\x00" + dest
+	if m, ok := sshEffective.Load(key); ok {
+		return m.(map[string]string), nil
+	}
 	out, err := SSHCommand(append([]string{"-G"}, SSHArgs(dest)...)...).Output()
 	if err != nil {
 		return nil, err
@@ -137,8 +157,11 @@ var SSHEffective = func(dest string) (map[string]string, error) {
 			m[k] = v
 		}
 	}
+	sshEffective.Store(key, m)
 	return m, nil
 }
+
+var sshEffective sync.Map
 
 // SSHConfig is the ~/.ssh/config block devopsy suggests for a target's
 // host: where it connects (from the target and ssh -G, when effective is

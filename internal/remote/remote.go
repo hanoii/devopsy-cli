@@ -1656,8 +1656,8 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	args := append(append(append(SSHOptions(), extra...), ttyFlag), SSHArgs(t.Host)...)
 	args = append(args, "sh -c "+Quote(script))
 	if Trace != nil {
-		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
-		Trace.Debug(fmt.Sprintf("ssh %s %s", opts, t.Host))
+		// As ssh gets them, but devopsy's own options and the script.
+		Trace.Debug("ssh " + strings.Join(append(append(extra[:len(extra):len(extra)], ttyFlag), SSHArgs(t.Host)...), " "))
 		Trace.Trace("running:\n" + strings.TrimRight(script, "\n"))
 	}
 
