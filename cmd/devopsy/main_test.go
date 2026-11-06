@@ -1204,6 +1204,10 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(nil, "--environments"); code != 0 || !strings.HasSuffix(out, "devopsy@server:b/prod\ndevopsy@server:c/pr-12\n") {
 		t.Fatalf("--environments (%d):\n%s", code, out)
 	}
+	// A server it cannot take is said with its fix, the others listed.
+	if out, code := run([]string{"DEVOPSY_SERVER_PROD=ssh://bad"}, "--environments"); code != 1 || !strings.Contains(out, "devopsy: error: server \"ssh://bad\": not [user@]host[:port]\n") || !strings.Contains(out, "or a Host of ~/.ssh/config") || !strings.Contains(out, "devopsy@server:b/prod\n") {
+		t.Errorf("--environments with a server that is none (%d):\n%s", code, out)
+	}
 	// On one server, named alone or through an environment.
 	if out, code := run(nil, "@other", "--environments"); code != 0 || !strings.Contains(out, "other:b/prod\n") {
 		t.Fatalf("@other --environments (%d):\n%s", code, out)

@@ -704,7 +704,8 @@ environments:
 	// A parent that cannot be resolved is no error for the child, until
 	// something syncs.
 	t.Setenv("DEVOPSY_SERVER_PROD", "bad:host")
-	if tg := load("vm1:dev"); tg.ParentTarget != nil || tg.ParentErr == nil || !strings.HasPrefix(tg.ParentErr.Error(), "environment dev: parent prod: server \"bad:host\"") {
+	if tg := load("vm1:dev"); tg.ParentTarget != nil || tg.ParentErr == nil || !strings.HasPrefix(tg.ParentErr.Error(), "environment dev: parent prod: server \"bad:host\"") || !strings.Contains(fmt.Sprint(report.Fixes(tg.ParentErr)), "~/.ssh/config") {
+		// Wrapped, its fixes with it.
 		t.Errorf("unresolved parent: %+v %v", tg.ParentTarget, tg.ParentErr)
 	}
 	t.Setenv("DEVOPSY_SERVER_PROD", "")
