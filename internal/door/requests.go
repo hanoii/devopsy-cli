@@ -97,6 +97,9 @@ type Action struct {
 	Secret string
 	// Logins says Docker should use the project's registry logins.
 	Logins bool
+	// Images says Docker changes what a name in the image store is, under the
+	// project's image lock.
+	Images bool
 	// Cleanup are directories of the door's that go after Docker.
 	Cleanup []string
 	// Entries are what Docker's mounts need there, which the door makes first.
@@ -173,7 +176,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if len(args) != 2 || !p.ownHold(args[1]) {
 			return nil, refuse("docker tag %s: only a hold of this project's", strings.Join(args, " "))
 		}
-		return &Action{Docker: argv}, nil
+		return &Action{Docker: argv, Images: true}, nil
 	case "rm":
 		return decideRM(args, p, d)
 	case "pull":
@@ -181,7 +184,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if len(args) != 2 || args[0] != "-q" || strings.HasPrefix(args[1], "-") {
 			return nil, noDocker(argv)
 		}
-		return &Action{Docker: argv, Logins: true}, nil
+		return &Action{Docker: argv, Logins: true, Images: true}, nil
 	case "port":
 		// Where a sync's own daemon listens, on the host's loopback.
 		if len(args) != 2 || args[1] != "873" || !p.ownContainer(d, args[0]) {

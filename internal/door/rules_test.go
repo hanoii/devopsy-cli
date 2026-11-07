@@ -314,7 +314,7 @@ func TestCheckVerb(t *testing.T) {
 		ok   bool
 	}{
 		{"up -d --wait --remove-orphans", true},
-		{"up --pull always web", true},
+		{"up --pull never web", true}, {"up --pull always web", false},
 		{"up --wait-timeout=30", true},
 		{"down -v --rmi local", true},
 		{"down --rmi=local", true},

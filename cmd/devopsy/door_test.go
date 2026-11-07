@@ -6,11 +6,13 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -585,4 +587,89 @@ func doorJoinScript(argv []string) []string {
 		return append(append(slices.Clone(argv[:i+1]), text), argv[end:]...)
 	}
 	return argv
+}
+
+// A start holds the project's image lock past its exec, into compose: a build, pull or tag
+// of the project's would otherwise change an image between the label check and compose's
+// create. A door that refuses lets it go.
+func TestDoorImageLockHoldsTheProject(t *testing.T) {
+	t.Parallel()
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: t.TempDir()}}
+	unlock, err := side.imageLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.Open(filepath.Join(side.policy.Space, "locks", "shop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+		t.Fatal("the lock is not held")
+	}
+	if side.lock == nil {
+		t.Error("execKeeping has no lock to keep")
+	}
+	unlock()
+	if syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		t.Error("the lock stays after unlock")
+	}
+}
+
+// What a start execs, compose, holds the image lock it took: a lock let go at the exec
+// would leave compose's create open to a build of the project's.
+func TestDoorImageLockOutlivesItsExec(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("no flock(1) here")
+	}
+	space := t.TempDir()
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_LOCK_EXEC="+space)
+	out, err := c.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "held" {
+		t.Errorf("after the exec: %s %v", out, err)
+	}
+}
+
+// lockExecHelper takes the image lock and execs a shell that tries it from another open
+// file, as a build of the project's would.
+func lockExecHelper(space string) {
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: "/bin/sh"}
+	if _, err := side.imageLock(); err != nil {
+		panic(err)
+	}
+	lock := filepath.Join(space, "locks", "shop")
+	panic(side.execKeeping([]string{"sh", "-c", `flock -n "$1" true && echo free || echo held`, "sh", lock}, os.Environ()))
+}
+
+// A start runs the image the door read: what a service builds is checked by compose's name
+// for it, and an image still missing refuses, since compose would pull or build one past
+// the check.
+func TestDoorChecksWhatAServiceBuilds(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	if err := testfile.Write(docker, []byte(`#!/bin/sh
+case "$*" in
+  *" shop-prod-labelled") echo '{"devopsy.role":"proxy"}' ;;
+  *" shop-prod-plain") echo '{"a":"b"}' ;;
+  *) exit 1 ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop"}, real: docker}
+	file := func(svc string) map[string]any {
+		return map[string]any{"name": "shop-prod", "services": map[string]any{svc: map[string]any{"build": map[string]any{"context": "."}}}}
+	}
+	if err := side.checkImageLabels(file("plain"), ""); err != nil {
+		t.Errorf("the control: a plain build is refused: %v", err)
+	}
+	if err := side.checkImageLabels(file("labelled"), ""); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
+		t.Errorf("a build labelled devopsy.role: %v", err)
+	}
+	if err := side.checkImageLabels(file("missing"), ""); err == nil || !strings.Contains(err.Error(), "not here") {
+		t.Errorf("a build not here yet, which compose would build at the start: %v", err)
+	}
 }

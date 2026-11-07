@@ -25,7 +25,9 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - An rsync that names a whole mnt holds only the entry it writes (`narrow`): what it copies could otherwise leave a link where a bind's source goes by.
 - A word in a util container's arguments never starts with a dash: `find "$@"` would take it as code.
 - A Docker command devopsy calls has an answer here, or a reason in `doorVerbs` (`TestDoorKnowsDevopsysDockerCommands`, which sees `exec.Command`'s and scripts' lines, not a helper's).
-- An image's own labels under `devopsy.` or a vet's prefix refuse it: they land in its containers' labels, past any check of a file's, and an image not here yet is pulled first so they are read.
+- An image's own labels under `devopsy.` or a vet's prefix refuse it, what a service builds included, by compose's name for it: they land in its containers' labels, past any check of a file's, and an image not here yet is pulled first so they are read.
+- A start runs the image the door read: compose never pulls or builds one then (no `pull_policy` but `missing`, `never` or `if_not_present`, `--pull` only `missing` or `never`, an image still missing refuses), and the project's image lock (`imageLock`), which a build, a pull and a tag take too, is held into compose's exec, so nothing changes the image between the check and the create.
+- An image by name is shared: whatever the server's store holds under a name runs under any project's file that names it, as on a server without the door.
 - A build writes only a tag of this project's, and holds no labels of its own.
 - The deploy user is who owns the binary (`deployUser`): an install of it as root would point the door at root.
 - A container runs as `<uid>:<gid>` in numbers, never 0, the deploy user's ids, the door's users' or the socket's group (`hostIDs`), for a service's `user:` and `exec -u` alike (`userRefused`): a name is the image's to map to 0, and a host id is that user's to reach through `/proc`.

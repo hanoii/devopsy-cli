@@ -328,6 +328,11 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		}
 	}
 	checkLabels(svc, s, p, fail)
+	// The image a start runs is the one whose labels the door read: compose pulling or
+	// building one of its own at the start would run another (checkImageLabels).
+	if pp, _ := s["pull_policy"].(string); pp != "" && pp != "missing" && pp != "never" && pp != "if_not_present" {
+		fail("%s: pull_policy %s: pull or build first, then start", svc, pp)
+	}
 	for _, key := range []string{"post_start", "pre_stop"} {
 		for _, h := range list(s[key]) {
 			hook, _ := h.(map[string]any)

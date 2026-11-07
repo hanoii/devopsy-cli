@@ -65,6 +65,10 @@ func (p Policy) CheckVerb(argv []string) error {
 			value = rest[next]
 			next++
 		}
+		// A start runs the image the door checked, never one compose pulls then.
+		if name == "--pull" && takes == 1 && value != "missing" && value != "never" {
+			return refuse("%s: --pull takes only missing or never: pull first, then start", verb)
+		}
 		// `--rmi all` would take images other projects run.
 		if name == "--rmi" && value != "local" {
 			return refuse("%s: --rmi takes only local", verb)
