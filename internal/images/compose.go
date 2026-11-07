@@ -125,17 +125,18 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // its activation gave it (DigestLabel: a plain up followed a name another
 // environment's pull moved, or something outside devopsy), or held on
 // another image than the release's own (HeldLabel), own names included.
-func StatusLines(d Docker, project, rel string) []string {
+// A hold is said, the rest warned.
+func StatusLines(d Docker, project, rel string) []StatusLine {
 	_, labels, held := composeFacts(rel)
 	cs, err := d.Containers(project)
 	if err != nil {
-		return []string{"could not list the containers: " + err.Error()}
+		return []StatusLine{{Text: "could not list the containers: " + err.Error(), Warn: true}}
 	}
 	refs := map[string]string{}
 	for _, e := range readList(rel) {
 		refs[e.Service] = e.Ref
 	}
-	var lines []string
+	var lines []StatusLine
 	seen := map[string]bool{}
 	for _, c := range cs {
 		if c.OneOff || c.Service == "" || seen[c.Service] {
@@ -146,7 +147,7 @@ func StatusLines(d Docker, project, rel string) []string {
 		gave := c.Digest
 		switch {
 		case err == nil && labels[c.Service] != "" && gave != labels[c.Service] && !sameImage(img, labels[c.Service]):
-			lines = append(lines, fmt.Sprintf("%s runs %s, not %s the current release gives it: an activation was cut off, and the next release makes it again", c.Service, shownImage(refs[c.Service], img), shortName(labels[c.Service])))
+			lines = append(lines, StatusLine{Text: fmt.Sprintf("%s runs %s, not %s the current release gives it: an activation was cut off, and the next release makes it again", c.Service, shownImage(refs[c.Service], img), shortName(labels[c.Service])), Warn: true})
 			continue
 		case err != nil || gave == "":
 		case !sameImage(img, gave):
@@ -154,7 +155,7 @@ func StatusLines(d Docker, project, rel string) []string {
 			if r := refs[c.Service]; r != "" {
 				l += ": " + r + " moved since (a plain up follows names)"
 			}
-			lines = append(lines, l)
+			lines = append(lines, StatusLine{Text: l, Warn: true})
 			continue
 		}
 		if from := held[c.Service]; from != "" {
@@ -162,10 +163,16 @@ func StatusLines(d Docker, project, rel string) []string {
 			if r := refs[c.Service]; r != "" && digestOf(labels[c.Service]) == "" {
 				on = r + " (" + on + ")"
 			}
-			lines = append(lines, fmt.Sprintf("%s held on %s, %s, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, heldWhat(from)))
+			lines = append(lines, StatusLine{Text: fmt.Sprintf("%s held on %s, %s, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, heldWhat(from))})
 		}
 	}
 	return lines
+}
+
+// StatusLine is one of StatusLines: Warn when it needs attention.
+type StatusLine struct {
+	Text string
+	Warn bool
 }
 
 // shownImage is an image for messages: its digest in ref's repository,

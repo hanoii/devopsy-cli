@@ -51,14 +51,15 @@ var Capabilities = []Capability{
 	},
 	{
 		Name:     "status",
-		What:     "lines of the project's own under devopsy --status, after the containers: its URL, a maintenance mode, a version",
+		What:     "facts of the project's own under devopsy --status, after the containers: its URL, a maintenance mode, a version",
 		Who:      "any project with something to say about itself",
 		CalledBy: "devopsy [@<target>] --status, locally and on servers",
 		Actions: []CapabilityAction{
 			{
-				Name:  "show",
-				Usage: "show",
-				Does:  "prints what to add, one fact per line, with the project's environment loaded; stdout goes through as it is",
+				Name:   "show",
+				Usage:  "show",
+				Does:   "prints what to add, one fact per line as <level>\\t<key>\\t<value>[\\t<fix>] (level info or warning, a warning making --status exit 3; fix a command to copy; one key on lines in a row is one fact of several lines), with the project's environment loaded and DEVOPSY_STATUS_RUNNING the services running, space-separated; devopsy aligns and colors them, --status --json prints them as fields, and a line of another shape is warned",
+				Output: "warning\\tmaintenance\\ton\\tdevopsy maintenance off",
 			},
 		},
 	},

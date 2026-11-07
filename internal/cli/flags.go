@@ -81,7 +81,7 @@ var Flags = []FlagGroup{
 		{Name: "--vars-project", Args: "[...]", Scope: Server, Desc: "the project's .env on the server"},
 	}},
 	{"Running", []Flag{
-		{Name: "--status", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
+		{Name: "--status", Args: "[--json]", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
 		{Name: "--shell", Args: "[service] [-- command...]", Scope: LocalOrTarget, Desc: "a shell, or the command, in a container"},
 		{Name: "--shell-host", Args: "[--root]", Scope: Server, Desc: "a shell on the server itself, or root's"},
 		{Name: "--environments", Scope: LocalOrServer, Desc: "the project's environments on its servers"},

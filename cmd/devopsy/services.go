@@ -373,6 +373,7 @@ func restoreServices(cwd string, services []cli.SyncService, o restoreOpts) erro
 // psEntry is a container in docker compose ps --format json.
 type psEntry struct {
 	Name, Service, State, Health, Status, Labels string
+	ExitCode                                     int
 }
 
 // serviceEntries is parsePS without one-off containers: a stray run --rm

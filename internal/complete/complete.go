@@ -324,8 +324,10 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		r = filter(r, cur)
 		r.Directive = DirectiveNoFileComp
 		return r
-	case "--release-no-sync", "--rollback", "--reload", "--inherit", "--status":
+	case "--release-no-sync", "--rollback", "--reload", "--inherit":
 		return flags([]Candidate{help})
+	case "--status":
+		return flags([]Candidate{{"--json", "the same as JSON, for scripts and agents", GroupDevopsy}, help})
 	case "--ssh-keys":
 		switch {
 		case len(words) == 2:

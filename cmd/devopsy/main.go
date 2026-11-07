@@ -184,6 +184,8 @@ func run() int {
 		return runReleaseInherit(cwd, args[1:])
 	case remote.SnapshotStepFlag:
 		return runSnapshotStep(cwd, args[1:])
+	case remote.StatusFactsFlag:
+		return runStatusFacts(cwd, args[1:])
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {

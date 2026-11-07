@@ -1120,18 +1120,28 @@ Examples:
   devopsy @b/prod --vars-instance set SITE_ID                # the instance's
   devopsy @vm1 --vars-project set SHARED_KEY                 # the project's
 `,
-	"--status": `Usage: devopsy [@<target>] --status
+	"--status": `Usage: devopsy [@<target>] --status [--json]
 
 What is running. In a project: its containers (every one, state and
-health, as docker compose ps sees them), then what the project's status
-capability prints (.devopsy/capabilities/status/show), its URL, say.
-With a target: the current release there (id, commit, when, by whom, how
-many releases are kept), the parent and the last sync for a child, then
-the same from the current release on the server.
+health, as docker compose ps sees them, and the services with none),
+then what the project's status capability prints
+(.devopsy/capabilities/status/show), its URL, say. With a target: the
+current release there (id, commit, when, by whom, how many releases are
+kept), the parent and the last sync for a child, what is running or cut
+off on it, the server's disks, then the same from the current release on
+the server, its images included.
+
+Exits 3 when something needs attention (a container unhealthy,
+restarting or exited on an error, a cut operation, a disk nearly full, a
+warning of the status capability's), as --server-info does.
+
+Options:
+  --json   the same as JSON on stdout, for scripts and agents
 
 Examples:
   devopsy --status
   devopsy @prod --status
+  devopsy @prod --status --json
 `,
 	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
        devopsy --ssh-keys-generate [<name>] [--out <file>]

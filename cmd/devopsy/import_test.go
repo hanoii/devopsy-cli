@@ -164,7 +164,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 
 	// Nothing runs on it, said with the import's ways out.
 	fixes := []string{"devopsy @devopsy@one:prod --import db < <file>", "devopsy @devopsy@one:prod --import db --resolved"}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "the import of db did not complete") || strings.Contains(out, "--sync") {
+	if out, code := s.run(nil, "@prod", "--status"); code != statusWarned || !strings.Contains(out, "the import of db did not complete") || strings.Contains(out, "--sync") {
 		t.Errorf("--status (%d):\n%s", code, out)
 	} else {
 		for _, f := range fixes {

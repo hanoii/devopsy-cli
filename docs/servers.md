@@ -21,7 +21,7 @@ devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped f
 devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
 devopsy @vm1:prod --snapshots restore <id>   # its data, code and images back, as a new release (--no-code: the data alone)
 devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   # a snapshot off the server
-devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, images held or moved, the project's own lines
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, the disks, its containers, images held or moved, the project's own lines; exit 3 when something needs attention, --json for fields
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
