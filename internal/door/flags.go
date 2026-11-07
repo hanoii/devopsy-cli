@@ -1,25 +1,8 @@
 package door
 
 import (
-	"regexp"
 	"strings"
 )
-
-// execUser is a uid or a name, with a group or not.
-var execUser = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*(:[A-Za-z0-9_][A-Za-z0-9_-]*)?$`)
-
-// plainUser says whether a user names no root: a shell's own user, in its own container.
-func plainUser(value string) bool {
-	if !execUser.MatchString(value) {
-		return false
-	}
-	for _, part := range strings.Split(value, ":") {
-		if part == "root" || strings.Trim(part, "0") == "" {
-			return false
-		}
-	}
-	return true
-}
 
 // Verbs are what compose may be asked to do through the door, each with its
 // flags and how many values each takes: a closed list, since a flag may read a
@@ -48,7 +31,7 @@ var Verbs = map[string]map[string]int{
 // CheckVerb checks a compose command: its verb, and every flag up to where its
 // arguments stop being compose's. Compose takes a flag after a service too, so
 // only what follows exec's and run's service is not compose's.
-func CheckVerb(argv []string) error {
+func (p Policy) CheckVerb(argv []string) error {
 	if len(argv) == 0 {
 		return refuse("no compose command")
 	}
@@ -82,13 +65,19 @@ func CheckVerb(argv []string) error {
 			value = rest[next]
 			next++
 		}
+		// A start runs the image the door checked, never one compose pulls then.
+		if name == "--pull" && takes == 1 && value != "missing" && value != "never" {
+			return refuse("%s: --pull takes only missing or never: pull first, then start", verb)
+		}
 		// `--rmi all` would take images other projects run.
 		if name == "--rmi" && value != "local" {
 			return refuse("%s: --rmi takes only local", verb)
 		}
-		// A shell's user (devopsy.shell.user), in its own container: never root.
-		if (name == "-u" || name == "--user") && !plainUser(value) {
-			return refuse("%s: user %s", verb, value)
+		// A shell's user (devopsy.shell.user) is held as a service's `user:` is.
+		if name == "-u" || name == "--user" {
+			if why := p.userRefused(value); why != "" {
+				return refuse("%s: user %s", verb, why)
+			}
 		}
 		i = next
 	}

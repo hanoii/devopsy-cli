@@ -32,7 +32,7 @@ func TestDoorReviewRefusedProject(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a service with no user released:\n%s", out)
 	}
-	if !strings.Contains(out, "refused") || !strings.Contains(out, "user must be <uid>:<gid>") {
+	if !strings.Contains(out, "refused") || !strings.Contains(out, "<uid>:<gid> in numbers") {
 		t.Errorf("the refusal does not say what is wrong:\n%s", out)
 	}
 	t.Logf("the refusal:\n%s", out)
@@ -67,7 +67,7 @@ func TestDoorReviewDataFlows(t *testing.T) {
   web:
 `+doorService+`    command: [sleep, infinity]
     volumes: [./mnt/data:/d, ./mnt/settings.ini:/etc/settings.ini, db:/v]
-    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any, devopsy.shell: "true", devopsy.shell.user: "10001"}
+    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any, devopsy.shell: "true", devopsy.shell.user: "10001:10001"}
 volumes:
   db: {}
 `, map[string]string{

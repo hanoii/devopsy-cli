@@ -51,7 +51,7 @@ func TestCheckFileTakesWhatTemplatesUse(t *testing.T) {
 	file := parse(t, `{"name":"shop-prod","x-any":1,
 	  "networks":{"default":{"name":"shop-prod_default","internal":true},"proxy":{"name":"shop-prod_proxy"},"tunnel":{"name":"traefik","external":true}},
 	  "volumes":{"data":{"name":"shop-prod_data"}},
-	  "services":{"web":`+safe(`,"read_only":true,"cap_add":["NET_BIND_SERVICE"],"cap_drop":["ALL"],"tmpfs":["/tmp"],
+	  "services":{"shop-web":`+safe(`,"read_only":true,"cap_add":["NET_BIND_SERVICE"],"cap_drop":["ALL"],"tmpfs":["/tmp"],
 	    "labels":{"traefik.enable":"true","devopsy.data":"volumes","":""},
 	    "environment":{"A":"b"},"networks":{"default":null,"tunnel":null},"logging":{"driver":"local"},
 	    "deploy":{"resources":{"limits":{"memory":"1g"}}},"post_start":[{"command":["true"]}],
@@ -59,7 +59,7 @@ func TestCheckFileTakesWhatTemplatesUse(t *testing.T) {
 	if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
 		t.Fatalf("refused: %v", errs)
 	}
-	labels := file["services"].(map[string]any)["web"].(map[string]any)["labels"].(map[string]any)
+	labels := file["services"].(map[string]any)["shop-web"].(map[string]any)["labels"].(map[string]any)
 	if _, ok := labels[""]; ok {
 		t.Error("a label that interpolated to nothing stayed")
 	}
@@ -129,7 +129,13 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a capability in another form", svc(`,"cap_add":"SYS_ADMIN"`), "cap_add must be a list"},
 		{"a variable in a service", svc(`,"image":"${X}"`), "a variable"},
 		{"a variable in a key", `{"name":"shop-prod","services":{"${X}":{}}}`, "a variable"},
-		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
+		// A start runs the image the door read: compose pulling or building one then would run another.
+		{"a pull at every start", svc(`,"pull_policy":"always"`), "pull_policy always"},
+		{"a build at every start", svc(`,"pull_policy":"build"`), "pull_policy build"},
+		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"shop-web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
+		// Compose makes a service's name an alias on each of its networks.
+		{"another's name on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{"t":null}`) + `}}`, "a service is named shop-<name>"},
+		{"another's name on a shared default", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(``) + `}}`, "a service is named shop-<name>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -314,7 +320,11 @@ func TestCheckVerb(t *testing.T) {
 		ok   bool
 	}{
 		{"up -d --wait --remove-orphans", true},
-		{"up --pull always web", true},
+		// A start runs the image the door read: compose pulling one then would run another.
+		{"up --pull never web", true},
+		{"up --pull always web", false},
+		{"up -d --pull=always", false},
+		{"create --pull always", false},
 		{"up --wait-timeout=30", true},
 		{"down -v --rmi local", true},
 		{"down --rmi=local", true},
@@ -330,8 +340,14 @@ func TestCheckVerb(t *testing.T) {
 		{"up --env-file /x", false},
 		{"exec -u 0 web sh", false},
 		{"exec --privileged web sh", false},
-		{"exec -u 1000 web sh", true},
-		{"exec --user app web sh", true},
+		// Who a shell runs as is held as a service's user: is: numbers, never root or a
+		// host id (ForbiddenIDs), and never a name, which the image maps to any uid.
+		{"exec -u 10001:10001 web sh", true},
+		{"exec -u 1000 web sh", false},
+		{"exec -u 10001:999 web sh", false},
+		{"exec --user app web sh", false},
+		{"exec -u admin web sh", false},
+		{"exec --user=admin:admin web sh", false},
 		{"exec -u root:root web sh", false},
 		{"exec -u 1:0 web sh", false},
 		{"exec -u 00 web sh", false},
@@ -351,7 +367,7 @@ func TestCheckVerb(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.argv, func(t *testing.T) {
 			t.Parallel()
-			err := CheckVerb(strings.Fields(tt.argv))
+			err := testPolicy.CheckVerb(strings.Fields(tt.argv))
 			if (err == nil) != tt.ok {
 				t.Errorf("ok %v, want %v: %v", err == nil, tt.ok, err)
 			}

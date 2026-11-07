@@ -97,6 +97,9 @@ type Action struct {
 	Secret string
 	// Logins says Docker should use the project's registry logins.
 	Logins bool
+	// Images says Docker changes what a name in the image store is, under the
+	// project's image lock.
+	Images bool
 	// Cleanup are directories of the door's that go after Docker.
 	Cleanup []string
 	// Entries are what Docker's mounts need there, which the door makes first.
@@ -173,7 +176,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if len(args) != 2 || !p.ownHold(args[1]) {
 			return nil, refuse("docker tag %s: only a hold of this project's", strings.Join(args, " "))
 		}
-		return &Action{Docker: argv}, nil
+		return &Action{Docker: argv, Images: true}, nil
 	case "rm":
 		return decideRM(args, p, d)
 	case "pull":
@@ -181,7 +184,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if len(args) != 2 || args[0] != "-q" || strings.HasPrefix(args[1], "-") {
 			return nil, noDocker(argv)
 		}
-		return &Action{Docker: argv, Logins: true}, nil
+		return &Action{Docker: argv, Logins: true, Images: true}, nil
 	case "port":
 		// Where a sync's own daemon listens, on the host's loopback.
 		if len(args) != 2 || args[1] != "873" || !p.ownContainer(d, args[0]) {
@@ -231,7 +234,8 @@ func decidePS(args []string, p Policy, d Daemon) (*Action, error) {
 		docker = append(docker, "--format", f)
 	}
 	for _, f := range filters {
-		if !strings.HasPrefix(f, "id=") {
+		// Docker's CLI trims a filter's key and lowercases it: `ID=` and ` id =` are `id=`.
+		if key, _, _ := strings.Cut(f, "="); strings.ToLower(strings.TrimSpace(key)) != "id" {
 			docker = append(docker, "--filter", f)
 		}
 	}
@@ -591,7 +595,7 @@ func decideRemoval(paths []string, mounts []mount, p Policy, h Host, known Known
 			return nil, refuse("docker run: %s: %v", target, err)
 		}
 		if rest, ok := strings.CutPrefix(real, p.Clones()+"/"); ok {
-			a.Docker = []string{"run", "--rm", "--network", "none", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "-v", p.Clones() + ":/s", known.Image, "rm", "-rf", "/s/" + rest}
+			a.Docker = slices.Concat([]string{"run", "--rm", "--network", "none"}, RootUtil(), []string{"-v", p.Clones() + ":/s", known.Image, "rm", "-rf", "/s/" + rest})
 			if parent, err := h.Real(filepath.Dir(target)); err == nil && p.InTree(parent) {
 				a.Remove = append(a.Remove, target)
 			}

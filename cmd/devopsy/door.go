@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -163,6 +165,8 @@ type doorSide struct {
 	vets   []remote.DoorVet
 	// made are this request's work directories, so that a refusal leaves none behind.
 	made []string
+	// lock is the project's image lock, when this request holds it (imageLock).
+	lock *os.File
 }
 
 // read runs a read of the project's tree, as its user.
@@ -442,7 +446,7 @@ func (s *doorSide) removeWork(dir string) {
 		return
 	}
 	root := filepath.Join(s.policy.Space, "work")
-	_ = s.docker("run", "--rm", "--network", "none", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "-v", root+":/w", remote.UtilImage, "rm", "-rf", "/w/"+filepath.Base(dir)).Run()
+	_ = s.docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", root + ":/w", remote.UtilImage, "rm", "-rf", "/w/" + filepath.Base(dir)})...).Run()
 }
 
 // ownWork says whether a work directory is this project's, by its name (workDir): not one
@@ -873,7 +877,7 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 // an unlinked file, so nothing of a project's environment stays on disk, with no .env,
 // in the release it says it is from, since devopsy reads compose's working_dir.
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
-	if err := door.CheckVerb(argv); err != nil {
+	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
 	refused := door.CheckFile(file, s.policy, argv[0], s)
@@ -894,6 +898,13 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return doorRefused(err)
 	}
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
+	if starts || argv[0] == "build" || argv[0] == "pull" {
+		unlock, err := s.imageLock()
+		if err != nil {
+			return doorRefused(err)
+		}
+		defer unlock()
+	}
 	if starts {
 		for _, v := range s.vets {
 			if !carriesLabel(file, v.Prefix) {
@@ -934,13 +945,20 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
 	}
+	if argv[0] == "build" {
+		b, err := s.builder()
+		if err != nil {
+			return doorRefused(err)
+		}
+		env = append(slices.Clone(env), b...)
+	}
 	cmd := []string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}
 	for _, p := range strings.Split(profiles, ",") {
 		if composeProfile.MatchString(p) {
 			cmd = append(cmd, "--profile", p)
 		}
 	}
-	err = syscall.Exec(s.real, append(cmd, argv...), env)
+	err = s.execKeeping(append(cmd, argv...), env)
 	return doorRefused(err)
 }
 
@@ -951,7 +969,7 @@ func (s *doorSide) downProject(name string, flags []string) int {
 		return doorRefused(errors.New("refused: not this project's name: " + name))
 	}
 	argv := append([]string{"down"}, flags...)
-	if err := door.CheckVerb(argv); err != nil {
+	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
 	err := syscall.Exec(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)
@@ -960,12 +978,19 @@ func (s *doorSide) downProject(name string, flags []string) int {
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a
 // proxy reads: a build's or an image's LABEL lands in a container's labels, past any check
-// of a file's. An image not here yet comes first, with this project's logins.
+// of a file's. An image not here yet comes first, with this project's logins, and one
+// still missing refuses the start: compose would pull or build it after this check. The
+// image lock (imageLock) keeps what was checked until compose has created its containers.
 func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 	services, _ := file["services"].(map[string]any)
+	name, _ := file["name"].(string)
 	for _, svc := range slices.Sorted(maps.Keys(services)) {
 		sv, _ := services[svc].(map[string]any)
 		image, _ := sv["image"].(string)
+		_, builds := sv["build"]
+		if image == "" && builds {
+			image = name + "-" + svc // compose's name for what it builds
+		}
 		if image == "" {
 			continue
 		}
@@ -974,20 +999,20 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 		}
 		out, err := inspect()
 		if err != nil {
-			// Compose would pull it after this check, so it comes first.
-			d, lerr := s.logins(config)
-			if lerr != nil {
-				return lerr
-			}
-			pull := s.docker("pull", "-q", image)
-			pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
-			pull.Stderr = os.Stderr
-			if pull.Run() != nil {
-				// Compose's own error says it better, on what it then fails to find.
-				continue
+			// Compose would pull it after this check, so it comes first. What builds is
+			// never pulled: its name is this project's alone.
+			if !builds {
+				d, lerr := s.logins(config)
+				if lerr != nil {
+					return lerr
+				}
+				pull := s.docker("pull", "-q", image)
+				pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
+				pull.Stderr = os.Stderr
+				pull.Run()
 			}
 			if out, err = inspect(); err != nil {
-				continue
+				return fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
 			}
 		}
 		labels := map[string]string{}
@@ -1007,6 +1032,72 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 		}
 	}
 	return nil
+}
+
+// imageLock holds this project's image lock until the door's process ends, compose's
+// after an exec included (execKeeping): a build, pull or tag of the project's waits while
+// a start runs, which otherwise could change an image between its label check and
+// compose's create. A wait is said, and ends in 10 minutes. unlock lets it go for a door
+// that returns rather than execs.
+func (s *doorSide) imageLock() (unlock func(), err error) {
+	dir := filepath.Join(s.policy.Space, "locks")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, s.policy.Project), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	unlock = func() { s.lock = nil; f.Close() }
+	fd := int(f.Fd())
+	took := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
+	if !took {
+		what := s.policy.Project + "'s images"
+		timer := report.Start("waiting for " + what + ", up to 10 minutes")
+		for end := time.Now().Add(10 * time.Minute); time.Now().Before(end) && !took; {
+			time.Sleep(250 * time.Millisecond)
+			took = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
+		}
+		if !took {
+			f.Close()
+			return nil, fmt.Errorf("refused: %s did not end in 10 minutes", what)
+		}
+		timer.Stop("done waiting for " + what)
+	}
+	s.lock = f
+	return unlock, nil
+}
+
+// builder is what a build's environment needs to run on this project's own BuildKit,
+// made at its first build: on one builder, cache mounts are shared across projects by
+// their id, so one project's build would fill a cache another's trusts. Its settings are
+// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets.
+func (s *doorSide) builder() ([]string, error) {
+	name := "devopsy-" + s.policy.Project
+	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name}
+	env := append(slices.Clone(s.env), b[0])
+	inspect := s.docker("buildx", "inspect", name)
+	inspect.Env = env
+	if inspect.Run() != nil {
+		create := s.docker("buildx", "create", "--name", name, "--driver", "docker-container")
+		create.Env, create.Stdout, create.Stderr = env, os.Stderr, os.Stderr
+		if err := create.Run(); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
+		}
+	}
+	return b, nil
+}
+
+// execKeeping execs docker keeping the image lock, if the door holds it, open in what
+// it becomes: Go's descriptors close at an exec, and any process it starts before
+// would otherwise hold the lock too.
+func (s *doorSide) execKeeping(argv, env []string) error {
+	if s.lock != nil {
+		if _, err := unix.FcntlInt(s.lock.Fd(), unix.F_SETFD, 0); err != nil {
+			return err
+		}
+	}
+	return syscall.Exec(s.real, argv, env)
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)
@@ -1111,6 +1202,13 @@ func (s *doorSide) request(config string, argv []string) int {
 		env = append(slices.Clone(env), a.Secret+"="+string(value))
 		stdin = strings.NewReader("")
 	}
+	if a.Images {
+		unlock, err := s.imageLock()
+		if err != nil {
+			return doorRefused(err)
+		}
+		defer unlock()
+	}
 	if a.Logins {
 		d, err := s.logins(config)
 		if err != nil {
@@ -1122,7 +1220,7 @@ func (s *doorSide) request(config string, argv []string) int {
 		stdin = strings.NewReader(a.Stdin)
 	}
 	if a.Stdin == "" && a.Secret == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 {
-		err := syscall.Exec(s.real, append([]string{"docker"}, a.Docker...), env)
+		err := s.execKeeping(append([]string{"docker"}, a.Docker...), env)
 		return doorRefused(err)
 	}
 	c := exec.Command(s.real, a.Docker...)

@@ -28,6 +28,9 @@ var binary string
 const startWait = time.Minute
 
 func TestMain(m *testing.M) {
+	if space := os.Getenv("DEVOPSY_TEST_LOCK_EXEC"); space != "" {
+		lockExecHelper(space) // TestDoorImageLockOutlivesItsExec
+	}
 	dir, err := os.MkdirTemp("", "devopsy-test")
 	if err != nil {
 		panic(err)

@@ -210,23 +210,41 @@ func TestDecideRunReceiveIntoAVolumeHoldsNoMnt(t *testing.T) {
 	}
 }
 
-// BUG: classify takes any depth under its clones as a clone, and what is below a clone's top
-// is an entry's copy: its directories are the project's, against "A root container holds no
-// path a project user can change" and "believed only for a path whose every part is the
-// deploy user's". A link there, behind a directory its user cannot read, comes back from
-// `realpath -m` as written, and the daemon follows it (TestDoorCloneHoldsNoLinkForRoot).
+// What is below a clone's top is a copy of the project's data: its names, its links, and
+// the modes it gave its directories. A link there, behind a directory its user cannot read,
+// comes back from `realpath -m` as written, and the daemon would follow it as root
+// (TestDoorCloneLinkReadsNothingAsRoot, end to end). So a source in a clone goes as deep as
+// devopsy's own clones, and a take named mnt or volumes, which would make a path inside a
+// copy look like one, is none.
 func TestDecideRunTakesNoPathInsideAClone(t *testing.T) {
 	t.Parallel()
 	export := func(source string) []string {
 		return []string{"run", "-v", source + ":/x/h:ro", "util:1", "sh", "-c", "export script", "sh", "h"}
 	}
-	clone := "/space/clones/shop/abc/1"
-	// What devopsy asks of a clone, its copied entry and volume at most.
-	if _, err := decide(t, export(clone+"/mnt/data")...); err != nil {
-		t.Fatalf("the control: an entry's copy is refused: %v", err)
+	clone := "/space/clones/shop/abc"
+	// What devopsy asks of a clone, its copied entry and volume at most, with a take or not.
+	for _, ok := range []string{clone + "/volumes/db", clone + "/mnt/data", clone + "/1/volumes/db", clone + "/1/mnt/data"} {
+		if _, err := decide(t, export(ok)...); err != nil {
+			t.Errorf("the control: devopsy's own %s is refused: %v", ok, err)
+		}
 	}
-	if a, err := decide(t, export(clone+"/mnt/data/hide/link")...); err == nil {
-		t.Errorf("a path inside an entry's copy, for root: %q", a.Docker)
+	for _, inside := range []string{
+		clone + "/1/mnt/data/hide/link",
+		clone + "/volumes/mnt/link",
+		clone + "/mnt/mnt/link",
+		clone + "/volumes/volumes/link",
+		clone + "/mnt/volumes/link",
+	} {
+		if a, err := decide(t, export(inside)...); err == nil {
+			t.Errorf("a path inside a copy, for root: %q", a.Docker)
+		}
+	}
+	// And the step that puts one there: a directory inside an entry's copy, as a clone's
+	// volume, which the clone's `cp -a <it>/.` then gives its mode and its links.
+	script := "set -e\nmkdir -p /c/mnt /c/volumes\nmkdir -p '/c/volumes/mnt'\n" +
+		"cp -a --reflink=always '/m/volumes/mnt/.' '/c/volumes/mnt/' || cp -a --reflink=always '/m/volumes/mnt/.' '/c/volumes/mnt/'\n"
+	if a, err := decide(t, "run", "-v", clone+"/mnt/mnt/hide:/m/volumes/mnt:ro", "-v", "/space/clones/shop/def:/c", "util:1", "sh", "-c", script); err == nil {
+		t.Errorf("a directory inside an entry's copy, cloned as a volume: %q", a.Docker)
 	}
 }
 

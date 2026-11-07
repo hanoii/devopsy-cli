@@ -18,6 +18,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A project user's `shared/mnt` is a link into `<space>`, made at a release's start (`--mnt-ready`), and a compose name comes from where an environment is in that user's tree, never from a caller (`Policy.NameOf`).
 - Entries are made by the door, so a project user can write inside one and never replace it: when devopsy's own mkdir is refused (`makeEntry`), and what a file binds, at `compose config`, since a step writes in an entry before anything starts (`entries`), and at `up` (`bindEntries`).
 - An entry the door made a directory, not knowing it is a file, is replaced while empty: the two are told apart only by an import or a sync.
+- A service on a shared network is named `<project>-<name>` (`OwnName`), and holds no alias or fixed address there: compose makes each service's name an alias on its networks, which would answer for another's name (for example `traefik` on `tunnel`).
 - A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.
 - Of another project's labels, only its role, compose project and exports are ever read (`exportedLabel`).
 - A util container is one of the forms in `internal/door/forms.go`, its command, its arguments and its mounts checked together, never one a caller gives: it is root on the host's files, and a command paired with another's mounts writes where a bind goes by.
@@ -25,10 +26,13 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - An rsync that names a whole mnt holds only the entry it writes (`narrow`): what it copies could otherwise leave a link where a bind's source goes by.
 - A word in a util container's arguments never starts with a dash: `find "$@"` would take it as code.
 - A Docker command devopsy calls has an answer here, or a reason in `doorVerbs` (`TestDoorKnowsDevopsysDockerCommands`, which sees `exec.Command`'s and scripts' lines, not a helper's).
-- An image's own labels under `devopsy.` or a vet's prefix refuse it: they land in its containers' labels, past any check of a file's, and an image not here yet is pulled first so they are read.
+- An image's own labels under `devopsy.` or a vet's prefix refuse it, what a service builds included, by compose's name for it: they land in its containers' labels, past any check of a file's, and an image not here yet is pulled first so they are read.
+- A start runs the image the door read: compose never pulls or builds one then (no `pull_policy` but `missing`, `never` or `if_not_present`, `--pull` only `missing` or `never`, an image still missing refuses), and the project's image lock (`imageLock`), which a build, a pull and a tag take too, is held into compose's exec, so nothing changes the image between the check and the create.
+- An image by name is shared: whatever the server's store holds under a name runs under any project's file that names it, as on a server without the door.
 - A build writes only a tag of this project's, and holds no labels of its own.
+- A build runs on the project's own BuildKit, `devopsy-<project>` (docker-container driver, made at its first build, `builder`), its settings in `<space>/buildx`: on one builder, cache mounts are shared across projects by their id, so one project's build would fill a cache another's trusts. Its `FROM` comes from a registry or its own stages, never the server's store, which that builder does not see.
 - The deploy user is who owns the binary (`deployUser`): an install of it as root would point the door at root.
-- No container runs as the deploy user's ids, the door's users' or the socket's group (`hostIDs`): it would be that user's to reach through `/proc`.
+- A container runs as `<uid>:<gid>` in numbers, never 0, the deploy user's ids, the door's users' or the socket's group (`hostIDs`), for a service's `user:` and `exec -u` alike (`userRefused`): a name is the image's to map to 0, and a host id is that user's to reach through `/proc`.
 - A server with project users also needs what `e2e/door_test.go`'s `doorServer` sets up: `sudo`, `acl`, the `devopsy-projects` group holding them, the two sudo rules (`%devopsy-projects` to the deploy user for `devopsy --door *`, the deploy user to them for `devopsy --door-read *`), `<space>` on its own mount, and the `docker` link to devopsy.
 - `read_all` is an admin's grant of reads of everything, secrets included, and nothing else.
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).

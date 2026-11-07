@@ -328,6 +328,11 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		}
 	}
 	checkLabels(svc, s, p, fail)
+	// The image a start runs is the one whose labels the door read: compose pulling or
+	// building one of its own at the start would run another (checkImageLabels).
+	if pp, _ := s["pull_policy"].(string); pp != "" && pp != "missing" && pp != "never" && pp != "if_not_present" {
+		fail("%s: pull_policy %s: pull or build first, then start", svc, pp)
+	}
 	for _, key := range []string{"post_start", "pre_stop"} {
 		for _, h := range list(s[key]) {
 			hook, _ := h.(map[string]any)
@@ -338,7 +343,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 			}
 		}
 	}
-	checkAliases(file, svc, s, fail)
+	checkAliases(file, svc, s, p, fail)
 	for _, m := range list(s["volumes"]) {
 		v, ok := m.(map[string]any)
 		if !ok {
@@ -397,14 +402,8 @@ func checkLimits(svc string, s map[string]any, fail func(string, ...any)) {
 
 func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	user, _ := s["user"].(string)
-	if m := numericUser.FindStringSubmatch(user); m == nil {
-		fail(`%s: user must be <uid>:<gid> in numbers, for example user: "10001:10001"`, svc)
-	} else {
-		uid, _ := strconv.Atoi(m[1])
-		gid, _ := strconv.Atoi(m[2])
-		if uid == 0 || gid == 0 || slices.Contains(p.ForbiddenIDs, uid) || slices.Contains(p.ForbiddenIDs, gid) {
-			fail("%s: user %s: a host id", svc, user)
-		}
+	if why := p.userRefused(user); why != "" {
+		fail("%s: user %s", svc, why)
 	}
 	// Without no-new-privileges a setuid image writes a root binary onto the host.
 	opts := list(s["security_opt"])
@@ -416,6 +415,23 @@ func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...
 			fail("%s: cap_add %v", svc, c)
 		}
 	}
+}
+
+// userRefused says why a container may not run as user, or nothing: a user is numbers
+// only, since a name is the image's to map (to 0, say), and never root or an id of the
+// host's (ForbiddenIDs), whose processes it would reach through /proc. One check for a
+// service's user: and for exec's -u.
+func (p Policy) userRefused(user string) string {
+	m := numericUser.FindStringSubmatch(user)
+	if m == nil {
+		return fmt.Sprintf(`%q: <uid>:<gid> in numbers, for example "10001:10001"`, user)
+	}
+	uid, _ := strconv.Atoi(m[1])
+	gid, _ := strconv.Atoi(m[2])
+	if uid == 0 || gid == 0 || slices.Contains(p.ForbiddenIDs, uid) || slices.Contains(p.ForbiddenIDs, gid) {
+		return user + ": a host id"
+	}
+	return ""
 }
 
 func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
@@ -432,13 +448,20 @@ func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...an
 }
 
 // checkAliases refuses an alias on a network others share: it would answer for
-// their names.
-func checkAliases(file map[string]any, svc string, s map[string]any, fail func(string, ...any)) {
+// their names. So would the service's own name, which compose makes an alias on each
+// of its networks: there it is one of this project's (OwnName).
+func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	networks, _ := file["networks"].(map[string]any)
 	nets, _ := s["networks"].(map[string]any)
+	if _, ok := s["networks"]; !ok && s["network_mode"] == nil {
+		nets = map[string]any{"default": nil} // compose's own, unless the file makes it shared
+	}
 	for _, net := range sortedKeys(nets) {
 		top, _ := networks[net].(map[string]any)
 		opts, _ := nets[net].(map[string]any)
+		if truthy(top["external"]) && !p.OwnName(svc) {
+			fail("%s: on the shared network %s, a service is named %s-<name>: compose answers for its name there", svc, net, p.Project)
+		}
 		if k := unknownKey(opts, netKeys); k != "" {
 			fail("%s: network %s: %s", svc, net, k)
 		}
