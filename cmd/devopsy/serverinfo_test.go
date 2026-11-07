@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestServerFactsParsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d.Version != "29.9.1" || !d.Containerd || d.RootDir != "/var/lib/docker" || !slices.Equal(d.Security, []string{"apparmor", "seccomp", "cgroupns"}) || d.Cgroup != "v2" || d.LogDriver != "json-file" || d.Proxy != "http://proxy:3128" {
-		t.Errorf("docker info: %+v", d)
+		t.Errorf("docker        info: %+v", d)
 	}
 	d = remote.DockerFacts{}
 	if err := parseDockerInfo([]byte(`{"Driver":"overlay2","DriverStatus":[["Backing Filesystem","xfs"]]}`), &d); err != nil || d.Containerd {
@@ -88,21 +89,20 @@ func TestServerInfoReport(t *testing.T) {
 			},
 		}
 	}
-	lines, warnings := serverInfoReport(healthy(), "vm1", "vm1:", "0.53.0", now)
-	out := strings.Join(lines, "\n")
+	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
-		"devopsy      0.53.0, protocol 8\n",
-		"releases     /home/devopsy, keep 5 (at most 5)",
-		"snapshots    in each environment's directory, keep at most 5",
-		"system       Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
+		"devopsy       0.53.0, protocol 8\n",
+		"releases      /home/devopsy, keep 5 (at most 5)",
+		"snapshots     in each environment's directory, keep at most 5",
+		"system        Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
 		"2 CPUs, 4.3 GB memory (2.1 GB available), no swap, load 0.10 0.20 0.30, up 3 days",
-		"             clock synchronized\n",
-		"docker       29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
+		"              clock synchronized\n",
+		"docker        29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
 		"security apparmor seccomp",
 		"logs json-file max-file=5 max-size=20m",
-		"disks        releases /home/devopsy, docker /var/lib/docker, /: xfs, 40.0 GB free of 80.0 GB (50% used), reflinks",
-		"roles        proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
-		"environments traefik/prod  20261026120000  24 h ago  by ci",
+		"disks         releases /home/devopsy, docker /var/lib/docker, /: xfs, 40.0 GB free of 80.0 GB (50% used), reflinks",
+		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
+		"environments  traefik/prod  20261026120000  24 h ago  by ci",
 		"shop/prod  20261027115000  10 min ago  by ana  1 of 3 running",
 		"shop/Staging  20261027110000  1 h ago  by ana  1 of 1 running",
 	} {
@@ -188,7 +188,7 @@ func TestServerInfoReport(t *testing.T) {
 	} {
 		info := healthy()
 		c.change(&info)
-		_, warnings := serverInfoReport(info, "vm1", "vm1:", cmp.Or(c.local, "0.53.0"), now)
+		_, warnings := serverInfoSays(info, "vm1", "vm1:", cmp.Or(c.local, "0.53.0"), now)
 		msg, fix, _ := strings.Cut(c.want, "|")
 		if len(warnings) != 1 || !strings.Contains(warnings[0].msg, msg) || (fix != "" && !strings.Contains(fixText(warnings[0].fixes), fix)) {
 			t.Errorf("%s: want one warning %q (fix %q), got %+v", c.name, msg, fix, warnings)
@@ -203,9 +203,9 @@ func TestServerInfoReport(t *testing.T) {
 	} {
 		info := healthy()
 		info.Environments[1].Status += status
-		lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
-		if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), said) {
-			t.Errorf("running (%q): %+v\n%s", said, warnings, strings.Join(lines, "\n"))
+		out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+		if len(warnings) != 0 || !strings.Contains(out, said) {
+			t.Errorf("running (%q): %+v\n%s", said, warnings, out)
 		}
 	}
 
@@ -221,18 +221,18 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	info0 := healthy()
 	info0.Time = now.Add(42 * time.Second).UnixNano()
-	if lines, warnings := serverInfoReport(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "clock synchronized, about 42 s ahead of local") {
-		t.Errorf("clock ahead: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "clock synchronized, about 42 s ahead of local") {
+		t.Errorf("clock ahead: %+v\n%s", warnings, out)
 	}
 
 	// What kdump keeps is a note, never a warning: crash dumps are a
 	// choice.
 	info := healthy()
 	info.CrashKernel = 512 << 20
-	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
+	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 1 || !warnings[0].note || !strings.Contains(warnings[0].msg, "kdump keeps 536.9 MB of memory for its crash kernel") ||
-		!strings.Contains(fixText(warnings[0].fixes), "DEVOPSY_KDUMP=off") || !strings.Contains(strings.Join(lines, "\n"), "kernel keeps 536.9 MB for kdump") {
-		t.Errorf("kdump: %+v\n%s", warnings, strings.Join(lines, "\n"))
+		!strings.Contains(fixText(warnings[0].fixes), "DEVOPSY_KDUMP=off") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
+		t.Errorf("kdump: %+v\n%s", warnings, out)
 	}
 
 	// This machine's: fixes run here, no session to the server.
@@ -240,7 +240,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.Version = "0.54.0"
 	info.Disks[0].Free, info.Disks[0].Used = 4e9, 76e9
 	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
-	_, warnings = serverInfoReport(info, "", "", "0.54.0", now)
+	_, warnings = serverInfoSays(info, "", "", "0.54.0", now)
 	if len(warnings) != 2 || !strings.HasPrefix(fixText(warnings[0].fixes), "see what Docker takes, then empty its build cache:\n$ docker system df\n$ docker builder prune\n") ||
 		strings.Contains(fixText(warnings[0].fixes), "--shell-host") ||
 		fixText(warnings[1].fixes) != "\n$ cd /home/devopsy/shop/dev/current && devopsy --status\n" {
@@ -250,9 +250,9 @@ func TestServerInfoReport(t *testing.T) {
 	// A kernel without AppArmor is said, not warned: nothing to install.
 	info = healthy()
 	info.Docker.Security, info.AppArmor, info.AppArmorParser = []string{"seccomp"}, false, false
-	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
-	if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "security seccomp (no AppArmor in this kernel)") {
-		t.Errorf("no AppArmor in the kernel: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+	if len(warnings) != 0 || !strings.Contains(out, "security seccomp (no AppArmor in this kernel)") {
+		t.Errorf("no AppArmor in the kernel: %+v\n%s", warnings, out)
 	}
 
 	// Without flock every lock reads held: no environment is busy, its
@@ -260,18 +260,42 @@ func TestServerInfoReport(t *testing.T) {
 	info = healthy()
 	info.Missing = []string{"flock"}
 	info.Environments[1].Status += "busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut")
-	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
-	if len(warnings) != 2 || !strings.Contains(warnings[1].msg, "shop/prod: the import of db did not complete") || strings.Contains(strings.Join(lines, "\n"), "an operation running") {
-		t.Errorf("no flock: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+	if len(warnings) != 2 || !strings.Contains(warnings[1].msg, "shop/prod: the import of db did not complete") || strings.Contains(out, "an operation running") {
+		t.Errorf("no flock: %+v\n%s", warnings, out)
 	}
 
 	// Every problem of an environment is warned, as --status says each
-	// (review: the first alone was).
+	// (review: the first alone was), in one warning with the --status
+	// that shows them.
 	info = healthy()
 	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")})
-	if _, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 2 {
-		t.Errorf("two problems of shop/dev: %+v", warnings)
+	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || strings.Count(warnings[0].msg, "shop/dev: ") != 2 || len(warnings[0].fixes) != 1 {
+		t.Errorf("two problems of shop/dev, one warning with its fix: %+v", warnings)
 	}
+}
+
+// said is a warning --server-info shows, or a note (said with its
+// fixes, never warned).
+type said struct {
+	msg   string
+	fixes []report.Remedy
+	note  bool
+}
+
+// serverInfoSays is serverInfoReport's entries as --server-info shows
+// them, uncolored, and its warnings and notes, each its lines.
+func serverInfoSays(info remote.ServerInfo, host, ref, local string, now time.Time) (string, []said) {
+	es := serverInfoReport(info, host, ref, local, now)
+	var b strings.Builder
+	newEntryTable(&b, style{}, es).print(es)
+	var ws []said
+	for _, e := range es {
+		if e.Level == remote.StatusWarning || len(e.Fixes) > 0 {
+			ws = append(ws, said{strings.Join(e.Lines, "\n"), e.Fixes, e.Level != remote.StatusWarning})
+		}
+	}
+	return b.String(), ws
 }
 
 // fixText is fixes as one text, the commands after their words.
@@ -307,7 +331,7 @@ func TestFirstWriteAsCommandStdout(t *testing.T) {
 
 // --server-info end to end against the fake ssh: the server's facts
 // read there, its environments and their state, a role, the warnings
-// and exit 3.
+// and exit 3, as text and as JSON.
 func TestServerInfo(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -346,16 +370,16 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "@devopsy@one:", "--server-info")
 	for _, want := range []string{
 		"@devopsy@one:\n",
-		"releases     " + s.root + ", keep 5",
+		"releases      " + s.root + ", keep 5",
 		"containerd /var/lib/containerd",
-		"docker       29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
-		"disks        releases " + s.root,
-		"roles        proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
-		"environments shop/dev  none: 19990101000000 failed",
+		"docker        29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
+		"disks         releases " + s.root,
+		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
+		"environments  shop/dev  none: 19990101000000 failed",
 		"shop/eu/prod  none: not released yet",
 		"shop/prod  " + strings.TrimPrefix(s.current("prod"), "releases/") + "  just now",
 		"shop/dev: its first release, 19990101000000, failed",
-		"devopsy: | in shop's checkout:\ndevopsy: | $ devopsy @devopsy@one:dev --status",
+		"in shop's checkout:\n              $ devopsy @devopsy@one:dev --status",
 		"shop/prod: db restarting",
 		// The server's clock, taken last and compared on arrival.
 		"clock not synchronized, ",
@@ -376,6 +400,25 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	if m, _ := filepath.Glob(filepath.Join(s.root, ".devopsy-reflink.*")); len(m) > 0 {
 		t.Errorf("left %v", m)
 	}
+	// --json: the facts and what it shows of them, each warning with its
+	// fixes, alone on the output (nothing said around it) and exit 3.
+	out, code = s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "@devopsy@one:", "--server-info", "--json")
+	var r serverReport
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("--json (%d): %v:\n%s", code, err, out)
+	}
+	var fixes []string
+	for _, e := range r.Entries {
+		if e.Level == remote.StatusWarning && e.Key == "environments" {
+			for _, f := range e.Fixes {
+				fixes = append(fixes, f.Cmds...)
+			}
+		}
+	}
+	if code != serverInfoWarned || !r.Attention || r.Server != "devopsy@one:" || r.Facts.Root != s.root || len(r.Facts.Environments) == 0 ||
+		!slices.Contains(fixes, "devopsy @devopsy@one:dev --status") {
+		t.Errorf("--json (%d): %+v", code, r)
+	}
 
 	// Without a target, the Linux server it runs on, the same facts read
 	// in process; refused elsewhere (macOS: CI runs both).
@@ -388,10 +431,10 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	for _, want := range []string{
 		"local (",
-		"releases     " + s.root + ", keep 5",
-		"roles        proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
-		"environments shop/dev  none: 19990101000000 failed",
-		"devopsy: | $ cd " + filepath.Join(s.root, "shop", "dev", "current") + " && devopsy --status",
+		"releases      " + s.root + ", keep 5",
+		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
+		"environments  shop/dev  none: 19990101000000 failed",
+		"$ cd " + filepath.Join(s.root, "shop", "dev", "current") + " && devopsy --status",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("local: no %q in (%d):\n%s", want, code, out)

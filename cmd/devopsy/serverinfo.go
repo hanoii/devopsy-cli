@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -486,18 +487,14 @@ func environments(root string) []remote.Environment {
 	return envs
 }
 
-// runServerInfo implements devopsy [@<server>] --server-info: the facts
-// the server's devopsy reports, or this machine's without a target,
-// then what needs attention, warned with its fix; serverInfoWarned when
-// anything was.
+// runServerInfo implements devopsy [@<server>] --server-info [--json]:
+// the facts the server's devopsy reports, or this machine's without a
+// target, each with what needs attention in it, warned with its fix;
+// serverInfoWarned when anything was.
 func runServerInfo(t *remote.Target, args []string) int {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--server-info"]))
-			return 0
-		}
-		report.Error("usage: devopsy [@<server>] --server-info")
-		return 1
+	asJSON, code := reportArgs("--server-info", args, "usage: devopsy [@<server>] --server-info [--json]")
+	if code >= 0 {
+		return code
 	}
 	if t == nil {
 		// Servers are Linux: elsewhere (the operator's Mac) the facts are
@@ -511,11 +508,13 @@ func runServerInfo(t *remote.Target, args []string) int {
 		if err != nil {
 			return failErr(err)
 		}
+		r := serverReport{Facts: info, Entries: serverInfoReport(info, "", "", version, time.Now())}
 		head := "local"
 		if name, err := os.Hostname(); err == nil {
 			head += " (" + name + ")"
+			r.Host = name
 		}
-		return printServerInfo(head, info, "", "", time.Now())
+		return r.print(os.Stdout, styleFor(os.Stdout), head, asJSON)
 	}
 	// The facts' first byte is when the server's clock is compared: the
 	// session's end comes after.
@@ -537,7 +536,8 @@ func runServerInfo(t *remote.Target, args []string) int {
 	if ref != t.Host+":" {
 		head += " (" + t.Host + ")"
 	}
-	return printServerInfo(head, info, t.Host, ref, out.at)
+	r := serverReport{Server: ref, Host: t.Host, Facts: info, Entries: serverInfoReport(info, t.Host, ref, version, out.at)}
+	return r.print(os.Stdout, styleFor(os.Stdout), head, asJSON)
 }
 
 // firstWrite is a buffer that keeps when its first write came. The buffer
@@ -555,53 +555,63 @@ func (w *firstWrite) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-// printServerInfo prints info's report under head, then its notes and
-// warnings: serverInfoWarned when it warned. host and ref are empty for
-// this machine's; now is when its facts came.
-func printServerInfo(head string, info remote.ServerInfo, host, ref string, now time.Time) int {
-	lines, warnings := serverInfoReport(info, host, ref, version, now)
-	fmt.Println(styleFor(os.Stdout).name(head))
-	for _, l := range lines {
-		fmt.Println(l)
-	}
+// serverReport is what --server-info shows and --server-info --json
+// prints.
+type serverReport struct {
+	// Server is the server as typed (remote.ServerRef), empty for this
+	// machine; Host where it is, this machine's name.
+	Server string            `json:"server,omitempty"`
+	Host   string            `json:"host,omitempty"`
+	Facts  remote.ServerInfo `json:"facts"`
+	// Entries are what --server-info shows of the facts, in order, each
+	// warning after the line it is about, under its key.
+	Entries []remote.StatusEntry `json:"entries"`
+	// Attention says something is at StatusWarning: it exits 3.
+	Attention bool `json:"attention"`
+}
+
+// print shows r on w in st under heading, or prints it as JSON:
+// serverInfoWarned when something needs attention.
+func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+	r.Attention = entriesWarn(r.Entries)
 	code := 0
-	for _, w := range warnings {
-		level := report.WarnLevel
-		if w.note {
-			level = report.InfoLevel
-		} else {
-			code = serverInfoWarned
-		}
-		report.Default().Say(level, w.msg, nil, w.fixes)
+	if r.Attention {
+		code = serverInfoWarned
 	}
+	if asJSON {
+		r.Entries = copyableEntries(r.Entries)
+		if err := printJSON(w, r); err != nil {
+			return failErr(err)
+		}
+		return code
+	}
+	fmt.Fprintln(w, st.name(report.Copyable(heading)))
+	newEntryTable(w, st, r.Entries).print(r.Entries)
 	return code
 }
 
-// serverWarning is a warning and its fixes; a note is said, not warned,
-// and leaves the exit code alone.
-type serverWarning struct {
-	msg   string
-	fixes []report.Remedy
-	note  bool
-}
-
-// serverInfoReport is what --server-info prints of info, its lines and
-// its warnings, for the server host (as an address's server part) and
-// ref (as typed, for fixes: remote.ServerRef), both empty for this
-// machine's; local is this devopsy's version, now when the facts came:
-// what ages count from and the server's clock (info.Time) is compared
-// with.
-func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) (lines []string, warnings []serverWarning) {
+// serverInfoReport is what --server-info shows of info, for the server
+// host (as an address's server part) and ref (as typed, for fixes:
+// remote.ServerRef), both empty for this machine's; local is this
+// devopsy's version, now when the facts came: what ages count from and
+// the server's clock (info.Time) is compared with.
+func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) []remote.StatusEntry {
+	var es []remote.StatusEntry
+	key := ""
+	// row adds a line under k, more one under the last row's key.
+	row := func(k, value string) {
+		key = k
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: k, Lines: []string{value}})
+	}
+	more := func(value string) { row(key, value) }
+	// warn adds a warning under the last row's key, with its fixes; note
+	// a line said with its fixes, never warned.
 	warn := func(msg string, fixes ...report.Remedy) {
-		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg}, Fixes: fixes})
 	}
 	note := func(msg string, fixes ...report.Remedy) {
-		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes, note: true})
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{msg}, Fixes: fixes})
 	}
-	row := func(key, value string) {
-		lines = append(lines, fmt.Sprintf("%-12s %s", key, value))
-	}
-	more := func(value string) { row("", value) }
 
 	// devopsy and the release settings.
 	v := info.Version + ", protocol " + strconv.Itoa(info.Protocol)
@@ -654,16 +664,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	var kept []string
 	if info.KHOScratch > 0 {
 		kept = append(kept, humanBytes(info.KHOScratch)+" for Kexec HandOver")
+	}
+	if info.CrashKernel > 0 {
+		kept = append(kept, humanBytes(info.CrashKernel)+" for kdump")
+	}
+	if len(kept) > 0 {
+		more("kernel keeps " + strings.Join(kept, ", "))
+	}
+	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
 			report.Fix("kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it, rerun as root"))
 	}
 	if info.CrashKernel > 0 {
-		kept = append(kept, humanBytes(info.CrashKernel)+" for kdump")
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
 			report.Fix("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
-	}
-	if len(kept) > 0 {
-		more("kernel keeps " + strings.Join(kept, ", "))
 	}
 	if info.RebootRequired {
 		msg := "the server needs a reboot"
@@ -700,14 +714,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// Docker.
 	d := info.Docker
 	if d.Error != "" {
-		row("docker", d.Error)
+		key = "docker"
 		warn("Docker did not answer: " + d.Error)
 	} else {
 		parts := []string{d.Version}
 		if d.Compose != "" {
 			parts = append(parts, "compose "+d.Compose)
-		} else {
-			warn("docker compose is missing", report.Fix("install the docker-compose-plugin package, as root"))
 		}
 		store := "classic image store"
 		if d.Containerd {
@@ -718,6 +730,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			parts = append(parts, "cgroup "+d.Cgroup)
 		}
 		row("docker", strings.Join(parts, ", "))
+		if d.Compose == "" {
+			warn("docker compose is missing", report.Fix("install the docker-compose-plugin package, as root"))
+		}
 		// Docker lists apparmor whenever the kernel has it, and then loads
 		// its profile with apparmor_parser: without it no container
 		// starts ("the docker-default profile could not be loaded").
@@ -761,26 +776,15 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				snapshotDisk = i
 			}
 		}
-		key := ""
-		if i == 0 {
-			key = "disks"
-		}
-		use := judgeDisk(disk, info.SnapshotRoot, ref)
-		if disk.Error != "" {
-			row(key, use.value)
-			continue
-		}
-		value := use.value
+		reflinks := ""
 		switch disk.Reflinks {
 		case "yes":
-			value += ", reflinks"
+			reflinks = ", reflinks"
 		case "no":
-			value += ", no reflinks"
+			reflinks = ", no reflinks"
 		}
-		row(key, value)
-		if use.warn != "" {
-			warn(use.warn, use.fixes...)
-		}
+		key = "disks"
+		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
 				reflinkFix(info.MirrorsOff))
@@ -792,6 +796,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	// Tools.
+	key = "tools"
 	for _, t := range serverTools {
 		if slices.Contains(info.Missing, t.name) {
 			warn("the server has no " + t.name + ": " + t.without)
@@ -822,18 +827,13 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if len(holders) == 0 {
 		row("roles", "none")
 	}
-	for i, role := range sortedKeysOf(holders) {
-		key := ""
-		if i == 0 {
-			key = "roles"
-		}
+	for _, role := range sortedKeysOf(holders) {
 		for _, p := range holders[role] {
 			value := role + ": " + p
 			for _, k := range sortedKeysOf(exports[p]) {
 				value += " " + k + "=" + exports[p][k]
 			}
-			row(key, value)
-			key = ""
+			row("roles", value)
 		}
 		if len(holders[role]) > 1 {
 			warn("role " + role + " is held by " + strings.Join(holders[role], " and ") + ": a role is one compose project's on a host, and imports read either")
@@ -846,11 +846,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if len(info.Environments) == 0 {
 		row("environments", "none")
 	}
-	for i, env := range info.Environments {
-		key := ""
-		if i == 0 {
-			key = "environments"
-		}
+	for _, env := range info.Environments {
 		h := parseStatus(env.Status)
 		value := env.Path + "  "
 		switch {
@@ -901,7 +897,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		case h.busy && !noFlock:
 			value += "  an operation running"
 		}
-		row(key, value)
+		row("environments", value)
 		// Each as --status says it. A mark while the release lock is held
 		// is what runs (a restore, an import, a sync): said above, not
 		// warned; the cut and left lines only show while it is free.
@@ -927,11 +923,16 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if len(bad) > 0 {
 			problems = append(problems, strings.Join(bad, ", "))
 		}
-		for _, p := range problems {
-			warn(env.Path+": "+p, statusFix(host, info.Root, env.Path))
+		// One warning of every problem, with the --status that shows them.
+		if len(problems) > 0 {
+			var lines []string
+			for _, p := range problems {
+				lines = append(lines, env.Path+": "+p)
+			}
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Fixes: []report.Remedy{statusFix(host, info.Root, env.Path)}})
 		}
 	}
-	return lines, warnings
+	return es
 }
 
 // clockOffset says d, the server's clock less the local one, as
@@ -969,6 +970,16 @@ func reflinkFix(mirrorsOff bool) report.Remedy {
 type diskUse struct {
 	value, warn string
 	fixes       []report.Remedy
+}
+
+// entries are the disk's line under disks, more after its value, then
+// its warning, an entry of its own with its fixes.
+func (u diskUse) entries(more string) []remote.StatusEntry {
+	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "disks", Lines: []string{u.value + more}}}
+	if u.warn != "" {
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "disks", Lines: []string{u.warn}, Fixes: u.fixes})
+	}
+	return es
 }
 
 // diskWarnEnv off judges no disk full, for tests whose disk may be.

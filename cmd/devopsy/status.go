@@ -35,7 +35,7 @@ const statusShowFormat = `<level>\t<key>\t<value>[\t<fix>]`
 // none), then the project's own entries (capabilities/status/show). In a
 // release on a server, its images and the server's disks too.
 func runStatus(cwd string, args []string, color bool) int {
-	asJSON, code := statusArgs(args, "usage: devopsy --status [--json]")
+	asJSON, code := reportArgs("--status", args, "usage: devopsy --status [--json]")
 	if code >= 0 {
 		return code
 	}
@@ -85,7 +85,7 @@ func runStatusFacts(cwd string, args []string) int {
 // or running), then the facts of its current release there, formatted
 // here.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
-	asJSON, code := statusArgs(args, "usage: devopsy @"+targetRef(t)+" --status [--json]")
+	asJSON, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json]")
 	if code >= 0 {
 		return code
 	}
@@ -109,23 +109,6 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	r.addHeader(parseStatus(header), t)
 	r.addFacts(facts, remote.ServerRef(t))
 	return r.print(os.Stdout, styleFor(os.Stdout), fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), asJSON)
-}
-
-// statusArgs reads --status's arguments: whether --json, and code, the
-// exit code when that is all (help, a usage error), else -1.
-func statusArgs(args []string, usage string) (asJSON bool, code int) {
-	for _, a := range args {
-		switch a {
-		case "--help", "-h":
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--status"]))
-			return false, 0
-		case "--json":
-			asJSON = true
-		default:
-			return false, fail(usage)
-		}
-	}
-	return asJSON, -1
 }
 
 // statusFacts are the facts of the project at cwd (projectDir its
@@ -421,14 +404,7 @@ func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
 	r.Project = facts.Project
 	r.Disks = facts.Disks
 	for _, d := range facts.Disks {
-		use := judgeDisk(d, facts.SnapshotRoot, ref)
-		e := remote.StatusEntry{Level: remote.StatusInfo, Key: "disks", Lines: []string{use.value}}
-		if use.warn != "" {
-			e.Level = remote.StatusWarning
-			e.Lines = append(e.Lines, use.warn)
-			e.Fixes = use.fixes
-		}
-		r.Entries = append(r.Entries, e)
+		r.Entries = append(r.Entries, judgeDisk(d, facts.SnapshotRoot, ref).entries("")...)
 	}
 	r.head = len(r.Entries)
 	r.Containers = []remote.StatusContainer{}
@@ -469,88 +445,26 @@ func containerTrouble(state, health string, exitCode int) string {
 // print shows r on w in st under heading (none locally), or prints it
 // as JSON: statusWarned when something needs attention.
 func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+	r.Attention = entriesWarn(r.Entries) || slices.ContainsFunc(r.Containers, func(c remote.StatusContainer) bool { return c.Level == remote.StatusWarning })
 	code := 0
-	for _, e := range r.Entries {
-		if e.Level == remote.StatusWarning {
-			r.Attention = true
-		}
-	}
-	for _, c := range r.Containers {
-		if c.Level == remote.StatusWarning {
-			r.Attention = true
-		}
-	}
 	if r.Attention {
 		code = statusWarned
 	}
-	if r.Entries == nil {
-		r.Entries = []remote.StatusEntry{}
-	}
 	if asJSON {
-		// Its lines and commands copyable as the text's are: a bracketed
-		// address quoted.
-		for i := range r.Entries {
-			e := &r.Entries[i]
-			e.Lines = slices.Clone(e.Lines)
-			for j := range e.Lines {
-				e.Lines[j] = report.Copyable(e.Lines[j])
-			}
-			e.Fixes = slices.Clone(e.Fixes)
-			for j := range e.Fixes {
-				f := &e.Fixes[j]
-				f.Text = report.Copyable(f.Text)
-				f.Cmds = slices.Clone(f.Cmds)
-				for k := range f.Cmds {
-					f.Cmds[k] = report.Copyable(f.Cmds[k])
-				}
-			}
-		}
-		out, err := json.MarshalIndent(r, "", "  ")
-		if err != nil {
+		r.Entries = copyableEntries(r.Entries)
+		if err := printJSON(w, r); err != nil {
 			return failErr(err)
 		}
-		fmt.Fprintln(w, string(out))
 		return code
 	}
-	width := len("containers")
-	for _, e := range r.Entries {
-		width = max(width, len(e.Key))
-	}
-	col := width + 2
-	row := func(key, value string) string {
-		return strings.TrimRight(fmt.Sprintf("%-*s%s", col, key, value), " ")
-	}
-	entries := func(es []remote.StatusEntry) {
-		prev := ""
-		for _, e := range es {
-			paint := func(s string) string { return s }
-			if e.Level == remote.StatusWarning {
-				paint = st.warn
-			}
-			for i, l := range e.Lines {
-				key := ""
-				if i == 0 && e.Key != prev {
-					key = e.Key
-				}
-				fmt.Fprintln(w, paint(report.Copyable(row(key, l))))
-			}
-			for _, f := range e.Fixes {
-				if f.Text != "" {
-					fmt.Fprintln(w, paint(report.Copyable(row("", f.Text))))
-				}
-				for _, c := range f.Cmds {
-					fmt.Fprintln(w, st.head(report.Copyable(row("", "$ "+c))))
-				}
-			}
-			prev = e.Key
-		}
-	}
+	tab := newEntryTable(w, st, r.Entries, "containers")
+	row := tab.row
 	if heading != "" {
 		fmt.Fprintln(w, st.name(report.Copyable(heading)))
 	} else {
 		fmt.Fprintln(w, row("project", r.Project))
 	}
-	entries(r.Entries[:r.head])
+	tab.print(r.Entries[:r.head])
 	switch {
 	case r.Project == "":
 		// An environment with no release live: no project to list.
@@ -584,7 +498,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 			fmt.Fprintln(w, line)
 		}
 	}
-	entries(r.Entries[r.head:])
+	tab.print(r.Entries[r.head:])
 	return code
 }
 

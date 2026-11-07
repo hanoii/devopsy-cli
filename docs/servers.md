@@ -74,7 +74,8 @@ in `--shell-host`; anywhere else it refuses. It reports:
 - every environment under the release root, with its current release,
   its containers and its state.
 
-What needs attention is a warning, with its fix:
+What needs attention is a warning under the line it is about, with its
+fix:
 
 - an older devopsy;
 - a reboot the system asks for;
@@ -101,7 +102,9 @@ What is running (a sync, an import, a restore) is reported as
 information. So is the memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
-It exits 3 when it warned, so CI can run it as a check.
+It exits 3 when it warned, so CI can run it as a check. `--json` prints
+the facts and the same lines as JSON on stdout, each warning with its
+fixes, for scripts and agents.
 
 ## The server's devopsy
 

@@ -149,7 +149,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return filter(r, cur)
 	case first == "--env":
 		return showFlag(words, cur)
-	case first == "--status":
+	case first == "--status" || first == "--server-info":
 		r := Result{Directive: DirectiveNoFileComp}
 		if len(words) == 2 {
 			r.Candidates = []Candidate{jsonCandidate}
@@ -336,7 +336,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return r
 	case "--release-no-sync", "--rollback", "--reload", "--inherit":
 		return flags([]Candidate{help})
-	case "--status":
+	case "--status", "--server-info":
 		return flags([]Candidate{jsonCandidate, help})
 	case "--ssh-keys":
 		switch {
