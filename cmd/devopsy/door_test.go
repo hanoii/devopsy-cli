@@ -673,3 +673,37 @@ esac
 		t.Errorf("a build not here yet, which compose would build at the start: %v", err)
 	}
 }
+
+// A project's build runs on a BuildKit of its own, made at its first build: on one builder,
+// a cache mount is shared across projects by its id. Its settings stay the door's.
+func TestDoorBuildsOnTheProjectsBuilder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	docker := filepath.Join(dir, "docker")
+	if err := testfile.Write(docker, []byte(`#!/bin/sh
+echo "$BUILDX_CONFIG $*" >>`+log+`
+case "$*" in
+  "buildx inspect "*) [ -e `+dir+`/made ] ;;
+  "buildx create "*) touch `+dir+`/made ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}, real: docker}
+	for range 2 {
+		env, err := side.builder()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(env, "BUILDX_BUILDER=devopsy-shop") || !slices.Contains(env, "BUILDX_CONFIG="+filepath.Join(dir, "space", "buildx")) {
+			t.Errorf("a build's environment: %q", env)
+		}
+	}
+	got, _ := os.ReadFile(log)
+	space := filepath.Join(dir, "space", "buildx")
+	want := space + " buildx inspect devopsy-shop\n" + space + " buildx create --name devopsy-shop --driver docker-container\n" + space + " buildx inspect devopsy-shop\n"
+	if string(got) != want {
+		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
+	}
+}

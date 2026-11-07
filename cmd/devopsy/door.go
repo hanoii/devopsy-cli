@@ -945,6 +945,13 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
 	}
+	if argv[0] == "build" {
+		b, err := s.builder()
+		if err != nil {
+			return doorRefused(err)
+		}
+		env = append(slices.Clone(env), b...)
+	}
 	cmd := []string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}
 	for _, p := range strings.Split(profiles, ",") {
 		if composeProfile.MatchString(p) {
@@ -1059,6 +1066,26 @@ func (s *doorSide) imageLock() (unlock func(), err error) {
 	}
 	s.lock = f
 	return unlock, nil
+}
+
+// builder is what a build's environment needs to run on this project's own BuildKit,
+// made at its first build: on one builder, cache mounts are shared across projects by
+// their id, so one project's build would fill a cache another's trusts. Its settings are
+// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets.
+func (s *doorSide) builder() ([]string, error) {
+	name := "devopsy-" + s.policy.Project
+	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name}
+	env := append(slices.Clone(s.env), b[0])
+	inspect := s.docker("buildx", "inspect", name)
+	inspect.Env = env
+	if inspect.Run() != nil {
+		create := s.docker("buildx", "create", "--name", name, "--driver", "docker-container")
+		create.Env, create.Stdout, create.Stderr = env, os.Stderr, os.Stderr
+		if err := create.Run(); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
+		}
+	}
+	return b, nil
 }
 
 // execKeeping execs docker keeping the image lock, if the door holds it, open in what

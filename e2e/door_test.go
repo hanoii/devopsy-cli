@@ -3,8 +3,10 @@
 package e2e
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A project user with no Docker socket, on a real kernel, Docker and sudo: what no unit
@@ -618,5 +620,51 @@ sleep 1`); code != 0 {
 	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
 	if out, code := op(t, dir, agent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
 		t.Errorf("a child at another address, under the rule (%d):\n%s", code, out)
+	}
+}
+
+// A door project builds on a BuildKit of its own: on one builder, a cache mount is shared
+// across projects by its id, and one project's build fills a cache another's trusts. The
+// control: the same two builds on the server's own builder see each other's.
+func TestDoorBuildCachesStayApart(t *testing.T) {
+	target := fmt.Sprintf("/cache-%d", time.Now().UnixNano())
+	dockerfile := func(name string) string {
+		return "FROM busybox:1.37\nRUN --mount=type=cache,target=" + target + " sh -c 'cat " + target + "/mark 2>/dev/null || echo none; echo " + name + " >" + target + "/mark' >/seen\n"
+	}
+	build := func(project string) string {
+		user := doorUser(t, project)
+		script := fmt.Sprintf(`set -e
+mkdir -p ~/%[1]s/prod/b && cd ~/%[1]s/prod/b
+cat >Dockerfile <<'D'
+%[2]sD
+printf 'services:\n  app:\n    build: .\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n' >compose.yaml
+COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, project, dockerfile(project))
+		if out, code := doorAs(t, user, script); code != 0 {
+			t.Fatalf("%s's build (%d):\n%s", project, code, out)
+		}
+		out, _ := doorRoot(t, "docker run --rm "+project+"-prod-app cat /seen")
+		return strings.TrimSpace(out)
+	}
+	t.Cleanup(func() {
+		doorRoot(t, "docker image rm -f doorcachea-prod-app doorcacheb-prod-app doorcachec doorcached >/dev/null 2>&1")
+	})
+	if got := build("doorcachea"); got != "none" {
+		t.Fatalf("the first build saw a cache: %q", got)
+	}
+	if got := build("doorcacheb"); got != "none" {
+		t.Errorf("a project's build saw another's cache: %q", got)
+	}
+	// The control: the deploy user's own builds share the server's builder.
+	control := fmt.Sprintf(`set -e
+mkdir -p /tmp/doorcachec /tmp/doorcached
+cat >/tmp/doorcachec/Dockerfile <<'D'
+%sD
+cat >/tmp/doorcached/Dockerfile <<'D'
+%sD
+docker build -q -t doorcachec /tmp/doorcachec >/dev/null
+docker build -q -t doorcached /tmp/doorcached >/dev/null
+docker run --rm doorcached cat /seen`, dockerfile("doorcachec"), dockerfile("doorcached"))
+	if out, code := execIn(t, []string{"-u", "devopsy", "-w", "/", doorServer(t)}, control); code != 0 || strings.TrimSpace(out) != "doorcachec" {
+		t.Errorf("the control: the server's builder kept no shared cache (%d): %q", code, out)
 	}
 }
