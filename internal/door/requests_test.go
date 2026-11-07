@@ -189,9 +189,13 @@ func TestDecidePS(t *testing.T) {
 		{"all, with its format", []string{"-a", "--format", "{{.Labels}}"}, cut},
 		{"a role's holder, with more of it", []string{"--filter", "label=devopsy.role=proxy", "--format", "{{.Labels}}"}, cut},
 		{"imports' look, with more", []string{"-q", "--no-trunc", "-a", "--filter", "name=x"}, cut},
-		// BUG: a caller's id filter stays in, and filters of one key widen each other, so the
-		// door's own id filters add to it: another's row comes back, all its labels included.
+		// Filters of one key widen each other: a caller's id filter beside the door's own
+		// would bring another's row back, all its labels included. Docker's CLI trims a
+		// filter's key and lowercases it, so every spelling of id goes.
 		{"an id filter of another's", []string{"-a", "--filter", "id=victim", "--format", "{{.Labels}}"}, cut},
+		{"an id filter in capitals", []string{"-a", "--filter", "ID=victim", "--format", "{{.Labels}}"}, cut},
+		{"an id filter in mixed case", []string{"-a", "--filter=Id=victim", "--format", "{{json .}}"}, cut},
+		{"an id filter with spaces", []string{"-a", "--filter", " id =victim"}, cut},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -204,8 +208,11 @@ func TestDecidePS(t *testing.T) {
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("ends %q, want %q", got, tt.want)
 			}
-			if slices.Contains(a.Docker, "id=victim") || slices.Contains(a.Docker, "id=bare") {
-				t.Errorf("reaches another's: %q", a.Docker)
+			for _, arg := range a.Docker {
+				key, value, _ := strings.Cut(arg, "=")
+				if strings.ToLower(strings.TrimSpace(key)) == "id" && (strings.Contains(value, "victim") || strings.Contains(value, "bare")) {
+					t.Errorf("reaches another's: %q", a.Docker)
+				}
 			}
 		})
 	}

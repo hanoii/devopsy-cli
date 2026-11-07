@@ -129,6 +129,9 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a capability in another form", svc(`,"cap_add":"SYS_ADMIN"`), "cap_add must be a list"},
 		{"a variable in a service", svc(`,"image":"${X}"`), "a variable"},
 		{"a variable in a key", `{"name":"shop-prod","services":{"${X}":{}}}`, "a variable"},
+		// A start runs the image the door read: compose pulling or building one then would run another.
+		{"a pull at every start", svc(`,"pull_policy":"always"`), "pull_policy always"},
+		{"a build at every start", svc(`,"pull_policy":"build"`), "pull_policy build"},
 		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"shop-web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
 		// Compose makes a service's name an alias on each of its networks.
 		{"another's name on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{"t":null}`) + `}}`, "a service is named shop-<name>"},
@@ -317,7 +320,11 @@ func TestCheckVerb(t *testing.T) {
 		ok   bool
 	}{
 		{"up -d --wait --remove-orphans", true},
-		{"up --pull never web", true}, {"up --pull always web", false},
+		// A start runs the image the door read: compose pulling one then would run another.
+		{"up --pull never web", true},
+		{"up --pull always web", false},
+		{"up -d --pull=always", false},
+		{"create --pull always", false},
 		{"up --wait-timeout=30", true},
 		{"down -v --rmi local", true},
 		{"down --rmi=local", true},
@@ -333,8 +340,14 @@ func TestCheckVerb(t *testing.T) {
 		{"up --env-file /x", false},
 		{"exec -u 0 web sh", false},
 		{"exec --privileged web sh", false},
-		{"exec -u 10001:10001 web sh", true}, {"exec -u 1000 web sh", false},
+		// Who a shell runs as is held as a service's user: is: numbers, never root or a
+		// host id (ForbiddenIDs), and never a name, which the image maps to any uid.
+		{"exec -u 10001:10001 web sh", true},
+		{"exec -u 1000 web sh", false},
+		{"exec -u 10001:999 web sh", false},
 		{"exec --user app web sh", false},
+		{"exec -u admin web sh", false},
+		{"exec --user=admin:admin web sh", false},
 		{"exec -u root:root web sh", false},
 		{"exec -u 1:0 web sh", false},
 		{"exec -u 00 web sh", false},
