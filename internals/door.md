@@ -18,6 +18,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A project user's `shared/mnt` is a link into `<space>`, made at a release's start (`--mnt-ready`), and a compose name comes from where an environment is in that user's tree, never from a caller (`Policy.NameOf`).
 - Entries are made by the door, so a project user can write inside one and never replace it: when devopsy's own mkdir is refused (`makeEntry`), and what a file binds, at `compose config`, since a step writes in an entry before anything starts (`entries`), and at `up` (`bindEntries`).
 - An entry the door made a directory, not knowing it is a file, is replaced while empty: the two are told apart only by an import or a sync.
+- A service on a shared network is named `<project>-<name>` (`OwnName`), and holds no alias or fixed address there: compose makes each service's name an alias on its networks, which would answer for another's name (for example `traefik` on `tunnel`).
 - A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.
 - Of another project's labels, only its role, compose project and exports are ever read (`exportedLabel`).
 - A util container is one of the forms in `internal/door/forms.go`, its command, its arguments and its mounts checked together, never one a caller gives: it is root on the host's files, and a command paired with another's mounts writes where a bind goes by.

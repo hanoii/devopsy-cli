@@ -343,7 +343,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 			}
 		}
 	}
-	checkAliases(file, svc, s, fail)
+	checkAliases(file, svc, s, p, fail)
 	for _, m := range list(s["volumes"]) {
 		v, ok := m.(map[string]any)
 		if !ok {
@@ -448,13 +448,20 @@ func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...an
 }
 
 // checkAliases refuses an alias on a network others share: it would answer for
-// their names.
-func checkAliases(file map[string]any, svc string, s map[string]any, fail func(string, ...any)) {
+// their names. So would the service's own name, which compose makes an alias on each
+// of its networks: there it is one of this project's (OwnName).
+func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	networks, _ := file["networks"].(map[string]any)
 	nets, _ := s["networks"].(map[string]any)
+	if _, ok := s["networks"]; !ok && s["network_mode"] == nil {
+		nets = map[string]any{"default": nil} // compose's own, unless the file makes it shared
+	}
 	for _, net := range sortedKeys(nets) {
 		top, _ := networks[net].(map[string]any)
 		opts, _ := nets[net].(map[string]any)
+		if truthy(top["external"]) && !p.OwnName(svc) {
+			fail("%s: on the shared network %s, a service is named %s-<name>: compose answers for its name there", svc, net, p.Project)
+		}
 		if k := unknownKey(opts, netKeys); k != "" {
 			fail("%s: network %s: %s", svc, net, k)
 		}

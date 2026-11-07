@@ -145,7 +145,7 @@ func TestCheckFileUlimitsGiveNoPriority(t *testing.T) {
 func TestCheckFileTakesNoFixedAddressOnASharedNetwork(t *testing.T) {
 	t.Parallel()
 	file := func(net, opts string) map[string]any {
-		return parse(t, `{"name":"shop-prod","networks":`+net+`,"services":{"web":`+safe(`,"networks":{"n":`+opts+`}`)+`}}`)
+		return parse(t, `{"name":"shop-prod","networks":`+net+`,"services":{"shop-web":`+safe(`,"networks":{"n":`+opts+`}`)+`}}`)
 	}
 	own := `{"n":{"name":"shop-prod_n"}}`
 	shared := `{"n":{"name":"traefik","external":true}}`

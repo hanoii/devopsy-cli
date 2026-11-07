@@ -51,7 +51,7 @@ func TestCheckFileTakesWhatTemplatesUse(t *testing.T) {
 	file := parse(t, `{"name":"shop-prod","x-any":1,
 	  "networks":{"default":{"name":"shop-prod_default","internal":true},"proxy":{"name":"shop-prod_proxy"},"tunnel":{"name":"traefik","external":true}},
 	  "volumes":{"data":{"name":"shop-prod_data"}},
-	  "services":{"web":`+safe(`,"read_only":true,"cap_add":["NET_BIND_SERVICE"],"cap_drop":["ALL"],"tmpfs":["/tmp"],
+	  "services":{"shop-web":`+safe(`,"read_only":true,"cap_add":["NET_BIND_SERVICE"],"cap_drop":["ALL"],"tmpfs":["/tmp"],
 	    "labels":{"traefik.enable":"true","devopsy.data":"volumes","":""},
 	    "environment":{"A":"b"},"networks":{"default":null,"tunnel":null},"logging":{"driver":"local"},
 	    "deploy":{"resources":{"limits":{"memory":"1g"}}},"post_start":[{"command":["true"]}],
@@ -59,7 +59,7 @@ func TestCheckFileTakesWhatTemplatesUse(t *testing.T) {
 	if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
 		t.Fatalf("refused: %v", errs)
 	}
-	labels := file["services"].(map[string]any)["web"].(map[string]any)["labels"].(map[string]any)
+	labels := file["services"].(map[string]any)["shop-web"].(map[string]any)["labels"].(map[string]any)
 	if _, ok := labels[""]; ok {
 		t.Error("a label that interpolated to nothing stayed")
 	}
@@ -129,7 +129,10 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a capability in another form", svc(`,"cap_add":"SYS_ADMIN"`), "cap_add must be a list"},
 		{"a variable in a service", svc(`,"image":"${X}"`), "a variable"},
 		{"a variable in a key", `{"name":"shop-prod","services":{"${X}":{}}}`, "a variable"},
-		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
+		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"shop-web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
+		// Compose makes a service's name an alias on each of its networks.
+		{"another's name on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{"t":null}`) + `}}`, "a service is named shop-<name>"},
+		{"another's name on a shared default", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(``) + `}}`, "a service is named shop-<name>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
