@@ -66,6 +66,14 @@ func doorRoot(t *testing.T, script string) (string, int) {
 	return execIn(t, []string{"-w", "/", doorServer(t)}, script)
 }
 
+// doorEntries is what a failure needs to say of a compose name's entries: their owners,
+// modes and ACLs, which decide what its project user may write there.
+func doorEntries(t *testing.T, name string) string {
+	t.Helper()
+	out, _ := doorRoot(t, "cd "+doorSpace+"/mnt/"+name+" 2>&1 && ls -lna . && getfacl -p . * 2>&1")
+	return out
+}
+
 // doorAs runs script as user on the door's server, with a login's PATH.
 func doorAs(t *testing.T, user, script string) (string, int) {
 	t.Helper()
@@ -618,7 +626,7 @@ sleep 1`); code != 0 {
 	// forwarded to the project's user there.
 	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
 	if out, code := op(t, dir, agent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
-		t.Errorf("a child at another address, under the rule (%d):\n%s", code, out)
+		t.Errorf("a child at another address, under the rule (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))
 	}
 }
 
