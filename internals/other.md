@@ -13,7 +13,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - A one-off container (a compose run) is no service's: neither command lists or judges it.
 - The status capability's lines are `<level>\t<key>\t<value>[\t<fix>]` (`parseStatusShow`): one key on lines in a row is one entry, a line of another shape a warning naming it, a failure of `show` a warning, and the rest still shown.
 - In a release `images.StatusLines` names the services held (`HeldLabel`, own names included, said), those running another image than the current release's `ComposeFile` gives them (another activation's container) and those running another image than their `devopsy.digest` label says (a plain up that followed a moved name), both warned.
-- The services with no container come from `compose config --services`, never through the door (`behindDoor`: the docker found is devopsy and the socket is out of reach), whose `config` makes the binds' entries.
+- The services with no container come from `compose config --services` run by the real docker (`realDocker`), never the door's, whose `config` makes the binds' entries.
 - The disks are the release root's, Docker's data root's and containerd's (`docker info`, not through the door, where it is the admin's), the snapshot root's and /, with no reflink tried, judged by `judgeDisk`, which `--server-info` uses too; `DEVOPSY_INTERNAL_DISK_WARN=off` judges none, for tests.
 
 ## --server-info

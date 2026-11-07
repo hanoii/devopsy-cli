@@ -152,14 +152,10 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 			running = append(running, e.Service)
 		}
 	}
-	// The services with none, of the active profiles. Never through the
-	// door: its compose config makes the binds' entries, and --status
-	// changes nothing.
-	if !behindDoor() {
-		for _, svc := range strings.Fields(composeServices(cwd)) {
-			if !has[svc] {
-				facts.Containers = append(facts.Containers, remote.StatusContainer{Service: svc, State: remote.StatusNoContainer})
-			}
+	// The services with none, of the active profiles.
+	for _, svc := range strings.Fields(composeServices(cwd)) {
+		if !has[svc] {
+			facts.Containers = append(facts.Containers, remote.StatusContainer{Service: svc, State: remote.StatusNoContainer})
 		}
 	}
 	// In a release, the images held by digest and those a plain up moved
@@ -183,14 +179,16 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 // composeServices is compose config --services of the project at cwd,
 // empty when compose cannot read the project: what it says then is the
 // project's own commands' to say (a variable missing, say), and --status
-// lists the containers all the same.
+// lists the containers all the same. It runs the real docker, never the
+// door's: config needs no daemon, and the door's would make the binds'
+// entries, where --status changes nothing.
 func composeServices(cwd string) string {
 	plan, err := cli.Build(cwd, []string{"--", "config", "--services"}, os.Environ())
 	if err != nil {
 		return ""
 	}
 	trace(plan.Args)
-	cmd := exec.Command("docker", plan.Args[1:]...)
+	cmd := exec.Command(realDocker(), plan.Args[1:]...)
 	cmd.Env = plan.Env
 	out, err := cmd.Output()
 	if err != nil {

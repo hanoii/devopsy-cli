@@ -205,10 +205,11 @@ func dataFlags(projectDir string, words []string, cur string, onTarget bool) Res
 	return filter(r, cur)
 }
 
-// showFlag completes --env's one option.
-// jsonCandidate is --status's --json, locally and on a target.
+// jsonCandidate is --status's and --server-info's --json, locally and
+// on a target.
 var jsonCandidate = Candidate{"--json", "the same as JSON, for scripts and agents", GroupDevopsy}
 
+// showFlag completes --env's one option.
 func showFlag(words []string, cur string) Result {
 	r := Result{Directive: DirectiveNoFileComp}
 	if len(words) == 2 {

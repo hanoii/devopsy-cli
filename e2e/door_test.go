@@ -171,7 +171,13 @@ func TestDoorProjectsLife(t *testing.T) {
 	op(t, dir, "echo '# again' >>.devopsy/compose.yaml")
 	release("a second release", "--release")
 	release("a rollback", "--rollback --yes")
-	release("--status", "--status")
+	// --status lists a service with no container: compose config, as the
+	// project user, needs no door.
+	release("a service removed", "rm -fs web")
+	if out := release("--status", "--status"); !strings.Contains(out, "web") || !strings.Contains(out, "no container") {
+		t.Errorf("--status does not list web, removed:\n%s", out)
+	}
+	release("its service back", "up -d --wait web")
 	if out, code := op(t, dir, "NOTE=hello devopsy @prod --vars set NOTE"); code != 0 {
 		t.Fatalf("--vars set (%d):\n%s", code, out)
 	}

@@ -1125,8 +1125,7 @@ Examples:
 
 What is running. In a project: its containers (state and health, as
 docker compose ps sees them, a run's left out, and the services with
-none, except behind a server's door),
-then what the project's status capability prints
+none), then what the project's status capability prints
 (.devopsy/capabilities/status/show), its URL, say. With a target: the
 current release there (id, commit, when, by whom, how many releases are
 kept), the parent and the last sync for a child, what is running or cut
