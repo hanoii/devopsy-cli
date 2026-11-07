@@ -198,7 +198,9 @@ case "$*" in
     [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
     printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "${FAKE_APP_SOURCE:-$dir/mnt${FAKE_APP_MOUNT-/storage}}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   # The services of the active profiles, as compose config --services.
-  *" config --services") for s in $svcs; do echo "$s"; done ;;
+  *" config --services")
+    [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
+    for s in $svcs; do echo "$s"; done ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
@@ -2670,6 +2672,11 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	// A service with no container is listed as such.
 	if out, code := s.run([]string{"FAKE_ABSENT=db"}, "--status"); code != 0 || !strings.Contains(out, "  db       no container\n") || strings.Count(out, "  db ") != 1 {
 		t.Errorf("a service with no container (%d):\n%s", code, out)
+	}
+	// A project compose cannot read lists its containers all the same,
+	// and compose's error is its own commands' to say.
+	if out, code := s.run([]string{"FAIL_CONFIG=shop"}, "--status"); code != 0 || strings.Contains(out, "no such file") || !strings.Contains(out, "  app ") {
+		t.Errorf("a project compose config fails on (%d):\n%s", code, out)
 	}
 	// A container restarting needs attention.
 	if out, code := s.run([]string{"FAKE_DB_RESTARTING=1"}, "--status"); code != statusWarned || !strings.Contains(out, "  db       restarting\n") {

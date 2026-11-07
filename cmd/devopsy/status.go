@@ -156,12 +156,9 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 	// door: its compose config makes the binds' entries, and --status
 	// changes nothing.
 	if !behindDoor() {
-		var services bytes.Buffer
-		if compose(cwd, &services, "config", "--services") == nil {
-			for _, svc := range strings.Fields(services.String()) {
-				if !has[svc] {
-					facts.Containers = append(facts.Containers, remote.StatusContainer{Service: svc, State: remote.StatusNoContainer})
-				}
+		for _, svc := range strings.Fields(composeServices(cwd)) {
+			if !has[svc] {
+				facts.Containers = append(facts.Containers, remote.StatusContainer{Service: svc, State: remote.StatusNoContainer})
 			}
 		}
 	}
@@ -181,6 +178,25 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 		facts.Disks, facts.SnapshotRoot = serverDisks()
 	}
 	return facts, nil
+}
+
+// composeServices is compose config --services of the project at cwd,
+// empty when compose cannot read the project: what it says then is the
+// project's own commands' to say (a variable missing, say), and --status
+// lists the containers all the same.
+func composeServices(cwd string) string {
+	plan, err := cli.Build(cwd, []string{"--", "config", "--services"}, os.Environ())
+	if err != nil {
+		return ""
+	}
+	trace(plan.Args)
+	cmd := exec.Command("docker", plan.Args[1:]...)
+	cmd.Env = plan.Env
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // statusShow runs the project's status capability, when it has one, with
