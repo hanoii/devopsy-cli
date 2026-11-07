@@ -62,8 +62,21 @@ var (
 )
 
 // cloneShape is a path in a project's clones: its directory, a take's in it, and from
-// either the clone's mnt or volumes, or one thing in those.
-var cloneShape = regexp.MustCompile(`^` + word + `(/` + word + `)?(/(mnt|volumes)(/` + word + `)?)?$`)
+// either the clone's mnt or volumes, or one thing in those. A take is never named mnt or
+// volumes: its path would then also be one inside a copy, the project's own names and
+// links, which a root container would follow.
+func cloneShape(rest string) bool {
+	parts := strings.Split(rest, "/")
+	for _, part := range parts {
+		if !wordOnly.MatchString(part) {
+			return false
+		}
+	}
+	if len(parts) > 1 && !kindDir.MatchString(parts[1]) {
+		parts = parts[1:] // a take
+	}
+	return len(parts) <= 3 && (len(parts) < 2 || kindDir.MatchString(parts[1]))
+}
 
 func target(pattern string) *regexp.Regexp { return regexp.MustCompile(`^` + pattern + `$`) }
 
@@ -246,7 +259,7 @@ func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 	if rest, ok := strings.CutPrefix(real, p.Clones()+"/"); ok {
 		// As deep as devopsy's own clones go: what is below is a container's to have
 		// made, and a root container handed that holds whatever it says.
-		if !cloneShape.MatchString(rest) {
+		if !cloneShape(rest) {
 			return 0, "", refuse("docker run: a path inside a clone: %s", m.source)
 		}
 		return kindClone, real, nil
