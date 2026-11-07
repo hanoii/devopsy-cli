@@ -403,6 +403,15 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 		}
 	}
 	out = append(out, RootUtil()...)
+	// What it writes in an entry, with modes of the copy's, comes back to the project
+	// user when it exits, or for one detached when it is removed (Removes).
+	if !slices.Contains(opts, "-d") {
+		for i, m := range mounts {
+			if !m.readOnly && strings.HasPrefix(placed[i], filepath.Join(p.Space, "mnt")+"/") && filepath.Dir(placed[i]) != filepath.Join(p.Space, "mnt") {
+				action.Regrant = append(action.Regrant, placed[i])
+			}
+		}
+	}
 	action.Docker = append(append(append([]string{"run"}, out...), known.Image), cmd...)
 	return action, nil
 }

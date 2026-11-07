@@ -287,3 +287,29 @@ func TestDecideRestoreTakesNoNetwork(t *testing.T) {
 		t.Errorf("the caller's network: %q", a.Stream.Docker)
 	}
 }
+
+// A root copy's modes narrow the project user's ACL in what it writes, so a form says the
+// entries it writes, for the door to give back once it exits: never what it only reads, and
+// never a whole mnt, the deploy user's.
+func TestDecideRunSaysWhatItWrites(t *testing.T) {
+	t.Parallel()
+	mnt, dev := "/space/mnt/shop-prod", "/space/mnt/shop-dev"
+	for _, tt := range []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{"an rsync, narrowed to its entry", []string{"run", "-v", mnt + ":/src:ro", "-v", dev + ":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, []string{dev + "/data"}},
+		{"a receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt + ":/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}, []string{mnt + "/data"}},
+		{"a share", []string{"run", "-v", mnt + "/data:/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"}, []string{dev + "/data"}},
+		{"an emptying of the whole mnt", []string{"run", "-v", mnt + ":/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"}, nil},
+	} {
+		a, err := decide(t, tt.argv...)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if !slices.Equal(a.Regrant, tt.want) {
+			t.Errorf("%s: gives back %q, want %q", tt.name, a.Regrant, tt.want)
+		}
+	}
+}

@@ -27,6 +27,8 @@ type Policy struct {
 	Space string
 	// Tree is the project's release root, which that user owns.
 	Tree string
+	// UID is the project user's, for what is given it as root (the door's regrant).
+	UID string
 	// Joinable are shared networks it may join.
 	Joinable []string
 	// Roles are the roles the admin gave it.

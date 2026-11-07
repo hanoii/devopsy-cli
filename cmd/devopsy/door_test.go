@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -709,14 +708,10 @@ esac
 	}
 }
 
-// A root copy's modes narrow what the project user may write in its entries (an ACL's mask),
-// so each start gives it back, as root, where it was lost; with nothing made yet, nothing runs.
-func TestDoorRegrantsItsEntries(t *testing.T) {
+// A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
+// mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
+func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
 	t.Parallel()
-	me, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
 	log := filepath.Join(dir, "docker.log")
 	docker := filepath.Join(dir, "docker")
@@ -725,22 +720,20 @@ func TestDoorRegrantsItsEntries(t *testing.T) {
 	if err := testfile.Write(docker, []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	side := &doorSide{policy: door.Policy{Project: "shop", User: me.Username, Space: filepath.Join(dir, "space")}, real: docker}
-	if err := side.regrant("shop-prod"); err != nil {
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", UID: "10002", Space: filepath.Join(dir, "space")}, real: docker}
+	if err := side.regrant(nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(log); err == nil {
-		t.Error("a grant with no entries made yet")
+		t.Error("a grant with no entry")
 	}
-	if err := os.MkdirAll(side.policy.Mnt("shop-prod"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := side.regrant("shop-prod"); err != nil {
+	data, ini := filepath.Join(side.policy.Mnt("shop-prod"), "data"), filepath.Join(side.policy.Mnt("shop-prod"), "app.ini")
+	if err := side.regrant([]string{data, ini}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(log)
-	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges -v " + side.policy.Mnt("shop-prod") + ":/e " + remote.UtilImage +
-		" find /e -xdev -mindepth 1 ( -type d -o -type f ) ! -perm -g=w -exec setfacl -m u:" + me.Uid + ":rwX {} +\n"
+	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges -v " + data + ":/e/0 -v " + ini + ":/e/1 " + remote.UtilImage +
+		" find /e/0 /e/1 -xdev ( -type d -o -type f ) ! -perm -g=w -exec setfacl -m u:10002:rwX {} +\n"
 	if string(got) != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
 	}
