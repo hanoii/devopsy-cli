@@ -554,7 +554,9 @@ func terminalCode(t *testing.T, log string) string {
 
 func execIn(t *testing.T, where []string, script string) (string, int) {
 	t.Helper()
-	cmd := exec.Command("docker", append(append([]string{"exec"}, where...), "sh", "-c", script)...)
+	// Docker Engine's exec runs with umask 022, OrbStack's with 000, which leaves
+	// everything a test writes world-writable and hides what modes decide.
+	cmd := exec.Command("docker", append(append([]string{"exec"}, where...), "sh", "-c", "umask 022\n"+script)...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
