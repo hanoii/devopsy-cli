@@ -23,7 +23,7 @@ func TestCheckFileRunsTheImageItChecked(t *testing.T) {
 		}
 	}
 	for _, argv := range []string{"up --pull always", "up -d --pull=always", "create --pull always"} {
-		if err := CheckVerb(strings.Fields(argv)); err == nil {
+		if err := testPolicy.CheckVerb(strings.Fields(argv)); err == nil {
 			t.Errorf("%s: compose pulls the tag again after the labels were read", argv)
 		}
 	}
@@ -37,11 +37,11 @@ func TestCheckFileRunsTheImageItChecked(t *testing.T) {
 func TestCheckVerbExecUserIsNoHostOrNamedUser(t *testing.T) {
 	t.Parallel()
 	for _, argv := range []string{"exec -u admin web sh", "exec --user=admin:admin web sh", "exec -u 1000 web sh", "exec -u 10001:999 web sh"} {
-		if err := CheckVerb(strings.Fields(argv)); err == nil {
+		if err := testPolicy.CheckVerb(strings.Fields(argv)); err == nil {
 			t.Errorf("%s: a user `user:` would refuse", argv)
 		}
 	}
-	if err := CheckVerb(strings.Fields("exec -u 10001:10001 web sh")); err != nil {
+	if err := testPolicy.CheckVerb(strings.Fields("exec -u 10001:10001 web sh")); err != nil {
 		t.Errorf("the control: a plain numeric user refused: %v", err)
 	}
 }

@@ -330,8 +330,8 @@ func TestCheckVerb(t *testing.T) {
 		{"up --env-file /x", false},
 		{"exec -u 0 web sh", false},
 		{"exec --privileged web sh", false},
-		{"exec -u 1000 web sh", true},
-		{"exec --user app web sh", true},
+		{"exec -u 10001:10001 web sh", true}, {"exec -u 1000 web sh", false},
+		{"exec --user app web sh", false},
 		{"exec -u root:root web sh", false},
 		{"exec -u 1:0 web sh", false},
 		{"exec -u 00 web sh", false},
@@ -351,7 +351,7 @@ func TestCheckVerb(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.argv, func(t *testing.T) {
 			t.Parallel()
-			err := CheckVerb(strings.Fields(tt.argv))
+			err := testPolicy.CheckVerb(strings.Fields(tt.argv))
 			if (err == nil) != tt.ok {
 				t.Errorf("ok %v, want %v: %v", err == nil, tt.ok, err)
 			}

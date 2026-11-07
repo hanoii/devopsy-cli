@@ -397,14 +397,8 @@ func checkLimits(svc string, s map[string]any, fail func(string, ...any)) {
 
 func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	user, _ := s["user"].(string)
-	if m := numericUser.FindStringSubmatch(user); m == nil {
-		fail(`%s: user must be <uid>:<gid> in numbers, for example user: "10001:10001"`, svc)
-	} else {
-		uid, _ := strconv.Atoi(m[1])
-		gid, _ := strconv.Atoi(m[2])
-		if uid == 0 || gid == 0 || slices.Contains(p.ForbiddenIDs, uid) || slices.Contains(p.ForbiddenIDs, gid) {
-			fail("%s: user %s: a host id", svc, user)
-		}
+	if why := p.userRefused(user); why != "" {
+		fail("%s: user %s", svc, why)
 	}
 	// Without no-new-privileges a setuid image writes a root binary onto the host.
 	opts := list(s["security_opt"])
@@ -416,6 +410,23 @@ func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...
 			fail("%s: cap_add %v", svc, c)
 		}
 	}
+}
+
+// userRefused says why a container may not run as user, or nothing: a user is numbers
+// only, since a name is the image's to map (to 0, say), and never root or an id of the
+// host's (ForbiddenIDs), whose processes it would reach through /proc. One check for a
+// service's user: and for exec's -u.
+func (p Policy) userRefused(user string) string {
+	m := numericUser.FindStringSubmatch(user)
+	if m == nil {
+		return fmt.Sprintf(`%q: <uid>:<gid> in numbers, for example "10001:10001"`, user)
+	}
+	uid, _ := strconv.Atoi(m[1])
+	gid, _ := strconv.Atoi(m[2])
+	if uid == 0 || gid == 0 || slices.Contains(p.ForbiddenIDs, uid) || slices.Contains(p.ForbiddenIDs, gid) {
+		return user + ": a host id"
+	}
+	return ""
 }
 
 func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...any)) {

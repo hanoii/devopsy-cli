@@ -873,7 +873,7 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 // an unlinked file, so nothing of a project's environment stays on disk, with no .env,
 // in the release it says it is from, since devopsy reads compose's working_dir.
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
-	if err := door.CheckVerb(argv); err != nil {
+	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
 	refused := door.CheckFile(file, s.policy, argv[0], s)
@@ -951,7 +951,7 @@ func (s *doorSide) downProject(name string, flags []string) int {
 		return doorRefused(errors.New("refused: not this project's name: " + name))
 	}
 	argv := append([]string{"down"}, flags...)
-	if err := door.CheckVerb(argv); err != nil {
+	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
 	err := syscall.Exec(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)

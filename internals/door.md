@@ -28,7 +28,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - An image's own labels under `devopsy.` or a vet's prefix refuse it: they land in its containers' labels, past any check of a file's, and an image not here yet is pulled first so they are read.
 - A build writes only a tag of this project's, and holds no labels of its own.
 - The deploy user is who owns the binary (`deployUser`): an install of it as root would point the door at root.
-- No container runs as the deploy user's ids, the door's users' or the socket's group (`hostIDs`): it would be that user's to reach through `/proc`.
+- A container runs as `<uid>:<gid>` in numbers, never 0, the deploy user's ids, the door's users' or the socket's group (`hostIDs`), for a service's `user:` and `exec -u` alike (`userRefused`): a name is the image's to map to 0, and a host id is that user's to reach through `/proc`.
 - A server with project users also needs what `e2e/door_test.go`'s `doorServer` sets up: `sudo`, `acl`, the `devopsy-projects` group holding them, the two sudo rules (`%devopsy-projects` to the deploy user for `devopsy --door *`, the deploy user to them for `devopsy --door-read *`), `<space>` on its own mount, and the `docker` link to devopsy.
 - `read_all` is an admin's grant of reads of everything, secrets included, and nothing else.
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).

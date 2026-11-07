@@ -343,7 +343,7 @@ func TestCheckVerbOtherSpellings(t *testing.T) {
 		{"--project-directory", "/x", "up"},
 		{"-f", "/x", "up"},
 	} {
-		if err := CheckVerb(argv); err == nil {
+		if err := testPolicy.CheckVerb(argv); err == nil {
 			t.Errorf("%q is taken", argv)
 		}
 	}
