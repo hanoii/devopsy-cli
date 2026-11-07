@@ -231,7 +231,8 @@ func decidePS(args []string, p Policy, d Daemon) (*Action, error) {
 		docker = append(docker, "--format", f)
 	}
 	for _, f := range filters {
-		if !strings.HasPrefix(f, "id=") {
+		// Docker's CLI trims a filter's key and lowercases it: `ID=` and ` id =` are `id=`.
+		if key, _, _ := strings.Cut(f, "="); strings.ToLower(strings.TrimSpace(key)) != "id" {
 			docker = append(docker, "--filter", f)
 		}
 	}
