@@ -901,11 +901,15 @@ func dockerOut(ctx context.Context, args ...string) (string, error) {
 // harmless: a build tags the image only once complete, and the image a
 // rebuild replaced is removed without -f, so one a container still runs
 // stays.
-func ensureUtilImage(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "-f", "{{.Id}} {{.Created}}", remote.UtilImage).Output()
+func ensureUtilImage(ctx context.Context) error { return ensureUtilImageWith(ctx, "docker") }
+
+// ensureUtilImageWith is ensureUtilImage through the docker given: the door's own, for
+// its grants.
+func ensureUtilImageWith(ctx context.Context, docker string) error {
+	out, err := exec.CommandContext(ctx, docker, "image", "inspect", "-f", "{{.Id}} {{.Created}}", remote.UtilImage).Output()
 	if err != nil {
 		report.Info("building " + remote.UtilImage)
-		if err := buildUtilImage(ctx, false); err != nil {
+		if err := buildUtilImage(ctx, false, docker); err != nil {
 			return fmt.Errorf("building %s: %w", remote.UtilImage, err)
 		}
 		return nil
@@ -917,17 +921,17 @@ func ensureUtilImage(ctx context.Context) error {
 		return nil
 	}
 	report.Info("updating " + remote.UtilImage + ", built over a week ago")
-	if err := buildUtilImage(ctx, true); err != nil {
+	if err := buildUtilImage(ctx, true, docker); err != nil {
 		if ctx.Err() != nil {
 			return interrupted(ctx, err)
 		}
 		report.Warn("updating "+remote.UtilImage+" failed: going on with the one there", err.Error())
 		return nil
 	}
-	now, err := exec.CommandContext(ctx, "docker", "image", "inspect", "-f", "{{.Id}}", remote.UtilImage).Output()
+	now, err := exec.CommandContext(ctx, docker, "image", "inspect", "-f", "{{.Id}}", remote.UtilImage).Output()
 	if now := strings.TrimSpace(string(now)); err == nil && id != "" && now != "" && now != id {
 		// Untagged now; a container still running it keeps it.
-		_ = exec.CommandContext(ctx, "docker", "image", "rm", id).Run()
+		_ = exec.CommandContext(ctx, docker, "image", "rm", id).Run()
 	}
 	return nil
 }
@@ -937,7 +941,7 @@ func ensureUtilImage(ctx context.Context) error {
 // never a pipe: a docker that exits before reading it (its daemon down)
 // would raise SIGPIPE, which interruptible takes for the operator's
 // interrupt, cancelling the whole command.
-func buildUtilImage(ctx context.Context, refresh bool) error {
+func buildUtilImage(ctx context.Context, refresh bool, docker string) error {
 	f, err := os.CreateTemp("", "devopsy-util-*.Dockerfile")
 	if err != nil {
 		return err
@@ -950,7 +954,7 @@ func buildUtilImage(ctx context.Context, refresh bool) error {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs(refresh)...)
+	cmd := exec.CommandContext(ctx, docker, remote.BuildUtilImageArgs(refresh)...)
 	cmd.Stdin = f
 	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
 	return cmd.Run()

@@ -133,7 +133,7 @@
 
 - The hidden `--snapshot-step` is a feature flag, so an older server refuses every snapshot script before anything changes.
 - Release snapshots are a named feature, `release-snapshots`, found by `--snapshot-step release-` (`ReleaseSnapshotsFeature`): a server with manual snapshots only refuses a release with them on once its activation starts, after the upload, accepted, since an activation's needs are checked by its own session and the upload's by the upload's (internals/releases.md).
-- What came with release snapshots is under the same name: the mounts check's words after `restored` (`restart`, a restore's snapshot) and `devopsy-util:3` in a script's text, so every activation needs it; a new `UtilImage` tag (internals/data.md) is a named feature of its own, since a devopsy without the tag never readies it.
+- What came with release snapshots is under the same name: the mounts check's words after `restored` (`restart`, a restore's snapshot); the `UtilImage` tag in a script's text is a named feature of its own (`util-image-4` for `devopsy-util:4`, internals/data.md), so every activation needs it, since a devopsy without the tag never readies it.
 
 ## Tests
 

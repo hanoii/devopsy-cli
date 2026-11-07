@@ -391,9 +391,9 @@ func ChildSSH() []string {
 // root on the data and serves rsync across servers, so its base floats
 // on alpine:3 and gets its fixes within a week. Its tag changes with the
 // Dockerfile's packages. It was devopsy-rsync until October 2026, then
-// devopsy-util:1 and :2 (:3 added zstd, for snapshots): hosts keep those
-// until removed.
-const UtilImage = "devopsy-util:3"
+// devopsy-util:1, :2 and :3 (:3 added zstd, for snapshots, :4 acl, for the
+// door's grants): hosts keep those until removed.
+const UtilImage = "devopsy-util:4"
 
 // UtilImageMaxAge is how old UtilImage may get before it is rebuilt.
 const UtilImageMaxAge = 7 * 24 * time.Hour
@@ -408,8 +408,9 @@ const UtilImageFlag = "--util-image"
 // tar, find and chown, not busybox's: tar's --numeric-owner and
 // --overwrite, find's -user and -group with numbers and -exec ... +,
 // chown -h, as documented; zstd for snapshots' tars (Go's standard
-// library has none, and devopsy takes no dependency for it).
-var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar findutils coreutils zstd"}
+// library has none, and devopsy takes no dependency for it); setfacl for
+// what the door gives a project user back in its entries.
+var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar findutils coreutils zstd acl"}
 
 // RsyncCopy is how a sync copies an entry of mnt, in UtilImage, on one
 // server or across two: everything, owners as numbers, and what the

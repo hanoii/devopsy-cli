@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -930,6 +931,11 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			return doorRefused(err)
 		}
 	}
+	if starts || argv[0] == "start" || argv[0] == "restart" {
+		if err := s.regrant(name); err != nil {
+			return doorRefused(err)
+		}
+	}
 	if argv[0] == "up" {
 		s.pruneSealed()
 	}
@@ -1066,6 +1072,33 @@ func (s *doorSide) imageLock() (unlock func(), err error) {
 	}
 	s.lock = f
 	return unlock, nil
+}
+
+// regrant gives this project user back what it may do in a compose name's entries, rwX,
+// where a root container's copy took it away: an import's tar and a sync's rsync set each
+// item's mode, which on a file with an ACL sets its mask, and the mask narrows the project
+// user's entry. As root, since an entry's files are its container user's once its owners
+// are given, and only an owner or root changes an ACL. Only what lost its group class's
+// write is touched: a start after no copy walks the entries and changes nothing.
+func (s *doorSide) regrant(name string) error {
+	mnt := s.policy.Mnt(name)
+	if _, err := os.Stat(mnt); err != nil {
+		return nil // nothing made yet
+	}
+	u, err := user.Lookup(s.policy.User)
+	if err != nil {
+		return err
+	}
+	if err := ensureUtilImageWith(context.Background(), s.real); err != nil {
+		return err
+	}
+	c := s.docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", mnt + ":/e", remote.UtilImage,
+		"find", "/e", "-xdev", "-mindepth", "1", "(", "-type", "d", "-o", "-type", "f", ")", "!", "-perm", "-g=w", "-exec", "setfacl", "-m", "u:" + u.Uid + ":rwX", "{}", "+"})...)
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("refused: %s's entries: what its user may write could not be given back: %v", name, err)
+	}
+	return nil
 }
 
 // builder is what a build's environment needs to run on this project's own BuildKit,

@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -703,6 +704,43 @@ esac
 	got, _ := os.ReadFile(log)
 	space := filepath.Join(dir, "space", "buildx")
 	want := space + " buildx inspect devopsy-shop\n" + space + " buildx create --name devopsy-shop --driver docker-container\n" + space + " buildx inspect devopsy-shop\n"
+	if string(got) != want {
+		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A root copy's modes narrow what the project user may write in its entries (an ACL's mask),
+// so each start gives it back, as root, where it was lost; with nothing made yet, nothing runs.
+func TestDoorRegrantsItsEntries(t *testing.T) {
+	t.Parallel()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	docker := filepath.Join(dir, "docker")
+	// The util image is there, built today.
+	fake := "#!/bin/sh\ncase \"$*\" in \"image inspect \"*) echo \"sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)\"; exit ;; esac\necho \"$*\" >>" + log + "\n"
+	if err := testfile.Write(docker, []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: me.Username, Space: filepath.Join(dir, "space")}, real: docker}
+	if err := side.regrant("shop-prod"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("a grant with no entries made yet")
+	}
+	if err := os.MkdirAll(side.policy.Mnt("shop-prod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := side.regrant("shop-prod"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(log)
+	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges -v " + side.policy.Mnt("shop-prod") + ":/e " + remote.UtilImage +
+		" find /e -xdev -mindepth 1 ( -type d -o -type f ) ! -perm -g=w -exec setfacl -m u:" + me.Uid + ":rwX {} +\n"
 	if string(got) != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
 	}
