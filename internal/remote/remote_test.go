@@ -3239,7 +3239,7 @@ func TestParseActivating(t *testing.T) {
 			t.Errorf("%q does not parse", c.line)
 			continue
 		}
-		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix[0]+"|"+fix[1] != c.fix {
+		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix.Text+"|"+strings.Join(fix.Cmds, " ") != c.fix {
 			t.Errorf("%q (partial %v): %q, %q; want %q, %q", c.line, c.partial, what, fix, c.what, c.fix)
 		}
 	}

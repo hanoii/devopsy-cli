@@ -1303,7 +1303,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 		}
 		if missing, ok := copiesService(ctx, projectDir, services, streams, mark, childDirs, childVols); !ok {
 			ref := os.Getenv(remote.SyncToTargetEnv)
-			fixes := report.FixPairs(remote.ImportFixes(ref, mark, true))
+			fixes := remote.ImportFixes(ref, mark, true)
 			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
 			if len(missing) > 0 {
 				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy " + strings.Join(missing, ", ") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"

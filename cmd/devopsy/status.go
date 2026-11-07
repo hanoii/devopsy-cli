@@ -327,15 +327,15 @@ func (r *statusReport) add(level, key, line string) {
 // target as a release's hint does (remote.HintAddress).
 func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	info := func(key, line string) { r.add(remote.StatusInfo, key, line) }
-	// warn adds a warning with its fixes, each a text and its command.
-	warn := func(key, line string, fixes ...[2]string) {
-		r.Entries = append(r.Entries, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: report.FixPairs(fixes)})
+	// warn adds a warning with its fixes.
+	warn := func(key, line string, fixes ...report.Remedy) {
+		r.Entries = append(r.Entries, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: fixes})
 	}
 	switch {
 	case h.plain:
 		info("release", "none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		warn("release", "none: "+h.failed+" failed", [2]string{"see why:", "devopsy @" + targetRef(t) + " --log"})
+		warn("release", "none: "+h.failed+" failed", report.Fix("see why:", "devopsy @"+targetRef(t)+" --log"))
 	case h.none:
 		info("release", "none: not released yet")
 	}
@@ -406,9 +406,9 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	case h.mark.IsRestore():
 		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(remote.HintAddress(t), h.mark.From, t.Parent != "")...)
 	case h.partial != "":
-		fixes := [][2]string{{"sync it again:", "devopsy @" + remote.HintAddress(t) + " --sync"}, remote.ResetFix(remote.HintAddress(t))}
+		fixes := []report.Remedy{report.Fix("sync it again:", "devopsy @"+remote.HintAddress(t)+" --sync"), remote.ResetFix(remote.HintAddress(t))}
 		if h.id == "" {
-			fixes = [][2]string{{"release it: a first release syncs", "devopsy @" + remote.HintAddress(t) + " --release"}}
+			fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
 		}
 		warn("data", "from a sync that did not complete: "+h.partial+": nothing runs on it until one does", fixes...)
 	case h.left != "":

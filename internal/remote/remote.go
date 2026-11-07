@@ -114,25 +114,25 @@ func ParseActivating(line string) *Activating {
 	return &Activating{ID: f[0], Kind: f[1], From: f[2], Snapshot: f[3]}
 }
 
-// Cut is what --status says of a cut activation, and what finishes it,
-// a text and its command: the release again (ref the release's address
+// Cut is what --status says of a cut activation, and what finishes it:
+// the release again (ref the release's address
 // as typed, an alias's with its source), a rollback again, a restore
 // again (ref the target's as typed); a sync where a sync's partial copy
 // (syncPartial) refuses a release, and its run step finishes the cut one.
-func (a *Activating) Cut(ref, releaseRef string, syncPartial bool) (what string, fix [2]string) {
+func (a *Activating) Cut(ref, releaseRef string, syncPartial bool) (what string, fix report.Remedy) {
 	what, past := "the release of "+a.ID, " past its switch"
-	fix = [2]string{"release it again:", "devopsy @" + releaseRef + " --release"}
+	fix = report.Fix("release it again:", "devopsy @"+releaseRef+" --release")
 	if syncPartial {
-		fix = [2]string{"finish it with a sync:", "devopsy @" + ref + " --sync"}
+		fix = report.Fix("finish it with a sync:", "devopsy @"+ref+" --sync")
 	}
 	switch a.Kind {
 	case "rollback":
-		what, fix = "the rollback to "+a.ID, [2]string{"finish it:", "devopsy @" + ref + " --rollback"}
+		what, fix = "the rollback to "+a.ID, report.Fix("finish it:", "devopsy @"+ref+" --rollback")
 	case "restart":
 		// A failed run step's way back: current restarted.
 		what, past = "the restart of "+a.ID+" after "+a.From+" failed", ""
 	case "restore":
-		what, fix = "the restore of snapshot "+a.Snapshot+" as "+a.ID, [2]string{"run it again:", "devopsy @" + ref + " --snapshots restore " + a.Snapshot}
+		what, fix = "the restore of snapshot "+a.Snapshot+" as "+a.ID, report.Fix("run it again:", "devopsy @"+ref+" --snapshots restore "+a.Snapshot)
 	}
 	return what + " was cut off" + past + ": its run step may not have run", fix
 }
@@ -663,7 +663,7 @@ func prelude(t *Target, create bool) string {
   exit 1
 fi
 if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
-  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" "take them down, remove it, then release again:" "` + report.CmdMark + `docker compose -p <project> down" "` + report.CmdMark + `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current"
+  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + fixLines(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
   exit 1
 fi
 ` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared"
@@ -694,7 +694,7 @@ func UploadScript(t *Target, syncs bool) string {
 	guard := ""
 	if !syncs {
 		guard = `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" ` + syncFixLines(t) + `
   exit 1
 fi
 ` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")

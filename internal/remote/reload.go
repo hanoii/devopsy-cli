@@ -31,10 +31,11 @@ const ReloadingSays = "reloading "
 func ReloadScript(t *Target, projectName string) string {
 	call := func(args ...string) string { return devopsyCall(projectName, args, false) }
 	refuse := `{ rm -f "$rl_pending"; devopsy --say error "nothing reloaded"; exit 1; }`
+	noCurrent := fixLines(report.Fix("release it first:", "devopsy @"+HintAddress(t)+" --release"))
 	// Nothing current: said before the lock, which refuses a missing
 	// $base as one removed while it waited.
-	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" "release it first:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --release"; exit 1; }
-` + strings.TrimPrefix(prelude(t, false), "set -eu\n"+basePrelude(t)) + "exec 1>&2\n" + NoExit255 + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" "release it first:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --release"; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" ` + noCurrent + `; exit 1; }
+` + strings.TrimPrefix(prelude(t, false), "set -eu\n"+basePrelude(t)) + "exec 1>&2\n" + NoExit255 + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" ` + noCurrent + `; exit 1; }
 cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 rel="$base/$cur"
 rl_pending="$rel/` + TargetReloadFile + `"
@@ -63,7 +64,7 @@ unset ` + TargetPendingEnv + `
 rs=0
 with_tty ` + Quote(call("--release-steps", "reload", "run")) + ` || rs=$?
 img ran "$base" "$rel" || true
-[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --log" || true
+[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" ` + fixLines(report.Fix("", "devopsy @"+HintAddress(t)+" --log")) + ` || true
 exit "$rs"
 `
 }
