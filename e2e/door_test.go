@@ -582,17 +582,17 @@ func TestDoorHostFirewallAndSyncDaemon(t *testing.T) {
 	if !strings.Contains(ask("devopsy-doorfwo"), "hello-from-web") {
 		t.Fatal("the control: with no rule, a project user reaches no site directly, so this proves nothing")
 	}
-	// Docker's own address pools and the metadata service, never private ranges whole: a
-	// sync reaches another server over those.
-	nets := []string{doorDockerPool, "169.254.169.254/32"}
-	for _, n := range nets {
-		if out, code := doorRoot(t, "iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -d "+n+" -j REJECT"); code != 0 {
+	// What leaves through Docker's bridges, and the metadata service, never an address
+	// range: a sync reaches another server at any address, one inside Docker's pools too.
+	rules := []string{"-o docker0", "-o br-+", "-d 169.254.169.254/32"}
+	for _, r := range rules {
+		if out, code := doorRoot(t, "iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups "+r+" -j REJECT"); code != 0 {
 			t.Fatal(out)
 		}
 	}
 	t.Cleanup(func() {
-		for _, n := range nets {
-			doorRoot(t, "iptables -D OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -d "+n+" -j REJECT")
+		for _, r := range rules {
+			doorRoot(t, "iptables -D OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups "+r+" -j REJECT")
 		}
 		doorRoot(t, "docker rm -f doorfw-syncd")
 	})
@@ -623,7 +623,8 @@ sleep 1`); code != 0 {
 		t.Errorf("the control: with its password the daemon does not answer: %s", out)
 	}
 	// The real thing under the rule: a child at another address of the server, the agent
-	// forwarded to the project's user there.
+	// forwarded to the project's user there. On GitHub's runners that address is inside
+	// doorDockerPool, which a rule by address range refused.
 	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
 	if out, code := op(t, dir, agent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
 		t.Errorf("a child at another address, under the rule (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))

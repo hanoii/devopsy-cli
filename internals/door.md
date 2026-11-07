@@ -17,7 +17,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A rendered file and each verb's flags are checked deny by default (`CheckFile`, `CheckVerb`), so a key compose adds later fails closed.
 - A compose upgrade is tried against the rules before devopsy-server moves its pin: a key it starts writing by default refuses every `up`.
 - A bind holds no path with a part the project user can change, since the daemon resolves a bind at each start: an entry by its real path under `<space>/mnt/<compose name>`, a read-only part of a release as a sealed copy under `<space>/sealed/<project>`.
-- A firewall rule by the project users' group blocks Docker's address pools and the metadata service, never private ranges whole: a sync reaches another server over those.
+- A firewall rule by the project users' group blocks what leaves through Docker's bridges (`-o docker0`, `-o br-+`) and the metadata service, never an address range: a sync reaches another server at any address, one inside Docker's pools included.
 - `<space>` is on a mount of its own with `nosuid` and `nodev`: a container's setuid file or a crafted tar there otherwise crosses projects, or reaches root.
 - A project user's `shared/mnt` is a link into `<space>`, made at a release's start (`--mnt-ready`), and a compose name comes from where an environment is in that user's tree, never from a caller (`Policy.NameOf`).
 - Entries are made by the door, so a project user can write inside one and never replace it: when devopsy's own mkdir is refused (`makeEntry`), and what a file binds, at `compose config`, since a step writes in an entry before anything starts (`entries`), and at `up` (`bindEntries`).
