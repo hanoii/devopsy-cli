@@ -2,6 +2,10 @@
 
 A project user has no Docker socket: what it finds as `docker` asks the deploy user through sudo. Code: `internal/door/` (the decisions, touching nothing), `cmd/devopsy/door_client.go` (the project user's side of sudo), `door.go` (the deploy user's), `utilscripts.go`, `internal/remote/door.go`. `e2e/door_test.go` runs what needs a real kernel, Docker and sudo, each with a control that the attack works where the rule is off.
 
+- The door checks a rendered compose file and devopsy's own requests, never Docker's API: a policed socket's requests are read one way by it and another by the daemon, and compose acts as whoever runs it, past any socket.
+- Projects on one daemon are kept apart by the door's checks, and more isolation than that is a server of its own, never a daemon per project here (for example rootless Docker or a VM): one Traefik must reach every project's containers.
+- What runs is what the door checked: a name, a tag or a path is pinned or held from its check to its use (for example `imageLock`, `Paths.Real`, `cloneShape`), since a value resolved again after the check is a value nobody checked.
+- The door's protection depends on no template or project: its rules are on compose keys and devopsy's requests, deny by default, so a file that does not meet them is refused, and only what a label means to a proxy is left to the admin's vet (`door: vets:`), as devopsy knows no URL.
 - A server's `door:` is read only from the deploy user's own config: a project's could grant itself.
 - Who asks comes from `SUDO_USER`, and every word of the request is treated as hostile.
 - Who the socket lets in has no door (`runDocker`): the deploy user, and a project an admin put in the docker group.
