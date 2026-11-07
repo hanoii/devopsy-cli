@@ -61,6 +61,12 @@ var (
 	duArg     = regexp.MustCompile(`^(/m/` + word + `|/v/` + word + `)$`)
 )
 
+// RootUtil is what every util container the door runs as root holds back, root not
+// being needed for it: nothing there makes a device or gains privileges.
+func RootUtil() []string {
+	return []string{"--cap-drop", "MKNOD", "--security-opt", "no-new-privileges"}
+}
+
 // cloneShape is a path in a project's clones: its directory, a take's in it, and from
 // either the clone's mnt or volumes, or one thing in those. A take is never named mnt or
 // volumes: its path would then also be one inside a copy, the project's own names and
@@ -396,8 +402,7 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 			out = append(out, "--mount", v)
 		}
 	}
-	// What root is not needed for, gone: nothing here makes a device or gains privileges.
-	out = append(out, "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges")
+	out = append(out, RootUtil()...)
 	action.Docker = append(append(append([]string{"run"}, out...), known.Image), cmd...)
 	return action, nil
 }

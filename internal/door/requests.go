@@ -595,7 +595,7 @@ func decideRemoval(paths []string, mounts []mount, p Policy, h Host, known Known
 			return nil, refuse("docker run: %s: %v", target, err)
 		}
 		if rest, ok := strings.CutPrefix(real, p.Clones()+"/"); ok {
-			a.Docker = []string{"run", "--rm", "--network", "none", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "-v", p.Clones() + ":/s", known.Image, "rm", "-rf", "/s/" + rest}
+			a.Docker = slices.Concat([]string{"run", "--rm", "--network", "none"}, RootUtil(), []string{"-v", p.Clones() + ":/s", known.Image, "rm", "-rf", "/s/" + rest})
 			if parent, err := h.Real(filepath.Dir(target)); err == nil && p.InTree(parent) {
 				a.Remove = append(a.Remove, target)
 			}

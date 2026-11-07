@@ -446,7 +446,7 @@ func (s *doorSide) removeWork(dir string) {
 		return
 	}
 	root := filepath.Join(s.policy.Space, "work")
-	_ = s.docker("run", "--rm", "--network", "none", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "-v", root+":/w", remote.UtilImage, "rm", "-rf", "/w/"+filepath.Base(dir)).Run()
+	_ = s.docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", root + ":/w", remote.UtilImage, "rm", "-rf", "/w/" + filepath.Base(dir)})...).Run()
 }
 
 // ownWork says whether a work directory is this project's, by its name (workDir): not one
