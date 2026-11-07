@@ -158,7 +158,7 @@ func TestServerInfoReport(t *testing.T) {
 		}, "", "role proxy is held by traefik-prod and other-prod|"},
 		{"first release failed", func(i *remote.ServerInfo) {
 			i.Environments = append(i.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
-		}, "", "shop/dev: its first release, 20261027110000, failed|$ devopsy @vm1:dev --status"},
+		}, "", "shop/dev: none: 20261027110000 failed|$ devopsy @vm1:dev --status"},
 		{"cut", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "cut\t20261027115000\trelease\t20261026000000\n"
 		}, "", "shop/prod: the release of 20261027115000 was cut off past its switch: its run step may not have run|devopsy @vm1:prod --status"},
@@ -168,11 +168,11 @@ func TestServerInfoReport(t *testing.T) {
 		}, "", "shop/prod: the restart of 20261026000000 after 20261027115000 failed was cut off: its run step may not have run|devopsy @vm1:prod --status"},
 		{"sync", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "partial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")
-		}, "", "shop/prod: a sync did not complete|"},
+		}, "", "shop/prod: from a sync that did not complete: the copy was cut|"},
 		{"import", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "partial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut")
-		}, "", "shop/prod: the import of db did not complete|"},
-		{"left", func(i *remote.ServerInfo) { i.Environments[1].Status += "left\tdb app \n" }, "", "shop/prod: an operation cut off left db app stopped|"},
+		}, "", "shop/prod: the import of db did not complete: the import was cut|"},
+		{"left", func(i *remote.ServerInfo) { i.Environments[1].Status += "left\tdb app \n" }, "", "shop/prod: an operation cut off recorded db app as stopped|"},
 		{"restarting", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "db", State: "restarting"}, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "running", Health: "unhealthy"})
 		}, "", "shop/prod: db restarting, worker unhealthy|"},
@@ -195,16 +195,18 @@ func TestServerInfoReport(t *testing.T) {
 		}
 	}
 
-	// What is running is said, never warned: an import under way, and a
-	// restore, whose mark is there while it runs (review).
-	for status, said := range map[string]string{
-		"importing\nbusy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut"): "1 of 3 running  importing",
-		"busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "20261020000000", remote.IncompleteRestore, "restoring"):        "1 of 3 running  an operation running",
+	// What is running is said, and warned as --status warns it: an
+	// import under way, and a restore, whose mark is there while it runs,
+	// keep what they stopped down (envState.entries).
+	for status, want := range map[string]string{
+		"importing\nbusy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut"): "1 of 3 running  importing|shop/prod: importing db: what it stopped stays down until it completes",
+		"busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "20261020000000", remote.IncompleteRestore, "restoring"):        "1 of 3 running  an operation running|shop/prod: restoring snapshot 20261020000000: what it stopped stays down until it completes",
 	} {
+		said, warned, _ := strings.Cut(want, "|")
 		info := healthy()
 		info.Environments[1].Status += status
 		out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-		if len(warnings) != 0 || !strings.Contains(out, said) {
+		if len(warnings) != 1 || warnings[0].msg != warned || !strings.Contains(out, said) {
 			t.Errorf("running (%q): %+v\n%s", said, warnings, out)
 		}
 	}
@@ -378,7 +380,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"environments  shop/dev  none: 19990101000000 failed",
 		"shop/eu/prod  none: not released yet",
 		"shop/prod  " + strings.TrimPrefix(s.current("prod"), "releases/") + "  just now",
-		"shop/dev: its first release, 19990101000000, failed",
+		"shop/dev: none: 19990101000000 failed",
 		"in shop's checkout:\n              $ devopsy @devopsy@one:dev --status",
 		"shop/prod: db restarting",
 		// The server's clock, taken last and compared on arrival.

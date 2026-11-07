@@ -303,28 +303,44 @@ func (r *statusReport) add(level, key, line string) {
 }
 
 // addHeader adds the environment's state on the server (remote.EnvStatus,
-// read): its release, its parent and its last sync, and what is running,
-// cut or partial on it, with the commands that finish each, naming the
-// target as a release's hint does (remote.HintAddress).
+// read, envState.entries) and its current release, for JSON.
 func (r *statusReport) addHeader(h envState, t *remote.Target) {
-	info := func(key, line string) { r.add(remote.StatusInfo, key, line) }
+	if h.id != "" {
+		r.Release = &statusRelease{ID: h.id, Record: h.record}
+		r.Release.Kept, _ = strconv.Atoi(h.kept)
+	}
+	r.Entries = append(r.Entries, h.entries(envAt{hint: remote.HintAddress(t), ref: targetRef(t), parent: t.Parent})...)
+}
+
+// envAt is how an environment's entries name it in their fixes: hint as
+// a release's hint does (remote.HintAddress), ref as typed (targetRef);
+// and parent is its parent, "" for none.
+type envAt struct{ hint, ref, parent string }
+
+// entries are an environment's state, as --status and --server-info
+// judge it: its release, its parent and its last sync, and what is
+// running, cut or partial on it, each warning with the commands that
+// finish it.
+func (h envState) entries(at envAt) []remote.StatusEntry {
+	var es []remote.StatusEntry
+	info := func(key, line string) {
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{line}})
+	}
 	// warn adds a warning with its fixes.
 	warn := func(key, line string, fixes ...report.Remedy) {
-		r.Entries = append(r.Entries, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: fixes})
 	}
 	switch {
 	case h.plain:
 		info("release", "none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		warn("release", "none: "+h.failed+" failed", report.Fix("see why:", "devopsy @"+targetRef(t)+" --log"))
+		warn("release", "none: "+h.failed+" failed", report.Fix("see why:", "devopsy @"+at.ref+" --log"))
 	case h.none:
 		info("release", "none: not released yet")
 	}
 	if h.id != "" {
-		rel := &statusRelease{ID: h.id}
 		line := h.id
 		if h.record != nil {
-			rel.Record = h.record
 			if h.record.Commit != "" {
 				short := h.record.Commit
 				if len(short) > 10 {
@@ -343,18 +359,16 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 			}
 		}
 		if h.kept != "" {
-			rel.Kept, _ = strconv.Atoi(h.kept)
 			line += "  (" + h.kept + " kept)"
 		}
-		r.Release = rel
 		info("release", line)
 	}
 	if h.cut != nil {
-		what, fix := h.cut.Cut(remote.HintAddress(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
+		what, fix := h.cut.Cut(at.hint, at.hint, h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
 		warn("release", what, fix)
 	}
-	if t.Parent != "" {
-		line := t.Parent
+	if at.parent != "" {
+		line := at.parent
 		if h.synced != "" {
 			if when, err := time.Parse("2006-01-02 15:04:05", h.synced); err == nil {
 				line += "  last synced " + ago(when.UTC())
@@ -373,28 +387,30 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	if h.snapshotting {
 		info("data", "a snapshot of it is being taken")
 	}
+	child := at.parent != ""
 	switch {
 	case h.mark.IsImport() && h.importing:
 		warn("data", "importing "+h.mark.From+": what it stopped stays down until it completes")
 	case h.importing:
 		info("data", "an import into it is running")
 	case h.mark.IsImport():
-		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.ImportFixes(remote.HintAddress(t), h.mark.From, t.Parent != "")...)
+		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.ImportFixes(at.hint, h.mark.From, child)...)
 	case h.mark.IsRestore() && h.busy:
 		// Its mark is there from its first write to its run step, the
 		// release lock held all along.
 		warn("data", "restoring snapshot "+h.mark.From+": what it stopped stays down until it completes")
 	case h.mark.IsRestore():
-		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(remote.HintAddress(t), h.mark.From, t.Parent != "")...)
+		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(at.hint, h.mark.From, child)...)
 	case h.partial != "":
-		fixes := []report.Remedy{report.Fix("sync it again:", "devopsy @"+remote.HintAddress(t)+" --sync"), remote.ResetFix(remote.HintAddress(t))}
+		fixes := []report.Remedy{report.Fix("sync it again:", "devopsy @"+at.hint+" --sync"), remote.ResetFix(at.hint)}
 		if h.id == "" {
-			fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
+			fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+at.hint+" --release")}
 		}
 		warn("data", "from a sync that did not complete: "+h.partial+": nothing runs on it until one does", fixes...)
 	case h.left != "":
 		warn("data", "an operation cut off recorded "+h.left+" as stopped: the next release, sync, import or snapshot here starts what of them is down")
 	}
+	return es
 }
 
 // addFacts adds a project's facts: the server's disks, judged as

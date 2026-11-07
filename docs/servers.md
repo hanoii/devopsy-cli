@@ -93,13 +93,14 @@ fix:
 - a tool the server needs, missing;
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
-  its switch, a sync, an import or a restore that did not complete,
-  services an operation left stopped, or containers restarting, paused,
-  dead, unhealthy, or exited on an error of their own (a stop's codes
-  excepted).
+  its switch, a sync, an import or a restore that did not complete, an
+  import or a restore under way (what it stopped stays down until it
+  completes), services an operation left stopped, or containers
+  restarting, paused, dead, unhealthy, or exited on an error of their
+  own (a stop's codes excepted), each as `--status` says it.
 
-What is running (a sync, an import, a restore) is reported as
-information. So is the memory kdump keeps, with how to free it
+A sync or a snapshot under way is reported as information. So is the
+memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check. `--json` prints

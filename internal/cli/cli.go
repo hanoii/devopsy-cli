@@ -1045,10 +1045,10 @@ apparmor_parser (no container starts), logs without a size limit, a disk
 90% full or with less than 5 GB free, no reflinks, a snapshot root on
 the release root's filesystem, a tool the server needs missing, a role
 held twice, and an environment whose first release failed, cut off past
-its switch, with a sync, an import or a restore that did not complete,
-services an operation left stopped, or containers restarting, paused,
-dead, unhealthy or exited on an error of their own (what is running, a
-sync, an import or a restore, is said, not warned). It then exits 3, for
+its switch, with a sync, an import or a restore that did not complete or
+an import or a restore under way, services an operation left stopped,
+or containers restarting, paused, dead, unhealthy or exited on an error
+of their own, each as --status says it. It then exits 3, for
 CI: 0 says nothing needs attention. What kdump keeps is said with how to
 free it, never warned: crash dumps are a choice.
 

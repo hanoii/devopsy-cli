@@ -848,6 +848,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	for _, env := range info.Environments {
 		h := parseStatus(env.Status)
+		h.busy = h.busy && !noFlock
 		value := env.Path + "  "
 		switch {
 		case h.none && h.failed != "":
@@ -894,31 +895,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			value += "  taking a snapshot"
 		case h.source:
 			value += "  a sync or an export from it"
-		case h.busy && !noFlock:
+		case h.busy:
 			value += "  an operation running"
 		}
 		row("environments", value)
-		// Each as --status says it. A mark while the release lock is held
-		// is what runs (a restore, an import, a sync): said above, not
-		// warned; the cut and left lines only show while it is free.
+		// --status's warnings (envState.entries), whose fixes --status
+		// gives: this names the environment only by its path.
 		var problems []string
-		if h.none && h.failed != "" {
-			problems = append(problems, "its first release, "+h.failed+", failed")
-		}
-		if h.cut != nil {
-			what, _ := h.cut.Cut("", "", false)
-			problems = append(problems, what)
-		}
-		switch {
-		case h.busy && !noFlock:
-		case h.mark.IsImport():
-			problems = append(problems, "the import of "+h.mark.From+" did not complete")
-		case h.mark.IsRestore():
-			problems = append(problems, "the restore of snapshot "+h.mark.From+" did not complete")
-		case h.partial != "":
-			problems = append(problems, "a sync did not complete: "+h.partial)
-		case h.left != "":
-			problems = append(problems, "an operation cut off left "+h.left+" stopped")
+		for _, e := range h.entries(envAt{}) {
+			if e.Level == remote.StatusWarning {
+				problems = append(problems, e.Lines...)
+			}
 		}
 		if len(bad) > 0 {
 			problems = append(problems, strings.Join(bad, ", "))
