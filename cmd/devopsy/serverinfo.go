@@ -86,7 +86,7 @@ func serverFacts() (remote.ServerInfo, error) {
 		// system containerd's root, not Docker's.
 		containerd = "/var/lib/containerd"
 	}
-	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerd, info.SnapshotRoot)
+	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerd, info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
 			info.Missing = append(info.Missing, t.name)
@@ -226,13 +226,7 @@ func zoneCMA(data string) int64 {
 // dockerFacts asks docker info, docker compose version and reads the
 // daemon's configuration file.
 func dockerFacts() remote.DockerFacts {
-	var d remote.DockerFacts
-	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
-	if err != nil {
-		d.Error = "docker info: " + cmdError(err)
-	} else if err := parseDockerInfo(out, &d); err != nil {
-		d.Error = "docker info: " + err.Error()
-	}
+	d := dockerInfo()
 	if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
 		d.Compose = strings.TrimSpace(string(out))
 	}
@@ -248,6 +242,18 @@ func dockerFacts() remote.DockerFacts {
 		if json.Unmarshal(data, &conf) == nil {
 			d.LogOptsKnown, d.LogOpts = true, conf.LogOpts
 		}
+	}
+	return d
+}
+
+// dockerInfo is what docker info says, alone.
+func dockerInfo() remote.DockerFacts {
+	var d remote.DockerFacts
+	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
+	if err != nil {
+		d.Error = "docker info: " + cmdError(err)
+	} else if err := parseDockerInfo(out, &d); err != nil {
+		d.Error = "docker info: " + err.Error()
 	}
 	return d
 }
@@ -302,8 +308,9 @@ func cmdError(err error) string {
 // diskFacts is the filesystems of the release root, Docker's data,
 // containerd's (empty: not its image store), the snapshot root and /,
 // one per device, each path where it is: the
-// nearest existing directory above it, for a root not made yet.
-func diskFacts(root, docker, containerd, snapshots string) []remote.Disk {
+// nearest existing directory above it, for a root not made yet. reflink
+// tries a clone in the release root (a file made and removed there).
+func diskFacts(root, docker, containerd, snapshots string, reflink bool) []remote.Disk {
 	var disks []remote.Disk
 	var devs []uint64
 	add := func(what, path string) {
@@ -338,7 +345,7 @@ func diskFacts(root, docker, containerd, snapshots string) []remote.Disk {
 		devs = append(devs, dev)
 	}
 	add("releases", root)
-	if len(disks) > 0 && disks[0].Error == "" {
+	if reflink && len(disks) > 0 && disks[0].Error == "" {
 		disks[0].Reflinks = tryReflink(root)
 	}
 	add("docker", docker)
@@ -736,62 +743,28 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	// The disks.
-	freeing := func(disk remote.Disk) []report.Remedy {
-		var fixes []report.Remedy
-		has := func(what string) bool {
-			return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
-		}
-		if has("docker") || has("containerd") {
-			if ref == "" {
-				fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
-			} else {
-				fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
-			}
-		}
-		if has("snapshots") || (has("releases") && info.SnapshotRoot == "") {
-			fixes = append(fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
-		}
-		if len(fixes) == 0 {
-			if ref == "" {
-				fixes = append(fixes, report.Fix("see what takes it"))
-			} else {
-				fixes = append(fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
-			}
-		}
-		return fixes
-	}
 	release := -1
 	snapshotDisk := -1
 	for i, disk := range info.Disks {
-		var paths []string
 		for _, p := range disk.Paths {
-			what, path, _ := strings.Cut(p, "=")
+			what, _, _ := strings.Cut(p, "=")
 			if what == "releases" {
 				release = i
 			}
 			if what == "snapshots" {
 				snapshotDisk = i
 			}
-			if what == "/" {
-				paths = append(paths, "/")
-			} else {
-				paths = append(paths, what+" "+path)
-			}
 		}
 		key := ""
 		if i == 0 {
 			key = "disks"
 		}
+		use := judgeDisk(disk, info.SnapshotRoot, ref)
 		if disk.Error != "" {
-			row(key, strings.Join(paths, ", ")+": "+disk.Error)
+			row(key, use.value)
 			continue
 		}
-		// As df counts it: of what the deploy user could use, rounded up.
-		pct := int64(0)
-		if total := disk.Used + disk.Free; total > 0 {
-			pct = (disk.Used*100 + total - 1) / total
-		}
-		value := fmt.Sprintf("%s: %s, %s free of %s (%d%% used)", strings.Join(paths, ", "), disk.Type, humanBytes(disk.Free), humanBytes(disk.Size), pct)
+		value := use.value
 		switch disk.Reflinks {
 		case "yes":
 			value += ", reflinks"
@@ -799,9 +772,8 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			value += ", no reflinks"
 		}
 		row(key, value)
-		if pct >= diskUsedWarn || disk.Free < diskFreeWarn {
-			warn(fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", strings.Join(paths, ", "), pct, humanBytes(disk.Free)),
-				freeing(disk)...)
+		if use.warn != "" {
+			warn(use.warn, use.fixes...)
 		}
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
@@ -990,6 +962,67 @@ func reflinkFix(mirrorsOff bool) report.Remedy {
 		mirror = "the server's snapshots: {mirror: false} (its devopsy config) lifted, then " + mirror
 	}
 	return report.Fix(mirror + ", or data on XFS (a new server from devopsy-server's cloud-init.yaml)")
+}
+
+// diskUse is a disk as --server-info and --status say it: value its
+// line (what lives there, its filesystem, what is free), and past the
+// thresholds warn and the ways to free it.
+type diskUse struct {
+	value, warn string
+	fixes       []report.Remedy
+}
+
+// diskWarnEnv off judges no disk full, for tests whose disk may be.
+const diskWarnEnv = "DEVOPSY_INTERNAL_DISK_WARN"
+
+// judgeDisk is disk's line and warning, for a server with snapshotRoot,
+// ref the server as typed for its fixes (remote.ServerRef), empty for
+// this machine.
+func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
+	var paths []string
+	for _, p := range disk.Paths {
+		what, path, _ := strings.Cut(p, "=")
+		if what == "/" {
+			paths = append(paths, "/")
+		} else {
+			paths = append(paths, what+" "+path)
+		}
+	}
+	where := strings.Join(paths, ", ")
+	if disk.Error != "" {
+		return diskUse{value: where + ": " + disk.Error}
+	}
+	// As df counts it: of what the deploy user could use, rounded up.
+	pct := int64(0)
+	if total := disk.Used + disk.Free; total > 0 {
+		pct = (disk.Used*100 + total - 1) / total
+	}
+	use := diskUse{value: fmt.Sprintf("%s: %s, %s free of %s (%d%% used)", where, disk.Type, humanBytes(disk.Free), humanBytes(disk.Size), pct)}
+	if (pct < diskUsedWarn && disk.Free >= diskFreeWarn) || os.Getenv(diskWarnEnv) == "off" {
+		return use
+	}
+	use.warn = fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", where, pct, humanBytes(disk.Free))
+	has := func(what string) bool {
+		return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
+	}
+	if has("docker") || has("containerd") {
+		if ref == "" {
+			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
+		} else {
+			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+		}
+	}
+	if has("snapshots") || (has("releases") && snapshotRoot == "") {
+		use.fixes = append(use.fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
+	}
+	if len(use.fixes) == 0 {
+		if ref == "" {
+			use.fixes = append(use.fixes, report.Fix("see what takes it"))
+		} else {
+			use.fixes = append(use.fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+		}
+	}
+	return use
 }
 
 // composeNameOf is the compose name of the environment at path,
