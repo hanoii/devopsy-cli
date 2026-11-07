@@ -93,8 +93,9 @@ What needs attention is a warning, with its fix:
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
   its switch, a sync, an import or a restore that did not complete,
-  services an operation left stopped, or containers restarting, unhealthy
-  or paused.
+  services an operation left stopped, or containers restarting, paused,
+  dead, unhealthy, or exited on an error of their own (a stop's codes
+  excepted).
 
 What is running (a sync, an import, a restore) is reported as
 information. So is the memory kdump keeps, with how to free it

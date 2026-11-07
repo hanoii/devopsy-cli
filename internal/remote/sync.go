@@ -241,8 +241,15 @@ func RestoreFixes(ref, snapshot string, child bool) [][2]string {
 // restoreFixLines are RestoreFixes as --say's details, the snapshot the
 // shell's $snapshot.
 func restoreFixLines(t *Target, snapshot string) string {
+	return fixLines(RestoreFixes(HintAddress(t), "$"+snapshot, t.Parent != "")...)
+}
+
+// fixLines are fixes, each a text and its command, as --say's details
+// for a script: the text, then the command after report.CmdMark, each
+// double-quoted.
+func fixLines(fixes ...[2]string) string {
 	var lines []string
-	for _, f := range RestoreFixes(HintAddress(t), "$"+snapshot, t.Parent != "") {
+	for _, f := range fixes {
 		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
 	}
 	return strings.Join(lines, " ")
@@ -256,25 +263,20 @@ func ResetFix(ref string) [2]string {
 // syncFixLines are a sync mark's ways out as --say's details for a
 // script: a sync, the details in more (each double-quoted), a reset.
 func syncFixLines(t *Target, more ...string) string {
-	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync"`}
+	lines := []string{fixLines([2]string{"to fix it, sync it again:", "devopsy @" + HintAddress(t) + " --sync"})}
 	return strings.Join(append(append(lines, more...), resetFixLines(t)), " ")
 }
 
 // resetFixLines is ResetFix as --say's details for a script.
 func resetFixLines(t *Target) string {
-	f := ResetFix(HintAddress(t))
-	return `"` + f[0] + `" "` + report.CmdMark + f[1] + `"`
+	return fixLines(ResetFix(HintAddress(t)))
 }
 
 // importFixLines are ImportFixes as --say's details for a script, the
 // service the shell's $service: each text, then its command after
 // report.CmdMark, double-quoted.
 func importFixLines(t *Target, service string) string {
-	var lines []string
-	for _, f := range ImportFixes(HintAddress(t), "$"+service, t.Parent != "") {
-		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
-	}
-	return strings.Join(lines, " ")
+	return fixLines(ImportFixes(HintAddress(t), "$"+service, t.Parent != "")...)
 }
 
 // markRefusal is shell refusing on the environment's mark ($base set),

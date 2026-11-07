@@ -1,6 +1,10 @@
 package remote
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
+)
 
 // StatusFactsFlag is the hidden flag behind @<target> --status: run by
 // its session on the server, in the environment's current release (or a
@@ -47,17 +51,10 @@ const StatusNoContainer = "none"
 // StatusEntry is a fact --status shows under its key: one or more lines
 // at a level (StatusInfo, StatusWarning), with the ways to act on it.
 type StatusEntry struct {
-	Level string      `json:"level"`
-	Key   string      `json:"key"`
-	Lines []string    `json:"lines"`
-	Fixes []StatusFix `json:"fixes,omitempty"`
-}
-
-// StatusFix is a way to act on an entry: what to do, the commands to
-// copy, or both.
-type StatusFix struct {
-	Text     string   `json:"text,omitempty"`
-	Commands []string `json:"commands,omitempty"`
+	Level string          `json:"level"`
+	Key   string          `json:"key"`
+	Lines []string        `json:"lines"`
+	Fixes []report.Remedy `json:"fixes,omitempty"`
 }
 
 // An entry's levels: a warning needs attention, and --status then exits

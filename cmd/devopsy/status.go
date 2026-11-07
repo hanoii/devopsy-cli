@@ -137,18 +137,15 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 	if err := compose(cwd, &out, "ps", "--all", "--format", "json"); err != nil {
 		return facts, fmt.Errorf("docker compose ps: %w", err)
 	}
-	entries, err := parsePS(out.Bytes())
+	// Never a one-off (a run, an import's run --rm): no service's
+	// container.
+	entries, err := serviceEntries(out.Bytes())
 	if err != nil {
 		return facts, fmt.Errorf("docker compose ps: %w", err)
 	}
 	has := map[string]bool{}
 	var running []string
 	for _, e := range entries {
-		// A one-off (a run, an import's run --rm) is no service's
-		// container.
-		if e.oneOff() {
-			continue
-		}
 		facts.Containers = append(facts.Containers, remote.StatusContainer{Service: e.Service, State: e.State, Health: e.Health, Status: e.Status, ExitCode: e.ExitCode})
 		has[e.Service] = true
 		if e.State == "running" && !slices.Contains(running, e.Service) {
@@ -236,9 +233,9 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 			bad = append(bad, line)
 			continue
 		}
-		var fix []remote.StatusFix
+		var fix []report.Remedy
 		if len(f) == 4 && f[3] != "" {
-			fix = []remote.StatusFix{{Commands: []string{f[3]}}}
+			fix = []report.Remedy{report.Fix("", f[3])}
 		}
 		if n := len(entries); n > 0 && entries[n-1].Key == f[1] {
 			e := &entries[n-1]
@@ -247,7 +244,7 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 				e.Level = remote.StatusWarning
 			}
 			for _, x := range fix {
-				if !slices.ContainsFunc(e.Fixes, func(y remote.StatusFix) bool { return slices.Equal(x.Commands, y.Commands) }) {
+				if !slices.ContainsFunc(e.Fixes, func(y report.Remedy) bool { return slices.Equal(x.Cmds, y.Cmds) }) {
 					e.Fixes = append(e.Fixes, x)
 				}
 			}
@@ -270,10 +267,7 @@ func serverDisks() ([]remote.Disk, string) {
 	docker, containerd := "", ""
 	if !behindDoor() {
 		d := dockerInfo()
-		docker = d.RootDir
-		if d.Containerd {
-			containerd = "/var/lib/containerd"
-		}
+		docker, containerd = d.RootDir, containerdRoot(d)
 	}
 	return diskFacts(r.Root, docker, containerd, r.Snapshots.Root, false), r.Snapshots.Root
 }
@@ -313,16 +307,13 @@ func (r *statusReport) add(level, key, line string) {
 
 // addHeader adds the environment's state on the server (remote.EnvStatus,
 // read): its release, its parent and its last sync, and what is running,
-// cut or partial on it, with the commands that finish each.
+// cut or partial on it, with the commands that finish each, naming the
+// target as a release's hint does (remote.HintAddress).
 func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	info := func(key, line string) { r.add(remote.StatusInfo, key, line) }
 	// warn adds a warning with its fixes, each a text and its command.
 	warn := func(key, line string, fixes ...[2]string) {
-		e := remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}}
-		for _, f := range fixes {
-			e.Fixes = append(e.Fixes, remote.StatusFix{Text: f[0], Commands: []string{f[1]}})
-		}
-		r.Entries = append(r.Entries, e)
+		r.Entries = append(r.Entries, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: report.FixPairs(fixes)})
 	}
 	switch {
 	case h.plain:
@@ -362,7 +353,7 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 		info("release", line)
 	}
 	if h.cut != nil {
-		what, fix := h.cut.Cut(targetRef(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
+		what, fix := h.cut.Cut(remote.HintAddress(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
 		warn("release", what, fix)
 	}
 	if t.Parent != "" {
@@ -391,15 +382,15 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	case h.importing:
 		info("data", "an import into it is running")
 	case h.mark.IsImport():
-		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.ImportFixes(targetRef(t), h.mark.From, t.Parent != "")...)
+		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.ImportFixes(remote.HintAddress(t), h.mark.From, t.Parent != "")...)
 	case h.mark.IsRestore() && h.busy:
 		// Its mark is there from its first write to its run step, the
 		// release lock held all along.
 		warn("data", "restoring snapshot "+h.mark.From+": what it stopped stays down until it completes")
 	case h.mark.IsRestore():
-		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "")...)
+		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(remote.HintAddress(t), h.mark.From, t.Parent != "")...)
 	case h.partial != "":
-		fixes := [][2]string{{"sync it again:", "devopsy @" + targetRef(t) + " --sync"}, remote.ResetFix(targetRef(t))}
+		fixes := [][2]string{{"sync it again:", "devopsy @" + remote.HintAddress(t) + " --sync"}, remote.ResetFix(remote.HintAddress(t))}
 		if h.id == "" {
 			fixes = [][2]string{{"release it: a first release syncs", "devopsy @" + remote.HintAddress(t) + " --release"}}
 		}
@@ -421,9 +412,7 @@ func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
 		if use.warn != "" {
 			e.Level = remote.StatusWarning
 			e.Lines = append(e.Lines, use.warn)
-			for _, f := range use.fixes {
-				e.Fixes = append(e.Fixes, remote.StatusFix{Text: f.Text, Commands: f.Cmds})
-			}
+			e.Fixes = use.fixes
 		}
 		r.Entries = append(r.Entries, e)
 	}
@@ -496,9 +485,9 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 			for j := range e.Fixes {
 				f := &e.Fixes[j]
 				f.Text = report.Copyable(f.Text)
-				f.Commands = slices.Clone(f.Commands)
-				for k := range f.Commands {
-					f.Commands[k] = report.Copyable(f.Commands[k])
+				f.Cmds = slices.Clone(f.Cmds)
+				for k := range f.Cmds {
+					f.Cmds[k] = report.Copyable(f.Cmds[k])
 				}
 			}
 		}
@@ -535,7 +524,7 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 				if f.Text != "" {
 					fmt.Fprintln(w, paint(report.Copyable(row("", f.Text))))
 				}
-				for _, c := range f.Commands {
+				for _, c := range f.Cmds {
 					fmt.Fprintln(w, st.head(report.Copyable(row("", "$ "+c))))
 				}
 			}

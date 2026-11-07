@@ -75,8 +75,8 @@ func Line(l Level, msg string) string { return Head(l) + msg }
 // Remedy is one way to fix a failure: what to do and, optionally, the
 // commands that do it.
 type Remedy struct {
-	Text string
-	Cmds []string
+	Text string   `json:"text,omitempty"`
+	Cmds []string `json:"commands,omitempty"`
 }
 
 // Fix is a Remedy: text says what to do (it may be empty when the

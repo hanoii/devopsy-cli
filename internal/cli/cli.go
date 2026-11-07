@@ -1046,7 +1046,8 @@ GB free, no reflinks, a snapshot root on the release root's filesystem,
 a tool the server needs missing, a role held twice, and an environment
 whose first release failed, cut off past its switch, with a sync, an
 import or a restore that did not complete, services an operation left
-stopped, or containers restarting, unhealthy or paused (what is running,
+stopped, or containers restarting, paused, dead, unhealthy or exited on
+an error of their own (what is running,
 a sync, an import or a restore, is said, not warned). It then exits 3,
 for CI: 0 says nothing needs attention. What kdump keeps is said with
 how to free it, never warned: crash dumps are a choice.
@@ -1122,8 +1123,9 @@ Examples:
 `,
 	"--status": `Usage: devopsy [@<target>] --status [--json]
 
-What is running. In a project: its containers (every one, state and
-health, as docker compose ps sees them, and the services with none),
+What is running. In a project: its containers (state and health, as
+docker compose ps sees them, a run's left out, and the services with
+none, except behind a server's door),
 then what the project's status capability prints
 (.devopsy/capabilities/status/show), its URL, say. With a target: the
 current release there (id, commit, when, by whom, how many releases are

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -430,5 +431,26 @@ func TestServerInfoEnvironments(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
 		t.Errorf("environments: %v", got)
+	}
+}
+
+// --server-info's help and docs/servers.md name every container trouble
+// it warns about (containerTrouble), dead and exited on an error too.
+func TestServerInfoDocsNameContainerTroubles(t *testing.T) {
+	t.Parallel()
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "servers.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for where, text := range map[string]string{
+		"--server-info's help": cli.RemoteCommandHelp["--server-info"],
+		"docs/servers.md":      string(doc),
+	} {
+		text = strings.Join(strings.Fields(text), " ")
+		for _, trouble := range []string{containerTrouble("dead", "", 0), "exited"} {
+			if !strings.Contains(text, trouble) {
+				t.Errorf("%s does not say a container %s warns", where, trouble)
+			}
+		}
 	}
 }

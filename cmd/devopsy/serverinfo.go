@@ -80,13 +80,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	info.Docker = dockerFacts()
-	containerd := ""
-	if info.Docker.Containerd {
-		// The containerd image store keeps images and layers in the
-		// system containerd's root, not Docker's.
-		containerd = "/var/lib/containerd"
-	}
-	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerd, info.SnapshotRoot, true)
+	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
 			info.Missing = append(info.Missing, t.name)
@@ -244,6 +238,16 @@ func dockerFacts() remote.DockerFacts {
 		}
 	}
 	return d
+}
+
+// containerdRoot is where d's images and layers are when it uses the
+// containerd image store, the system containerd's root, not Docker's;
+// else empty.
+func containerdRoot(d remote.DockerFacts) string {
+	if d.Containerd {
+		return "/var/lib/containerd"
+	}
+	return ""
 }
 
 // dockerInfo is what docker info says, alone.
