@@ -92,7 +92,7 @@ func cutRefusal(t *Target) string {
 	cases := ""
 	for _, kind := range []string{"rollback", "restart", "restore", "*"} {
 		what, fix := (&Activating{ID: "$rl_id", Kind: kind, From: "$rl_from", Snapshot: "$rl_snap"}).Cut(a, a, false)
-		cases += "    " + kind + `) devopsy --say error "` + what + `: nothing reloaded" "` + fix + `" ;;
+		cases += "    " + kind + `) devopsy --say error "` + what + `: nothing reloaded" "` + fix[0] + `" "` + report.CmdMark + fix[1] + `" ;;
 `
 	}
 	return `if [ -f "$base/` + ActivatingFile + `" ]; then

@@ -47,8 +47,9 @@ func TestServerFactsParsers(t *testing.T) {
 	if err := parseDockerInfo([]byte(`{"ServerErrors":["Cannot connect to the Docker daemon"]}`), &d); err == nil || !strings.Contains(err.Error(), "Cannot connect") {
 		t.Errorf("daemon down: %v", err)
 	}
-	cs := parseHostContainers([]byte("running healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited - null\n"))
-	if len(cs) != 2 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[1].State != "exited" || cs[1].Health != "" {
+	cs := parseHostContainers([]byte("running 0 healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - null\nexited 2 - {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"))
+	if len(cs) != 3 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[0].OneOff ||
+		cs[1].State != "exited" || cs[1].Health != "" || cs[1].ExitCode != 1 || !cs[2].OneOff {
 		t.Errorf("containers: %+v", cs)
 	}
 }
@@ -177,6 +178,12 @@ func TestServerInfoReport(t *testing.T) {
 		{"paused", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "web", State: "paused"})
 		}, "", "shop/prod: web paused|"},
+		// Judged as --status judges it (containerTrouble): an exit on an
+		// error of its own, never a one-off's.
+		{"exited on an error", func(i *remote.ServerInfo) {
+			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "exited", ExitCode: 1},
+				remote.HostContainer{Project: "shop-prod", Service: "app", State: "exited", ExitCode: 2, OneOff: true})
+		}, "", "shop/prod: worker exited 1|"},
 	} {
 		info := healthy()
 		c.change(&info)
@@ -329,8 +336,8 @@ case "$1 $2" in
   "ps -aq") echo c1; echo c2; echo gone; exit 0 ;;
   # A container gone since ps: inspect prints the others, then fails
   # (review: every container was dropped then).
-  "inspect --format") echo 'running - {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
-    echo 'restarting - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
+  "inspect --format") echo 'running 0 - {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
+    echo 'restarting 0 - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
     echo 'Error response from daemon: No such container: gone' >&2; exit 1 ;;
 esac
 exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"

@@ -144,11 +144,12 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 	has := map[string]bool{}
 	var running []string
 	for _, e := range entries {
-		facts.Containers = append(facts.Containers, remote.StatusContainer{Service: e.Service, State: e.State, Health: e.Health, Status: e.Status, ExitCode: e.ExitCode})
-		// A one-off (a run --rm) is no service's container.
+		// A one-off (a run, an import's run --rm) is no service's
+		// container.
 		if e.oneOff() {
 			continue
 		}
+		facts.Containers = append(facts.Containers, remote.StatusContainer{Service: e.Service, State: e.State, Health: e.Health, Status: e.Status, ExitCode: e.ExitCode})
 		has[e.Service] = true
 		if e.State == "running" && !slices.Contains(running, e.Service) {
 			running = append(running, e.Service)
@@ -157,7 +158,7 @@ func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error)
 	// The services with none, of the active profiles. Never through the
 	// door: its compose config makes the binds' entries, and --status
 	// changes nothing.
-	if !disks || reachesDocker() {
+	if !behindDoor() {
 		var services bytes.Buffer
 		if compose(cwd, &services, "config", "--services") == nil {
 			for _, svc := range strings.Fields(services.String()) {
@@ -267,7 +268,7 @@ func serverDisks() ([]remote.Disk, string) {
 		return []remote.Disk{{Paths: []string{"releases=(unknown)"}, Error: err.Error()}}, ""
 	}
 	docker, containerd := "", ""
-	if reachesDocker() {
+	if !behindDoor() {
 		d := dockerInfo()
 		docker = d.RootDir
 		if d.Containerd {
@@ -301,7 +302,7 @@ type statusReport struct {
 // how many releases are kept.
 type statusRelease struct {
 	ID string `json:"id"`
-	remote.Record
+	*remote.Record
 	Kept int `json:"kept"`
 }
 
@@ -315,12 +316,19 @@ func (r *statusReport) add(level, key, line string) {
 // cut or partial on it, with the commands that finish each.
 func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	info := func(key, line string) { r.add(remote.StatusInfo, key, line) }
-	warn := func(key, line string) { r.add(remote.StatusWarning, key, line) }
+	// warn adds a warning with its fixes, each a text and its command.
+	warn := func(key, line string, fixes ...[2]string) {
+		e := remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}}
+		for _, f := range fixes {
+			e.Fixes = append(e.Fixes, remote.StatusFix{Text: f[0], Commands: []string{f[1]}})
+		}
+		r.Entries = append(r.Entries, e)
+	}
 	switch {
 	case h.plain:
 		info("release", "none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		warn("release", fmt.Sprintf("none: %s failed, devopsy @%s --log shows why", h.failed, targetRef(t)))
+		warn("release", "none: "+h.failed+" failed", [2]string{"see why:", "devopsy @" + targetRef(t) + " --log"})
 	case h.none:
 		info("release", "none: not released yet")
 	}
@@ -328,7 +336,7 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 		rel := &statusRelease{ID: h.id}
 		line := h.id
 		if h.record != nil {
-			rel.Record = *h.record
+			rel.Record = h.record
 			if h.record.Commit != "" {
 				short := h.record.Commit
 				if len(short) > 10 {
@@ -355,7 +363,7 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	}
 	if h.cut != nil {
 		what, fix := h.cut.Cut(targetRef(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
-		warn("release", what+": "+fix)
+		warn("release", what, fix)
 	}
 	if t.Parent != "" {
 		line := t.Parent
@@ -383,27 +391,19 @@ func (r *statusReport) addHeader(h envState, t *remote.Target) {
 	case h.importing:
 		info("data", "an import into it is running")
 	case h.mark.IsImport():
-		var fixes []string
-		for _, f := range remote.ImportFixes(targetRef(t), h.mark.From, t.Parent != "") {
-			fixes = append(fixes, f[1])
-		}
-		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does: "+strings.Join(fixes, ", or "))
+		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.ImportFixes(targetRef(t), h.mark.From, t.Parent != "")...)
 	case h.mark.IsRestore() && h.busy:
 		// Its mark is there from its first write to its run step, the
 		// release lock held all along.
 		warn("data", "restoring snapshot "+h.mark.From+": what it stopped stays down until it completes")
 	case h.mark.IsRestore():
-		var fixes []string
-		for _, f := range remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "") {
-			fixes = append(fixes, f[1])
-		}
-		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does: "+strings.Join(fixes, ", or "))
+		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "")...)
 	case h.partial != "":
-		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
+		fixes := [][2]string{{"sync it again:", "devopsy @" + targetRef(t) + " --sync"}, remote.ResetFix(targetRef(t))}
 		if h.id == "" {
-			fix = "devopsy @" + remote.HintAddress(t) + " --release: a first release syncs"
+			fixes = [][2]string{{"release it: a first release syncs", "devopsy @" + remote.HintAddress(t) + " --release"}}
 		}
-		warn("data", "from a sync that did not complete: "+h.partial+": nothing runs on it until one does: "+fix)
+		warn("data", "from a sync that did not complete: "+h.partial+": nothing runs on it until one does", fixes...)
 	case h.left != "":
 		warn("data", "an operation cut off recorded "+h.left+" as stopped: the next release, sync, import or snapshot here starts what of them is down")
 	}
@@ -417,7 +417,7 @@ func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
 	r.Disks = facts.Disks
 	for _, d := range facts.Disks {
 		use := judgeDisk(d, facts.SnapshotRoot, ref)
-		e := remote.StatusEntry{Level: remote.StatusInfo, Key: "disk", Lines: []string{use.value}}
+		e := remote.StatusEntry{Level: remote.StatusInfo, Key: "disks", Lines: []string{use.value}}
 		if use.warn != "" {
 			e.Level = remote.StatusWarning
 			e.Lines = append(e.Lines, use.warn)
@@ -436,17 +436,31 @@ func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
 	r.Entries = append(r.Entries, facts.Entries...)
 }
 
-// containerLevel is a container's level: a warning when it restarts, is
-// dead or unhealthy, or exited on an error of its own (a stop ends it
-// with 0, or a signal's 137 or 143).
+// containerLevel is a container's level: a warning when it needs
+// attention (containerTrouble).
 func containerLevel(c remote.StatusContainer) string {
-	switch {
-	case c.State == "restarting", c.State == "dead", c.Health == "unhealthy":
-		return remote.StatusWarning
-	case c.State == "exited" && !slices.Contains([]int{0, 137, 143}, c.ExitCode):
+	if containerTrouble(c.State, c.Health, c.ExitCode) != "" {
 		return remote.StatusWarning
 	}
 	return remote.StatusInfo
+}
+
+// containerTrouble is what is wrong with a container, for --status and
+// --server-info, else empty: restarting, paused (devopsy never pauses:
+// Traefik drops a paused container's router), dead, unhealthy while it
+// runs (Docker says unhealthy of a stopped one's health too), or exited
+// on an error of its own (a stop ends it with 0, or a signal's 137 or
+// 143).
+func containerTrouble(state, health string, exitCode int) string {
+	switch {
+	case state == "restarting", state == "paused", state == "dead":
+		return state
+	case state == "running" && health == "unhealthy":
+		return "unhealthy"
+	case state == "exited" && !slices.Contains([]int{0, 137, 143}, exitCode):
+		return "exited " + strconv.Itoa(exitCode)
+	}
+	return ""
 }
 
 // print shows r on w in st under heading (none locally), or prints it
@@ -470,6 +484,24 @@ func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool)
 		r.Entries = []remote.StatusEntry{}
 	}
 	if asJSON {
+		// Its lines and commands copyable as the text's are: a bracketed
+		// address quoted.
+		for i := range r.Entries {
+			e := &r.Entries[i]
+			e.Lines = slices.Clone(e.Lines)
+			for j := range e.Lines {
+				e.Lines[j] = report.Copyable(e.Lines[j])
+			}
+			e.Fixes = slices.Clone(e.Fixes)
+			for j := range e.Fixes {
+				f := &e.Fixes[j]
+				f.Text = report.Copyable(f.Text)
+				f.Commands = slices.Clone(f.Commands)
+				for k := range f.Commands {
+					f.Commands[k] = report.Copyable(f.Commands[k])
+				}
+			}
+		}
 		out, err := json.MarshalIndent(r, "", "  ")
 		if err != nil {
 			return failErr(err)

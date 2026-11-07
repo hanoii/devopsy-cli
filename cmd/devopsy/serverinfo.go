@@ -396,28 +396,30 @@ func hostContainers() []remote.HostContainer {
 	}
 	// A container gone since ps (a run --rm, a util container) fails
 	// inspect, which printed every other one all the same.
-	out, _ = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
+	out, _ = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
 	return parseHostContainers(out)
 }
 
-// parseHostContainers reads lines of "<state> <health or -> <labels as
-// JSON>".
+// parseHostContainers reads lines of "<state> <exit code> <health or ->
+// <labels as JSON>".
 func parseHostContainers(out []byte) []remote.HostContainer {
 	var cs []remote.HostContainer
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
-		f := strings.SplitN(sc.Text(), " ", 3)
-		if len(f) < 3 {
+		f := strings.SplitN(sc.Text(), " ", 4)
+		if len(f) < 4 {
 			continue
 		}
 		var labels map[string]string
-		if json.Unmarshal([]byte(f[2]), &labels) != nil {
+		if json.Unmarshal([]byte(f[3]), &labels) != nil {
 			continue
 		}
-		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"]}
-		if f[1] != "-" {
-			c.Health = f[1]
+		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"],
+			OneOff: labels["com.docker.compose.oneoff"] == "True"}
+		c.ExitCode, _ = strconv.Atoi(f[1])
+		if f[2] != "-" {
+			c.Health = f[2]
 		}
 		for k, v := range labels {
 			if k == cli.RoleLabel || strings.HasPrefix(k, cli.ExportPrefix) {
@@ -867,24 +869,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		running, all := 0, 0
 		var bad []string
 		for _, c := range info.Containers {
-			if c.Project != compose {
+			// A one-off (a run, an import's run --rm) is no service's
+			// container.
+			if c.Project != compose || c.OneOff {
 				continue
 			}
 			all++
 			if c.State == "running" {
 				running++
 			}
-			// Docker says unhealthy of a stopped container's health too:
-			// it means something only while it runs.
-			switch {
-			case c.State == "restarting":
-				bad = append(bad, c.Service+" restarting")
-			case c.State == "running" && c.Health == "unhealthy":
-				bad = append(bad, c.Service+" unhealthy")
-			case c.State == "paused":
-				// devopsy never pauses: Traefik drops a paused container's
-				// router.
-				bad = append(bad, c.Service+" paused")
+			if trouble := containerTrouble(c.State, c.Health, c.ExitCode); trouble != "" {
+				bad = append(bad, c.Service+" "+trouble)
 			}
 		}
 		if all > 0 {

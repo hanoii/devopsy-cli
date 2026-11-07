@@ -88,8 +88,8 @@ type Disk struct {
 	Error string   `json:"error,omitempty"`
 	Type  string   `json:"type,omitempty"`
 	Size  int64    `json:"size,omitempty"`
-	Free  int64    `json:"free,omitempty"` // to the deploy user
-	Used  int64    `json:"used,omitempty"`
+	Free  int64    `json:"free"` // to the deploy user
+	Used  int64    `json:"used"`
 	// Reflinks is yes or no where tried (the release root's), else
 	// empty.
 	Reflinks string `json:"reflinks,omitempty"`
@@ -97,11 +97,14 @@ type Disk struct {
 
 // HostContainer is a container as --server-info needs it.
 type HostContainer struct {
-	Project string            `json:"project,omitempty"`
-	Service string            `json:"service,omitempty"`
-	State   string            `json:"state"`
-	Health  string            `json:"health,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"` // devopsy.role and devopsy.export.* only
+	Project string `json:"project,omitempty"`
+	Service string `json:"service,omitempty"`
+	State   string `json:"state"`
+	Health  string `json:"health,omitempty"`
+	// ExitCode is an exited container's; OneOff a compose run's.
+	ExitCode int               `json:"exit_code,omitempty"`
+	OneOff   bool              `json:"one_off,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"` // devopsy.role and devopsy.export.* only
 }
 
 // Environment is an environment's directory under the release root and

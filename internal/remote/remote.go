@@ -114,24 +114,25 @@ func ParseActivating(line string) *Activating {
 	return &Activating{ID: f[0], Kind: f[1], From: f[2], Snapshot: f[3]}
 }
 
-// Cut is what --status says of a cut activation, and what finishes it:
-// the release again (ref the release's address as typed, an alias's
-// with its source), a rollback again, a restore again (ref the target's
-// as typed); a sync where a sync's partial copy (syncPartial) refuses a
-// release, and its run step finishes the cut one.
-func (a *Activating) Cut(ref, releaseRef string, syncPartial bool) (what, fix string) {
-	what, past, fix := "the release of "+a.ID, " past its switch", "devopsy @"+releaseRef+" --release releases it again"
+// Cut is what --status says of a cut activation, and what finishes it,
+// a text and its command: the release again (ref the release's address
+// as typed, an alias's with its source), a rollback again, a restore
+// again (ref the target's as typed); a sync where a sync's partial copy
+// (syncPartial) refuses a release, and its run step finishes the cut one.
+func (a *Activating) Cut(ref, releaseRef string, syncPartial bool) (what string, fix [2]string) {
+	what, past := "the release of "+a.ID, " past its switch"
+	fix = [2]string{"release it again:", "devopsy @" + releaseRef + " --release"}
 	if syncPartial {
-		fix = "devopsy @" + ref + " --sync finishes it"
+		fix = [2]string{"finish it with a sync:", "devopsy @" + ref + " --sync"}
 	}
 	switch a.Kind {
 	case "rollback":
-		what, fix = "the rollback to "+a.ID, "devopsy @"+ref+" --rollback finishes it"
+		what, fix = "the rollback to "+a.ID, [2]string{"finish it:", "devopsy @" + ref + " --rollback"}
 	case "restart":
 		// A failed run step's way back: current restarted.
 		what, past = "the restart of "+a.ID+" after "+a.From+" failed", ""
 	case "restore":
-		what, fix = "the restore of snapshot "+a.Snapshot+" as "+a.ID, "devopsy @"+ref+" --snapshots restore "+a.Snapshot+" runs it again"
+		what, fix = "the restore of snapshot "+a.Snapshot+" as "+a.ID, [2]string{"run it again:", "devopsy @" + ref + " --snapshots restore " + a.Snapshot}
 	}
 	return what + " was cut off" + past + ": its run step may not have run", fix
 }
