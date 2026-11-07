@@ -493,7 +493,8 @@ func TestDoorSecretHasOneForm(t *testing.T) {
 	t.Cleanup(func() { os.Stdin = saved })
 	logged := filepath.Join(t.TempDir(), "ran")
 	fake := filepath.Join(t.TempDir(), "docker")
-	if err := testfile.Write(fake, []byte("#!/bin/sh\necho \"$RSYNC_PASSWORD\" >"+logged+"\n"), 0o755); err != nil {
+	// What the copy had; the door's own calls after it (its grant) have no password.
+	if err := testfile.Write(fake, []byte("#!/bin/sh\ncase \"$*\" in \"image inspect \"*) echo \"sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)\"; exit ;; esac\n[ -z \"$RSYNC_PASSWORD\" ] || echo \"$RSYNC_PASSWORD\" >"+logged+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ask := func(t *testing.T, value string) int {
@@ -507,7 +508,7 @@ func TestDoorSecretHasOneForm(t *testing.T) {
 		space := t.TempDir()
 		argv := []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", filepath.Join(space, "mnt", "shop-prod") + ":/mnt", remote.UtilImage}
 		argv = append(append(argv, remote.RsyncCopy...), "rsync://127.0.0.1:9/data/", "/mnt/data/")
-		side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: "/none"}, real: fake}
+		side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", UID: "10002", Space: space, Tree: "/none"}, real: fake}
 		return side.request("", argv)
 	}
 	doorFakes(t)

@@ -707,3 +707,34 @@ esac
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
+// mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
+func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	docker := filepath.Join(dir, "docker")
+	// The util image is there, built today.
+	fake := "#!/bin/sh\ncase \"$*\" in \"image inspect \"*) echo \"sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)\"; exit ;; esac\necho \"$*\" >>" + log + "\n"
+	if err := testfile.Write(docker, []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", UID: "10002", Space: filepath.Join(dir, "space")}, real: docker}
+	if err := side.regrant(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Error("a grant with no entry")
+	}
+	data, ini := filepath.Join(side.policy.Mnt("shop-prod"), "data"), filepath.Join(side.policy.Mnt("shop-prod"), "app.ini")
+	if err := side.regrant([]string{data, ini}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(log)
+	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges -v " + data + ":/e/0 -v " + ini + ":/e/1 " + remote.UtilImage +
+		" find /e/0 /e/1 -xdev ( -type d -o -type f ) ! -perm -g=w -exec setfacl -m u:10002:rwX {} +\n"
+	if string(got) != want {
+		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
+	}
+}

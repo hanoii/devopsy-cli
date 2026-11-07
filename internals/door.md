@@ -2,6 +2,10 @@
 
 A project user has no Docker socket: what it finds as `docker` asks the deploy user through sudo. Code: `internal/door/` (the decisions, touching nothing), `cmd/devopsy/door_client.go` (the project user's side of sudo), `door.go` (the deploy user's), `utilscripts.go`, `internal/remote/door.go`. `e2e/door_test.go` runs what needs a real kernel, Docker and sudo, each with a control that the attack works where the rule is off.
 
+- The door checks a rendered compose file and devopsy's own requests, never Docker's API: a policed socket's requests are read one way by it and another by the daemon, and compose acts as whoever runs it, past any socket.
+- Projects on one daemon are kept apart by the door's checks, and more isolation than that is a server of its own, never a daemon per project here (for example rootless Docker or a VM): one Traefik must reach every project's containers.
+- What runs is what the door checked: a name, a tag or a path is pinned or held from its check to its use (for example `imageLock`, `Paths.Real`, `cloneShape`), since a value resolved again after the check is a value nobody checked.
+- The door's protection depends on no template or project: its rules are on compose keys and devopsy's requests, deny by default, so a file that does not meet them is refused, and only what a label means to a proxy is left to the admin's vet (`door: vets:`), as devopsy knows no URL.
 - A server's `door:` is read only from the deploy user's own config: a project's could grant itself.
 - Who asks comes from `SUDO_USER`, and every word of the request is treated as hostile.
 - Who the socket lets in has no door (`runDocker`): the deploy user, and a project an admin put in the docker group.
@@ -13,10 +17,11 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A rendered file and each verb's flags are checked deny by default (`CheckFile`, `CheckVerb`), so a key compose adds later fails closed.
 - A compose upgrade is tried against the rules before devopsy-server moves its pin: a key it starts writing by default refuses every `up`.
 - A bind holds no path with a part the project user can change, since the daemon resolves a bind at each start: an entry by its real path under `<space>/mnt/<compose name>`, a read-only part of a release as a sealed copy under `<space>/sealed/<project>`.
-- A firewall rule by the project users' group blocks Docker's address pools and the metadata service, never private ranges whole: a sync reaches another server over those.
+- A firewall rule by the project users' group blocks what leaves through Docker's bridges (`-o docker0`, `-o br-+`) and the metadata service, never an address range: a sync reaches another server at any address, one inside Docker's pools included.
 - `<space>` is on a mount of its own with `nosuid` and `nodev`: a container's setuid file or a crafted tar there otherwise crosses projects, or reaches root.
 - A project user's `shared/mnt` is a link into `<space>`, made at a release's start (`--mnt-ready`), and a compose name comes from where an environment is in that user's tree, never from a caller (`Policy.NameOf`).
 - Entries are made by the door, so a project user can write inside one and never replace it: when devopsy's own mkdir is refused (`makeEntry`), and what a file binds, at `compose config`, since a step writes in an entry before anything starts (`entries`), and at `up` (`bindEntries`).
+- What a root util container writes in an entry is given back to the project user as `rwX` when it exits, or when it is removed for one detached (`Regrant`, `Removes`, `regrant`): a tar's or an rsync's mode on a file with an ACL sets its mask, which narrows the project user's entry, and only an owner or root changes an ACL, so a root util container does it, touching only what lost its group class's write.
 - An entry the door made a directory, not knowing it is a file, is replaced while empty: the two are told apart only by an import or a sync.
 - A service on a shared network is named `<project>-<name>` (`OwnName`), and holds no alias or fixed address there: compose makes each service's name an alias on its networks, which would answer for another's name (for example `traefik` on `tunnel`).
 - A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.

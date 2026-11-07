@@ -100,6 +100,12 @@ type Action struct {
 	// Images says Docker changes what a name in the image store is, under the
 	// project's image lock.
 	Images bool
+	// Regrant are entries a root container writes, given back to the project user
+	// once it exits: a copy's modes narrow its ACL there (the door's regrant).
+	Regrant []string
+	// Removes are containers whose writable entries are given back once removed: a
+	// detached one's copy ends with it.
+	Removes []string
 	// Cleanup are directories of the door's that go after Docker.
 	Cleanup []string
 	// Entries are what Docker's mounts need there, which the door makes first.
@@ -383,7 +389,13 @@ func decideRM(args []string, p Policy, d Daemon) (*Action, error) {
 			return nil, refuse("not this project's: docker rm %s", a)
 		}
 	}
-	return &Action{Docker: append([]string{"rm"}, args...)}, nil
+	var removes []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			removes = append(removes, a)
+		}
+	}
+	return &Action{Docker: append([]string{"rm"}, args...), Removes: removes}, nil
 }
 
 // decideUtilBuild builds only devopsy's util image, from the door's own

@@ -140,7 +140,9 @@ volumes:
 	} else if out, _ := doorRoot(t, "test -f "+mnt+"/settings.ini && cat "+mnt+"/settings.ini"); !strings.Contains(out, "ini") {
 		t.Errorf("the file entry after the import: %s", out)
 	}
-	must("a child's release", "devopsy @dev --release")
+	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 {
+		t.Fatalf("a child's release (%d):\n%s\nthe parent's entries:\n%s\nthe child's:\n%s", code, out, doorEntries(t, "doorflow-prod"), doorEntries(t, "doorflow-dev"))
+	}
 	child := doorSpace + "/mnt/doorflow-dev"
 	if out, _ := doorRoot(t, "cat "+child+"/data/f"); !strings.Contains(out, "dat") {
 		t.Errorf("the child's entry: %s", out)

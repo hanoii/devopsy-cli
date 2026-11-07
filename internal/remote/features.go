@@ -96,14 +96,15 @@ var namedFeatures = []struct {
 	// What came with release snapshots, under their name: the mounts
 	// check's words after restored, restart (the restart after a failed
 	// run step) and a restore's snapshot, which a devopsy without them
-	// refuses as usage after the switch; and the util image a script runs,
-	// devopsy-util:3, whose tag a devopsy without it never readies, where a
-	// sync's receive runs it after its claim (the copy then counted as
-	// cut). childNeeds carries the latter to the child's first session, so
-	// a child lacking it refuses before anything stops. A new tag of
-	// UtilImage is a named feature of its own.
+	// refuses as usage after the switch.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
-	{ReleaseSnapshotsFeature, regexp.MustCompile(regexp.QuoteMeta("devopsy-util:3"))},
+	// The util image a script runs, devopsy-util:4 (setfacl, for the door's
+	// grants), whose tag a devopsy without it never readies, where a sync's
+	// receive runs it after its claim (the copy then counted as cut).
+	// childNeeds carries it to the child's first session, so a child
+	// lacking it refuses before anything stops. A new tag of UtilImage is a
+	// named feature of its own.
+	{UtilImageFeature, regexp.MustCompile(regexp.QuoteMeta(UtilImage))},
 	// devopsy's containers found by their labels (ContainerLabels): the
 	// receive script a push writes runs the child's rsync, which the
 	// child's holder removes by its labels once it decides. An older
@@ -125,6 +126,9 @@ const ContainerLabelsFeature = "container-labels"
 // RecordModeFeature is the named feature of the server finding its
 // images' settings itself, each release's mode from its record first.
 const RecordModeFeature = "record-mode"
+
+// UtilImageFeature is UtilImage's tag's named feature: devopsy-util:4.
+const UtilImageFeature = "util-image-4"
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"

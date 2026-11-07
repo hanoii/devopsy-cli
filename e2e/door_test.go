@@ -66,6 +66,14 @@ func doorRoot(t *testing.T, script string) (string, int) {
 	return execIn(t, []string{"-w", "/", doorServer(t)}, script)
 }
 
+// doorEntries is what a failure needs to say of a compose name's entries: their owners,
+// modes and ACLs, which decide what its project user may write there.
+func doorEntries(t *testing.T, name string) string {
+	t.Helper()
+	out, _ := doorRoot(t, "cd "+doorSpace+"/mnt/"+name+" 2>&1 && ls -lna . && getfacl -p . * 2>&1")
+	return out
+}
+
 // doorAs runs script as user on the door's server, with a login's PATH.
 func doorAs(t *testing.T, user, script string) (string, int) {
 	t.Helper()
@@ -332,7 +340,7 @@ script=${script%x}
 docker run --rm --name devopsy-evil --label devopsy.env=doormnt-prod --label devopsy.task=import --network none \
   --mount type=bind,source=`+entry+`,target=/mnt/data \
   --mount type=bind,source=`+base+`/.devopsy-sync.stream.evil,target=/in/evil,readonly \
-  devopsy-util:3 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
+  devopsy-util:4 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
 		t.Fatalf("devopsy's own import, asked directly (%d): %s", code, out)
 	}
 	asRootID := func() string {
@@ -426,7 +434,7 @@ func TestDoorKeepsProjectsApart(t *testing.T) {
 	if out, _ := doorAs(t, "devopsy-doorsep", "docker inspect --format '{{.Id}} {{json .Config.Labels}}' "+strings.TrimSpace(id)); !strings.Contains(out, `com.docker.compose.project`) {
 		t.Errorf("the control: imports read nothing of another's: %s", out)
 	}
-	doorAs(t, "devopsy-doorsep", "docker rm -f "+web+"; docker tag devopsy-util:3 busybox:1.37; docker image rm busybox:1.37")
+	doorAs(t, "devopsy-doorsep", "docker rm -f "+web+"; docker tag devopsy-util:4 busybox:1.37; docker image rm busybox:1.37")
 	if out, code := doorRoot(t, "docker inspect -f '{{.State.Running}}' "+web); code != 0 || !strings.Contains(out, "true") {
 		t.Errorf("another's container removed: %s", out)
 	}
@@ -574,17 +582,17 @@ func TestDoorHostFirewallAndSyncDaemon(t *testing.T) {
 	if !strings.Contains(ask("devopsy-doorfwo"), "hello-from-web") {
 		t.Fatal("the control: with no rule, a project user reaches no site directly, so this proves nothing")
 	}
-	// Docker's own address pools and the metadata service, never private ranges whole: a
-	// sync reaches another server over those.
-	nets := []string{doorDockerPool, "169.254.169.254/32"}
-	for _, n := range nets {
-		if out, code := doorRoot(t, "iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -d "+n+" -j REJECT"); code != 0 {
+	// What leaves through Docker's bridges, and the metadata service, never an address
+	// range: a sync reaches another server at any address, one inside Docker's pools too.
+	rules := []string{"-o docker0", "-o br-+", "-d 169.254.169.254/32"}
+	for _, r := range rules {
+		if out, code := doorRoot(t, "iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups "+r+" -j REJECT"); code != 0 {
 			t.Fatal(out)
 		}
 	}
 	t.Cleanup(func() {
-		for _, n := range nets {
-			doorRoot(t, "iptables -D OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -d "+n+" -j REJECT")
+		for _, r := range rules {
+			doorRoot(t, "iptables -D OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups "+r+" -j REJECT")
 		}
 		doorRoot(t, "docker rm -f doorfw-syncd")
 	})
@@ -604,7 +612,7 @@ auth users = nobody
 secrets file = /etc/rsyncd.secrets
 [d]
 path = /mnt/d
-' devopsy-util:3 sh -c 'printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && printf "nobody:%s\n" "$RSYNC_SECRET" > /etc/rsyncd.secrets && chmod 600 /etc/rsyncd.secrets && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf' >/dev/null
+' devopsy-util:4 sh -c 'printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && printf "nobody:%s\n" "$RSYNC_SECRET" > /etc/rsyncd.secrets && chmod 600 /etc/rsyncd.secrets && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf' >/dev/null
 sleep 1`); code != 0 {
 		t.Fatal(out)
 	}
@@ -615,10 +623,11 @@ sleep 1`); code != 0 {
 		t.Errorf("the control: with its password the daemon does not answer: %s", out)
 	}
 	// The real thing under the rule: a child at another address of the server, the agent
-	// forwarded to the project's user there.
+	// forwarded to the project's user there. On GitHub's runners that address is inside
+	// doorDockerPool, which a rule by address range refused.
 	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
 	if out, code := op(t, dir, agent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
-		t.Errorf("a child at another address, under the rule (%d):\n%s", code, out)
+		t.Errorf("a child at another address, under the rule (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))
 	}
 }
 
@@ -710,13 +719,13 @@ door entry "$mnt" mnt dir
 mkdir "$mnt/mnt/hide"
 ln -s /root "$mnt/mnt/hide/link"
 chmod 000 "$mnt/mnt/hide"
-echo "the control: $(docker run --rm -v "$mnt/mnt/hide/link:/x/data:ro" devopsy-util:3 sh -c "$export" sh data 2>"$HOME/said" | tar -xOf - data/doorclone-s3cret 2>/dev/null || :; tr '\n' ' ' <"$HOME/said")"
+echo "the control: $(docker run --rm -v "$mnt/mnt/hide/link:/x/data:ro" devopsy-util:4 sh -c "$export" sh data 2>"$HOME/said" | tar -xOf - data/doorclone-s3cret 2>/dev/null || :; tr '\n' ' ' <"$HOME/said")"
 c1=$(door clone "$tree/prod/one")
 c2=$(door clone "$tree/prod/two")
-docker run --rm -v "$mnt:/m/mnt:ro" -v "$c1:/c" devopsy-util:3 sh -c "$first" 2>&1
-docker run --rm -v "$c1/mnt/mnt/hide:/m/volumes/mnt:ro" -v "$c2:/c" devopsy-util:3 sh -c "$second" 2>&1
+docker run --rm -v "$mnt:/m/mnt:ro" -v "$c1:/c" devopsy-util:4 sh -c "$first" 2>&1
+docker run --rm -v "$c1/mnt/mnt/hide:/m/volumes/mnt:ro" -v "$c2:/c" devopsy-util:4 sh -c "$second" 2>&1
 echo "the link: $(ls -ld "$c2/volumes/mnt" 2>&1)"
-docker run --rm -v "$c2/volumes/mnt/link:/x/data:ro" devopsy-util:3 sh -c "$export" sh data | tar -xOf - data/doorclone-s3cret
+docker run --rm -v "$c2/volumes/mnt/link:/x/data:ro" devopsy-util:4 sh -c "$export" sh data | tar -xOf - data/doorclone-s3cret
 `
 	out, _ := doorAs(t, user, script)
 	control, _, _ := strings.Cut(out, "\n")

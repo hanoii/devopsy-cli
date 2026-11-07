@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -611,7 +612,7 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 		return door.Policy{}, err
 	}
 	return door.Policy{
-		Project: s.Project, User: who, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles, ReadAll: s.ReadAll,
+		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles, ReadAll: s.ReadAll,
 		ForbiddenIDs: ids, Others: otherProjects(s),
 	}, nil
 }
@@ -1068,6 +1069,56 @@ func (s *doorSide) imageLock() (unlock func(), err error) {
 	return unlock, nil
 }
 
+// regrant gives this project user back rwX in entries a root container wrote, where
+// the copy took it: an import's tar and a sync's rsync set each item's mode, which on a
+// file with an ACL sets its mask, and the mask narrows the project user's entry. As root,
+// since an entry's files are its container user's once its owners are given, and only an
+// owner or root changes an ACL. Only what lost its group class's write is touched.
+func (s *doorSide) regrant(entries []string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if s.policy.UID == "" {
+		return errors.New("no project user to give " + strings.Join(entries, ", ") + " back to")
+	}
+	if err := ensureUtilImageWith(context.Background(), s.real); err != nil {
+		return err
+	}
+	args := slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil())
+	var targets []string
+	for i, e := range entries {
+		t := fmt.Sprintf("/e/%d", i)
+		args, targets = append(args, "-v", e+":"+t), append(targets, t)
+	}
+	args = append(append(append(args, remote.UtilImage, "find"), targets...),
+		"-xdev", "(", "-type", "d", "-o", "-type", "f", ")", "!", "-perm", "-g=w", "-exec", "setfacl", "-m", "u:"+s.policy.UID+":rwX", "{}", "+")
+	c := s.docker(args...)
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("what %s may write in its entries could not be given back: %v", s.policy.User, err)
+	}
+	return nil
+}
+
+// writtenEntries are the entries of this project's that containers write, by their
+// mounts: a detached copy's, given back once it is removed.
+func (s *doorSide) writtenEntries(containers []string) []string {
+	mnt := filepath.Join(s.policy.Space, "mnt") + "/"
+	var entries []string
+	for _, c := range containers {
+		out, err := s.docker("inspect", "--type", "container", "-f", `{{range .Mounts}}{{if .RW}}{{println .Source}}{{end}}{{end}}`, c).Output()
+		if err != nil {
+			continue
+		}
+		for _, src := range strings.Fields(string(out)) {
+			if strings.HasPrefix(src, mnt) && filepath.Dir(src)+"/" != mnt {
+				entries = append(entries, src)
+			}
+		}
+	}
+	return entries
+}
+
 // builder is what a build's environment needs to run on this project's own BuildKit,
 // made at its first build: on one builder, cache mounts are shared across projects by
 // their id, so one project's build would fill a cache another's trusts. Its settings are
@@ -1219,7 +1270,8 @@ func (s *doorSide) request(config string, argv []string) int {
 	if a.Stdin != "" {
 		stdin = strings.NewReader(a.Stdin)
 	}
-	if a.Stdin == "" && a.Secret == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 {
+	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
+	if a.Stdin == "" && a.Secret == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
 		err := s.execKeeping(append([]string{"docker"}, a.Docker...), env)
 		return doorRefused(err)
 	}
@@ -1232,6 +1284,13 @@ func (s *doorSide) request(config string, argv []string) int {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			code = ee.ExitCode()
+		}
+	}
+	// A copy cut halfway narrowed what it wrote too.
+	if err := s.regrant(regrant); err != nil {
+		report.Warn(err.Error())
+		if code == 0 {
+			code = 1
 		}
 	}
 	for _, co := range a.Collect {
