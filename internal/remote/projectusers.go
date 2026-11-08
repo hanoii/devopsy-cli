@@ -2,6 +2,8 @@ package remote
 
 import (
 	"path"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // ProjectUsersFlag is the hidden flag behind --project-users, run by its session on the
@@ -55,9 +57,9 @@ func doorSudoers(deploy, devopsy string) string {
 // doorTreeCheck refuses a tree that is there and not the user's ($1 the user, $2 the tree): it
 // would hand that user what another made there, whose entries it could then rename. A link
 // there is never the user's.
-const doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
+var doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
   if [ -L "$2" ] || [ -z "$(find "$2" -maxdepth 0 -user "$1" 2>/dev/null)" ]; then
-    echo "` + errorHead + `$2 is there already, and not $1's: move it aside first, since a project user gets only a tree --project-users add made" >&2
+    ` + echoLine(report.ErrorLevel, "$2 is there already, and not $1's: move it aside first, since a project user gets only a tree --project-users add made") + `
     exit 3
   fi
 fi
@@ -77,7 +79,7 @@ group=` + DoorGroup + `
 getent group "$group" >/dev/null || groupadd --system "$group"
 for u in root ` + Quote(deploy) + `; do
   if id -nG "$u" | tr ' ' '\n' | grep -qx "$group"; then
-    echo "` + errorHead + `$u is in $group, and sshd would ignore its own keys for devopsy's: take it out first (gpasswd -d $u $group)" >&2
+    ` + echoLine(report.ErrorLevel, "$u is in $group, and sshd would ignore its own keys for devopsy's", report.Fix("take it out first:", "gpasswd -d $u $group")) + `
     exit 3
   fi
 done
@@ -90,13 +92,13 @@ put() {
   printf '%s' "$4" >"$tmp"
   chmod "$2" "$tmp"
   if cmp -s "$tmp" "$1" 2>/dev/null; then rm -f "$tmp"; return 1; fi
-  if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; echo "` + errorHead + `$1 did not pass its check" >&2; exit 4; fi
+  if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
   mv -f "$tmp" "$1"
 }
 # A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
 # Docker. A real docker there would put the project users on the socket.
 if [ ! -L ` + DoorDockerLink + ` ] && [ -e ` + DoorDockerLink + ` ]; then
-  echo "` + errorHead + DoorDockerLink + ` is a real docker: project users would reach the socket through it" >&2
+  ` + echoLine(report.ErrorLevel, DoorDockerLink+" is a real docker: project users would reach the socket through it") + `
   exit 3
 fi
 [ "$(readlink ` + DoorDockerLink + ` 2>/dev/null || :)" = ` + Quote(devopsy) + ` ] || ln -sfn ` + Quote(devopsy) + ` ` + DoorDockerLink + `
@@ -107,7 +109,7 @@ old=$(cat ` + DoorSSHDropIn + ` 2>/dev/null || :)
 if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
   if ! sshd -t; then
     if [ -n "$old" ]; then printf '%s\n' "$old" >` + DoorSSHDropIn + `; else rm -f ` + DoorSSHDropIn + `; fi
-    echo "` + errorHead + `sshd refused ` + DoorSSHDropIn + `: put back as it was" >&2
+    ` + echoLine(report.ErrorLevel, "sshd refused "+DoorSSHDropIn+": put back as it was") + `
     exit 4
   fi
   touch ` + DoorRebootMarker + ` /run/reboot-required

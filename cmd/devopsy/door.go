@@ -1395,5 +1395,5 @@ func foreignError(project string, ids []string, all map[string]map[string]string
 		}
 	}
 	return &report.Failure{Msg: fmt.Sprintf("refused: containers the door did not make are under %s's names: %s", project, strings.Join(names, ", ")),
-		Fixes: []report.Remedy{report.Fix("the deploy user takes them down, which keeps their volumes:", "docker compose -p "+names[0]+" down")}}
+		Remedies: []report.Remedy{report.Fix("the deploy user takes them down, which keeps their volumes:", "docker compose -p "+names[0]+" down")}}
 }
