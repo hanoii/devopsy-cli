@@ -113,3 +113,25 @@ func TestDoorTreeCheck(t *testing.T) {
 		}
 	}
 }
+
+// The --ssh-keys scripts find the door's directory as DoorDir does, by the same variables: a
+// script that ran without the server's devopsy would otherwise edit keys sshd never reads.
+func TestDoorDirShell(t *testing.T) {
+	t.Parallel()
+	for _, env := range []map[string]string{
+		{"HOME": "/home/devopsy"},
+		{"HOME": "/home/devopsy", "XDG_CONFIG_HOME": "/xdg"},
+		{"HOME": "/home/devopsy", "XDG_CONFIG_HOME": "/xdg", "DEVOPSY_HOME": "/dh"},
+	} {
+		c := exec.Command("sh", "-c", "set -u\n"+doorDirShell+"\nprintf '%s' \"$door\"")
+		c.Env = nil
+		for k, v := range env {
+			c.Env = append(c.Env, k+"="+v)
+		}
+		out, err := c.Output()
+		want := filepath.Join(filepath.Dir(userConfigFile(func(k string) string { return env[k] }, env["HOME"])), "door")
+		if err != nil || string(out) != want {
+			t.Errorf("%v: %q %v, want %q", env, out, err, want)
+		}
+	}
+}

@@ -826,7 +826,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		row("door", fmt.Sprintf("%s, %d project users", dr.Space, dr.Users))
 		if dr.Unguarded != "" {
 			warn(dr.Unguarded+": the door refuses every request",
-				report.Fix("mount it so, for example with this line in /etc/fstab:", dr.Space+" "+dr.Space+" none bind,nosuid,nodev 0 0"))
+				spaceFix(dr.Space))
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",

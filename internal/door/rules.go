@@ -52,16 +52,20 @@ func (p Policy) ImagesFile() string { return filepath.Join(p.Space, "images", p.
 // no other project's whose name extends this one's.
 func (p Policy) OwnName(name string) bool {
 	// One word: this names a directory (Mnt).
-	if !strings.HasPrefix(name, p.Project+"-") || !wordOnly.MatchString(name) {
+	if !Extends(name, p.Project) || !wordOnly.MatchString(name) {
 		return false
 	}
 	for _, other := range p.Others {
-		if len(other) > len(p.Project) && (name == other || strings.HasPrefix(name, other+"-")) {
+		if len(other) > len(p.Project) && (name == other || Extends(name, other)) {
 			return false
 		}
 	}
 	return true
 }
+
+// Extends says whether name is under project's names, compose's flat <project>-<rest>: a
+// project's own compose name, or another project's whose name starts with it.
+func Extends(name, project string) bool { return strings.HasPrefix(name, project+"-") }
 
 // Mnt is the directory of a compose name's entries: every part of it is the
 // deploy user's, so a project user cannot replace an entry.

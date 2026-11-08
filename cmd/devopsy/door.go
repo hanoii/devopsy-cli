@@ -610,7 +610,7 @@ func runDoor(args []string) int {
 		return doorRefused(err)
 	}
 	if err := spaceGuarded(policy.Space); err != nil {
-		report.Fail(err, report.Fix("mount it so, for example with this line in /etc/fstab:", policy.Space+" "+policy.Space+" none bind,nosuid,nodev 0 0"))
+		report.Fail(err, spaceFix(policy.Space))
 		doorRecord(err.Error())
 		return 2
 	}
@@ -763,14 +763,14 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 // what the deploy user's release root does. Names are flat, so a longer one is out of
 // this project's reach (door.Policy.OwnName).
 func otherProjects(s remote.DoorUser) []string {
-	others := slices.Clone(s.Others)
+	root := ""
 	if r, err := remote.ReleaseSettings(); err == nil {
-		if entries, err := os.ReadDir(r.Root); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != s.Project {
-					others = append(others, e.Name())
-				}
-			}
+		root = r.Root
+	}
+	var others []string
+	for _, p := range serverProjects(s.Others, root) {
+		if p != s.Project {
+			others = append(others, p)
 		}
 	}
 	return others

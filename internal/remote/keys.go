@@ -127,10 +127,18 @@ if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
   exit ` + fmt.Sprint(AskedAsProjectUser) + `
 fi
 id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
-f=${DEVOPSY_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/devopsy}/door/keys/` + user + `
-sf=${DEVOPSY_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/devopsy}/door/sync-keys/` + user + `
+` + doorDirShell + `
+f=$door/keys/` + user + `
+sf=$door/sync-keys/` + user + `
 `
 }
+
+// doorDirShell sets $door to DoorDir in a script that runs without the server's devopsy (the
+// --ssh-keys scripts): the same rule, kept in step by TestDoorDirShell.
+const doorDirShell = `if [ -n "${DEVOPSY_HOME:-}" ]; then door=$DEVOPSY_HOME/door
+elif [ -n "${XDG_CONFIG_HOME:-}" ]; then door=$XDG_CONFIG_HOME/devopsy/door
+else door=$HOME/.config/devopsy/door
+fi`
 
 // keysLock is a lock beside the file: two edits at once would lose one. The --ssh-keys
 // scripts say their lines with echoLine, since they need nothing of the server's devopsy.

@@ -103,22 +103,19 @@ func projectNameClash(project string, others []string) string {
 	for _, o := range others {
 		switch {
 		case o == project:
-		case strings.HasPrefix(project, o+"-"):
+		case door.Extends(project, o):
 			return project + " extends " + o + "'s name"
-		case strings.HasPrefix(o, project+"-"):
+		case door.Extends(o, project):
 			return o + " extends " + project + "'s name"
 		}
 	}
 	return ""
 }
 
-// serverProjects are the projects a name could clash with: the door's users' and the release
-// root's, which holds every project released here, running or not.
-func serverProjects(d *remote.Door, root string) []string {
-	var ps []string
-	for _, u := range d.Users {
-		ps = append(ps, u.Project)
-	}
+// serverProjects are the projects a name could clash with: the door's users' (door), and the
+// release root's, which holds every project released here, running or not.
+func serverProjects(door []string, root string) []string {
+	ps := slices.Clone(door)
 	if entries, err := os.ReadDir(root); err == nil {
 		for _, e := range entries {
 			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
@@ -129,6 +126,22 @@ func serverProjects(d *remote.Door, root string) []string {
 	return ps
 }
 
+// doorProjects are the door's users' projects, none without a door.
+func doorProjects(d *remote.Door) []string {
+	var ps []string
+	if d != nil {
+		for _, u := range d.Users {
+			ps = append(ps, u.Project)
+		}
+	}
+	return ps
+}
+
+// spaceFix is how a door's space gets nosuid and nodev, the one way every refusal of it offers.
+func spaceFix(space string) report.Remedy {
+	return report.Fix("mount it so, for example with this line in /etc/fstab:", space+" "+space+" none bind,nosuid,nodev 0 0")
+}
+
 // doorNameOwner is the project user whose names compose project name sits under, by the
 // door's rule (door.Policy.OwnName) among the server's projects (serverProjects, root the
 // release root), "" for none or no door: the door acts only on containers it made, and
@@ -137,7 +150,7 @@ func doorNameOwner(d *remote.Door, root, name string) string {
 	if d == nil {
 		return ""
 	}
-	projects := serverProjects(d, root)
+	projects := serverProjects(doorProjects(d), root)
 	for who, u := range d.Users {
 		if (door.Policy{Project: u.Project, User: who, Others: projects}).OwnName(name) {
 			return who
@@ -148,7 +161,7 @@ func doorNameOwner(d *remote.Door, root, name string) string {
 
 func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if err := spaceGuarded(d.Space); err != nil {
-		report.Fail(err, report.Fix("mount it so, for example with this line in /etc/fstab:", d.Space+" "+d.Space+" none bind,nosuid,nodev 0 0"))
+		report.Fail(err, spaceFix(d.Space))
 		return 1
 	}
 	if u, ok := d.Users[who]; ok && u.Project != project {
@@ -158,7 +171,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	projects := serverProjects(d, r.Root)
+	projects := serverProjects(doorProjects(d), r.Root)
 	if why := projectNameClash(project, projects); why != "" {
 		report.Fail(errors.New("a project "+project+" here would share compose names: "+why),
 			report.Fix("a project gone from the release root ("+r.Root+") holds its name while its directory stays, its .env kept by --destroy: removed with its last environment's --destroy --purge"))
