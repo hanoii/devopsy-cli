@@ -296,6 +296,15 @@ user's releases of the project for example: move it aside first. Once
 the project has its user, a release by the deploy user under its names
 is refused before it goes live.
 
+Images are a project user's own too. Those it builds and the holds of
+its releases are; any other image is pulled once with the project's
+own registry logins (the `auths` of its `~/.docker/config.json`)
+before the project runs it, inspects it or tags it, even when another
+project has it on the server already. A private image another project pulled with its
+own login is then refused, and a public one costs one pull. The door
+records what each project pulled this way, so later starts ask the
+registry nothing.
+
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
 A child on another server needs its own project user there
 ([Syncs](syncs.md#how-the-data-travels)).

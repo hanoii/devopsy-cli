@@ -832,3 +832,54 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 		t.Error("with no answer from Docker: not refused")
 	}
 }
+
+// A start runs an image of this project's, or one it claims first: pulled with its own
+// registry logins, the id then recorded in its space, so the next start asks the registry
+// nothing. One already on disk that another project pulled (a private one with that
+// project's login), built (blog-prod-web) or holds, or an id alone, is refused when this
+// project's pull of it fails, and a hold of another's is never pulled at all.
+func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	calls, fails := filepath.Join(dir, "calls"), filepath.Join(dir, "fails")
+	fake := filepath.Join(dir, "docker")
+	// Every image is on disk, sha256:<its name's length> its id; a pull fails for a ref
+	// listed in fails.
+	write(t, fake, "#!/bin/sh\necho \"$*\" >>"+calls+"\nfor a; do ref=$a; done\ncase \"$*\" in\n"+
+		"  'pull -q '*) ! grep -qxF \"$ref\" "+fails+" ;;\n"+
+		"  'image inspect --format {{.Id}}'*) echo \"sha256:${#ref} $ref\" ;;\n"+
+		"  'image inspect'*) echo '{}' ;;\nesac\n", 0o755)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir, Others: []string{"blog"}}, real: fake}
+	start := func(image string) error {
+		t.Helper()
+		os.Remove(calls)
+		file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
+		return side.checkImageLabels(file, filepath.Join(dir, "none.json"))
+	}
+	pulled := func() bool { return strings.Contains(readString(calls), "pull -q ") }
+	if err := start("registry.example.com/blog/private:1"); err != nil || !pulled() {
+		t.Fatalf("claimed by its pull (%v), pulled %v:\n%s", err, pulled(), readString(calls))
+	}
+	if got := readString(side.policy.ImagesFile()); got != "sha256:35\n" {
+		t.Errorf("the record: %q", got)
+	}
+	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	if err := start("registry.example.com/blog/private:1"); err != nil || pulled() {
+		t.Errorf("claimed already, pulled again (%v):\n%s", err, readString(calls))
+	}
+	write(t, fails, "blog-prod-web\nblog-prod-web:latest\nregistry.example.com/app:2\nsha256:0123\n", 0o644)
+	for _, image := range []string{"blog-prod-web", "blog-prod-web:latest", "registry.example.com/app:2", "sha256:0123"} {
+		if err := start(image); err == nil || !strings.Contains(err.Error(), "its registry logins do not pull it") {
+			t.Errorf("%s, another's, ran: %v", image, err)
+		}
+	}
+	if err := start("registry.example.com/app:devopsy-blog-prod-20260101000000"); err == nil || pulled() {
+		t.Errorf("another's hold pulled or ran (%v):\n%s", err, readString(calls))
+	}
+	// Its own built image and its own hold need no claim.
+	for _, image := range []string{"shop-prod-web", "busybox:devopsy-shop-prod-20260101000000"} {
+		if err := start(image); err != nil || pulled() {
+			t.Errorf("its own %s (%v):\n%s", image, err, readString(calls))
+		}
+	}
+}

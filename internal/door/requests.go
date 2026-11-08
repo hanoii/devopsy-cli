@@ -51,6 +51,8 @@ type Daemon interface {
 	Inspect(target string) (id string, labels map[string]string, err error)
 	// Containers lists every container's full id, stopped ones included.
 	Containers() ([]string, error)
+	// Image gives an image's id and names; an error if there is none.
+	Image(ref string) (id string, tags []string, err error)
 }
 
 // Host is what a request asks of the project's tree and the door's space, on
@@ -95,6 +97,10 @@ type Action struct {
 	Exit int
 	// Secret names a variable the caller sends on stdin, for docker's environment.
 	Secret string
+	// Claims are images the project must claim before Docker runs: each pulled with
+	// its registry logins and, pulled, its id recorded as the project's (Policy.Images).
+	// One that does not pull refuses the request.
+	Claims []string
 	// Logins says Docker should use the project's registry logins.
 	Logins bool
 	// Images says Docker changes what a name in the image store is, under the
@@ -216,22 +222,34 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 	case "network":
 		return decideNetwork(args, p)
 	case "image":
-		return decideImage(args, p)
+		return decideImage(args, p, d, known)
 	case "volume":
 		return decideVolume(args, p)
 	case "tag":
-		if len(args) != 2 || !p.ownHold(args[1]) {
+		if len(args) != 2 || !p.ownHold(args[1]) || strings.HasPrefix(args[0], "-") {
 			return nil, refuse("docker tag %s: only a hold of this project's", strings.Join(args, " "))
 		}
-		return &Action{Docker: argv, Images: true}, nil
+		// Its source is an image this project names too: its own, or claimed.
+		a := &Action{Docker: argv, Images: true}
+		if !p.OwnsImage(d, args[0], known) {
+			if err := p.Claimable(args[0]); err != nil {
+				return nil, err
+			}
+			a.Claims, a.Logins = []string{args[0]}, true
+		}
+		return a, nil
 	case "rm":
 		return decideRM(args, p, d)
 	case "pull":
 		// An image a rollback or restart needs again: it could name it in a compose file.
+		// The door's claim pulls it, with the project's logins, and records it.
 		if len(args) != 2 || args[0] != "-q" || strings.HasPrefix(args[1], "-") {
 			return nil, noDocker(argv)
 		}
-		return &Action{Docker: argv, Logins: true, Images: true}, nil
+		if err := p.Claimable(args[1]); err != nil {
+			return nil, err
+		}
+		return &Action{Claims: []string{args[1]}, Logins: true, Images: true}, nil
 	case "port":
 		// Where a sync's own daemon listens, on the host's loopback.
 		if len(args) != 2 || args[1] != "873" || !p.ownContainer(d, args[0]) {
@@ -363,14 +381,28 @@ func decideNetwork(args []string, p Policy) (*Action, error) {
 	return &Action{Docker: append([]string{"network"}, args...)}, nil
 }
 
-func decideImage(args []string, p Policy) (*Action, error) {
+func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error) {
 	if len(args) == 0 {
 		return nil, refuse("docker image")
 	}
 	switch args[0] {
 	case "inspect":
-		// The image store is one, so this tells nothing that is anyone's alone.
-		return &Action{Docker: append([]string{"image"}, args...)}, nil
+		// An image holds its project's configuration (its Env, a build argument
+		// included): only one this project's, or claimed with its own logins.
+		a := &Action{Docker: append([]string{"image"}, args...)}
+		_, targets := flagValues(args[1:], "--format", "-f")
+		for _, t := range targets {
+			if strings.HasPrefix(t, "-") {
+				return nil, refuse("docker image inspect %s", t)
+			}
+			if !p.OwnsImage(d, t, known) {
+				if err := p.Claimable(t); err != nil {
+					return nil, err
+				}
+				a.Claims, a.Logins = append(a.Claims, t), true
+			}
+		}
+		return a, nil
 	case "rm":
 		// A hold, or a name it built. `image prune` is server-wide: the admin's.
 		for _, t := range args[1:] {
@@ -456,6 +488,52 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 
 // ownHold says whether a tag is a hold of this project's,
 // <repo>:devopsy-<compose name>-<id>: nothing moves a tag anyone else reads.
+// OwnsImage says whether ref is this project's image: devopsy's util image (known), a
+// name only this project writes (one it builds, OwnName, or a hold of its own), an image
+// another of whose names is so, or one whose id the project claimed (Images). Any other is
+// claimed first (Action.Claims): pulled with this project's own registry logins, so an
+// image another project pulled with its own is never this one's by being on disk.
+func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
+	if ref == known.Image || p.ownRef(ref) {
+		return true
+	}
+	id, tags, err := d.Image(ref)
+	if err != nil {
+		return false
+	}
+	if slices.Contains(p.Images, id) {
+		return true
+	}
+	return slices.ContainsFunc(tags, p.ownRef)
+}
+
+// ownRef says whether ref is a name only this project writes: a build's (its repository
+// under the project's names) or a hold of its own.
+func (p Policy) ownRef(ref string) bool {
+	if strings.Contains(ref, "@") {
+		return false
+	}
+	repo, tag := splitRef(ref)
+	return p.ownHold(ref) || (p.OwnName(repo) && !strings.HasPrefix(tag, "devopsy-"))
+}
+
+// splitRef is ref's repository and tag, a registry's port kept in the repository.
+func splitRef(ref string) (repo, tag string) {
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[:i], ref[i+1:]
+	}
+	return ref, ""
+}
+
+// Claimable refuses a claim that would write a name another project's: a hold not this
+// project's (a registry's tag of that name, pulled, would be another's hold here).
+func (p Policy) Claimable(ref string) error {
+	if _, tag := splitRef(ref); strings.HasPrefix(tag, "devopsy-") && !strings.Contains(ref, "@") && !p.ownHold(ref) {
+		return refuse("%s: another project's hold", ref)
+	}
+	return nil
+}
+
 func (p Policy) ownHold(tag string) bool {
 	_, after, ok := strings.Cut(tag, ":devopsy-")
 	return ok && p.OwnName(after) && holdName.MatchString(after)

@@ -7,27 +7,6 @@ import (
 
 // An attack round on what crosses projects, by one reviewer.
 
-// BUG: an image by name is shared, so a project's file runs another project's code: what
-// another builds (compose's <compose name>-<service>, its tag that project's alone), a hold
-// of another's (<repo>:devopsy-<compose name>-<id>), or any image by its id. Each is
-// another project's, and a start should refuse it as a build refuses writing it.
-func TestOpusReviewCheckFileRunsAnothersImage(t *testing.T) {
-	t.Parallel()
-	p := testPolicy
-	p.Others = []string{"blog"}
-	for _, image := range []string{
-		"blog-prod-web",
-		"blog-prod-web:latest",
-		"registry.example.com/app:devopsy-blog-prod-20260101000000",
-		"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-	} {
-		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
-		if errs := CheckFile(file, p, "up", &fakePaths{}); len(errs) == 0 {
-			t.Errorf("BUG: a start runs another project's image %s", image)
-		}
-	}
-}
-
 // BUG: read_all hands a project user `docker inspect` of any container as it is, whose
 // Config.Env holds another project's secrets (a database password, a token). No template
 // uses it; what it is for (a proxy's listing) needs labels and addresses, never an

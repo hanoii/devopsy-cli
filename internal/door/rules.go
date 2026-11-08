@@ -42,7 +42,14 @@ type Policy struct {
 	// Others are the server's other projects. Names are flat, so one whose name extends
 	// this one's would otherwise be this one's to reach: shop-eu's, for shop.
 	Others []string
+	// Images are the ids of images the project claimed (Action.Claims), the door's
+	// record in its space (ImagesFile).
+	Images []string
 }
+
+// ImagesFile is the door's record of a project user's claimed images, one id a line, in
+// its space: the deploy user's, never the project user's to write.
+func (p Policy) ImagesFile() string { return filepath.Join(p.Space, "images", p.User) }
 
 // OwnName says whether a compose name is this project's (<project>-...), and
 // no other project's whose name extends this one's.

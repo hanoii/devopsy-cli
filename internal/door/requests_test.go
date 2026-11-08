@@ -32,6 +32,26 @@ func (d fakeDaemon) Containers() ([]string, error) {
 	return ids, nil
 }
 
+// testImages are the images on the fake daemon, by every name they go by: id first.
+var testImages = [][]string{
+	{"sha256:aaa", "shop-prod-web", "shop-prod-web:latest"},
+	{"sha256:bbb", "busybox:devopsy-shop-prod-20240101000000"},
+	{"sha256:ccc", "blog-prod-web", "blog-prod-web:latest"},
+	{"sha256:ddd", "busybox:devopsy-blog-prod-20240101000000"},
+	{"sha256:eee", "postgres:16"},
+	{"sha256:fff", "registry.example.com/blog/private:1"},
+}
+
+// Image finds an image by id or name.
+func (d fakeDaemon) Image(ref string) (string, []string, error) {
+	for _, img := range testImages {
+		if slices.Contains(img, ref) {
+			return img[0], img[1:], nil
+		}
+	}
+	return "", nil, errors.New("no such image")
+}
+
 var testDaemon = fakeDaemon{
 	"mine":   {"com.docker.compose.project": "shop-prod", "traefik.enable": "true", "devopsy.door": "devopsy-shop"},
 	"task":   {"devopsy.env": "shop-dev", "devopsy.task": "owners", "devopsy.door": "devopsy-shop"},
@@ -632,6 +652,57 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 	} {
 		if a, err := decide(t, argv...); err == nil {
 			t.Errorf("%q: %q", argv, a.Docker)
+		}
+	}
+}
+
+// An image is this project's when only it writes one of its names (a build of its own, a
+// hold of its own), or when it claimed it: pulled with its own registry logins, the id
+// recorded. Any other is claimed first, whatever the request (an inspect, a tag's source,
+// a pull), so another project's image, built or pulled with that project's logins, is
+// never this one's by being on disk: an inspect would read its Env, a tag would make it a
+// hold of this project's. A claim may not write another project's hold.
+func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
+	t.Parallel()
+	p := testPolicy
+	p.Others = []string{"blog"}
+	p.Images = []string{"sha256:eee"}
+	claims := func(argv ...string) []string {
+		t.Helper()
+		a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil {
+			t.Fatalf("%q: %v", argv, err)
+		}
+		return a.Claims
+	}
+	for _, image := range []string{"shop-prod-web", "sha256:aaa", "busybox:devopsy-shop-prod-20240101000000", "sha256:bbb", "postgres:16", testKnown.Image} {
+		if c := claims("image", "inspect", "--format", "{{.Id}}", image); len(c) != 0 {
+			t.Errorf("its own %s claimed: %v", image, c)
+		}
+		if c := claims("tag", image, "busybox:devopsy-shop-prod-20240101000001"); len(c) != 0 {
+			t.Errorf("a tag of its own %s claimed: %v", image, c)
+		}
+	}
+	for _, image := range []string{"blog-prod-web", "sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123"} {
+		if c := claims("image", "inspect", image); !slices.Equal(c, []string{image}) {
+			t.Errorf("another's or nobody's %s answered unclaimed: %v", image, c)
+		}
+		if c := claims("tag", image, "busybox:devopsy-shop-prod-20240101000001"); !slices.Equal(c, []string{image}) {
+			t.Errorf("a tag of %s, unclaimed: %v", image, c)
+		}
+	}
+	if c := claims("pull", "-q", "postgres:16"); !slices.Equal(c, []string{"postgres:16"}) {
+		t.Errorf("a pull is a claim: %v", c)
+	}
+	for _, argv := range [][]string{
+		{"pull", "-q", "registry.example.com/x:devopsy-blog-prod-20240101000000"},
+		{"image", "inspect", "busybox:devopsy-blog-prod-20240101000000"},
+		{"tag", "busybox:devopsy-blog-prod-20240101000000", "busybox:devopsy-shop-prod-20240101000001"},
+		{"tag", "--help", "busybox:devopsy-shop-prod-20240101000001"},
+		{"image", "inspect", "--help"},
+	} {
+		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+			t.Errorf("%q: taken: %+v", argv, a)
 		}
 	}
 }

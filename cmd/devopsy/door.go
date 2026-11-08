@@ -495,6 +495,61 @@ func (s *doorSide) Containers() ([]string, error) {
 	return strings.Fields(string(out)), nil
 }
 
+// Image is an image's id and names (door.Daemon), as the deploy user's docker has them.
+func (s *doorSide) Image(ref string) (string, []string, error) {
+	out, err := s.docker("image", "inspect", "--format", "{{.Id}}{{range .RepoTags}} {{.}}{{end}}", ref).Output()
+	f := strings.Fields(string(out))
+	if err != nil || len(f) == 0 {
+		return "", nil, fmt.Errorf("no image %s", ref)
+	}
+	return f[0], f[1:], nil
+}
+
+// claim pulls ref with the project's registry logins (config, the caller's docker config)
+// and records the image it then names as the project's (door.Policy.Images, ImagesFile):
+// an image another project pulled with its own logins is this one's only once its own
+// pull of it goes through, a public one at the cost of one pull. Under the project's image
+// lock; what the pull says goes to stderr, stdout being the request's answer.
+func (s *doorSide) claim(ref, config string) error {
+	d, err := s.logins(config)
+	if err != nil {
+		return err
+	}
+	pull := s.docker("pull", "-q", ref)
+	pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
+	pull.Stdout, pull.Stderr = os.Stderr, os.Stderr
+	if pull.Run() != nil {
+		return fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
+	}
+	id, _, err := s.Image(ref)
+	if err != nil {
+		return fmt.Errorf("refused: %s: %v", ref, err)
+	}
+	if slices.Contains(s.policy.Images, id) {
+		return nil
+	}
+	file := s.policy.ImagesFile()
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(id + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	s.policy.Images = append(s.policy.Images, id)
+	return err
+}
+
+// claimedImages reads a project user's record of claimed images (door.Policy.ImagesFile).
+func claimedImages(file string) []string {
+	data, _ := os.ReadFile(file)
+	return strings.Fields(string(data))
+}
+
 // doorKnown is what devopsy's own util containers run.
 func doorKnown() door.Known {
 	return door.Known{
@@ -647,10 +702,12 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 	if err != nil {
 		return door.Policy{}, err
 	}
-	return door.Policy{
+	p := door.Policy{
 		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles, ReadAll: s.ReadAll,
 		ForbiddenIDs: ids, Others: otherProjects(s),
-	}, nil
+	}
+	p.Images = claimedImages(p.ImagesFile())
+	return p, nil
 }
 
 // otherProjects are the server's projects but this one: what the door's users hold, and
@@ -1038,26 +1095,20 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 		if image == "" {
 			continue
 		}
-		inspect := func() ([]byte, error) {
-			return s.docker("image", "inspect", "--format", "{{json .Config.Labels}}", image).Output()
+		// The image a start runs is this project's, or claimed first: compose would pull a
+		// missing one after this check, and one another project pulled is on disk already.
+		// What builds is never pulled: its name is this project's alone.
+		if !builds && !s.policy.OwnsImage(s, image, doorKnown()) {
+			if err := s.policy.Claimable(image); err != nil {
+				return err
+			}
+			if err := s.claim(image, config); err != nil {
+				return fmt.Errorf("%s: %w", svc, err)
+			}
 		}
-		out, err := inspect()
+		out, err := s.docker("image", "inspect", "--format", "{{json .Config.Labels}}", image).Output()
 		if err != nil {
-			// Compose would pull it after this check, so it comes first. What builds is
-			// never pulled: its name is this project's alone.
-			if !builds {
-				d, lerr := s.logins(config)
-				if lerr != nil {
-					return lerr
-				}
-				pull := s.docker("pull", "-q", image)
-				pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
-				pull.Stderr = os.Stderr
-				pull.Run()
-			}
-			if out, err = inspect(); err != nil {
-				return fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
-			}
+			return fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
 		}
 		labels := map[string]string{}
 		if json.Unmarshal(out, &labels) != nil {
@@ -1279,6 +1330,18 @@ func (s *doorSide) request(config string, argv []string) int {
 			report.Warn("could not remove " + path)
 		}
 	}
+	if a.Images {
+		unlock, err := s.imageLock()
+		if err != nil {
+			return doorRefused(err)
+		}
+		defer unlock()
+	}
+	for _, ref := range a.Claims {
+		if err := s.claim(ref, config); err != nil {
+			return doorRefused(err)
+		}
+	}
 	if a.Stream != nil {
 		return s.stream(a.Stream)
 	}
@@ -1295,13 +1358,6 @@ func (s *doorSide) request(config string, argv []string) int {
 		}
 		env = append(slices.Clone(env), a.Secret+"="+string(value))
 		stdin = strings.NewReader("")
-	}
-	if a.Images {
-		unlock, err := s.imageLock()
-		if err != nil {
-			return doorRefused(err)
-		}
-		defer unlock()
 	}
 	if a.Logins {
 		d, err := s.logins(config)
