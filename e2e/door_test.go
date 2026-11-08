@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -863,7 +864,7 @@ volumes:
 	}
 	// --server-info reads the door's host as root: its users, and the firewall rule this server
 	// lacks, with the lines that add it (a warning, so it exits 3).
-	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !strings.Contains(out, "door         "+doorSpace+", 1 project users") || !strings.Contains(out, "keeps them off: -o docker0, -o br-+, -d 169.254.169.254/32") {
+	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project users\n`).MatchString(out) || !strings.Contains(out, "keeps them off: -o docker0, -o br-+, -d 169.254.169.254/32") {
 		t.Errorf("--server-info on a door server:\n%s", out)
 	}
 	// add refuses a name sharing compose names with a project there, and refuses while the
