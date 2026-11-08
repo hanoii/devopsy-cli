@@ -59,6 +59,11 @@ func TestKeysRemoveLast(t *testing.T) {
 	if code := remove("AAAAone"); code != 4 || !strings.Contains(readFile(keys), "AAAAone") {
 		t.Errorf("last key beside a comment: exit %d, file %q", code, readFile(keys))
 	}
+	// A sync's key is no one's way in: it only does that sync's requests.
+	write(t, keys, "ssh-ed25519 AAAAone laptop\nrestrict,command=\"devopsy --sync-child 1.0a1b2c /srv/x vm2:x\" ssh-ed25519 AAAAsync devopsy-sync-1.0a1b2c\n")
+	if code := remove("AAAAone"); code != 4 || !strings.Contains(readFile(keys), "AAAAone") {
+		t.Errorf("last key beside a sync's: exit %d, file %q", code, readFile(keys))
+	}
 	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
 	if code := remove("AAAAone"); code != 0 || strings.Contains(readFile(keys), "AAAAone") {
 		t.Errorf("one of two keys: exit %d, file %q", code, readFile(keys))

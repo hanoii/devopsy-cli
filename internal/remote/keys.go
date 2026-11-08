@@ -170,8 +170,9 @@ printf '%s\n' "$f"
 func KeysRemoveScript(user string) string {
 	last := ""
 	if user == "" {
-		last = `# Keys left, comments and blank lines aside (a commented-out key is none).
-if ! grep -Ev '^[[:space:]]*(#|$)' "$f.tmp" | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'; then
+		last = `# Keys left, comments and blank lines aside (a commented-out key is none), and
+# sync keys (SyncKeyLine), which only do their sync's requests.
+if ! grep -Ev '^[[:space:]]*(#|$)' "$f.tmp" | grep -Ev ' ` + syncKeyPrefix + `[0-9]+\.[0-9a-f]{6}$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'; then
   rm -f "$f.tmp"
   ` + echoLine(report.ErrorLevel, "that is the last key: removing it would lock everyone out") + `
   exit 4

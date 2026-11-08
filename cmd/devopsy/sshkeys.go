@@ -224,8 +224,14 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		k := matches[0]
 		fp, _ := k.Fingerprint()
 		// The server checks too (KeysRemoveScript), under its lock. A project user's last key
-		// goes: that is how its logins stop.
-		if len(keys) == 1 && user == "" {
+		// goes: that is how its logins stop. A sync's key is no one's way in.
+		ways := 0
+		for _, k := range keys {
+			if _, sync := remote.SyncKeyID(k); !sync {
+				ways++
+			}
+		}
+		if ways == 1 && user == "" {
 			return fail(fp + " is " + t.Host + "'s last key: removing it would lock everyone out")
 		}
 		var buf bytes.Buffer
