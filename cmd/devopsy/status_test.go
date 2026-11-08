@@ -362,7 +362,8 @@ func TestStatusPrintColors(t *testing.T) {
 	out.Reset()
 	if code := r.print(&out, style{on: true}, "", true); code != statusWarned || bytes.Contains(out.Bytes(), []byte("\033")) {
 		t.Errorf("--json (%d):\n%s", code, out.String())
-	}	// A highlight alone needs no attention.
+	}
+	// A highlight alone needs no attention.
 	h := statusReport{}
 	h.addFacts(remote.StatusFacts{Entries: []remote.StatusEntry{{Level: remote.StatusHighlight, Key: "url", Lines: []string{"https://shop.example"}}}}, "")
 	if code := h.print(&bytes.Buffer{}, style{}, "", false); code != 0 {
