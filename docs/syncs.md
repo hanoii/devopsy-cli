@@ -174,11 +174,12 @@ Across servers, the parent's server starts an rsync daemon for the
 copy. It is read-only, serves only the entries being copied, has no
 network, and takes a password made for that sync. The parent's server
 connects to the child's over SSH, and a reverse forward on that
-connection lets the child's rsync reach the daemon, through a socket
-on the parent's server that only the sync's user can open. A
-stream goes into a file on the child's server through another SSH
-session from the parent's. Data goes from server to server, never
-through your machine.
+connection lets the child's rsync reach the daemon. The forward
+listens on a port on the child server's loopback, which the password
+guards, and ends at a socket on the parent's server that only the
+parent address's user can open. A stream is written to a file on the
+child's server over a second SSH session from the parent's. Data goes
+from server to server, never through your machine.
 
 The parent's server connects with a key made for that sync, never with
 your SSH agent ([CI](servers.md#ci)):
