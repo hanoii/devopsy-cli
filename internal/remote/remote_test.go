@@ -3504,3 +3504,21 @@ func TestImportFixesTextsNameNoCommand(t *testing.T) {
 		}
 	}
 }
+
+// A push on one server goes only into the child's own directory under the release root,
+// whatever its holder named: a child wrongly taken for the parent's machine would otherwise
+// choose where the parent's server writes, or wipes on a --reset.
+func TestSyncToOwn(t *testing.T) {
+	t.Parallel()
+	for base, ok := range map[string]bool{"/srv/shop/dev": true, "/srv/blog/prod": false, "/srv/shop/dev/..": false, "/etc": false} {
+		script := "devopsy() { echo \"$*\" >&2; }\nroot=/srv\n" + SyncToBaseEnv + "=" + Quote(base) + "\n" + syncToOwn("shop/dev") + "echo pushed\n"
+		out, err := exec.Command("sh", "-c", script).CombinedOutput()
+		if (err == nil) != ok || strings.Contains(string(out), "pushed") != ok {
+			t.Errorf("%s: %v %s", base, err, out)
+		}
+	}
+	env := map[string]string{SyncIDEnv: "1.abcdef", SyncToPathEnv: "shop/dev"}
+	if s := PushScript(&Target{Path: "shop/prod"}, "shop", env); !strings.Contains(s, syncToOwn("shop/dev")) || !strings.Contains(s, SameMachineClear("1.abcdef")) {
+		t.Errorf("the push on one server:\n%s", s)
+	}
+}

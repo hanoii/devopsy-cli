@@ -144,7 +144,10 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool, child *r
 	}
 	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), id: newSyncID(), reset: reset}
 	job.sameHost = sameHost(c.Host, p.Host)
-	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
+	// Addresses that resolve apart may still be one machine: a marker the parent's check
+	// writes says so, once read back through the child's address (sameMachine).
+	probe := !job.sameHost && oneUser(c.Host, p.Host)
+	if p.Address == c.Address {
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
 	}
 	if !job.sameHost {
@@ -176,12 +179,23 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool, child *r
 	// which came with restoreMarkNeed: a parent without it would clear the
 	// mark over what it does not copy.
 	needs := append(remote.Needs(remote.PushScript(p, job.parentName, pushEnv)), restoreMarkNeed)
-	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, needs), bytes.NewReader(nil), &out, false)
+	check := remote.ParentCheckScript(p, job.parentName, needs)
+	if probe {
+		check += remote.SameMachineMark(job.id)
+	}
+	code, err := remote.SSH(p, check, bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
 	if code != 0 {
 		return nil, fmt.Errorf("could not check the parent @%s (%d)", p.Address, code)
+	}
+	if probe && sameMachine(c, job.id, remote.ParseSameMark(out.String())) {
+		job.sameHost = true
+		job.to, job.port, job.key, job.pub = "", "", nil, ""
+	}
+	if job.sameHost && p.Path == c.Path {
+		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
 	}
 	cur := remote.ParseCurrent(out.String())
 	job.images = remote.ParseParentData(out.String())
@@ -210,6 +224,30 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool, child *r
 		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) holds data from a sync that did not complete", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("sync it first:", "devopsy @"+remote.HintAddress(p)+" --sync")}}
 	}
 	return job, nil
+}
+
+// sameMachine says whether the child's address reaches the machine the parent's check wrote
+// sync id's marker on: its content read back there. A machine that never saw the marker
+// cannot answer with it, so a child elsewhere, a hostile one included, is never taken for
+// the parent's server, which would then copy into a directory the child names.
+func sameMachine(c *remote.Target, id, mark string) bool {
+	if mark == "" {
+		return false
+	}
+	var out bytes.Buffer
+	if code, err := remote.SSH(c, remote.SameMachineProbe(id), bytes.NewReader(nil), &out, false); err != nil || code != 0 {
+		return false
+	}
+	return strings.TrimSpace(out.String()) == mark
+}
+
+// oneUser says whether two SSH destinations log in as one user, as ssh -G resolves them: the
+// marker sameMachine reads is that user's alone, root aside, and two users on one machine are
+// two kinds of sync (KindsDiffer) or none devopsy makes.
+func oneUser(a, b string) bool {
+	ea, errA := remote.SSHEffective(a)
+	eb, errB := remote.SSHEffective(b)
+	return errA == nil && errB == nil && ea["user"] == eb["user"]
 }
 
 // sameHost reports whether two SSH destinations are one server: the same
@@ -498,7 +536,9 @@ func runPush(ctx context.Context, job *syncJob, base, id, hostKeys string, rlog 
 		env[remote.ColorEnv] = "1"
 	}
 	where := "same server"
-	if !job.sameHost {
+	if job.sameHost {
+		env[remote.SyncToPathEnv] = job.child.Path
+	} else {
 		env[remote.SyncKeyedEnv] = "1"
 		env[remote.SyncHostKeysEnv] = hostKeys
 		where = "from " + p.Host + " to " + job.to

@@ -645,8 +645,8 @@ sudo -n -u devopsy /usr/local/bin/devopsy --door compose ~/.docker/config.json /
 // reaches them all and the resolver still answers. A door project's container reaches no
 // metadata service either. --server-info says when the host's rules are not devopsy's (an
 // ACCEPT ahead of the jump, the chain emptied) and add, or the boot's loader, loads them
-// again. A sync works under it (TestDoorSyncAcrossDoorServers, its forward on the child the
-// project user's sshd).
+// again. A sync works under it, between servers (TestDoorSyncAcrossDoorServers, its forward
+// on the child the project user's sshd) and to its own server at another address.
 func TestDoorFirewall(t *testing.T) {
 	web := `    image: busybox:1.37
     user: "10001:10001"
@@ -739,6 +739,15 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 		}
 	}
 	doorRoot(t, "iptables -D OUTPUT -j ACCEPT")
+
+	// A child at another address of this server, which the project user cannot reach under
+	// the firewall: the parent's marker, read back through that address, says it is this
+	// server, and the copy stays on it.
+	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
+	out, code := op(t, dir, noAgent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release")
+	if code != 0 || !strings.Contains(out, ":dev, same server") {
+		t.Errorf("a child at another address of the server (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))
+	}
 }
 
 // The firewall holds over IPv6 too: a project's network with IPv6, which Docker gives a subnet

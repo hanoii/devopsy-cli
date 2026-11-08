@@ -553,6 +553,9 @@ const (
 	// its current release's .devopsy/.
 	SyncToBaseEnv = "DEVOPSY_SYNC_TO_BASE"
 	SyncToDirEnv  = "DEVOPSY_SYNC_TO_DIR"
+	// SyncToPathEnv is the child's path under the release root, on one server only: the
+	// push copies into no other directory than that one (PushScript).
+	SyncToPathEnv = "DEVOPSY_INTERNAL_SYNC_TO_PATH"
 	// SyncToProjectEnv is the child's compose project, SyncToTargetEnv
 	// its address.
 	SyncToProjectEnv = "DEVOPSY_SYNC_TO_PROJECT"
@@ -730,6 +733,58 @@ const HostKeysDirEnv = "DEVOPSY_INTERNAL_HOST_KEYS"
 
 // hostKeys prints the server's sshd host keys, "<type> <blob>," each.
 const hostKeys = `cat "${` + HostKeysDirEnv + `:-/etc/ssh}"/ssh_host_*_key.pub 2>/dev/null | awk 'NF >= 2 { printf "%s %s,", $1, $2 }'`
+
+// SameMachineDirEnv is where a server keeps a sync's same-machine marker, for the tests
+// (/dev/shm): memory, so on that machine alone, never in a home another server shares.
+const SameMachineDirEnv = "DEVOPSY_INTERNAL_SAME_MACHINE"
+
+// sameMachineDir is sync id's marker directory, as a script names it.
+func sameMachineDir(id string) string {
+	return `"${` + SameMachineDirEnv + `:-/dev/shm}"/devopsy-same.` + id
+}
+
+// SameMachineMark is what a sync's parent session adds when the two addresses do not resolve
+// to one host: a directory of its own for sync id, its random content printed as a samemark
+// line for the operator to compare, never on a command line. A directory there already is
+// someone else's, so no marker, and no machine is taken for the parent's. Its own markers
+// older than an hour go: a sync that failed before its push left them.
+func SameMachineMark(id string) string {
+	d := sameMachineDir(id)
+	return `find "${` + SameMachineDirEnv + `:-/dev/shm}" -maxdepth 1 -name 'devopsy-same.*' -user "$(id -u)" -mmin +60 -exec rm -rf {} + 2>/dev/null || :
+if mkdir -m 700 ` + d + ` 2>/dev/null; then
+  sm=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  (umask 077 && printf '%s\n' "$sm" >` + d + `/m) && printf 'samemark\t%s\n' "$sm"
+fi
+`
+}
+
+// SameMachineProbe is the session to the child's address that prints sync id's marker and
+// removes it: the same content means the same machine.
+func SameMachineProbe(id string) string {
+	d := sameMachineDir(id)
+	return "cat " + d + "/m 2>/dev/null || :\nrm -rf " + d + "\n"
+}
+
+// syncToOwn refuses a push on one server into another directory than the child's own, path
+// under the release root ($root): a holder names it, and a child wrongly taken for the
+// parent's machine would otherwise choose where the parent's server writes.
+func syncToOwn(path string) string {
+	return `[ "$` + SyncToBaseEnv + `" = "$root"/` + Quote(path) + ` ] || { devopsy --say error "the child's side named $` + SyncToBaseEnv + `, not its own directory: nothing synced"; exit 1; }
+`
+}
+
+// SameMachineClear removes sync id's marker, the push's way on the parent's server.
+func SameMachineClear(id string) string { return "rm -rf " + sameMachineDir(id) + "\n" }
+
+// ParseSameMark is the marker's content in a parent's check, "" with none.
+func ParseSameMark(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "samemark\t"); ok {
+			return v
+		}
+	}
+	return ""
+}
 
 // KindsDiffer is the refusal of a sync between a project user and a
 // deploy user, parentProjectUser the parent's side.
@@ -1056,13 +1111,23 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	for _, k := range keys {
 		exports += " " + k + "=" + Quote(env[k])
 	}
-	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
+	// The sync's marker goes (SameMachineMark): the push runs on the parent's server.
+	clear := ""
+	if id := env[SyncIDEnv]; id != "" {
+		clear = SameMachineClear(id)
+	}
+	// On one server, into the child's own directory and no other, whatever its holder said.
+	own := ""
+	if to, ok := env[SyncToPathEnv]; ok {
+		own = syncToOwn(to)
+	}
+	return "set -eu\n" + basePrelude(p) + clear + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
 ` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixes(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   devopsy --say error "the parent $base holds data from a sync that did not complete" ` + sayRemedies(report.Fix("sync it first:", "devopsy @"+HintAddress(p)+" --sync")) + `
   exit 1
 fi
 cd "$base/current"
-export` + exports + "\n" + devopsyCall(projectName, push, true) + "\n"
+export` + exports + "\n" + own + devopsyCall(projectName, push, true) + "\n"
 }
 
 // ExportScript writes service's data to stdout (devopsy --export), in the

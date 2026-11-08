@@ -563,7 +563,9 @@ opts=
 for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
 # Which server the session is on, for the fake id (FAKE_PROJECT_HOST).
-case "$opts" in *" devopsy@two") export FAKE_HOST=two ;; *" devopsy@one") export FAKE_HOST=one ;; esac
+case "$opts" in *" devopsy@two") export FAKE_HOST=two ;; *" devopsy@one"|*" devopsy@uno") export FAKE_HOST=one ;; esac
+# Each server's own memory (remote.SameMachineDirEnv): uno is one under another name.
+if [ -n "${FAKE_HOST:-}" ]; then export DEVOPSY_INTERNAL_SAME_MACHINE="$SSH_LOG.shm.$FAKE_HOST"; mkdir -p "$DEVOPSY_INTERNAL_SAME_MACHINE"; fi
 # Which sessions carried the operator's --yes for the images' checks.
 case "$s" in *DEVOPSY_INTERNAL_IMAGES_ACCEPT=*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
 
@@ -1312,6 +1314,35 @@ func TestSyncFileEntry(t *testing.T) {
 // for that sync's requests alone and removes once it decided; an rsync
 // daemon on the parent's, the child's server reaching it through a
 // reverse forward, and the daemon removed.
+// One server under two names (a DNS name for one environment, its address for the other)
+// is one server: a marker the parent's session wrote, with random content, read back through
+// the child's address, says so, and the copy stays on it, no key and no SSH between them. A
+// machine that never saw the marker cannot answer with it, so a child elsewhere is never
+// taken for the parent's server (TestSyncDifferentHosts), and the marker goes either way.
+func TestSyncOneServerTwoNames(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run([]string{"DEVOPSY_SERVER_PROD=devopsy@one"}, "@devopsy@uno:dev", "--release")
+	docker, ssh := s.logs()
+	if code != 0 || !strings.Contains(out, "into @devopsy@uno:dev, same server") || strings.Contains(ssh, "HostKeyAlias=devopsy-sync-") || strings.Contains(docker, "-daemon") {
+		t.Fatalf("one server, two names (%d):\n%s\n%s", code, out, ssh)
+	}
+	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
+		t.Errorf("not copied: %q\n%s", got, docker)
+	}
+	if left, _ := filepath.Glob(s.sshLog + ".shm.one/devopsy-same.*"); len(left) != 0 {
+		t.Errorf("the marker stayed: %v", left)
+	}
+	// Another user on that machine is not asked: root would read the marker, and a sync
+	// between two users of one machine goes as between servers.
+	scripts := filepath.Join(t.TempDir(), "scripts")
+	s.run([]string{"DEVOPSY_SERVER_PROD=devopsy@one", "FAKE_SSH_SCRIPTS=" + scripts}, "@root@uno:dev", "--release")
+	if _, ssh := s.logs(); strings.Contains(readString(scripts), "/m 2>/dev/null") || strings.Contains(readString(scripts), "mkdir -m 700") || !strings.Contains(ssh, " root@uno") {
+		t.Errorf("another user's address probed:\n%s\n%s", ssh, readString(scripts))
+	}
+}
+
 func TestSyncDifferentHosts(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -1347,6 +1378,10 @@ func TestSyncDifferentHosts(t *testing.T) {
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
 		t.Errorf("not copied: %q\n%s", got, docker)
+	}
+	// The parent's marker (TestSyncOneServerTwoNames) goes with its push.
+	if left, _ := filepath.Glob(s.sshLog + ".shm.one/devopsy-same.*"); len(left) != 0 {
+		t.Errorf("the marker stayed on the parent's server: %v", left)
 	}
 	var receive string
 	for _, line := range strings.Split(ssh, "\n") {

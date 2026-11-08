@@ -280,11 +280,7 @@ Google's or OpenStack's in IPv6. No container on Docker's networks
 reaches those addresses either, the deploy user's included: an app
 that takes the instance's credentials from them needs credentials of
 its own. DNS at those addresses still answers, since some clouds'
-resolver is there. Syncs between servers work under it. A sync
-between two environments of one server works only when both name the
-server by the same host as ssh resolves it: an IP address for one and
-a name for the other takes the path between servers, and the project
-user cannot reach its own server's SSH server.
+resolver is there. Syncs work under it.
 
 The rules are in two chains devopsy owns, `DEVOPSY-PROJECTS` in
 iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table.
