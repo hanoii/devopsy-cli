@@ -115,7 +115,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			what += " for " + t.Host + " in " + strings.TrimSpace(buf.String())
 		}
 		if restricted {
-			say(what, "restricted: commands only, no shell, with the agent and port forwarding syncs across servers need")
+			say(what, "restricted: commands only, no shell, no pty, no forwarding")
 		} else {
 			say(what)
 		}
@@ -313,7 +313,7 @@ func runSSHKeysGenerate(args []string, color bool) int {
 	fp, _ := k.Fingerprint()
 	report.Say(report.InfoLevel, "made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub", nil,
 		report.Hint("authorize it on a server, --restricted for CI (commands only, no shell):", "devopsy @<target> --ssh-keys add "+out+".pub --restricted"),
-		report.Hint("then store the private key in CI as a protected file variable and load it in the job:", "eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\""))
+		report.Hint("then store the private key in CI as a protected file variable and use it in the job:", "devopsy --ssh-option IdentityFile=\"$DEVOPSY_SSH_KEY\" @<target> --release"))
 	return 0
 }
 

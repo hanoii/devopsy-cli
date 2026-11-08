@@ -297,9 +297,8 @@ the project has its user, a release by the deploy user under its names
 is refused before it goes live.
 
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
-A child on another server needs its own project user there: a sync
-copies only between project users, or only between deploy users
-([Syncs](syncs.md)).
+A child on another server needs its own project user there
+([Syncs](syncs.md#how-the-data-travels)).
 
 `--project-users remove shop` drops its entry and keys, so it logs in no
 more and the door answers it no more; its Unix user, home and tree stay.

@@ -38,9 +38,10 @@ var SyncIDPattern = regexp.MustCompile(`^[0-9]{1,20}\.[0-9a-f]{6}$`)
 const syncKeyPrefix = "devopsy-sync-"
 
 // SyncKeyLife is how long a sync key lasts on the child at most: it
-// only bounds a key nothing removed (the holder removes its own, and what
-// settles a cut sync), and a sync's later sessions (its streams) log in
-// long after its first.
+// only bounds a key nothing removed (the holder removes its own, and the
+// next sync into that environment a dead holder's), and a sync's later
+// sessions (its streams) log in long after its first. A dead holder's key
+// does nothing meanwhile: its gate is gone with the next settle.
 const SyncKeyLife = 48 * time.Hour
 
 // syncAddress is what a key's line may hold of the child's address (for

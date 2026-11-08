@@ -1212,10 +1212,9 @@ root. Any target on the server does too; the keys are the server's.
 comment the name. Nothing is sent anywhere: add the .pub to each server.
 
 For CI: generate one, add the .pub with --restricted, store the private key as
-a protected file variable, and in the job load it into an agent (eval
-"$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY") before devopsy @<target>
---release. Rotate by generating another, adding it, then removing the old
-one.
+a protected file variable, and in the job run devopsy --ssh-option
+IdentityFile="$DEVOPSY_SSH_KEY" @<target> --release (or load it into an
+agent). Rotate by generating another, adding it, then removing the old one.
 
 Examples:
   devopsy @prod --ssh-keys

@@ -170,54 +170,59 @@ On one server, a single container copies between the two directories,
 without SSH, and a stream is written straight into the child's
 directory.
 
-Across servers, the parent's server starts an rsync daemon (read-only,
-serving only the entries being copied, on its loopback only, with a
-password made for that sync) and reaches the child's server over SSH
-through a reverse forward. A stream also goes to the child's file
-through an SSH session from the parent's server. Data goes from server
-to server, never through your machine.
+Across servers, the parent's server starts an rsync daemon for the
+copy. It is read-only, serves only the entries being copied, listens
+only on that server itself, and takes a password made for that sync.
+The parent's server connects to the child's over SSH, and a reverse
+forward on that connection lets the child's rsync reach the daemon. A
+stream goes into a file on the child's server through another SSH
+session from the parent's. Data goes from server to server, never
+through your machine.
 
-The parent's server reaches the child's with a key made for that sync,
-never your SSH agent, which devopsy does not forward:
+The parent's server connects with a key made for that sync, never with
+your SSH agent ([CI](servers.md#ci)):
 
-- devopsy makes a key pair locally for each sync, kept in memory. The
-  child's side authorizes the public half once it is ready, and the
-  parent's gets the private half on its session's input, never on a
-  command line.
-- On the child, the key runs only devopsy's command for that sync,
-  while the sync is open there: no shell, no pty, no agent, no local
-  forward, a reverse forward on the loopback only. The child builds
-  every step itself from its own release and labels; what the parent
-  asks is only which of the sync's steps, for names the child's labels
-  have. The key goes once the child's side decides, and expires within
-  two days in any case.
-- The child's host key comes from the child's side too, over your own
-  session, so the parent's first connection to it is checked, not
-  trusted. A server whose sshd keeps its host keys outside `/etc/ssh` is
-  refused.
-- Whoever runs as the parent's user during a sync can read that key,
-  which only does that sync's steps on the child until it ends. Your
-  agent and other servers stay out of reach.
+- devopsy makes the key pair on your machine for each sync and keeps it
+  in memory. Once the child's side is ready, it authorizes the public
+  half. The parent's side receives the private half through its SSH
+  session's input, never on a command line, and keeps it in a file of
+  its own until the push ends.
+- On the child, the key runs only devopsy's command for that sync, and
+  only while the sync is open there: no shell, no terminal, no agent,
+  no local forwarding. Only a reverse forward on the server itself is
+  allowed. The child builds every step from its own release and labels:
+  the parent only picks which of the sync's steps to run, and only for
+  names in the child's labels. The key is removed once the child's side
+  has the sync's result, and expires within two days in any case.
+- The child's host keys come from the child's side too, over your own
+  session, so the parent's first connection checks the child's host key
+  instead of accepting whatever it is offered. A child whose `/etc/ssh`
+  holds no `ssh_host_*_key.pub` is refused before anything stops.
+- Whoever runs as the parent's user during a sync can read that key. It
+  can only run that sync's steps on the child, and only until the sync
+  ends.
 
 The sync's SSH sessions, like every session devopsy opens, send
 keepalives every 15 seconds, so a firewall does not drop a quiet copy.
-The parent gives up within 30 seconds on a child it cannot reach, or
-that refuses its key, instead of keeping its services stopped for
+If the child cannot be reached or refuses the key, the parent gives up
+within 30 seconds instead of keeping its own services stopped for
 minutes.
 
-Across servers:
+A sync across servers needs:
 
-- The child's server must be reachable from the parent's as `ssh -G`
-  resolves it locally (user, hostname, port). A host behind a
+- The child's server reachable from the parent's at the user, hostname
+  and port `ssh -G` gives on your machine. A host behind a
   `ProxyCommand` or `ProxyJump` is refused, since a relay through your
-  machine is not supported.
-- Both sides are project users ([Servers](servers.md)), or neither: a
-  project user's data would drive a deploy user's copy, or a project
-  user would talk to a deploy user's push. devopsy refuses before
-  anything stops; `--export` and `--import` move a service's data
-  across through your machine instead.
-- A CI key is plain `restrict` (`--ssh-keys add --restricted`): a sync
-  needs no forwarding of it.
+  machine is not supported. Two users on one machine count as two
+  servers here.
+- The child's sshd allowing remote forwards (`AllowTcpForwarding`), and
+  reading `permitlisten` and `expiry-time` in a key's options (OpenSSH
+  7.8 or later).
+- Both sides project users ([Servers](servers.md)), or neither: a
+  project user would otherwise drive a copy the deploy user runs, or
+  the other way round. devopsy refuses before anything stops, and
+  `--export` piped into `--import` moves a service's data across through
+  your machine instead.
 
 ## When a sync fails
 
