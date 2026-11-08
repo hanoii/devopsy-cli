@@ -67,11 +67,13 @@ func editSyncKeys(file, devopsy string, args []string, now time.Time) error {
 		return lockedKeys(file, func(lines []string) ([]string, error) {
 			var kept []string
 			for _, l := range lines {
-				id, exp, sync := syncKeyOf(l)
+				id, base, exp, sync := syncKeyOf(l)
 				if sync && id == args[1] {
 					return nil, fmt.Errorf("sync %s has a key already", id)
 				}
-				if sync && !exp.After(now) {
+				// Expired, or an earlier sync's into this environment: its
+				// holder is gone, since this one holds the lock.
+				if sync && (!exp.After(now) || base == args[2]) {
 					continue
 				}
 				kept = append(kept, l)
@@ -82,7 +84,7 @@ func editSyncKeys(file, devopsy string, args []string, now time.Time) error {
 		return lockedKeys(file, func(lines []string) ([]string, error) {
 			var kept []string
 			for _, l := range lines {
-				if id, _, sync := syncKeyOf(l); !sync || id != args[1] {
+				if id, _, _, sync := syncKeyOf(l); !sync || id != args[1] {
 					kept = append(kept, l)
 				}
 			}
@@ -92,17 +94,18 @@ func editSyncKeys(file, devopsy string, args []string, now time.Time) error {
 	return usage
 }
 
-// syncKeyOf says whether line is a sync's key, and which sync's, until when.
-func syncKeyOf(line string) (id string, expiry time.Time, ok bool) {
+// syncKeyOf says whether line is a sync's key, and which sync's, into which environment,
+// until when.
+func syncKeyOf(line string) (id, base string, expiry time.Time, ok bool) {
 	k, err := remote.ParseAuthorizedKey(line)
 	if err != nil || k == nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	if id, ok = remote.SyncKeyID(*k); !ok {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	expiry, _ = remote.SyncKeyExpiry(*k)
-	return id, expiry, true
+	return id, remote.SyncKeyBase(*k), expiry, true
 }
 
 // lockedKeys rewrites file's lines through edit under the lock beside it (the --ssh-keys
@@ -151,4 +154,63 @@ func lockedKeys(file string, edit func([]string) ([]string, error)) error {
 		return err
 	}
 	return os.Rename(tmp, file)
+}
+
+// syncKeyDirPrefix and the sync's id name the push's directory for its key, in the
+// parent's directory.
+const syncKeyDirPrefix = ".devopsy-sync-key."
+
+// takeSyncKey is the push's side of the sync's key: the private half from stdin, read to
+// its last line a byte at a time (what follows is the session's beats, the watcher's), and
+// the child's host keys (remote.SyncHostKeysEnv) as known hosts under the sync's alias,
+// both into a directory of the push's own in base, mode 0700, which the sessions to the
+// child use (remote.SyncKeyFileEnv, remote.SyncKnownHostsEnv). No agent: SSH_AUTH_SOCK goes,
+// should the login have one. done removes the directory; one a push killed outright left
+// goes first, since under the sync lock no other push runs.
+func takeSyncKey(base string) (done func(), err error) {
+	id := os.Getenv(remote.SyncIDEnv)
+	if !remote.SyncIDPattern.MatchString(id) {
+		return nil, fmt.Errorf("not a sync's id: %q", id)
+	}
+	left, _ := filepath.Glob(filepath.Join(base, syncKeyDirPrefix+"*"))
+	for _, d := range left {
+		_ = os.RemoveAll(d)
+	}
+	var key []byte
+	b := make([]byte, 1)
+	for !strings.HasSuffix(string(key), "-----END OPENSSH PRIVATE KEY-----\n") {
+		if len(key) > 16<<10 {
+			return nil, errors.New("no key on stdin")
+		}
+		if n, err := os.Stdin.Read(b); n == 0 || err != nil {
+			return nil, errors.New("no key on stdin")
+		}
+		key = append(key, b[0])
+	}
+	var hosts strings.Builder
+	for _, k := range strings.Split(os.Getenv(remote.SyncHostKeysEnv), ",") {
+		hosts.WriteString(k + "\n")
+	}
+	known := remote.SyncKnownHosts(id, hosts.String())
+	if known == "" {
+		return nil, errors.New("no host key of the child's server")
+	}
+	dir := filepath.Join(base, syncKeyDirPrefix+id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, err
+	}
+	done = func() { _ = os.RemoveAll(dir) }
+	keyFile, knownFile := filepath.Join(dir, "key"), filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(keyFile, key, 0o600); err != nil {
+		done()
+		return nil, err
+	}
+	if err := os.WriteFile(knownFile, []byte(known), 0o600); err != nil {
+		done()
+		return nil, err
+	}
+	os.Unsetenv("SSH_AUTH_SOCK")
+	os.Setenv(remote.SyncKeyFileEnv, keyFile)
+	os.Setenv(remote.SyncKnownHostsEnv, knownFile)
+	return done, nil
 }

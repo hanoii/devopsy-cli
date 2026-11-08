@@ -12,6 +12,6 @@ Findings that belong to no one area.
 - Go's HTTPS to github.com takes about 1.5 s, hence the detached update check.
 - Traefik picks up a new container a few seconds after `up` returns.
 - macOS hides what Linux servers do: dash as `sh` never execs the last command of `sh -c`, so a signal to it does not reach that command.
-- OrbStack machines are `ProxyCommand` hosts from macOS, so a sync across servers needs hosts reachable directly (`ssh -G` without a proxy, for example `<machine>.orb.local` with a key of your own); their `/etc/ssh/ssh_config.d/10-orbstack.conf` sets `IdentityAgent`, which hides a forwarded agent from the parent's `ssh` ("get_agent_identities: Permission denied"), so remove it on test machines.
+- OrbStack machines are `ProxyCommand` hosts from macOS, so a sync across servers needs hosts reachable directly (`ssh -G` without a proxy, for example `<machine>.orb.local` with a key of your own).
 - OrbStack's `docker exec` runs with umask 000, Docker Engine's (CI's, a server's) with 022, so what an end-to-end test writes through it is world-writable locally and a bug that hangs on a mode passes: `execIn` sets 022 itself.
 - OrbStack's own SSH keeps stdin open and leads no process group: the watcher needs a real sshd (`e2e/`).

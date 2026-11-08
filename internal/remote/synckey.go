@@ -102,15 +102,11 @@ func sshString(buf, b []byte) []byte {
 // its address and whether it is a reset. Every part is checked, since a
 // project user's door writes it from what that user asks.
 func SyncKeyLine(devopsy, id, base, to string, reset bool, blob string, expiry time.Time) (string, error) {
-	switch {
-	case !SyncIDPattern.MatchString(id):
-		return "", fmt.Errorf("not a sync's id: %q", id)
-	case !syncPathChars.MatchString(base) || path.Clean(base) != base || strings.Contains(base, "/../"):
-		return "", fmt.Errorf("not an environment's directory: %q", base)
-	case !syncPathChars.MatchString(devopsy) || path.Clean(devopsy) != devopsy:
+	if err := CheckSyncChild(id, base, to); err != nil {
+		return "", err
+	}
+	if !syncPathChars.MatchString(devopsy) || path.Clean(devopsy) != devopsy {
 		return "", fmt.Errorf("not devopsy's absolute path: %q", devopsy)
-	case !syncAddress.MatchString(to):
-		return "", fmt.Errorf("not an address: %q", to)
 	}
 	if !ed25519Blob(blob) {
 		return "", fmt.Errorf("not an ed25519 public key: %q", blob)
@@ -120,6 +116,21 @@ func SyncKeyLine(devopsy, id, base, to string, reset bool, blob string, expiry t
 		command += " reset"
 	}
 	return `restrict,port-forwarding,permitopen="127.0.0.1:1",permitlisten="127.0.0.1:*",expiry-time="` + expiry.UTC().Format("20060102150405") + `Z",command="` + command + `" ssh-ed25519 ` + blob + " " + syncKeyPrefix + id, nil
+}
+
+// CheckSyncChild refuses what a sync key's forced command may not name: an id not a
+// sync's, a directory not absolute and clean, an address with more than a target's
+// characters. SyncKeyLine and --sync-child both check by it.
+func CheckSyncChild(id, base, to string) error {
+	switch {
+	case !SyncIDPattern.MatchString(id):
+		return fmt.Errorf("not a sync's id: %q", id)
+	case !syncPathChars.MatchString(base) || path.Clean(base) != base:
+		return fmt.Errorf("not an environment's directory: %q", base)
+	case !syncAddress.MatchString(to):
+		return fmt.Errorf("not an address: %q", to)
+	}
+	return nil
 }
 
 // ed25519Blob says whether blob is an ssh-ed25519 public key's base64,
@@ -135,6 +146,16 @@ func ed25519Blob(blob string) bool {
 func SyncKeyID(k AuthorizedKey) (string, bool) {
 	id, ok := strings.CutPrefix(k.Comment, syncKeyPrefix)
 	return id, ok && SyncIDPattern.MatchString(id)
+}
+
+var syncKeyBase = regexp.MustCompile(`(^|,)command="[^"]* ` + SyncChildFlag + ` [^ "]+ ([^ "]+) `)
+
+// SyncKeyBase is the environment's directory sync key k's command names.
+func SyncKeyBase(k AuthorizedKey) string {
+	if m := syncKeyBase.FindStringSubmatch(k.Options); m != nil {
+		return m[2]
+	}
+	return ""
 }
 
 var syncKeyExpiry = regexp.MustCompile(`(^|,)expiry-time="([0-9]{14})Z"`)

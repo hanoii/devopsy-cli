@@ -84,10 +84,19 @@ func claimWrite(base string) (first bool, err error) {
 // recordOf reports whether the gate or record at path is sync id's: its
 // first line is "<from> <id>".
 func recordOf(path, id string) bool {
+	_, ok := gateOf(path, id)
+	return ok
+}
+
+// gateOf is recordOf, with the address the sync is from.
+func gateOf(path, id string) (from string, ok bool) {
 	data, err := os.ReadFile(path)
 	first, _, _ := strings.Cut(string(data), "\n")
 	f := strings.Fields(first)
-	return err == nil && len(f) == 2 && f[1] == id
+	if err != nil || len(f) != 2 || f[1] != id {
+		return "", false
+	}
+	return f[0], true
 }
 
 // errDecided is a write into a child whose holder decided already: its

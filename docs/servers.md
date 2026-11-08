@@ -165,9 +165,9 @@ of the host's `LocalForward` lines, and each session would try to bind
 them again while another holds them. It adds `-o ForwardAgent=no` too,
 whatever `~/.ssh/config` says: a session's user, a project user's above
 all, would otherwise reach every server your agent's keys open. A sync
-across servers forwards it to the parent's server for the push
-([Syncs](syncs.md)), and `--ssh-option ForwardAgent=yes` asks for it by
-hand; on `--shell` it reaches the server, not the container.
+across servers needs none: it uses a key made for it
+([Syncs](syncs.md)). `--ssh-option ForwardAgent=yes` asks for the agent
+by hand; on `--shell` it reaches the server, not the container.
 
 A key for CI is set up with `--ssh-keys` (Keys on a server, below).
 
@@ -208,8 +208,8 @@ too.
 
 - `--ssh-keys` lists the keys: fingerprint, type, comment, options.
 - `--ssh-keys add <file>` authorizes a public key. `add --restricted` is
-  for a machine's key: `restrict` (commands only, no shell) plus the agent
-  and port forwarding a sync across servers needs.
+  for a machine's key: `restrict` (commands only, no shell, no pty, no
+  forwarding).
 - `--ssh-keys remove <fingerprint or comment>` removes one. It refuses
   the last, which would lock everyone out.
 - `--ssh-keys --for <project>`, with any of the above, edits a project
@@ -223,8 +223,8 @@ too.
 
 For CI: generate a pair, `add` the `.pub` on each server with
 `--restricted`, store the private key as a protected file variable, and
-in the job run `eval "$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY"` before
-`devopsy @prod --release`. To rotate it, generate another, add it, then
+in the job run `devopsy --ssh-option IdentityFile="$DEVOPSY_SSH_KEY"
+@prod --release`, or load it into an agent. To rotate it, generate another, add it, then
 remove the old one.
 
 ## Project users with no Docker socket
@@ -295,9 +295,9 @@ tree that is there already and not the project user's, the deploy
 user's releases of the project for example: move it aside first.
 
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
-A child on another server needs its own project user there, with the
-operator's key, since a sync across servers goes through the operator's
-forwarded agent.
+A child on another server needs its own project user there: a sync
+copies only between project users, or only between deploy users
+([Syncs](syncs.md)).
 
 `--project-users remove shop` drops its entry and keys, so it logs in no
 more and the door answers it no more; its Unix user, home and tree stay.

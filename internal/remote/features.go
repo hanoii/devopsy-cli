@@ -45,6 +45,11 @@ var namedFeatures = []struct {
 	// which every activation calls (partialGuard), and which tolerates
 	// labels it cannot read.
 	{DataCopyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|export|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}(prepare|finish|import|list)\b`)},
+	// A sync across servers through a key made for it: the push takes it
+	// on its stdin (--sync-push's key word), and the holder authorizes it
+	// (--sync-key, a flag of its own). An older parent would wait for an
+	// agent and read the key as its session's beats.
+	{SyncKeyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push([ '\\]{1,8}reset)?[ '\\]{1,8}key\b`)},
 	// --reset: the parent's push wipes the child at its first write,
 	// through the child's --sync-services wipe. An older parent would
 	// sync without wiping, an older child refuse the word.
@@ -154,6 +159,10 @@ const DataVersionFeature = "data-version"
 
 // ResetFeature is --reset's named feature.
 const ResetFeature = "reset"
+
+// SyncKeyFeature is the push's named feature for a sync's key, in place of
+// the operator's forwarded agent.
+const SyncKeyFeature = "sync-push-key"
 
 // DataCopyFeature is the data labels' named feature: devopsy.data=true
 // and devopsy.data.copy (the data-labels before it read devopsy.data as

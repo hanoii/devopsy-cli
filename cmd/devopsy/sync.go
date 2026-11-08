@@ -6,6 +6,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -67,17 +69,28 @@ type syncJob struct {
 	// names (remote.ParseInherit), read in the preflight: inheritVars
 	// writes them, never what the checkout's names.
 	inherit []string
+	// key and pub are the sync key's halves (remote.NewSyncKey), across
+	// servers: the holder authorizes pub, the push gets key on its stdin.
+	key []byte
+	pub string
+	// parentProjectUser: the parent's user is a project user, which the
+	// child's must be too (remote.KindsDiffer).
+	parentProjectUser bool
 }
 
 // sameServer sets what a child's side copies of a parent on its own
 // server (remote.SyncOptions.SameServerFrom): its directory, the child's
-// copy's header naming the sync's source, kept alone for a --from.
+// copy's header naming the sync's source, kept alone for a --from; across
+// servers the sync key's public half; and the parent's kind either way.
 func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 	if job.sameHost {
 		o.SameServerFrom = job.parent.Path
 		o.SameServerHeader = remote.ParentEnvHeader(job.sourceRef(), job.from)
 		o.SameServerKeep = job.from
+	} else {
+		o.Key = job.pub
 	}
+	o.ParentProjectUser = job.parentProjectUser
 	return o
 }
 
@@ -113,7 +126,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, reset bool, child *remote.Current) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -132,12 +145,6 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
 	}
 	if !job.sameHost {
-		if os.Getenv("SSH_AUTH_SOCK") == "" {
-			return nil, agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally", p.Host, c.Host))
-		}
-		if err := agentHasKeys(p.Host, c.Host); err != nil {
-			return nil, err
-		}
 		user, hostname, port, err := remote.ChildAddress(c.Host)
 		if err != nil {
 			return nil, err
@@ -146,14 +153,21 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 		if user != "" {
 			job.to = user + "@" + hostname
 		}
+		if job.key, job.pub, err = remote.NewSyncKey(); err != nil {
+			return nil, err
+		}
+		job.pub = strings.TrimPrefix(job.pub, "ssh-ed25519 ")
 	}
 	// The parent's devopsy must have what the push needs, checked in this
 	// session already open, before the holder stops anything on the
 	// child or a first release uploads.
 	var out bytes.Buffer
-	var pushEnv map[string]string
+	pushEnv := map[string]string{}
 	if reset {
-		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
+		pushEnv[remote.SyncResetEnv] = "1"
+	}
+	if !job.sameHost {
+		pushEnv[remote.SyncKeyedEnv] = "1"
 	}
 	// The push also checks a restore's mark on the child (copiesService),
 	// which came with restoreMarkNeed: a parent without it would clear the
@@ -169,6 +183,17 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	cur := remote.ParseCurrent(out.String())
 	job.images = remote.ParseParentData(out.String())
 	job.inherit = remote.ParseInherit(out.String())
+	job.parentProjectUser = cur.ProjectUser
+	// What the child's check read already (a release's): refused before
+	// the upload. Otherwise the holder refuses, before it stops anything.
+	if child != nil {
+		if child.ProjectUser != cur.ProjectUser {
+			return nil, &report.Failure{Msg: remote.KindsDiffer(cur.ProjectUser), Remedies: []report.Remedy{remote.KindsFix()}}
+		}
+		if !job.sameHost && !child.HostKeys {
+			return nil, fmt.Errorf("@%s's server's sshd host keys are not in /etc/ssh: the parent's server could not check it is that one", c.Address)
+		}
+	}
 	switch {
 	case !cur.Current:
 		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) has no current release", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("release it first:", "devopsy @"+remote.HintAddress(p)+" --release")}}
@@ -311,11 +336,12 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		}
 	case found := <-marker:
 		marked = true
-		base, id, _ := strings.Cut(found, "\t")
+		base, rest, _ := strings.Cut(found, "\t")
+		id, hostKeys, _ := strings.Cut(rest, "\t")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		pushed := make(chan int, 1)
-		go func() { pushed <- runPush(ctx, job, base, id, rlog, color) }()
+		go func() { pushed <- runPush(ctx, job, base, id, hostKeys, rlog, color) }()
 		var code int
 		interrupted := false
 		select {
@@ -442,10 +468,12 @@ func lostSays(t *remote.Target, when, left string) string {
 const staysDown = "what it stopped may stay down until the next release, sync, import or snapshot there"
 
 // runPush is the push session: devopsy --sync-push on the parent's
-// server, into the child's directory base. Across servers it forwards the
-// SSH agent, so the parent's server reaches the child's for this session
-// only.
-func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLog, color bool) int {
+// server, into the child's directory base. Across servers its stdin
+// carries the sync key's private half first, and its environment the
+// child's host keys as the holder sent them (hostKeys): the parent's
+// server reaches the child's with that key alone, never the operator's
+// agent.
+func runPush(ctx context.Context, job *syncJob, base, id, hostKeys string, rlog *releaseLog, color bool) int {
 	p := job.parent
 	env := map[string]string{
 		remote.SyncToEnv:         job.to,
@@ -466,10 +494,10 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	if color {
 		env[remote.ColorEnv] = "1"
 	}
-	var extra []string
 	where := "same server"
 	if !job.sameHost {
-		extra = []string{"-o", "ForwardAgent=yes"}
+		env[remote.SyncKeyedEnv] = "1"
+		env[remote.SyncHostKeysEnv] = hostKeys
 		where = "from " + p.Host + " to " + job.to
 	}
 	log := report.Default().Tee(rlog.Line)
@@ -489,8 +517,16 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	// did not exec, it does not).
 	stop := context.AfterFunc(ctx, func() { w.Close() })
 	defer stop()
+	// The key before any beat, so the push reads it whole (takeSyncKey);
+	// the pipe holds it until the session starts.
+	if !job.sameHost {
+		if _, err := w.Write(job.key); err != nil {
+			log.Fail(err)
+			return 1
+		}
+	}
 	defer heartbeat(w)()
-	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
+	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, nil, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
 		log.Fail(err)
 		return 1
@@ -701,7 +737,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return failErr(fmt.Errorf("--from: %w", err))
 		}
 	}
-	job, err := syncPreflight(t, p, projectName, reset)
+	job, err := syncPreflight(t, p, projectName, reset, nil)
 	if err != nil {
 		return failErr(err)
 	}
@@ -988,24 +1024,34 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
 		return fail(err.Error())
 	}
-	switch {
-	case len(args) == 1 && args[0] == "reset":
-		// The child's first write wipes it first: this side's own, and
-		// the child's devopsy's (its imports) through --sync-exec.
-		os.Setenv(remote.SyncResetEnv, "1")
-	case len(args) > 0:
-		return fail("usage: devopsy " + cli.SyncPushFlag + " [reset]")
+	keyed := false
+	for _, a := range args {
+		switch a {
+		case "reset":
+			// The child's first write wipes it first: this side's own, and
+			// the child's devopsy's (its imports) through --sync-exec.
+			os.Setenv(remote.SyncResetEnv, "1")
+		case "key":
+			keyed = true
+		default:
+			return fail("usage: devopsy " + cli.SyncPushFlag + " [reset] [key]")
+		}
 	}
 	reset := os.Getenv(remote.SyncResetEnv) != ""
-	if to := os.Getenv(remote.SyncToEnv); to != "" && os.Getenv("SSH_AUTH_SOCK") == "" {
-		host, _ := os.Hostname()
-		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it (authorize it with `restrict,agent-forwarding,port-forwarding`, or use a key without restrictions), and so does sshd with AllowAgentForwarding no", host))
-	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
 		return fail(err.Error())
 	}
 	base, project := filepath.Dir(cwd), composeName(cwd)
+	// Across servers, the sync's key first on stdin, before the session's
+	// beats: its sessions to the child go with it alone.
+	if keyed {
+		done, err := takeSyncKey(base)
+		if err != nil {
+			return fail("the sync's key: " + err.Error())
+		}
+		defer done()
+	}
 	ctx, stop := interruptible()
 	defer stop()
 	if os.Getenv(remote.SyncWatchEnv) != "" {
@@ -1271,7 +1317,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 	// So is an import's mark on the child for a service this side does
 	// not copy: only a sync that writes it may clear it. Asked even with
 	// nothing to copy here, for that mark.
-	child, mark, restoreMark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
+	child, mark, restoreMark, err := childServices(ctx)
 	if err != nil {
 		return nil, fail(err.Error())
 	}
@@ -1610,7 +1656,7 @@ func exportStream(ctx context.Context, cwd, projectDir, name string, env []strin
 			_ = os.Remove(spool)
 		}
 	} else {
-		err = exportInto(ctx, cwd, projectDir, name, env, to, spool)
+		err = exportInto(ctx, cwd, projectDir, name, env, to)
 	}
 	if err != nil {
 		return fmt.Errorf("export %s: %w: nothing imported", name, err)
@@ -1671,26 +1717,28 @@ func importStream(ctx context.Context, name string, last bool) error {
 }
 
 // childSSHArgs are ssh's arguments for a session from the parent's
-// server to the child's (to) running script behind the check of the
-// child's devopsy (remote.ChildCheck, needs the later sessions'): -o
-// option, remote.ChildSSH, nil, -T, extra, the sync's port;
-// traced, script aside.
-func childSSHArgs(to, script string, needs []string, option string, extra ...string) []string {
+// server to the child's (to) asking req of it, with the sync's key, whose
+// forced command takes the request (--sync-child): -o option,
+// remote.ChildSSH, -T, extra, the sync's port; traced.
+func childSSHArgs(to string, req syncRequest, option string, extra ...string) []string {
 	args := append([]string{"-o", option}, remote.ChildSSH()...)
 	args = append(append(args, "-T"), extra...)
 	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
 		args = append(args, "-p", p)
 	}
-	trace(append([]string{"ssh"}, append(args, to)...))
-	script = remote.ChildCheck(os.Getenv(remote.SyncToTargetEnv), script, needs)
-	return append(args, to, "sh -c "+remote.Quote(script))
+	if b, err := strconv.Atoi(os.Getenv(remote.HeartbeatEnv)); err == nil {
+		req.Beat = b
+	}
+	data, _ := json.Marshal(req)
+	trace(append([]string{"ssh"}, append(args, to, string(data))...))
+	return append(args, to, string(data))
 }
 
-// exportInto runs the export of name with its stdout written to spool on
-// the child's server (to), by cat in an SSH session the forwarded agent
-// opens. Both must succeed.
-func exportInto(ctx context.Context, cwd, projectDir, name string, env []string, to, spool string) error {
-	sshArgs := childSSHArgs(to, "umask 077; cat > "+remote.Quote(spool), nil, "ClearAllForwardings=yes")
+// exportInto runs the export of name with its stdout written to its spool
+// on the child's server (to), which the child names (a spool request).
+// Both must succeed.
+func exportInto(ctx context.Context, cwd, projectDir, name string, env []string, to string) error {
+	sshArgs := childSSHArgs(to, syncRequest{Spool: name}, "ClearAllForwardings=yes")
 	r, w, err := os.Pipe()
 	if err != nil {
 		return err
@@ -1712,37 +1760,6 @@ func exportInto(ctx context.Context, cwd, projectDir, name string, env []string,
 		return fmt.Errorf("writing it into %s: %w", to, written)
 	}
 	return exported
-}
-
-// childNeeds is what the sync's later sessions to the child's server
-// need of its devopsy (remote.Needs): the imports' and, with entries or
-// volumes to copy (dirs), the receive's, and the data labels always (every later session
-// reads them), checked on the first session (childServices), so a
-// child's devopsy older than this one refuses before anything stops.
-func childNeeds(dirs, streams []string) []string {
-	toDir, toProject := os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv)
-	script := ""
-	for i, name := range streams {
-		args := []string{cli.SyncServicesFlag, "import", name}
-		if i == len(streams)-1 {
-			args = append(args, "last")
-		}
-		script += remote.SyncExecScript(toDir, toProject, nil, args)
-	}
-	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, toProject, nil, len(streams) == 0, wipeScript(), false)
-	}
-	if os.Getenv(remote.SyncResetEnv) != "" {
-		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
-	}
-	needs := remote.Needs(script)
-	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature, remote.DataVersionFeature} {
-		if !slices.Contains(needs, f) {
-			needs = append(needs, f)
-		}
-	}
-	slices.Sort(needs)
-	return needs
 }
 
 // childService is a line of the child's --sync-services list: a service,
@@ -1823,7 +1840,7 @@ const listRestore = "!restore"
 // service of its import's mark if any, through --sync-exec, after it
 // prepared them: across servers the sync's first session there, which
 // checks the child's devopsy for needs too.
-func childServices(ctx context.Context, needs []string) ([]childService, string, []childService, error) {
+func childServices(ctx context.Context) ([]childService, string, []childService, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, "", nil, err
@@ -1831,7 +1848,6 @@ func childServices(ctx context.Context, needs []string) ([]childService, string,
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "list")
 	cmd.Stdout, cmd.Stderr = &out, errOut
-	cmd.Env = append(os.Environ(), remote.SyncNeedsEnv+"="+strings.Join(needs, " "))
 	if err := cmd.Run(); err != nil {
 		return nil, "", nil, fmt.Errorf("listing the child's services: %w", err)
 	}
@@ -2370,7 +2386,8 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, toBase, syncID, port, present, files, keys, toProject, owners, last, wipeScript(), true), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+address)
+		pn, _ := strconv.Atoi(port)
+		sshArgs := childSSHArgs(to, syncRequest{Receive: &syncReceive{Port: pn, Dirs: present, Files: files, Volumes: keys, Last: last, Secret: true}}, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+address)
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		// On stdin, since a command line shows to every user of the server.
@@ -2397,7 +2414,7 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 				continue
 			}
 			// sshd answers a refused forward as it does a taken port.
-			return fmt.Errorf("copying into %s: its server refused the reverse forward %d times: a key with `restrict` needs `port-forwarding` too (`restrict,agent-forwarding,port-forwarding`), and sshd's AllowTcpForwarding must allow remote forwards", to, attempt+1)
+			return fmt.Errorf("copying into %s: its server refused the reverse forward %d times: sshd's AllowTcpForwarding must allow remote forwards", to, attempt+1)
 		}
 		return fmt.Errorf("copying into %s: %w", to, err)
 	}
@@ -2466,7 +2483,7 @@ func runSyncExec(args []string, color bool) int {
 	}
 	if to := os.Getenv(remote.SyncToEnv); to != "" {
 		remote.Verbose = cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0
-		sshArgs := childSSHArgs(to, remote.SyncExecScript(toDir, toProject, syncExecEnv(), args), strings.Fields(os.Getenv(remote.SyncNeedsEnv)), "ClearAllForwardings=yes")
+		sshArgs := childSSHArgs(to, syncRequest{Exec: args}, "ClearAllForwardings=yes")
 		cmd := remote.SSHCommand(sshArgs...)
 		err := syscall.Exec(cmd.Path, cmd.Args, os.Environ())
 		return fail(err.Error())
@@ -2993,26 +3010,6 @@ func wipeData(p place) error {
 	return rec.write(p.cwd)
 }
 
-// agentHasKeys asks the local agent for its keys before anything starts:
-// SSH_AUTH_SOCK set is not an agent (macOS always sets it, CI may leave a
-// stale one), and a parent with a forwarded agent holding no key would
-// only find out after the child's services were stopped. A missing
-// ssh-add is not an error: ssh itself reports later.
-func agentHasKeys(parent, child string) error {
-	err := exec.Command("ssh-add", "-l").Run()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) {
-		return nil
-	}
-	switch exit.ExitCode() {
-	case 1:
-		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and it holds no key: ssh-add the key %s accepts (in CI, each server's CI key)", parent, child, child)
-	case 2:
-		return agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s)", parent, child, os.Getenv("SSH_AUTH_SOCK")))
-	}
-	return nil
-}
-
 // syncLeftovers removes what earlier syncs left in base, as a finish or
 // a settle of a killed holder does (both under the release lock): every
 // stream's spool, dump-sized (another sync's push starts only once its
@@ -3030,10 +3027,4 @@ func syncLeftovers(base string) {
 			_ = os.Remove(f)
 		}
 	}
-}
-
-// agentFailure is msg, a sync that needs an SSH agent and has none, with
-// the way to start one.
-func agentFailure(msg string) error {
-	return &report.Failure{Msg: msg, Remedies: []report.Remedy{report.Fix("start one with your key (in CI, add the key to an agent):", `eval "$(ssh-agent)"; ssh-add`)}}
 }

@@ -233,8 +233,9 @@ what `config.yaml` sets.
   @<server> --shell-host` does, for that command (`--ssh-option
   <key=value>` goes first, repeatable, an ssh `-o` for every session).
 - CI releases with a restricted key: `devopsy --ssh-keys-generate`, then
-  `devopsy @t --ssh-keys add <key>.pub --restricted`; the job loads the
-  private key into an agent and runs `devopsy @t --release`.
+  `devopsy @t --ssh-keys add <key>.pub --restricted`; the job runs
+  `devopsy --ssh-option IdentityFile=<key> @t --release`. A sync across
+  servers uses a key of its own, never the agent.
 - A project with a user of its own, no Docker socket (`devopsy-<project>`):
   made as the deploy user with `devopsy @devopsy@<server>: --project-users
   add <project>`, its keys `--ssh-keys --for <project> add <key>.pub`. A

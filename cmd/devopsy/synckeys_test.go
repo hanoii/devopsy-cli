@@ -38,7 +38,18 @@ func TestEditSyncKeys(t *testing.T) {
 	if err := add("1762600000.000001", now.Add(-remote.SyncKeyLife-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	// Another environment's sync key stays; an earlier sync's into this
+	// one goes with the next add, its holder gone.
+	if err := editSyncKeys(file, "/usr/local/bin/devopsy", []string{"add", "1762600000.000009", "/srv/shop/prod", "vm2:prod", "-", blob}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := add("1762600000.000003", now); err != nil {
+		t.Fatal(err)
+	}
 	if err := add("1762600000.000002", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := editSyncKeys(file, "", []string{"remove", "1762600000.000009"}, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := add("1762600000.000002", now); err == nil || !strings.Contains(err.Error(), "has a key already") {

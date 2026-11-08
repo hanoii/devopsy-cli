@@ -1657,13 +1657,12 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
 	}
 	if os.Getenv(ProtocolCheckEnv) == "warn" {
-		// Exported: a push checks the child's devopsy the same way
-		// (ChildCheck).
+		// Exported: the server's own devopsy calls check the same way.
 		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
 	script = WithNeeds(script, alsoNeeds(ctx)...)
 	// extra first: ssh keeps the first value, so a session's own option
-	// (the push's ForwardAgent=yes) wins over SSHOptions.
+	// (--shell-host --root's -l root) wins over SSHOptions.
 	args := append(append(append(extra[:len(extra):len(extra)], SSHOptions()...), ttyFlag), SSHArgs(t.Host)...)
 	args = append(args, "sh -c "+Quote(script))
 	if Trace != nil {

@@ -1515,7 +1515,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "devopsy: authorized SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "devopsy: | restricted:") {
 		t.Fatalf("add restricted (%d):\n%s", code, out)
 	}
-	if got := readString(authorized); !strings.HasPrefix(got, "restrict,agent-forwarding,port-forwarding ssh-ed25519 ") || !strings.Contains(got, " ci-server\n") || strings.Contains(got, "PRIVATE") {
+	if got := readString(authorized); !strings.HasPrefix(got, "restrict ssh-ed25519 ") || !strings.Contains(got, " ci-server\n") || strings.Contains(got, "PRIVATE") {
 		t.Errorf("authorized_keys after add: %q", got)
 	}
 	// add a plain key, from a file and from stdin, never twice.
@@ -1531,7 +1531,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("add a private key (%d):\n%s", code, out)
 	}
 	out, code = run("", "@prod", "--ssh-keys")
-	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict,agent-forwarding,port-forwarding]") {
+	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict]") {
 		t.Fatalf("list (%d):\n%s", code, out)
 	}
 	// remove by comment, by fingerprint prefix; never the last one.

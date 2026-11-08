@@ -116,7 +116,7 @@
 - Every `Set` on a server comes from one constructor, `serverImages` (`cmd/devopsy/images.go`), which finds the image lock and the project's record of names left (`images.LeftFile`) from the release root (`ReleaseSettings`) and the environment's directory (`images.BaseEnv`), and the scripts pass `img` only `--name` and `--address`: a setting a script passes is one a script can forget.
 - The server finding these itself is a named feature, `record-mode` (`RecordModeFeature`), found by every script that runs the server's images (`--images`, `--export`, `--import`, `--snapshot-step`): an older server, told nothing, would take build mode for every release and hold no lock.
 - `runImages` ignores SIGPIPE, SIGTERM, SIGINT and SIGHUP: Go keeps no inherited ignored SIGPIPE or SIGTERM, so the script's `trap ''` alone would let a gone session or a second TERM kill an undo halfway.
-- The history and the holds are a named feature, `data-images` (`DataImagesFeature`, internals/releases.md for what `childNeeds` carries), found by the `img` words they added (`names`, `record`, `restore`, `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s `--name`, with its `--address`, which an older `--images` refuses as usage after the locks: every activation, holder, parent check and removal refuses on an older server before anything changes.
+- The history and the holds are a named feature, `data-images` (`DataImagesFeature`), found by the `img` words they added (`names`, `record`, `restore`, `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s `--name`, with its `--address`, which an older `--images` refuses as usage after the locks: every activation, holder, parent check and removal refuses on an older server before anything changes.
 
 ## Tests
 

@@ -26,7 +26,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - `Plan.Starts` reads the labels from the project's own compose files (`ComposeConfig`), never a `-f` the command adds; never for a `--dry-run` where compose parses it (before the command, after it up to `--`, for `run` only before its service: `commandValueFlags`, `dryRun`); never in a release on a server (`cli.InRelease`), where `--mnt-owners` owns it, so a rollback's plain `up` never fails on labels `--mnt-owners restored` only warns about.
 - Locally, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
 - No owners are fixed for a stream's import (it writes as the service's user), restarts or reboots (owners persist), and no flag fixes owners: a release does it.
-- The owners in copies are a named feature, `mnt-owner` (internals/releases.md for what `childNeeds` carries), found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
+- The owners in copies are a named feature, `mnt-owner` found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
 
 ## The mounts check
 

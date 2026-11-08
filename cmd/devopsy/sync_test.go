@@ -560,11 +560,26 @@ fi
 opts=
 for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
+# Which server the session is on, for the fake id (FAKE_PROJECT_HOST).
+case "$opts" in *" devopsy@two") export FAKE_HOST=two ;; *" devopsy@one") export FAKE_HOST=one ;; esac
 # Which sessions carried the operator's --yes for the images' checks.
 case "$s" in *DEVOPSY_INTERNAL_IMAGES_ACCEPT=*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
 
 # FAKE_SSH_SCRIPTS: each session's script there too, after a line ----.
 [ -z "${FAKE_SSH_SCRIPTS:-}" ] || printf -- '----\n%s\n' "$s" >> "$FAKE_SSH_SCRIPTS"
+# A sync key's session, as sshd runs it: the forced command of the line
+# the holder authorized for that sync (its alias names it), the request
+# in SSH_ORIGINAL_COMMAND; none, refused.
+case "$opts" in *HostKeyAlias=devopsy-sync-*)
+  alias=${opts#*HostKeyAlias=}; alias=${alias%% *}
+  forced=$(grep " $alias\$" "$HOME/.ssh/authorized_keys" 2>/dev/null | sed 's/.*command="\([^"]*\)".*/\1/')
+  [ -n "$forced" ] || { echo "Permission denied (publickey)." >&2; exit 255; }
+  export SSH_ORIGINAL_COMMAND="$s"
+  s=$forced
+  # sshd's clean environment: none of the parent's sync variables.
+  for v in $(env | grep -E '^(DEVOPSY_(INTERNAL_)?(SYNC|HEARTBEAT)_[A-Z_]*|COMPOSE_PROJECT_NAME)=' | cut -d= -f1); do unset "$v"; done
+  ;;
+esac
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 [ -z "${FAKE_RESTRICT:-}" ] || unset SSH_AUTH_SOCK
 # FAKE_SSH_DETACH: the push outlives its ssh, as on a server, where only
@@ -636,8 +651,11 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	// flock logs, and locks nothing unless FAKE_REAL_FLOCK names the real
 	// one (Linux: a test of what a held lock shows).
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\n[ -z \"${FAKE_REAL_FLOCK:-}\" ] || exec \"$FAKE_REAL_FLOCK\" \"$@\"\nexit 0\n", 0o755)
-	// The agent's keys (ssh-add -l): FAKE_AGENT=empty has none, dead no agent.
-	write(t, filepath.Join(bin, "ssh-add"), "#!/bin/sh\ncase ${FAKE_AGENT:-} in empty) exit 1 ;; dead) exit 2 ;; esac\nexit 0\n", 0o755)
+	// id says the session's user is a project user on FAKE_PROJECT_HOST
+	// (one or two, from fakessh).
+	write(t, filepath.Join(bin, "id"), "#!/bin/sh\nif [ \"$*\" = -nG ] && [ -n \"${FAKE_HOST:-}\" ] && [ \"$FAKE_HOST\" = \"${FAKE_PROJECT_HOST:-}\" ]; then echo 'devopsy devopsy-projects'; exit 0; fi\nexec /usr/bin/id \"$@\"\n", 0o755)
+	// The server's sshd host keys, which a holder sends the push.
+	write(t, filepath.Join(tmp, "hostkeys", "ssh_host_ed25519_key.pub"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g root@two\n", 0o644)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
 	if err := os.Symlink(binary, filepath.Join(bin, "devopsy")); err != nil {
 		t.Fatal(err)
@@ -666,7 +684,7 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "show"), "#!/bin/sh\necho \"show project=$COMPOSE_PROJECT_NAME pw=${DB_PASSWORD:-}\"\ncat\n", 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home,
-		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log,
+		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log, remote.HostKeysDirEnv + "=" + filepath.Join(tmp, "hostkeys"),
 		// The disk the tests run on may be nearly full: --status judges
 		// none, else it would exit 3 there.
 		diskWarnEnv + "=off"}
@@ -1287,33 +1305,17 @@ func TestSyncFileEntry(t *testing.T) {
 	}
 }
 
-// Across servers: the agent forwarded to the parent's, an rsync daemon
-// there, the child's server reaching it through a reverse forward, and the
-// daemon removed.
+// Across servers: no agent anywhere, the parent's server reaching the
+// child's with a key made for the sync, which the child's side authorized
+// for that sync's requests alone and removes once it decided; an rsync
+// daemon on the parent's, the child's server reaching it through a
+// reverse forward, and the daemon removed.
 func TestSyncDifferentHosts(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
-
-	// No agent here: nothing starts.
-	if out, code := s.run(env, "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "$ eval \"$(ssh-agent)\"; ssh-add\n") || s.current("dev") != "" {
-		t.Fatalf("no agent (%d):\n%s", code, out)
-	}
-	if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
-		t.Errorf("sessions before the agent check (only the first-release check expected):\n%s", ssh)
-	}
-	// An agent without keys, or none behind the socket: the same, before
-	// any session.
-	agent := append(env, "SSH_AUTH_SOCK=/tmp/agent.sock")
-	for fake, want := range map[string]string{"empty": "holds no key: ssh-add the key devopsy@two accepts", "dead": "none answers at SSH_AUTH_SOCK (/tmp/agent.sock)"} {
-		if out, code := s.run(append(agent, "FAKE_AGENT="+fake), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, want) || s.current("dev") != "" {
-			t.Fatalf("agent %s (%d):\n%s", fake, code, out)
-		}
-		if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
-			t.Errorf("sessions before the agent check (%s):\n%s", fake, ssh)
-		}
-	}
+	agent := env
 	// A child behind a jump host is out of the parent's reach.
 	if out, code := s.run(append(agent, "FAKE_PROXYJUMP=bastion"), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "relay through this machine is not supported yet") {
 		t.Fatalf("proxyjump (%d):\n%s", code, out)
@@ -1323,8 +1325,18 @@ func TestSyncDifferentHosts(t *testing.T) {
 	// A daemon an earlier push from prod left (its devopsy killed
 	// outright) goes before this push starts its own.
 	write(t, s.log+".shop-prod", "FAKE_LEFT=old-daemon:shop-prod:source\n", 0o644)
-	out, code := s.run(agent, "@devopsy@two:dev", "--release")
+	// So does a key a push killed outright left.
+	leftKey := filepath.Join(s.root, "shop", "prod", ".devopsy-sync-key.1762600000.000001", "key")
+	write(t, leftKey, "an old key\n", 0o600)
+	scripts := filepath.Join(t.TempDir(), "scripts")
+	out, code := s.run(append(agent, "FAKE_SSH_SCRIPTS="+scripts), "@devopsy@two:dev", "--release")
 	docker, ssh := s.logs()
+	// The private half travels on the push's stdin only: in no session's
+	// command line (which every user of a server sees), the holder's
+	// public half and the child's host keys aside.
+	if got := readString(scripts); strings.Contains(got, "PRIVATE KEY") || !strings.Contains(got, remote.SyncKeyEnv+"=") || !strings.Contains(got, remote.SyncHostKeysEnv+"=") || !strings.Contains(got, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g,") {
+		t.Errorf("the sync's key in the sessions' scripts:\n%s", got)
+	}
 	if rm, run := strings.Index(docker, "rm -f old-daemon"), strings.Index(docker, "run --rm -d --name devopsy-sync-"); rm < 0 || run < rm {
 		t.Errorf("the stale daemon not removed before the push's own:\n%s", docker)
 	}
@@ -1334,23 +1346,30 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
 		t.Errorf("not copied: %q\n%s", got, docker)
 	}
-	var push, receive string
+	var receive string
 	for _, line := range strings.Split(ssh, "\n") {
-		switch {
-		case strings.Contains(line, "ForwardAgent=yes"):
-			push = line
-		case strings.Contains(line, " -R "):
+		if strings.Contains(line, " -R ") {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ForwardAgent=yes -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
-		t.Errorf("push session: %q\n%s", push, ssh)
+	if strings.Contains(ssh, "ForwardAgent=yes") || strings.Contains(ssh, "PRIVATE KEY") {
+		t.Errorf("an agent forwarded, or the key on a command line:\n%s", ssh)
 	}
-	// The parent's sessions to the child: never the forwarded agent, no
-	// password prompt, and a short connect timeout.
-	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -T -R 127.0.0.1:") || !strings.Contains(receive, ":127.0.0.1:32768 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	// The parent's sessions to the child: the sync's key alone, the
+	// child's host key checked under the sync's alias against what its
+	// holder sent, no agent, no password prompt, a short connect timeout.
+	keyDir := filepath.Join(s.root, "shop", "prod", ".devopsy-sync-key.")
+	childSSH := `-o ForwardAgent=no -o BatchMode=yes -i ` + regexp.QuoteMeta(keyDir) + `([0-9]+\.[0-9a-f]{6})/key -o IdentitiesOnly=yes -o HostKeyAlias=devopsy-sync-([0-9]+\.[0-9a-f]{6}) -o UserKnownHostsFile=` + regexp.QuoteMeta(keyDir) + `[0-9.a-f]+/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3`
+	if m := regexp.MustCompile(`-o ExitOnForwardFailure=yes ` + childSSH + ` -T -R 127\.0\.0\.1:[0-9]+:127\.0\.0\.1:32768 -p 22 devopsy@two$`).FindStringSubmatch(receive); m == nil || m[1] != m[2] || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
+	}
+	// Once decided, the key is gone from the child, and its files from
+	// the parent.
+	if got := readString(filepath.Join(filepath.Dir(s.root), ".ssh", "authorized_keys")); strings.Contains(got, "devopsy-sync-") {
+		t.Errorf("the sync's key stayed on the child:\n%s", got)
+	}
+	if left, _ := filepath.Glob(keyDir + "*"); len(left) != 0 {
+		t.Errorf("x on the parent: %v", left)
 	}
 	// Every session of the release bounds its connection and keeps itself
 	// alive: the upload, the holder, the push, the push's look at the
@@ -1358,7 +1377,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	// log's save, and the read of the parent's variables (an unreachable
 	// parent fails in seconds).
 	keep := "-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" -T -p 22 devopsy@two\n") {
+	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !regexp.MustCompile(childSSH+` -T -p 22 devopsy@two\n`).MatchString(ssh) {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "port cid123 873", " --network host -e RSYNC_PASSWORD -v " + s.mnt("dev") + ":/mnt devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
@@ -1396,41 +1415,35 @@ func TestSyncDifferentHosts(t *testing.T) {
 		t.Errorf("an owned entry across servers (%d):\n%s\n%s", code, out, docker)
 	}
 
-	// A child's devopsy older than the parent's (lacking --say, which
-	// only the receive calls) refuses on the push's first session there,
-	// the look at its services, before the parent stops or copies
-	// anything.
-	lacks := filepath.Join(t.TempDir(), "lacks")
-	write(t, filepath.Join(lacks, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ say / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
-	out, code = s.run(append(agent, "FAKE_CHILD_PATH="+lacks), "@devopsy@two:dev", "--sync", "--yes")
-	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (say)\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. upgrade it:\ndevopsy: |    $ devopsy @devopsy@two: --upgrade") || !strings.Contains(out, "listing the child's services") || strings.Contains(docker, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.Contains(docker, "rsync://") {
-		t.Fatalf("a child lacking what the push needs (%d):\n%s\n%s", code, out, docker)
-	}
-
-	// --sync-exec across servers keeps its session alive too.
-	execEnv := append(agent, "DEVOPSY_SYNC_TO=devopsy@two", "DEVOPSY_SYNC_SSH_PORT=22", "DEVOPSY_SYNC_TO_DIR="+filepath.Join(s.root, "shop", "dev", "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev")
-	if out, code := s.run(execEnv, "--sync-exec", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
-		t.Fatalf("--sync-exec (%d):\n%s", code, out)
-	}
-	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes "+childSSH+" -T -p 22 devopsy@two") {
-		t.Errorf("--sync-exec session: %s", ssh)
-	}
-
-	// A restricted key refuses the agent: the parent's side says so, and
-	// the child's services come back.
-	out, code = s.run(append(agent, "FAKE_RESTRICT=1"), "@devopsy@two:dev", "--sync", "--yes")
-	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "no SSH agent was forwarded to") || !strings.Contains(out, "restrict,agent-forwarding") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") {
-		t.Fatalf("restricted key (%d):\n%s\n%s", code, out, docker)
-	}
-
-	// A key restricted on the child's server refuses the reverse forward,
-	// which sshd reports as a taken port: three tries, then both causes.
+	// A child's sshd refusing the reverse forward, which it reports as a
+	// taken port: three tries, then the cause.
 	out, code = s.run(append(agent, "FAKE_NO_FORWARD=1"), "@devopsy@two:dev", "--sync", "--yes")
 	docker, ssh = s.logs()
-	if code == 0 || !strings.Contains(out, "refused the reverse forward 3 times") || !strings.Contains(out, "port-forwarding") || strings.Count(ssh, " -R ") != 3 || !strings.Contains(docker, " rm -f cid123") {
+	if code == 0 || !strings.Contains(out, "refused the reverse forward 3 times") || !strings.Contains(out, "AllowTcpForwarding") || strings.Count(ssh, " -R ") != 3 || !strings.Contains(docker, " rm -f cid123") {
 		t.Fatalf("refused forward (%d):\n%s\n%s\n%s", code, out, ssh, docker)
+	}
+	// A failed sync leaves no key either, on the child or the parent.
+	authorized := filepath.Join(filepath.Dir(s.root), ".ssh", "authorized_keys")
+	if got := readString(authorized); strings.Contains(got, "devopsy-sync-") {
+		t.Errorf("a failed sync's key stayed on the child:\n%s", got)
+	}
+	if left, _ := filepath.Glob(keyDir + "*"); len(left) != 0 {
+		t.Errorf("a failed sync's key stayed on the parent: %v", left)
+	}
+	// A key the child cannot authorize: the holder brings back what it
+	// stopped, and the push never starts.
+	if err := os.Remove(authorized); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Dir(authorized)); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Dir(authorized), "not a directory\n", 0o644)
+	out, code = s.run(agent, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	os.Remove(filepath.Dir(authorized))
+	if code == 0 || !strings.Contains(out, "authorizing the sync's key failed") || strings.Contains(out, "copying @") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") {
+		t.Fatalf("a key the child could not authorize (%d):\n%s\n%s", code, out, docker)
 	}
 }
 
@@ -1751,14 +1764,13 @@ func TestSyncCapability(t *testing.T) {
 	// Across servers the export goes into the child's spool through an
 	// SSH session of the parent's (cat), then the import there.
 	s.labels("FAKE_DB=stream")
-	across := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	across := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
 	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
 	_, ssh := s.logs()
 	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret") {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
-	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -T -p 22 devopsy@two") != 4 {
+	if n := len(regexp.MustCompile(`-o ClearAllForwardings=yes -o ForwardAgent=no -o BatchMode=yes -i \S+/key -o IdentitiesOnly=yes -o HostKeyAlias=devopsy-sync-\S+ .* -T -p 22 devopsy@two\n`).FindAllString(ssh, -1)); n != 4 {
 		t.Errorf("the child's list, its util image (app's storage is rsynced), the spool's cat and the import, each a session:\n%s", ssh)
 	}
 	if _, err := os.Stat(spool); err == nil {
@@ -3800,8 +3812,9 @@ func TestSyncInheritedLabel(t *testing.T) {
 	}
 	os.Remove(fresh)
 
-	// --sync-exec gives the child's devopsy the pending file, on both
-	// topologies, from the child's directory the push knows.
+	// --sync-exec gives the child's devopsy the pending file on one server,
+	// from the child's directory the push knows (across servers the
+	// child's --sync-child sets it from its own: TestSyncChild).
 	show := filepath.Join(s.dot, "commands", "inheritfile")
 	write(t, show, "#!/bin/sh\necho \"file=$DEVOPSY_INTERNAL_INHERIT_FILE\"\n", 0o755)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -3809,11 +3822,8 @@ func TestSyncInheritedLabel(t *testing.T) {
 	}
 	base := filepath.Join(s.root, "shop", "dev")
 	push := []string{"DEVOPSY_SYNC_TO_DIR=" + filepath.Join(base, "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev", "DEVOPSY_SYNC_TO_BASE=" + base, remote.SyncIDEnv + "=1.2"}
-	across := append([]string{"DEVOPSY_SYNC_TO=devopsy@two", "DEVOPSY_SYNC_SSH_PORT=22", "SSH_AUTH_SOCK=/tmp/agent.sock"}, push...)
-	for name, env := range map[string][]string{"same server": push, "across servers": across} {
-		if out, code := s.run(env, "--sync-exec", "inheritfile"); code != 0 || !strings.Contains(out, "file="+stale+"\n") {
-			t.Errorf("--sync-exec, %s (%d):\n%s", name, code, out)
-		}
+	if out, code := s.run(push, "--sync-exec", "inheritfile"); code != 0 || !strings.Contains(out, "file="+stale+"\n") {
+		t.Errorf("--sync-exec (%d):\n%s", code, out)
 	}
 }
 

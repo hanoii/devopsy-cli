@@ -173,10 +173,31 @@ directory.
 Across servers, the parent's server starts an rsync daemon (read-only,
 serving only the entries being copied, on its loopback only, with a
 password made for that sync) and reaches the child's server over SSH
-through a reverse forward. Your SSH agent is forwarded for that session
-only, and never on to the child. A stream also goes to the child's file through an SSH session from the
-parent's server. Data goes from server to server, never through your
-machine.
+through a reverse forward. A stream also goes to the child's file
+through an SSH session from the parent's server. Data goes from server
+to server, never through your machine.
+
+The parent's server reaches the child's with a key made for that sync,
+never your SSH agent, which devopsy does not forward:
+
+- devopsy makes a key pair locally for each sync, kept in memory. The
+  child's side authorizes the public half once it is ready, and the
+  parent's gets the private half on its session's input, never on a
+  command line.
+- On the child, the key runs only devopsy's command for that sync,
+  while the sync is open there: no shell, no pty, no agent, no local
+  forward, a reverse forward on the loopback only. The child builds
+  every step itself from its own release and labels; what the parent
+  asks is only which of the sync's steps, for names the child's labels
+  have. The key goes once the child's side decides, and expires within
+  two days in any case.
+- The child's host key comes from the child's side too, over your own
+  session, so the parent's first connection to it is checked, not
+  trusted. A server whose sshd keeps its host keys outside `/etc/ssh` is
+  refused.
+- Whoever runs as the parent's user during a sync can read that key,
+  which only does that sync's steps on the child until it ends. Your
+  agent and other servers stay out of reach.
 
 The sync's SSH sessions, like every session devopsy opens, send
 keepalives every 15 seconds, so a firewall does not drop a quiet copy.
@@ -186,34 +207,17 @@ minutes.
 
 Across servers:
 
-- An agent must run where devopsy runs, with keys both servers accept,
-  since the parent's server reaches the child's through it. Before
-  anything starts, devopsy checks that the agent has keys, though not
-  which ones. In CI, use `eval $(ssh-agent); ssh-add` with the key the
-  servers accept, instead of `ssh -i`.
-- The parent's server can use every key in that agent for the session,
-  not only the child's. For example, with `prod` the parent of
-  `staging`, and `staging` the parent of `pr-*`, a sync of `pr-12`
-  forwards the agent to staging's server, prod's key included. When
-  servers trust each other less than that, load only the keys the sync
-  needs, or constrain them to their path (OpenSSH 8.9 or later, with
-  hosts written as in `known_hosts`):
-
-  ```sh
-  ssh-add -h vm1 ~/.ssh/vm1                # the parent's server, from your machine only
-  ssh-add -h vm2 -h 'vm1>vm2' ~/.ssh/vm2   # the child's: from your machine and from vm1
-  ```
-
 - The child's server must be reachable from the parent's as `ssh -G`
-  resolves it locally (user, hostname, port; its host key is accepted on
-  first use). A host behind a `ProxyCommand` or `ProxyJump` is refused,
-  since a relay through your machine is not supported.
-- A CI key needs `restrict,agent-forwarding,port-forwarding` in the
-  deploy user's `authorized_keys` on both servers, which is what
-  `--ssh-keys add --restricted` writes: agent forwarding for the
-  parent's session, port forwarding for the reverse forward to the
-  child's. A plain `restrict` refuses both, and devopsy says which one
-  failed.
+  resolves it locally (user, hostname, port). A host behind a
+  `ProxyCommand` or `ProxyJump` is refused, since a relay through your
+  machine is not supported.
+- Both sides are project users ([Servers](servers.md)), or neither: a
+  project user's data would drive a deploy user's copy, or a project
+  user would talk to a deploy user's push. devopsy refuses before
+  anything stops; `--export` and `--import` move a service's data
+  across through your machine instead.
+- A CI key is plain `restrict` (`--ssh-keys add --restricted`): a sync
+  needs no forwarding of it.
 
 ## When a sync fails
 

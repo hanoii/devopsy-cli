@@ -12,10 +12,10 @@ import (
 )
 
 // RestrictedKeyOptions is what a CI key gets in authorized_keys: no shell,
-// no X11, nothing but commands, plus the two forwardings a sync across
-// servers needs (the operator's agent to the parent, the parent's reverse
-// forward to the child's rsync daemon).
-const RestrictedKeyOptions = "restrict,agent-forwarding,port-forwarding"
+// no pty, no forwarding, nothing but commands. A sync across servers
+// needs none of it: the parent reaches the child with a key of the sync's
+// own (SyncKeyLine).
+const RestrictedKeyOptions = "restrict"
 
 // AuthorizedKey is one line of the deploy user's authorized_keys.
 type AuthorizedKey struct {

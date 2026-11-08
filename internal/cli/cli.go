@@ -517,10 +517,10 @@ runs.
 
 On one server, one container copies between the two directories. Across
 servers, the parent's runs an rsync daemon for the copy and reaches the
-child's over SSH with your agent, forwarded for that session only: an agent
-must be running locally (in CI too), and the child's host must be reachable
-from the parent's as ssh -G resolves it locally (no ProxyCommand or ProxyJump).
-A CI key needs restrict,agent-forwarding,port-forwarding (--ssh-keys add --restricted).
+child's over SSH with a key made for that sync, which only does its requests
+there while it runs: no agent is forwarded, and the child's host must be
+reachable from the parent's as ssh -G resolves it locally (no ProxyCommand or
+ProxyJump). Both sides are project users, or neither.
 
 The parent comes from the child's instance and the usual server variables
 (DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
@@ -1196,10 +1196,8 @@ root. Any target on the server does too; the keys are the server's.
   --ssh-keys                list them: fingerprint, type, comment, options
   --ssh-keys add <file>     authorize the public key in <file> (- for stdin)
     --restricted            for a machine's key, like CI's: restrict
-                            (commands only, no shell, no X11), with
-                            agent-forwarding and port-forwarding, which a
-                            sync across servers needs. A person's key is
-                            added plain.
+                            (commands only, no shell, no pty, no
+                            forwarding). A person's key is added plain.
   --ssh-keys remove <key>   remove the key with that fingerprint (a prefix
                             will do) or that exact comment. The last key is
                             never removed: it would lock everyone out.

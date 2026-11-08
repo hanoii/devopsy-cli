@@ -400,17 +400,34 @@ const SyncResetEnv = "DEVOPSY_INTERNAL_SYNC_RESET"
 var SyncingInto = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `syncing into ([0-9]{14})`)
 
 // ChildSSH are the options of the parent's sessions to the child (the
-// rsync session and --sync-exec), with connectOptions as every session
-// has them: the operator's agent, forwarded to the parent for the push,
-// never goes one hop further (the child is the unreviewed side, and a
-// ForwardAgent in the parent's ssh config would send it), a key the
-// child refuses fails at once instead of waiting for a password nobody
-// can type, and a child the parent cannot reach fails in seconds, not
-// after the TCP timeout, with its services stopped meanwhile. Not
-// SSHOptions: the rsync session keeps its forwarding.
+// receive, the spools and --sync-exec), with connectOptions as every
+// session has them: the sync's key alone (IdentitiesOnly), no agent, a
+// refused key failing at once instead of waiting for a password nobody
+// can type, the child's host key checked against what its holder sent
+// (under the sync's alias, whatever the port or address), and a child the
+// parent cannot reach failing in seconds, not after the TCP timeout, with
+// its services stopped meanwhile. Not SSHOptions: the receive keeps its
+// forwarding.
 func ChildSSH() []string {
-	return append([]string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"}, connectOptions()...)
+	opts := []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes"}
+	if key := os.Getenv(SyncKeyFileEnv); key != "" {
+		opts = append(opts, "-i", key, "-o", "IdentitiesOnly=yes", "-o", "HostKeyAlias="+SyncHostKeyAlias(os.Getenv(SyncIDEnv)),
+			"-o", "UserKnownHostsFile="+os.Getenv(SyncKnownHostsEnv), "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes")
+	}
+	return append(opts, connectOptions()...)
 }
+
+// SyncKeyedEnv, in PushScript's env, makes the push take the sync's key on
+// its stdin first (--sync-push's key word): a sync across servers.
+const SyncKeyedEnv = "DEVOPSY_INTERNAL_SYNC_KEYED"
+
+// SyncKeyFileEnv and SyncKnownHostsEnv are the push's files of the sync's
+// key and of the child's host keys (cmd/devopsy's takeSyncKey), for its
+// sessions to the child (ChildSSH).
+const (
+	SyncKeyFileEnv    = "DEVOPSY_INTERNAL_SYNC_KEY_FILE"
+	SyncKnownHostsEnv = "DEVOPSY_INTERNAL_SYNC_KNOWN_HOSTS"
+)
 
 // UtilImage is devopsy's own image for what needs root on a host's files,
 // built there from UtilDockerfile when missing: syncs' rsync, the tar of
@@ -549,10 +566,6 @@ const (
 	DataVolumesEnv = "DEVOPSY_DATA_VOLUMES"
 	DataCustomEnv  = "DEVOPSY_DATA_CUSTOM"
 	DataStopEnv    = "DEVOPSY_DATA_STOP"
-	// SyncNeedsEnv is, for --sync-exec, what the sync's later sessions
-	// to the child need of its devopsy (remote.Needs), space-separated:
-	// checked on the first (ChildCheck).
-	SyncNeedsEnv = "DEVOPSY_INTERNAL_SYNC_NEEDS"
 	// SyncWatchEnv tells --sync-push that its stdin stays open for as
 	// long as devopsy's push session lives: EOF means the session is gone,
 	// and the push stops.
@@ -597,6 +610,15 @@ type SyncOptions struct {
 	// NoInherit: the parent's inherit: names nothing, so the child's
 	// inherit.env empties on go, as a sync writing keys replaces it.
 	NoInherit bool
+	// Key is the sync key's public blob, across servers (NewSyncKey): the
+	// holder authorizes it once prepared (--sync-key), for the push's
+	// sessions to the child, and removes it once it decided. It also
+	// sends the child's host keys with its marker, for the push to check.
+	Key string
+	// ParentProjectUser: the parent's user is a project user. Both sides
+	// of a sync are of one kind, project users or deploy users, or the
+	// holder refuses before anything stops (KindsDiffer).
+	ParentProjectUser bool
 }
 
 // sameServerCopy is the child's side of what a sync carries of its
@@ -666,7 +688,61 @@ func (o *SyncOptions) exports(t *Target) string {
 	if o.Reset {
 		s += "export " + SyncResetEnv + "=1\n"
 	}
-	return s
+	if o.Key != "" {
+		s += "export " + SyncKeyEnv + "=" + Quote(o.Key) + "\n"
+	}
+	parent := "no"
+	if o.ParentProjectUser {
+		parent = "yes"
+	}
+	return s + "export " + SyncParentKindEnv + "=" + parent + "\n"
+}
+
+// SyncParentKindEnv is yes when a sync's parent's user is a project user,
+// no otherwise (SyncOptions.ParentProjectUser), for syncBlock's check.
+const SyncParentKindEnv = "DEVOPSY_INTERNAL_SYNC_PARENT_PROJECT_USER"
+
+// syncKinds refuses, before the prepare, a sync between a project user and
+// a deploy user (KindsDiffer): status set, nothing stopped.
+var syncKinds = `if [ -n "${` + SyncParentKindEnv + `:-}" ]; then
+  if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then sync_me=yes; else sync_me=no; fi
+  if [ "$sync_me" != "$` + SyncParentKindEnv + `" ]; then
+    status=1
+    if [ "$sync_me" = no ]; then
+      devopsy --say error ` + Quote(KindsDiffer(true)) + ` ` + sayRemedies(KindsFix()) + ` || true
+    else
+      devopsy --say error ` + Quote(KindsDiffer(false)) + ` ` + sayRemedies(KindsFix()) + ` || true
+    fi
+  fi
+fi
+`
+
+// SyncKeyEnv holds the sync key's public blob in the holder (SyncOptions.Key).
+const SyncKeyEnv = "DEVOPSY_INTERNAL_SYNC_KEY"
+
+// SyncHostKeysEnv holds the child's host keys for the push, as the
+// holder's marker sends them ("<type> <blob>," each).
+const SyncHostKeysEnv = "DEVOPSY_INTERNAL_SYNC_HOST_KEYS"
+
+// HostKeysDirEnv is where a server's sshd host keys are read from, for
+// the tests (/etc/ssh).
+const HostKeysDirEnv = "DEVOPSY_INTERNAL_HOST_KEYS"
+
+// hostKeys prints the server's sshd host keys, "<type> <blob>," each.
+const hostKeys = `cat "${` + HostKeysDirEnv + `:-/etc/ssh}"/ssh_host_*_key.pub 2>/dev/null | awk 'NF >= 2 { printf "%s %s,", $1, $2 }'`
+
+// KindsDiffer is the refusal of a sync between a project user and a
+// deploy user, parentProjectUser the parent's side.
+func KindsDiffer(parentProjectUser bool) string {
+	if parentProjectUser {
+		return "the parent's user is a project user and the child's is not: a sync copies between users of one kind, and a project user's data would drive the deploy user here"
+	}
+	return "the child's user is a project user and the parent's is not: a sync copies between users of one kind, and a project user would talk to the deploy user's push and rsync daemon there"
+}
+
+// KindsFix is the way across between kinds: through the operator.
+func KindsFix() report.Remedy {
+	return report.Fix("copy a service's data through this machine instead:", "devopsy @<parent> --export <service> | devopsy @<child> --import <service>")
 }
 
 // syncFinish defines sync_finish go|abort|partial, in the child's
@@ -760,7 +836,26 @@ func syncBlock(projectName, failed string, release bool) string {
 	// (DoneLine).
 	return syncFinish(projectName) + timerStart("sync_t") + `sync_id=$` + SyncIDEnv + `
 : >"$base/` + SyncHoldingFile + `"
-` + syncPrepare(projectName, release) + `if [ "$status" = 0 ]; then
+` + syncKinds + `if [ "$status" = 0 ]; then
+` + syncPrepare(projectName, release) + `fi
+# Across servers, the key the push reaches this side with, once prepared:
+# without its gate open it does nothing. Failing, what was stopped comes back.
+if [ "$status" = 0 ] && [ -n "${` + SyncKeyEnv + `:-}" ]; then
+  sync_hostkeys=$(` + hostKeys + `)
+  sk_reset=-
+  [ -z "${` + SyncResetEnv + `:-}" ] || sk_reset=reset
+  if [ -z "$sync_hostkeys" ]; then
+    status=1
+    devopsy --say error "this server's sshd host keys are not in ${` + HostKeysDirEnv + `:-/etc/ssh}: the parent's server could not check it is this one" || true
+  else
+    devopsy ` + SyncKeyFlag + ` add "$sync_id" "$base" "$` + SyncToTargetEnv + `" "$sk_reset" "$` + SyncKeyEnv + `" || status=$?
+  fi
+  if [ "$status" != 0 ]; then
+    sync_finish abort || true
+    devopsy --say error "authorizing the sync's key failed ($status): nothing changed" || true
+  fi
+fi
+if [ "$status" = 0 ]; then
   printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
 ` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
   # rename or the unlink wins), so nothing is written into what abort
@@ -825,6 +920,8 @@ func syncBlock(projectName, failed string, release bool) string {
   fi
   rm -f ` + taken + `
 fi
+# Decided: the key goes, nothing writes any more.
+[ -z "${` + SyncKeyEnv + `:-}" ] || devopsy ` + SyncKeyFlag + ` remove "$sync_id" || true
 rm -f "$base/` + SyncHoldingFile + `"
 [ "$status" != 0 ] || ` + sayTook("sync_t", `"data synced"`) + syncRestorePipe
 }
@@ -839,7 +936,7 @@ const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncTo
 // reads this session any more, and a write to it would kill what restores
 // the services, so the rest goes to a file in $base.
 func syncWait() string {
-	return `  printf '%s%s\t%s\n' "` + SyncMarker + `" "$base" "$sync_id" || true
+	return `  printf '%s%s\t%s\t%s\n' "` + SyncMarker + `" "$base" "$sync_id" "${sync_hostkeys:-}" || true
   reply=
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
@@ -941,12 +1038,15 @@ func syncSourceLock() string {
 func PushScript(p *Target, projectName string, env map[string]string) string {
 	keys := make([]string, 0, len(env))
 	push := []string{"--sync-push"}
-	for k := range env {
-		if k == SyncResetEnv {
-			push = append(push, "reset")
-			continue
+	for _, word := range []struct{ env, word string }{{SyncResetEnv, "reset"}, {SyncKeyedEnv, "key"}} {
+		if _, ok := env[word.env]; ok {
+			push = append(push, word.word)
 		}
-		keys = append(keys, k)
+	}
+	for k := range env {
+		if k != SyncResetEnv && k != SyncKeyedEnv {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	exports := ""
@@ -1108,6 +1208,8 @@ func CurrentExistsScript(t *Target, extra []string) string {
 ` + IncompleteCheck + `
 if ` + ImportRunning + `; then echo importing; fi
 case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeature + ` ;; esac
+if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then echo projectuser; fi
+[ -z "$(` + hostKeys + `)" ] || echo hostkeys
 [ ! -f "$base/shared/` + ParentEnvFile + `" ] || printf 'parentenv\t%s\n' "$(head -n 1 "$base/shared/` + ParentEnvFile + `")"
 `
 }
@@ -1183,6 +1285,10 @@ type Current struct {
 	// what a refresh of the copy follows (refreshParentEnv), read here so
 	// a child's release needs no session of its own for it.
 	ParentEnv string
+	// ProjectUser: the session's user is a project user (KindsDiffer).
+	// HostKeys: its server's sshd host keys are readable, which a sync
+	// across servers sends the push (SyncOptions.Key).
+	ProjectUser, HostKeys bool
 }
 
 // ParseCurrent reads CurrentExistsScript's output.
@@ -1201,6 +1307,10 @@ func ParseCurrent(out string) Current {
 			c.DataLabels = true
 		case "parentenv":
 			c.ParentEnv = value
+		case "projectuser":
+			c.ProjectUser = true
+		case "hostkeys":
+			c.HostKeys = true
 		}
 	}
 	return c
@@ -1339,29 +1449,6 @@ copyvol() {
 		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
 	}
 	return script
-}
-
-// ChildCheck is script for a session the parent's devopsy opens to the
-// child's server (across servers), behind serverCheck: the child's
-// devopsy refuses unless it has what script needs and extra, the needs of
-// the sync's later sessions there, which the first one (the push's look
-// at the child's services, SyncNeedsEnv) carries, so it refuses before
-// the parent stops anything. address is the child's, for the upgrade
-// hint, which names its server.
-func ChildCheck(address, script string, extra []string) string {
-	needs := Needs(script)
-	for _, n := range extra {
-		if !slices.Contains(needs, n) {
-			needs = append(needs, n)
-		}
-	}
-	slices.Sort(needs)
-	check := needsEnv + "=" + Quote(strings.Join(needs, " ")) + "\n"
-	if os.Getenv(ProtocolCheckEnv) == "warn" {
-		check = ProtocolCheckEnv + "=warn\n" + check
-	}
-	a, _ := parseAddress(address)
-	return check + serverCheck(a.server+":") + script
 }
 
 // SyncExecScript runs devopsy args in the child's current release (toDir

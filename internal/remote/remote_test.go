@@ -258,7 +258,9 @@ func allScripts() map[string]string {
 		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
 		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Inherit: true, ID: "1.2", Again: "--reset"}, true),
 		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
+		"holder keyed":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2", Key: "AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g", ParentProjectUser: true, Reset: true}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
+		"push keyed":      PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy", SyncKeyedEnv: "1", SyncResetEnv: "1"}),
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataCopyFeature}),
 		"parent check":    ParentCheckScript(tg, "app-prod", []string{"sync-push"}),
@@ -267,7 +269,6 @@ func allScripts() map[string]string {
 		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, "", map[string]string{"app.ini": "1:2"}, false, "", false),
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
-		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
 		"export":          ExportScript(tg, "app-prod", "it's db"),
 		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n", "database"),
 		"resolved check":  ResolvedCheckScript(tg),
@@ -310,7 +311,7 @@ func TestImagesAgain(t *testing.T) {
 // settle, which every activation calls, stays out.
 func TestDataCopyFeature(t *testing.T) {
 	t.Parallel()
-	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder plain", "import", "push", "resolved", "sync only"}
+	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder keyed", "holder plain", "import", "push", "push keyed", "resolved", "sync only"}
 	for name, s := range allScripts() {
 		got := slices.Contains(Needs(s), DataCopyFeature)
 		if got != slices.Contains(need, name) {
@@ -338,7 +339,7 @@ func TestDataCopyFeature(t *testing.T) {
 // owners and mounts check are flags of their own.
 func TestMntOwnerFeature(t *testing.T) {
 	t.Parallel()
-	need := []string{"exec list", "import", "push", "resolved"}
+	need := []string{"exec list", "import", "push", "push keyed", "resolved"}
 	for name, s := range allScripts() {
 		if got := slices.Contains(Needs(s), MntOwnerFeature); got != slices.Contains(need, name) {
 			t.Errorf("%s needs %s: %v", name, MntOwnerFeature, got)
@@ -450,11 +451,47 @@ func TestDataChecksFirst(t *testing.T) {
 	order(data, "export "+ImagesAcceptEnv, `'--check-images' '--restore' '20261025120000'`, `'restore-data'`)
 }
 
+// A sync across servers goes by a key of its own: the push that takes it
+// on its stdin needs sync-push-key, and every script holding a sync's
+// child side calls --sync-key, so a server whose devopsy predates them
+// refuses before anything changes. The holder authorizes the key once
+// prepared, sends the host keys with its marker, removes the key once it
+// decided, and checks the two sides' kinds before its prepare.
+func TestSyncKeyFeature(t *testing.T) {
+	t.Parallel()
+	s := allScripts()
+	for name, script := range s {
+		if slices.Contains(Needs(script), SyncKeyFeature) != (name == "push keyed") {
+			t.Errorf("%s needs %s: %v", name, SyncKeyFeature, !slices.Contains(Needs(script), SyncKeyFeature))
+		}
+		holds := strings.HasPrefix(name, "holder") || name == "activate+sync" || name == "sync only"
+		if slices.Contains(Needs(script), "sync-key") != holds {
+			t.Errorf("%s needs sync-key: %v", name, !holds)
+		}
+	}
+	if !strings.Contains(s["push keyed"], "'--sync-push' 'reset' 'key'") {
+		t.Errorf("the keyed push's words:\n%s", s["push keyed"])
+	}
+	h := s["holder keyed"]
+	order := []string{"export " + SyncKeyEnv + "=", "export " + SyncParentKindEnv + "=yes", `if [ "$sync_me" != "$` + SyncParentKindEnv + `" ]; then`, "'--sync-services' 'prepare'", "devopsy --sync-key add \"$sync_id\" \"$base\"", "ready for sync in", `"${sync_hostkeys:-}"`, `mv -f "$base/.devopsy-sync.started"`, `devopsy --sync-key remove "$sync_id"`}
+	at := 0
+	for _, w := range order {
+		i := strings.Index(h[at:], w)
+		if i < 0 {
+			t.Fatalf("%q missing or out of order in the keyed holder:\n%s", w, h)
+		}
+		at += i + len(w)
+	}
+	if strings.Contains(s["holder plain"], "export "+SyncKeyEnv) {
+		t.Error("a holder on the parent's server authorizes a key")
+	}
+}
+
 func TestResetFeature(t *testing.T) {
 	t.Parallel()
 	tg := &Target{Path: "app/prod"}
 	for name, s := range allScripts() {
-		if name != "receive reset" && slices.Contains(Needs(s), ResetFeature) {
+		if name != "receive reset" && name != "push keyed" && slices.Contains(Needs(s), ResetFeature) {
 			t.Errorf("%s needs %s", name, ResetFeature)
 		}
 	}
@@ -539,7 +576,7 @@ func TestLockWaitSaysItsTime(t *testing.T) {
 func TestContainerLabelsFeature(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
-		if slices.Contains(Needs(s), ContainerLabelsFeature) != (name == "push") {
+		if slices.Contains(Needs(s), ContainerLabelsFeature) != (name == "push" || name == "push keyed") {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
 	}

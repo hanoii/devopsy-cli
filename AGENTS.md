@@ -91,7 +91,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - A project's small choice is a compose label (for example `devopsy.shell`, roles, `devopsy.data`); a capability is for behavior a label cannot express, and a new one waits for a second use.
 - `--shell-host` is never overridable by a project: it is the way in when a project is broken.
 - A release is a tar stream over `ssh` from wherever devopsy runs (for example a laptop, CI), never a pull: a server needs Docker, devopsy and a few standard tools, never the repository, a deploy key, a webhook or a daemon of devopsy's.
-- Pushing costs this, accepted: a release needs its operator until its switch, and a sync across servers works only through the operator's forwarded agent.
+- Pushing costs this, accepted: a release needs its operator until its switch, and a sync across servers works only through a key the operator made for that sync, which does that sync's requests on the child and nothing else.
 - A target's compose name is `<project>[-<instance>]-<environment>` (`Target.ComposeName`) and its directory `<project>/[<instance>/]<environment>` under the server's release root, from nothing else (not a `path:` key, compose's `name:`, the checkout's folder or the local `COMPOSE_PROJECT_NAME`): the same target lands in the same place from any laptop or CI, and everything per environment finds its things by that name, with no registry of environments.
 - Renaming a project, instance or environment makes a new, empty environment; moving the old one by hand is accepted.
 - Servers and instance names come from the target (for example `@vm1:eu/prod`, `DEVOPSY_SERVER`, an alias), never from a project's config: one checkout releases to any server.

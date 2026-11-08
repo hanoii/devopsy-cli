@@ -67,6 +67,9 @@ func TestSyncKeyLine(t *testing.T) {
 	if id, ok := SyncKeyID(*k); !ok || id != "1762590000.0a1b2c" {
 		t.Fatalf("SyncKeyID: %q %v", id, ok)
 	}
+	if base := SyncKeyBase(*k); base != "/srv/shop/stage" {
+		t.Fatalf("SyncKeyBase: %q", base)
+	}
 	if exp, ok := SyncKeyExpiry(*k); !ok || !exp.Equal(at) {
 		t.Fatalf("SyncKeyExpiry: %v %v", exp, ok)
 	}
