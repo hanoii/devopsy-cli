@@ -46,8 +46,6 @@ type DoorUser struct {
 	Joinable []string `yaml:"joinable"`
 	// Roles are the roles it was given.
 	Roles []string `yaml:"roles"`
-	// ReadAll lets it read every container and network, secrets included.
-	ReadAll bool `yaml:"read_all"`
 	// Space, Vets, Others and Users are the server's, filled in by DoorSettingsOf.
 	Space  string    `yaml:"-"`
 	Vets   []DoorVet `yaml:"-"`
@@ -92,9 +90,9 @@ func decodeDoorUser(name string, n yaml.Node) (DoorUser, error) {
 	}
 	for k := range fields {
 		switch k {
-		case "project", "tree", "joinable", "roles", "read_all":
+		case "project", "tree", "joinable", "roles":
 		default:
-			return DoorUser{}, fmt.Errorf("%s: unknown key %q (project, tree, joinable, roles, read_all)", name, k)
+			return DoorUser{}, fmt.Errorf("%s: unknown key %q (project, tree, joinable, roles)", name, k)
 		}
 	}
 	var u DoorUser

@@ -33,9 +33,6 @@ type Policy struct {
 	Joinable []string
 	// Roles are the roles the admin gave it.
 	Roles []string
-	// ReadAll, the admin's grant, lets it read every container and network: their
-	// environments and secrets included.
-	ReadAll bool
 	// ForbiddenIDs are host ids no container may run as: a container as a host
 	// user's uid is that user's to reach through /proc.
 	ForbiddenIDs []int
@@ -257,7 +254,8 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 		}
 		driver, _ := n["driver"].(string)
 		ipam, _ := n["ipam"].(map[string]any)
-		if !strings.HasPrefix(nm, name+"_") || unknownKey(n, topNetworkKeys) != "" || len(ipam) > 0 || (driver != "" && driver != "bridge") {
+		// No IPv6 of its own either: fewer paths across the server to keep shut.
+		if !strings.HasPrefix(nm, name+"_") || unknownKey(n, topNetworkKeys) != "" || len(ipam) > 0 || (driver != "" && driver != "bridge") || truthy(n["enable_ipv6"]) {
 			fail("network %s: not the project's plain network: %s", key, nm)
 		}
 	}
@@ -315,7 +313,9 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	}
 	checkIdentity(svc, s, p, fail)
 	checkLimits(svc, s, fail)
-	if nm, _ := s["network_mode"].(string); nm != "" && nm != "none" && nm != "bridge" {
+	// Never Docker's default bridge, docker0: every service with it shares it, and talks to
+	// the others' ports there, under none of the project's names.
+	if nm, _ := s["network_mode"].(string); nm != "" && nm != "none" {
 		fail("%s: network_mode %s", svc, nm)
 	}
 	if len(list(s["ports"])) > 0 {

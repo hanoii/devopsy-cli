@@ -760,9 +760,9 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 	}
 }
 
-// The firewall holds over IPv6 too: a project's network with IPv6, which Docker gives a subnet
-// of its own pools, is no more another project user's to reach from the host than its IPv4
-// address. The control: the deploy user reaches both.
+// The firewall holds over IPv6 too: a container on a network with IPv6 (the deploy user's: a
+// door project's network has none) is no more a project user's to reach from the host than
+// its IPv4 address. The control: the deploy user reaches both.
 func TestDoorFirewallIPv6(t *testing.T) {
 	name := doorServer(t)
 	prev, _ := doorRoot(t, "sysctl -n net.ipv6.conf.all.disable_ipv6")
@@ -771,21 +771,16 @@ func TestDoorFirewallIPv6(t *testing.T) {
 		t.Skipf("no IPv6 on %s: %s", name, out)
 	}
 	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doorv6-web; docker network rm doorv6")
 		doorRoot(t, "sysctl -qw net.ipv6.conf.all.disable_ipv6="+strings.TrimSpace(prev)+" net.ipv6.conf.default.disable_ipv6="+strings.TrimSpace(prevDefault))
 	})
-	dir := doorProject(t, "doorv6", `services:
-  web:
-`+doorService+`    command: [sh, -c, "mkdir -p /tmp/w && echo hello-v6 >/tmp/w/index.html && exec httpd -f -p 8080 -h /tmp/w"]
-networks:
-  default:
-    enable_ipv6: true
-`, nil)
-	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
-		t.Fatalf("a release with an IPv6 network (%d):\n%s", code, out)
-	}
-	t.Cleanup(func() { op(t, dir, "devopsy @prod --destroy --yes") })
 	doorUser(t, "doorv6o")
-	addrs, _ := doorRoot(t, "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.GlobalIPv6Address}}{{end}}' doorv6-prod-web-1")
+	if out, code := doorRoot(t, `set -e
+docker network create --ipv6 doorv6 >/dev/null
+docker run -d --name doorv6-web --network doorv6 busybox:1.37 sh -c 'mkdir -p /w && echo hello-v6 >/w/index.html && exec httpd -f -p 8080 -h /w' >/dev/null`); code != 0 {
+		t.Skipf("Docker made no IPv6 network here (%d): %s", code, out)
+	}
+	addrs, _ := doorRoot(t, "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.GlobalIPv6Address}}{{end}}' doorv6-web")
 	f := strings.Fields(addrs)
 	if len(f) != 2 {
 		t.Skipf("Docker gave the network no IPv6 subnet here: %q", addrs)
@@ -796,11 +791,9 @@ networks:
 		return strings.Contains(out, "hello-v6")
 	}
 	for _, url := range []string{"http://" + f[0] + ":8080/", "http://[" + f[1] + "]:8080/"} {
-		if !ask("devopsy", url) {
-			t.Fatalf("the control: the deploy user does not reach %s", url)
-		}
+		eventually(t, startWaitE2E, "the deploy user reaching "+url, func() bool { return ask("devopsy", url) })
 		if ask("devopsy-doorv6o", url) {
-			t.Errorf("another project user reached %s", url)
+			t.Errorf("a project user reached %s", url)
 		}
 	}
 }

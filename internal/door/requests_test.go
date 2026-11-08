@@ -481,24 +481,6 @@ func TestDecideBuildsItsOwnDockerfile(t *testing.T) {
 	}
 }
 
-// Read, an admin's grant, opens reads and nothing else.
-func TestDecideReadAll(t *testing.T) {
-	t.Parallel()
-	p := testPolicy
-	p.ReadAll = true
-	for _, argv := range [][]string{{"ps", "-a"}, {"inspect", "victim"}, {"network", "ls"}, {"network", "inspect", "other-prod_default"}} {
-		a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
-		if err != nil || !slices.Equal(a.Docker, argv) {
-			t.Errorf("%q: %+v, %v", argv, a, err)
-		}
-	}
-	for _, argv := range [][]string{{"exec", "victim", "sh"}, {"logs", "victim"}, {"rm", "-f", "victim"}, {"network", "connect", "x", "victim"}, {"tag", "x", "busybox:1.37"}} {
-		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
-			t.Errorf("%q: %+v", argv, a)
-		}
-	}
-}
-
 // A clone's real script, whose names come from a project's labels.
 func TestCloneScriptForm(t *testing.T) {
 	t.Parallel()

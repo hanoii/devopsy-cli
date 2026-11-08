@@ -739,7 +739,7 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 		return door.Policy{}, err
 	}
 	p := door.Policy{
-		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles, ReadAll: s.ReadAll,
+		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
 		ForbiddenIDs: ids, Others: otherProjects(s),
 	}
 	p.Images = claimedImages(p.ImagesFile())

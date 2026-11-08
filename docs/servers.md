@@ -260,7 +260,7 @@ devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
 and, with `releases: root` elsewhere than the deploy user's home, its
 tree there. Its entry is a file of the deploy user's,
 `~/.config/devopsy/door/users/devopsy-shop.yaml`, where an admin may add
-`joinable:`, `roles:` or `read_all:` (`devopsy --debug schema`). The
+`joinable:` or `roles:` (`devopsy --debug schema`). The
 first `add` also puts on the server what devopsy needs there, each piece
 checked before it lands: the `devopsy-projects` group, the door's sudo
 rules, a `docker` that is devopsy, and sshd's part, which asks devopsy

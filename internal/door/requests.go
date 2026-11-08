@@ -209,9 +209,6 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		return nil, refuse("no docker command")
 	}
 	cmd, args := argv[0], argv[1:]
-	if p.ReadAll && (cmd == "ps" || cmd == "inspect" || (cmd == "network" && len(args) > 0 && (args[0] == "inspect" || args[0] == "ls"))) {
-		return &Action{Docker: argv}, nil
-	}
 	switch cmd {
 	case "version":
 		return &Action{Docker: argv}, nil

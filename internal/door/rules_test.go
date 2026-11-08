@@ -96,6 +96,9 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a key nobody knows yet", svc(`,"new_in_compose_9":1`), "web: new_in_compose_9"},
 		{"the host's network", svc(`,"network_mode":"host"`), "network_mode host"},
 		{"another container's network", svc(`,"network_mode":"container:victim"`), "network_mode container:victim"},
+		// Docker's default bridge, docker0, which every service with it shares, its
+		// containers talking to each other's ports: none of the project's names.
+		{"the default bridge", svc(`,"network_mode":"bridge"`), "network_mode bridge"},
 		{"ports", svc(`,"ports":[{"target":80}]`), "web: ports"},
 		{"a capability", svc(`,"cap_add":["SYS_ADMIN"]`), "cap_add SYS_ADMIN"},
 		{"sysctls", svc(`,"sysctls":{"net.ipv4.ip_forward":"1"}`), "sysctls"},
@@ -123,6 +126,8 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a network's driver options on a service", svc(`,"networks":{"default":{"driver_opts":{"a":"b"}}}`), "network default: driver_opts"},
 		{"a mac address", svc(`,"networks":{"default":{"mac_address":"x"}}`), "network default: mac_address"},
 		{"a volume's labels and driver", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","driver":"x"}}}`, "volume v"},
+		// IPv6 a project's network does without: fewer paths across its server to keep shut.
+		{"a network with IPv6", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":true}}}`, "plain network"},
 		{"a network's address space", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","ipam":{"config":[{"subnet":"10.0.0.0/8"}]}}}}`, "plain network"},
 		{"labels in another form", svc(`,"labels":"a=b"`), "labels must be a map"},
 		{"mounts in another form", svc(`,"volumes":{"a":"b"}`), "volumes must be a list"},

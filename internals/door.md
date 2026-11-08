@@ -32,6 +32,8 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - Entries are made by the door, so a project user can write inside one and never replace it: when devopsy's own mkdir is refused (`makeEntry`), and what a file binds, at `compose config`, since a step writes in an entry before anything starts (`entries`), and at `up` (`bindEntries`).
 - What a root util container writes in an entry is given back to the project user as `rwX` when it exits, or when it is removed for one detached (`Regrant`, `Removes`, `regrant`): a tar's or an rsync's mode on a file with an ACL sets its mask, which narrows the project user's entry, and only an owner or root changes an ACL, so a root util container does it, touching only what lost its group class's write.
 - An entry the door made a directory, not knowing it is a file, is replaced while empty: the two are told apart only by an import or a sync.
+- A service is on its project's own networks, a joinable one or none, never Docker's default bridge (`network_mode: bridge`): every service with it shares docker0 and reaches the others' ports there.
+- A project's network has no IPv6 (`enable_ipv6` refused), its address space Docker's: fewer paths across the server to keep shut.
 - A service on a shared network is named `<project>-<name>` (`OwnName`), and holds no alias or fixed address there: compose makes each service's name an alias on its networks, which would answer for another's name (for example `traefik` on `tunnel`).
 - A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.
 - The door acts only on containers it made for the asking user (`devopsy.door`, `door.DoorLabel`, on every service it runs and every util container), and runs no compose command while a container it did not make is under the project's names (`Policy.Foreign`): compose's and devopsy's labels are anyone's to set outside it, and such a container runs as root with any mount.
@@ -57,7 +59,6 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - `add` refuses a project name that extends another's on the server, or another extends (`projectNameClash`, over the door's users and the release root): compose names are flat, so whichever came first would hold the other's networks, volumes and containers.
 - What `add` writes in a project user's home is written as that user (`runuser`), and only when the user is new: root writing in a home its user owns follows the links that user put there.
 - `remove` drops a project user's entry, keys and sync keys, never its Unix user: deleting a user that holds a tree and data is not one subcommand's.
-- `read_all` is an admin's grant of reads of everything, secrets included, and nothing else.
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).
 - A root container holds no path a project user can change: input is copied in and output collected by that user's rights, and a restore streams through a container with no mounts.
 - A project's registry login reaches compose as its `auth` values alone, in the door's own directory: Docker's CLI loads plugins and helpers from a `DOCKER_CONFIG`, which would run the project's program as the deploy user.
