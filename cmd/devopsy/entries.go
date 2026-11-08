@@ -97,13 +97,17 @@ func (t entryTable) row(key, value string) string {
 
 // print prints es: a key once over its entry's lines and the next
 // entries' of that key, then its remedies as report lays them out
-// (RemedyLines), a warning's lines and texts yellow, each command bold.
+// (RemedyLines), a warning's lines and texts yellow, a highlight's bold,
+// each command bold.
 func (t entryTable) print(es []remote.StatusEntry) {
 	prev := ""
 	for i, e := range es {
 		paint := func(s string) string { return s }
-		if e.Level == remote.StatusWarning {
+		switch e.Level {
+		case remote.StatusWarning:
 			paint = t.st.warn
+		case remote.StatusHighlight:
+			paint = t.st.head
 		}
 		for j, l := range e.Lines {
 			key := ""

@@ -215,10 +215,13 @@ func statusShow(cwd, projectDir string, running []string) []remote.StatusEntry {
 	return entries
 }
 
+// statusLevels are the status capability's levels, lowest first.
+var statusLevels = []string{remote.StatusInfo, remote.StatusHighlight, remote.StatusWarning}
+
 // parseStatusShow reads the status capability's lines, statusShowFormat
 // each (empty lines skipped): consecutive lines of one key are one entry
-// of several lines, its level the highest of theirs, with every fix they
-// give. bad are the lines that are not.
+// of several lines, its level the highest of theirs (info, highlight,
+// warning), with every fix they give. bad are the lines that are not.
 func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSuffix(line, "\r")
@@ -226,13 +229,13 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) < 3 || len(f) > 4 || (f[0] != remote.StatusInfo && f[0] != remote.StatusWarning) || f[1] == "" {
+		if len(f) < 3 || len(f) > 4 || !slices.Contains(statusLevels, f[0]) || f[1] == "" {
 			bad = append(bad, line)
 			continue
 		}
 		var fix []report.Remedy
 		if len(f) == 4 && f[3] != "" {
-			// A warning's command is its fix; an info line's a hint.
+			// A warning's command is its fix; any other line's a hint.
 			if f[0] == remote.StatusWarning {
 				fix = []report.Remedy{report.Fix("", f[3])}
 			} else {
@@ -242,8 +245,8 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 		if n := len(entries); n > 0 && entries[n-1].Key == f[1] {
 			e := &entries[n-1]
 			e.Lines = append(e.Lines, f[2])
-			if f[0] == remote.StatusWarning {
-				e.Level = remote.StatusWarning
+			if slices.Index(statusLevels, f[0]) > slices.Index(statusLevels, e.Level) {
+				e.Level = f[0]
 			}
 			// A command is kept once, a fix if any line made it one.
 			for _, x := range fix {

@@ -49,7 +49,8 @@ type StatusContainer struct {
 const StatusNoContainer = "none"
 
 // StatusEntry is a fact --status shows under its key: one or more lines
-// at a level (StatusInfo, StatusWarning), with the ways to act on it.
+// at a level (StatusInfo, StatusHighlight, StatusWarning), with the
+// ways to act on it.
 type StatusEntry struct {
 	Level    string          `json:"level"`
 	Key      string          `json:"key"`
@@ -57,11 +58,13 @@ type StatusEntry struct {
 	Remedies []report.Remedy `json:"remedies,omitempty"`
 }
 
-// An entry's levels: a warning needs attention, and --status then exits
-// 3.
+// An entry's levels: a highlight is a fact shown in bold, one people
+// look for (a project's URL); a warning needs attention, and --status
+// then exits 3.
 const (
-	StatusInfo    = "info"
-	StatusWarning = "warning"
+	StatusInfo      = "info"
+	StatusHighlight = "highlight"
+	StatusWarning   = "warning"
 )
 
 // StatusScript prints what the server knows about a target, for --status:

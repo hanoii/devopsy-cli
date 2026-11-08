@@ -19,13 +19,15 @@ Each line is one fact, its fields separated by tabs:
 <level>	<key>	<value>[	<fix>]
 ```
 
-The level is `info` or `warning`. A warning is shown in color and makes
-`--status` exit 3, as anything else that needs attention does. The fix,
-when there is one, is a command to copy, shown under the fact after `$ `:
-a warning's under `to fix it:`, an info line's as a hint, a command
-worth knowing. Lines in a row with the same key are one fact of several
-lines (several URLs, a message on more than one line), a warning when
-any of them is, each command once. devopsy aligns the keys with its own,
+The level is `info`, `highlight` or `warning`. A highlight is shown in
+bold, for the one or two facts people look for (the site's URL, its
+login). A warning is shown in color and makes `--status` exit 3, as
+anything else that needs attention does. The fix, when there is one, is
+a command to copy, shown under the fact after `$ `: a warning's under
+`to fix it:`, any other line's as a hint, a command worth knowing.
+Lines in a row with the same key are one fact of several lines (several
+URLs, a message on more than one line), at the highest of their levels,
+each command once. devopsy aligns the keys with its own,
 and `--status --json` prints each fact as fields (`level`, `key`,
 `lines`, `remedies`, each with its `text`, `commands`, and `hint` when
 it is one). Empty lines are skipped; any other line is shown as a

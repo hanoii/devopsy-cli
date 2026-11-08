@@ -26,13 +26,17 @@ func TestParseStatusShow(t *testing.T) {
 		"info\tcron\tlast run failed\tdevopsy drush cron\r\n" +
 		"warning\tcron\tdatabase is locked\tdevopsy drush cron\n" +
 		"info\turl\thttps://shop.example/admin\n" +
+		"info\tlogin\tuser:secret\n" +
+		"highlight\tlogin\tor a one-time link\tdevopsy drush uli\n" +
+		"warning\tqueue\tstuck\n" +
+		"highlight\tqueue\t12 items\n" +
 		"url https://shop.example\n" +
 		"info\turl\n" +
 		"error\turl\tx\n" +
 		"info\t\tx\n" +
 		"info\ta\tb\tc\td\n"
 	entries, bad := parseStatusShow(out)
-	if len(entries) != 3 {
+	if len(entries) != 5 {
 		t.Fatalf("entries: %+v", entries)
 	}
 	if e := entries[0]; e.Key != "url" || e.Level != remote.StatusInfo || strings.Join(e.Lines, "|") != "https://shop.example|https://www.shop.example" || e.Remedies != nil {
@@ -43,6 +47,12 @@ func TestParseStatusShow(t *testing.T) {
 	}
 	if e := entries[2]; e.Key != "url" || strings.Join(e.Lines, "|") != "https://shop.example/admin" {
 		t.Errorf("a key coming back: %+v", e)
+	}
+	if e := entries[3]; e.Key != "login" || e.Level != remote.StatusHighlight || len(e.Remedies) != 1 || !e.Remedies[0].Hint {
+		t.Errorf("a highlight on its second line, its command a hint: %+v", e)
+	}
+	if e := entries[4]; e.Key != "queue" || e.Level != remote.StatusWarning {
+		t.Errorf("a warning then a highlight of one key: %+v", e)
 	}
 	if strings.Join(bad, "|") != "url https://shop.example|info\turl|error\turl\tx|info\t\tx|info\ta\tb\tc\td" {
 		t.Errorf("bad lines: %q", bad)
@@ -310,10 +320,11 @@ func TestStatusHeaderFixes(t *testing.T) {
 }
 
 // The layout's colors: the heading cyan, a warning's lines yellow whole
-// (padded first, so the columns hold), a command bold, a running
+// (padded first, so the columns hold), a highlight's bold whole, a
+// command bold, a running
 // container green, one needing attention yellow, a service with no
 // container dim, info lines as they are; --json never colors and exits
-// the same.
+// the same, and a highlight alone exits 0.
 func TestStatusPrintColors(t *testing.T) {
 	t.Parallel()
 	r := statusReport{}
@@ -326,7 +337,8 @@ func TestStatusPrintColors(t *testing.T) {
 			{Service: "worker", State: remote.StatusNoContainer},
 		},
 		Entries: []remote.StatusEntry{
-			{Level: remote.StatusInfo, Key: "url", Lines: []string{"https://shop.example"}},
+			{Level: remote.StatusInfo, Key: "php", Lines: []string{"8.4"}},
+			{Level: remote.StatusHighlight, Key: "url", Lines: []string{"https://shop.example"}},
 			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Remedies: []report.Remedy{report.Fix("bring it back:", "devopsy maintenance off")}},
 		},
 	}, "vm1:")
@@ -338,7 +350,8 @@ func TestStatusPrintColors(t *testing.T) {
 		"  app      \033[0;32mrunning\033[0m  up 1 hour (healthy)\n" +
 		"  db       \033[0;33mexited\033[0m\n" +
 		"  worker   \033[2mno container\033[0m\n" +
-		"url          https://shop.example\n" +
+		"php          8.4\n" +
+		"\033[1murl          https://shop.example\033[0m\n" +
 		"\033[0;33mmaintenance  on\033[0m\n" +
 		"\033[0;33m             to fix it:\033[0m\n" +
 		"\033[0;33m             bring it back:\033[0m\n" +
@@ -349,6 +362,11 @@ func TestStatusPrintColors(t *testing.T) {
 	out.Reset()
 	if code := r.print(&out, style{on: true}, "", true); code != statusWarned || bytes.Contains(out.Bytes(), []byte("\033")) {
 		t.Errorf("--json (%d):\n%s", code, out.String())
+	}	// A highlight alone needs no attention.
+	h := statusReport{}
+	h.addFacts(remote.StatusFacts{Entries: []remote.StatusEntry{{Level: remote.StatusHighlight, Key: "url", Lines: []string{"https://shop.example"}}}}, "")
+	if code := h.print(&bytes.Buffer{}, style{}, "", false); code != 0 {
+		t.Errorf("a highlight exits %d", code)
 	}
 }
 
