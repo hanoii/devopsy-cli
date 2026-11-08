@@ -39,7 +39,7 @@ func runUpgrade(args []string, color bool) int {
 	tag := ""
 	if len(args) == 1 {
 		tag = args[0]
-		if !update.IsRelease(tag) {
+		if !update.IsTag(tag) {
 			return fail(fmt.Sprintf("%q is not a release tag, like v0.9.0", tag))
 		}
 		if !strings.HasPrefix(tag, "v") {

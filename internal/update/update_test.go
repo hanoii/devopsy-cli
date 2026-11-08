@@ -19,11 +19,19 @@ import (
 	"time"
 )
 
+// A release build is GoReleaser's version alone: scripts/devopsy's git
+// describe on a tag ("v0.9.0") is the checkout's code, which --upgrade
+// would overwrite for nothing; a tag is either form.
 func TestVersions(t *testing.T) {
 	t.Parallel()
-	for v, want := range map[string]bool{"0.9.0": true, "v0.9.0": true, "dev": false, "v0.9.0-2-g1a2b3c4-dirty": false, "1a2b3c4": false} {
+	for v, want := range map[string]bool{"0.9.0": true, "v0.9.0": false, "dev": false, "v0.9.0-2-g1a2b3c4-dirty": false, "1a2b3c4": false} {
 		if IsRelease(v) != want {
 			t.Errorf("IsRelease(%q) != %v", v, want)
+		}
+	}
+	for v, want := range map[string]bool{"0.9.0": true, "v0.9.0": true, "dev": false, "v0.9.0-2-g1a2b3c4-dirty": false} {
+		if IsTag(v) != want {
+			t.Errorf("IsTag(%q) != %v", v, want)
 		}
 	}
 	for _, c := range []struct {

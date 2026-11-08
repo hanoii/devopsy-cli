@@ -36,10 +36,16 @@ const CheckEvery = 24 * time.Hour
 var releaseVersion = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 
 // IsRelease reports whether version is a release build's (GoReleaser sets
-// "0.9.0"), not a development build's ("dev", or git describe output like
-// "v0.9.0-2-g1a2b3c4-dirty" from scripts/devopsy).
+// "0.9.0"), not a development build's ("dev", or git describe output from
+// scripts/devopsy, like "v0.9.0-2-g1a2b3c4-dirty", or "v0.9.0" on a tag,
+// which is the checkout's code all the same).
 func IsRelease(version string) bool {
-	return releaseVersion.MatchString(version)
+	return !strings.HasPrefix(version, "v") && releaseVersion.MatchString(version)
+}
+
+// IsTag reports whether tag names a release, like v0.9.0 or 0.9.0.
+func IsTag(tag string) bool {
+	return releaseVersion.MatchString(tag)
 }
 
 // Newer reports whether release version a is newer than b. Versions that are
@@ -75,7 +81,7 @@ func Latest(ctx context.Context, repo string) (string, error) {
 	}
 	resp.Body.Close()
 	tag := path.Base(resp.Header.Get("Location"))
-	if !IsRelease(tag) {
+	if !IsTag(tag) {
 		return "", fmt.Errorf("no latest release found at %s/releases/latest (%s)", repo, resp.Status)
 	}
 	return tag, nil
