@@ -274,11 +274,13 @@ sshd ignore their own keys.
 server, in IPv4 and, where the kernel has it, IPv6. A project user's
 processes on the host reach no container on Docker's networks, nothing
 at the host's own addresses (loopback included) but port 53 for a DNS
-resolver, and no cloud metadata service at 169.254.169.254, or
-`fd00:ec2::254` and `fd20:ce::254` in IPv6. No container on Docker's
-networks reaches those addresses either, the deploy user's included:
-an app that takes the instance's credentials from them needs
-credentials of its own. Syncs between servers work under it. A sync
+resolver, and no cloud metadata service: none of link-local
+(`169.254.0.0/16`), nor Alibaba's or Azure's other addresses, nor AWS's,
+Google's or OpenStack's in IPv6. No container on Docker's networks
+reaches those addresses either, the deploy user's included: an app
+that takes the instance's credentials from them needs credentials of
+its own. DNS at those addresses still answers, since some clouds'
+resolver is there. Syncs between servers work under it. A sync
 between two environments of one server works only when both name the
 server by the same host as ssh resolves it: an IP address for one and
 a name for the other takes the path between servers, and the project
@@ -286,8 +288,10 @@ user cannot reach its own server's SSH server.
 
 The rules are in two chains devopsy owns, `DEVOPSY-PROJECTS` in
 iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table.
-`devopsy-firewall.service` loads them again at every boot, and the
-server's other rules stay as they are. `--server-info` checks them and
+`devopsy-firewall.service` loads them at every boot and
+`devopsy-firewall.timer` every five minutes after, so a reload of the
+server's own firewall drops them for no longer; the server's other
+rules stay as they are. `--server-info` checks them and
 warns when a chain is not devopsy's, when nothing jumps to it, or when
 a rule ahead of devopsy's jump lets packets through; running `add`
 again loads them again. It also checks the door's space and a reboot

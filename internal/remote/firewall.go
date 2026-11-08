@@ -16,37 +16,56 @@ const (
 	DoorContainerChain = "DEVOPSY-CONTAINERS"
 	DoorFirewallScript = "/usr/local/libexec/devopsy-firewall"
 	DoorFirewallUnit   = "/etc/systemd/system/devopsy-firewall.service"
+	DoorFirewallTimer  = "/etc/systemd/system/devopsy-firewall.timer"
 )
 
 // firewallFamily is one of iptables' families: its command, how it rejects, and the cloud
-// metadata services' addresses in it (AWS's, then Google's, in IPv6).
+// metadata services' addresses in it. In IPv4, all of link-local (AWS's, Google's, Azure's
+// IMDS, DigitalOcean's, Tencent's, Scaleway's, ECS's), then Alibaba's and Azure's WireServer;
+// in IPv6, AWS's, Google's and OpenStack's. Link-local is never another server's, so a range
+// costs a sync nothing there.
 type firewallFamily struct {
 	cmd, reject string
 	metadata    []string
 }
 
 var firewallFamilies = []firewallFamily{
-	{"iptables", "icmp-port-unreachable", []string{"169.254.169.254/32"}},
-	{"ip6tables", "icmp6-port-unreachable", []string{"fd00:ec2::254/128", "fd20:ce::254/128"}},
+	{"iptables", "icmp-port-unreachable", []string{"169.254.0.0/16", "100.100.100.200/32", "168.63.129.16/32"}},
+	{"ip6tables", "icmp6-port-unreachable", []string{"fd00:ec2::254/128", "fd20:ce::254/128", "fe80::a9fe:a9fe/128"}},
 }
 
 // bridges are Docker's: the default one and every network compose makes.
 var bridges = []string{"docker0", "br-+"}
 
 // doorRules are a family's rules in chain, each as iptables -S prints it after "-A <chain> ".
-// What answers a connection another made goes: a sync's forward on the child is the project
-// user's sshd, answering on loopback. Otherwise a project user's process reaches nothing on the host's loopback but a DNS resolver there:
-// a port a container publishes on it is reached through docker-proxy, a process of root's
-// whose own connection no rule by group sees. The resolver goes by the port first asked for,
-// 53, since a NAT may have moved it (Docker's own, at 127.0.0.11). Nor Docker's bridges, where every project's
-// containers are, nor the metadata service, which hands out the instance's credentials:
-// never an address range, since a sync reaches another server at any address. A container
-// reaches no metadata service either, through the host or past it.
+//
+// A project user's process reaches nothing on the host's loopback, which its own addresses go
+// out through too: a port a container publishes there is reached through docker-proxy, a
+// process of root's whose own connection no rule by group sees. Nor Docker's bridges, where
+// every project's containers are, nor a metadata service, which hands out the instance's
+// credentials. It goes by interface and by those addresses, never another range: a sync
+// reaches another server at any address. Two ways out: the answers to a connection another
+// made (a sync's forward on the child is the project user's sshd), and DNS, on loopback or
+// at a metadata address (Google's resolver is its metadata server, AWS's 169.254.169.253),
+// by the port first asked for, 53, since a NAT may have moved it (Docker's own resolver, at
+// 127.0.0.11).
+//
+// A container reaches no metadata service either, through the host or past it, DNS there
+// aside: in raw, before connection tracking and any NAT, so by the port it asks.
 func doorRules(f firewallFamily, chain string) []string {
 	var r []string
+	dns := func(match, prefix string) {
+		for _, p := range []string{"udp", "tcp"} {
+			r = append(r, prefix+" -p "+p+" "+match+" -j RETURN")
+		}
+	}
 	switch chain {
 	case DoorChain:
-		r = []string{"-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN", "-o lo -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-o lo -p tcp -m conntrack --ctorigdstport 53 -j RETURN"}
+		r = append(r, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN")
+		dns("-m conntrack --ctorigdstport 53", "-o lo")
+		for _, m := range f.metadata {
+			dns("-m conntrack --ctorigdstport 53", "-d "+m)
+		}
 		for _, out := range append([]string{"lo"}, bridges...) {
 			r = append(r, "-o "+out+" -j REJECT --reject-with "+f.reject)
 		}
@@ -54,6 +73,11 @@ func doorRules(f firewallFamily, chain string) []string {
 			r = append(r, "-d "+m+" -j REJECT --reject-with "+f.reject)
 		}
 	case DoorContainerChain:
+		for _, m := range f.metadata {
+			for _, in := range bridges {
+				r = append(r, "-d "+m+" -i "+in+" -p udp -m udp --dport 53 -j RETURN", "-d "+m+" -i "+in+" -p tcp -m tcp --dport 53 -j RETURN")
+			}
+		}
 		for _, m := range f.metadata {
 			for _, in := range bridges {
 				r = append(r, "-d "+m+" -i "+in+" -j DROP")
@@ -95,7 +119,8 @@ func doorRestore(f firewallFamily) string {
 func DoorFirewallLoader() string {
 	s := `#!/bin/sh
 # Written by devopsy (devopsy @<server> --project-users add): the project users' firewall,
-# its own chains loaded whole and jumped to first. Run at boot by devopsy-firewall.service.
+# its own chains loaded whole and jumped to first. Run at boot by devopsy-firewall.service,
+# and every few minutes by devopsy-firewall.timer.
 set -eu
 gid=$(getent group ` + DoorGroup + ` | cut -d: -f3)
 [ -n "$gid" ] || { echo "no group ` + DoorGroup + `" >&2; exit 1; }
@@ -133,11 +158,25 @@ Wants=network-pre.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
 ExecStart=` + DoorFirewallScript + `
 
 [Install]
 WantedBy=multi-user.target
+`
+
+// doorFirewallTimerText loads the firewall again every few minutes: a reload of the server's
+// own firewall (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules with
+// no word, and loading them changes nothing while they are there.
+const doorFirewallTimerText = `# Written by devopsy (devopsy @<server> --project-users add).
+[Unit]
+Description=devopsy's firewall for its project users, loaded again
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target
 `
 
 // DoorFirewallRead prints each family's tables as iptables -S does, for DoorFirewallWrong, a
@@ -155,7 +194,10 @@ func DoorFirewallInstall() string {
 	return "set -eu\numask 022\n" + hostGroup + hostPut + "mkdir -p " + path.Dir(DoorFirewallScript) + " /etc/systemd/system/multi-user.target.wants\n" +
 		"put " + DoorFirewallScript + " 755 'sh -n \"$1\"' " + Quote(DoorFirewallLoader()) + " || :\n" +
 		"put " + DoorFirewallUnit + " 644 true " + Quote(doorFirewallUnitText) + " || :\n" +
+		"put " + DoorFirewallTimer + " 644 true " + Quote(doorFirewallTimerText) + " || :\n" +
 		"ln -sfn " + DoorFirewallUnit + " /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service\n" +
+		"mkdir -p /etc/systemd/system/timers.target.wants\n" +
+		"ln -sfn " + DoorFirewallTimer + " /etc/systemd/system/timers.target.wants/devopsy-firewall.timer\n" +
 		DoorFirewallScript + "\n" + DoorFirewallRead
 }
 

@@ -56,7 +56,7 @@ func TestDoorFirewallWrong(t *testing.T) {
 	for name, edit := range map[string][2]string{
 		"one gone":       {"-A " + DoorChain + " -o br-+ -j REJECT --reject-with icmp6-port-unreachable\n", ""},
 		"one accepting":  {"-o docker0 -j REJECT --reject-with icmp-port-unreachable", "-o docker0 -j ACCEPT"},
-		"one added":      {"-A " + DoorContainerChain + " -d 169.254.169.254/32 -i docker0 -j DROP\n", "-A " + DoorContainerChain + " -j RETURN\n-A " + DoorContainerChain + " -d 169.254.169.254/32 -i docker0 -j DROP\n"},
+		"one added":      {"-A " + DoorContainerChain + " -d 169.254.0.0/16 -i docker0 -j DROP\n", "-A " + DoorContainerChain + " -j RETURN\n-A " + DoorContainerChain + " -d 169.254.0.0/16 -i docker0 -j DROP\n"},
 		"its jump gone":  {"-A PREROUTING -j " + DoorContainerChain + "\n", ""},
 		"a table unread": {"# ip6tables raw\n", "# ip6tables nothing\n"},
 	} {
@@ -78,27 +78,39 @@ func TestDoorFirewallWrong(t *testing.T) {
 }
 
 // What the firewall keeps a project user's process and a container off, in both families,
-// and the one way out of the loopback it leaves: a DNS resolver there, and the answers to
-// a connection another made (a sync's forward is the project user's sshd).
+// and the ways out it leaves: a DNS resolver on loopback or at a metadata address (Google's
+// resolver is its metadata server, AWS's 169.254.169.253), and the answers to a connection
+// another made (a sync's forward is the project user's sshd). The metadata services are all
+// of link-local, never another server's, and the clouds' others: Alibaba's, Azure's
+// WireServer, OpenStack's in IPv6.
 func TestDoorRules(t *testing.T) {
 	t.Parallel()
+	in := func(rules []string, want ...string) {
+		t.Helper()
+		last := -1
+		for _, w := range want {
+			i := slices.Index(rules, w)
+			if i < 0 || i < last {
+				t.Errorf("no %q after %q in:\n%s", w, want[:max(0, slices.Index(want, w))], strings.Join(rules, "\n"))
+				return
+			}
+			last = i
+		}
+	}
 	v4, v6 := doorRules(firewallFamilies[0], DoorChain), doorRules(firewallFamilies[1], DoorChain)
-	for _, want := range []string{"-o lo -j REJECT --reject-with icmp-port-unreachable", "-o docker0 -j REJECT --reject-with icmp-port-unreachable", "-o br-+ -j REJECT --reject-with icmp-port-unreachable", "-d 169.254.169.254/32 -j REJECT --reject-with icmp-port-unreachable"} {
-		if !slices.Contains(v4, want) {
-			t.Errorf("IPv4 has no %q: %q", want, v4)
-		}
-	}
-	for _, want := range []string{"-o lo -j REJECT --reject-with icmp6-port-unreachable", "-o br-+ -j REJECT --reject-with icmp6-port-unreachable", "-d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable"} {
-		if !slices.Contains(v6, want) {
-			t.Errorf("IPv6 has no %q: %q", want, v6)
-		}
-	}
-	if lo := slices.Index(v4, "-o lo -j REJECT --reject-with icmp-port-unreachable"); slices.Index(v4, "-o lo -p udp -m conntrack --ctorigdstport 53 -j RETURN") > lo || v4[0] != "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" {
-		t.Errorf("the ways out after the loopback's REJECT: %q", v4)
-	}
-	if c := doorRules(firewallFamilies[1], DoorContainerChain); !slices.Contains(c, "-d fd00:ec2::254/128 -i br-+ -j DROP") || !slices.Contains(c, "-d fd20:ce::254/128 -i docker0 -j DROP") {
-		t.Errorf("containers: %q", c)
-	}
+	in(v4, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+		"-o lo -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-o lo -p tcp -m conntrack --ctorigdstport 53 -j RETURN",
+		"-d 169.254.0.0/16 -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-d 169.254.0.0/16 -p tcp -m conntrack --ctorigdstport 53 -j RETURN",
+		"-o lo -j REJECT --reject-with icmp-port-unreachable", "-o docker0 -j REJECT --reject-with icmp-port-unreachable", "-o br-+ -j REJECT --reject-with icmp-port-unreachable",
+		"-d 169.254.0.0/16 -j REJECT --reject-with icmp-port-unreachable", "-d 100.100.100.200/32 -j REJECT --reject-with icmp-port-unreachable", "-d 168.63.129.16/32 -j REJECT --reject-with icmp-port-unreachable")
+	in(v6, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN", "-o lo -p udp -m conntrack --ctorigdstport 53 -j RETURN",
+		"-d fd00:ec2::254/128 -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-d fe80::a9fe:a9fe/128 -p tcp -m conntrack --ctorigdstport 53 -j RETURN",
+		"-o lo -j REJECT --reject-with icmp6-port-unreachable", "-o br-+ -j REJECT --reject-with icmp6-port-unreachable",
+		"-d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fd20:ce::254/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fe80::a9fe:a9fe/128 -j REJECT --reject-with icmp6-port-unreachable")
+	// Containers: no conntrack yet in raw, and no NAT before it, so the port asked for.
+	in(doorRules(firewallFamilies[0], DoorContainerChain), "-d 169.254.0.0/16 -i docker0 -p udp -m udp --dport 53 -j RETURN", "-d 169.254.0.0/16 -i br-+ -p tcp -m tcp --dport 53 -j RETURN",
+		"-d 169.254.0.0/16 -i docker0 -j DROP", "-d 168.63.129.16/32 -i br-+ -j DROP")
+	in(doorRules(firewallFamilies[1], DoorContainerChain), "-d fe80::a9fe:a9fe/128 -i br-+ -p udp -m udp --dport 53 -j RETURN", "-d fd00:ec2::254/128 -i br-+ -j DROP", "-d fe80::a9fe:a9fe/128 -i docker0 -j DROP")
 }
 
 // The loader and add's script parse, and the loader loads each family's chains whole before
@@ -115,7 +127,14 @@ func TestDoorFirewallScripts(t *testing.T) {
 	if restore < 0 || jump < restore || !strings.Contains(l[:restore], "if [ -e /proc/net/if_inet6 ]; then\nprintf '%s' '*filter\n:"+DoorChain+" - [0:0]\n") {
 		t.Errorf("the loader:\n%s", l)
 	}
-	if !strings.Contains(DoorFirewallInstall(), "ln -sfn "+DoorFirewallUnit+" /etc/systemd/system/multi-user.target.wants/") {
-		t.Errorf("the unit not enabled:\n%s", DoorFirewallInstall())
+	// Loaded at boot, and every few minutes after: a reload of the server's own firewall
+	// (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules silently. A
+	// service that stays active once run would never run again by its timer.
+	install := DoorFirewallInstall()
+	if !strings.Contains(install, "ln -sfn "+DoorFirewallUnit+" /etc/systemd/system/multi-user.target.wants/") || !strings.Contains(install, "ln -sfn "+DoorFirewallTimer+" /etc/systemd/system/timers.target.wants/") {
+		t.Errorf("the units not enabled:\n%s", install)
+	}
+	if strings.Contains(doorFirewallUnitText, "RemainAfterExit") || !strings.Contains(doorFirewallTimerText, "OnUnitInactiveSec=") {
+		t.Errorf("the units:\n%s\n%s", doorFirewallUnitText, doorFirewallTimerText)
 	}
 }
