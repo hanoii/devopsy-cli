@@ -169,10 +169,11 @@ devopsy-util:1 devopsy-util:2` removes.
 On one server, a single container copies between the two directories,
 without SSH, and a stream is written straight into the child's
 directory. Two addresses are one server when ssh resolves them to the
-same host, or when they log in as the same user and a marker with
-random content, written on the parent's server, reads back the same
-through the child's address: a name for one environment and the
-server's IP address for the other are one server too.
+same user, host name and port. They are also one server when they log
+in as the same user and a marker devopsy writes on the parent's server,
+with random content, reads back the same through the child's address.
+So an environment addressed by a host name and another by the server's
+IP address count as one server.
 
 Across servers, the parent's server starts an rsync daemon for the
 copy. It is read-only, serves only the entries being copied, has no

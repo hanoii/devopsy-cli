@@ -271,27 +271,29 @@ while the deploy user or root is in `devopsy-projects`, which would have
 sshd ignore their own keys.
 
 `add` also loads a firewall for project users, one for the whole
-server, in IPv4 and, where the kernel has it, IPv6. A project user's
-processes on the host reach no container on Docker's networks, nothing
-at the host's own addresses (loopback included) but port 53 for a DNS
-resolver, and no cloud metadata service: none of link-local
-(`169.254.0.0/16`), nor Alibaba's or Azure's other addresses, nor AWS's,
-Google's or OpenStack's in IPv6. No container on Docker's networks
-reaches those addresses either, the deploy user's included: an app
-that takes the instance's credentials from them needs credentials of
-its own. DNS at those addresses still answers, since some clouds'
-resolver is there. Syncs work under it.
+server, for IPv4 and, where the kernel supports it, IPv6. A project
+user's processes on the host reach no container on Docker's networks
+and no cloud metadata service. At the host's own addresses, loopback
+included, they reach only port 53, for a DNS resolver. The metadata
+addresses are IPv4's link-local (`169.254.0.0/16`), Alibaba's and
+Azure's addresses outside it, and the IPv6 addresses of AWS, Google
+and OpenStack. Containers on Docker's networks, the deploy user's
+included, cannot reach them either: an app that takes the instance's
+credentials from them needs credentials of its own. DNS at those
+addresses still answers, since some clouds run their resolver there.
+Syncs still work with the firewall loaded.
 
 The rules are in two chains devopsy owns, `DEVOPSY-PROJECTS` in
-iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table.
-`devopsy-firewall.service` loads them at every boot and
-`devopsy-firewall.timer` every five minutes after, so a reload of the
-server's own firewall drops them for no longer; the server's other
-rules stay as they are. `--server-info` checks them and
+iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table, and
+the server's other rules stay as they are. `devopsy-firewall.service`
+loads them at every boot. From the next boot on, which the first `add`
+needs anyway for sshd, `devopsy-firewall.timer` loads them every five
+minutes too, so if a reload of the server's own firewall drops them,
+they are back within five minutes. `--server-info` checks them and
 warns when a chain is not devopsy's, when nothing jumps to it, or when
-a rule ahead of devopsy's jump lets packets through; running `add`
-again loads them again. It also checks the door's space and a reboot
-sshd waits for.
+a rule ahead of devopsy's jump lets packets through: `add` loads them
+again. `--server-info` also checks that the door's space is mounted
+`nosuid,nodev`, and whether sshd waits for a reboot.
 
 A project's name may not extend another's on the server, or be
 extended by one (`shop` and `shop-admin`): compose names are flat, so
@@ -312,15 +314,17 @@ A project user has images of its own too: those it builds, and those
 its releases hold. Any other image is pulled once with the project's
 registry logins (the `auths` of its `~/.docker/config.json`) before the
 project runs it, inspects it or tags it, even when another project has
-it on the server already. The project cannot use a private image
-another project pulled with its login, and a public one costs it one
-pull. The door records what each project pulled this way, so later
-starts ask the registry nothing. The project user's `docker login`
-goes through the door: Docker checks it, reaching the registry as for
-a pull, so a registry on the same server takes it, and the project
-user's own devopsy keeps it in its `~/.docker/config.json`. The
-password comes on stdin (`--password-stdin`) or at a prompt, never on
-the command line.
+it on the server already. So a private image another project pulled is
+never this project's without its own login, and a public image is
+pulled once more for it. The door records what each project pulled
+this way, so later starts do not contact the registry.
+
+The project user's `docker login` goes through the door. Docker checks
+the login against the registry as it does for a pull, so a registry on
+the same server accepts it. The project user's devopsy then keeps the
+login in its own docker config (`~/.docker/config.json`, or under
+`DOCKER_CONFIG`). The password is read from stdin (`--password-stdin`,
+with `--username`) or at a prompt, never from the command line.
 
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
 A child on another server needs its own project user there
