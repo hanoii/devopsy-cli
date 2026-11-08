@@ -457,7 +457,7 @@ func snapshotCheck(ctx context.Context, cwd string, p snapshotPaths, d *snapshot
 		}
 	}
 	if len(bad) > 0 {
-		return &report.Failure{Msg: "no snapshot taken", Details: bad, Fixes: []report.Remedy{report.Fix("mount its data from ./mnt/<name> or a named volume, or that path read-only (:ro), or label a service without data " + cli.DataLabel + "=false")}}
+		return &report.Failure{Msg: "no snapshot taken", Details: bad, Remedies: []report.Remedy{report.Fix("mount its data from ./mnt/<name> or a named volume, or that path read-only (:ro), or label a service without data " + cli.DataLabel + "=false")}}
 	}
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
@@ -1121,7 +1121,7 @@ func removeSnapshot(cwd string, p snapshotPaths, id string) error {
 		return errors.New("no snapshot " + id + ": nothing removed")
 	}
 	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore && m.From == id {
-		return &report.Failure{Msg: "the restore of snapshot " + id + " did not complete: it stays until a restore completes", Fixes: restoreRemedies(cwd, id)}
+		return &report.Failure{Msg: "the restore of snapshot " + id + " did not complete: it stays until a restore completes", Remedies: restoreRemedies(cwd, id)}
 	}
 	report.Info("removing snapshot " + id)
 	return removeSnapshotDir(cwd, p, dir, 10*time.Minute)
@@ -1294,10 +1294,10 @@ func startLeftDown(cwd string, names []string) (down []string) {
 			start = append(start, s)
 		}
 	}
-	fix := []string{"to start them:", report.CmdMark + "devopsy @" + targetAddress(cwd) + " up -d"}
+	fix := report.Fix("", "devopsy @"+targetAddress(cwd)+" up -d")
 	if len(again) > 0 {
 		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
-			report.Warn("docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", fix...)
+			report.Say(report.WarnLevel, "docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", nil, fix)
 			down = again
 		}
 	}
@@ -1305,7 +1305,7 @@ func startLeftDown(cwd string, names []string) (down []string) {
 		return down
 	}
 	if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
-		report.Warn("docker compose start: "+err.Error()+": they stay stopped", fix...)
+		report.Say(report.WarnLevel, "docker compose start: "+err.Error()+": they stay stopped", nil, fix)
 		return append(down, start...)
 	}
 	left = start
@@ -1606,7 +1606,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		}
 		if code == sshLost {
 			// The server keeps a snapshot only once it read the whole tar.
-			report.Error(lostSays(t, "", "the snapshot is imported only if the server got all of it"), "devopsy @"+targetRef(t)+" --snapshots shows whether it did")
+			report.Say(report.ErrorLevel, lostSays(t, "", "the snapshot is imported only if the server got all of it"), nil, remote.SeeHint(targetRef(t), "whether it did", "--snapshots"))
 		}
 		return code
 	}
@@ -1707,8 +1707,8 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return failErr(&report.Failure{
-				Msg:   "--snapshots remove asks first, and there is no terminal to ask at",
-				Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --snapshots "+strings.Join(args, " ")+" --yes")},
+				Msg:      "--snapshots remove asks first, and there is no terminal to ask at",
+				Remedies: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --snapshots "+strings.Join(args, " ")+" --yes")},
 			})
 		}
 		what := "this snapshot"
@@ -1764,14 +1764,14 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 
 // snapshotWords are what liveSession says of a take.
 func snapshotWords(t *remote.Target) liveWords {
-	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
+	logs := remote.SeeHint(targetRef(t), "how it ends", "--log")
 	return liveWords{
 		goesOn:     goesOnSays(t, "snapshot", "past its stopped pass", logs),
-		cancelling: []string{"interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"},
-		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", leavesNow},
-		lostAfter:  []string{lostSays(t, "after the stopped pass", "the snapshot was past its stopped pass there"), logs},
-		lostBefore: []string{lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), "devopsy @" + targetRef(t) + " --snapshots shows whether it was taken"},
-		hadGone:    []string{"it was past its stopped pass already, and went on", logs},
+		cancelling: says("interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"),
+		slow:       utterance{msg: "the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", details: []string{leavesNow}},
+		lostAfter:  says(lostSays(t, "after the stopped pass", "the snapshot was past its stopped pass there"), logs),
+		lostBefore: says(lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), remote.SeeHint(targetRef(t), "whether it was taken", "--snapshots")),
+		hadGone:    says("it was past its stopped pass already, and went on", logs),
 	}
 }
 
@@ -2267,7 +2267,7 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	}
 	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
 	unlock()
-	report.Info("imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", "to restore it:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id)
+	report.Say(report.InfoLevel, "imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", nil, report.Hint("to restore it:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+id))
 	return nil
 }
 
@@ -2345,7 +2345,7 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 		return nil
 	}
 	return &report.Failure{Msg: "snapshot " + filepath.Base(snap) + " does not fit the current release's labels: nothing restored", Details: bad,
-		Fixes: []report.Remedy{report.Fix("restore it whole, its code included:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+filepath.Base(snap))}}
+		Remedies: []report.Remedy{report.Fix("restore it whole, its code included:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+filepath.Base(snap))}}
 }
 
 // snapshotRestoreData writes snap's data into the environment, for the
@@ -2486,7 +2486,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// From the mark on, the restore rule: whatever fails keeps the set
 	// down under the mark, its ways out a restore again or another.
 	stayDown := func(msg string) int {
-		return failErr(&report.Failure{Msg: msg + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
+		return failErr(&report.Failure{Msg: msg + ": the services stay down", Remedies: restoreRemedies(cwd, id)})
 	}
 	// Its release snapshot's stopped set is the restore's once its mark is
 	// there: a mark that cannot be written leaves the snapshot's lines, which
@@ -2543,7 +2543,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		if noCode {
 			again = " --snapshots restore " + id + " --no-code --with-env"
 		}
-		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+again)
+		report.Say(report.WarnLevel, "the snapshot's shared/.env differs from the environment's"+in+": kept as it is", nil, report.Hint("--with-env brings it back too:", "devopsy @"+targetAddress(cwd)+again))
 	}
 	// It lands under the variables it leaves (its labels read with the
 	// snapshot's, --with-env, moved in place above): its history comes back
@@ -2722,12 +2722,12 @@ var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `resto
 // --no-code restore's data is as it was.
 func restoreWords(t *remote.Target, noCode bool) liveWords {
 	w := releaseWords(t, "restore")
-	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
+	logs := remote.SeeHint(targetRef(t), "how it ends", "--log")
 	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
-	w.lostAfter = []string{lostSays(t, "past its point of no return", "the restore was writing the data there, or about to"), w.lostAfter[1]}
-	w.hadGone = []string{"it was writing the data already, and went on", logs}
+	w.lostAfter.msg = lostSays(t, "past its point of no return", "the restore was writing the data there, or about to")
+	w.hadGone = says("it was writing the data already, and went on", logs)
 	if noCode {
-		w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}
+		w.lostBefore = says(lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), remote.SeeHint(targetRef(t), "its state", "--status"))
 	}
 	return w
 }
@@ -2828,7 +2828,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		if noCode {
 			how = ""
 		}
-		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes; devopsy @%s --snapshot first keeps it", t.Address, what, how, t.Host, t.Path, targetRef(t)), confirmWord(t), "nothing restored", false); err != nil {
+		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes", t.Address, what, how, t.Host, t.Path), confirmWord(t), "nothing restored", false, report.Hint("a snapshot first keeps it:", "devopsy @"+targetRef(t)+" --snapshot")); err != nil {
 			return failErr(err)
 		}
 	}

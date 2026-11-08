@@ -20,8 +20,8 @@ func atTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 // go on: nothing (what was not done, "nothing removed") as the error when
 // something else is typed. Without a terminal it fails, with --yes as the
 // fix. tty asks on the terminal itself, when stdin carries data.
-func typeToGoOn(what, name, nothing string, tty bool) error {
-	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: []string{what}, Fixes: []report.Remedy{report.Fix("add --yes to go on without asking")}}
+func typeToGoOn(what, name, nothing string, tty bool, hints ...report.Remedy) error {
+	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: []string{what}, Remedies: append(hints, report.Fix("add --yes to go on without asking"))}
 	in, log := report.LineReader(stdinReader), report.Default()
 	if tty {
 		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
@@ -33,7 +33,7 @@ func typeToGoOn(what, name, nothing string, tty bool) error {
 	} else if !atTerminal() {
 		return noTerminal
 	}
-	log.Info(what)
+	log.Say(report.InfoLevel, what, nil, hints...)
 	if !log.ConfirmName(in, name) {
 		return errors.New(nothing)
 	}

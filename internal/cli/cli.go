@@ -1537,8 +1537,8 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	if !strings.HasPrefix(args[0], "-") && !isComposeCommand(args[0], env.Environ()) {
 		return nil, &ExitError{Code: 1, Msg: unknownWord(args[0], projectDir)}
 	}
-	if msg := LoneUnknownFlag(args); msg != "" {
-		return nil, &ExitError{Code: 1, Msg: msg}
+	if err := LoneUnknownFlag(args); err != nil {
+		return nil, &ExitError{Code: 1, Err: err}
 	}
 
 	plan := p.compose(args)

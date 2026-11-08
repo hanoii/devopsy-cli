@@ -596,13 +596,15 @@ export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
 // --release-settings in $settings. Its lines are a plain echo: the
 // server's devopsy may lack --say.
 func serverCheck(ref string) string {
-	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy @"+ref+" --upgrade)") + `; exit 1; }
+	upgrade := report.Fix("upgrade it:", "devopsy @"+ref+" --upgrade")
+	risk := report.Fix("set " + ProtocolCheckEnv + "=warn to go on at your own risk")
+	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings", upgrade) + `; exit 1; }
 server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
 if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
   if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+ref+" --upgrade)") + `
+    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway", upgrade) + `
   else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+ref+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs", upgrade, risk) + `
     exit 1
   fi
 fi
@@ -614,9 +616,9 @@ for f in ${` + needsEnv + `:-}; do
 done
 if [ -n "$missing" ]; then
   if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway: upgrade it (devopsy @"+ref+" --upgrade)") + `
+    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway", upgrade) + `
   else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing): upgrade it (devopsy @"+ref+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing)", upgrade, risk) + `
     exit 1
   fi
 fi
@@ -663,7 +665,7 @@ func prelude(t *Target, create bool) string {
   exit 1
 fi
 if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
-  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + fixLines(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
+  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + sayRemedies(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
   exit 1
 fi
 ` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared"
@@ -694,10 +696,10 @@ func UploadScript(t *Target, syncs bool) string {
 	guard := ""
 	if !syncs {
 		guard = `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" ` + syncFixLines(t) + `
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" ` + syncFixes(t) + `
   exit 1
 fi
-` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")
+` + markRefusal(t, "nothing released", syncFixes(t, releaseSyncFix(t)), "exit 1")
 	}
 	return prelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 rel="$base/releases/$id"
@@ -964,7 +966,7 @@ exec 4<&-
 func partialGuard(t *Target, projectName, refuse string) string {
 	return `if [ -n "$prev" ]; then
 ` + settleSync(projectName) + `fi
-` + markRefusal(t, "nothing changed", syncFixLines(t, `"or --release-sync to release with it"`), refuse)
+` + markRefusal(t, "nothing changed", syncFixes(t, releaseSyncFix(t)), refuse)
 }
 
 // recoverFetch finishes what a release's fetch killed outright left (img
@@ -1310,15 +1312,15 @@ fi
 // enter changes to where commands run: the current release, or the path
 // itself for a plain devopsy directory (a project maintained in place).
 func enter(t *Target) string {
-	return basePrelude(t) + fmt.Sprintf(`if [ -d "$base/current" ]; then
+	return basePrelude(t) + `if [ -d "$base/current" ]; then
   cd "$base/current"
 elif [ -d "$base/.devopsy" ]; then
   cd "$base"
 else
-  devopsy --say error "$base has no release and no .devopsy/ project: run 'devopsy @%s --release' first"
+  devopsy --say error "$base has no release and no .devopsy/ project" ` + releaseFirst(t, "") + `
   exit 1
 fi
-`, HintAddress(t))
+`
 }
 
 // RunScript runs args in the current release, or in a plain directory.
@@ -2039,7 +2041,7 @@ done
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
-  devopsy --say error "$base stays: its images are not all removed; run --destroy again"
+  devopsy --say error "$base stays: its images are not all removed" ` + sayRemedies(report.Fix("run it again:", "devopsy @"+HintAddress(t)+" --destroy")) + `
   exit 1
 fi
 cd /

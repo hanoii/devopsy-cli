@@ -232,7 +232,12 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 		}
 		var fix []report.Remedy
 		if len(f) == 4 && f[3] != "" {
-			fix = []report.Remedy{report.Fix("", f[3])}
+			// A warning's command is its fix; an info line's a hint.
+			if f[0] == remote.StatusWarning {
+				fix = []report.Remedy{report.Fix("", f[3])}
+			} else {
+				fix = []report.Remedy{report.Hint("", f[3])}
+			}
 		}
 		if n := len(entries); n > 0 && entries[n-1].Key == f[1] {
 			e := &entries[n-1]
@@ -240,14 +245,18 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 			if f[0] == remote.StatusWarning {
 				e.Level = remote.StatusWarning
 			}
+			// A command is kept once, a fix if any line made it one.
 			for _, x := range fix {
-				if !slices.ContainsFunc(e.Fixes, func(y report.Remedy) bool { return slices.Equal(x.Cmds, y.Cmds) }) {
-					e.Fixes = append(e.Fixes, x)
+				i := slices.IndexFunc(e.Remedies, func(y report.Remedy) bool { return slices.Equal(x.Cmds, y.Cmds) })
+				if i < 0 {
+					e.Remedies = append(e.Remedies, x)
+				} else if !x.Hint {
+					e.Remedies[i].Hint = false
 				}
 			}
 			continue
 		}
-		entries = append(entries, remote.StatusEntry{Level: f[0], Key: f[1], Lines: []string{f[2]}, Fixes: fix})
+		entries = append(entries, remote.StatusEntry{Level: f[0], Key: f[1], Lines: []string{f[2]}, Remedies: fix})
 	}
 	return entries, bad
 }
@@ -328,13 +337,13 @@ func (h envState) entries(at envAt) []remote.StatusEntry {
 	}
 	// warn adds a warning with its fixes.
 	warn := func(key, line string, fixes ...report.Remedy) {
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Remedies: fixes})
 	}
 	switch {
 	case h.plain:
 		info("release", "none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		warn("release", "none: "+h.failed+" failed", report.Fix("see why:", "devopsy @"+at.ref+" --log"))
+		warn("release", "none: "+h.failed+" failed", remote.LogHint(at.ref))
 	case h.none:
 		info("release", "none: not released yet")
 	}

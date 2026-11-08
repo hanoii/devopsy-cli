@@ -73,12 +73,12 @@ func (l *Logger) Shows(lv Level) bool {
 	return true
 }
 
-// Say writes msg, its details and its fixes at level lv (Lines).
-func (l *Logger) Say(lv Level, msg string, details []string, fixes []Remedy) {
+// Say writes msg, its details and its remedies at level lv (Lines).
+func (l *Logger) Say(lv Level, msg string, details []string, remedies ...Remedy) {
 	if !l.Shows(lv) {
 		return
 	}
-	lines := Lines(lv, msg, details, fixes)
+	lines := Lines(lv, msg, details, remedies)
 	var b strings.Builder
 	for _, line := range lines {
 		if l.mask != nil {
@@ -97,29 +97,29 @@ func (l *Logger) Say(lv Level, msg string, details []string, fixes []Remedy) {
 }
 
 // Info says what devopsy does, or did.
-func (l *Logger) Info(msg string, details ...string) { l.Say(InfoLevel, msg, details, nil) }
+func (l *Logger) Info(msg string, details ...string) { l.Say(InfoLevel, msg, details) }
 
 // Warn says something needs attention while the command goes on.
-func (l *Logger) Warn(msg string, details ...string) { l.Say(WarnLevel, msg, details, nil) }
+func (l *Logger) Warn(msg string, details ...string) { l.Say(WarnLevel, msg, details) }
 
 // Error says why the command fails.
-func (l *Logger) Error(msg string, details ...string) { l.Say(ErrorLevel, msg, details, nil) }
+func (l *Logger) Error(msg string, details ...string) { l.Say(ErrorLevel, msg, details) }
 
 // Fail says why the command fails, from err: its message, then the
 // details and fixes a Failure in its chain carries, then more fixes.
 func (l *Logger) Fail(err error, more ...Remedy) {
-	fixes := Fixes(err)
-	l.Say(ErrorLevel, err.Error(), Details(err), append(fixes[:len(fixes):len(fixes)], more...))
+	fixes := Remedies(err)
+	l.Say(ErrorLevel, err.Error(), Details(err), append(fixes[:len(fixes):len(fixes)], more...)...)
 	for _, f := range Also(err) {
-		l.Say(ErrorLevel, f.Msg, f.Details, f.Fixes)
+		l.Say(ErrorLevel, f.Msg, f.Details, f.Remedies...)
 	}
 }
 
 // Debug says what devopsy runs, shown with -v.
-func (l *Logger) Debug(msg string, details ...string) { l.Say(DebugLevel, msg, details, nil) }
+func (l *Logger) Debug(msg string, details ...string) { l.Say(DebugLevel, msg, details) }
 
 // Trace says the detail of what devopsy runs (scripts), shown with -vv.
-func (l *Logger) Trace(msg string, details ...string) { l.Say(TraceLevel, msg, details, nil) }
+func (l *Logger) Trace(msg string, details ...string) { l.Say(TraceLevel, msg, details) }
 
 // LineReader reads an answer: a bufio.Reader, shared by every prompt on
 // one input so a buffered line is never lost.
@@ -176,6 +176,12 @@ func (l *Logger) Input(in LineReader, question, def string) string {
 // ConfirmName asks to type name to go on: true only when it was.
 func (l *Logger) ConfirmName(in LineReader, name string) bool {
 	return l.Ask(in, "type "+name+" to go on:") == name
+}
+
+// Say writes msg, its details and its remedies at level lv, through
+// Default.
+func Say(lv Level, msg string, details []string, remedies ...Remedy) {
+	std.Say(lv, msg, details, remedies...)
 }
 
 // Info says what devopsy does, or did, through Default.

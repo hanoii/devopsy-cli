@@ -28,12 +28,18 @@ func TestLines(t *testing.T) {
 			"devopsy: error: locked\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @dev --sync"},
 		{"fixes", ErrorLevel, "no server", nil, []Remedy{Fix("set it in .devopsy/.env:\nDEVOPSY_SERVER_PROD=vm1"), Fix("sync from an address instead:", "devopsy @dev --sync --from @vm1:prod", "devopsy @dev --status"), Fix("", "a", "b")},
 			"devopsy: error: no server\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. set it in .devopsy/.env:\ndevopsy: |    DEVOPSY_SERVER_PROD=vm1\ndevopsy: | 2. sync from an address instead:\ndevopsy: |    $ devopsy @dev --sync --from @vm1:prod\ndevopsy: |    $ devopsy @dev --status\ndevopsy: | 3. $ a\ndevopsy: |    $ b"},
+		// A hint is its text then its commands, in order, never numbered
+		// nor under "to fix it:", before the fixes (Hint).
+		{"hints", InfoLevel, "made a key", nil, []Remedy{Hint("authorize it:", "devopsy @x --ssh-keys add k.pub"), Hint("then load it:", "ssh-add k")},
+			"devopsy: made a key\ndevopsy: | authorize it:\ndevopsy: | $ devopsy @x --ssh-keys add k.pub\ndevopsy: | then load it:\ndevopsy: | $ ssh-add k"},
+		{"a hint and fixes", ErrorLevel, "lost", []string{"why"}, []Remedy{Fix("", "devopsy @x --import db --resolved"), Hint("whether its mark is there:", "devopsy @x --status"), Fix("again:", "devopsy @x --import db")},
+			"devopsy: error: lost\ndevopsy: | why\ndevopsy: | whether its mark is there:\ndevopsy: | $ devopsy @x --status\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. $ devopsy @x --import db --resolved\ndevopsy: | 2. again:\ndevopsy: |    $ devopsy @x --import db"},
 		// An address with brackets shows quoted, as a shell takes it, so a
 		// command copies as shown: in a fix's command, a script's detail
 		// line or a command named in prose, the message included. One
 		// already in quotes, and the punctuation after it, stay as they are.
-		{"brackets", ErrorLevel, "@[::1]:22:dev is locked", []string{"$ devopsy @[::1]:22:dev --status", "devopsy @[::1]:22:dev --log shows why, or run 'devopsy @[::1]:22:dev --release'", "(devopsy @[::1]:22:dev), or @[::1]:22:", "@[::1]:22:dev's .env", "devopsy @[<server>:]<env>"}, []Remedy{Fix("", "devopsy @vm1:dev --sync --from @[::1]:22:prod")},
-			"devopsy: error: @'[::1]:22:dev' is locked\ndevopsy: | $ devopsy @'[::1]:22:dev' --status\ndevopsy: | devopsy @'[::1]:22:dev' --log shows why, or run 'devopsy @[::1]:22:dev --release'\ndevopsy: | (devopsy @'[::1]:22:dev'), or @'[::1]:22:'\ndevopsy: | @[::1]:22:dev's .env\ndevopsy: | devopsy @[<server>:]<env>\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:dev --sync --from @'[::1]:22:prod'"},
+		{"brackets", ErrorLevel, "@[::1]:22:dev is locked", []string{"devopsy @[::1]:22:dev --log shows why, or run 'devopsy @[::1]:22:dev --release'", "(devopsy @[::1]:22:dev), or @[::1]:22:", "@[::1]:22:dev's .env", "devopsy @[<server>:]<env>"}, []Remedy{Fix("", "devopsy @vm1:dev --sync --from @[::1]:22:prod")},
+			"devopsy: error: @'[::1]:22:dev' is locked\ndevopsy: | devopsy @'[::1]:22:dev' --log shows why, or run 'devopsy @[::1]:22:dev --release'\ndevopsy: | (devopsy @'[::1]:22:dev'), or @'[::1]:22:'\ndevopsy: | @[::1]:22:dev's .env\ndevopsy: | devopsy @[<server>:]<env>\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:dev --sync --from @'[::1]:22:prod'"},
 	} {
 		if got := strings.Join(Lines(c.lv, c.msg, c.details, c.fixes), "\n"); got != c.want {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, got, c.want)
@@ -43,7 +49,7 @@ func TestLines(t *testing.T) {
 
 func TestFail(t *testing.T) {
 	t.Parallel()
-	err := fmt.Errorf("environment dev: parent prod: %w", &Failure{Msg: "no server", Details: []string{"why"}, Fixes: []Remedy{Fix("set DEVOPSY_SERVER_PROD")}})
+	err := fmt.Errorf("environment dev: parent prod: %w", &Failure{Msg: "no server", Details: []string{"why"}, Remedies: []Remedy{Fix("set DEVOPSY_SERVER_PROD")}})
 	if err.Error() != "environment dev: parent prod: no server" {
 		t.Fatalf("message: %q", err.Error())
 	}
@@ -61,7 +67,7 @@ func TestFail(t *testing.T) {
 		t.Fatalf("also: got\n%s\nwant\n%s", out.String(), want)
 	}
 	// The fixes the error carries are never changed by more.
-	if f := Fixes(err); len(f) != 1 {
+	if f := Remedies(err); len(f) != 1 {
 		t.Fatalf("the error's fixes changed: %v", f)
 	}
 }

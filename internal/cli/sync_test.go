@@ -770,7 +770,7 @@ func TestLeavingBindsUnsearchableSaysSo(t *testing.T) {
 	}
 	for what, err := range map[string]error{"the mounts check": CheckMounts(parsed), "the start gate": CheckLeavingBinds(parsed, nil, "the start")} {
 		var said []string
-		for _, f := range report.Fixes(err) {
+		for _, f := range report.Remedies(err) {
 			said = append(said, f.Text)
 		}
 		said = append(said, report.Details(err)...)

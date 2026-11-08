@@ -116,7 +116,7 @@ trap - INT TERM HUP
 : >"$base/` + SnapshotHoldingFile + `"
 `
 	s := "set -eu\n" + basePrelude(t) + "exec 1>&2\n" + NoExit255
-	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release')"; exit 1; }
+	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "") + `; exit 1; }
 `
 	s += watchSession(false)
 	s += "export " + snapshotEnv(t, keep) + `
@@ -124,7 +124,7 @@ umask 077
 mkdir -p "$snaps"
 cd "$base/current"
 `
-	refuse := markRefusal(t, "no snapshot taken", `"a snapshot of it would restore as complete" `+syncFixLines(t), "exit 1")
+	refuse := markRefusal(t, "no snapshot taken", `"a snapshot of it would restore as complete" `+syncFixes(t), "exit 1")
 	s += refuse + snapLock + step("leftovers") + "\n" + step("check") + "\n" + step("mirror") + "\nexec 6>&-\n"
 	s += releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + "\n" + settleSync(projectName) + snapLock + refuse
@@ -327,7 +327,7 @@ if [ "$rs" = 0 ]; then
   if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "${cur#releases/}")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
 else
 ` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
-  devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true
+  devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixes(t, "rd_snapshot") + ` || true
 fi
 exit "$rs"
 `
@@ -361,7 +361,7 @@ exec tar -C "$snaps" -cf - ` + Quote(id) + `
 // its tars (--snapshot-step imported), renamed into place. It needs a
 // current release, as a restore does: on a new server, release first.
 func SnapshotImportScript(t *Target, projectName string) string {
-	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release'), then import the snapshot and restore it (--with-env brings its shared/.env back)"; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "release it first, then import the snapshot and restore it (--with-env brings its shared/.env back):") + `; exit 1; }
 umask 077
 mkdir -p "$snaps"
 ` + snapshotLock(false) + lockedGate(false, "") + `tmp="$snaps/.import.$$"

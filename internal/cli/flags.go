@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // Scope is where a flag of devopsy's runs: which address it takes.
@@ -153,16 +155,16 @@ var RemoteOnly = func() []string {
 // devopsy does not know is a typo. Empty otherwise. The nearest flag of
 // devopsy's is suggested when it is a couple of letters off, or two more
 // when the two share a part (--ssh-host and --shell-host).
-func LoneUnknownFlag(args []string) string {
+func LoneUnknownFlag(args []string) error {
 	if len(args) != 1 || !strings.HasPrefix(args[0], "-") || args[0] == "--" {
-		return ""
+		return nil
 	}
 	word := args[0]
 	var nearest string
 	best := 5
 	for _, f := range flagsWhere(func(Scope) bool { return true }) {
 		if f.Name == word {
-			return ""
+			return nil
 		}
 		d := editDistance(f.Name, word)
 		if d > 2 && !sharePart(f.Name, word) {
@@ -176,7 +178,7 @@ func LoneUnknownFlag(args []string) string {
 	if nearest != "" {
 		why += fmt.Sprintf(" (did you mean %s?)", nearest)
 	}
-	return why + "; devopsy --help lists them"
+	return &report.Failure{Msg: why, Remedies: []report.Remedy{report.Hint("devopsy's flags:", "devopsy --help")}}
 }
 
 // sharePart reports whether two flags have a hyphen-separated part in

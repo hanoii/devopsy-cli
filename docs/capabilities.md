@@ -21,12 +21,15 @@ Each line is one fact, its fields separated by tabs:
 
 The level is `info` or `warning`. A warning is shown in color and makes
 `--status` exit 3, as anything else that needs attention does. The fix,
-when there is one, is a command to copy, shown under the fact after `$ `.
-Lines in a row with the same key are one fact of several lines (several
-URLs, a message on more than one line), a warning when any of them is.
-devopsy aligns the keys with its own, and `--status --json` prints each
-fact as fields (`level`, `key`, `lines`, `fixes`). Empty lines are
-skipped; any other line is shown as a warning that names it.
+when there is one, is a command to copy, shown under the fact after `$ `:
+a warning's under `to fix it:`, an info line's as a hint, a command
+worth knowing. Lines in a row with the same key are one fact of several
+lines (several URLs, a message on more than one line), a warning when
+any of them is, each command once. devopsy aligns the keys with its own,
+and `--status --json` prints each fact as fields (`level`, `key`,
+`lines`, `remedies`, each with its `text`, `commands`, and `hint` when
+it is one). Empty lines are skipped; any other line is shown as a
+warning that names it.
 
 `DEVOPSY_STATUS_RUNNING` holds the services running, separated by
 spaces, so `show` can skip what needs a stopped one.

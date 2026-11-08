@@ -27,15 +27,16 @@ func runSay(args []string) int {
 		args = append(args[:1:1], args[3:]...)
 	}
 	if len(args) < 2 || !ok {
-		report.Error("usage: devopsy " + remote.SayFlag + " info|warning|error [" + remote.SaySinceFlag + " <epoch>] <message> [<detail>...]")
+		report.Error("usage: devopsy " + remote.SayFlag + " info|warning|error [" + remote.SaySinceFlag + " <epoch>] <message> [<detail>...] [" + remote.SayFixFlag + "|" + remote.SayHintFlag + " <text> [<command>...]]...")
 		return 2
 	}
 	if timed {
 		args[1] = report.SinceEpoch(args[1], since)
 	}
+	details, remedies := parseRemedies(args[2:])
 	signal.Ignore(syscall.SIGPIPE)
 	w := &failedWriter{w: os.Stderr}
-	report.Default().To(w).Say(lv, args[1], args[2:], nil)
+	report.Default().To(w).Say(lv, args[1], details, remedies...)
 	if w.err != nil {
 		return 1
 	}
@@ -54,4 +55,29 @@ func (f *failedWriter) Write(p []byte) (int, error) {
 		f.err = err
 	}
 	return n, err
+}
+
+// parseRemedies splits --say's words after its message: the details, up
+// to the first --fix or --hint, then each remedy, its first word its
+// text and the next words its commands (remote.SayFixFlag).
+func parseRemedies(words []string) (details []string, remedies []report.Remedy) {
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		if w != remote.SayFixFlag && w != remote.SayHintFlag {
+			if len(remedies) == 0 {
+				details = append(details, w)
+			} else {
+				last := &remedies[len(remedies)-1]
+				last.Cmds = append(last.Cmds, w)
+			}
+			continue
+		}
+		r := report.Remedy{Hint: w == remote.SayHintFlag}
+		if i+1 < len(words) {
+			i++
+			r.Text = words[i]
+		}
+		remedies = append(remedies, r)
+	}
+	return details, remedies
 }

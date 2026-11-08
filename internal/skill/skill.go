@@ -69,8 +69,8 @@ func Install(dir, version string, stub bool) (path, link string, notes []string,
 		return "", "", nil, fmt.Errorf("%s was not written by devopsy: remove or move it first", path)
 	} else if err == nil && Edited(old) {
 		return "", "", nil, &report.Failure{
-			Msg:   path + " was edited since devopsy wrote it: left as it is",
-			Fixes: []report.Remedy{report.Fix("to take this version instead, remove it and run this command again:", "rm "+remote.Quote(path))},
+			Msg:      path + " was edited since devopsy wrote it: left as it is",
+			Remedies: []report.Remedy{report.Fix("to take this version instead, remove it and run this command again:", "rm "+remote.Quote(path))},
 		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", "", nil, err

@@ -2,15 +2,25 @@ package remote
 
 import "github.com/hanoii/devopsy-cli/internal/report"
 
-// SayFlag is the hidden `devopsy --say <level> <message> [<detail>...]`:
-// how scripts say things, formatted and colored as devopsy's own lines
-// (report). Scripts call it after basePrelude, which makes sure
-// the server's devopsy has it (Protocol 5).
+// SayFlag is the hidden `devopsy --say <level> <message> [<detail>...]
+// [--fix|--hint <text> [<command>...]]...`: how scripts say things,
+// formatted and colored as devopsy's own lines (report). Scripts call it
+// after basePrelude, which makes sure the server's devopsy has it
+// (Protocol 5).
 const SayFlag = "--say"
 
 // SaySinceFlag adds to --say's message the time since a script's clock
 // (timerStart).
 const SaySinceFlag = "--since"
+
+// SayFixFlag and SayHintFlag start a remedy in --say's words, a fix
+// (report.Fix) or a hint (report.Hint): the next word its text (empty
+// for none), the words up to the next one its commands. The first ends
+// the details (sayRemedies).
+const (
+	SayFixFlag  = "--fix"
+	SayHintFlag = "--hint"
+)
 
 // SayLevels are --say's levels, by name.
 var SayLevels = map[string]report.Level{
@@ -45,10 +55,15 @@ func sayTook(name, msg string) string {
 	return "devopsy " + SayFlag + " info " + SaySinceFlag + ` "${` + name + `:-}" ` + msg + " || true\n"
 }
 
-// echoLine is a script's command saying msg at level lv without the
-// server's devopsy, for what runs before basePrelude knows it works, or
-// without it (the --ssh-keys scripts): msg is shell text in double
-// quotes, so its $f expands.
-func echoLine(lv report.Level, msg string) string {
-	return `echo "` + report.Head(lv) + report.Copyable(msg) + `" >&2`
+// echoLine is a script's command saying msg at level lv, with its
+// remedies, without the server's devopsy, for what runs before
+// basePrelude knows it works, or without it (the --ssh-keys scripts):
+// each line report lays out is shell text in double quotes, so its $f
+// expands.
+func echoLine(lv report.Level, msg string, remedies ...report.Remedy) string {
+	s := "printf '%s\\n'"
+	for _, l := range report.Lines(lv, msg, nil, remedies) {
+		s += ` "` + l + `"`
+	}
+	return s + " >&2"
 }

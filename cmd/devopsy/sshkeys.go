@@ -163,7 +163,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		switch len(matches) {
 		case 0:
-			return fail(words[0] + " matches none of " + t.Host + "'s keys (devopsy @" + targetRef(t) + " --ssh-keys lists them)")
+			return failErr(&report.Failure{Msg: words[0] + " matches none of " + t.Host + "'s keys", Remedies: []report.Remedy{remote.SeeHint(targetRef(t), "them", "--ssh-keys")}})
 		case 1:
 		default:
 			return fail(words[0] + " matches several keys: give more of the fingerprint")
@@ -248,11 +248,9 @@ func runSSHKeysGenerate(args []string, color bool) int {
 		return fail(out + ".pub: " + errors.New("not a public key").Error())
 	}
 	fp, _ := k.Fingerprint()
-	report.Info("made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub",
-		"authorize it on a server, --restricted for CI (commands only, no shell):",
-		report.CmdMark+"devopsy @<target> --ssh-keys add "+out+".pub --restricted",
-		"then store the private key in CI as a protected file variable and load it in the job:",
-		report.CmdMark+"eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\"")
+	report.Say(report.InfoLevel, "made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub", nil,
+		report.Hint("authorize it on a server, --restricted for CI (commands only, no shell):", "devopsy @<target> --ssh-keys add "+out+".pub --restricted"),
+		report.Hint("then store the private key in CI as a protected file variable and load it in the job:", "eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\""))
 	return 0
 }
 

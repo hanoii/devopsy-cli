@@ -185,7 +185,7 @@ func TestInstall(t *testing.T) {
 			_, _, _, err := skill.Install(edited, "v2", false)
 			if err == nil || !strings.Contains(err.Error(), "edited since devopsy wrote it") {
 				t.Errorf("edited (stub %v): %v", from, err)
-			} else if fixes := report.Fixes(err); len(fixes) != 1 || len(fixes[0].Cmds) != 1 || fixes[0].Cmds[0] != "rm '"+editedPath+"'" {
+			} else if fixes := report.Remedies(err); len(fixes) != 1 || len(fixes[0].Cmds) != 1 || fixes[0].Cmds[0] != "rm '"+editedPath+"'" {
 				t.Errorf("edited (stub %v), the fix: %+v", from, fixes)
 			}
 			if data, _ := os.ReadFile(editedPath); string(data) != mine {

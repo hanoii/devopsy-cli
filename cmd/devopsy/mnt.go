@@ -379,9 +379,9 @@ func checkOwned(projectDir string, services []cli.SyncService) error {
 			details = append(details, "mnt/"+l+" is a symbolic link")
 		}
 		return &report.Failure{
-			Msg:     "an owned entry of mnt is a symbolic link: Docker would mount what it points to, and devopsy give that to the entry's owner: the release does not go live",
-			Details: details,
-			Fixes:   []report.Remedy{report.Fix("make each a directory of its own in shared/mnt, moving what it points to there")},
+			Msg:      "an owned entry of mnt is a symbolic link: Docker would mount what it points to, and devopsy give that to the entry's owner: the release does not go live",
+			Details:  details,
+			Remedies: []report.Remedy{report.Fix("make each a directory of its own in shared/mnt, moving what it points to there")},
 		}
 	}
 	return ensureUtilImage(context.Background())

@@ -58,7 +58,7 @@ func runUpgrade(args []string, color bool) int {
 
 	tmp, err := update.Prepare(exe)
 	if errors.Is(err, fs.ErrPermission) {
-		return fail(fmt.Sprintf("cannot write to %s: run 'sudo devopsy --upgrade'", filepath.Dir(exe)))
+		return failErr(&report.Failure{Msg: "cannot write to " + filepath.Dir(exe), Remedies: []report.Remedy{report.Fix("", "sudo devopsy --upgrade")}})
 	} else if err != nil {
 		return fail(err.Error())
 	}
@@ -125,7 +125,7 @@ func updateNotice(color bool) {
 	if exe, err := os.Executable(); err == nil {
 		cmd = upgradeCommand(exe)
 	}
-	report.Warn(fmt.Sprintf("devopsy %s is available (this is %s)", strings.TrimPrefix(latest, "v"), version), "to upgrade:", report.CmdMark+cmd)
+	report.Say(report.WarnLevel, fmt.Sprintf("devopsy %s is available (this is %s)", strings.TrimPrefix(latest, "v"), version), nil, report.Hint("to upgrade:", cmd))
 }
 
 // upgradeCommand is what upgrades the binary at exe: with sudo when its

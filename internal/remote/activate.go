@@ -601,12 +601,12 @@ func (a *activation) restartPrevious() string {
 	s := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then
       if [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteImport + ` ]; then
         rs_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
-        devopsy --say warning "not restarting ${prev#releases/}: the import of $rs_service did not complete, and nothing runs on its data until one does" ` + importFixLines(a.t, "rs_service") + `
+        devopsy --say warning "not restarting ${prev#releases/}: the import of $rs_service did not complete, and nothing runs on its data until one does" ` + importFixes(a.t, "rs_service") + `
       elif [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
         rs_snapshot=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
-        devopsy --say warning "not restarting ${prev#releases/}: the restore of snapshot $rs_snapshot did not complete, and nothing runs on its data until one does" ` + restoreFixLines(a.t, "rs_snapshot") + `
+        devopsy --say warning "not restarting ${prev#releases/}: the restore of snapshot $rs_snapshot did not complete, and nothing runs on its data until one does" ` + restoreFixes(a.t, "rs_snapshot") + `
       else
-        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" ` + syncFixLines(a.t) + `
+        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" ` + syncFixes(a.t) + `
       fi
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
@@ -627,7 +627,7 @@ func (a *activation) restartPrevious() string {
 	// the data as the failed release left it (a sync's copy, a restore's):
 	// as a rollback checks before its switch (review).
 	s += `    if ! (cd "$base/current" && ` + devopsyCall(a.project, []string{"--check-mounts", "restored", "restart"}, false) + `); then
-      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" ` + fixLines(report.Fix("once what the check says is fixed:", "devopsy @"+HintAddress(a.t)+" --release")) + `
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" ` + sayRemedies(report.Fix("once what the check says is fixed:", "devopsy @"+HintAddress(a.t)+" --release")) + `
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `
@@ -723,7 +723,7 @@ func (a *activation) failure() string {
 	// its mark kept, which --status names and the next release finishes.
 	// timeout: a daemon stopping can hang a call, under the lock.
 	s += `if [ "$status" != 0 ] && ! { if command -v timeout >/dev/null 2>&1; then timeout 5 docker version; else docker version; fi; } >/dev/null 2>&1; then
-  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" ` + fixLines(report.Fix("once Docker answers again, to see how to finish it:", "devopsy @"+HintAddress(a.t)+" --status")) + `
+  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" ` + sayRemedies(report.Hint("once Docker answers again, to see how to finish it:", "devopsy @"+HintAddress(a.t)+" --status")) + `
   exit "$status"
 fi
 `

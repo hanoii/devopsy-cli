@@ -181,7 +181,9 @@ devopsy: debug: ssh -T vm1
 After the prefix comes the level: none for what devopsy does, `warning:`
 when it goes on but something needs attention, `error:` when the command
 fails, `debug:` (`-v`) and `trace:` (`-vv`) for what it runs. Details
-and fixes follow on `| ` lines, with a command to copy after `$ `.
+follow on `| ` lines, then commands to copy after `$ `: hints, worth
+knowing, then the fixes under `to fix it:`, numbered when there are
+several ways out.
 
 Questions start with `devopsy:` too, and are asked only at a terminal.
 Without one, a command that would ask fails and says to add `--yes`.

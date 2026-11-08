@@ -501,7 +501,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 		// half missing or another machine's (Docker's VM).
 		if runtime.GOOS != "linux" {
 			report.Default().Say(report.ErrorLevel, "--server-info without a server reads the Linux server it runs on, and this is "+runtime.GOOS, nil,
-				[]report.Remedy{report.Fix("", "devopsy @<server> --server-info")})
+				report.Fix("", "devopsy @<server> --server-info"))
 			return 1
 		}
 		info, err := serverFacts()
@@ -607,10 +607,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// warn adds a warning under the last row's key, with its fixes; note
 	// a line said with its fixes, never warned.
 	warn := func(msg string, fixes ...report.Remedy) {
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg}, Fixes: fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg}, Remedies: fixes})
 	}
 	note := func(msg string, fixes ...report.Remedy) {
-		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{msg}, Fixes: fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{msg}, Remedies: fixes})
 	}
 
 	// devopsy and the release settings.
@@ -677,7 +677,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Fix("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
+			report.Hint("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
 	}
 	if info.RebootRequired {
 		msg := "the server needs a reboot"
@@ -702,13 +702,16 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if off != "" {
 			msg = "the server's clock is not synchronized (" + off + "): certificates and logs need it"
 		}
-		fix := report.Fix("as root:", "timedatectl set-ntp true")
+		fixes := []report.Remedy{report.Fix("as root:", "timedatectl set-ntp true")}
 		if info.NTPService == "yes" {
 			// Its time service runs and no server answers it: a network
 			// that blocks NTP (UDP 123) out.
-			fix = report.Fix("its time service runs and no time server answers (UDP 123 blocked out?): name one the network has, NTP=<host> in /etc/systemd/timesyncd.conf.d/ (or chrony's sources), as root; this says what it tried:", "timedatectl timesync-status")
+			fixes = []report.Remedy{
+				report.Hint("its time service runs and no time server answers (UDP 123 blocked out?); what it tried:", "timedatectl timesync-status"),
+				report.Fix("name one the network has, NTP=<host> in /etc/systemd/timesyncd.conf.d/ (or chrony's sources), as root"),
+			}
 		}
-		warn(msg, fix)
+		warn(msg, fixes...)
 	}
 
 	// Docker.
@@ -916,7 +919,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			for _, p := range problems {
 				lines = append(lines, env.Path+": "+p)
 			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Fixes: []report.Remedy{statusFix(host, info.Root, env.Path)}})
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env.Path)}})
 		}
 	}
 	return es
@@ -964,7 +967,7 @@ type diskUse struct {
 func (u diskUse) entries(more string) []remote.StatusEntry {
 	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "disks", Lines: []string{u.value + more}}}
 	if u.warn != "" {
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "disks", Lines: []string{u.warn}, Fixes: u.fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "disks", Lines: []string{u.warn}, Remedies: u.fixes})
 	}
 	return es
 }
@@ -1014,9 +1017,9 @@ func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
 	}
 	if len(use.fixes) == 0 {
 		if ref == "" {
-			use.fixes = append(use.fixes, report.Fix("see what takes it"))
+			use.fixes = append(use.fixes, report.Hint("see what takes it"))
 		} else {
-			use.fixes = append(use.fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+			use.fixes = append(use.fixes, report.Hint("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
 		}
 	}
 	return use
@@ -1031,14 +1034,15 @@ func composeNameOf(path string) string {
 	return strings.Join(parts, "-")
 }
 
-// statusFix is the --status of the environment at path, in its project,
-// or in its current release under root on this machine (no host).
-func statusFix(host, root, path string) report.Remedy {
+// statusHint is the --status of the environment at path, which says
+// how to fix what it warns of, in its project, or in its current release
+// under root on this machine (no host).
+func statusHint(host, root, path string) report.Remedy {
 	if host == "" {
-		return report.Fix("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
+		return report.Hint("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
 	}
 	project, rest, _ := strings.Cut(path, "/")
-	return report.Fix("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
+	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
 }
 
 // removing is a directory a --destroy cut off while removing it left

@@ -45,8 +45,7 @@ func Paint(line string) string {
 		return dim + line + reset
 	case line == strings.TrimRight(Bar, " ") || strings.HasPrefix(line, Bar):
 		bar, text := line[:min(len(line), len(Bar))], line[min(len(line), len(Bar)):]
-		if cmd := strings.TrimLeft(text, " 0123456789."); strings.HasPrefix(cmd, CmdMark) {
-			lead := text[:len(text)-len(cmd)]
+		if lead, cmd, ok := SplitCmd(text); ok {
 			return dim + bar + reset + lead + bold + cmd + reset
 		}
 		return dim + bar + reset + text

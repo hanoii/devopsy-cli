@@ -104,8 +104,8 @@ memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check. `--json` prints
-the facts and the same lines as JSON on stdout, each warning with its
-fixes, for scripts and agents.
+the facts and the same lines as JSON on stdout, each with its fixes and
+hints (`remedies`), for scripts and agents.
 
 ## The server's devopsy
 

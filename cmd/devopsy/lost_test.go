@@ -109,7 +109,7 @@ func TestDestroyDataFailedSays(t *testing.T) {
 // ...), but with words after the command ("devopsy @prod --destroy again
 // finishes it", "devopsy @prod --destroy finishes it"): copied, they are
 // usage errors (--destroy takes --yes and --purge alone). Every other fix
-// after report.CmdMark is the command alone.
+// after "$ " is the command alone.
 func TestDestroyHalfwayFixCopies(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -124,7 +124,7 @@ func TestDestroyHalfwayFixCopies(t *testing.T) {
 		}
 		fixes := 0
 		for _, line := range strings.Split(errs, "\n") {
-			_, cmd, ok := strings.Cut(line, report.Bar+report.CmdMark)
+			_, cmd, ok := strings.Cut(line, report.Bar+"$ ")
 			if !ok {
 				continue
 			}
@@ -163,7 +163,7 @@ func TestLostResolvedSays(t *testing.T) {
 	if code != 255 {
 		t.Fatalf("the fake lost no session (%d):\n%s", code, errs)
 	}
-	if !strings.Contains(errs, "devopsy: error:") || !strings.Contains(errs, report.CmdMark+"devopsy @devopsy@one:prod --import db --resolved") {
+	if !strings.Contains(errs, "devopsy: error:") || !strings.Contains(errs, "$ "+"devopsy @devopsy@one:prod --import db --resolved") {
 		t.Errorf("a --resolved whose session was lost (%d) said nothing of devopsy's:\n%s", code, errs)
 	}
 	// Its devopsy killed as it starts the record: the mark stays, said.
@@ -171,7 +171,7 @@ func TestLostResolvedSays(t *testing.T) {
 	if code == 0 || !s.mark().IsImport() {
 		t.Fatalf("the fake killed no --resolved (%d):\n%s", code, errs)
 	}
-	if !strings.Contains(errs, "was killed") || !strings.Contains(errs, report.CmdMark+"devopsy @devopsy@one:prod --import db --resolved") {
+	if !strings.Contains(errs, "was killed") || !strings.Contains(errs, "$ "+"devopsy @devopsy@one:prod --import db --resolved") {
 		t.Errorf("a --resolved whose devopsy was killed (%d) says neither so nor how to finish it:\n%s", code, errs)
 	}
 	if _, errs, code = s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes"); code != 0 || s.mark() != nil {
@@ -197,7 +197,7 @@ func TestDestroyDataKilledSays(t *testing.T) {
 	if code == 0 || !strings.Contains(docker, " down --volumes") {
 		t.Fatalf("the fake killed no destroy after its down (%d):\n%s\n%s", code, errs, docker)
 	}
-	if !strings.Contains(errs, "halfway") || !strings.Contains(errs, report.Bar+report.CmdMark+"devopsy @devopsy@one:prod --destroy") {
+	if !strings.Contains(errs, "halfway") || !strings.Contains(errs, report.Bar+"$ "+"devopsy @devopsy@one:prod --destroy") {
 		t.Errorf("a destroy whose data step was killed past its down says neither that it stopped halfway nor how to finish it (%d):\n%s", code, errs)
 	}
 }
@@ -236,7 +236,7 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	if s.current("solo") != "releases/"+ids[1] || !strings.HasPrefix(readString(mark), ids[1]+"\trollback\t"+ids[2]+"\t") {
 		t.Fatalf("a rollback killed past its switch: current %q, mark %q:\n%s", s.current("solo"), readString(mark), out)
 	}
-	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the rollback to "+ids[1]+" was cut off past its switch: its run step may not have run\n            finish it:\n            $ devopsy @devopsy@one:solo --rollback\n") {
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the rollback to "+ids[1]+" was cut off past its switch: its run step may not have run\n            to fix it:\n            finish it:\n            $ devopsy @devopsy@one:solo --rollback\n") {
 		t.Errorf("--status after a cut rollback:\n%s", out)
 	}
 	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, ids[1]) || !strings.Contains(out, "  CUT") {
@@ -256,7 +256,7 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	if cut == ids[1] || !strings.HasPrefix(readString(mark), cut+"\trelease\t"+ids[1]+"\t") {
 		t.Fatalf("a release killed past its switch: current %q, mark %q:\n%s", cut, readString(mark), out)
 	}
-	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the release of "+cut+" was cut off past its switch: its run step may not have run\n            release it again:\n            $ devopsy @devopsy@one:solo --release\n") {
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the release of "+cut+" was cut off past its switch: its run step may not have run\n            to fix it:\n            release it again:\n            $ devopsy @devopsy@one:solo --release\n") {
 		t.Errorf("--status after a cut release:\n%s", out)
 	}
 	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 || fileExists(mark) {
@@ -285,7 +285,7 @@ func TestActivationCutPastSwitch(t *testing.T) {
 		t.Errorf("--status names the failed rollback to %s as cut off, finished by --rollback, while current is %s, whose restart was cut:\n%s", failed, cur, out)
 	}
 	// It names the restart that was cut instead, on current.
-	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the restart of "+cur+" after "+failed+" failed was cut off: its run step may not have run\n            release it again:\n            $ devopsy @devopsy@one:solo --release\n") {
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the restart of "+cur+" after "+failed+" failed was cut off: its run step may not have run\n            to fix it:\n            release it again:\n            $ devopsy @devopsy@one:solo --release\n") {
 		t.Errorf("--status does not name the restart of %s that was cut:\n%s", cur, out)
 	}
 	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, "  CUT") {
@@ -543,16 +543,19 @@ func TestDestroyCutLeavesMovedBase(t *testing.T) {
 func TestActivationLostWords(t *testing.T) {
 	t.Parallel()
 	tg := &remote.Target{Address: "vm1:prod"}
+	text := func(u utterance) string {
+		return strings.Join(report.Lines(report.ErrorLevel, u.msg, u.details, u.remedies), "\n")
+	}
 	for _, kind := range []string{"release", "rollback"} {
 		w := releaseWords(tg, kind)
-		if !strings.Contains(strings.Join(w.lostAfter, "\n"), "--status") {
-			t.Errorf("a %s's session lost past its switch does not name --status: %q", kind, w.lostAfter)
+		if !strings.Contains(text(w.lostAfter), "--status") {
+			t.Errorf("a %s's session lost past its switch does not name --status: %+v", kind, w.lostAfter)
 		}
 	}
 	w := restoreWords(tg, false)
-	for _, words := range [][]string{w.goesOn, w.lostAfter, w.hadGone} {
-		if strings.Contains(strings.Join(words, "\n"), "past its switch") {
-			t.Errorf("a full restore past its point of no return, writing its data before its switch, says past its switch: %q", words)
+	for _, u := range []utterance{w.goesOn, w.lostAfter, w.hadGone} {
+		if strings.Contains(text(u), "past its switch") {
+			t.Errorf("a full restore past its point of no return, writing its data before its switch, says past its switch: %+v", u)
 		}
 	}
 }

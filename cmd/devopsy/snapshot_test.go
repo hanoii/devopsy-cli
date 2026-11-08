@@ -654,7 +654,7 @@ func TestSnapshotExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, []byte("not a tar"), "@prod", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "nothing imported") {
 		t.Errorf("no snapshot on stdin (%d):\n%s", code, errs)
 	}
-	if _, errs, code := s.runIO(nil, exported, "@solo", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "has no current release: release it first") {
+	if _, errs, code := s.runIO(nil, exported, "@solo", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "has no current release\ndevopsy: | to fix it:\ndevopsy: | release it first, then import the snapshot") {
 		t.Errorf("into an environment never released (%d):\n%s", code, errs)
 	}
 }
@@ -3973,5 +3973,25 @@ func TestNoCodeRestoreCut(t *testing.T) {
 	reload, rcode := s.run(nil, "@prod", "--reload")
 	if rcode != 0 || strings.Contains(reload, "cut off past its switch") {
 		t.Errorf("the reload after the restore's run step is refused (%d):\n%s", rcode, reload)
+	}
+}
+
+// A restore's question offers a snapshot first as a hint, its command
+// after "$ ", at a terminal and, without one, under the failure.
+func TestRestoreQuestionOffersSnapshotAsAHint(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1])
+	if code == 0 || !strings.Contains(out, "nothing restored: no terminal to confirm it on") {
+		t.Fatalf("restore without a terminal (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "--snapshot first keeps it") || !strings.Contains(out, "devopsy: | $ devopsy @devopsy@one:prod --snapshot\n") {
+		t.Errorf("the question names --snapshot in its words, not as a hint:\n%s", out)
 	}
 }

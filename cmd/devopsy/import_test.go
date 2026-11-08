@@ -393,7 +393,7 @@ func TestImportSessionLostWhileRunning(t *testing.T) {
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait, "FAKE_SSH_LOST_RUNNING=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	_ = s.wait(cmd, errs, "a session lost during the load")
-	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "the import was under way there") || !strings.Contains(errs.String(), "--status shows how it ends") {
+	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "the import was under way there") || !strings.Contains(errs.String(), "see how it ends:\ndevopsy: | $ devopsy @devopsy@one:prod --status") {
 		t.Errorf("a session lost during the load (%d):\n%s", code, errs)
 	}
 	write(t, wait+".go", "", 0o644)
@@ -1626,5 +1626,31 @@ func TestSyncHoldsNotDerived(t *testing.T) {
 	}
 	if _, _, mc, why := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); mc != remote.IncompleteFinish || !strings.Contains(why, "what runs on it could not be derived from its history") {
 		t.Errorf("the mark: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))
+	}
+}
+
+// Through a user-level alias without source:, a remedy to release,
+// restore or sync names remote.HintAddress, the resolved address, which
+// works when copied: --vars set's release to apply a value, and
+// --resolved's ways out of a restore's and a sync's mark.
+func TestRemediesThroughAliasNameHintAddress(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(filepath.Dir(s.project), "home", "config.yaml"), "releases:\n  root: "+s.root+"\naliases:\n  a-shop: {project: shop, to: \"devopsy@one:prod\"}\n", 0o644)
+	s.releaseProd(nil)
+	out, code := s.run([]string{"FAKE_DB_IMAGE=mariadb:12"}, "@a-shop", "--vars", "set", "FAKE_DB_IMAGE")
+	if code != 0 || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "$ devopsy @a-shop --release") {
+		t.Errorf("--vars set's release hint through an alias without source (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-22 10:00:00", "20261020100000", remote.IncompleteRestore, "it was cut"), 0o644)
+	out, code = s.run(nil, "@a-shop", "--import", "db", "--resolved", "--yes")
+	if code == 0 || !strings.Contains(out, "$ devopsy @devopsy@one:prod --snapshots restore 20261020100000") || strings.Contains(out, "$ devopsy @a-shop --snapshots") {
+		t.Errorf("--resolved on a restore's mark through an alias without source (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-22 10:00:00", "vm1:live", remote.IncompleteCopy, "the copy was cut"), 0o644)
+	out, code = s.run(nil, "@a-shop", "--import", "db", "--resolved", "--yes")
+	if code == 0 || !strings.Contains(out, "$ devopsy @devopsy@one:prod --sync") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --reset") || strings.Contains(out, "$ devopsy @a-shop --") {
+		t.Errorf("--resolved on a sync's mark through an alias without source (%d):\n%s", code, out)
 	}
 }

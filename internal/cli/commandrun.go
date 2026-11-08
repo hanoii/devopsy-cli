@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // CommandTargetEnv is the address a project command with `## Needs:` was
@@ -89,9 +90,9 @@ func (c CommandRun) Check(name, path string, where Where) error {
 	case Bare:
 		switch {
 		case c.Needs != "":
-			return fmt.Errorf("%s needs a %s (## Needs: %s in %s): devopsy @<%s> %s", name, c.Needs, c.Needs, path, c.Needs, name)
+			return &report.Failure{Msg: fmt.Sprintf("%s needs a %s (## Needs: %s in %s)", name, c.Needs, c.Needs, path), Remedies: []report.Remedy{report.Fix("", "devopsy @<"+c.Needs+"> "+name)}}
 		case c.Run == "target":
-			return fmt.Errorf("%s runs only on a target (## Run: target in %s): devopsy @<target> %s", name, path, name)
+			return &report.Failure{Msg: fmt.Sprintf("%s runs only on a target (## Run: target in %s)", name, path), Remedies: []report.Remedy{report.Fix("", "devopsy @<target> "+name)}}
 		}
 	case Addressed:
 		if c.Run == "local" && c.Needs == "" {

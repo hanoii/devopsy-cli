@@ -171,19 +171,19 @@ func sayLevels(t *remote.Target, level *remote.Level, verb string, keys []string
 				over = append(over, overridden{addr(dir), levelSays(defs[1].Level, own, tr.Parent)})
 			}
 		}
-		unset := report.CmdMark + "devopsy @" + targetRef(t) + " " + flag + " unset " + k
+		unset := "devopsy @" + targetRef(t) + " " + flag + " unset " + k
 		switch {
 		case len(over) == 0:
 		case level == nil:
-			report.Warn(fmt.Sprintf("%s overrides the value %s", k, over[0].says), "to use that value again:", unset)
+			report.Say(report.WarnLevel, fmt.Sprintf("%s overrides the value %s", k, over[0].says), nil, report.Hint("to use that value again:", unset))
 		case len(over) == 1:
-			report.Warn(fmt.Sprintf("%s in %s overrides, on @%s, the value %s", k, oursSays, over[0].addr, over[0].says), "to use that value again:", unset)
+			report.Say(report.WarnLevel, fmt.Sprintf("%s in %s overrides, on @%s, the value %s", k, oursSays, over[0].addr, over[0].says), nil, report.Hint("to use that value again:", unset))
 		default:
 			details := []string{"the values it overrides:"}
 			for _, o := range over {
 				details = append(details, fmt.Sprintf("@%s: the value %s", o.addr, o.says))
 			}
-			report.Warn(fmt.Sprintf("%s in %s overrides another value on %d environments", k, oursSays, len(over)), append(details, "to use those values again:", unset)...)
+			report.Say(report.WarnLevel, fmt.Sprintf("%s in %s overrides another value on %d environments", k, oursSays, len(over)), details, report.Hint("to use those values again:", unset))
 		}
 	}
 }
@@ -206,16 +206,16 @@ func sayHidden(k, oursSays, addr string, nearer []cli.EnvTracedDef, own, parent 
 	if len(says) > 1 {
 		verb = "override"
 	}
-	var details []string
+	var hints []report.Remedy
 	if inherited && !owned {
-		details = []string{"to set it there instead, over the inherited value:", report.CmdMark + "devopsy @" + addr + " --vars set " + k}
+		hints = []report.Remedy{report.Hint("to set it there instead, over the inherited value:", "devopsy @"+addr+" --vars set "+k)}
 	}
 	if inherited {
 		from := "its parent"
 		if parent != "" {
 			from = parent
 		}
-		details = append(details, fmt.Sprintf("to stop inheriting it: drop %s from %s's inherit: in config.yaml and release %s, then:", k, from, from), report.CmdMark+"devopsy @"+addr+" --inherit")
+		hints = append(hints, report.Hint(fmt.Sprintf("to stop inheriting it: drop %s from %s's inherit: in config.yaml and release %s, then:", k, from, from), "devopsy @"+addr+" --inherit"))
 	}
-	report.Warn(fmt.Sprintf("%s in %s has no effect on @%s: %s %s it", k, oursSays, addr, joinAnd(says), verb), details...)
+	report.Say(report.WarnLevel, fmt.Sprintf("%s in %s has no effect on @%s: %s %s it", k, oursSays, addr, joinAnd(says), verb), nil, hints...)
 }

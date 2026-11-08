@@ -51,8 +51,20 @@ const Prefix = "devopsy: "
 // Bar starts a line that continues the one before: details and fixes.
 const Bar = Prefix + "| "
 
-// CmdMark starts a command to copy, on a Bar line.
-const CmdMark = "$ "
+// cmdMark starts a command to copy: only this package writes it
+// (TestNothingSaysAround), so every command is laid out one way.
+const cmdMark = "$ "
+
+// SplitCmd splits a line of RemedyLines that is a command into what
+// leads it (a number, an indent) and the command shown after "$ ", for
+// painting it apart; ok false for any other line.
+func SplitCmd(line string) (lead, cmd string, ok bool) {
+	cmd = strings.TrimLeft(line, " 0123456789.")
+	if !strings.HasPrefix(cmd, cmdMark) {
+		return "", "", false
+	}
+	return line[:len(line)-len(cmd)], cmd, true
+}
 
 var tags = map[Level]string{TraceLevel: "trace", DebugLevel: "debug", WarnLevel: "warning", ErrorLevel: "error"}
 
@@ -72,22 +84,83 @@ func Head(l Level) string {
 // mistake; Lines splits them.
 func Line(l Level, msg string) string { return Head(l) + msg }
 
-// Remedy is one way to fix a failure: what to do and, optionally, the
-// commands that do it.
+// Remedy is what a line offers to do: a fix, a way out of what is wrong
+// (Fix), or a hint, a command worth knowing (Hint); text says what it
+// does, the commands do it.
 type Remedy struct {
 	Text string   `json:"text,omitempty"`
 	Cmds []string `json:"commands,omitempty"`
+	// Hint is a hint's: shown in order, never under "to fix it:".
+	Hint bool `json:"hint,omitempty"`
 }
 
-// Fix is a Remedy: text says what to do (it may be empty when the
-// commands say it all), cmds are shown after CmdMark, to copy.
+// Fix is a way out of what a line says is wrong: text says what to do
+// (it may be empty when the commands say it all), cmds are shown after
+// "$ ", to copy. A line's fixes are alternatives (RemedyLines).
 func Fix(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds} }
 
+// Hint is a command worth knowing, said after a line's details: text
+// (perhaps empty), then cmds after "$ ". A line's hints are steps, in
+// order (RemedyLines).
+func Hint(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds, Hint: true} }
+
+// RemedyLines lays out rs, without a bar (a string of several lines
+// stays one), an empty one skipped: each hint's text then its commands,
+// in order; then the fixes, one under "to fix it:", more under "to fix
+// it, do one of these:", each numbered, a text of several lines under
+// its number.
+func RemedyLines(rs []Remedy) []string {
+	var out []string
+	var fixes []Remedy
+	for _, r := range rs {
+		if r.Text == "" && len(r.Cmds) == 0 {
+			continue // nothing to say (a bare --fix)
+		}
+		if !r.Hint {
+			fixes = append(fixes, r)
+			continue
+		}
+		if r.Text != "" {
+			out = append(out, r.Text)
+		}
+		for _, c := range r.Cmds {
+			out = append(out, cmdMark+c)
+		}
+	}
+	switch len(fixes) {
+	case 0:
+	case 1:
+		out = append(out, "to fix it:")
+		if fixes[0].Text != "" {
+			out = append(out, fixes[0].Text)
+		}
+		for _, c := range fixes[0].Cmds {
+			out = append(out, cmdMark+c)
+		}
+	default:
+		out = append(out, "to fix it, do one of these:")
+		for i, f := range fixes {
+			num := fmt.Sprintf("%d. ", i+1)
+			indent := strings.Repeat(" ", len(num))
+			cmds := f.Cmds
+			if f.Text != "" {
+				out = append(out, num+strings.ReplaceAll(strings.TrimRight(f.Text, "\n"), "\n", "\n"+indent))
+			} else if len(cmds) > 0 {
+				out = append(out, num+cmdMark+cmds[0])
+				cmds = cmds[1:]
+			}
+			for _, c := range cmds {
+				out = append(out, indent+cmdMark+c)
+			}
+		}
+	}
+	return out
+}
+
 // Lines formats msg at level l: msg's first line after Head(l), then
-// msg's other lines, the details and the fixes, each on a Bar line
-// (every string split at its newlines). One fix reads "to fix it:" and
-// the fix; more read "to fix it, do one of these:" and each numbered.
-func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
+// msg's other lines, the details and the remedies (RemedyLines), each on
+// a Bar line (every string split at its newlines).
+func Lines(l Level, msg string, details []string, remedies []Remedy) []string {
 	head, rest, _ := strings.Cut(strings.TrimRight(msg, "\n"), "\n")
 	out := []string{Head(l) + Copyable(head)}
 	add := func(s string) {
@@ -101,34 +174,8 @@ func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 	for _, d := range details {
 		add(d)
 	}
-	switch len(fixes) {
-	case 0:
-	case 1:
-		add("to fix it:")
-		if fixes[0].Text != "" {
-			add(fixes[0].Text)
-		}
-		for _, c := range fixes[0].Cmds {
-			add(CmdMark + c)
-		}
-	default:
-		add("to fix it, do one of these:")
-		for i, f := range fixes {
-			num := fmt.Sprintf("%d. ", i+1)
-			indent := strings.Repeat(" ", len(num))
-			cmds := f.Cmds
-			if f.Text != "" {
-				// A text of several lines (a label, a config example)
-				// goes under its number.
-				add(num + strings.ReplaceAll(strings.TrimRight(f.Text, "\n"), "\n", "\n"+indent))
-			} else if len(cmds) > 0 {
-				add(num + CmdMark + cmds[0])
-				cmds = cmds[1:]
-			}
-			for _, c := range cmds {
-				add(indent + CmdMark + c)
-			}
-		}
+	for _, r := range RemedyLines(remedies) {
+		add(r)
 	}
 	return out
 }
@@ -165,16 +212,17 @@ func bracketsIPv6(w string) bool {
 	return ok && closed && err == nil && a.Is6()
 }
 
-// Failure is an error with details (why it happens) and fixes (what to
-// do about it). Error() is the message alone, so wrapping keeps the usual
-// "context: message" shape; Fail prints the rest under it. Also are
-// failures of the same kind found with it (each data service without a
-// label), which Fail says after it, each with its own message, in order.
+// Failure is an error with details (why it happens) and remedies (what
+// to do about it: fixes and hints). Error() is the message alone, so
+// wrapping keeps the usual "context: message" shape; Fail prints the
+// rest under it. Also are failures of the same kind found with it (each
+// data service without a label), which Fail says after it, each with its
+// own message, in order.
 type Failure struct {
-	Msg     string
-	Details []string
-	Fixes   []Remedy
-	Also    []*Failure
+	Msg      string
+	Details  []string
+	Remedies []Remedy
+	Also     []*Failure
 }
 
 func (e *Failure) Error() string { return e.Msg }
@@ -213,11 +261,11 @@ func Messages(err error) []string {
 	return ms
 }
 
-// Fixes are err's, when a Failure is in its chain.
-func Fixes(err error) []Remedy {
+// Remedies are err's, when a Failure is in its chain.
+func Remedies(err error) []Remedy {
 	var e *Failure
 	if errors.As(err, &e) {
-		return e.Fixes
+		return e.Remedies
 	}
 	return nil
 }

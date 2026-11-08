@@ -1003,7 +1003,7 @@ func TestReleaseFrom(t *testing.T) {
 	if out, code := s.run(nil, "@devopsy@one:solo", "--release", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: @devopsy@one:solo is not a child") {
 		t.Fatalf("--from without a parent (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") {
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") || !strings.Contains(out, "$ devopsy @devopsy@one:dev --release-sync --from @devopsy@one:prod\n") {
 		t.Fatalf("--release-no-sync --from (%d):\n%s", code, out)
 	}
 	// An address --from cannot take says why, its fix with it.
@@ -1297,7 +1297,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
 
 	// No agent here: nothing starts.
-	if out, code := s.run(env, "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "eval $(ssh-agent)") || s.current("dev") != "" {
+	if out, code := s.run(env, "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "$ eval \"$(ssh-agent)\"; ssh-add\n") || s.current("dev") != "" {
 		t.Fatalf("no agent (%d):\n%s", code, out)
 	}
 	if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
@@ -1404,7 +1404,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	write(t, filepath.Join(lacks, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ say / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	out, code = s.run(append(agent, "FAKE_CHILD_PATH="+lacks), "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (say): upgrade it (devopsy @devopsy@two: --upgrade)") || !strings.Contains(out, "listing the child's services") || strings.Contains(docker, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.Contains(docker, "rsync://") {
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (say)\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. upgrade it:\ndevopsy: |    $ devopsy @devopsy@two: --upgrade") || !strings.Contains(out, "listing the child's services") || strings.Contains(docker, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.Contains(docker, "rsync://") {
 		t.Fatalf("a child lacking what the push needs (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -1846,7 +1846,7 @@ func TestSyncGuards(t *testing.T) {
 	if out, code := s.run(nil, "@solo", "--release-sync"); code == 0 || !strings.Contains(out, "@devopsy@one:solo is not a child") {
 		t.Errorf("--release-sync, not a child (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "the parent @devopsy@one:prod (devopsy@one:shop/prod) has no current release") {
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "the parent @devopsy@one:prod (devopsy@one:shop/prod) has no current release") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release\n") {
 		t.Errorf("parent not released (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "has no current release") || !strings.Contains(out, "--release-no-sync") {
@@ -1856,7 +1856,7 @@ func TestSyncGuards(t *testing.T) {
 		t.Errorf("the child was touched: %v", err)
 	}
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "has no current release: run 'devopsy @devopsy@one:dev --release' first") {
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "has no current release\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. release it, which syncs on its own:\ndevopsy: |    $ devopsy @devopsy@one:dev --release\ndevopsy: | 2. release it without the data, then sync it:\ndevopsy: |    $ devopsy @devopsy@one:dev --release-no-sync\ndevopsy: |    $ devopsy @devopsy@one:dev --sync\n") {
 		t.Errorf("child not released (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--from", "dev", "--yes"); code == 0 || !strings.Contains(out, "and its parent are the same environment") {
@@ -2580,7 +2580,7 @@ func TestSyncHolderGone(t *testing.T) {
 	s.logs()
 	out, code := s.run([]string{"FAKE_SLOW_RSYNC=" + started, "FAKE_HOLDER_DIE=" + started}, "@dev", "--sync", "--yes")
 	docker, ssh := s.logs()
-	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
+	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | see whether it does:\ndevopsy: | $ devopsy @devopsy@one:dev --status\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @devopsy@one:dev --sync") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("holder gone (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
 	// The push outlives devopsy's session: its restore may still be
@@ -2685,7 +2685,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	// The capability's warning, its fix under it, every key aligned on
 	// the longest.
 	out, code = s.run([]string{"FAKE_SHOW=warning\tmaintenance\ton\tdevopsy maintenance off\n"}, "--status")
-	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  on\n             $ devopsy maintenance off\n") {
+	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  on\n             to fix it:\n             $ devopsy maintenance off\n") {
 		t.Errorf("the capability's warning (%d):\n%s", code, out)
 	}
 	// A line of another format is warned, the others still shown.
@@ -4583,8 +4583,9 @@ func TestSyncChildRefusesLeavingBindsBeforeStopping(t *testing.T) {
 	}
 }
 
-// The child's check before stopping names --reset as the way to start
-// the child over without the link, and a reset skips it, since its wipe
+// The child's check before stopping names --reset as a way to start the
+// child over without the link, one of its numbered fixes beside the
+// mounts check's own, and a reset skips it, since its wipe
 // removes the link: here dev's app binds mnt/cache/public, a link to /
 // in an entry the parent has not, so a sync is refused, and the reset
 // wipes it and copies prod's data, nothing left stopped or marked.
@@ -4602,7 +4603,7 @@ func TestSyncResetWipesLeavingBind(t *testing.T) {
 	if err := os.Symlink("/", filepath.Join(s.mnt("dev"), "cache", "public")); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "devopsy @devopsy@one:dev --reset") {
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "to fix it, do one of these:") || !strings.Contains(out, "2. start it over from its parent") || !strings.Contains(out, "$ devopsy @devopsy@one:dev --reset") {
 		t.Fatalf("a sync into a child with a link out of its entry at a bind source (%d):\n%s", code, out)
 	}
 	s.logs()

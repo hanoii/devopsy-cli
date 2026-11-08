@@ -210,16 +210,18 @@ func (m *Incomplete) IsRestore() bool { return m != nil && m.Code == IncompleteR
 // complete, ref the address as typed, child whether it has a parent: the
 // import again from a complete file (on a child, or a sync), or
 // --resolved to go on with the data as it is. Each with its command, for
-// report's fixes and --say's details (fixLines) alike.
+// report's fixes and --say's (sayRemedies) alike.
 func ImportFixes(ref, service string, child bool) []report.Remedy {
 	fixes := []report.Remedy{
 		report.Fix("import it again, from a complete file:", "devopsy @"+ref+" --import "+service+" < <file>"),
 	}
 	if child {
-		fixes = append(fixes, report.Fix("or sync it from its parent:", "devopsy @"+ref+" --sync"), ResetFix(ref))
+		fixes = append(fixes, report.Fix("sync it from its parent:", "devopsy @"+ref+" --sync"), ResetFix(ref))
 	}
+	resolved := "devopsy @" + ref + " --import " + service + " --resolved"
 	return append(fixes,
-		report.Fix("or go on with the data as it is (to fix it by hand first: devopsy @"+ref+" up -d --no-deps "+service+", then --shell "+service+"):", "devopsy @"+ref+" --import "+service+" --resolved"))
+		report.Fix("go on with the data as it is:", resolved),
+		report.Fix("fix it by hand, then go on with it:", "devopsy @"+ref+" up -d --no-deps "+service, "devopsy @"+ref+" --shell "+service, resolved))
 }
 
 // RestoreFixes are the ways out of a restore of snapshot that did not
@@ -229,8 +231,8 @@ func ImportFixes(ref, service string, child bool) []report.Remedy {
 func RestoreFixes(ref, snapshot string, child bool) []report.Remedy {
 	fixes := []report.Remedy{
 		report.Fix("restore it again:", "devopsy @"+ref+" --snapshots restore "+snapshot),
-		report.Fix("or its data alone, under the current release:", "devopsy @"+ref+" --snapshots restore "+snapshot+" --no-code"),
-		report.Fix("or another snapshot:", "devopsy @"+ref+" --snapshots"),
+		report.Fix("its data alone, under the current release:", "devopsy @"+ref+" --snapshots restore "+snapshot+" --no-code"),
+		report.Fix("another snapshot:", "devopsy @"+ref+" --snapshots"),
 	}
 	if child {
 		fixes = append(fixes, ResetFix(ref))
@@ -238,66 +240,86 @@ func RestoreFixes(ref, snapshot string, child bool) []report.Remedy {
 	return fixes
 }
 
-// restoreFixLines are RestoreFixes as --say's details, the snapshot the
-// shell's $snapshot.
-func restoreFixLines(t *Target, snapshot string) string {
-	return fixLines(RestoreFixes(HintAddress(t), "$"+snapshot, t.Parent != "")...)
-}
-
-// fixLines are fixes as --say's details, for a script: each its text
-// (when it has one), then its commands after report.CmdMark, each
-// double-quoted, so a shell variable in them expands.
-func fixLines(fixes ...report.Remedy) string {
-	var lines []string
-	for _, f := range fixes {
-		if f.Text != "" {
-			lines = append(lines, `"`+f.Text+`"`)
+// sayRemedies are rs as --say's words, for a script: each --fix or
+// --hint, its text, then its commands, each double-quoted, so a shell
+// variable in them expands.
+func sayRemedies(rs ...report.Remedy) string {
+	var words []string
+	for _, r := range rs {
+		words = append(words, SayFixFlag)
+		if r.Hint {
+			words[len(words)-1] = SayHintFlag
 		}
-		for _, c := range f.Cmds {
-			lines = append(lines, `"`+report.CmdMark+c+`"`)
+		words = append(words, `"`+r.Text+`"`)
+		for _, c := range r.Cmds {
+			words = append(words, `"`+c+`"`)
 		}
 	}
-	return strings.Join(lines, " ")
+	return strings.Join(words, " ")
+}
+
+// SeeHint is the command that shows what of ref (how it ends, whether
+// it was taken) through flag (--log, --status, --snapshots).
+func SeeHint(ref, what, flag string) report.Remedy {
+	return report.Hint("see "+what+":", "devopsy @"+ref+" "+flag)
+}
+
+// LogHint is the command that shows why what failed on ref failed.
+func LogHint(ref string) report.Remedy { return SeeHint(ref, "why", "--log") }
+
+// releaseFirst is the --say words of the way out of an environment with
+// no release yet, t's first release: text says it, empty for "release it
+// first:".
+func releaseFirst(t *Target, text string) string {
+	if text == "" {
+		text = "release it first:"
+	}
+	return sayRemedies(report.Fix(text, "devopsy @"+HintAddress(t)+" --release"))
 }
 
 // ResetFix is the way out that starts a child over from its parent.
 func ResetFix(ref string) report.Remedy {
-	return report.Fix("or start it over from its parent (all its data goes, its shared/.env stays):", "devopsy @"+ref+" --reset")
+	return report.Fix("start it over from its parent (all its data goes, its shared/.env stays):", "devopsy @"+ref+" --reset")
 }
 
-// syncFixLines are a sync mark's ways out as --say's details for a
-// script: a sync, the details in more (each double-quoted), a reset.
-func syncFixLines(t *Target, more ...string) string {
-	lines := []string{fixLines(report.Fix("to fix it, sync it again:", "devopsy @"+HintAddress(t)+" --sync"))}
-	return strings.Join(append(append(lines, more...), resetFixLines(t)), " ")
+// syncFixes are a sync mark's ways out: a sync, more, a reset.
+func syncFixes(t *Target, more ...report.Remedy) string {
+	fixes := append([]report.Remedy{report.Fix("sync it again:", "devopsy @"+HintAddress(t)+" --sync")}, more...)
+	return sayRemedies(append(fixes, ResetFix(HintAddress(t)))...)
 }
 
-// resetFixLines is ResetFix as --say's details for a script.
-func resetFixLines(t *Target) string {
-	return fixLines(ResetFix(HintAddress(t)))
+// releaseSyncFix is the way out of a sync mark for a release: one that
+// syncs.
+func releaseSyncFix(t *Target) report.Remedy {
+	return report.Fix("release with a sync:", "devopsy @"+HintAddress(t)+" --release-sync")
 }
 
-// importFixLines are ImportFixes as --say's details for a script, the
-// service the shell's $service: each text, then its command after
-// report.CmdMark, double-quoted.
-func importFixLines(t *Target, service string) string {
-	return fixLines(ImportFixes(HintAddress(t), "$"+service, t.Parent != "")...)
+// importFixes are ImportFixes as --say's words, the service the shell's
+// $service.
+func importFixes(t *Target, service string) string {
+	return sayRemedies(ImportFixes(HintAddress(t), "$"+service, t.Parent != "")...)
+}
+
+// restoreFixes are RestoreFixes as --say's words, the snapshot the
+// shell's $snapshot.
+func restoreFixes(t *Target, snapshot string) string {
+	return sayRemedies(RestoreFixes(HintAddress(t), "$"+snapshot, t.Parent != "")...)
 }
 
 // markRefusal is shell refusing on the environment's mark ($base set),
 // then running refuse: an import's says which service and the ways out,
 // a restore's which snapshot and its ways out, a sync's what syncFix
-// says (--say details). what is what does not
+// says (--say's words, sayRemedies). what is what does not
 // happen ("nothing released"). Without a mark, nothing.
 func markRefusal(t *Target, what, syncFix, refuse string) string {
 	mark := `"$base/` + SyncIncompleteFile + `"`
 	return `if [ -e ` + mark + ` ]; then
   if [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
     mr_service=$(cut -f2 ` + mark + ` 2>/dev/null) || true
-    devopsy --say error "the import of $mr_service into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + importFixLines(t, "mr_service") + `
+    devopsy --say error "the import of $mr_service into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + importFixes(t, "mr_service") + `
   elif [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
     mr_snapshot=$(cut -f2 ` + mark + ` 2>/dev/null) || true
-    devopsy --say error "the restore of snapshot $mr_snapshot into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + restoreFixLines(t, "mr_snapshot") + `
+    devopsy --say error "the restore of snapshot $mr_snapshot into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + restoreFixes(t, "mr_snapshot") + `
   else
     devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + what + `: ` + IncompleteWhy + `" ` + syncFix + `
   fi
@@ -315,7 +337,7 @@ fi
 // written. A failure of its own said so itself.
 func killedSays(t *Target, projectName, status, nothing string) string {
 	s := `if [ "$` + status + `" -gt 128 ]; then
-` + markRefusal(t, killed(status), syncFixLines(t), ":")
+` + markRefusal(t, killed(status), syncFixes(t), ":")
 	if nothing != "" {
 		s += `if [ ! -e "$base/` + SyncIncompleteFile + `" ]; then
 ` + settleSync(projectName) + "  " + killedLine(status, "before its first write", nothing, "") + `fi
@@ -341,7 +363,7 @@ func killedLine(status, when, left, finish string) string {
 	}
 	s = `devopsy --say error "` + s + `: ` + left + `"`
 	if finish != "" {
-		s += " " + fixLines(report.Fix("to finish it:", finish))
+		s += " " + sayRemedies(report.Fix("", finish))
 	}
 	return s + " || true\n"
 }
@@ -769,7 +791,7 @@ func syncBlock(projectName, failed string, release bool) string {
       elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
         devopsy --say error "nothing was copied, and the data is still from a restore of snapshot $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes every service of it, and ` + failed + `" || true
       else
-        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" ` + fixLines(report.Fix("if the parent no longer has that data, start the child over from it:", "devopsy @$"+SyncToTargetEnv+" --reset")) + ` || true
+        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" ` + sayRemedies(report.Fix("if the parent no longer has that data, start the child over from it:", "devopsy @$"+SyncToTargetEnv+" --reset")) + ` || true
       fi
       ;;
     *) devopsy --say error "the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" || true ;;
@@ -848,12 +870,12 @@ var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -
 // deployed decides, never the checkout). o says where from (From, the
 // parent's address).
 func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) string {
-	s := "set -eu\n" + NoExit255 + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	s := "set -eu\n" + NoExit255 + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: nothing to sync into"
   exit 1
 fi
-[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, HintAddress(t)) + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
+[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release" ` + sayRemedies(report.Fix("release it, which syncs on its own:", "devopsy @"+HintAddress(t)+" --release"), report.Fix("release it without the data, then sync it:", "devopsy @"+HintAddress(t)+" --release-no-sync", "devopsy @"+HintAddress(t)+" --sync")) + `; exit 1; }
+` + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
@@ -932,8 +954,8 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
-` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + HintAddress(p) + ` --sync)"
+` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixes(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  devopsy --say error "the parent $base holds data from a sync that did not complete" ` + sayRemedies(report.Fix("sync it first:", "devopsy @"+HintAddress(p)+" --sync")) + `
   exit 1
 fi
 cd "$base/current"
@@ -979,21 +1001,21 @@ func ImportScript(t *Target, projectName, service, end, accept string) string {
 	if accept != "" {
 		acceptLine = "export " + ImagesAcceptEnv + "=" + Quote(accept) + "\n"
 	}
-	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
-`, HintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "") + `; exit 1; }
+` + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
 trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
 ` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   im_code=$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   im_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   if [ "$im_code" = ` + IncompleteRestore + ` ]; then
-    devopsy --say error "the restore of snapshot $im_service into @` + t.Address + ` did not complete, and only a restore completes it: nothing imported" ` + restoreFixLines(t, "im_service") + `
+    devopsy --say error "the restore of snapshot $im_service into @` + t.Address + ` did not complete, and only a restore completes it: nothing imported" ` + restoreFixes(t, "im_service") + `
     exit 1
   elif [ "$im_code" != ` + IncompleteImport + ` ]; then
-    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" ` + syncFixLines(t) + `
+    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" ` + syncFixes(t) + `
     exit 1
   elif [ "$im_service" != ` + Quote(service) + ` ]; then
-    devopsy --say error "the import of $im_service into @` + t.Address + ` did not complete, and only $im_service can be imported until one does: nothing imported" ` + importFixLines(t, "im_service") + `
+    devopsy --say error "the import of $im_service into @` + t.Address + ` did not complete, and only $im_service can be imported until one does: nothing imported" ` + importFixes(t, "im_service") + `
     exit 1
   fi
 fi

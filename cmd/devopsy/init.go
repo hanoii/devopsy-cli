@@ -26,7 +26,7 @@ func runInit(cwd string, args []string, color bool) int {
 	}
 	file := filepath.Join(dot, remote.ConfigFile)
 	if _, err := os.Stat(file); err == nil {
-		report.Info(file+" exists: nothing to do", "devopsy --debug schema documents every key")
+		report.Say(report.InfoLevel, file+" exists: nothing to do", nil, report.Hint("every key:", "devopsy --debug schema"))
 		return 0
 	}
 
@@ -38,7 +38,7 @@ func runInit(cwd string, args []string, color bool) int {
 	case atTerminal():
 		name = report.Default().Input(stdinReader, "the project's name on servers (its directory and compose names)", suggest)
 	default:
-		return fail("devopsy --init <project>: name the project when not at a terminal (" + suggest + "?)")
+		return failErr(&report.Failure{Msg: "--init: no terminal to ask the project's name on", Remedies: []report.Remedy{report.Fix("name it:", "devopsy --init "+suggest)}})
 	}
 	if !remote.ValidName(name) {
 		return fail(fmt.Sprintf("project %q: lowercase letters, digits and -", name))
@@ -62,6 +62,6 @@ environments:
 	if _, err := os.Stat(filepath.Join(dot, "compose.yaml")); err != nil {
 		then = "add " + filepath.Join(dot, "compose.yaml") + ", then release with:"
 	}
-	report.Info("wrote "+file, then, report.CmdMark+"devopsy @<server>:prod --release")
+	report.Say(report.InfoLevel, "wrote "+file, nil, report.Hint(then, "devopsy @<server>:prod --release"))
 	return 0
 }

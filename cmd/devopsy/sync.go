@@ -133,7 +133,7 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	}
 	if !job.sameHost {
 		if os.Getenv("SSH_AUTH_SOCK") == "" {
-			return nil, fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally: eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", p.Host, c.Host)
+			return nil, agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally", p.Host, c.Host))
 		}
 		if err := agentHasKeys(p.Host, c.Host); err != nil {
 			return nil, err
@@ -171,15 +171,15 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	job.inherit = remote.ParseInherit(out.String())
 	switch {
 	case !cur.Current:
-		return nil, fmt.Errorf("the parent @%s (%s:%s) has no current release: release it first", p.Address, p.Host, p.Path)
+		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) has no current release", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("release it first:", "devopsy @"+remote.HintAddress(p)+" --release")}}
 	case cur.Importing:
-		return nil, fmt.Errorf("an import into the parent @%s (%s:%s) is running: sync once it is done (devopsy @%s --status shows it)", p.Address, p.Host, p.Path, targetRef(p))
+		return nil, &report.Failure{Msg: fmt.Sprintf("an import into the parent @%s (%s:%s) is running: sync once it is done", p.Address, p.Host, p.Path), Remedies: []report.Remedy{remote.SeeHint(targetRef(p), "it", "--status")}}
 	case cur.Mark.IsImport():
-		return nil, fmt.Errorf("the import of %s into the parent @%s (%s:%s) did not complete: import it again, or devopsy @%s --import %s --resolved, then sync", cur.Mark.From, p.Address, p.Host, p.Path, targetRef(p), cur.Mark.From)
+		return nil, &report.Failure{Msg: fmt.Sprintf("the import of %s into the parent @%s (%s:%s) did not complete: complete it, then sync", cur.Mark.From, p.Address, p.Host, p.Path), Remedies: remote.ImportFixes(remote.HintAddress(p), cur.Mark.From, p.Parent != "")}
 	case cur.Mark.IsRestore():
-		return nil, fmt.Errorf("the restore of snapshot %s into the parent @%s (%s:%s) did not complete: restore it again (devopsy @%s --snapshots restore %s), then sync", cur.Mark.From, p.Address, p.Host, p.Path, targetRef(p), cur.Mark.From)
+		return nil, &report.Failure{Msg: fmt.Sprintf("the restore of snapshot %s into the parent @%s (%s:%s) did not complete: complete it, then sync", cur.Mark.From, p.Address, p.Host, p.Path), Remedies: remote.RestoreFixes(remote.HintAddress(p), cur.Mark.From, p.Parent != "")}
 	case cur.Mark != nil:
-		return nil, fmt.Errorf("the parent @%s (%s:%s) holds data from a sync that did not complete: sync it first (devopsy @%s --sync)", p.Address, p.Host, p.Path, targetRef(p))
+		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) holds data from a sync that did not complete", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("sync it first:", "devopsy @"+remote.HintAddress(p)+" --sync")}}
 	}
 	return job, nil
 }
@@ -213,7 +213,7 @@ func sameHost(a, b string) bool {
 func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog, color bool) int {
 	log := report.Default().Tee(rlog.Line)
 	partial := func() {
-		log.Warn("@"+job.child.Address+" may hold a partial copy now", "devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
+		log.Say(report.WarnLevel, "@"+job.child.Address+" may hold a partial copy now", nil, remote.SeeHint(targetRef(job.child), "whether it does", "--status"), report.Fix("", "devopsy @"+remote.HintAddress(job.child)+" --sync"))
 	}
 	// An *os.File, so the holder's ssh reads it directly: devopsy writes go
 	// or abort, and nothing waits on a copy if the holder ends first.
@@ -352,7 +352,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 			// The push's session is gone, not necessarily the push: what
 			// the copy wrote decides, never the answer.
 			answer = "abort\n"
-			log.Error(lostSays(job.parent, "during the copy", "what the copy wrote decides how the sync ends on @"+job.child.Address), "devopsy @"+targetRef(job.child)+" --status shows it")
+			log.Say(report.ErrorLevel, lostSays(job.parent, "during the copy", "what the copy wrote decides how the sync ends on @"+job.child.Address), nil, remote.SeeHint(targetRef(job.child), "how it ended", "--status"))
 		} else if code != 0 {
 			answer = "abort\n"
 			log.Error(fmt.Sprintf("the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
@@ -386,8 +386,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		select {
 		case res = <-done:
 		case <-sigs:
-			w := goesOnSays(job.child, "run step", "", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
-			log.Warn(w[0], w[1:]...)
+			goesOnSays(job.child, "run step", "", remote.SeeHint(targetRef(job.child), "how it ends", "--log")).say(log, report.WarnLevel)
 			select {
 			case res = <-done:
 			case <-sigs:
@@ -403,19 +402,19 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		return 1
 	}
 	if res.code == 0 && pushFailed != 0 {
-		log.Error(fmt.Sprintf("the copy into @%s had completed and it went on, but the push on @%s failed (%d): check its services", job.child.Address, job.parent.Address, pushFailed), "devopsy @"+targetRef(job.parent)+" --status shows them")
+		log.Say(report.ErrorLevel, fmt.Sprintf("the copy into @%s had completed and it went on, but the push on @%s failed (%d): check its services", job.child.Address, job.parent.Address, pushFailed), nil, remote.SeeHint(targetRef(job.parent), "them", "--status"))
 		return 1
 	}
 	if res.code == sshLost {
 		switch {
 		case !marked && release:
-			log.Error(lostSays(job.child, "before the copy", "its data there is as it was"), "devopsy @"+targetRef(job.child)+" --releases shows whether the release went live")
+			log.Say(report.ErrorLevel, lostSays(job.child, "before the copy", "its data there is as it was"), nil, remote.SeeHint(targetRef(job.child), "whether the release went live", "--releases"))
 		case !marked:
-			log.Error(lostSays(job.child, "before the copy", "its data there is as it was, and "+staysDown), "devopsy @"+targetRef(job.child)+" --status shows it")
+			log.Say(report.ErrorLevel, lostSays(job.child, "before the copy", "its data there is as it was, and "+staysDown), nil, remote.SeeHint(targetRef(job.child), "its state", "--status"))
 		case answered:
-			log.Error(lostSays(job.child, "after the copy", "the sync was past its copy there"), "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+			log.Say(report.ErrorLevel, lostSays(job.child, "after the copy", "the sync was past its copy there"), nil, remote.SeeHint(targetRef(job.child), "how it ends", "--log"))
 		default:
-			log.Error(lostSays(job.child, "during the copy", "what the copy wrote decides how the sync ends there"), "devopsy @"+targetRef(job.child)+" --status shows how it ended")
+			log.Say(report.ErrorLevel, lostSays(job.child, "during the copy", "what the copy wrote decides how the sync ends there"), nil, remote.SeeHint(targetRef(job.child), "how it ended", "--status"))
 		}
 	}
 	return res.code
@@ -590,7 +589,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		log.Info(fmt.Sprintf("inherited %s from @%s into @%s's shared/%s", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
 	if len(shadowed) > 0 {
-		log.Warn(fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), "to inherit it:", report.CmdMark+"devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " "))
+		log.Say(report.WarnLevel, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), nil, report.Hint("to inherit it:", "devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " ")))
 	}
 	if len(missing) > 0 {
 		log.Warn(fmt.Sprintf("@%s does not set %s (its current release's inherit:): not inherited", p.Address, strings.Join(missing, ", ")))
@@ -974,7 +973,7 @@ func runUtilImage() int {
 func syncEnv(flag string) (toDir, toProject string, err error) {
 	toDir, toProject = os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv)
 	if toDir == "" || toProject == "" {
-		return "", "", fmt.Errorf("%s only runs in a sync's push, on the parent's server (devopsy @<child> --sync)", flag)
+		return "", "", &report.Failure{Msg: flag + " only runs in a sync's push, on the parent's server", Remedies: []report.Remedy{report.Hint("a sync runs it:", "devopsy @<child> --sync")}}
 	}
 	return toDir, toProject, nil
 }
@@ -1287,8 +1286,8 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 		}
 		if len(missing) > 0 {
 			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
-				Fixes: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
-					report.Fix("or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
+				Remedies: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
+					report.Fix("start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
 			return nil, 1
 		}
 	}
@@ -1308,7 +1307,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 			if len(missing) > 0 {
 				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy " + strings.Join(missing, ", ") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
 			}
-			report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
+			report.Fail(&report.Failure{Msg: msg, Remedies: fixes})
 			return nil, 1
 		}
 	}
@@ -1352,7 +1351,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 		if len(conflicts) > 0 {
 			fixes = append(fixes, report.Fix(cli.DataStopLabel+"="+cli.StopImport+" on the child's service, to stop it for the sync"), report.Fix(cli.DataLabel+"=true on the child's service ("+cli.DataCopyLabel+"="+cli.CopyVolumes+"), to copy under it running"))
 		}
-		report.Fail(&report.Failure{Msg: "the child's data labels do not match the parent's: nothing changed", Details: append(conflicts, mismatches...), Fixes: fixes})
+		report.Fail(&report.Failure{Msg: "the child's data labels do not match the parent's: nothing changed", Details: append(conflicts, mismatches...), Remedies: fixes})
 		return nil, 1
 	}
 	for _, msg := range stopMismatches(services, child) {
@@ -2705,7 +2704,7 @@ func childPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []
 	// --reset, whose wipe removes it. Which entries the copy replaces
 	// is the parent's to say: one there is refused too, said.
 	if os.Getenv(remote.SyncResetEnv) == "" {
-		if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied (or start the child over without it: devopsy @"+cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")+" --reset)"); err != nil {
+		if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied", remote.ResetFix(cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>"))); err != nil {
 			return failErr(err)
 		}
 	}
@@ -3009,7 +3008,7 @@ func agentHasKeys(parent, child string) error {
 	case 1:
 		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and it holds no key: ssh-add the key %s accepts (in CI, each server's CI key)", parent, child, child)
 	case 2:
-		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s): eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", parent, child, os.Getenv("SSH_AUTH_SOCK"))
+		return agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s)", parent, child, os.Getenv("SSH_AUTH_SOCK")))
 	}
 	return nil
 }
@@ -3031,4 +3030,10 @@ func syncLeftovers(base string) {
 			_ = os.Remove(f)
 		}
 	}
+}
+
+// agentFailure is msg, a sync that needs an SSH agent and has none, with
+// the way to start one.
+func agentFailure(msg string) error {
+	return &report.Failure{Msg: msg, Remedies: []report.Remedy{report.Fix("start one with your key (in CI, add the key to an agent):", `eval "$(ssh-agent)"; ssh-add`)}}
 }
