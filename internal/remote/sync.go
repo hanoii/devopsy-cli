@@ -1138,11 +1138,17 @@ export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(pro
 `
 }
 
+// settleNeeded succeeds when something killed outright left what
+// --sync-services settle settles ($base set): a sync's record, claimed or
+// taken, or its gate alone (its key would answer while it stays), or a
+// take's or an operation's recorded stops.
+var settleNeeded = `{ [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || ls "$base"/` + SyncOpenPrefix + `* >/dev/null 2>&1 || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; }`
+
 // settleLeftover settles a sync's holder killed outright: its record's
 // writers end first, and its data becomes a sync's mark (replacing an
 // import's), which the checks after it see. Under the release lock.
 func settleLeftover(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if ` + settleNeeded + `; then
   ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
 fi
 `

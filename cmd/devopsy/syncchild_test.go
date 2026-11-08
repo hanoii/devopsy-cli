@@ -86,6 +86,24 @@ func TestSyncChild(t *testing.T) {
 	if out, code := child(list); code == 0 || !strings.Contains(out, "is not open") {
 		t.Errorf("taken (%d):\n%s", code, out)
 	}
+	os.Remove(filepath.Join(base, remote.SyncTakenFile))
+	// A holder killed outright with its gate open and nothing written: the
+	// next lock-taker's settle removes the gate, so its key does nothing.
+	write(t, gate, "vm1:prod "+id+"\n", 0o644)
+	settle := exec.Command(binary, "--sync-services", "settle")
+	settle.Dir = filepath.Join(base, "current")
+	settle.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+settle.Dir)
+	if out, err := settle.CombinedOutput(); err != nil || fileExists(gate) {
+		t.Fatalf("settle over a dead holder's gate (%v), gate there %v:\n%s", err, fileExists(gate), out)
+	}
+	if out, code := child(list); code == 0 || !strings.Contains(out, "is not open") {
+		t.Errorf("a settled gate's key (%d):\n%s", code, out)
+	}
+	// Whatever takes the lock next settles it: a release, here.
+	write(t, gate, "vm1:prod "+id+"\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || fileExists(gate) {
+		t.Errorf("a release over a dead holder's gate (%d), gate there %v:\n%s", code, fileExists(gate), out)
+	}
 }
 
 // A sync copies between users of one kind, both project users or both deploy users: a

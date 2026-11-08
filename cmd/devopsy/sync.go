@@ -124,8 +124,9 @@ func newSyncID() string {
 
 // syncPreflight checks a sync of p into c can start, before anything
 // changes: c is a child with a run step, p another environment of the same
-// project, released; across servers, an SSH agent to forward and a child
-// the parent's server can reach.
+// project, released; across servers, a child the parent's server can
+// reach, and the sync's key pair; with the child's facts (a release's
+// check), both sides of one kind and the child's host keys there.
 func syncPreflight(c, p *remote.Target, projectName string, reset bool, child *remote.Current) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
@@ -2234,7 +2235,7 @@ func (d dataSet) in(dir string) dataSet {
 // push may have left (remote.TaskSource).
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
-// an SSH session the forwarded agent opens.
+// an SSH session with the sync's key.
 func syncRsync(ctx context.Context, src dataSet, parent string, owners map[string]string, shares map[string]bool, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
@@ -2471,7 +2472,7 @@ func cleanEnv(projectName string) []string {
 // runSyncExec implements the hidden --sync-exec <args>...: devopsy args
 // in the child's current release, as its project, stdin, stdout and stderr
 // through: the push's look at the child's services, and its imports.
-// Across servers over SSH (the forwarded agent); on the same one with a
+// Across servers over SSH, a request with the sync's key; on the same one with a
 // clean environment.
 func runSyncExec(args []string, color bool) int {
 	toDir, toProject, err := syncEnv(cli.SyncExecFlag)
@@ -2640,6 +2641,13 @@ func childSettle(p place, services []cli.SyncService) int {
 	if err := settleStops(p.cwd, p.base); err != nil {
 		return fail(err.Error())
 	}
+	// A gate left is a dead holder's (settle runs under the lock, before a
+	// holder opens its own): gone, nothing claims it, and its sync's key
+	// does nothing any more (--sync-child).
+	gates, _ := filepath.Glob(filepath.Join(p.base, remote.SyncOpenPrefix+"*"))
+	for _, g := range gates {
+		_ = os.Remove(g)
+	}
 	started, taken := filepath.Join(p.base, remote.SyncStartedFile), filepath.Join(p.base, remote.SyncTakenFile)
 	if !fileExists(started) && !fileExists(taken) {
 		return 0
@@ -2660,10 +2668,6 @@ func childSettle(p place, services []cli.SyncService) int {
 		code = fail(err.Error())
 	}
 	_ = os.Remove(taken)
-	gates, _ := filepath.Glob(filepath.Join(p.base, remote.SyncOpenPrefix+"*"))
-	for _, g := range gates {
-		_ = os.Remove(g)
-	}
 	syncLeftovers(p.base)
 	if err := runDataHook(context.Background(), p.cwd, p.projectDir, recordHookEnv(p.cwd, services), nil, nil, nil, "finish", "child", "partial"); err != nil {
 		code = fail("the data capability's finish child partial: " + err.Error())

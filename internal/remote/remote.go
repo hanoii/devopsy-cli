@@ -1083,7 +1083,7 @@ func releaseSnapshotStopped(projectName string, restore bool) string {
 // stopped services start), under the release lock, in the current
 // release, before anything reads the mark.
 func settleSync(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if ` + settleNeeded + `; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 `
@@ -1631,7 +1631,7 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 }
 
 // SSHWith is SSHLog with extra ssh options before SSHOptions, so they win
-// (a sync's push session forwards the agent: -o ForwardAgent=yes).
+// (--shell-host --root's -l root).
 func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	return SSHContext(context.Background(), t, extra, script, stdin, stdout, tty, log)
 }
