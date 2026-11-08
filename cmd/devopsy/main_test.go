@@ -242,7 +242,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 		}
 	}
 	// An environment's command needs an environment.
-	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--releases"); code == 0 || !strings.Contains(out, "--releases needs an environment: devopsy @vm1:<environment> --releases") {
+	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--releases"); code == 0 || !strings.Contains(out, "--releases needs an environment\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:<environment> --releases\n") {
 		t.Errorf("@vm1: --releases (%d):\n%s", code, out)
 	}
 	// A lone flag devopsy does not know is a typo, whatever the address
@@ -253,7 +253,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 			t.Errorf("%s --ssh-host (%d):\n%s", addr, code, out)
 		}
 	}
-	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--frobnicate"); code == 0 || !strings.Contains(out, "--frobnicate is not a devopsy flag;") {
+	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--frobnicate"); code == 0 || !strings.Contains(out, "--frobnicate is not a devopsy flag\ndevopsy: | devopsy's flags:\ndevopsy: | $ devopsy --help\n") {
 		t.Errorf("@vm1: --frobnicate (%d):\n%s", code, out)
 	}
 	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") {
@@ -1084,7 +1084,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 		return string(out), cmd.ProcessState.ExitCode()
 	}
 
-	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "shop needs an instance: devopsy @[<server>:]<instance>/prod") {
+	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "shop needs an instance\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. name it in the address:\ndevopsy: |    $ devopsy @[<server>:]<instance>/prod\ndevopsy: | 2. set DEVOPSY_INSTANCE\n") {
 		t.Fatalf("instance required (%d):\n%s", code, out)
 	}
 	// A shared value for the whole project on that server, before any release.
@@ -1095,15 +1095,15 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"OTHER=1"}, "@devopsy@server", "--vars-project", "set", "OTHER"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
 		t.Fatalf("@server --vars-project (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@devopsy@server", "--vars-instance"); code == 0 || !strings.Contains(out, "(for a server: --vars-instance needs an environment, devopsy @devopsy@server:<environment> --vars-instance)") {
+	if out, code := run(nil, "@devopsy@server", "--vars-instance"); code == 0 || !strings.Contains(out, "for a server, --vars-instance needs an environment:\n") || !strings.Contains(out, "$ devopsy @devopsy@server:<environment> --vars-instance\n") {
 		t.Fatalf("@server --vars-instance (%d):\n%s", code, out)
 	}
 	// A server with a port, its : left out, reads as an environment: the
 	// error says how to name the server.
-	if out, code := run(nil, "@devopsy@server:5369", "--vars-instance"); code == 0 || !strings.Contains(out, "(for a server with a port: --vars-instance needs an environment, devopsy @devopsy@server:5369:<environment> --vars-instance)") {
+	if out, code := run(nil, "@devopsy@server:5369", "--vars-instance"); code == 0 || !strings.Contains(out, "for a server with a port, --vars-instance needs an environment:\n") || !strings.Contains(out, "$ devopsy @devopsy@server:5369:<environment> --vars-instance\n") {
 		t.Fatalf("@server:port --vars-instance (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@devopsy@server:5369", "--ssh-keys"); code == 0 || !strings.Contains(out, "(for a server with a port: devopsy @devopsy@server:5369: --ssh-keys)") {
+	if out, code := run(nil, "@devopsy@server:5369", "--ssh-keys"); code == 0 || !strings.Contains(out, "for a server with a port:\n") || !strings.Contains(out, "$ devopsy @devopsy@server:5369: --ssh-keys\n") {
 		t.Fatalf("@server:port --ssh-keys (%d):\n%s", code, out)
 	}
 	if out, code := run(nil, "@devopsy@server", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
@@ -1285,7 +1285,7 @@ func TestInitAndSchema(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := runDevopsy(t, dir, nil, "--init"); code == 0 || !strings.Contains(out, "(my-shop?)") {
+	if out, code := runDevopsy(t, dir, nil, "--init"); code == 0 || !strings.Contains(out, "name it:\ndevopsy: | $ devopsy --init my-shop\n") {
 		t.Fatalf("no terminal, no name (%d):\n%s", code, out)
 	}
 	if out, code := runDevopsy(t, dir, nil, "--init", "Bad Name"); code == 0 {
@@ -1662,5 +1662,35 @@ func TestReleasesRemove(t *testing.T) {
 	// Each release's line, then its images (the fake docker's output).
 	if out, code := run(nil, "@prod", "--releases"); code != 0 || !strings.Contains(out, "* "+current) || strings.Count(out, "\n    ") != 2 || strings.Count(out, "\n") != 4 {
 		t.Errorf("listing (%d):\n%s", code, out)
+	}
+}
+
+// Refusals offer the command meant as a fix, never in their words:
+// --release and --reload given arguments, --environments with no server.
+func TestLocalRefusalsOfferTheirCommandsAsFixes(t *testing.T) {
+	t.Parallel()
+	project := t.TempDir()
+	dot := filepath.Join(project, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: shop\nenvironments:\n  prod:\n    release: deploy\n", 0o644)
+	for _, c := range []struct {
+		args  []string
+		cmds  []string
+		words string
+	}{
+		{[]string{"--release", "x"}, []string{"$ devopsy --release", "$ devopsy @<target> --release"}, "locally: devopsy --release ("},
+		{[]string{"--reload", "x"}, []string{"$ devopsy --reload", "$ devopsy @<target> --reload"}, "locally: devopsy --reload ("},
+		{[]string{"--environments"}, []string{"$ devopsy @<server> --environments"}, "no server: devopsy @<server>"},
+	} {
+		out, code := runDevopsy(t, project, nil, c.args...)
+		if code == 0 || strings.Contains(out, c.words) {
+			t.Errorf("%v: the command in the words (%d):\n%s", c.args, code, out)
+			continue
+		}
+		for _, cmd := range c.cmds {
+			if !strings.Contains(out, cmd+"\n") || !strings.Contains(out, "to fix it") {
+				t.Errorf("%v: %q is not a fix:\n%s", c.args, cmd, out)
+			}
+		}
 	}
 }

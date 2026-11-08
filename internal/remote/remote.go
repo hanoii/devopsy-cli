@@ -2041,7 +2041,7 @@ done
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
-  devopsy --say error "$base stays: its images are not all removed; run --destroy again"
+  devopsy --say error "$base stays: its images are not all removed" ` + sayRemedies(report.Fix("run it again:", "devopsy @"+HintAddress(t)+" --destroy")) + `
   exit 1
 fi
 cd /

@@ -1450,7 +1450,7 @@ func ServerTarget(projectDir, addr string, projectEnv func(string) (string, bool
 		return nil, err
 	}
 	if t.Host == "" {
-		return nil, fmt.Errorf("no server for @%s: devopsy @<server>, or %s (or %s)", addr, ServerVar, EnvironmentVar(t.Name))
+		return nil, noServer(addr, "devopsy @<server>", t.Name)
 	}
 	return t, nil
 }
@@ -1617,7 +1617,7 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	case instance != "" && !project.Instances:
 		return nil, fmt.Errorf("%s has no instances (instances: true in %s turns them on), but %s names %s", project.Name, ConfigFile, from, instance)
 	case strict && instance == "" && project.Instances:
-		return nil, fmt.Errorf("%s needs an instance: devopsy @[<server>:]<instance>/%s, or %s", project.Name, a.env, InstanceVar)
+		return nil, &report.Failure{Msg: project.Name + " needs an instance", Remedies: []report.Remedy{report.Fix("name it in the address:", "devopsy @[<server>:]<instance>/"+a.env), report.Fix("set " + InstanceVar)}}
 	}
 	t.Instance = instance
 	if instance != "" {
@@ -1661,7 +1661,7 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 				Remedies: []report.Remedy{report.Fix("set " + a.env + "'s server in .devopsy/.env, as the templates do: " + EnvironmentVar(a.env) + "=<server> (or " + ServerVar + " for every environment)")},
 			}}
 		}
-		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))
+		return nil, noServer(addr, "devopsy @<server>:"+addr, a.env)
 	}
 
 	dir := project.Name
@@ -1753,4 +1753,14 @@ func ReleaseEnvironment(projectDir string) (*Target, error) {
 	named := *t
 	named.Name = name
 	return &named, nil
+}
+
+// noServer is the refusal of an address with no server, addr as typed:
+// the server in the address (cmd, how it starts), or the variable that
+// names it, for every environment or env's.
+func noServer(addr, cmd, env string) error {
+	return &report.Failure{Msg: "no server for @" + addr, Remedies: []report.Remedy{
+		report.Fix("name it in the address:", cmd),
+		report.Fix("set " + ServerVar + ", or " + EnvironmentVar(env) + " for " + env + " alone"),
+	}}
 }

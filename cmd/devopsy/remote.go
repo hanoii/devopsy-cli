@@ -61,8 +61,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	help := len(args) == 1 || args[1] == "--help" || args[1] == "-h" || (len(args) > 2 && (args[2] == "--help" || args[2] == "-h"))
 	// A lone flag devopsy does not know is a typo, whatever the address:
 	// compose's flags never stand alone. Before any connection.
-	if msg := cli.LoneUnknownFlag(args[1:]); msg != "" {
-		return fail(msg)
+	if err := cli.LoneUnknownFlag(args[1:]); err != nil {
+		return failErr(err)
 	}
 	load := remote.LoadTarget
 	serverOnly := false
@@ -73,20 +73,21 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case help:
 		load = remote.DescribeTarget
 	case len(args) > 1 && strings.HasSuffix(addr, ":"):
-		return fail(fmt.Sprintf("%s needs an environment: devopsy @%s<environment> %s", args[1], addr, args[1]))
+		return failErr(&report.Failure{Msg: args[1] + " needs an environment", Remedies: []report.Remedy{report.Fix("", "devopsy @"+addr+"<environment> "+args[1])}})
 	}
 	t, err := load(projectDir, addr, projectEnv)
+	var server []report.Remedy
 	if err != nil && !help && len(args) > 1 {
 		// Maybe a server named alone, for a command that needs an
 		// environment: the error stays, a typo in a name being as likely.
 		// Or a server with a port, its : left out (@vm1:5369).
 		if st, serr := remote.ServerTarget(projectDir, addr, projectEnv); serr == nil && st.Name == "" {
-			err = fmt.Errorf("%w\n(for a server: %s needs an environment, devopsy @%s:<environment> %s)", err, args[1], st.Host, args[1])
+			server = append(server, report.Fix("for a server, "+args[1]+" needs an environment:", "devopsy @"+st.Host+":<environment> "+args[1]))
 		} else if st, serr := remote.ServerTarget(projectDir, addr+":", projectEnv); strings.Contains(addr, ":") && serr == nil && st.Name == "" {
 			if serverOnly {
-				err = fmt.Errorf("%w\n(for a server with a port: devopsy @%s: %s)", err, st.Host, args[1])
+				server = append(server, report.Fix("for a server with a port:", "devopsy @"+st.Host+": "+args[1]))
 			} else {
-				err = fmt.Errorf("%w\n(for a server with a port: %s needs an environment, devopsy @%s:<environment> %s)", err, args[1], st.Host, args[1])
+				server = append(server, report.Fix("for a server with a port, "+args[1]+" needs an environment:", "devopsy @"+st.Host+":<environment> "+args[1]))
 			}
 		}
 	}
@@ -98,7 +99,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return 0
 			}
 		}
-		return failErr(err)
+		return failErr(err, server...)
 	}
 	// A target with an environment was checked as it loaded (LoadTarget);
 	// a server alone is checked here, help never.
@@ -122,7 +123,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	// environments and schema explain local config: on a server they would
 	// describe the release's copy and the server's own user config.
 	if args[0] == "--debug" && len(args) > 1 && (args[1] == "environments" || args[1] == "schema") {
-		return fail(fmt.Sprintf("--debug %s is about this machine's config: run devopsy --debug %s, without a target", args[1], strings.Join(args[1:], " ")))
+		return failErr(&report.Failure{Msg: "--debug " + args[1] + " is about this machine's config", Remedies: []report.Remedy{report.Fix("run it without a target:", "devopsy --debug "+strings.Join(args[1:], " "))}})
 	}
 
 	// A user-level target belongs to no project, so nothing may be released
@@ -323,7 +324,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		}
 	}
 	if noSync && from != "" {
-		return fail("--from: --release-no-sync never syncs: devopsy @" + remote.HintAddress(t) + " --release-sync --from @" + from + " syncs from it")
+		return failErr(&report.Failure{Msg: "--from: --release-no-sync never syncs", Remedies: []report.Remedy{report.Fix("sync from it:", "devopsy @"+remote.HintAddress(t)+" --release-sync --from @"+from)}})
 	}
 	if (syncFlag || from != "") && t.Parent == "" {
 		flag := args[0]
@@ -523,7 +524,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		first := !current
 		syncs := !noSync && (syncFlag || first)
 		if cur.Importing {
-			return failErr(&report.Failure{Msg: "an import into @" + t.Address + " is running: release once it is done: nothing changed", Remedies: []report.Remedy{seeHint(targetRef(t), "it", "--status")}})
+			return failErr(&report.Failure{Msg: "an import into @" + t.Address + " is running: release once it is done: nothing changed", Remedies: []report.Remedy{remote.SeeHint(targetRef(t), "it", "--status")}})
 		}
 		// A partial copy from a sync is never run on: only a sync
 		// completes it (the activation checks again); a sync is one
@@ -1070,12 +1071,6 @@ func (s utterance) say(log *report.Logger, lv report.Level) {
 	log.Say(lv, s.msg, s.details, s.remedies...)
 }
 
-// seeHint is the command that shows what of ref (how it ends, whether
-// it was taken) through flag (--log, --status, --snapshots).
-func seeHint(ref, what, flag string) report.Remedy {
-	return report.Hint("see "+what+":", "devopsy @"+ref+" "+flag)
-}
-
 // goesOnSays is what every session says once interrupted past its point
 // of no return (a release's switch, a take's stopped pass, an import's
 // first write, a sync's copy): what goes on, where it is (past, or
@@ -1096,14 +1091,14 @@ const leavesNow = "Ctrl-C again leaves now"
 // releaseWords are an activation's, named by its kind: a release, a
 // rollback, a full restore (a release of the snapshot's copy).
 func releaseWords(t *remote.Target, kind string) liveWords {
-	logs := seeHint(targetRef(t), "how it ends", "--log")
+	logs := remote.SeeHint(targetRef(t), "how it ends", "--log")
 	return liveWords{
 		goesOn:     goesOnSays(t, kind, "at or past its switch", logs),
 		cancelling: says("interrupted: cancelling the " + kind + " on @" + t.Address),
 		slow:       utterance{msg: "the server is cancelling it, first waiting for the release lock if another release holds it", details: []string{leavesNow}},
 		// Killed there, it never ends: --status names it (cut).
-		lostAfter:  says(lostSays(t, "at or after the switch", "the "+kind+" was at or past its switch there"), logs, seeHint(targetRef(t), "whether it was cut off", "--status")),
-		lostBefore: says(lostSays(t, "before the switch", "nothing went live there"), seeHint(targetRef(t), "its releases", "--releases")),
+		lostAfter:  says(lostSays(t, "at or after the switch", "the "+kind+" was at or past its switch there"), logs, remote.SeeHint(targetRef(t), "whether it was cut off", "--status")),
+		lostBefore: says(lostSays(t, "before the switch", "nothing went live there"), remote.SeeHint(targetRef(t), "its releases", "--releases")),
 		hadGone:    says("it had switched already, and went on", logs),
 	}
 }

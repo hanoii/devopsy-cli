@@ -18,6 +18,8 @@ import (
 	"github.com/moby/patternmatcher"
 	"github.com/moby/patternmatcher/ignorefile"
 	"go.yaml.in/yaml/v3"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // contextHashVersion goes into every hash, so a change to what is hashed
@@ -320,7 +322,7 @@ func serviceBuild(composeFile, service string) (map[string]any, string, error) {
 		}
 		sort.Strings(built)
 		if len(built) != 1 {
-			return nil, "", fmt.Errorf("%s: %d services have a build: section (%s), name one: devopsy --context-hash <service>", composeFile, len(built), strings.Join(built, ", "))
+			return nil, "", &report.Failure{Msg: fmt.Sprintf("%s: %d services have a build: section (%s)", composeFile, len(built), strings.Join(built, ", ")), Remedies: []report.Remedy{report.Fix("name one:", "devopsy --context-hash <service>")}}
 		}
 		service = built[0]
 	}

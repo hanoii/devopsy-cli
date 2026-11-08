@@ -58,7 +58,7 @@ func runUpgrade(args []string, color bool) int {
 
 	tmp, err := update.Prepare(exe)
 	if errors.Is(err, fs.ErrPermission) {
-		return fail(fmt.Sprintf("cannot write to %s: run 'sudo devopsy --upgrade'", filepath.Dir(exe)))
+		return failErr(&report.Failure{Msg: "cannot write to " + filepath.Dir(exe), Remedies: []report.Remedy{report.Fix("", "sudo devopsy --upgrade")}})
 	} else if err != nil {
 		return fail(err.Error())
 	}

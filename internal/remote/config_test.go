@@ -39,8 +39,9 @@ environments:
 			t.Errorf("%s: want an error", addr)
 		}
 	}
-	if _, err := LoadTarget(dir, "prod", nil); err == nil || !strings.Contains(err.Error(), "no server for @prod") {
-		t.Errorf("no server: %v", err)
+	// No server: the address with one, a fix, never in the message.
+	if _, err := LoadTarget(dir, "prod", nil); err == nil || err.Error() != "no server for @prod" || len(report.Remedies(err)) == 0 || report.Remedies(err)[0].Cmds[0] != "devopsy @<server>:prod" {
+		t.Errorf("no server: %v %+v", err, report.Remedies(err))
 	}
 	if _, err := LoadTarget(t.TempDir(), "vm1:prod", nil); err == nil {
 		t.Errorf("no config: want an error")

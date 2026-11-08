@@ -1003,7 +1003,7 @@ func TestReleaseFrom(t *testing.T) {
 	if out, code := s.run(nil, "@devopsy@one:solo", "--release", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: @devopsy@one:solo is not a child") {
 		t.Fatalf("--from without a parent (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") {
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") || !strings.Contains(out, "$ devopsy @devopsy@one:dev --release-sync --from @devopsy@one:prod\n") {
 		t.Fatalf("--release-no-sync --from (%d):\n%s", code, out)
 	}
 	// An address --from cannot take says why, its fix with it.
@@ -1297,7 +1297,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
 
 	// No agent here: nothing starts.
-	if out, code := s.run(env, "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "eval $(ssh-agent)") || s.current("dev") != "" {
+	if out, code := s.run(env, "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "$ eval \"$(ssh-agent)\"; ssh-add\n") || s.current("dev") != "" {
 		t.Fatalf("no agent (%d):\n%s", code, out)
 	}
 	if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
@@ -1846,7 +1846,7 @@ func TestSyncGuards(t *testing.T) {
 	if out, code := s.run(nil, "@solo", "--release-sync"); code == 0 || !strings.Contains(out, "@devopsy@one:solo is not a child") {
 		t.Errorf("--release-sync, not a child (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "the parent @devopsy@one:prod (devopsy@one:shop/prod) has no current release") {
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "the parent @devopsy@one:prod (devopsy@one:shop/prod) has no current release") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release\n") {
 		t.Errorf("parent not released (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "has no current release") || !strings.Contains(out, "--release-no-sync") {
@@ -1856,7 +1856,7 @@ func TestSyncGuards(t *testing.T) {
 		t.Errorf("the child was touched: %v", err)
 	}
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "has no current release\ndevopsy: | to fix it:\ndevopsy: | release it first, which syncs on its own (--release-no-sync releases without the data, and --sync later fills it):\ndevopsy: | $ devopsy @devopsy@one:dev --release") {
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "has no current release\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. release it, which syncs on its own:\ndevopsy: |    $ devopsy @devopsy@one:dev --release\ndevopsy: | 2. release it without the data, then sync it:\ndevopsy: |    $ devopsy @devopsy@one:dev --release-no-sync\ndevopsy: |    $ devopsy @devopsy@one:dev --sync\n") {
 		t.Errorf("child not released (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--from", "dev", "--yes"); code == 0 || !strings.Contains(out, "and its parent are the same environment") {

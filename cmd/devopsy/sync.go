@@ -133,7 +133,7 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	}
 	if !job.sameHost {
 		if os.Getenv("SSH_AUTH_SOCK") == "" {
-			return nil, fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally: eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", p.Host, c.Host)
+			return nil, agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally", p.Host, c.Host))
 		}
 		if err := agentHasKeys(p.Host, c.Host); err != nil {
 			return nil, err
@@ -171,9 +171,9 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	job.inherit = remote.ParseInherit(out.String())
 	switch {
 	case !cur.Current:
-		return nil, fmt.Errorf("the parent @%s (%s:%s) has no current release: release it first", p.Address, p.Host, p.Path)
+		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) has no current release", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("release it first:", "devopsy @"+remote.HintAddress(p)+" --release")}}
 	case cur.Importing:
-		return nil, &report.Failure{Msg: fmt.Sprintf("an import into the parent @%s (%s:%s) is running: sync once it is done", p.Address, p.Host, p.Path), Remedies: []report.Remedy{seeHint(targetRef(p), "it", "--status")}}
+		return nil, &report.Failure{Msg: fmt.Sprintf("an import into the parent @%s (%s:%s) is running: sync once it is done", p.Address, p.Host, p.Path), Remedies: []report.Remedy{remote.SeeHint(targetRef(p), "it", "--status")}}
 	case cur.Mark.IsImport():
 		return nil, &report.Failure{Msg: fmt.Sprintf("the import of %s into the parent @%s (%s:%s) did not complete: complete it, then sync", cur.Mark.From, p.Address, p.Host, p.Path), Remedies: remote.ImportFixes(remote.HintAddress(p), cur.Mark.From, p.Parent != "")}
 	case cur.Mark.IsRestore():
@@ -213,7 +213,7 @@ func sameHost(a, b string) bool {
 func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog, color bool) int {
 	log := report.Default().Tee(rlog.Line)
 	partial := func() {
-		log.Say(report.WarnLevel, "@"+job.child.Address+" may hold a partial copy now", nil, seeHint(targetRef(job.child), "whether it does", "--status"), report.Fix("", "devopsy @"+remote.HintAddress(job.child)+" --sync"))
+		log.Say(report.WarnLevel, "@"+job.child.Address+" may hold a partial copy now", nil, remote.SeeHint(targetRef(job.child), "whether it does", "--status"), report.Fix("", "devopsy @"+remote.HintAddress(job.child)+" --sync"))
 	}
 	// An *os.File, so the holder's ssh reads it directly: devopsy writes go
 	// or abort, and nothing waits on a copy if the holder ends first.
@@ -352,7 +352,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 			// The push's session is gone, not necessarily the push: what
 			// the copy wrote decides, never the answer.
 			answer = "abort\n"
-			log.Say(report.ErrorLevel, lostSays(job.parent, "during the copy", "what the copy wrote decides how the sync ends on @"+job.child.Address), nil, seeHint(targetRef(job.child), "how it ended", "--status"))
+			log.Say(report.ErrorLevel, lostSays(job.parent, "during the copy", "what the copy wrote decides how the sync ends on @"+job.child.Address), nil, remote.SeeHint(targetRef(job.child), "how it ended", "--status"))
 		} else if code != 0 {
 			answer = "abort\n"
 			log.Error(fmt.Sprintf("the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
@@ -386,7 +386,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		select {
 		case res = <-done:
 		case <-sigs:
-			goesOnSays(job.child, "run step", "", seeHint(targetRef(job.child), "how it ends", "--log")).say(log, report.WarnLevel)
+			goesOnSays(job.child, "run step", "", remote.SeeHint(targetRef(job.child), "how it ends", "--log")).say(log, report.WarnLevel)
 			select {
 			case res = <-done:
 			case <-sigs:
@@ -402,19 +402,19 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		return 1
 	}
 	if res.code == 0 && pushFailed != 0 {
-		log.Say(report.ErrorLevel, fmt.Sprintf("the copy into @%s had completed and it went on, but the push on @%s failed (%d): check its services", job.child.Address, job.parent.Address, pushFailed), nil, seeHint(targetRef(job.parent), "them", "--status"))
+		log.Say(report.ErrorLevel, fmt.Sprintf("the copy into @%s had completed and it went on, but the push on @%s failed (%d): check its services", job.child.Address, job.parent.Address, pushFailed), nil, remote.SeeHint(targetRef(job.parent), "them", "--status"))
 		return 1
 	}
 	if res.code == sshLost {
 		switch {
 		case !marked && release:
-			log.Say(report.ErrorLevel, lostSays(job.child, "before the copy", "its data there is as it was"), nil, seeHint(targetRef(job.child), "whether the release went live", "--releases"))
+			log.Say(report.ErrorLevel, lostSays(job.child, "before the copy", "its data there is as it was"), nil, remote.SeeHint(targetRef(job.child), "whether the release went live", "--releases"))
 		case !marked:
-			log.Say(report.ErrorLevel, lostSays(job.child, "before the copy", "its data there is as it was, and "+staysDown), nil, seeHint(targetRef(job.child), "its state", "--status"))
+			log.Say(report.ErrorLevel, lostSays(job.child, "before the copy", "its data there is as it was, and "+staysDown), nil, remote.SeeHint(targetRef(job.child), "its state", "--status"))
 		case answered:
-			log.Say(report.ErrorLevel, lostSays(job.child, "after the copy", "the sync was past its copy there"), nil, seeHint(targetRef(job.child), "how it ends", "--log"))
+			log.Say(report.ErrorLevel, lostSays(job.child, "after the copy", "the sync was past its copy there"), nil, remote.SeeHint(targetRef(job.child), "how it ends", "--log"))
 		default:
-			log.Say(report.ErrorLevel, lostSays(job.child, "during the copy", "what the copy wrote decides how the sync ends there"), nil, seeHint(targetRef(job.child), "how it ended", "--status"))
+			log.Say(report.ErrorLevel, lostSays(job.child, "during the copy", "what the copy wrote decides how the sync ends there"), nil, remote.SeeHint(targetRef(job.child), "how it ended", "--status"))
 		}
 	}
 	return res.code
@@ -973,7 +973,7 @@ func runUtilImage() int {
 func syncEnv(flag string) (toDir, toProject string, err error) {
 	toDir, toProject = os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv)
 	if toDir == "" || toProject == "" {
-		return "", "", fmt.Errorf("%s only runs in a sync's push, on the parent's server (devopsy @<child> --sync)", flag)
+		return "", "", &report.Failure{Msg: flag + " only runs in a sync's push, on the parent's server", Remedies: []report.Remedy{report.Hint("a sync runs it:", "devopsy @<child> --sync")}}
 	}
 	return toDir, toProject, nil
 }
@@ -3008,7 +3008,7 @@ func agentHasKeys(parent, child string) error {
 	case 1:
 		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and it holds no key: ssh-add the key %s accepts (in CI, each server's CI key)", parent, child, child)
 	case 2:
-		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s): eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", parent, child, os.Getenv("SSH_AUTH_SOCK"))
+		return agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s)", parent, child, os.Getenv("SSH_AUTH_SOCK")))
 	}
 	return nil
 }
@@ -3030,4 +3030,10 @@ func syncLeftovers(base string) {
 			_ = os.Remove(f)
 		}
 	}
+}
+
+// agentFailure is msg, a sync that needs an SSH agent and has none, with
+// the way to start one.
+func agentFailure(msg string) error {
+	return &report.Failure{Msg: msg, Remedies: []report.Remedy{report.Fix("start one with your key (in CI, add the key to an agent):", `eval "$(ssh-agent)"; ssh-add`)}}
 }

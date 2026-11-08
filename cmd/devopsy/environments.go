@@ -42,7 +42,7 @@ func runEnvironments(cwd string, args []string, color bool) int {
 		return fail(err.Error())
 	}
 	if len(servers) == 0 {
-		return fail(fmt.Sprintf("--environments: no server: devopsy @<server> --environments, or %s (or %s)", remote.ServerVar, remote.EnvironmentVar("<environment>")))
+		return failErr(&report.Failure{Msg: "--environments: no server", Remedies: []report.Remedy{report.Fix("name it:", "devopsy @<server> --environments"), report.Fix("set " + remote.ServerVar + ", or DEVOPSY_SERVER_<ENVIRONMENT> for one environment")}})
 	}
 	return listEnvironments(project, servers, color)
 }

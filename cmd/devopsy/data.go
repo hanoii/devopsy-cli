@@ -1103,7 +1103,7 @@ func runImport(cwd string, args []string, color bool) int {
 		return runResolved(cwd, name)
 	}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		return fail(cli.ImportFlag + " reads " + name + "'s data from stdin: devopsy @<target> " + cli.ExportFlag + " " + name + " | devopsy " + cli.ImportFlag + " " + name + ", or < a file")
+		return failErr(stdinFailure(name, "devopsy "+cli.ImportFlag+" "+name))
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
@@ -1610,7 +1610,7 @@ func (r importRun) failed(cause error) int {
 		}
 		return failErr(&report.Failure{Msg: "the import of " + r.name + " did not complete: its data may be partial, and " + what, Remedies: fixes})
 	}
-	report.Say(report.ErrorLevel, "the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", nil, seeHint(targetAddress(r.cwd), "the ways out", "--status"))
+	report.Say(report.ErrorLevel, "the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", nil, remote.SeeHint(targetAddress(r.cwd), "the ways out", "--status"))
 	return 1
 }
 
@@ -1651,9 +1651,9 @@ func runResolved(cwd, name string) int {
 	case m == nil:
 		return fail("no import of " + name + " to resolve: the environment has no mark")
 	case m.IsRestore():
-		return fail("the restore of snapshot " + m.From + " did not complete: --resolved is for imports; restore it again (--snapshots restore " + m.From + ")")
+		return failErr(&report.Failure{Msg: "the restore of snapshot " + m.From + " did not complete: --resolved is for imports: nothing resolved", Remedies: restoreRemedies(cwd, m.From)})
 	case !m.IsImport():
-		return fail("this environment's data is from a sync that did not complete, and only a sync completes it: nothing resolved")
+		return failErr(&report.Failure{Msg: "this environment's data is from a sync that did not complete, and only a sync completes it: nothing resolved", Remedies: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetAddress(cwd)+" --sync")}})
 	case m.From != name:
 		return fail("the import that did not complete is " + m.From + "'s, not " + name + "'s: nothing resolved")
 	}
@@ -1905,7 +1905,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 		return fail(err.Error())
 	}
 	if code == sshLost {
-		report.Say(report.ErrorLevel, lostSays(t, "", "the export is incomplete, and "+staysDown), nil, seeHint(targetRef(t), "its state", "--status"))
+		report.Say(report.ErrorLevel, lostSays(t, "", "the export is incomplete, and "+staysDown), nil, remote.SeeHint(targetRef(t), "its state", "--status"))
 	}
 	return code
 }
@@ -1926,7 +1926,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		return runRemoteResolved(t, projectName, name, yes)
 	}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		return fail(cli.ImportFlag + " reads " + name + "'s data from stdin: devopsy @<target> " + cli.ExportFlag + " " + name + " | devopsy @" + targetRef(t) + " " + cli.ImportFlag + " " + name + ", or < a file")
+		return failErr(stdinFailure(name, "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+name))
 	}
 	if !yes {
 		if err := confirmImport(t, name); err != nil {
@@ -2014,7 +2014,7 @@ wait:
 			first := !interrupted
 			interrupted = true
 			if first && started {
-				goesOnSays(t, "import of "+name, "", seeHint(targetRef(t), "how it ends", "--status")).say(report.Default(), report.WarnLevel)
+				goesOnSays(t, "import of "+name, "", remote.SeeHint(targetRef(t), "how it ends", "--status")).say(report.Default(), report.WarnLevel)
 			} else if first {
 				report.Error("interrupted: nothing imported into @" + t.Address + ", and what was stopped there comes back")
 				closeIn()
@@ -2041,10 +2041,10 @@ wait:
 	}
 	switch {
 	case wasStarted && ctx.Err() != nil:
-		report.Say(report.WarnLevel, "the session is ended: the import of "+name+" goes on on @"+t.Address, nil, seeHint(targetRef(t), "how it ends", "--status"))
+		report.Say(report.WarnLevel, "the session is ended: the import of "+name+" goes on on @"+t.Address, nil, remote.SeeHint(targetRef(t), "how it ends", "--status"))
 		return 130
 	case wasStarted && res.code == sshLost:
-		report.Say(report.ErrorLevel, lostSays(t, "during the import", "the import was under way there"), nil, seeHint(targetRef(t), "how it ends", "--status"))
+		report.Say(report.ErrorLevel, lostSays(t, "during the import", "the import was under way there"), nil, remote.SeeHint(targetRef(t), "how it ends", "--status"))
 		return sshLost
 	case interrupted && !wasStarted:
 		return 130
@@ -2052,7 +2052,7 @@ wait:
 		// Before the byte the server waits for (ImportMarker), it never
 		// writes: no byte within its quiet time, it restores what it
 		// stopped (killed, the next lock-taker does).
-		report.Say(report.ErrorLevel, lostSays(t, "before the import started", "nothing imported there, and "+staysDown), nil, seeHint(targetRef(t), "its state", "--status"))
+		report.Say(report.ErrorLevel, lostSays(t, "before the import started", "nothing imported there, and "+staysDown), nil, remote.SeeHint(targetRef(t), "its state", "--status"))
 		return sshLost
 	}
 	return res.code
@@ -2092,14 +2092,14 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	}
 	switch {
 	case importing:
-		return failErr(&report.Failure{Msg: "an import into @" + t.Address + " still runs: nothing resolved", Remedies: []report.Remedy{seeHint(targetRef(t), "it", "--status")}})
+		return failErr(&report.Failure{Msg: "an import into @" + t.Address + " still runs: nothing resolved", Remedies: []report.Remedy{remote.SeeHint(targetRef(t), "it", "--status")}})
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
 	case mark.IsRestore():
-		fixes := remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "")
+		fixes := remote.RestoreFixes(remote.HintAddress(t), mark.From, t.Parent != "")
 		return failErr(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Remedies: fixes})
 	case !mark.IsImport() || settle:
-		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Remedies: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), remote.ResetFix(targetRef(t))}})
+		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Remedies: []report.Remedy{report.Fix("sync it:", "devopsy @"+remote.HintAddress(t)+" --sync"), remote.ResetFix(remote.HintAddress(t))}})
 	case mark.From != name:
 		return failErr(&report.Failure{Msg: "the import that did not complete on @" + t.Address + " is " + mark.From + "'s, not " + name + "'s: nothing resolved", Remedies: []report.Remedy{report.Fix("resolve that one:", "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+mark.From+" --resolved")}})
 	}
@@ -2156,4 +2156,13 @@ func confirmImport(t *remote.Target, name string) error {
 	where := t.Host + ":" + t.Path
 	return typeToGoOn(fmt.Sprintf("this replaces %s's data on @%s (%s) with what stdin carries", name, t.Address, where),
 		confirmWord(t), "nothing imported", true)
+}
+
+// stdinFailure is an import of name run at a terminal: it reads the data
+// from stdin, through import (its command), from an export or a file.
+func stdinFailure(name, imp string) error {
+	return &report.Failure{Msg: cli.ImportFlag + " reads " + name + "'s data from stdin", Remedies: []report.Remedy{
+		report.Fix("from an export:", "devopsy @<target> "+cli.ExportFlag+" "+name+" | "+imp),
+		report.Fix("from a file:", imp+" < <file>"),
+	}}
 }

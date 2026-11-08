@@ -246,7 +246,7 @@ func sayApplied(t *remote.Target, said, applied string, lines []string) {
 	case "0":
 		report.Say(report.InfoLevel, said, nil, report.Hint("running containers keep their old values until they are recreated: to apply it now,", "devopsy @"+targetRef(t)+" --reload"))
 	case "3":
-		report.Say(report.InfoLevel, said, append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), report.Hint("to apply it:", "devopsy @"+targetRef(t)+" --release"))
+		report.Say(report.InfoLevel, said, append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), report.Hint("to apply it:", "devopsy @"+remote.HintAddress(t)+" --release"))
 	case "4":
 		report.Say(report.WarnLevel, said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "), nil,
 			report.Fix("set them:", "devopsy @"+targetRef(t)+" --vars set <KEY>..."))

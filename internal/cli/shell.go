@@ -73,7 +73,7 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 		case len(labeled) == 1:
 			service = labeled[0]
 		case len(labeled) > 1:
-			return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("--shell: several services are labeled %s=true (%s): label one, or name it: devopsy --shell <service>", ShellLabel, strings.Join(labeled, ", "))}
+			return nil, &ExitError{Code: 1, Err: &report.Failure{Msg: fmt.Sprintf("--shell: several services are labeled %s=true (%s)", ShellLabel, strings.Join(labeled, ", ")), Remedies: []report.Remedy{report.Fix("label one"), report.Fix("name it:", "devopsy --shell <service>")}}}
 		default:
 			running, err := RunningServices(p)
 			if err == nil && len(running) == 1 {

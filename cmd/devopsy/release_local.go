@@ -26,7 +26,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return 0
 	}
 	if len(args) > 0 {
-		return fail("--release takes nothing locally: devopsy --release (a target's: devopsy @<target> --release)")
+		return failErr(&report.Failure{Msg: "--release takes nothing locally", Remedies: []report.Remedy{report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release")}})
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {

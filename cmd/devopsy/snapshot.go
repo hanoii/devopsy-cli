@@ -1606,7 +1606,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		}
 		if code == sshLost {
 			// The server keeps a snapshot only once it read the whole tar.
-			report.Say(report.ErrorLevel, lostSays(t, "", "the snapshot is imported only if the server got all of it"), nil, seeHint(targetRef(t), "whether it did", "--snapshots"))
+			report.Say(report.ErrorLevel, lostSays(t, "", "the snapshot is imported only if the server got all of it"), nil, remote.SeeHint(targetRef(t), "whether it did", "--snapshots"))
 		}
 		return code
 	}
@@ -1764,13 +1764,13 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 
 // snapshotWords are what liveSession says of a take.
 func snapshotWords(t *remote.Target) liveWords {
-	logs := seeHint(targetRef(t), "how it ends", "--log")
+	logs := remote.SeeHint(targetRef(t), "how it ends", "--log")
 	return liveWords{
 		goesOn:     goesOnSays(t, "snapshot", "past its stopped pass", logs),
 		cancelling: says("interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"),
 		slow:       utterance{msg: "the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", details: []string{leavesNow}},
 		lostAfter:  says(lostSays(t, "after the stopped pass", "the snapshot was past its stopped pass there"), logs),
-		lostBefore: says(lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), seeHint(targetRef(t), "whether it was taken", "--snapshots")),
+		lostBefore: says(lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), remote.SeeHint(targetRef(t), "whether it was taken", "--snapshots")),
 		hadGone:    says("it was past its stopped pass already, and went on", logs),
 	}
 }
@@ -2722,12 +2722,12 @@ var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `resto
 // --no-code restore's data is as it was.
 func restoreWords(t *remote.Target, noCode bool) liveWords {
 	w := releaseWords(t, "restore")
-	logs := seeHint(targetRef(t), "how it ends", "--log")
+	logs := remote.SeeHint(targetRef(t), "how it ends", "--log")
 	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
 	w.lostAfter.msg = lostSays(t, "past its point of no return", "the restore was writing the data there, or about to")
 	w.hadGone = says("it was writing the data already, and went on", logs)
 	if noCode {
-		w.lostBefore = says(lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), seeHint(targetRef(t), "its state", "--status"))
+		w.lostBefore = says(lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), remote.SeeHint(targetRef(t), "its state", "--status"))
 	}
 	return w
 }
@@ -2828,7 +2828,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		if noCode {
 			how = ""
 		}
-		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes; devopsy @%s --snapshot first keeps it", t.Address, what, how, t.Host, t.Path, targetRef(t)), confirmWord(t), "nothing restored", false); err != nil {
+		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes", t.Address, what, how, t.Host, t.Path), confirmWord(t), "nothing restored", false, report.Hint("a snapshot first keeps it:", "devopsy @"+targetRef(t)+" --snapshot")); err != nil {
 			return failErr(err)
 		}
 	}

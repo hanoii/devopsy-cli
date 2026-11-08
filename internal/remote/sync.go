@@ -218,8 +218,10 @@ func ImportFixes(ref, service string, child bool) []report.Remedy {
 	if child {
 		fixes = append(fixes, report.Fix("sync it from its parent:", "devopsy @"+ref+" --sync"), ResetFix(ref))
 	}
+	resolved := "devopsy @" + ref + " --import " + service + " --resolved"
 	return append(fixes,
-		report.Fix("go on with the data as it is (to fix it by hand first: devopsy @"+ref+" up -d --no-deps "+service+", then --shell "+service+"):", "devopsy @"+ref+" --import "+service+" --resolved"))
+		report.Fix("go on with the data as it is:", resolved),
+		report.Fix("fix it by hand, then go on with it:", "devopsy @"+ref+" up -d --no-deps "+service, "devopsy @"+ref+" --shell "+service, resolved))
 }
 
 // RestoreFixes are the ways out of a restore of snapshot that did not
@@ -256,10 +258,14 @@ func sayRemedies(rs ...report.Remedy) string {
 	return strings.Join(words, " ")
 }
 
-// LogHint is the command that shows why what failed on ref failed.
-func LogHint(ref string) report.Remedy {
-	return report.Hint("see why:", "devopsy @"+ref+" --log")
+// SeeHint is the command that shows what of ref (how it ends, whether
+// it was taken) through flag (--log, --status, --snapshots).
+func SeeHint(ref, what, flag string) report.Remedy {
+	return report.Hint("see "+what+":", "devopsy @"+ref+" "+flag)
 }
+
+// LogHint is the command that shows why what failed on ref failed.
+func LogHint(ref string) report.Remedy { return SeeHint(ref, "why", "--log") }
 
 // releaseFirst is the --say words of the way out of an environment with
 // no release yet, t's first release: text says it, empty for "release it
@@ -868,7 +874,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: nothing to sync into"
   exit 1
 fi
-[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "release it first, which syncs on its own (--release-no-sync releases without the data, and --sync later fills it):") + `; exit 1; }
+[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release" ` + sayRemedies(report.Fix("release it, which syncs on its own:", "devopsy @"+HintAddress(t)+" --release"), report.Fix("release it without the data, then sync it:", "devopsy @"+HintAddress(t)+" --release-no-sync", "devopsy @"+HintAddress(t)+" --sync")) + `; exit 1; }
 ` + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }

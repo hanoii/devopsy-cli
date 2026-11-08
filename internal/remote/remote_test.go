@@ -483,7 +483,8 @@ func TestSayFeatures(t *testing.T) {
 }
 
 // A script offers a command only as a remedy, after a --fix or a --hint
-// of its --say (sayRemedies), never in a message's or a detail's words:
+// of its --say (sayRemedies), never in a message's or a detail's words,
+// nor as a flag to run again:
 // report lays out a remedy as every local error's, under "to fix it:",
 // numbered, its command bold.
 func TestScriptsOfferCommandsAsRemedies(t *testing.T) {
@@ -492,6 +493,9 @@ func TestScriptsOfferCommandsAsRemedies(t *testing.T) {
 		for _, l := range strings.Split(s, "\n") {
 			say := strings.Index(l, SayFlag+" ")
 			cmd := strings.Index(l, "devopsy @")
+			if run := strings.Index(l, "run --"); run >= 0 && (cmd < 0 || run < cmd) {
+				cmd = run // a flag to run again, its command left out
+			}
 			if say < 0 || cmd < say {
 				continue
 			}
@@ -3416,5 +3420,17 @@ exit 0
 	}
 	if got := fakeImage(root, "registry/app:prod"); got != "built-1" {
 		t.Errorf("after it registry/app:prod is %q, want built-1", got)
+	}
+}
+
+// An import mark's ways out name their commands as commands, never in
+// their texts, so each shows bold after "$ " to copy: fixing the data by
+// hand is a way of its own, its commands in order.
+func TestImportFixesTextsNameNoCommand(t *testing.T) {
+	t.Parallel()
+	for _, r := range ImportFixes("prod", "db", true) {
+		if strings.Contains(r.Text, "devopsy @") {
+			t.Errorf("a fix's text names a command: %q", r.Text)
+		}
 	}
 }
