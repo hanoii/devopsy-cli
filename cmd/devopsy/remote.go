@@ -988,7 +988,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		return failErr(err)
 	}
 	if code == sshLost {
-		report.Error(lostSays(t, "", "the destroy may have stopped halfway there"), "to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy")
+		report.Say(report.ErrorLevel, lostSays(t, "", "the destroy may have stopped halfway there"), nil, report.Fix("", "devopsy @"+targetRef(t)+" --destroy"))
 	}
 	if code != 0 {
 		return code
@@ -1012,9 +1012,9 @@ func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
 		purge = report.Default().Confirm(stdinReader, fmt.Sprintf("no environment is left in %s: remove it and its .env, shared by its environments, too?", strings.Join(dirs, " and ")))
 	}
 	if !purge {
-		report.Warn(t.Host+" keeps "+strings.Join(dirs, " and "),
-			"no environment is left there: its .env stays, with what --vars-project or --vars-instance set, for the next environment released there",
-			"to remove them:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy --yes --purge")
+		report.Say(report.WarnLevel, t.Host+" keeps "+strings.Join(dirs, " and "),
+			[]string{"no environment is left there: its .env stays, with what --vars-project or --vars-instance set, for the next environment released there"},
+			report.Hint("to remove them:", "devopsy @"+targetRef(t)+" --destroy --yes --purge"))
 		return 0
 	}
 	code, err := remote.SSH(t, remote.LeftoverScript(t, true), bytes.NewReader(nil), nil, false)

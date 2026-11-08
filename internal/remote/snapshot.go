@@ -124,7 +124,7 @@ umask 077
 mkdir -p "$snaps"
 cd "$base/current"
 `
-	refuse := markRefusal(t, "no snapshot taken", `"a snapshot of it would restore as complete" `+syncFixLines(t), "exit 1")
+	refuse := markRefusal(t, "no snapshot taken", `"a snapshot of it would restore as complete" `+syncFixes(t), "exit 1")
 	s += refuse + snapLock + step("leftovers") + "\n" + step("check") + "\n" + step("mirror") + "\nexec 6>&-\n"
 	s += releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + "\n" + settleSync(projectName) + snapLock + refuse
@@ -327,7 +327,7 @@ if [ "$rs" = 0 ]; then
   if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "${cur#releases/}")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
 else
 ` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
-  devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true
+  devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixes(t, "rd_snapshot") + ` || true
 fi
 exit "$rs"
 `

@@ -107,6 +107,7 @@ release      20261107000000  just now
 disks        releases /srv, /: ext4, 50.0 GB free of 100.0 GB (50% used)
              docker /var/lib/docker: xfs, 2.0 GB free of 100.0 GB (98% used)
              docker /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
+             to fix it:
              see what Docker takes, then empty its build cache, on the server:
              $ devopsy @vm1: --shell-host
              $ docker system df
@@ -118,6 +119,7 @@ containers
 url          https://shop.example
              https://www.shop.example
 maintenance  on
+             to fix it:
              $ devopsy maintenance off
 `
 	if out.String() != want || code != statusWarned {
@@ -160,7 +162,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	out, code := s.run(warn, "@prod", "--status")
 	if code != statusWarned || !strings.Contains(out, "\nrelease      "+id) || !strings.Contains(out, "\ndisks        releases ") ||
 		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl          https://shop-prod.example\n") ||
-		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  on\n             $ devopsy maintenance off\n") {
+		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  on\n             to fix it:\n             $ devopsy maintenance off\n") {
 		t.Errorf("--status with a warning on the server (%d):\n%s", code, out)
 	}
 	stdout, stderr, code := s.runIO(warn, nil, "@prod", "--status", "--json")
@@ -337,8 +339,9 @@ func TestStatusPrintColors(t *testing.T) {
 		"  worker   \033[2mno container\033[0m\n" +
 		"url          https://shop.example\n" +
 		"\033[0;33mmaintenance  on\033[0m\n" +
+		"\033[0;33m             to fix it:\033[0m\n" +
 		"\033[0;33m             bring it back:\033[0m\n" +
-		"\033[1m             $ devopsy maintenance off\033[0m\n"
+		"             \033[1m$ devopsy maintenance off\033[0m\n"
 	if out.String() != want || code != statusWarned {
 		t.Errorf("--status in color (%d):\n%q\nwant:\n%q", code, out.String(), want)
 	}

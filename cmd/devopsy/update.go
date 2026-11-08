@@ -125,7 +125,7 @@ func updateNotice(color bool) {
 	if exe, err := os.Executable(); err == nil {
 		cmd = upgradeCommand(exe)
 	}
-	report.Warn(fmt.Sprintf("devopsy %s is available (this is %s)", strings.TrimPrefix(latest, "v"), version), "to upgrade:", report.CmdMark+cmd)
+	report.Say(report.WarnLevel, fmt.Sprintf("devopsy %s is available (this is %s)", strings.TrimPrefix(latest, "v"), version), nil, report.Hint("to upgrade:", cmd))
 }
 
 // upgradeCommand is what upgrades the binary at exe: with sudo when its

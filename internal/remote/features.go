@@ -114,7 +114,13 @@ var namedFeatures = []struct {
 	// --say --since (sayTook): an older --say would print "--since" as
 	// the message, and the rest as details.
 	{SaySinceFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `[ '\\]{1,8}info[ '\\]{1,8}` + SaySinceFlag + `\b`)},
+	// --say's remedies (sayRemedies): an older --say would print
+	// "--fix" and each word after it as details.
+	{SayRemediesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `\b[^\n]* (` + SayFixFlag + `|` + SayHintFlag + `) "`)},
 }
+
+// SayRemediesFeature is the named feature of --say --fix and --hint.
+const SayRemediesFeature = "say-remedies"
 
 // SaySinceFeature is the named feature of --say --since.
 const SaySinceFeature = "say-since"

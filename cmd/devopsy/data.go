@@ -1606,7 +1606,7 @@ func (r importRun) failed(cause error) int {
 	if !r.onTarget {
 		fixes := []report.Remedy{report.Fix("import it again, from a complete file:", "devopsy "+cli.ImportFlag+" "+r.name+" < <file>")}
 		if len(down) > 0 {
-			fixes = append(fixes, report.Fix("or start them on the data as it is:", "devopsy start "+strings.Join(down, " ")))
+			fixes = append(fixes, report.Fix("start them on the data as it is:", "devopsy start "+strings.Join(down, " ")))
 		}
 		return failErr(&report.Failure{Msg: "the import of " + r.name + " did not complete: its data may be partial, and " + what, Fixes: fixes})
 	}
@@ -2129,7 +2129,8 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		return fail(err.Error())
 	}
 	if code == sshLost {
-		report.Error(lostSays(t, "", "the import of "+name+" may not be resolved there"), "devopsy @"+targetRef(t)+" --status shows whether its mark is still there; to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --import "+name+" --resolved")
+		report.Say(report.ErrorLevel, lostSays(t, "", "the import of "+name+" may not be resolved there"), nil,
+			report.Hint("whether its mark is still there:", "devopsy @"+targetRef(t)+" --status"), report.Fix("", "devopsy @"+targetRef(t)+" --import "+name+" --resolved"))
 	}
 	return code
 }

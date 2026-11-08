@@ -101,7 +101,7 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 		}
 		// What it accepted too: a line naming only the rest would be refused
 		// on these (review: copied lines took turns, none going through).
-		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, append(forced, refusedSvcs...))+w.input))
+		fixes = append(fixes, report.Fix("knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, append(forced, refusedSvcs...))+w.input))
 		s.sayAll(report.ErrorLevel, w.what+": "+w.nothing, refused, fixes...)
 		return nil, ErrRefused
 	}
@@ -150,9 +150,9 @@ func (s *Set) snapshotFix(refusals []judged) report.Remedy {
 		}
 	}
 	if newest != "" {
-		return report.Fix("or restore the newest snapshot of the data from before the change, with its code:", s.cmd("--snapshots restore "+newest))
+		return report.Fix("restore the newest snapshot of the data from before the change, with its code:", s.cmd("--snapshots restore "+newest))
 	}
-	return report.Fix("or restore a snapshot from before the change, with its code:", s.cmd("--snapshots"))
+	return report.Fix("restore a snapshot from before the change, with its code:", s.cmd("--snapshots"))
 }
 
 // SnapshotManifest is a snapshot's manifest (remote's), read for the

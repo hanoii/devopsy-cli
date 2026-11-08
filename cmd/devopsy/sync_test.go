@@ -2685,7 +2685,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	// The capability's warning, its fix under it, every key aligned on
 	// the longest.
 	out, code = s.run([]string{"FAKE_SHOW=warning\tmaintenance\ton\tdevopsy maintenance off\n"}, "--status")
-	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  on\n             $ devopsy maintenance off\n") {
+	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  on\n             to fix it:\n             $ devopsy maintenance off\n") {
 		t.Errorf("the capability's warning (%d):\n%s", code, out)
 	}
 	// A line of another format is warned, the others still shown.

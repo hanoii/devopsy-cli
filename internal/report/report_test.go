@@ -28,6 +28,12 @@ func TestLines(t *testing.T) {
 			"devopsy: error: locked\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @dev --sync"},
 		{"fixes", ErrorLevel, "no server", nil, []Remedy{Fix("set it in .devopsy/.env:\nDEVOPSY_SERVER_PROD=vm1"), Fix("sync from an address instead:", "devopsy @dev --sync --from @vm1:prod", "devopsy @dev --status"), Fix("", "a", "b")},
 			"devopsy: error: no server\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. set it in .devopsy/.env:\ndevopsy: |    DEVOPSY_SERVER_PROD=vm1\ndevopsy: | 2. sync from an address instead:\ndevopsy: |    $ devopsy @dev --sync --from @vm1:prod\ndevopsy: |    $ devopsy @dev --status\ndevopsy: | 3. $ a\ndevopsy: |    $ b"},
+		// A hint is its text then its commands, in order, never numbered
+		// nor under "to fix it:", before the fixes (Hint).
+		{"hints", InfoLevel, "made a key", nil, []Remedy{Hint("authorize it:", "devopsy @x --ssh-keys add k.pub"), Hint("then load it:", "ssh-add k")},
+			"devopsy: made a key\ndevopsy: | authorize it:\ndevopsy: | $ devopsy @x --ssh-keys add k.pub\ndevopsy: | then load it:\ndevopsy: | $ ssh-add k"},
+		{"a hint and fixes", ErrorLevel, "lost", []string{"why"}, []Remedy{Fix("", "devopsy @x --import db --resolved"), Hint("whether its mark is there:", "devopsy @x --status"), Fix("again:", "devopsy @x --import db")},
+			"devopsy: error: lost\ndevopsy: | why\ndevopsy: | whether its mark is there:\ndevopsy: | $ devopsy @x --status\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. $ devopsy @x --import db --resolved\ndevopsy: | 2. again:\ndevopsy: |    $ devopsy @x --import db"},
 		// An address with brackets shows quoted, as a shell takes it, so a
 		// command copies as shown: in a fix's command, a script's detail
 		// line or a command named in prose, the message included. One

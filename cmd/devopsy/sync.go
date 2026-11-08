@@ -590,7 +590,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		log.Info(fmt.Sprintf("inherited %s from @%s into @%s's shared/%s", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
 	if len(shadowed) > 0 {
-		log.Warn(fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), "to inherit it:", report.CmdMark+"devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " "))
+		log.Say(report.WarnLevel, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), nil, report.Hint("to inherit it:", "devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " ")))
 	}
 	if len(missing) > 0 {
 		log.Warn(fmt.Sprintf("@%s does not set %s (its current release's inherit:): not inherited", p.Address, strings.Join(missing, ", ")))
@@ -1288,7 +1288,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 		if len(missing) > 0 {
 			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
 				Fixes: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
-					report.Fix("or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
+					report.Fix("start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
 			return nil, 1
 		}
 	}

@@ -62,6 +62,6 @@ environments:
 	if _, err := os.Stat(filepath.Join(dot, "compose.yaml")); err != nil {
 		then = "add " + filepath.Join(dot, "compose.yaml") + ", then release with:"
 	}
-	report.Info("wrote "+file, then, report.CmdMark+"devopsy @<server>:prod --release")
+	report.Say(report.InfoLevel, "wrote "+file, nil, report.Hint(then, "devopsy @<server>:prod --release"))
 	return 0
 }

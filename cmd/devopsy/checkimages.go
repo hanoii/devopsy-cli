@@ -127,7 +127,7 @@ func runCheckImages(cwd string, args []string) int {
 		// code and images with them.
 		fixes = []report.Remedy{
 			report.Fix("restore it with its code and images, which ran on those variables:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --with-env"),
-			report.Fix("or its data alone, under the variables there now:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --no-code"),
+			report.Fix("its data alone, under the variables there now:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --no-code"),
 		}
 	}
 	if snapshot != "" && os.Getenv(remote.RestoreEnvEnv) == "" && readMark(filepath.Dir(cwd)) != nil {

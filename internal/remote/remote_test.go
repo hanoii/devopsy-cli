@@ -465,16 +465,20 @@ func TestResetFeature(t *testing.T) {
 	}
 }
 
-// A script saying a time needs --since from the server's devopsy, whose
-// older --say would print "--since" as the line.
-func TestSaySinceFeature(t *testing.T) {
+// A script saying a time needs --since from the server's devopsy, and
+// one saying fixes or hints --fix and --hint: an older --say would print
+// "--since" as the line, and "--fix" and what follows as details.
+func TestSayFeatures(t *testing.T) {
 	t.Parallel()
 	tg := &Target{Path: "app/prod"}
-	if got := Needs(ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, nil)); !slices.Contains(got, SaySinceFeature) {
+	if got := Needs(ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, nil)); !slices.Contains(got, SaySinceFeature) || !slices.Contains(got, SayRemediesFeature) {
 		t.Errorf("an activation's needs: %v", got)
 	}
-	if slices.Contains(Needs("devopsy --say info 'x'\n"), SaySinceFeature) {
-		t.Errorf("a plain --say needs %s", SaySinceFeature)
+	if got := Needs(UploadScript(tg, false)); !slices.Contains(got, SayRemediesFeature) {
+		t.Errorf("an upload's needs: %v", got)
+	}
+	if got := Needs("devopsy --say info 'x'\ndevopsy --say error \"use --fix later\"\n"); slices.Contains(got, SaySinceFeature) || slices.Contains(got, SayRemediesFeature) {
+		t.Errorf("a plain --say needs %v", got)
 	}
 }
 
@@ -2791,7 +2795,10 @@ func TestImportMarkRefusals(t *testing.T) {
 	}
 	importMark := IncompleteLine("2026-10-22 10:00:00", "db", IncompleteImport, "it failed or was cut after its first write: its data may be partial")
 	write(t, mark, importMark)
-	wantImport := []string{"the import of db into @vm1:prod did not complete", "devopsy: | $ devopsy @vm1:prod --import db < <file>", "devopsy: | $ devopsy @vm1:prod --import db --resolved"}
+	// Its ways out as a local error's: numbered, under "to fix it".
+	wantImport := []string{"the import of db into @vm1:prod did not complete",
+		"devopsy: | to fix it, do one of these:\ndevopsy: | 1. import it again, from a complete file:\ndevopsy: |    $ devopsy @vm1:prod --import db < <file>\ndevopsy: | 2. go on with the data as it is",
+		"devopsy: |    $ devopsy @vm1:prod --import db --resolved"}
 	for name, script := range map[string]string{
 		"upload":   UploadScript(tg, false),
 		"activate": ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, nil),
@@ -2813,7 +2820,7 @@ func TestImportMarkRefusals(t *testing.T) {
 	// On a child, a sync is a way out too; a release that syncs goes on to
 	// its upload.
 	child := &Target{Name: "prod", Address: "vm1:prod", Host: "vm1", Path: "app/prod", Parent: "live"}
-	if out, _ := run(UploadScript(child, false), ""); !strings.Contains(out, "devopsy: | $ devopsy @vm1:prod --sync") {
+	if out, _ := run(UploadScript(child, false), ""); !strings.Contains(out, "devopsy: | 2. sync it from its parent:\ndevopsy: |    $ devopsy @vm1:prod --sync") {
 		t.Errorf("a child's upload:\n%s", out)
 	}
 	if out, _ := run(UploadScript(tg, true), ""); !strings.Contains(out, LockedMarker) {
@@ -3240,7 +3247,7 @@ func TestParseActivating(t *testing.T) {
 			continue
 		}
 		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix.Text+"|"+strings.Join(fix.Cmds, " ") != c.fix {
-			t.Errorf("%q (partial %v): %q, %q; want %q, %q", c.line, c.partial, what, fix, c.what, c.fix)
+			t.Errorf("%q (partial %v): %q, %+v; want %q, %q", c.line, c.partial, what, fix, c.what, c.fix)
 		}
 	}
 }

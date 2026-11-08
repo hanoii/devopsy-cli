@@ -150,7 +150,7 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 				if n == 1 {
 					what = fmt.Sprintf("1 more variable reaches @%s from elsewhere (its other files, imports, the env capability, devopsy)", targetRef(t))
 				}
-				report.Info(what, "all of them, with their values:", report.CmdMark+"devopsy @"+targetRef(t)+" --env")
+				report.Say(report.InfoLevel, what, nil, report.Hint("all of them, with their values:", "devopsy @"+targetRef(t)+" --env"))
 			}
 		}
 		return 0
@@ -240,23 +240,23 @@ func sayApplied(t *remote.Target, said, applied string, lines []string) {
 	case "first":
 		report.Info(said, "nothing is released there yet: its first release applies it")
 	case "marked":
-		report.Info(said, markedSays, report.CmdMark+"devopsy @"+targetRef(t)+" --status")
+		report.Say(report.InfoLevel, said, nil, report.Hint(markedSays, "devopsy @"+targetRef(t)+" --status"))
 	case "cut":
-		report.Info(said, "its release was cut off past its switch: a reload applies it once that is finished, as --status shows:", report.CmdMark+"devopsy @"+targetRef(t)+" --status")
+		report.Say(report.InfoLevel, said, nil, report.Hint("its release was cut off past its switch: a reload applies it once that is finished, as --status shows:", "devopsy @"+targetRef(t)+" --status"))
 	case "0":
-		report.Info(said, "running containers keep their old values until they are recreated: to apply it now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
+		report.Say(report.InfoLevel, said, nil, report.Hint("running containers keep their old values until they are recreated: to apply it now,", "devopsy @"+targetRef(t)+" --reload"))
 	case "3":
-		report.Info(said, append(append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), "to apply it:", report.CmdMark+"devopsy @"+targetRef(t)+" --release")...)
+		report.Say(report.InfoLevel, said, append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), report.Hint("to apply it:", "devopsy @"+targetRef(t)+" --release"))
 	case "4":
-		report.Warn(said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "),
-			"to set them:", report.CmdMark+"devopsy @"+targetRef(t)+" --vars set <KEY>...")
+		report.Say(report.WarnLevel, said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "), nil,
+			report.Fix("set them:", "devopsy @"+targetRef(t)+" --vars set <KEY>..."))
 	case "":
 		// The instance's or the project's file, several environments'.
 		report.Info(said, "running containers keep their old values until they are recreated: each environment's --reload applies it")
 	default:
 		// The check could not tell (compose's configuration unreadable):
 		// a reload says why.
-		report.Info(said, "running containers keep their old values until they are recreated: a reload applies it once its checks pass", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
+		report.Say(report.InfoLevel, said, nil, report.Hint("running containers keep their old values until they are recreated: a reload applies it once its checks pass", "devopsy @"+targetRef(t)+" --reload"))
 	}
 }
 
@@ -297,7 +297,7 @@ func confirmUnnamedSecrets(names []string, p *remote.Project, yes bool) error {
 	if yes || !atTerminal() {
 		return &report.Failure{Msg: warning, Details: []string{why}, Fixes: []report.Remedy{fix}}
 	}
-	report.Default().Say(report.WarnLevel, warning, []string{why}, []report.Remedy{fix})
+	report.Default().Say(report.WarnLevel, warning, []string{why}, fix)
 	if !report.Default().Confirm(stdinReader, "go on anyway?") {
 		return errors.New("nothing changed")
 	}

@@ -501,7 +501,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 		// half missing or another machine's (Docker's VM).
 		if runtime.GOOS != "linux" {
 			report.Default().Say(report.ErrorLevel, "--server-info without a server reads the Linux server it runs on, and this is "+runtime.GOOS, nil,
-				[]report.Remedy{report.Fix("", "devopsy @<server> --server-info")})
+				report.Fix("", "devopsy @<server> --server-info"))
 			return 1
 		}
 		info, err := serverFacts()
@@ -677,7 +677,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Fix("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
+			report.Hint("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
 	}
 	if info.RebootRequired {
 		msg := "the server needs a reboot"
@@ -916,7 +916,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			for _, p := range problems {
 				lines = append(lines, env.Path+": "+p)
 			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Fixes: []report.Remedy{statusFix(host, info.Root, env.Path)}})
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Fixes: []report.Remedy{statusHint(host, info.Root, env.Path)}})
 		}
 	}
 	return es
@@ -1031,14 +1031,15 @@ func composeNameOf(path string) string {
 	return strings.Join(parts, "-")
 }
 
-// statusFix is the --status of the environment at path, in its project,
-// or in its current release under root on this machine (no host).
-func statusFix(host, root, path string) report.Remedy {
+// statusHint is the --status of the environment at path, which says
+// how to fix what it warns of, in its project, or in its current release
+// under root on this machine (no host).
+func statusHint(host, root, path string) report.Remedy {
 	if host == "" {
-		return report.Fix("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
+		return report.Hint("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
 	}
 	project, rest, _ := strings.Cut(path, "/")
-	return report.Fix("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
+	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
 }
 
 // removing is a directory a --destroy cut off while removing it left

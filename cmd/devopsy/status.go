@@ -232,7 +232,11 @@ func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
 		}
 		var fix []report.Remedy
 		if len(f) == 4 && f[3] != "" {
-			fix = []report.Remedy{report.Fix("", f[3])}
+			// A warning's command is its fix; an info line's a hint.
+			fix = []report.Remedy{report.Hint("", f[3])}
+			if f[0] == remote.StatusWarning {
+				fix[0].Hint = false
+			}
 		}
 		if n := len(entries); n > 0 && entries[n-1].Key == f[1] {
 			e := &entries[n-1]
@@ -334,7 +338,7 @@ func (h envState) entries(at envAt) []remote.StatusEntry {
 	case h.plain:
 		info("release", "none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		warn("release", "none: "+h.failed+" failed", report.Fix("see why:", "devopsy @"+at.ref+" --log"))
+		warn("release", "none: "+h.failed+" failed", report.Hint("see why:", "devopsy @"+at.ref+" --log"))
 	case h.none:
 		info("release", "none: not released yet")
 	}

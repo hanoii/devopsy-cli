@@ -96,8 +96,8 @@ func (t entryTable) row(key, value string) string {
 }
 
 // print prints es: a key once over its entry's lines and the next
-// entries' of that key, a warning's lines and fixes' texts yellow, each
-// command bold after "$ ".
+// entries' of that key, then its remedies as report lays them out
+// (RemedyLines), a warning's lines and texts yellow, each command bold.
 func (t entryTable) print(es []remote.StatusEntry) {
 	prev := ""
 	for i, e := range es {
@@ -112,12 +112,13 @@ func (t entryTable) print(es []remote.StatusEntry) {
 			}
 			fmt.Fprintln(t.w, paint(report.Copyable(t.row(key, l))))
 		}
-		for _, f := range e.Fixes {
-			if f.Text != "" {
-				fmt.Fprintln(t.w, paint(report.Copyable(t.row("", f.Text))))
-			}
-			for _, c := range f.Cmds {
-				fmt.Fprintln(t.w, t.st.head(report.Copyable(t.row("", report.CmdMark+c))))
+		for _, r := range report.RemedyLines(e.Fixes) {
+			for _, l := range strings.Split(r, "\n") {
+				if lead, cmd, ok := report.SplitCmd(l); ok {
+					fmt.Fprintln(t.w, report.Copyable(t.row("", lead+t.st.head(cmd))))
+				} else {
+					fmt.Fprintln(t.w, paint(report.Copyable(t.row("", l))))
+				}
 			}
 		}
 		prev = e.Key

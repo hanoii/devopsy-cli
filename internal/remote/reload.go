@@ -31,7 +31,7 @@ const ReloadingSays = "reloading "
 func ReloadScript(t *Target, projectName string) string {
 	call := func(args ...string) string { return devopsyCall(projectName, args, false) }
 	refuse := `{ rm -f "$rl_pending"; devopsy --say error "nothing reloaded"; exit 1; }`
-	noCurrent := fixLines(report.Fix("release it first:", "devopsy @"+HintAddress(t)+" --release"))
+	noCurrent := sayRemedies(report.Fix("release it first:", "devopsy @"+HintAddress(t)+" --release"))
 	// Nothing current: said before the lock, which refuses a missing
 	// $base as one removed while it waited.
 	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" ` + noCurrent + `; exit 1; }
@@ -44,7 +44,7 @@ rm -f "$rl_pending"
 # gone) ends it, nothing changed.
 trap 'rm -f "$rl_pending"; devopsy --say error "interrupted: nothing reloaded" || true; exit 130' INT TERM HUP
 ` + releaseImages(projectName, t) + recoverFetch(`"$rel"`) + settleSync(projectName) +
-		markRefusal(t, "nothing reloaded", syncFixLines(t), "exit 1") + cutRefusal(t) + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
+		markRefusal(t, "nothing reloaded", syncFixes(t), "exit 1") + cutRefusal(t) + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
 cd "$base/current"
 ` + call("--prepare-release", "reload") + ` || ` + refuse + `
 export ` + TargetPendingEnv + `="$rl_pending"
@@ -64,7 +64,7 @@ unset ` + TargetPendingEnv + `
 rs=0
 with_tty ` + Quote(call("--release-steps", "reload", "run")) + ` || rs=$?
 img ran "$base" "$rel" || true
-[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" ` + fixLines(report.Fix("", "devopsy @"+HintAddress(t)+" --log")) + ` || true
+[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" ` + sayRemedies(report.Hint("", "devopsy @"+HintAddress(t)+" --log")) + ` || true
 exit "$rs"
 `
 }
@@ -93,7 +93,7 @@ func cutRefusal(t *Target) string {
 	cases := ""
 	for _, kind := range []string{"rollback", "restart", "restore", "*"} {
 		what, fix := (&Activating{ID: "$rl_id", Kind: kind, From: "$rl_from", Snapshot: "$rl_snap"}).Cut(a, a, false)
-		cases += "    " + kind + `) devopsy --say error "` + what + `: nothing reloaded" ` + fixLines(fix) + ` ;;
+		cases += "    " + kind + `) devopsy --say error "` + what + `: nothing reloaded" ` + sayRemedies(fix) + ` ;;
 `
 	}
 	return `if [ -f "$base/` + ActivatingFile + `" ]; then

@@ -2,15 +2,25 @@ package remote
 
 import "github.com/hanoii/devopsy-cli/internal/report"
 
-// SayFlag is the hidden `devopsy --say <level> <message> [<detail>...]`:
-// how scripts say things, formatted and colored as devopsy's own lines
-// (report). Scripts call it after basePrelude, which makes sure
-// the server's devopsy has it (Protocol 5).
+// SayFlag is the hidden `devopsy --say <level> <message> [<detail>...]
+// [--fix|--hint <text> [<command>...]]...`: how scripts say things,
+// formatted and colored as devopsy's own lines (report). Scripts call it
+// after basePrelude, which makes sure the server's devopsy has it
+// (Protocol 5).
 const SayFlag = "--say"
 
 // SaySinceFlag adds to --say's message the time since a script's clock
 // (timerStart).
 const SaySinceFlag = "--since"
+
+// SayFixFlag and SayHintFlag start a remedy in --say's words, a fix
+// (report.Fix) or a hint (report.Hint): the next word its text (empty
+// for none), the words up to the next one its commands. The first ends
+// the details (sayRemedies).
+const (
+	SayFixFlag  = "--fix"
+	SayHintFlag = "--hint"
+)
 
 // SayLevels are --say's levels, by name.
 var SayLevels = map[string]report.Level{

@@ -663,7 +663,7 @@ func prelude(t *Target, create bool) string {
   exit 1
 fi
 if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
-  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + fixLines(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
+  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + sayRemedies(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
   exit 1
 fi
 ` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared"
@@ -694,10 +694,10 @@ func UploadScript(t *Target, syncs bool) string {
 	guard := ""
 	if !syncs {
 		guard = `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" ` + syncFixLines(t) + `
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" ` + syncFixes(t) + `
   exit 1
 fi
-` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")
+` + markRefusal(t, "nothing released", syncFixes(t, releaseSyncFix(t)), "exit 1")
 	}
 	return prelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 rel="$base/releases/$id"
@@ -964,7 +964,7 @@ exec 4<&-
 func partialGuard(t *Target, projectName, refuse string) string {
 	return `if [ -n "$prev" ]; then
 ` + settleSync(projectName) + `fi
-` + markRefusal(t, "nothing changed", syncFixLines(t, `"or --release-sync to release with it"`), refuse)
+` + markRefusal(t, "nothing changed", syncFixes(t, releaseSyncFix(t)), refuse)
 }
 
 // recoverFetch finishes what a release's fetch killed outright left (img

@@ -508,7 +508,7 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 			// it ran: a plain one refused unless its label reaches that.
 			s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s's own image of it, built by the project, is gone from this server: it stays on %s (%s), on the data as it is", e.Service, tid, heldWhat(wasHeld[e.Service]), shownData(e)),
 				nil, report.Fix("a release builds it, its label raised to the data's version:", s.cmd("--release")),
-				report.Fix("or, knowing its data takes the older image, accept it:", s.again("--release", []string{e.Service})))
+				report.Fix("knowing its data takes the older image, accept it:", s.again("--release", []string{e.Service})))
 			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
 			continue
 		}

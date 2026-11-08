@@ -1294,10 +1294,10 @@ func startLeftDown(cwd string, names []string) (down []string) {
 			start = append(start, s)
 		}
 	}
-	fix := []string{"to start them:", report.CmdMark + "devopsy @" + targetAddress(cwd) + " up -d"}
+	fix := report.Fix("", "devopsy @"+targetAddress(cwd)+" up -d")
 	if len(again) > 0 {
 		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
-			report.Warn("docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", fix...)
+			report.Say(report.WarnLevel, "docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", nil, fix)
 			down = again
 		}
 	}
@@ -1305,7 +1305,7 @@ func startLeftDown(cwd string, names []string) (down []string) {
 		return down
 	}
 	if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
-		report.Warn("docker compose start: "+err.Error()+": they stay stopped", fix...)
+		report.Say(report.WarnLevel, "docker compose start: "+err.Error()+": they stay stopped", nil, fix)
 		return append(down, start...)
 	}
 	left = start
@@ -2267,7 +2267,7 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	}
 	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
 	unlock()
-	report.Info("imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", "to restore it:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id)
+	report.Say(report.InfoLevel, "imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", nil, report.Hint("to restore it:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+id))
 	return nil
 }
 
@@ -2543,7 +2543,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		if noCode {
 			again = " --snapshots restore " + id + " --no-code --with-env"
 		}
-		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+again)
+		report.Say(report.WarnLevel, "the snapshot's shared/.env differs from the environment's"+in+": kept as it is", nil, report.Hint("--with-env brings it back too:", "devopsy @"+targetAddress(cwd)+again))
 	}
 	// It lands under the variables it leaves (its labels read with the
 	// snapshot's, --with-env, moved in place above): its history comes back

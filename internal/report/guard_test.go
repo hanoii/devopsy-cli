@@ -19,7 +19,8 @@ import (
 // document, is the exception.
 func TestNothingSaysAround(t *testing.T) {
 	t.Parallel()
-	said := regexp.MustCompile(`(^|[^\\a-z])["` + "`" + `]devopsy: |\\"devopsy: |Fprint(f|ln)?\((os\.Stderr|errOut)\b`)
+	// A command's "$ " too: report lays every one out (Fix, Hint).
+	said := regexp.MustCompile(`(^|[^\\a-z])["` + "`" + `]devopsy: |\\"devopsy: |Fprint(f|ln)?\((os\.Stderr|errOut)\b|["` + "`" + `']\$ |\\"\$ `)
 	allowed := []struct{ file, line string }{
 		// Usage, devopsy's help: printed as it is.
 		{"internal/cli/cli.go", "`devopsy: docker compose for projects"},
