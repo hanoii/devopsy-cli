@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -185,8 +184,14 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if r.Root != me.HomeDir {
 		tree, root = filepath.Join(r.Root, project), r.Root
 	}
-	if err := ensureUtilImage(context.Background()); err != nil {
+	// The project users' firewall, loaded and checked before any project user can log in.
+	wrong, err := doorFirewall(remote.DoorFirewallInstall(), true)
+	if err != nil {
 		return failErr(err)
+	}
+	if len(wrong) > 0 {
+		report.Error("the project users' firewall did not load as devopsy's: nothing else changed", wrong...)
+		return 1
 	}
 	var out bytes.Buffer
 	c := exec.Command("docker", "run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,
@@ -209,10 +214,6 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	}
 	report.Info("project user "+who+" for "+project+", its entry in "+entry,
 		"its keys: devopsy @<deploy user>@<server>: --ssh-keys --for "+project+" add <public key file>")
-	if missing, err := doorFirewallMissing(); err == nil && len(missing) > 0 {
-		report.Warn("project users reach what the door's firewall rule keeps them off: "+strings.Join(missing, ", "),
-			"devopsy @<server> --server-info says how to add it")
-	}
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"devopsy-server's DEVOPSY_AUTO_REBOOT_TIME takes it, as a kernel update (/run/reboot-required)")

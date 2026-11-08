@@ -71,6 +71,9 @@ su -s /bin/sh devopsy -c 'devopsy --util-image'
 	return name
 }
 
+// startWaitE2E bounds a wait for what a test then acts on (a container answering).
+const startWaitE2E = time.Minute
+
 // doorRoot runs script as root on the door's server.
 func doorRoot(t *testing.T, script string) (string, int) {
 	t.Helper()
@@ -587,9 +590,11 @@ docker image rm localhost:5000/private/app:1 >/dev/null
 	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 {
 		t.Errorf("with no login, a private image ran:\n%s", out)
 	}
+	// The project's login, as docker login writes it: its own docker login reaches no
+	// registry on its server, which the project users' firewall keeps it off.
 	user := "devopsy-doorreg"
-	if out, code := doorAs(t, user, "printf s3cret | docker login -u alice --password-stdin localhost:5000 2>&1"); code != 0 || !strings.Contains(out, "Login Succeeded") {
-		t.Fatalf("a login with no socket (%d): %s", code, out)
+	if out, code := doorAs(t, user, `mkdir -p ~/.docker && printf '{"auths":{"localhost:5000":{"auth":"%s"}}}' "$(printf alice:s3cret | base64)" >~/.docker/config.json`); code != 0 {
+		t.Fatalf("the project's login (%d): %s", code, out)
 	}
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("logged in, a private image (%d):\n%s", code, out)
@@ -634,75 +639,150 @@ sudo -n -u devopsy /usr/local/bin/devopsy --door compose ~/.docker/config.json /
 	}
 }
 
-// A rule by the project users' group keeps them off Docker's networks, and leaves the deploy
-// user and the containers alone. A sync's daemon, on the loopback, takes its password.
-func TestDoorHostFirewallAndSyncDaemon(t *testing.T) {
+// The project users' firewall, devopsy's own (--project-users add): a project user's process
+// on the host reaches no other project's container, no port published on the host's loopback
+// (through docker-proxy, a process of root's), and no metadata service, while the deploy user
+// reaches them all and the resolver still answers. A door project's container reaches no
+// metadata service either. --server-info says when the host's rules are not devopsy's (an
+// ACCEPT ahead of the jump, the chain emptied) and add, or the boot's loader, loads them
+// again. A sync works under it (TestDoorSyncAcrossDoorServers, its forward on the child the
+// project user's sshd).
+func TestDoorFirewall(t *testing.T) {
 	web := `    image: busybox:1.37
     user: "10001:10001"
     security_opt: [no-new-privileges]
-    command: sh -c 'while true; do echo -e "HTTP/1.1 200 OK\r\n\r\nhello-from-web" | nc -l -p 8080; done'
+    command: [sh, -c, "mkdir -p /tmp/w && echo hello-from-web >/tmp/w/index.html && exec httpd -f -p 8080 -h /tmp/w"]
 `
 	dir := doorProject(t, "doorfw", "services:\n  web:\n"+web, nil)
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("a release (%d):\n%s", code, out)
 	}
 	doorUser(t, "doorfwo")
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doorfw-loopback doorfw-md; ip link del doorfwmd0 2>/dev/null; true")
+	})
+	// The admin's own: a port for itself on the host's loopback, and a stand-in for the
+	// cloud's metadata service at its address.
+	if out, code := doorRoot(t, `set -e
+docker run -d --name doorfw-loopback -p 127.0.0.1:18080:8080 busybox:1.37 sh -c 'mkdir -p /w && echo hello-from-loopback >/w/index.html && exec httpd -f -p 8080 -h /w' >/dev/null
+ip link add doorfwmd0 type dummy
+ip addr add 169.254.169.254/32 dev doorfwmd0
+ip link set doorfwmd0 up
+docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w && echo instance-credentials >/w/index.html && exec httpd -f -p 169.254.169.254:80 -h /w' >/dev/null`); code != 0 {
+		t.Fatalf("the admin's containers (%d): %s", code, out)
+	}
 	ip, _ := doorRoot(t, "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' doorfw-prod-web-1 | cut -d' ' -f1")
-	url := "http://" + strings.TrimSpace(ip) + ":8080/"
-	ask := func(user string) string {
+	sites := map[string]string{
+		"http://" + strings.TrimSpace(ip) + ":8080/": "hello-from-web",
+		"http://127.0.0.1:18080/":                    "hello-from-loopback",
+		"http://169.254.169.254/":                    "instance-credentials",
+	}
+	reaches := func(user string) []string {
 		t.Helper()
-		out, _ := doorAs(t, user, "curl -s --max-time 3 "+url)
+		var got []string
+		for url, says := range sites {
+			if out, _ := doorAs(t, user, "curl -s --max-time 3 "+url); strings.Contains(out, says) {
+				got = append(got, url)
+			}
+		}
+		return got
+	}
+	// The deploy user is the control: every site answers.
+	eventually(t, startWaitE2E, "every site answering the deploy user", func() bool { return len(reaches("devopsy")) == len(sites) })
+	if got := reaches("devopsy-doorfwo"); len(got) != 0 {
+		t.Errorf("a project user reached %v", got)
+	}
+	if out, code := doorAs(t, "devopsy-doorfwo", "getent hosts mirror"); code != 0 {
+		t.Errorf("a project user's names did not resolve through Docker's resolver on the loopback (%d): %s", code, out)
+	}
+	if out, _ := op(t, dir, "devopsy @prod exec -T web wget -qO- -T 3 http://169.254.169.254/ 2>&1"); strings.Contains(out, "instance-credentials") {
+		t.Errorf("a door project's container read the metadata service: %s", out)
+	}
+
+	// What --server-info says of the host's rules, and add or the boot's loader putting them
+	// back: a project user then reaches nothing again.
+	info := func() string {
+		t.Helper()
+		out, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
 		return out
 	}
-	if !strings.Contains(ask("devopsy-doorfwo"), "hello-from-web") {
-		t.Fatal("the control: with no rule, a project user reaches no site directly, so this proves nothing")
+	if out := info(); strings.Contains(out, "firewall") {
+		t.Errorf("--server-info, the firewall loaded:\n%s", out)
 	}
-	// What leaves through Docker's bridges, and the metadata service, never an address
-	// range: a sync reaches another server at any address, one inside Docker's pools too.
-	rules := []string{"-o docker0", "-o br-+", "-d 169.254.169.254/32"}
-	for _, r := range rules {
-		if out, code := doorRoot(t, "iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups "+r+" -j REJECT"); code != 0 {
-			t.Fatal(out)
+	for _, c := range []struct{ name, break_, says, put string }{
+		{"an ACCEPT ahead", "iptables -I OUTPUT 1 -j ACCEPT", "OUTPUT lets packets through before its jump to DEVOPSY-PROJECTS: -j ACCEPT", "devopsy @devopsy@doorsrv: --project-users add doorfw"},
+		{"emptied", "iptables -F DEVOPSY-PROJECTS", "DEVOPSY-PROJECTS is not devopsy's", "boot"},
+	} {
+		if out, code := doorRoot(t, c.break_); code != 0 {
+			t.Fatalf("%s (%d): %s", c.name, code, out)
 		}
+		if got := reaches("devopsy-doorfwo"); len(got) == 0 {
+			t.Errorf("%s: the control: a project user reaches nothing with the rules broken", c.name)
+		}
+		if out := info(); !strings.Contains(out, c.says) || !strings.Contains(out, "devopsy @devopsy@doorsrv: --project-users add ") {
+			t.Errorf("%s: --server-info:\n%s", c.name, out)
+		}
+		if c.put == "boot" {
+			// What devopsy-firewall.service runs at boot.
+			if out, code := doorRoot(t, "/usr/local/libexec/devopsy-firewall"); code != 0 {
+				t.Fatalf("%s: the loader (%d): %s", c.name, code, out)
+			}
+		} else if out, code := op(t, "/", c.put+" 2>&1"); code != 0 {
+			t.Fatalf("%s: add again (%d): %s", c.name, code, out)
+		}
+		// The ACCEPT stays where the admin put it, behind the jump now.
+		if out := info(); strings.Contains(out, "firewall") {
+			t.Errorf("%s: --server-info once loaded again:\n%s", c.name, out)
+		}
+		if got := reaches("devopsy-doorfwo"); len(got) != 0 {
+			t.Errorf("%s: loaded again, a project user reached %v", c.name, got)
+		}
+	}
+	doorRoot(t, "iptables -D OUTPUT -j ACCEPT")
+}
+
+// The firewall holds over IPv6 too: a project's network with IPv6, which Docker gives a subnet
+// of its own pools, is no more another project user's to reach from the host than its IPv4
+// address. The control: the deploy user reaches both.
+func TestDoorFirewallIPv6(t *testing.T) {
+	name := doorServer(t)
+	prev, _ := doorRoot(t, "sysctl -n net.ipv6.conf.all.disable_ipv6")
+	prevDefault, _ := doorRoot(t, "sysctl -n net.ipv6.conf.default.disable_ipv6")
+	if out, code := doorRoot(t, "sysctl -qw net.ipv6.conf.all.disable_ipv6=0 net.ipv6.conf.default.disable_ipv6=0"); code != 0 {
+		t.Skipf("no IPv6 on %s: %s", name, out)
 	}
 	t.Cleanup(func() {
-		for _, r := range rules {
-			doorRoot(t, "iptables -D OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups "+r+" -j REJECT")
-		}
-		doorRoot(t, "docker rm -f doorfw-syncd")
+		doorRoot(t, "sysctl -qw net.ipv6.conf.all.disable_ipv6="+strings.TrimSpace(prev)+" net.ipv6.conf.default.disable_ipv6="+strings.TrimSpace(prevDefault))
 	})
-	if strings.Contains(ask("devopsy-doorfwo"), "hello-from-web") {
-		t.Error("a project user reached another site past the rule")
+	dir := doorProject(t, "doorv6", `services:
+  web:
+`+doorService+`    command: [sh, -c, "mkdir -p /tmp/w && echo hello-v6 >/tmp/w/index.html && exec httpd -f -p 8080 -h /tmp/w"]
+networks:
+  default:
+    enable_ipv6: true
+`, nil)
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("a release with an IPv6 network (%d):\n%s", code, out)
 	}
-	if !strings.Contains(ask("devopsy"), "hello-from-web") {
-		t.Error("the rule caught the deploy user too")
+	t.Cleanup(func() { op(t, dir, "devopsy @prod --destroy --yes") })
+	doorUser(t, "doorv6o")
+	addrs, _ := doorRoot(t, "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.GlobalIPv6Address}}{{end}}' doorv6-prod-web-1")
+	f := strings.Fields(addrs)
+	if len(f) != 2 {
+		t.Skipf("Docker gave the network no IPv6 subnet here: %q", addrs)
 	}
-	if out, code := doorRoot(t, `set -e
-mkdir -p /tmp/dm; echo s3cret-sync >/tmp/dm/f
-docker run -d --name doorfw-syncd -p 127.0.0.1:18873:873 -v /tmp/dm:/mnt/d:ro -e RSYNC_SECRET=0123456789abcdef0123456789abcdef -e 'RSYNCD_CONF=uid = 0
-gid = 0
-use chroot = yes
-read only = yes
-auth users = nobody
-secrets file = /etc/rsyncd.secrets
-[d]
-path = /mnt/d
-' devopsy-util:4 sh -c 'printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && printf "nobody:%s\n" "$RSYNC_SECRET" > /etc/rsyncd.secrets && chmod 600 /etc/rsyncd.secrets && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf' >/dev/null
-sleep 1`); code != 0 {
-		t.Fatal(out)
+	ask := func(user, url string) bool {
+		t.Helper()
+		out, _ := doorAs(t, user, "curl -s --max-time 3 '"+url+"'")
+		return strings.Contains(out, "hello-v6")
 	}
-	if out, _ := doorAs(t, "devopsy-doorfwo", "rm -f /tmp/stolen; rsync rsync://127.0.0.1:18873/d/f /tmp/stolen </dev/null 2>&1; cat /tmp/stolen 2>/dev/null"); strings.Contains(out, "s3cret-sync") {
-		t.Errorf("another project user read a sync's data with no password: %s", out)
-	}
-	if out, _ := doorAs(t, "devopsy-doorfwo", "rm -f /tmp/stolen2; RSYNC_PASSWORD=0123456789abcdef0123456789abcdef USER=nobody rsync rsync://127.0.0.1:18873/d/f /tmp/stolen2 </dev/null 2>&1; cat /tmp/stolen2 2>/dev/null"); !strings.Contains(out, "s3cret-sync") {
-		t.Errorf("the control: with its password the daemon does not answer: %s", out)
-	}
-	// The real thing under the rule: a child at another address of the server, the sync's
-	// key reaching the project's user there. On GitHub's runners that address is inside
-	// doorDockerPool, which a rule by address range refused.
-	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
-	if out, code := op(t, dir, noAgent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
-		t.Errorf("a child at another address, under the rule (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))
+	for _, url := range []string{"http://" + f[0] + ":8080/", "http://[" + f[1] + "]:8080/"} {
+		if !ask("devopsy", url) {
+			t.Fatalf("the control: the deploy user does not reach %s", url)
+		}
+		if ask("devopsy-doorv6o", url) {
+			t.Errorf("another project user reached %s", url)
+		}
 	}
 }
 
@@ -862,9 +942,8 @@ volumes:
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --ssh-keys --for doorpair add /tmp/planted.pub 2>&1 && "+login); code != 0 {
 		t.Errorf("the control: the same key, the deploy user's to give (%d): %s", code, out)
 	}
-	// --server-info reads the door's host as root: its users, and the firewall rule this server
-	// lacks, with the lines that add it (a warning, so it exits 3).
-	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project users\n`).MatchString(out) || !strings.Contains(out, "keeps them off: -o docker0, -o br-+, -d 169.254.169.254/32") {
+	// --server-info reads the door's host as root: its users, and the firewall add loaded.
+	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project users\n`).MatchString(out) || strings.Contains(out, "firewall") {
 		t.Errorf("--server-info on a door server:\n%s", out)
 	}
 	// add refuses a name sharing compose names with a project there, and refuses while the

@@ -74,25 +74,3 @@ func TestDoorTreeCheck(t *testing.T) {
 	}
 }
 
-// The door's firewall rule is found as iptables -S writes it, by the group's id: each of its
-// parts a REJECT or DROP of the project users' traffic, and nothing else counts.
-func TestDoorFirewallMissing(t *testing.T) {
-	t.Parallel()
-	all := "-P OUTPUT ACCEPT\n" +
-		"-A OUTPUT -o docker0 -m owner --gid-owner 1001 --suppl-groups -j REJECT --reject-with icmp-port-unreachable\n" +
-		"-A OUTPUT -o br-+ -m owner --gid-owner 1001 --suppl-groups -j DROP\n" +
-		"-A OUTPUT -d 169.254.169.254/32 -m owner --gid-owner 1001 --suppl-groups -j REJECT --reject-with icmp-port-unreachable\n"
-	if got := DoorFirewallMissing(all, "1001"); len(got) != 0 {
-		t.Errorf("all there: %q", got)
-	}
-	if got := DoorFirewallMissing(all, "1002"); len(got) != 3 {
-		t.Errorf("another group's: %q", got)
-	}
-	accept := strings.ReplaceAll(all, "-j DROP", "-j ACCEPT")
-	if got := DoorFirewallMissing(accept, "1001"); len(got) != 1 || got[0] != "-o br-+" {
-		t.Errorf("an ACCEPT for a part: %q", got)
-	}
-	if got := DoorFirewallMissing("-P OUTPUT ACCEPT\n", "1001"); len(got) != 3 {
-		t.Errorf("none: %q", got)
-	}
-}

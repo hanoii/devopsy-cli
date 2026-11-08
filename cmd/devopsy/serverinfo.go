@@ -50,7 +50,7 @@ var serverTools = []struct{ name, without string }{
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
-// waits for a reboot to take it, and its firewall rule, read as root through the util image.
+// waits for a reboot to take it, and its firewall, read as root through the util image.
 func doorFacts() *remote.DoorFacts {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
@@ -63,29 +63,42 @@ func doorFacts() *remote.DoorFacts {
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		f.Reboot = true
 	}
-	f.FirewallMissing, err = doorFirewallMissing()
+	for u := range d.Users {
+		if p := d.Users[u].Project; f.Project == "" || p < f.Project {
+			f.Project = p
+		}
+	}
+	f.FirewallWrong, err = doorFirewall(remote.DoorFirewallRead, false)
 	if err != nil {
 		f.FirewallError = err.Error()
 	}
 	return f
 }
 
-// doorFirewallMissing is what of the firewall rule by the project users' group the host's
-// iptables lacks, read as root with the host's network: the deploy user cannot read it.
-func doorFirewallMissing() ([]string, error) {
+// doorFirewall runs script as root on the host with its network, through the util image
+// (writing the host's files when write), and says what of the project users' firewall the
+// host lacks from what it prints (remote.DoorFirewallRead): the deploy user can neither
+// read nor change it.
+func doorFirewall(script string, write bool) ([]string, error) {
+	if err := ensureUtilImage(context.Background()); err != nil {
+		return nil, err
+	}
+	bind := "/:/host:ro"
+	if write {
+		bind = "/:/host"
+	}
+	c := exec.Command("docker", "run", "--rm", "--network", "host", "--cap-add", "NET_ADMIN", "-v", bind, remote.UtilImage,
+		"chroot", "/host", "/bin/sh", "-c", script)
+	c.Stderr = os.Stderr
+	out, err := c.Output()
+	if err != nil {
+		return nil, fmt.Errorf("the project users' firewall: %v", err)
+	}
 	g, err := user.LookupGroup(remote.DoorGroup)
 	if err != nil {
 		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
 	}
-	if err := ensureUtilImage(context.Background()); err != nil {
-		return nil, err
-	}
-	out, err := exec.Command("docker", "run", "--rm", "--network", "host", "--cap-add", "NET_ADMIN", "-v", "/:/host:ro", remote.UtilImage,
-		"chroot", "/host", "iptables", "-S", "OUTPUT").Output()
-	if err != nil {
-		return nil, fmt.Errorf("iptables -S OUTPUT: %v", err)
-	}
-	return remote.DoorFirewallMissing(string(out), g.Gid), nil
+	return remote.DoorFirewallWrong(string(out), g.Gid), nil
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
@@ -768,14 +781,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		switch {
 		case dr.FirewallError != "":
-			note("the door's firewall rule could not be read: " + dr.FirewallError)
-		case len(dr.FirewallMissing) > 0:
-			var lines []string
-			for _, part := range dr.FirewallMissing {
-				lines = append(lines, "iptables -I OUTPUT -m owner --gid-owner "+remote.DoorGroup+" --suppl-groups "+part+" -j REJECT")
-			}
-			warn("project users reach what the door's firewall rule keeps them off: "+strings.Join(dr.FirewallMissing, ", "),
-				report.Fix("as root, kept across reboots by the server's firewall setup:", lines...))
+			note("the project users' firewall could not be read: " + dr.FirewallError)
+		case len(dr.FirewallWrong) > 0:
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"project users reach what their firewall keeps them off"}, dr.FirewallWrong...),
+				Remedies: []report.Remedy{report.Fix("load it again, for any of its projects:", "devopsy @"+ref+" --project-users add "+cmp.Or(dr.Project, "<project>"))}})
 		}
 	}
 

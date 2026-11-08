@@ -65,6 +65,22 @@ var doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
 fi
 `
 
+// hostGroup makes the project users' group when it is not there yet.
+var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system " + DoorGroup + "\n"
+
+// hostPut is put <file> <mode> <check> <content>: content into file when it differs, checked
+// before it lands, failing otherwise when it changed nothing. Never in a pipeline, whose
+// subshell an exit would leave alone.
+var hostPut = `put() {
+  tmp=$(mktemp "$1.XXXXXX")
+  printf '%s' "$4" >"$tmp"
+  chmod "$2" "$tmp"
+  if cmp -s "$tmp" "$1" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
+  mv -f "$tmp" "$1"
+}
+`
+
 // DoorHostScript is what --project-users add does as root on the host, through the util
 // image (chroot into /host): the door's pieces when missing or different, each checked before
 // it lands (visudo, sshd -t), then the user, its home and its tree. Its arguments: the user,
@@ -76,8 +92,7 @@ func DoorHostScript(deploy, devopsy string) string {
 umask 022
 user=$1 tree=$2 root=$3
 group=` + DoorGroup + `
-getent group "$group" >/dev/null || groupadd --system "$group"
-for u in root ` + Quote(deploy) + `; do
+` + hostGroup + `for u in root ` + Quote(deploy) + `; do
   if id -nG "$u" | tr ' ' '\n' | grep -qx "$group"; then
     ` + echoLine(report.ErrorLevel, "$u is in $group, and sshd would ignore its own keys for devopsy's", report.Fix("take it out first:", "gpasswd -d $u $group")) + `
     exit 3
@@ -85,17 +100,7 @@ for u in root ` + Quote(deploy) + `; do
 done
 (set -- "$user" "$tree"
 ` + doorTreeCheck + `)
-# put <file> <mode> <check> <content>: content into file when it differs, checked before it
-# lands. Never in a pipeline, whose subshell an exit would leave alone.
-put() {
-  tmp=$(mktemp "$1.XXXXXX")
-  printf '%s' "$4" >"$tmp"
-  chmod "$2" "$tmp"
-  if cmp -s "$tmp" "$1" 2>/dev/null; then rm -f "$tmp"; return 1; fi
-  if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
-  mv -f "$tmp" "$1"
-}
-# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
+` + hostPut + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
 # Docker. A real docker there would put the project users on the socket.
 if [ ! -L ` + DoorDockerLink + ` ] && [ -e ` + DoorDockerLink + ` ]; then
   ` + echoLine(report.ErrorLevel, DoorDockerLink+" is a real docker: project users would reach the socket through it") + `

@@ -1,6 +1,6 @@
 package remote
 
-import "strings"
+
 
 // ServerFactsFlag is the hidden flag behind --server-info: run by its
 // session on the server, it prints the server's facts as one JSON
@@ -92,34 +92,12 @@ type DoorFacts struct {
 	Users     int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
-	// FirewallMissing are the parts of the firewall rule by the project users' group that are
-	// not there; FirewallError why it could not be read.
-	FirewallMissing []string `json:"firewall_missing,omitempty"`
-	FirewallError   string   `json:"firewall_error,omitempty"`
-}
-
-// DoorFirewall is the firewall rule by the project users' group, one line each: what leaves
-// through Docker's bridges, and the metadata service, as iptables -S writes them.
-var DoorFirewall = []string{"-o docker0", "-o br-+", "-d 169.254.169.254/32"}
-
-// DoorFirewallMissing is what of DoorFirewall the host's iptables -S OUTPUT lacks: a REJECT or
-// DROP holding the part and the group's id as its owner.
-func DoorFirewallMissing(rules, gid string) []string {
-	var missing []string
-	for _, part := range DoorFirewall {
-		found := false
-		for _, line := range strings.Split(rules, "\n") {
-			if strings.HasPrefix(line, "-A OUTPUT ") && strings.Contains(line, " "+part+" ") && strings.Contains(line, "--gid-owner "+gid+" ") &&
-				(strings.Contains(line, "-j REJECT") || strings.Contains(line, "-j DROP")) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			missing = append(missing, part)
-		}
-	}
-	return missing
+	// FirewallWrong is what of the project users' firewall the host lacks (DoorFirewallWrong);
+	// FirewallError why it could not be read. Project is one of its projects, which add
+	// loads the firewall again for.
+	FirewallWrong []string `json:"firewall_wrong,omitempty"`
+	FirewallError string   `json:"firewall_error,omitempty"`
+	Project       string   `json:"project,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.

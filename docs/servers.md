@@ -270,16 +270,28 @@ then no project user logs in, and `--project-users` says so. It refuses
 while the deploy user or root is in `devopsy-projects`, which would have
 sshd ignore their own keys.
 
-A project user's own traffic on the host is kept off containers and
-the cloud's metadata service by a firewall rule by its group, which the
-server keeps across reboots. `--server-info` checks it, and the door's
-space and a reboot sshd waits for, and prints what is missing:
+`add` also loads a firewall for project users, one for the whole
+server, in IPv4 and, where the kernel has it, IPv6. A project user's
+processes on the host reach no container on Docker's networks, nothing
+at the host's own addresses (loopback included) but port 53 for a DNS
+resolver, and no cloud metadata service at 169.254.169.254, or
+`fd00:ec2::254` and `fd20:ce::254` in IPv6. No container on Docker's
+networks reaches those addresses either, the deploy user's included:
+an app that takes the instance's credentials from them needs
+credentials of its own. Syncs between servers work under it. A sync
+between two environments of one server works only when both name the
+server by the same host as ssh resolves it: an IP address for one and
+a name for the other takes the path between servers, and the project
+user cannot reach its own server's SSH server.
 
-```sh
-iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -o docker0 -j REJECT
-iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -o br-+ -j REJECT
-iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -d 169.254.169.254/32 -j REJECT
-```
+The rules are in two chains devopsy owns, `DEVOPSY-PROJECTS` in
+iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table.
+`devopsy-firewall.service` loads them again at every boot, and the
+server's other rules stay as they are. `--server-info` checks them and
+warns when a chain is not devopsy's, when nothing jumps to it, or when
+a rule ahead of devopsy's jump lets packets through; running `add`
+again loads them again. It also checks the door's space and a reboot
+sshd waits for.
 
 A project's name may not extend another's on the server, or be
 extended by one (`shop` and `shop-admin`): compose names are flat, so
@@ -296,14 +308,17 @@ user's releases of the project for example: move it aside first. Once
 the project has its user, a release by the deploy user under its names
 is refused before it goes live.
 
-Images are a project user's own too. Those it builds and the holds of
-its releases are; any other image is pulled once with the project's
-own registry logins (the `auths` of its `~/.docker/config.json`)
-before the project runs it, inspects it or tags it, even when another
-project has it on the server already. A private image another project pulled with its
-own login is then refused, and a public one costs one pull. The door
-records what each project pulled this way, so later starts ask the
-registry nothing.
+A project user has images of its own too: those it builds, and those
+its releases hold. Any other image is pulled once with the project's
+registry logins (the `auths` of its `~/.docker/config.json`) before the
+project runs it, inspects it or tags it, even when another project has
+it on the server already. The project cannot use a private image
+another project pulled with its login, and a public one costs it one
+pull. The door records what each project pulled this way, so later
+starts ask the registry nothing. A `docker login` by the project user
+cannot reach a registry that runs on the same server, since the
+firewall keeps it off the server's addresses and containers: add that
+registry's `auths` entry to its `~/.docker/config.json` by hand.
 
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
 A child on another server needs its own project user there
