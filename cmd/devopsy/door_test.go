@@ -738,3 +738,21 @@ func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// The door's space on a mount that takes setuid files and devices lets a container's setuid
+// file cross projects and a crafted tar reach root, so the door does nothing there. A test's
+// temporary directory is on no such mount, mostly.
+func TestDoorRefusesASpaceWithSetuid(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if nosuid, nodev, _ := mountGuards(dir); nosuid && nodev {
+		t.Skip("this machine's temporary directories are on such a mount")
+	}
+	err := spaceGuarded(dir)
+	if err == nil || !strings.Contains(err.Error(), "nosuid and nodev") {
+		t.Errorf("a space on a plain mount: %v", err)
+	}
+	if err := spaceGuarded(filepath.Join(t.TempDir(), "none")); err == nil {
+		t.Error("a space that is not there")
+	}
+}

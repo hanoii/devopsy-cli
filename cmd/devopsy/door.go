@@ -547,6 +547,11 @@ func runDoor(args []string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
+	if err := spaceGuarded(policy.Space); err != nil {
+		report.Fail(err, report.Fix("mount it so, for example in /etc/fstab, as devopsy-server's door step does:", policy.Space+" "+policy.Space+" none bind,nosuid,nodev 0 0"))
+		doorRecord(err.Error())
+		return 2
+	}
 	doorLog = filepath.Join(policy.Space, "refused.log")
 	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets}
 	if len(args) == 0 {
@@ -592,6 +597,20 @@ func runDoor(args []string) int {
 		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
+}
+
+// spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a
+// container's setuid file crosses projects and a crafted tar reaches root, so the door does
+// nothing rather than half its promise.
+func spaceGuarded(space string) error {
+	nosuid, nodev, err := mountGuards(space)
+	if err != nil {
+		return fmt.Errorf("refused: the door's space %s: %v", space, err)
+	}
+	if !nosuid || !nodev {
+		return fmt.Errorf("refused: the door's space %s is not on a mount with nosuid and nodev", space)
+	}
+	return nil
 }
 
 // doorPolicy reads what the host says of a project user.
