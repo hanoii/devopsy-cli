@@ -2097,11 +2097,10 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
 	case mark.IsRestore():
-		fixes := report.FixPairs(remote.RestoreFixes(targetRef(t), mark.From, t.Parent != ""))
+		fixes := remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "")
 		return failErr(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Fixes: fixes})
 	case !mark.IsImport() || settle:
-		reset := remote.ResetFix(targetRef(t))
-		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), report.Fix(reset[0], reset[1])}})
+		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), remote.ResetFix(targetRef(t))}})
 	case mark.From != name:
 		return failErr(&report.Failure{Msg: "the import that did not complete on @" + t.Address + " is " + mark.From + "'s, not " + name + "'s: nothing resolved", Fixes: []report.Remedy{report.Fix("resolve that one:", "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+mark.From+" --resolved")}})
 	}

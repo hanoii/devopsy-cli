@@ -529,15 +529,14 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		// completes it (the activation checks again); a sync is one
 		// of the ways out of an import's too.
 		if cur.Mark != nil && !syncs {
-			reset := remote.ResetFix(remote.HintAddress(t))
-			fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+remote.HintAddress(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+remote.HintAddress(t)+" --sync"), report.Fix(reset[0], reset[1])}
+			fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+remote.HintAddress(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+remote.HintAddress(t)+" --sync"), remote.ResetFix(remote.HintAddress(t))}
 			msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
 			if cur.Mark.IsImport() {
 				msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
-				fixes = report.FixPairs(remote.ImportFixes(remote.HintAddress(t), cur.Mark.From, true))
+				fixes = remote.ImportFixes(remote.HintAddress(t), cur.Mark.From, true)
 			} else if cur.Mark.IsRestore() {
 				msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
-				fixes = report.FixPairs(remote.RestoreFixes(remote.HintAddress(t), cur.Mark.From, t.Parent != ""))
+				fixes = remote.RestoreFixes(remote.HintAddress(t), cur.Mark.From, t.Parent != "")
 			} else if !current {
 				fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
 			}

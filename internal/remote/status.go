@@ -1,6 +1,68 @@
 package remote
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
+)
+
+// StatusFactsFlag is the hidden flag behind @<target> --status: run by
+// its session on the server, in the environment's current release (or a
+// plain devopsy directory), it prints that environment's facts as one
+// JSON document (StatusFacts), which the operator's devopsy formats and
+// judges. With StatusNoProject, the server's disks alone: an environment
+// with no release live.
+const (
+	StatusFactsFlag = "--status-facts"
+	StatusNoProject = "--no-project"
+)
+
+// StatusFacts are what --status shows of an environment's project and
+// its server: facts, judged by the operator, but for Entries, which are
+// said where they are found (the images' lines, the status capability's).
+type StatusFacts struct {
+	// Project is the compose project's name.
+	Project    string            `json:"project,omitempty"`
+	Containers []StatusContainer `json:"containers"`
+	// Entries are the lines on its images (in a release) and the status
+	// capability's, in order.
+	Entries []StatusEntry `json:"entries,omitempty"`
+	// Disks are the server's (on a server only); SnapshotRoot, its
+	// snapshot root, tells their fixes.
+	Disks        []Disk `json:"disks,omitempty"`
+	SnapshotRoot string `json:"snapshot_root,omitempty"`
+}
+
+// StatusContainer is a container as docker compose ps lists it, or a
+// service of the compose file with none (State StatusNoContainer).
+type StatusContainer struct {
+	Service  string `json:"service"`
+	State    string `json:"state"`
+	Health   string `json:"health,omitempty"`
+	Status   string `json:"status,omitempty"`
+	ExitCode int    `json:"exit_code"`
+	// Level is the operator's: StatusWarning when it needs attention.
+	Level string `json:"level,omitempty"`
+}
+
+// StatusNoContainer is the state of a service with no container.
+const StatusNoContainer = "none"
+
+// StatusEntry is a fact --status shows under its key: one or more lines
+// at a level (StatusInfo, StatusWarning), with the ways to act on it.
+type StatusEntry struct {
+	Level string          `json:"level"`
+	Key   string          `json:"key"`
+	Lines []string        `json:"lines"`
+	Fixes []report.Remedy `json:"fixes,omitempty"`
+}
+
+// An entry's levels: a warning needs attention, and --status then exits
+// 3.
+const (
+	StatusInfo    = "info"
+	StatusWarning = "warning"
+)
 
 // StatusScript prints what the server knows about a target, for --status:
 // "plain" for a plain devopsy directory, "none" for an unreleased one
@@ -8,21 +70,24 @@ import "fmt"
 // else tab-separated header lines (release <id> <record JSON>, kept <n>,
 // synced <time or empty>, partial <the mark> when a sync or an import
 // left its data partial, left <services> that an operation cut off left
-// stopped), then "---" and, from the current release,
-// devopsy --status there: the containers and the project's own lines.
+// stopped), then "---" and the facts (StatusFactsFlag): the current
+// release's, else the server's disks alone.
 func StatusScript(t *Target) string {
+	facts := devopsyCall("", []string{StatusFactsFlag}, true)
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo plain
   echo ---
-  cd "$base" && exec devopsy --status
+  cd "$base" && ` + facts + `
 fi
 ` + EnvStatus + `
 # As EnvStatus tells it: current a link to a release (a directory there
 # is what Docker made of a failed release's bind mounts: "none").
 cur=$(readlink "$base/current" 2>/dev/null || true)
-[ -n "$cur" ] && [ -d "$base/$cur/.devopsy" ] || exit 0
 echo ---
-cd "$base/current" && exec devopsy --status
+if [ -n "$cur" ] && [ -d "$base/$cur/.devopsy" ]; then
+  cd "$base/current" && ` + facts + `
+fi
+` + devopsyCall("", []string{StatusFactsFlag, StatusNoProject}, true) + `
 `
 }
 

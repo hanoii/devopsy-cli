@@ -34,6 +34,22 @@ func reachesDocker() bool {
 	return os.Getenv("DOCKER_HOST") != "" || syscall.Access(dockerSocket, 2) == nil
 }
 
+// behindDoor says whether this user's docker is the door: the docker it
+// finds is devopsy (runDocker), and it has no Docker of its own.
+func behindDoor() bool {
+	found, err := exec.LookPath("docker")
+	if err != nil || reachesDocker() {
+		return false
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	a, errA := filepath.EvalSymlinks(found)
+	b, errB := filepath.EvalSymlinks(self)
+	return errA == nil && errB == nil && a == b
+}
+
 // devopsyPath is what sudo's rules name, wherever this was found as.
 func devopsyPath() string {
 	if p, err := exec.LookPath("devopsy"); err == nil {

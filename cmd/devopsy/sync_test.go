@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"cmp"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -196,6 +197,10 @@ case "$*" in
     # FAIL_CONFIG: this project's compose config fails.
     [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
     printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "${FAKE_APP_SOURCE:-$dir/mnt${FAKE_APP_MOUNT-/storage}}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+  # The services of the active profiles, as compose config --services.
+  *" config --services")
+    [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
+    for s in $svcs; do echo "$s"; done ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
@@ -661,7 +666,10 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "show"), "#!/bin/sh\necho \"show project=$COMPOSE_PROJECT_NAME pw=${DB_PASSWORD:-}\"\ncat\n", 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home,
-		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log}
+		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log,
+		// The disk the tests run on may be nearly full: --status judges
+		// none, else it would exit 3 there.
+		diskWarnEnv + "=off"}
 	return s
 }
 
@@ -1491,7 +1499,7 @@ func TestSyncAbort(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a rollback on a partial copy (%d):\n%s", code, out)
 	}
-	if status, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(status, "did not complete") {
+	if status, code := s.run(nil, "@dev", "--status"); code != statusWarned || !strings.Contains(status, "did not complete") {
 		t.Errorf("--status (%d):\n%s", code, status)
 	}
 	s.logs()
@@ -2643,33 +2651,72 @@ func TestSyncPushLostSaysCopyDecides(t *testing.T) {
 	}
 }
 
-// --status: the containers and the status capability's lines, locally;
-// with a target, the release's record and the last sync first.
+// --status: the project, its containers and the services with none,
+// then the status capability's entries, locally; with a target, the
+// release's record, the last sync and the server's disks first. Exit 3
+// when something needs attention, and --json prints the same.
 func TestStatus(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
-	write(t, filepath.Join(s.dot, "capabilities", "status", "show"), "#!/bin/sh\necho \"url https://$COMPOSE_PROJECT_NAME.example\"\n", 0o755)
+	write(t, filepath.Join(s.dot, "capabilities", "status", "show"), `#!/bin/sh
+printf 'info\turl\thttps://%s.example\n' "$COMPOSE_PROJECT_NAME"
+printf 'info\turl\thttps://www.%s.example\n' "$COMPOSE_PROJECT_NAME"
+printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
+[ -z "${FAKE_SHOW:-}" ] || printf "$FAKE_SHOW"
+`, 0o755)
 	out, code := s.run([]string{"FAKE_DB_DOWN=1"}, "--status")
-	if code != 0 || !strings.Contains(out, "containers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db ") || !strings.Contains(out, "exited") || !strings.Contains(out, "url https://shop.example\n") {
+	if code != 0 || !strings.HasPrefix(out, "project     shop\ncontainers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db       exited\n") ||
+		!strings.Contains(out, "url         https://shop.example\n            https://www.shop.example\n") || !strings.Contains(out, "running     app\n") {
 		t.Fatalf("local status (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet") {
+	// A service with no container is listed as such.
+	if out, code := s.run([]string{"FAKE_ABSENT=db"}, "--status"); code != 0 || !strings.Contains(out, "  db       no container\n") || strings.Count(out, "  db ") != 1 {
+		t.Errorf("a service with no container (%d):\n%s", code, out)
+	}
+	// A project compose cannot read lists its containers all the same,
+	// and compose's error is its own commands' to say.
+	if out, code := s.run([]string{"FAIL_CONFIG=shop"}, "--status"); code != 0 || strings.Contains(out, "no such file") || !strings.Contains(out, "  app ") {
+		t.Errorf("a project compose config fails on (%d):\n%s", code, out)
+	}
+	// A container restarting needs attention.
+	if out, code := s.run([]string{"FAKE_DB_RESTARTING=1"}, "--status"); code != statusWarned || !strings.Contains(out, "  db       restarting\n") {
+		t.Errorf("a container restarting (%d):\n%s", code, out)
+	}
+	// The capability's warning, its fix under it, every key aligned on
+	// the longest.
+	out, code = s.run([]string{"FAKE_SHOW=warning\tmaintenance\ton\tdevopsy maintenance off\n"}, "--status")
+	if code != statusWarned || !strings.Contains(out, "url          https://shop.example\n") || !strings.Contains(out, "maintenance  on\n             $ devopsy maintenance off\n") {
+		t.Errorf("the capability's warning (%d):\n%s", code, out)
+	}
+	// A line of another format is warned, the others still shown.
+	out, code = s.run([]string{"FAKE_SHOW=url https://shop.example\n"}, "--status")
+	if code != statusWarned || !strings.Contains(out, "the status capability printed lines that are not") || !strings.Contains(out, `"url https://shop.example"`) || !strings.Contains(out, "https://www.shop.example\n") {
+		t.Errorf("a line of another format (%d):\n%s", code, out)
+	}
+	// --json: the same, as fields.
+	stdout, stderr, code := s.runIO([]string{"FAKE_DB_DOWN=1"}, nil, "--status", "--json")
+	var r statusReport
+	if err := json.Unmarshal(stdout, &r); err != nil || code != 0 || r.Project != "shop" || r.Attention || len(r.Containers) != 2 || r.Containers[1].State != "exited" ||
+		len(r.Entries) != 2 || r.Entries[0].Key != "url" || strings.Join(r.Entries[0].Lines, " ") != "https://shop.example https://www.shop.example" {
+		t.Errorf("--status --json (%d, %v): %+v\n%s%s", code, err, r, stdout, stderr)
+	}
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet\n") || !strings.Contains(out, "\ndisks       releases ") || strings.Contains(out, "containers") {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
 	// A current that is a directory (a failed release's containers
 	// restarting, Docker making their bind mounts under it as root) is
-	// none, as before EnvStatus: --status ends there (review).
+	// none, as before EnvStatus: --status lists no project (review).
 	if err := os.MkdirAll(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "mnt", "storage"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.HasSuffix(out, "release     none: not released yet\n") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "release     none: not released yet\n") || strings.Contains(out, "containers") {
 		t.Fatalf("a current that is a directory (%d):\n%s", code, out)
 	}
 	os.RemoveAll(filepath.Join(s.root, "shop", "prod", "current"))
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "releases", "19990101000000", remote.FailedFile), "", 0o644)
 	out, code = s.run(nil, "@prod", "--status")
-	if code != 0 || !strings.Contains(out, "release     "+s.current("prod")[len("releases/"):]) || !strings.Contains(out, "just now") || !strings.Contains(out, "(1 kept)") || !strings.Contains(out, "url https://shop-prod.example\n") || strings.Contains(out, "parent") {
+	if code != 0 || !strings.Contains(out, "release     "+s.current("prod")[len("releases/"):]) || !strings.Contains(out, "just now") || !strings.Contains(out, "(1 kept)") || !strings.Contains(out, "url         https://shop-prod.example\n") || !strings.Contains(out, "\ndisks       releases ") || strings.Contains(out, "parent") {
 		t.Fatalf("prod status (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -2688,7 +2735,7 @@ func TestStatus(t *testing.T) {
 
 // A restore under way holds the release lock with its mark there, from
 // its first write to its run step: --status says it is restoring, not
-// that it did not complete (review).
+// that it did not complete (review), and warns: what it stopped is down.
 func TestStatusRestoreRunning(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -2700,7 +2747,7 @@ func TestStatusRestoreRunning(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "bin")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\ncase \"$*\" in \"-n -s \"*\"/.lock true\") exit 1 ;; esac\nexec "+filepath.Join(filepath.Dir(s.root), "bin", "flock")+" \"$@\"\n", 0o755)
 	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "@prod", "--status")
-	if code != 0 || strings.Contains(out, "did not complete") || !strings.Contains(out, "restoring snapshot 20261020000000") {
+	if code != statusWarned || strings.Contains(out, "did not complete") || !strings.Contains(out, "restoring snapshot 20261020000000") {
 		t.Errorf("--status during a restore (%d):\n%s", code, out)
 	}
 }
@@ -3666,11 +3713,11 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 		t.Errorf("the failed first release's containers stay:\n%s", docker)
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if out, code := s.run(nil, "@dev", "--status"); code != 0 || len(entries) != 1 || !strings.Contains(out, "release     none: "+entries[0].Name()+" failed, devopsy @devopsy@one:dev --log shows why") {
+	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || len(entries) != 1 || !strings.Contains(out, "release     none: "+entries[0].Name()+" failed\n            see why:\n            $ devopsy @devopsy@one:dev --log\n") {
 		t.Errorf("--status after a failed first release (%d):\n%s", code, out)
 	}
 	// The command it names copies as shown, a server in brackets quoted.
-	if out, code := s.run(nil, "@devopsy@[::1]:22:dev", "--status"); code != 0 || !strings.Contains(out, "failed, devopsy @'devopsy@[::1]:22:dev' --log shows why") {
+	if out, code := s.run(nil, "@devopsy@[::1]:22:dev", "--status"); code != statusWarned || !strings.Contains(out, "$ devopsy @'devopsy@[::1]:22:dev' --log\n") {
 		t.Errorf("--status naming a server in brackets (%d):\n%s", code, out)
 	}
 	os.Remove(s.log + ".failimport")
@@ -3888,7 +3935,7 @@ func TestSyncSettle(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "the copy completed, but the project's data capability refused it: finish child go failed") {
 		t.Errorf("a rollback after a refused copy (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "from a sync that did not complete: the copy completed, but the project's data capability refused it") || !strings.Contains(out, "from @devopsy@one:prod)") {
+	if out, code := s.run(nil, "@dev", "--status"); code != statusWarned || !strings.Contains(out, "from a sync that did not complete: the copy completed, but the project's data capability refused it") || !strings.Contains(out, "from @devopsy@one:prod)") {
 		t.Errorf("--status after a refused copy (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {

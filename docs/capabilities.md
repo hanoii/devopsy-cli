@@ -7,12 +7,42 @@ them, in the project's directory and with its environment. `devopsy
 
 ## status
 
-`show` prints the project's own lines under `devopsy --status`, after the
-containers: its URL, a maintenance mode, a version, one fact per line. It
-runs with the project's environment loaded (the drupal11 template has
-one), locally and on servers: `devopsy @prod --status` runs it in the
-current release there, after the release's record, the parent and the
-last sync.
+`show` prints the project's own facts under `devopsy --status`, after the
+containers: its URL, a maintenance mode, a version. It runs with the
+project's environment loaded, locally and on servers: `devopsy @prod
+--status` runs it in the current release there, after the release's
+record, the parent, the last sync and the server's disks.
+
+Each line is one fact, its fields separated by tabs:
+
+```
+<level>	<key>	<value>[	<fix>]
+```
+
+The level is `info` or `warning`. A warning is shown in color and makes
+`--status` exit 3, as anything else that needs attention does. The fix,
+when there is one, is a command to copy, shown under the fact after `$ `.
+Lines in a row with the same key are one fact of several lines (several
+URLs, a message on more than one line), a warning when any of them is.
+devopsy aligns the keys with its own, and `--status --json` prints each
+fact as fields (`level`, `key`, `lines`, `fixes`). Empty lines are
+skipped; any other line is shown as a warning that names it.
+
+`DEVOPSY_STATUS_RUNNING` holds the services running, separated by
+spaces, so `show` can skip what needs a stopped one.
+
+```sh
+#!/bin/sh
+printf 'info\turl\t%s\n' "$SITE_URL"
+case " $DEVOPSY_STATUS_RUNNING " in
+  *" app "*) printf 'info\tversion\t%s\n' "$(devopsy exec -T app cat VERSION)" ;;
+esac
+if [ -f "$DEVOPSY_PROJECT_DIR/mnt/maintenance/on" ]; then
+  printf 'warning\tmaintenance\ton\tdevopsy maintenance off\n'
+fi
+```
+
+The drupal11 and registry templates have fuller ones.
 
 ## env
 

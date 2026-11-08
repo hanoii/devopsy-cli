@@ -89,6 +89,8 @@ func TestComplete(t *testing.T) {
 		{[]string{"logs", ""}, nil, []string{"logs", ""}, 0},
 		{[]string{"--completion", "z"}, []string{"zsh"}, nil, DirectiveNoFileComp},
 		{[]string{"--env", ""}, []string{"--show"}, nil, DirectiveNoFileComp},
+		{[]string{"--status", ""}, []string{"--json"}, nil, DirectiveNoFileComp},
+		{[]string{"--server-info", ""}, []string{"--json"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
 		// Commands by scope: local ones here, target ones after @.
 		{[]string{"im"}, []string{"image"}, []string{"im"}, DirectiveNoFileComp},
@@ -107,6 +109,8 @@ func TestComplete(t *testing.T) {
 		{[]string{"@prod", "--snapshots", "restore", "2026", "--"}, []string{"--no-code", "--with-env", "--yes", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", ""}, []string{"list", "add", "remove"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", ""}, []string{"remove", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--status", ""}, []string{"--json", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--server-info", ""}, []string{"--json", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", "remove", ""}, []string{"failed", "--yes", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", "remove", "2026", "--"}, []string{"--yes", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", "add", "k.pub", "--"}, []string{"--restricted", "--help"}, nil, DirectiveNoFileComp},

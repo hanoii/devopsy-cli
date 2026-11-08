@@ -32,7 +32,7 @@ func TestSyncPartial(t *testing.T) {
 	if again, _ := srv(t, "ls shop/dev/releases | wc -l"); again != releases {
 		t.Errorf("uploaded anyway: %s releases, were %s", again, releases)
 	}
-	if out, code := op(t, dir, "devopsy @dev --status"); code != 0 || !strings.Contains(out, "did not complete") {
+	if out, code := op(t, dir, "devopsy @dev --status"); code != 3 || !strings.Contains(out, "did not complete") {
 		t.Errorf("--status (%d):\n%s", code, out)
 	}
 

@@ -389,7 +389,7 @@ func TestRestoreMark(t *testing.T) {
 	if !strings.Contains(readString(filepath.Join(base, remote.SyncIncompleteFile)), "restore") {
 		t.Errorf("the mark went")
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || strings.Count(out, "the restore of snapshot "+m[1]+" did not complete") != 1 {
+	if out, code := s.run(nil, "@prod", "--status"); code != statusWarned || strings.Count(out, "the restore of snapshot "+m[1]+" did not complete") != 1 {
 		t.Errorf("--status (%d), the mark said once:\n%s", code, out)
 	}
 }

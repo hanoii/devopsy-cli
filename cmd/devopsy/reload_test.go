@@ -254,10 +254,10 @@ func TestReloadCut(t *testing.T) {
 	base := filepath.Join(s.root, "shop", "prod")
 	id := strings.TrimPrefix(s.current("prod"), "releases/")
 	for line, want := range map[string][]string{
-		id + "\trelease\t\t\n":               {"the release of " + id + " was cut off past its switch", "devopsy @devopsy@one:prod --release releases it again"},
-		id + "\trollback\t\t\n":              {"the rollback to " + id + " was cut off past its switch", "devopsy @devopsy@one:prod --rollback finishes it"},
-		id + "\trestart\t29990101000000\t\n": {"the restart of " + id + " after 29990101000000 failed was cut off", "devopsy @devopsy@one:prod --release releases it again"},
-		id + "\trestore\t\t20261027000000\n": {"the restore of snapshot 20261027000000 as " + id + " was cut off past its switch", "devopsy @devopsy@one:prod --snapshots restore 20261027000000 runs it again"},
+		id + "\trelease\t\t\n":               {"the release of " + id + " was cut off past its switch", "release it again:\ndevopsy: | $ devopsy @devopsy@one:prod --release\n"},
+		id + "\trollback\t\t\n":              {"the rollback to " + id + " was cut off past its switch", "finish it:\ndevopsy: | $ devopsy @devopsy@one:prod --rollback\n"},
+		id + "\trestart\t29990101000000\t\n": {"the restart of " + id + " after 29990101000000 failed was cut off", "release it again:\ndevopsy: | $ devopsy @devopsy@one:prod --release\n"},
+		id + "\trestore\t\t20261027000000\n": {"the restore of snapshot 20261027000000 as " + id + " was cut off past its switch", "run it again:\ndevopsy: | $ devopsy @devopsy@one:prod --snapshots restore 20261027000000\n"},
 	} {
 		write(t, filepath.Join(base, remote.ActivatingFile), line, 0o644)
 		out, code := s.run(nil, "@prod", "--reload")

@@ -2645,7 +2645,7 @@ func (l *lenientWriter) Write(p []byte) (int, error) {
 // restoreRemedies are a restore mark's ways out, as commands that work
 // copied (the environment's address).
 func restoreRemedies(cwd, id string) []report.Remedy {
-	return report.FixPairs(remote.RestoreFixes(targetAddress(cwd), id, projectVar(cwd, "DEVOPSY_PARENT") != ""))
+	return remote.RestoreFixes(targetAddress(cwd), id, projectVar(cwd, "DEVOPSY_PARENT") != "")
 }
 
 // snapshotRestored completes a restore once its run step went through:

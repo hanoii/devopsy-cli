@@ -242,7 +242,8 @@ what `config.yaml` sets.
 
 ## When something fails
 
-- A failed or odd release starts with `devopsy @<target> --status`, then
+- A failed or odd release starts with `devopsy @<target> --status`
+  (exit 3 when something needs attention; `--json` gives its fields), then
   `devopsy @<target> --log` (the last release's; `--log <id>` another's).
   `--releases` marks each release: FAILED (never went live, or its run
   step failed), ROLLED BACK, INCOMPLETE (cut off before it went live),

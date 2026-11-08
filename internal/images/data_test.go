@@ -785,9 +785,16 @@ func TestDataRestartHolds(t *testing.T) {
 	if got := strings.Join(m.history("database"), " "); got != "ran:I1:11.8 ran:J1:12.1" {
 		t.Errorf("history after the restart: %s", got)
 	}
-	lines := strings.Join(StatusLines(d, "app-prod", m.e.rel(r1)), "\n")
+	holds := StatusLines(d, "app-prod", m.e.rel(r1))
+	lines := strings.Join(statusTexts(holds), "\n")
 	if !strings.Contains(lines, "database held on mariadb@J1, the image release "+r2+" ran on its data") || !strings.Contains(lines, "search held on app-prod-search (") {
 		t.Errorf("--status:\n%s", lines)
+	}
+	// A hold is what a rollback chose: said, never warned.
+	for _, l := range holds {
+		if l.Warn {
+			t.Errorf("a hold is warned: %s", l.Text)
+		}
 	}
 	if needs, err := m.e.set.ReloadCheck(m.e.rel(r1)); err != nil || len(needs) > 0 {
 		t.Errorf("a reload after the hold: %v %v", needs, err)
@@ -1235,11 +1242,25 @@ func TestStatusLines(t *testing.T) {
 	d.publish("caddy:2-alpine", "C2")
 	d.pull("caddy:2-alpine", "C2")
 	stage.up()
-	got := StatusLines(d, "app-stage", stage.e.rel(stage.cur))
+	lines := StatusLines(d, "app-stage", stage.e.rel(stage.cur))
+	got := statusTexts(lines)
 	want := []string{"alwaysup runs caddy@C2, not caddy@C1 its activation gave it: caddy:2-alpine moved since (a plain up follows names)"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("status lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+	// An image moved under a service needs attention: --status warns.
+	if len(lines) != 1 || !lines[0].Warn {
+		t.Errorf("a moved image is not warned: %+v", lines)
+	}
+}
+
+// statusTexts are lines' texts.
+func statusTexts(lines []StatusLine) []string {
+	var texts []string
+	for _, l := range lines {
+		texts = append(texts, l.Text)
+	}
+	return texts
 }
 
 // A rollback whose activation is killed outright past its switch (by
@@ -1274,7 +1295,7 @@ func TestStatusLinesRollbackCutPastSwitch(t *testing.T) {
 	if got := Recreate(d, "app-prod", rel); strings.Join(got, " ") != "app" {
 		t.Fatalf("setup: Recreate says %v, want app (current gives it another image)", got)
 	}
-	got := StatusLines(d, "app-prod", rel)
+	got := statusTexts(StatusLines(d, "app-prod", rel))
 	named := false
 	for _, l := range got {
 		if strings.HasPrefix(l, "app ") {
@@ -1902,7 +1923,7 @@ func TestDataFullRestoreOfHeld(t *testing.T) {
 	if !strings.Contains(out.String(), "database stays on the image its data ran when snapshot 20261102000001 was taken") {
 		m.fail("the hold is not said")
 	}
-	lines := strings.Join(StatusLines(d, "app-prod", rel), "\n")
+	lines := strings.Join(statusTexts(StatusLines(d, "app-prod", rel)), "\n")
 	if !strings.Contains(lines, "database held on mariadb@J1, the image its data ran when snapshot 20261102000001 was taken") || !strings.Contains(lines, "search held on app-prod-search (") {
 		t.Errorf("--status:\n%s", lines)
 	}

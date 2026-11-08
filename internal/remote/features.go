@@ -24,7 +24,7 @@ var featureFlags = []string{
 	"import", "missing-vars", "mnt-owners", "mnt-ready", "prepare-release",
 	"release-id", "release-inherit", "release-settings", "release-steps",
 	"say", "server-facts",
-	"snapshot-step", "status", "stdin-guard", "sync-push",
+	"snapshot-step", "status-facts", "stdin-guard", "sync-push",
 	"sync-services", "upgrade", "util-image", "watch-session",
 }
 

@@ -21,7 +21,7 @@ devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped f
 devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
 devopsy @vm1:prod --snapshots restore <id>   # its data, code and images back, as a new release (--no-code: the data alone)
 devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   # a snapshot off the server
-devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, images held or moved, the project's own lines
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, the disks, its containers, images held or moved, the project's own lines; exit 3 when something needs attention, --json for fields
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -74,7 +74,8 @@ in `--shell-host`; anywhere else it refuses. It reports:
 - every environment under the release root, with its current release,
   its containers and its state.
 
-What needs attention is a warning, with its fix:
+What needs attention is a warning under the line it is about, with its
+fix:
 
 - an older devopsy;
 - a reboot the system asks for;
@@ -92,15 +93,19 @@ What needs attention is a warning, with its fix:
 - a tool the server needs, missing;
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
-  its switch, a sync, an import or a restore that did not complete,
-  services an operation left stopped, or containers restarting, unhealthy
-  or paused.
+  its switch, a sync, an import or a restore that did not complete, an
+  import or a restore under way (what it stopped stays down until it
+  completes), services an operation left stopped, or containers
+  restarting, paused, dead, unhealthy, or exited on an error of their
+  own (a stop's codes excepted), each as `--status` says it.
 
-What is running (a sync, an import, a restore) is reported as
-information. So is the memory kdump keeps, with how to free it
+A sync or a snapshot under way is reported as information. So is the
+memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
-It exits 3 when it warned, so CI can run it as a check.
+It exits 3 when it warned, so CI can run it as a check. `--json` prints
+the facts and the same lines as JSON on stdout, each warning with its
+fixes, for scripts and agents.
 
 ## The server's devopsy
 

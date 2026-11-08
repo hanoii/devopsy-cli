@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,13 +81,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	info.Docker = dockerFacts()
-	containerd := ""
-	if info.Docker.Containerd {
-		// The containerd image store keeps images and layers in the
-		// system containerd's root, not Docker's.
-		containerd = "/var/lib/containerd"
-	}
-	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerd, info.SnapshotRoot)
+	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
 			info.Missing = append(info.Missing, t.name)
@@ -226,13 +221,7 @@ func zoneCMA(data string) int64 {
 // dockerFacts asks docker info, docker compose version and reads the
 // daemon's configuration file.
 func dockerFacts() remote.DockerFacts {
-	var d remote.DockerFacts
-	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
-	if err != nil {
-		d.Error = "docker info: " + cmdError(err)
-	} else if err := parseDockerInfo(out, &d); err != nil {
-		d.Error = "docker info: " + err.Error()
-	}
+	d := dockerInfo()
 	if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
 		d.Compose = strings.TrimSpace(string(out))
 	}
@@ -248,6 +237,28 @@ func dockerFacts() remote.DockerFacts {
 		if json.Unmarshal(data, &conf) == nil {
 			d.LogOptsKnown, d.LogOpts = true, conf.LogOpts
 		}
+	}
+	return d
+}
+
+// containerdRoot is where d's images and layers are when it uses the
+// containerd image store, the system containerd's root, not Docker's;
+// else empty.
+func containerdRoot(d remote.DockerFacts) string {
+	if d.Containerd {
+		return "/var/lib/containerd"
+	}
+	return ""
+}
+
+// dockerInfo is what docker info says, alone.
+func dockerInfo() remote.DockerFacts {
+	var d remote.DockerFacts
+	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
+	if err != nil {
+		d.Error = "docker info: " + cmdError(err)
+	} else if err := parseDockerInfo(out, &d); err != nil {
+		d.Error = "docker info: " + err.Error()
 	}
 	return d
 }
@@ -302,8 +313,9 @@ func cmdError(err error) string {
 // diskFacts is the filesystems of the release root, Docker's data,
 // containerd's (empty: not its image store), the snapshot root and /,
 // one per device, each path where it is: the
-// nearest existing directory above it, for a root not made yet.
-func diskFacts(root, docker, containerd, snapshots string) []remote.Disk {
+// nearest existing directory above it, for a root not made yet. reflink
+// tries a clone in the release root (a file made and removed there).
+func diskFacts(root, docker, containerd, snapshots string, reflink bool) []remote.Disk {
 	var disks []remote.Disk
 	var devs []uint64
 	add := func(what, path string) {
@@ -338,7 +350,7 @@ func diskFacts(root, docker, containerd, snapshots string) []remote.Disk {
 		devs = append(devs, dev)
 	}
 	add("releases", root)
-	if len(disks) > 0 && disks[0].Error == "" {
+	if reflink && len(disks) > 0 && disks[0].Error == "" {
 		disks[0].Reflinks = tryReflink(root)
 	}
 	add("docker", docker)
@@ -389,28 +401,30 @@ func hostContainers() []remote.HostContainer {
 	}
 	// A container gone since ps (a run --rm, a util container) fails
 	// inspect, which printed every other one all the same.
-	out, _ = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
+	out, _ = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
 	return parseHostContainers(out)
 }
 
-// parseHostContainers reads lines of "<state> <health or -> <labels as
-// JSON>".
+// parseHostContainers reads lines of "<state> <exit code> <health or ->
+// <labels as JSON>".
 func parseHostContainers(out []byte) []remote.HostContainer {
 	var cs []remote.HostContainer
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
-		f := strings.SplitN(sc.Text(), " ", 3)
-		if len(f) < 3 {
+		f := strings.SplitN(sc.Text(), " ", 4)
+		if len(f) < 4 {
 			continue
 		}
 		var labels map[string]string
-		if json.Unmarshal([]byte(f[2]), &labels) != nil {
+		if json.Unmarshal([]byte(f[3]), &labels) != nil {
 			continue
 		}
-		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"]}
-		if f[1] != "-" {
-			c.Health = f[1]
+		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"],
+			OneOff: labels["com.docker.compose.oneoff"] == "True"}
+		c.ExitCode, _ = strconv.Atoi(f[1])
+		if f[2] != "-" {
+			c.Health = f[2]
 		}
 		for k, v := range labels {
 			if k == cli.RoleLabel || strings.HasPrefix(k, cli.ExportPrefix) {
@@ -473,18 +487,14 @@ func environments(root string) []remote.Environment {
 	return envs
 }
 
-// runServerInfo implements devopsy [@<server>] --server-info: the facts
-// the server's devopsy reports, or this machine's without a target,
-// then what needs attention, warned with its fix; serverInfoWarned when
-// anything was.
+// runServerInfo implements devopsy [@<server>] --server-info [--json]:
+// the facts the server's devopsy reports, or this machine's without a
+// target, each with what needs attention in it, warned with its fix;
+// serverInfoWarned when anything was.
 func runServerInfo(t *remote.Target, args []string) int {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--server-info"]))
-			return 0
-		}
-		report.Error("usage: devopsy [@<server>] --server-info")
-		return 1
+	asJSON, code := reportArgs("--server-info", args, "usage: devopsy [@<server>] --server-info [--json]")
+	if code >= 0 {
+		return code
 	}
 	if t == nil {
 		// Servers are Linux: elsewhere (the operator's Mac) the facts are
@@ -498,11 +508,13 @@ func runServerInfo(t *remote.Target, args []string) int {
 		if err != nil {
 			return failErr(err)
 		}
+		r := serverReport{Facts: info, Entries: serverInfoReport(info, "", "", version, time.Now())}
 		head := "local"
 		if name, err := os.Hostname(); err == nil {
 			head += " (" + name + ")"
+			r.Host = name
 		}
-		return printServerInfo(head, info, "", "", time.Now())
+		return r.print(os.Stdout, styleFor(os.Stdout), head, asJSON)
 	}
 	// The facts' first byte is when the server's clock is compared: the
 	// session's end comes after.
@@ -524,7 +536,8 @@ func runServerInfo(t *remote.Target, args []string) int {
 	if ref != t.Host+":" {
 		head += " (" + t.Host + ")"
 	}
-	return printServerInfo(head, info, t.Host, ref, out.at)
+	r := serverReport{Server: ref, Host: t.Host, Facts: info, Entries: serverInfoReport(info, t.Host, ref, version, out.at)}
+	return r.print(os.Stdout, styleFor(os.Stdout), head, asJSON)
 }
 
 // firstWrite is a buffer that keeps when its first write came. The buffer
@@ -542,53 +555,63 @@ func (w *firstWrite) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-// printServerInfo prints info's report under head, then its notes and
-// warnings: serverInfoWarned when it warned. host and ref are empty for
-// this machine's; now is when its facts came.
-func printServerInfo(head string, info remote.ServerInfo, host, ref string, now time.Time) int {
-	lines, warnings := serverInfoReport(info, host, ref, version, now)
-	fmt.Println(styleFor(os.Stdout).name(head))
-	for _, l := range lines {
-		fmt.Println(l)
-	}
+// serverReport is what --server-info shows and --server-info --json
+// prints.
+type serverReport struct {
+	// Server is the server as typed (remote.ServerRef), empty for this
+	// machine; Host where it is, this machine's name.
+	Server string            `json:"server,omitempty"`
+	Host   string            `json:"host,omitempty"`
+	Facts  remote.ServerInfo `json:"facts"`
+	// Entries are what --server-info shows of the facts, in order, each
+	// warning after the line it is about, under its key.
+	Entries []remote.StatusEntry `json:"entries"`
+	// Attention says something is at StatusWarning: it exits 3.
+	Attention bool `json:"attention"`
+}
+
+// print shows r on w in st under heading, or prints it as JSON:
+// serverInfoWarned when something needs attention.
+func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+	r.Attention = entriesWarn(r.Entries)
 	code := 0
-	for _, w := range warnings {
-		level := report.WarnLevel
-		if w.note {
-			level = report.InfoLevel
-		} else {
-			code = serverInfoWarned
-		}
-		report.Default().Say(level, w.msg, nil, w.fixes)
+	if r.Attention {
+		code = serverInfoWarned
 	}
+	if asJSON {
+		r.Entries = copyableEntries(r.Entries)
+		if err := printJSON(w, r); err != nil {
+			return failErr(err)
+		}
+		return code
+	}
+	fmt.Fprintln(w, st.name(report.Copyable(heading)))
+	newEntryTable(w, st, r.Entries).print(r.Entries)
 	return code
 }
 
-// serverWarning is a warning and its fixes; a note is said, not warned,
-// and leaves the exit code alone.
-type serverWarning struct {
-	msg   string
-	fixes []report.Remedy
-	note  bool
-}
-
-// serverInfoReport is what --server-info prints of info, its lines and
-// its warnings, for the server host (as an address's server part) and
-// ref (as typed, for fixes: remote.ServerRef), both empty for this
-// machine's; local is this devopsy's version, now when the facts came:
-// what ages count from and the server's clock (info.Time) is compared
-// with.
-func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) (lines []string, warnings []serverWarning) {
+// serverInfoReport is what --server-info shows of info, for the server
+// host (as an address's server part) and ref (as typed, for fixes:
+// remote.ServerRef), both empty for this machine's; local is this
+// devopsy's version, now when the facts came: what ages count from and
+// the server's clock (info.Time) is compared with.
+func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) []remote.StatusEntry {
+	var es []remote.StatusEntry
+	key := ""
+	// row adds a line under k, more one under the last row's key.
+	row := func(k, value string) {
+		key = k
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: k, Lines: []string{value}})
+	}
+	more := func(value string) { row(key, value) }
+	// warn adds a warning under the last row's key, with its fixes; note
+	// a line said with its fixes, never warned.
 	warn := func(msg string, fixes ...report.Remedy) {
-		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg}, Fixes: fixes})
 	}
 	note := func(msg string, fixes ...report.Remedy) {
-		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes, note: true})
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{msg}, Fixes: fixes})
 	}
-	row := func(key, value string) {
-		lines = append(lines, fmt.Sprintf("%-12s %s", key, value))
-	}
-	more := func(value string) { row("", value) }
 
 	// devopsy and the release settings.
 	v := info.Version + ", protocol " + strconv.Itoa(info.Protocol)
@@ -641,16 +664,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	var kept []string
 	if info.KHOScratch > 0 {
 		kept = append(kept, humanBytes(info.KHOScratch)+" for Kexec HandOver")
+	}
+	if info.CrashKernel > 0 {
+		kept = append(kept, humanBytes(info.CrashKernel)+" for kdump")
+	}
+	if len(kept) > 0 {
+		more("kernel keeps " + strings.Join(kept, ", "))
+	}
+	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
 			report.Fix("kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it, rerun as root"))
 	}
 	if info.CrashKernel > 0 {
-		kept = append(kept, humanBytes(info.CrashKernel)+" for kdump")
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
 			report.Fix("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
-	}
-	if len(kept) > 0 {
-		more("kernel keeps " + strings.Join(kept, ", "))
 	}
 	if info.RebootRequired {
 		msg := "the server needs a reboot"
@@ -687,14 +714,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// Docker.
 	d := info.Docker
 	if d.Error != "" {
-		row("docker", d.Error)
+		key = "docker"
 		warn("Docker did not answer: " + d.Error)
 	} else {
 		parts := []string{d.Version}
 		if d.Compose != "" {
 			parts = append(parts, "compose "+d.Compose)
-		} else {
-			warn("docker compose is missing", report.Fix("install the docker-compose-plugin package, as root"))
 		}
 		store := "classic image store"
 		if d.Containerd {
@@ -705,6 +730,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			parts = append(parts, "cgroup "+d.Cgroup)
 		}
 		row("docker", strings.Join(parts, ", "))
+		if d.Compose == "" {
+			warn("docker compose is missing", report.Fix("install the docker-compose-plugin package, as root"))
+		}
 		// Docker lists apparmor whenever the kernel has it, and then loads
 		// its profile with apparmor_parser: without it no container
 		// starts ("the docker-default profile could not be loaded").
@@ -736,73 +764,27 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	// The disks.
-	freeing := func(disk remote.Disk) []report.Remedy {
-		var fixes []report.Remedy
-		has := func(what string) bool {
-			return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
-		}
-		if has("docker") || has("containerd") {
-			if ref == "" {
-				fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
-			} else {
-				fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
-			}
-		}
-		if has("snapshots") || (has("releases") && info.SnapshotRoot == "") {
-			fixes = append(fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
-		}
-		if len(fixes) == 0 {
-			if ref == "" {
-				fixes = append(fixes, report.Fix("see what takes it"))
-			} else {
-				fixes = append(fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
-			}
-		}
-		return fixes
-	}
 	release := -1
 	snapshotDisk := -1
 	for i, disk := range info.Disks {
-		var paths []string
 		for _, p := range disk.Paths {
-			what, path, _ := strings.Cut(p, "=")
+			what, _, _ := strings.Cut(p, "=")
 			if what == "releases" {
 				release = i
 			}
 			if what == "snapshots" {
 				snapshotDisk = i
 			}
-			if what == "/" {
-				paths = append(paths, "/")
-			} else {
-				paths = append(paths, what+" "+path)
-			}
 		}
-		key := ""
-		if i == 0 {
-			key = "disks"
-		}
-		if disk.Error != "" {
-			row(key, strings.Join(paths, ", ")+": "+disk.Error)
-			continue
-		}
-		// As df counts it: of what the deploy user could use, rounded up.
-		pct := int64(0)
-		if total := disk.Used + disk.Free; total > 0 {
-			pct = (disk.Used*100 + total - 1) / total
-		}
-		value := fmt.Sprintf("%s: %s, %s free of %s (%d%% used)", strings.Join(paths, ", "), disk.Type, humanBytes(disk.Free), humanBytes(disk.Size), pct)
+		reflinks := ""
 		switch disk.Reflinks {
 		case "yes":
-			value += ", reflinks"
+			reflinks = ", reflinks"
 		case "no":
-			value += ", no reflinks"
+			reflinks = ", no reflinks"
 		}
-		row(key, value)
-		if pct >= diskUsedWarn || disk.Free < diskFreeWarn {
-			warn(fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", strings.Join(paths, ", "), pct, humanBytes(disk.Free)),
-				freeing(disk)...)
-		}
+		key = "disks"
+		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
 				reflinkFix(info.MirrorsOff))
@@ -814,6 +796,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	// Tools.
+	key = "tools"
 	for _, t := range serverTools {
 		if slices.Contains(info.Missing, t.name) {
 			warn("the server has no " + t.name + ": " + t.without)
@@ -844,18 +827,13 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if len(holders) == 0 {
 		row("roles", "none")
 	}
-	for i, role := range sortedKeysOf(holders) {
-		key := ""
-		if i == 0 {
-			key = "roles"
-		}
+	for _, role := range sortedKeysOf(holders) {
 		for _, p := range holders[role] {
 			value := role + ": " + p
 			for _, k := range sortedKeysOf(exports[p]) {
 				value += " " + k + "=" + exports[p][k]
 			}
-			row(key, value)
-			key = ""
+			row("roles", value)
 		}
 		if len(holders[role]) > 1 {
 			warn("role " + role + " is held by " + strings.Join(holders[role], " and ") + ": a role is one compose project's on a host, and imports read either")
@@ -868,12 +846,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if len(info.Environments) == 0 {
 		row("environments", "none")
 	}
-	for i, env := range info.Environments {
-		key := ""
-		if i == 0 {
-			key = "environments"
-		}
+	for _, env := range info.Environments {
 		h := parseStatus(env.Status)
+		h.busy = h.busy && !noFlock
 		value := env.Path + "  "
 		switch {
 		case h.none && h.failed != "":
@@ -895,24 +870,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		running, all := 0, 0
 		var bad []string
 		for _, c := range info.Containers {
-			if c.Project != compose {
+			// A one-off (a run, an import's run --rm) is no service's
+			// container.
+			if c.Project != compose || c.OneOff {
 				continue
 			}
 			all++
 			if c.State == "running" {
 				running++
 			}
-			// Docker says unhealthy of a stopped container's health too:
-			// it means something only while it runs.
-			switch {
-			case c.State == "restarting":
-				bad = append(bad, c.Service+" restarting")
-			case c.State == "running" && c.Health == "unhealthy":
-				bad = append(bad, c.Service+" unhealthy")
-			case c.State == "paused":
-				// devopsy never pauses: Traefik drops a paused container's
-				// router.
-				bad = append(bad, c.Service+" paused")
+			if trouble := containerTrouble(c.State, c.Health, c.ExitCode); trouble != "" {
+				bad = append(bad, c.Service+" "+trouble)
 			}
 		}
 		if all > 0 {
@@ -927,40 +895,31 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			value += "  taking a snapshot"
 		case h.source:
 			value += "  a sync or an export from it"
-		case h.busy && !noFlock:
+		case h.busy:
 			value += "  an operation running"
 		}
-		row(key, value)
-		// Each as --status says it. A mark while the release lock is held
-		// is what runs (a restore, an import, a sync): said above, not
-		// warned; the cut and left lines only show while it is free.
+		row("environments", value)
+		// --status's warnings (envState.entries), whose fixes --status
+		// gives: this names the environment only by its path.
 		var problems []string
-		if h.none && h.failed != "" {
-			problems = append(problems, "its first release, "+h.failed+", failed")
-		}
-		if h.cut != nil {
-			what, _ := h.cut.Cut("", "", false)
-			problems = append(problems, what)
-		}
-		switch {
-		case h.busy && !noFlock:
-		case h.mark.IsImport():
-			problems = append(problems, "the import of "+h.mark.From+" did not complete")
-		case h.mark.IsRestore():
-			problems = append(problems, "the restore of snapshot "+h.mark.From+" did not complete")
-		case h.partial != "":
-			problems = append(problems, "a sync did not complete: "+h.partial)
-		case h.left != "":
-			problems = append(problems, "an operation cut off left "+h.left+" stopped")
+		for _, e := range h.entries(envAt{}) {
+			if e.Level == remote.StatusWarning {
+				problems = append(problems, e.Lines...)
+			}
 		}
 		if len(bad) > 0 {
 			problems = append(problems, strings.Join(bad, ", "))
 		}
-		for _, p := range problems {
-			warn(env.Path+": "+p, statusFix(host, info.Root, env.Path))
+		// One warning of every problem, with the --status that shows them.
+		if len(problems) > 0 {
+			var lines []string
+			for _, p := range problems {
+				lines = append(lines, env.Path+": "+p)
+			}
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Fixes: []report.Remedy{statusFix(host, info.Root, env.Path)}})
 		}
 	}
-	return lines, warnings
+	return es
 }
 
 // clockOffset says d, the server's clock less the local one, as
@@ -990,6 +949,77 @@ func reflinkFix(mirrorsOff bool) report.Remedy {
 		mirror = "the server's snapshots: {mirror: false} (its devopsy config) lifted, then " + mirror
 	}
 	return report.Fix(mirror + ", or data on XFS (a new server from devopsy-server's cloud-init.yaml)")
+}
+
+// diskUse is a disk as --server-info and --status say it: value its
+// line (what lives there, its filesystem, what is free), and past the
+// thresholds warn and the ways to free it.
+type diskUse struct {
+	value, warn string
+	fixes       []report.Remedy
+}
+
+// entries are the disk's line under disks, more after its value, then
+// its warning, an entry of its own with its fixes.
+func (u diskUse) entries(more string) []remote.StatusEntry {
+	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "disks", Lines: []string{u.value + more}}}
+	if u.warn != "" {
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "disks", Lines: []string{u.warn}, Fixes: u.fixes})
+	}
+	return es
+}
+
+// diskWarnEnv off judges no disk full, for tests whose disk may be.
+const diskWarnEnv = "DEVOPSY_INTERNAL_DISK_WARN"
+
+// judgeDisk is disk's line and warning, for a server with snapshotRoot,
+// ref the server as typed for its fixes (remote.ServerRef), empty for
+// this machine.
+func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
+	var paths []string
+	for _, p := range disk.Paths {
+		what, path, _ := strings.Cut(p, "=")
+		if what == "/" {
+			paths = append(paths, "/")
+		} else {
+			paths = append(paths, what+" "+path)
+		}
+	}
+	where := strings.Join(paths, ", ")
+	if disk.Error != "" {
+		return diskUse{value: where + ": " + disk.Error}
+	}
+	// As df counts it: of what the deploy user could use, rounded up.
+	pct := int64(0)
+	if total := disk.Used + disk.Free; total > 0 {
+		pct = (disk.Used*100 + total - 1) / total
+	}
+	use := diskUse{value: fmt.Sprintf("%s: %s, %s free of %s (%d%% used)", where, disk.Type, humanBytes(disk.Free), humanBytes(disk.Size), pct)}
+	if (pct < diskUsedWarn && disk.Free >= diskFreeWarn) || os.Getenv(diskWarnEnv) == "off" {
+		return use
+	}
+	use.warn = fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", where, pct, humanBytes(disk.Free))
+	has := func(what string) bool {
+		return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
+	}
+	if has("docker") || has("containerd") {
+		if ref == "" {
+			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
+		} else {
+			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+		}
+	}
+	if has("snapshots") || (has("releases") && snapshotRoot == "") {
+		use.fixes = append(use.fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
+	}
+	if len(use.fixes) == 0 {
+		if ref == "" {
+			use.fixes = append(use.fixes, report.Fix("see what takes it"))
+		} else {
+			use.fixes = append(use.fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+		}
+	}
+	return use
 }
 
 // composeNameOf is the compose name of the environment at path,

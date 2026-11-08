@@ -3228,18 +3228,18 @@ func TestParseActivating(t *testing.T) {
 		partial   bool
 		what, fix string
 	}{
-		{"3\trelease\t2\t\n", false, "the release of 3 was cut off past its switch: its run step may not have run", "devopsy @app-prod --release releases it again"},
-		{"3\trelease\t2\t\n", true, "the release of 3 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --sync finishes it"},
-		{"2\trollback\t3\t\n", false, "the rollback to 2 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --rollback finishes it"},
-		{"2\trestart\t3\t\n", false, "the restart of 2 after 3 failed was cut off: its run step may not have run", "devopsy @app-prod --release releases it again"},
-		{"4\trestore\t3\t1\n", false, "the restore of snapshot 1 as 4 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --snapshots restore 1 runs it again"},
+		{"3\trelease\t2\t\n", false, "the release of 3 was cut off past its switch: its run step may not have run", "release it again:|devopsy @app-prod --release"},
+		{"3\trelease\t2\t\n", true, "the release of 3 was cut off past its switch: its run step may not have run", "finish it with a sync:|devopsy @vm1:prod --sync"},
+		{"2\trollback\t3\t\n", false, "the rollback to 2 was cut off past its switch: its run step may not have run", "finish it:|devopsy @vm1:prod --rollback"},
+		{"2\trestart\t3\t\n", false, "the restart of 2 after 3 failed was cut off: its run step may not have run", "release it again:|devopsy @app-prod --release"},
+		{"4\trestore\t3\t1\n", false, "the restore of snapshot 1 as 4 was cut off past its switch: its run step may not have run", "run it again:|devopsy @vm1:prod --snapshots restore 1"},
 	} {
 		a := ParseActivating(c.line)
 		if a == nil {
 			t.Errorf("%q does not parse", c.line)
 			continue
 		}
-		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix != c.fix {
+		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix.Text+"|"+strings.Join(fix.Cmds, " ") != c.fix {
 			t.Errorf("%q (partial %v): %q, %q; want %q, %q", c.line, c.partial, what, fix, c.what, c.fix)
 		}
 	}

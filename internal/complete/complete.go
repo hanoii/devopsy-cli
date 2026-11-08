@@ -149,6 +149,12 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return filter(r, cur)
 	case first == "--env":
 		return showFlag(words, cur)
+	case first == "--status" || first == "--server-info":
+		r := Result{Directive: DirectiveNoFileComp}
+		if len(words) == 2 {
+			r.Candidates = []Candidate{jsonCandidate}
+		}
+		return filter(r, cur)
 	case first == "--export" || first == "--import":
 		return dataFlags(projectDir, words, cur, false)
 	case first == "--completion":
@@ -198,6 +204,10 @@ func dataFlags(projectDir string, words []string, cur string, onTarget bool) Res
 	}
 	return filter(r, cur)
 }
+
+// jsonCandidate is --status's and --server-info's --json, locally and
+// on a target.
+var jsonCandidate = Candidate{"--json", "the same as JSON, for scripts and agents", GroupDevopsy}
 
 // showFlag completes --env's one option.
 func showFlag(words []string, cur string) Result {
@@ -324,8 +334,10 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		r = filter(r, cur)
 		r.Directive = DirectiveNoFileComp
 		return r
-	case "--release-no-sync", "--rollback", "--reload", "--inherit", "--status":
+	case "--release-no-sync", "--rollback", "--reload", "--inherit":
 		return flags([]Candidate{help})
+	case "--status", "--server-info":
+		return flags([]Candidate{jsonCandidate, help})
 	case "--ssh-keys":
 		switch {
 		case len(words) == 2:

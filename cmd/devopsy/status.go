@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,89 +19,75 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
+// statusWarned is --status's exit code when something needs attention,
+// as --server-info's.
+const statusWarned = serverInfoWarned
+
+// statusRunningEnv is the services running, space-separated, for the
+// status capability's show.
+const statusRunningEnv = "DEVOPSY_STATUS_RUNNING"
+
+// statusShowFormat is the line the status capability's show prints.
+const statusShowFormat = `<level>\t<key>\t<value>[\t<fix>]`
+
 // runStatus implements devopsy --status in a project: its containers
-// (docker compose ps, every one, state and health), then whatever the
-// project's status capability prints (capabilities/status/show), its
-// URL for one. On a server, --status runs it in the current release.
+// (docker compose ps, every one, state and health, and the services with
+// none), then the project's own entries (capabilities/status/show). In a
+// release on a server, its images and the server's disks too.
 func runStatus(cwd string, args []string, color bool) int {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--status"]))
-			return 0
-		}
-		return fail("usage: devopsy --status")
+	asJSON, code := reportArgs("--status", args, "usage: devopsy --status [--json]")
+	if code >= 0 {
+		return code
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
 		return fail(err.Error())
 	}
-	var out bytes.Buffer
-	if err := compose(cwd, &out, "ps", "--all", "--format", "json"); err != nil {
-		return fail("docker compose ps: " + err.Error())
-	}
-	entries, err := parsePS(out.Bytes())
-	if err != nil {
-		return fail("docker compose ps: " + err.Error())
-	}
-	if len(entries) == 0 {
-		fmt.Println("containers  none")
-	} else {
-		width := len("service")
-		for _, e := range entries {
-			width = max(width, len(e.Service))
-		}
-		fmt.Println("containers")
-		for _, e := range entries {
-			state := e.State
-			if e.Health != "" {
-				state += "  " + e.Health
-			}
-			line := fmt.Sprintf("  %-*s  %s", width, e.Service, state)
-			if e.Status != "" {
-				line += "  " + strings.ToLower(e.Status[:1]) + e.Status[1:]
-			}
-			fmt.Println(line)
-		}
-	}
-	// On a server, the images held by digest and those a plain up moved
-	// off what their activation gave them.
-	if cli.InRelease(projectDir) {
-		if lines := images.StatusLines(images.CLI{}, composeName(cwd), remote.ReleaseFile(projectDir, "")); len(lines) > 0 {
-			fmt.Println("images")
-			for _, l := range lines {
-				fmt.Println("  " + l)
-			}
-		}
-	}
-	// The project's own lines, when it has the capability.
-	show := filepath.Join(projectDir, "capabilities", "status", "show")
-	if fi, err := os.Stat(show); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
-		return 0
-	}
-	plan, err := cli.Build(cwd, []string{"--capability", "status", "show"}, os.Environ())
+	facts, err := statusFacts(cwd, projectDir, cli.InRelease(projectDir))
 	if err != nil {
 		return fail(err.Error())
 	}
-	trace(plan.Args)
-	cmd := exec.Command(plan.Path, plan.Args[1:]...)
-	cmd.Env = plan.Env
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fail("the status capability: " + err.Error())
+	var r statusReport
+	r.addFacts(facts, "")
+	return r.print(os.Stdout, styleFor(os.Stdout), "", asJSON)
+}
+
+// runStatusFacts implements the hidden --status-facts on a server: the
+// facts of the project at cwd, or with --no-project the server's disks
+// alone, as one JSON document on stdout (remote.StatusFacts).
+func runStatusFacts(cwd string, args []string) int {
+	var facts remote.StatusFacts
+	switch {
+	case len(args) == 1 && args[0] == remote.StatusNoProject:
+		facts.Containers = []remote.StatusContainer{}
+		facts.Disks, facts.SnapshotRoot = serverDisks()
+	case len(args) > 0:
+		return fail("usage: devopsy " + remote.StatusFactsFlag + " [" + remote.StatusNoProject + "]")
+	default:
+		projectDir, err := cli.FindProjectDir(cwd)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if facts, err = statusFacts(cwd, projectDir, true); err != nil {
+			return fail(err.Error())
+		}
 	}
+	out, err := json.Marshal(facts)
+	if err != nil {
+		return failErr(err)
+	}
+	fmt.Println(string(out))
 	return 0
 }
 
 // runRemoteStatus implements devopsy @<target> --status: the release on
-// the server (its record, how many are kept, the last sync), then what
-// --status prints there.
+// the server (its record, how many are kept, the last sync, what is cut
+// or running), then the facts of its current release there, formatted
+// here.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--status"]))
-			return 0
-		}
-		return fail("usage: devopsy @" + targetRef(t) + " --status")
+	asJSON, code := reportArgs("--status", args, "usage: devopsy @"+targetRef(t)+" --status [--json]")
+	if code >= 0 {
+		return code
 	}
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.StatusScript(t), bytes.NewReader(nil), &out, false)
@@ -108,23 +97,249 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	if code != 0 {
 		return code
 	}
-	header, rest, _ := strings.Cut(out.String(), "\n---\n")
-	st := styleFor(os.Stdout)
-	// Each line names commands to copy, an address in brackets quoted.
-	say := func(s string) { fmt.Println(report.Copyable(s)) }
-	bad := func(s string) { fmt.Println(st.bad(report.Copyable(s))) }
-	fmt.Println(st.name(report.Copyable(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path))))
-	h := parseStatus(header)
+	header, rest, ok := strings.Cut(out.String(), "\n---\n")
+	var facts remote.StatusFacts
+	if ok {
+		err = json.Unmarshal([]byte(rest), &facts)
+	}
+	if !ok || err != nil {
+		return fail("the server's devopsy answered what this one cannot read: " + strings.TrimSpace(out.String()))
+	}
+	r := statusReport{Target: targetRef(t), Server: t.Host + ":" + t.Path}
+	r.addHeader(parseStatus(header), t)
+	r.addFacts(facts, remote.ServerRef(t))
+	return r.print(os.Stdout, styleFor(os.Stdout), fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), asJSON)
+}
+
+// statusFacts are the facts of the project at cwd (projectDir its
+// .devopsy): its containers, the services with none, its images in a
+// release, the status capability's entries, and with disks the server's.
+func statusFacts(cwd, projectDir string, disks bool) (remote.StatusFacts, error) {
+	facts := remote.StatusFacts{Project: composeName(cwd), Containers: []remote.StatusContainer{}}
+	var out bytes.Buffer
+	if err := compose(cwd, &out, "ps", "--all", "--format", "json"); err != nil {
+		return facts, fmt.Errorf("docker compose ps: %w", err)
+	}
+	// Never a one-off (a run, an import's run --rm): no service's
+	// container.
+	entries, err := serviceEntries(out.Bytes())
+	if err != nil {
+		return facts, fmt.Errorf("docker compose ps: %w", err)
+	}
+	has := map[string]bool{}
+	var running []string
+	for _, e := range entries {
+		facts.Containers = append(facts.Containers, remote.StatusContainer{Service: e.Service, State: e.State, Health: e.Health, Status: e.Status, ExitCode: e.ExitCode})
+		has[e.Service] = true
+		if e.State == "running" && !slices.Contains(running, e.Service) {
+			running = append(running, e.Service)
+		}
+	}
+	// The services with none, of the active profiles.
+	for _, svc := range strings.Fields(composeServices(cwd)) {
+		if !has[svc] {
+			facts.Containers = append(facts.Containers, remote.StatusContainer{Service: svc, State: remote.StatusNoContainer})
+		}
+	}
+	// In a release, the images held by digest and those a plain up moved
+	// off what their activation gave them.
+	if cli.InRelease(projectDir) {
+		for _, l := range images.StatusLines(images.CLI{}, facts.Project, remote.ReleaseFile(projectDir, "")) {
+			level := remote.StatusInfo
+			if l.Warn {
+				level = remote.StatusWarning
+			}
+			facts.Entries = append(facts.Entries, remote.StatusEntry{Level: level, Key: "images", Lines: []string{l.Text}})
+		}
+	}
+	facts.Entries = append(facts.Entries, statusShow(cwd, projectDir, running)...)
+	if disks {
+		facts.Disks, facts.SnapshotRoot = serverDisks()
+	}
+	return facts, nil
+}
+
+// composeServices is compose config --services of the project at cwd,
+// empty when compose cannot read the project: what it says then is the
+// project's own commands' to say (a variable missing, say), and --status
+// lists the containers all the same. It runs the real docker, never the
+// door's: config needs no daemon, and the door's would make the binds'
+// entries, where --status changes nothing.
+func composeServices(cwd string) string {
+	plan, err := cli.Build(cwd, []string{"--", "config", "--services"}, os.Environ())
+	if err != nil {
+		return ""
+	}
+	trace(plan.Args)
+	cmd := exec.Command(realDocker(), plan.Args[1:]...)
+	cmd.Env = plan.Env
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// statusShow runs the project's status capability, when it has one, with
+// the services running in statusRunningEnv: its entries, and a warning
+// when it failed or printed a line that is not statusShowFormat.
+func statusShow(cwd, projectDir string, running []string) []remote.StatusEntry {
+	show := filepath.Join(projectDir, "capabilities", "status", "show")
+	if fi, err := os.Stat(show); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		return nil
+	}
+	problem := func(lines ...string) remote.StatusEntry {
+		return remote.StatusEntry{Level: remote.StatusWarning, Key: "capability", Lines: lines}
+	}
+	plan, err := cli.Build(cwd, []string{"--capability", "status", "show"}, os.Environ())
+	if err != nil {
+		return []remote.StatusEntry{problem("the status capability: " + err.Error())}
+	}
+	trace(plan.Args)
+	var out bytes.Buffer
+	cmd := exec.Command(plan.Path, plan.Args[1:]...)
+	cmd.Env = append(plan.Env, statusRunningEnv+"="+strings.Join(running, " "))
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, &out, os.Stderr
+	runErr := cmd.Run()
+	entries, bad := parseStatusShow(out.String())
+	if len(bad) > 0 {
+		lines := []string{"the status capability printed lines that are not " + statusShowFormat + ":"}
+		for _, b := range bad {
+			lines = append(lines, strconv.Quote(b))
+		}
+		entries = append(entries, problem(lines...))
+	}
+	if runErr != nil {
+		entries = append(entries, problem("the status capability failed: "+runErr.Error()))
+	}
+	return entries
+}
+
+// parseStatusShow reads the status capability's lines, statusShowFormat
+// each (empty lines skipped): consecutive lines of one key are one entry
+// of several lines, its level the highest of theirs, with every fix they
+// give. bad are the lines that are not.
+func parseStatusShow(out string) (entries []remote.StatusEntry, bad []string) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) < 3 || len(f) > 4 || (f[0] != remote.StatusInfo && f[0] != remote.StatusWarning) || f[1] == "" {
+			bad = append(bad, line)
+			continue
+		}
+		var fix []report.Remedy
+		if len(f) == 4 && f[3] != "" {
+			fix = []report.Remedy{report.Fix("", f[3])}
+		}
+		if n := len(entries); n > 0 && entries[n-1].Key == f[1] {
+			e := &entries[n-1]
+			e.Lines = append(e.Lines, f[2])
+			if f[0] == remote.StatusWarning {
+				e.Level = remote.StatusWarning
+			}
+			for _, x := range fix {
+				if !slices.ContainsFunc(e.Fixes, func(y report.Remedy) bool { return slices.Equal(x.Cmds, y.Cmds) }) {
+					e.Fixes = append(e.Fixes, x)
+				}
+			}
+			continue
+		}
+		entries = append(entries, remote.StatusEntry{Level: f[0], Key: f[1], Lines: []string{f[2]}, Fixes: fix})
+	}
+	return entries, bad
+}
+
+// serverDisks are the filesystems of this server's release root,
+// Docker's data (unless Docker is behind the door, whose docker info is
+// the admin's), containerd's and the snapshot root, and /, with no
+// reflink tried: --status writes nothing.
+func serverDisks() ([]remote.Disk, string) {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return []remote.Disk{{Paths: []string{"releases=(unknown)"}, Error: err.Error()}}, ""
+	}
+	docker, containerd := "", ""
+	if !behindDoor() {
+		d := dockerInfo()
+		docker, containerd = d.RootDir, containerdRoot(d)
+	}
+	return diskFacts(r.Root, docker, containerd, r.Snapshots.Root, false), r.Snapshots.Root
+}
+
+// statusReport is what --status shows and --status --json prints.
+type statusReport struct {
+	// Target is the address as typed, Server where it is, both empty
+	// locally.
+	Target  string         `json:"target,omitempty"`
+	Server  string         `json:"server,omitempty"`
+	Project string         `json:"project,omitempty"`
+	Release *statusRelease `json:"release,omitempty"`
+	// Containers are the project's, each with its level.
+	Containers []remote.StatusContainer `json:"containers"`
+	Disks      []remote.Disk            `json:"disks,omitempty"`
+	// Entries are every other line, in order: the release's state, the
+	// disks, the images, the status capability's.
+	Entries []remote.StatusEntry `json:"entries"`
+	// Attention says something is at StatusWarning: --status exits 3.
+	Attention bool `json:"attention"`
+	// head is how many of Entries come before the containers.
+	head int
+}
+
+// statusRelease is the current release on a server: its id, its record,
+// how many releases are kept.
+type statusRelease struct {
+	ID string `json:"id"`
+	*remote.Record
+	Kept int `json:"kept"`
+}
+
+// add appends an entry of one line.
+func (r *statusReport) add(level, key, line string) {
+	r.Entries = append(r.Entries, remote.StatusEntry{Level: level, Key: key, Lines: []string{line}})
+}
+
+// addHeader adds the environment's state on the server (remote.EnvStatus,
+// read, envState.entries) and its current release, for JSON.
+func (r *statusReport) addHeader(h envState, t *remote.Target) {
+	if h.id != "" {
+		r.Release = &statusRelease{ID: h.id, Record: h.record}
+		r.Release.Kept, _ = strconv.Atoi(h.kept)
+	}
+	r.Entries = append(r.Entries, h.entries(envAt{hint: remote.HintAddress(t), ref: targetRef(t), parent: t.Parent})...)
+}
+
+// envAt is how an environment's entries name it in their fixes: hint as
+// a release's hint does (remote.HintAddress), ref as typed (targetRef);
+// and parent is its parent, "" for none.
+type envAt struct{ hint, ref, parent string }
+
+// entries are an environment's state, as --status and --server-info
+// judge it: its release, its parent and its last sync, and what is
+// running, cut or partial on it, each warning with the commands that
+// finish it.
+func (h envState) entries(at envAt) []remote.StatusEntry {
+	var es []remote.StatusEntry
+	info := func(key, line string) {
+		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{line}})
+	}
+	// warn adds a warning with its fixes.
+	warn := func(key, line string, fixes ...report.Remedy) {
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}, Fixes: fixes})
+	}
 	switch {
 	case h.plain:
-		say("release     none: a plain devopsy directory")
+		info("release", "none: a plain devopsy directory")
 	case h.none && h.failed != "":
-		say(fmt.Sprintf("release     none: %s failed, devopsy @%s --log shows why", h.failed, targetRef(t)))
+		warn("release", "none: "+h.failed+" failed", report.Fix("see why:", "devopsy @"+at.ref+" --log"))
 	case h.none:
-		say("release     none: not released yet")
+		info("release", "none: not released yet")
 	}
 	if h.id != "" {
-		line := "release     " + h.id
+		line := h.id
 		if h.record != nil {
 			if h.record.Commit != "" {
 				short := h.record.Commit
@@ -146,14 +361,14 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		if h.kept != "" {
 			line += "  (" + h.kept + " kept)"
 		}
-		say(line)
+		info("release", line)
 	}
 	if h.cut != nil {
-		what, fix := h.cut.Cut(targetRef(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
-		bad("release     " + what + ": " + fix)
+		what, fix := h.cut.Cut(at.hint, at.hint, h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
+		warn("release", what, fix)
 	}
-	if t.Parent != "" {
-		line := "parent      " + t.Parent
+	if at.parent != "" {
+		line := at.parent
 		if h.synced != "" {
 			if when, err := time.Parse("2006-01-02 15:04:05", h.synced); err == nil {
 				line += "  last synced " + ago(when.UTC())
@@ -161,49 +376,146 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		} else {
 			line += "  never synced"
 		}
-		say(line)
+		info("parent", line)
 	}
 	if h.syncing {
-		say("data        a sync into it is running")
+		info("data", "a sync into it is running")
 	}
 	if h.source {
-		say("data        a sync or an export from it is running")
+		info("data", "a sync or an export from it is running")
 	}
 	if h.snapshotting {
-		say("data        a snapshot of it is being taken")
+		info("data", "a snapshot of it is being taken")
 	}
+	child := at.parent != ""
 	switch {
 	case h.mark.IsImport() && h.importing:
-		bad("data        importing " + h.mark.From + ": what it stopped stays down until it completes")
+		warn("data", "importing "+h.mark.From+": what it stopped stays down until it completes")
 	case h.importing:
-		say("data        an import into it is running")
+		info("data", "an import into it is running")
 	case h.mark.IsImport():
-		var fixes []string
-		for _, f := range remote.ImportFixes(targetRef(t), h.mark.From, t.Parent != "") {
-			fixes = append(fixes, f[1])
-		}
-		bad("data        the import of " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or "))
+		warn("data", "the import of "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.ImportFixes(at.hint, h.mark.From, child)...)
 	case h.mark.IsRestore() && h.busy:
 		// Its mark is there from its first write to its run step, the
 		// release lock held all along.
-		bad("data        restoring snapshot " + h.mark.From + ": what it stopped stays down until it completes")
+		warn("data", "restoring snapshot "+h.mark.From+": what it stopped stays down until it completes")
 	case h.mark.IsRestore():
-		var fixes []string
-		for _, f := range remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "") {
-			fixes = append(fixes, f[1])
-		}
-		bad("data        the restore of snapshot " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or "))
+		warn("data", "the restore of snapshot "+h.mark.From+" did not complete: "+h.partial+": nothing runs on it until one does", remote.RestoreFixes(at.hint, h.mark.From, child)...)
 	case h.partial != "":
-		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
+		fixes := []report.Remedy{report.Fix("sync it again:", "devopsy @"+at.hint+" --sync"), remote.ResetFix(at.hint)}
 		if h.id == "" {
-			fix = "devopsy @" + remote.HintAddress(t) + " --release: a first release syncs"
+			fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+at.hint+" --release")}
 		}
-		bad("data        from a sync that did not complete: " + h.partial + ": nothing runs on it until one does: " + fix)
+		warn("data", "from a sync that did not complete: "+h.partial+": nothing runs on it until one does", fixes...)
 	case h.left != "":
-		bad("data        an operation cut off recorded " + h.left + " as stopped: the next release, sync, import or snapshot here starts what of them is down")
+		warn("data", "an operation cut off recorded "+h.left+" as stopped: the next release, sync, import or snapshot here starts what of them is down")
 	}
-	fmt.Print(rest)
-	return 0
+	return es
+}
+
+// addFacts adds a project's facts: the server's disks, judged as
+// --server-info judges them (ref the server as typed, for their fixes,
+// empty locally), its containers, judged, and its entries.
+func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
+	r.Project = facts.Project
+	r.Disks = facts.Disks
+	for _, d := range facts.Disks {
+		r.Entries = append(r.Entries, judgeDisk(d, facts.SnapshotRoot, ref).entries("")...)
+	}
+	r.head = len(r.Entries)
+	r.Containers = []remote.StatusContainer{}
+	for _, c := range facts.Containers {
+		c.Level = containerLevel(c)
+		r.Containers = append(r.Containers, c)
+	}
+	r.Entries = append(r.Entries, facts.Entries...)
+}
+
+// containerLevel is a container's level: a warning when it needs
+// attention (containerTrouble).
+func containerLevel(c remote.StatusContainer) string {
+	if containerTrouble(c.State, c.Health, c.ExitCode) != "" {
+		return remote.StatusWarning
+	}
+	return remote.StatusInfo
+}
+
+// containerTrouble is what is wrong with a container, for --status and
+// --server-info, else empty: restarting, paused (devopsy never pauses:
+// Traefik drops a paused container's router), dead, unhealthy while it
+// runs (Docker says unhealthy of a stopped one's health too), or exited
+// on an error of its own (a stop ends it with 0, or a signal's 137 or
+// 143).
+func containerTrouble(state, health string, exitCode int) string {
+	switch {
+	case state == "restarting", state == "paused", state == "dead":
+		return state
+	case state == "running" && health == "unhealthy":
+		return "unhealthy"
+	case state == "exited" && !slices.Contains([]int{0, 137, 143}, exitCode):
+		return "exited " + strconv.Itoa(exitCode)
+	}
+	return ""
+}
+
+// print shows r on w in st under heading (none locally), or prints it
+// as JSON: statusWarned when something needs attention.
+func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool) int {
+	r.Attention = entriesWarn(r.Entries) || slices.ContainsFunc(r.Containers, func(c remote.StatusContainer) bool { return c.Level == remote.StatusWarning })
+	code := 0
+	if r.Attention {
+		code = statusWarned
+	}
+	if asJSON {
+		r.Entries = copyableEntries(r.Entries)
+		if err := printJSON(w, r); err != nil {
+			return failErr(err)
+		}
+		return code
+	}
+	tab := newEntryTable(w, st, r.Entries, "containers")
+	row := tab.row
+	if heading != "" {
+		fmt.Fprintln(w, st.name(report.Copyable(heading)))
+	} else {
+		fmt.Fprintln(w, row("project", r.Project))
+	}
+	tab.print(r.Entries[:r.head])
+	switch {
+	case r.Project == "":
+		// An environment with no release live: no project to list.
+	case len(r.Containers) == 0:
+		fmt.Fprintln(w, row("containers", "none"))
+	default:
+		sw := len("service")
+		for _, c := range r.Containers {
+			sw = max(sw, len(c.Service))
+		}
+		fmt.Fprintln(w, "containers")
+		for _, c := range r.Containers {
+			state := c.State
+			switch {
+			case c.State == remote.StatusNoContainer:
+				state = st.dim("no container")
+			case c.Level == remote.StatusWarning:
+				state = st.warn(state)
+			case c.State == "running":
+				state = st.ok(state)
+			}
+			// compose's Status already ends in the health, when there is
+			// one: "Up 3 hours (healthy)".
+			if c.Health != "" && c.Status == "" {
+				state += "  " + c.Health
+			}
+			line := fmt.Sprintf("  %-*s  %s", sw, c.Service, state)
+			if c.Status != "" {
+				line += "  " + strings.ToLower(c.Status[:1]) + c.Status[1:]
+			}
+			fmt.Fprintln(w, line)
+		}
+	}
+	tab.print(r.Entries[r.head:])
+	return code
 }
 
 // envState is an environment's state lines (remote.EnvStatus), read.

@@ -75,22 +75,13 @@ func Line(l Level, msg string) string { return Head(l) + msg }
 // Remedy is one way to fix a failure: what to do and, optionally, the
 // commands that do it.
 type Remedy struct {
-	Text string
-	Cmds []string
+	Text string   `json:"text,omitempty"`
+	Cmds []string `json:"commands,omitempty"`
 }
 
 // Fix is a Remedy: text says what to do (it may be empty when the
 // commands say it all), cmds are shown after CmdMark, to copy.
 func Fix(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds} }
-
-// FixPairs is one Remedy per text and command to copy.
-func FixPairs(pairs [][2]string) []Remedy {
-	var rs []Remedy
-	for _, f := range pairs {
-		rs = append(rs, Fix(f[0], f[1]))
-	}
-	return rs
-}
 
 // Lines formats msg at level l: msg's first line after Head(l), then
 // msg's other lines, the details and the fixes, each on a Bar line

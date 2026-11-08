@@ -498,7 +498,9 @@ func docker(args ...string) (string, error) {
 // its output and exit code.
 func op(t *testing.T, dir, script string) (string, int) {
 	t.Helper()
-	return execIn(t, []string{"-w", dir, operator}, script)
+	// The host's disk, which the servers' are, may be nearly full:
+	// --status judges none, else it would exit 3 there.
+	return execIn(t, []string{"-e", "DEVOPSY_INTERNAL_DISK_WARN=off", "-w", dir, operator}, script)
 }
 
 // srv runs script on the server as the deploy user.

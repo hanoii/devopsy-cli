@@ -81,7 +81,7 @@ var Flags = []FlagGroup{
 		{Name: "--vars-project", Args: "[...]", Scope: Server, Desc: "the project's .env on the server"},
 	}},
 	{"Running", []Flag{
-		{Name: "--status", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
+		{Name: "--status", Args: "[--json]", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
 		{Name: "--shell", Args: "[service] [-- command...]", Scope: LocalOrTarget, Desc: "a shell, or the command, in a container"},
 		{Name: "--shell-host", Args: "[--root]", Scope: Server, Desc: "a shell on the server itself, or root's"},
 		{Name: "--environments", Scope: LocalOrServer, Desc: "the project's environments on its servers"},
@@ -91,7 +91,7 @@ var Flags = []FlagGroup{
 		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "a local SSH key pair, for CI"},
 		{Name: "--ssh-keys", Args: "[list | add <file> | remove <key>]", Scope: Server, Desc: "who may log in as the deploy user"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
-		{Name: "--server-info", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
+		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
 	}},
 	{"Setup and tools", []Flag{
