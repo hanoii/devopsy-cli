@@ -250,15 +250,10 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 			return nil, err
 		}
 		return &Action{Claims: []string{args[1]}, Logins: true, Images: true}, nil
-	case "port":
-		// Where a sync's own daemon listens, on the host's loopback.
-		if len(args) != 2 || args[1] != "873" || !p.ownContainer(d, args[0]) {
-			return nil, noDocker(argv)
-		}
-		return &Action{Docker: argv}, nil
 	case "exec":
-		// A sync asking its own daemon whether it answers, and nothing else.
-		if len(args) != 3 || args[1] != "rsync" || args[2] != "rsync://127.0.0.1/" || !p.ownContainer(d, args[0]) {
+		// A sync's own daemon serving one connection over the pipe, and nothing else: the
+		// daemon has no network, and the push relays to it from a socket of its own.
+		if len(args) != 2+len(DaemonServe) || args[0] != "-i" || !slices.Equal(args[2:], DaemonServe) || !p.ownContainer(d, args[1]) {
 			return nil, noDocker(argv)
 		}
 		return &Action{Docker: argv}, nil
@@ -565,7 +560,7 @@ type mount struct {
 func decideRun(args []string, p Policy, h Host, known Known) (*Action, error) {
 	var out []string
 	var mounts []mount
-	network, conf, secret, published, image := "", "", "", false, -1
+	network, conf, secret, image := "", "", "", -1
 scan:
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -626,17 +621,6 @@ scan:
 			default:
 				return nil, refuse("docker run: an environment")
 			}
-			out = append(out, a, v)
-		case "-p":
-			v, err := value()
-			if err != nil {
-				return nil, err
-			}
-			// A sync's daemon on the host's loopback, its port Docker's to pick.
-			if v != "127.0.0.1::873" {
-				return nil, refuse("docker run: a port: %s", v)
-			}
-			published = true
 			out = append(out, a, v)
 		case "--mount":
 			v, err := value()
@@ -701,7 +685,7 @@ scan:
 	if len(cmd) >= 3 && cmd[0] == "rm" && cmd[1] == "-rf" {
 		return decideRemoval(cmd[2:], mounts, p, h, known)
 	}
-	return decideForm(cmd, mounts, out, network, conf, secret, published, p, h, known)
+	return decideForm(cmd, mounts, out, network, conf, secret, p, h, known)
 }
 
 var removePath = regexp.MustCompile(`^/s/` + word + `(/` + word + `)*$`)

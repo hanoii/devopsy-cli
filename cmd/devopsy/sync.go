@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -2330,21 +2332,21 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 	if err := removeLeft(parent, remote.TaskSource); err != nil {
 		return err
 	}
-	daemon := append(append([]string{"run", "--rm", "-d"}, container{remote.SyncContainerPrefix + syncID + "-daemon", parent, remote.TaskSource}.runArgs()...), "-v", src.mnt+":/mnt:ro")
+	daemon := append(append([]string{"run", "--rm", "-d", "--network", "none"}, container{remote.SyncContainerPrefix + syncID + "-daemon", parent, remote.TaskSource}.runArgs()...), "-v", src.mnt+":/mnt:ro")
 	var keys []string
 	for _, v := range volumes {
 		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
 		keys = append(keys, v.Key)
 	}
-	// On the host's loopback, which a local user reaches, so with a password of this
-	// sync's: a project user must not read another's data as it is copied, and a rule by
-	// its group keeps it off Docker's networks, this push's user included.
+	// With no network: it serves each connection over docker exec, relayed from a socket
+	// only this push's user enters (relayDaemon). A password of this sync's still, for the
+	// forward's port on the child's loopback.
 	secret := make([]byte, 16)
 	if _, err := crand.Read(secret); err != nil {
 		return err
 	}
 	password := hex.EncodeToString(secret)
-	start := append(daemon, "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), "-e", "RSYNC_SECRET", remote.UtilImage,
+	start := append(daemon, "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), "-e", "RSYNC_SECRET", remote.UtilImage,
 		"sh", "-c", rsyncDaemonScript)
 	trace(append([]string{"docker"}, start...))
 	startCmd := exec.CommandContext(ctx, "docker", start...)
@@ -2363,24 +2365,35 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		cmd.Stderr = errOut // stdout: the id again
 		_ = cmd.Run()
 	}()
-	address, err := dockerOut(ctx, "port", id, "873")
-	if err != nil || address == "" {
-		return fmt.Errorf("the rsync daemon's address: %v", err)
-	}
-	// Its first line, the one on the loopback: never more than one here.
-	address, _, _ = strings.Cut(address, "\n")
+	// Its settings are written last: a listing of its modules proves them there.
 	ready := false
 	for i := 0; i < 50 && !ready; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if ready = exec.CommandContext(ctx, "docker", "exec", id, "rsync", "rsync://127.0.0.1/").Run() == nil; !ready {
+		c := daemonServe(ctx, id)
+		c.Stdin = strings.NewReader("@RSYNCD: 31.0\n\n")
+		out, _ := c.Output()
+		if ready = bytes.Contains(out, []byte("@RSYNCD: EXIT")); !ready {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	if !ready {
 		return fmt.Errorf("the rsync daemon did not answer in 5 seconds")
 	}
+	dir, err := os.MkdirTemp("", "devopsy-sync-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	// Short, in a directory of 0700: a unix socket's path has about 100 bytes.
+	address := filepath.Join(dir, "r.sock")
+	ln, err := net.Listen("unix", address)
+	if err != nil {
+		return fmt.Errorf("the rsync daemon's socket: %v", err)
+	}
+	defer ln.Close()
+	go relayDaemon(ctx, ln, id, errOut)
 
 	// A port free on the child's server: ssh fails at once when the
 	// forward cannot listen (ExitOnForwardFailure), then another. Never
@@ -2418,6 +2431,36 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 			return fmt.Errorf("copying into %s: its server refused the reverse forward %d times: sshd's AllowTcpForwarding must allow remote forwards", to, attempt+1)
 		}
 		return fmt.Errorf("copying into %s: %w", to, err)
+	}
+}
+
+// daemonServe is a sync's daemon serving one connection on the command's stdin and stdout.
+func daemonServe(ctx context.Context, id string) *exec.Cmd {
+	return exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", id}, door.DaemonServe...)...)
+}
+
+// relayDaemon serves the push's socket, each connection by daemonServe on the socket itself:
+// the daemon has no network, and the socket's directory is this user's alone. A port on the
+// host's loopback would be every local user's, and the project users' firewall drops theirs.
+func relayDaemon(ctx context.Context, ln net.Listener, id string, errOut io.Writer) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			// The socket's own descriptor, so the copy needs no goroutine of devopsy's and
+			// ends with the daemon's rsync.
+			f, err := conn.(*net.UnixConn).File()
+			conn.Close()
+			if err != nil {
+				return
+			}
+			defer f.Close()
+			c := daemonServe(ctx, id)
+			c.Stdin, c.Stdout, c.Stderr = f, f, errOut
+			_ = c.Run()
+		}()
 	}
 }
 

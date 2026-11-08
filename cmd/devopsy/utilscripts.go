@@ -21,6 +21,7 @@ done`
 	// spaceProbeScript says, per path, its filesystem (its parent's while
 	// missing), that one's free kilobytes, and the path's own use.
 	spaceProbeScript = `for p; do d=$p; [ -e "$d" ] || d=${d%/*}; set -- $(df -Pk "$d" | tail -n 1); u=0; [ ! -e "$p" ] || u=$(du -sk "$p" | cut -f1); printf '%s\t%s\t%s\t%s\n' "$p" "$1" "$4" "$u"; done`
-	// rsyncDaemonScript is a sync's read-only rsync daemon, from its settings.
-	rsyncDaemonScript = `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && printf "nobody:%s\n" "$RSYNC_SECRET" > /etc/rsyncd.secrets && chmod 600 /etc/rsyncd.secrets && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`
+	// rsyncDaemonScript is a sync's read-only rsync daemon, from its settings: they wait
+	// for each connection, which runs door.DaemonServe through docker exec.
+	rsyncDaemonScript = `umask 077 && printf "nobody:%s\n" "$RSYNC_SECRET" > /etc/rsyncd.secrets && printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec sleep infinity`
 )

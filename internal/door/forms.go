@@ -42,7 +42,7 @@ type form struct {
 	network string
 	// secret is the variable it takes on stdin.
 	secret string
-	// conf says it takes a sync daemon's settings and publishes its port.
+	// conf says it takes a sync daemon's settings.
 	conf bool
 	// narrow, for an rsync, is the one entry it writes, out of the mnt it asked for.
 	narrow func(cmd []string) (entry string, file bool, ok bool)
@@ -60,6 +60,10 @@ var (
 	probePath = regexp.MustCompile(`^/m/(mnt|volumes)/` + word + `$`)
 	duArg     = regexp.MustCompile(`^(/m/` + word + `|/v/` + word + `)$`)
 )
+
+// DaemonServe is a sync's daemon serving one connection over docker exec's pipe, rsync's
+// daemon as over a remote shell: the push relays each connection on its own socket to it.
+var DaemonServe = []string{"rsync", "--server", "--daemon", "--config=/etc/rsyncd.conf", "."}
 
 // RootUtil is what every util container the door runs as root holds back, root not
 // being needed for it: nothing there makes a device or gains privileges.
@@ -232,9 +236,9 @@ func forms(known Known) []form {
 			s := recvSrc.FindStringSubmatch(src)
 			return s[2], true, s[2] != "" && slices.Contains(cmd, "--inplace")
 		}},
-		// A sync's read-only daemon: its settings in one form, on the host's loopback, by a
-		// password of that sync's.
-		{name: "daemon", network: "bridge", secret: "RSYNC_SECRET", conf: true, matches: func(cmd []string) bool {
+		// A sync's read-only daemon: its settings in one form, no network (it serves over
+		// docker exec, DaemonServe), by a password of that sync's.
+		{name: "daemon", secret: "RSYNC_SECRET", conf: true, matches: func(cmd []string) bool {
 			return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && cmd[2] == known.Daemon
 		}, mounts: []mountRule{
 			{target(`/mnt`), true, []sourceKind{kindMnt, kindClone}},
@@ -296,7 +300,7 @@ func (r mountRule) takes(m mount, kind sourceKind) bool {
 }
 
 // decideForm checks a util container against the table, and says what it comes to.
-func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secret string, published bool, p Policy, h Host, known Known) (*Action, error) {
+func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secret string, p Policy, h Host, known Known) (*Action, error) {
 	var f *form
 	table := forms(known)
 	for i := range table {
@@ -317,8 +321,8 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 	if secret != f.secret {
 		return nil, refuse("docker run: an environment, for %s", f.name)
 	}
-	if f.conf != (conf != "") || f.conf != published {
-		return nil, refuse("docker run: settings or a port, for %s", f.name)
+	if f.conf != (conf != "") {
+		return nil, refuse("docker run: settings, for %s", f.name)
 	}
 	action := &Action{Secret: secret}
 	entry, file := "", false

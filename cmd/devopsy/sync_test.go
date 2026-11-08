@@ -352,7 +352,9 @@ case "$*" in
       ci=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f3)
       printf '{"Name":"/%s-%s-1","Image":"%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "${ci:-sha256:$cs}" "$p" "$cs" "$cl"
     done ;;
-  "port "*) echo 127.0.0.1:32768 ;;
+  # A sync's daemon serving one connection: here its listing, which says its
+  # settings are there.
+  "exec -i "*" rsync --server --daemon --config=/etc/rsyncd.conf .") printf '@RSYNCD: 31.0\n@RSYNCD: EXIT\n' ;;
   "inspect "*) echo 172.17.0.9 ;;
   # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
   # none with FAKE_UTIL_MISSING; a build fails with FAIL_UTIL_BUILD, else
@@ -1136,7 +1138,7 @@ func TestSyncReflinkClone(t *testing.T) {
 	if code != 0 || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
 		t.Fatalf("across servers (%d):\n%s", code, out)
 	}
-	inOrder("across servers", docker, "stop db", "-clone ", "start db", "run --rm -d --name devopsy-sync-", " -v "+clone, "/mnt:/mnt:ro", "-unclone ")
+	inOrder("across servers", docker, "stop db", "-clone ", "start db", "run --rm -d --network none --name devopsy-sync-", " -v "+clone, "/mnt:/mnt:ro", "-unclone ")
 	noClone("across servers")
 
 	// An export on a target tars from a clone, db started first.
@@ -1337,7 +1339,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if got := readString(scripts); strings.Contains(got, "PRIVATE KEY") || !strings.Contains(got, remote.SyncKeyEnv+"=") || !strings.Contains(got, remote.SyncHostKeysEnv+"=") || !strings.Contains(got, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g,") {
 		t.Errorf("the sync's key in the sessions' scripts:\n%s", got)
 	}
-	if rm, run := strings.Index(docker, "rm -f old-daemon"), strings.Index(docker, "run --rm -d --name devopsy-sync-"); rm < 0 || run < rm {
+	if rm, run := strings.Index(docker, "rm -f old-daemon"), strings.Index(docker, "run --rm -d --network none --name devopsy-sync-"); rm < 0 || run < rm {
 		t.Errorf("the stale daemon not removed before the push's own:\n%s", docker)
 	}
 	if code != 0 || !strings.Contains(out, "from devopsy@one to devopsy@two") || !strings.Contains(out, "deploy in shop-dev parent=prod devopsy@one:prod") {
@@ -1360,7 +1362,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	// holder sent, no agent, no password prompt, a short connect timeout.
 	keyDir := filepath.Join(s.root, "shop", "prod", ".devopsy-sync-key.")
 	childSSH := `-o ForwardAgent=no -o BatchMode=yes -i ` + regexp.QuoteMeta(keyDir) + `([0-9]+\.[0-9a-f]{6})/key -o IdentitiesOnly=yes -o HostKeyAlias=devopsy-sync-([0-9]+\.[0-9a-f]{6}) -o UserKnownHostsFile=` + regexp.QuoteMeta(keyDir) + `[0-9.a-f]+/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3`
-	if m := regexp.MustCompile(`-o ExitOnForwardFailure=yes ` + childSSH + ` -T -R 127\.0\.0\.1:[0-9]+:127\.0\.0\.1:32768 -p 22 devopsy@two$`).FindStringSubmatch(receive); m == nil || m[1] != m[2] || strings.Contains(receive, "ClearAllForwardings") {
+	if m := regexp.MustCompile(`-o ExitOnForwardFailure=yes ` + childSSH + ` -T -R 127\.0\.0\.1:[0-9]+:/[^ ]+/devopsy-sync-[0-9]+/r\.sock -p 22 devopsy@two$`).FindStringSubmatch(receive); m == nil || m[1] != m[2] || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
 	// Once decided, the key is gone from the child, and its files from
@@ -1380,7 +1382,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !regexp.MustCompile(childSSH+` -T -p 22 devopsy@two\n`).MatchString(ssh) {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "port cid123 873", " --network host -e RSYNC_PASSWORD -v " + s.mnt("dev") + ":/mnt devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/etc/rsyncd.conf .\n", " --network host -e RSYNC_PASSWORD -v " + s.mnt("dev") + ":/mnt devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}

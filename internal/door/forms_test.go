@@ -116,14 +116,14 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"no password":       {"RSYNC_PASSWORD", "RSYNC_SECRET"},
 			"elsewhere":         {"/mnt/data/", "/etc/data/"},
 		}},
-		{"daemon", []string{"run", "-p", "127.0.0.1::873", "-e", conf, "-e", "RSYNC_SECRET", "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
+		{"daemon", []string{"run", "-e", conf, "-e", "RSYNC_SECRET", "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
 			"written":            {mnt + ":/mnt:ro", mnt + ":/mnt"},
 			"another's mnt":      {mnt + ":/mnt:ro", "/space/mnt/other-prod:/mnt:ro"},
-			"a port for anyone":  {"127.0.0.1::873", "0.0.0.0::873"},
+			"a port":             {"-e\x00RSYNC_SECRET", "-e\x00RSYNC_SECRET\x00-p\x00127.0.0.1::873"},
 			"a walking path":     {"path = /mnt/data", "path = /mnt/.."},
 			"a path of its own":  {"path = /mnt/data", "path = /etc"},
 			"a setting appended": {"path = /mnt/data\n", "path = /mnt/data\nread only = no\n"},
-			"the host's network": {"-p\x00127.0.0.1::873", "--network\x00host\x00-p\x00127.0.0.1::873"},
+			"the host's network": {"-e\x00RSYNC_SECRET", "--network\x00host\x00-e\x00RSYNC_SECRET"},
 		}},
 		{"restore", []string{"run", "-v", tree + "/s:/s:ro", "-v", tree + "/f:/o", "util:1", "sh", "-c", "restore script", "sh", "f.zst"}, map[string][2]string{
 			"another's file": {tree + "/s:/s:ro", "/home/devopsy-other/other/s:/s:ro"},

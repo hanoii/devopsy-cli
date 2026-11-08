@@ -73,7 +73,7 @@ func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 
 // doorVerbs are Docker's commands the door answers, or says why it has no need to.
 var doorVerbs = map[string]string{
-	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "network": "", "port": "", "ps": "", "pull": "", "rm": "", "run": "",
+	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
 	"buildx": "--context-hash, local", "info": "--server-info, the admin's", "system": "--server-info, the admin's",
 	"builder": "a hint to the admin", "not": "a message",
@@ -158,7 +158,7 @@ func TestDoorTakesComputedForms(t *testing.T) {
 		t.Errorf("the door does not take devopsy's own clone:\n%s", script)
 	}
 	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
-	daemon := []string{"run", "--rm", "-d", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + rsyncdConf([]string{"storage", "app.ini"}, []string{"app.ini"}, []string{"db"}),
+	daemon := []string{"run", "--rm", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + rsyncdConf([]string{"storage", "app.ini"}, []string{"app.ini"}, []string{"db"}),
 		"-e", "RSYNC_SECRET", "-v", "/space/mnt/shop-prod:/mnt:ro", "-v", "shop-prod_db:/vol/db:ro", remote.UtilImage, "sh", "-c", rsyncDaemonScript}
 	if _, err := door.Decide(daemon, p, nil, doorTestHost{}, doorKnown()); err != nil {
 		t.Errorf("the door does not take devopsy's own rsync daemon: %v", err)

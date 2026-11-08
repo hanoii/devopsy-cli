@@ -171,10 +171,11 @@ without SSH, and a stream is written straight into the child's
 directory.
 
 Across servers, the parent's server starts an rsync daemon for the
-copy. It is read-only, serves only the entries being copied, listens
-only on that server itself, and takes a password made for that sync.
-The parent's server connects to the child's over SSH, and a reverse
-forward on that connection lets the child's rsync reach the daemon. A
+copy. It is read-only, serves only the entries being copied, has no
+network, and takes a password made for that sync. The parent's server
+connects to the child's over SSH, and a reverse forward on that
+connection lets the child's rsync reach the daemon, through a socket
+on the parent's server that only the sync's user can open. A
 stream goes into a file on the child's server through another SSH
 session from the parent's. Data goes from server to server, never
 through your machine.

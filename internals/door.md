@@ -66,7 +66,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - The door rewrites the file compose runs (a build's block, sources pinned or sealed), which `devopsy -- config` does not show, and a server with project users needs more than Docker, devopsy and a few tools: both accepted, against their Principles, for a project user only.
 - Of the image store, only a hold or a built name is a project user's to remove: a plain name may be others', and `image prune` is server-wide, so both do nothing for it.
 - A reflink clone lives in `<space>/clones/<project>`, on the data's filesystem, reached through a link in the project's tree: it holds other uids' files, and the project user reads it and cannot change a part of a path to it (`cloneDirReady`).
-- A sync's rsync daemon listens on the host's loopback with a password of that sync's: a local user reaches it, and a rule by the project users' group keeps them off Docker's networks.
+- A sync's rsync daemon has no network, and the door takes only `exec -i` of `DaemonServe` on a container it made: the push relays to it from a socket of its user's, never a port on the host's loopback.
 - The door sets its own umask: a caller's comes through sudo.
 - A rendered file goes to compose as an unlinked file (`unlinkedFile`), so nothing of a project's environment stays on disk.
 - What the door refuses goes to `<space>/refused.log`, a vet's refusal too: a real release asks for nothing refused, and `image prune`, the admin's, does nothing here.
