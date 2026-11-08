@@ -257,6 +257,17 @@ then no project user logs in, and `--project-users` says so. It refuses
 while the deploy user or root is in `devopsy-projects`, which would have
 sshd ignore their own keys.
 
+A project user's own traffic on the host is kept off containers and
+the cloud's metadata service by a firewall rule by its group, which the
+server keeps across reboots. `--server-info` checks it, and the door's
+space and a reboot sshd waits for, and prints what is missing:
+
+```sh
+iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -o docker0 -j REJECT
+iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -o br-+ -j REJECT
+iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -d 169.254.169.254/32 -j REJECT
+```
+
 A project's name may not extend another's on the server, or be
 extended by one (`shop` and `shop-admin`): compose names are flat, so
 `shop`'s environment `admin-prod` is `shop-admin`'s `prod`.

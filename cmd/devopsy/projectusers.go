@@ -178,6 +178,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	}
 	report.Info("project user "+who+" for "+project+", its entry in "+entry,
 		"its keys: devopsy @<deploy user>@<server>: --ssh-keys --for "+project+" add <public key file>")
+	if missing, err := doorFirewallMissing(); err == nil && len(missing) > 0 {
+		report.Warn("project users reach what the door's firewall rule keeps them off: "+strings.Join(missing, ", "),
+			"devopsy @<server> --server-info says how to add it")
+	}
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"devopsy-server's DEVOPSY_AUTO_REBOOT_TIME takes it, as a kernel update (/run/reboot-required)")

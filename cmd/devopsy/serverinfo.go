@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -47,6 +49,45 @@ var serverTools = []struct{ name, without string }{
 	{"tail", "only the traps protect a release after its switch (a tail that answers --version)"},
 }
 
+// doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
+// waits for a reboot to take it, and its firewall rule, read as root through the util image.
+func doorFacts() *remote.DoorFacts {
+	d, err := remote.ServerDoor()
+	if err != nil || d == nil || d.Space == "" {
+		return nil
+	}
+	f := &remote.DoorFacts{Space: d.Space, Users: len(d.Users)}
+	if err := spaceGuarded(d.Space); err != nil {
+		f.Unguarded = err.Error()
+	}
+	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
+		f.Reboot = true
+	}
+	f.FirewallMissing, err = doorFirewallMissing()
+	if err != nil {
+		f.FirewallError = err.Error()
+	}
+	return f
+}
+
+// doorFirewallMissing is what of the firewall rule by the project users' group the host's
+// iptables lacks, read as root with the host's network: the deploy user cannot read it.
+func doorFirewallMissing() ([]string, error) {
+	g, err := user.LookupGroup(remote.DoorGroup)
+	if err != nil {
+		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
+	}
+	if err := ensureUtilImage(context.Background()); err != nil {
+		return nil, err
+	}
+	out, err := exec.Command("docker", "run", "--rm", "--network", "host", "--cap-add", "NET_ADMIN", "-v", "/:/host:ro", remote.UtilImage,
+		"chroot", "/host", "iptables", "-S", "OUTPUT").Output()
+	if err != nil {
+		return nil, fmt.Errorf("iptables -S OUTPUT: %v", err)
+	}
+	return remote.DoorFirewallMissing(string(out), g.Gid), nil
+}
+
 // runServerFacts implements the hidden --server-facts on a server: its
 // facts as one JSON document on stdout (remote.ServerInfo).
 func runServerFacts() int {
@@ -81,6 +122,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	info.Docker = dockerFacts()
+	info.Door = doorFacts()
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -712,6 +754,29 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			}
 		}
 		warn(msg, fixes...)
+	}
+
+	if dr := info.Door; dr != nil {
+		row("door", fmt.Sprintf("%s, %d project users", dr.Space, dr.Users))
+		if dr.Unguarded != "" {
+			warn(dr.Unguarded+": the door refuses every request",
+				report.Fix("mount it so, for example with this line in /etc/fstab:", dr.Space+" "+dr.Space+" none bind,nosuid,nodev 0 0"))
+		}
+		if dr.Reboot {
+			warn("sshd takes the door at the next reboot: until then no project user logs in",
+				report.Fix("reboot it at a quiet time: its containers come back with Docker"))
+		}
+		switch {
+		case dr.FirewallError != "":
+			note("the door's firewall rule could not be read: " + dr.FirewallError)
+		case len(dr.FirewallMissing) > 0:
+			var lines []string
+			for _, part := range dr.FirewallMissing {
+				lines = append(lines, "iptables -I OUTPUT -m owner --gid-owner "+remote.DoorGroup+" --suppl-groups "+part+" -j REJECT")
+			}
+			warn("project users reach what the door's firewall rule keeps them off: "+strings.Join(dr.FirewallMissing, ", "),
+				report.Fix("as root, kept across reboots by the server's firewall setup:", lines...))
+		}
 	}
 
 	// Docker.

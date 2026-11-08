@@ -109,7 +109,7 @@ func doorUserOn(t *testing.T, alias, project string) string {
 	}
 	entry := "/home/devopsy/.config/devopsy/door/users/" + user + ".yaml"
 	if out, code := execIn(t, []string{"-w", "/", name}, `set -e
-if [ -e /run/devopsy-door-reboot ]; then kill -HUP "$(cat /run/sshd.pid)"; rm -f /run/devopsy-door-reboot; fi
+if [ -e /run/devopsy-door-reboot ]; then kill -HUP "$(cat /run/sshd.pid)"; rm -f /run/devopsy-door-reboot /run/reboot-required /run/reboot-required.pkgs; fi
 grep -q joinable `+entry+` || echo 'joinable: [shared]' >>`+entry); code != 0 {
 		t.Fatalf("the reboot and the entry on %s (%d): %s", alias, code, out)
 	}
@@ -805,6 +805,11 @@ volumes:
 	}
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --ssh-keys --for doorpair add /tmp/planted.pub 2>&1 && "+login); code != 0 {
 		t.Errorf("the control: the same key, the deploy user's to give (%d): %s", code, out)
+	}
+	// --server-info reads the door's host as root: its users, and the firewall rule this server
+	// lacks, with the lines that add it (a warning, so it exits 3).
+	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !strings.Contains(out, "door         "+doorSpace+", 1 project users") || !strings.Contains(out, "keeps them off: -o docker0, -o br-+, -d 169.254.169.254/32") {
+		t.Errorf("--server-info on a door server:\n%s", out)
 	}
 	// add refuses a name sharing compose names with a project there, and refuses while the
 	// deploy user is in the project users' group, which has sshd ignore its own keys: once sshd
