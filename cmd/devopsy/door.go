@@ -681,10 +681,16 @@ func (s *doorSide) login(registry, user string) int {
 		return doorRefused(err)
 	}
 	defer os.RemoveAll(config)
+	// In a pipe filled before it starts, never written after: a docker login that ended
+	// first would raise SIGPIPE.
+	in, err := filledPipe(string(bytes.TrimSuffix(password, []byte("\n"))))
+	if err != nil {
+		return doorRefused(err)
+	}
+	defer in.Close()
 	var out bytes.Buffer
 	c := s.docker("--config", config, "login", "--username", user, "--password-stdin", registry)
-	c.Stdin = bytes.NewReader(bytes.TrimSuffix(password, []byte("\n")))
-	c.Stdout, c.Stderr = &out, &out
+	c.Stdin, c.Stdout, c.Stderr = in, &out, &out
 	if err := c.Run(); err != nil {
 		report.Error("docker login "+registry+" failed", strings.Split(strings.TrimSpace(out.String()), "\n")...)
 		return 1

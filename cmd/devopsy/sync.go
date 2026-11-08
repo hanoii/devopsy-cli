@@ -2411,9 +2411,12 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		c := daemonServe(ctx, id)
-		c.Stdin = strings.NewReader("@RSYNCD: 31.0\n\n")
+		c, err := daemonListing(ctx, id)
+		if err != nil {
+			return err
+		}
 		out, _ := c.Output()
+		c.Stdin.(*os.File).Close()
 		if ready = bytes.Contains(out, []byte("@RSYNCD: EXIT")); !ready {
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -2477,6 +2480,19 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 // daemonServe is a sync's daemon serving one connection on the command's stdin and stdout.
 func daemonServe(ctx context.Context, id string) *exec.Cmd {
 	return exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", id}, door.DaemonServe...)...)
+}
+
+// daemonListing asks a sync's daemon for its modules, which proves its settings there. Its
+// request sits in a pipe filled before it starts: written by devopsy after, to a docker exec
+// that ended first, it would raise SIGPIPE, which the push takes for its session's end.
+func daemonListing(ctx context.Context, id string) (*exec.Cmd, error) {
+	in, err := filledPipe("@RSYNCD: 31.0\n\n")
+	if err != nil {
+		return nil, err
+	}
+	c := daemonServe(ctx, id)
+	c.Stdin = in
+	return c, nil
 }
 
 // relayDaemon serves the push's socket, each connection by daemonServe on the socket itself:

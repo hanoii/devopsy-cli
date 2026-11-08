@@ -5020,3 +5020,23 @@ func TestRollbackRefusedBeforeSteps(t *testing.T) {
 		t.Errorf("the rollback accepted (%d), current %q (want %q), marker %v:\n%s", code, s.current("prod"), first, fileExists(marker), out)
 	}
 }
+
+// A sync's daemon is asked for its modules through a pipe filled before docker exec starts:
+// written by devopsy after it, to one that ended first, the write raised SIGPIPE, which the
+// push takes for its session's end, and cut syncs at random under load.
+func TestDaemonListingFilledFirst(t *testing.T) {
+	t.Parallel()
+	c, err := daemonListing(t.Context(), "cid123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := c.Stdin.(*os.File)
+	if !ok {
+		t.Fatalf("its stdin is %T, written by devopsy after the start", c.Stdin)
+	}
+	defer f.Close()
+	b := make([]byte, 64)
+	if n, _ := f.Read(b); string(b[:n]) != "@RSYNCD: 31.0\n\n" {
+		t.Errorf("its request: %q", b[:n])
+	}
+}
