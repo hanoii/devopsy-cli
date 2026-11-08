@@ -10,6 +10,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A project user's entry is a file of its own, `door/users/<user>.yaml` beside the deploy user's config (`DoorDir`), merged into `door: users:`, and a user in both refuses: devopsy-server rewrites the config it marked at each run, and a round trip through YAML loses the admin's comments.
 - Who asks comes from `SUDO_USER`, and every word of the request is treated as hostile.
 - A project user's keys are the deploy user's to edit, in `DoorDir`'s `keys/<user>` (`--ssh-keys --for`), and sshd reads them only through `--authorized-keys`, dispatched before anything else, printing only lines that parse: a key a project user puts in its own home is never read, or a leaked key would add a second one that outlives rotation.
+- A project user's sync keys (`DoorSyncKeysFile`) are the door's to write (`--door sync-key`, from `--sync-key` as that user), each line the door's own (`remote.SyncKeyLine`), for an environment in that user's tree, and `--authorized-keys` prints them after its keys; a leaked key could add one that does that user's syncs' requests until its sync ends or it expires, so removing any of the user's keys, or the user, drops them all (internals/syncs.md).
 - Who the socket lets in has no door (`runDocker`): the deploy user, and a project an admin put in the docker group.
 - `--door` and `--door-read` are dispatched first in `run`, before anything loads a project or reads the environment.
 - The deploy user never reads a project's tree: what it needs comes from `--door-read`, run as that project's user, so no link or swap there can show it anything of the deploy user's.
@@ -49,7 +50,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - `add` refuses while a container the door did not make is under the project's names, and a tree that is there and not the project user's (`doorTreeCheck`), before it makes anything: either would hand that user what another made.
 - `add` refuses a project name that extends another's on the server, or another extends (`projectNameClash`, over the door's users and the release root): compose names are flat, so whichever came first would hold the other's networks, volumes and containers.
 - What `add` writes in a project user's home is written as that user (`runuser`), and only when the user is new: root writing in a home its user owns follows the links that user put there.
-- `remove` drops a project user's entry and keys, never its Unix user: deleting a user that holds a tree and data is not one subcommand's.
+- `remove` drops a project user's entry, keys and sync keys, never its Unix user: deleting a user that holds a tree and data is not one subcommand's.
 - `read_all` is an admin's grant of reads of everything, secrets included, and nothing else.
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).
 - A root container holds no path a project user can change: input is copied in and output collected by that user's rights, and a restore streams through a container with no mounts.
