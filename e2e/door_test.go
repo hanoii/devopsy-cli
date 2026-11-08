@@ -590,11 +590,21 @@ docker image rm localhost:5000/private/app:1 >/dev/null
 	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 {
 		t.Errorf("with no login, a private image ran:\n%s", out)
 	}
-	// The project's login, as docker login writes it: its own docker login reaches no
-	// registry on its server, which the project users' firewall keeps it off.
+	// The project user's docker login, through the door: its own would reach no registry on
+	// its server, which the project users' firewall keeps it off. Never a password on the
+	// command line, and a wrong one is no login.
 	user := "devopsy-doorreg"
-	if out, code := doorAs(t, user, `mkdir -p ~/.docker && printf '{"auths":{"localhost:5000":{"auth":"%s"}}}' "$(printf alice:s3cret | base64)" >~/.docker/config.json`); code != 0 {
-		t.Fatalf("the project's login (%d): %s", code, out)
+	if out, code := doorAs(t, user, "docker login -u alice -p s3cret localhost:5000 2>&1"); code == 0 || !strings.Contains(out, "shows to every user of the server") {
+		t.Errorf("a password on the command line (%d): %s", code, out)
+	}
+	if out, code := doorAs(t, user, "printf wrong | docker login -u alice --password-stdin localhost:5000 2>&1"); code == 0 || !strings.Contains(out, "docker login localhost:5000 failed") {
+		t.Errorf("a wrong password (%d): %s", code, out)
+	}
+	if out, _ := doorAs(t, user, "cat ~/.docker/config.json 2>/dev/null"); strings.Contains(out, "localhost:5000") {
+		t.Errorf("a wrong password kept: %s", out)
+	}
+	if out, code := doorAs(t, user, "printf s3cret | docker login -u alice --password-stdin localhost:5000 2>&1"); code != 0 || !strings.Contains(out, "Login Succeeded") {
+		t.Fatalf("a login with no socket (%d): %s", code, out)
 	}
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("logged in, a private image (%d):\n%s", code, out)

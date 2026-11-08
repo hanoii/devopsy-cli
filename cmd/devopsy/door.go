@@ -652,8 +652,44 @@ func runDoor(args []string) int {
 		}
 	case "sync-key":
 		return side.syncKey(args[1:])
+	case "login":
+		if len(args) == 3 {
+			return side.login(args[1], args[2])
+		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
+}
+
+// login has Docker check a project user's registry login, its password on stdin (doorLogin):
+// the deploy user's docker login asks the daemon, which reaches the registry as its pulls
+// do, where the project users' firewall keeps the project user off. Its config is a
+// directory of its own, gone after, so nothing of the login stays here.
+func (s *doorSide) login(registry, user string) int {
+	if !door.LoginRegistry(registry) || !door.LoginUser(user) {
+		return doorRefused(fmt.Errorf("refused: a login to %q as %q", registry, user))
+	}
+	password, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<16))
+	if err != nil {
+		return doorRefused(err)
+	}
+	root := filepath.Join(s.policy.Space, "work")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return doorRefused(err)
+	}
+	config, err := os.MkdirTemp(root, s.policy.Project+"-login-")
+	if err != nil {
+		return doorRefused(err)
+	}
+	defer os.RemoveAll(config)
+	var out bytes.Buffer
+	c := s.docker("--config", config, "login", "--username", user, "--password-stdin", registry)
+	c.Stdin = bytes.NewReader(bytes.TrimSuffix(password, []byte("\n")))
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Run(); err != nil {
+		report.Error("docker login "+registry+" failed", strings.Split(strings.TrimSpace(out.String()), "\n")...)
+		return 1
+	}
+	return 0
 }
 
 // syncKey is --sync-key for the caller: its sync keys (remote.DoorSyncKeysFile), never its

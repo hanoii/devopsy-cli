@@ -109,9 +109,11 @@ func runDocker(args []string) int {
 		return doorExec(real, args)
 	}
 	switch args[0] {
-	// No daemon behind these: how devopsy learns compose's words, and a project's login.
-	case "__complete", "login", "logout", "--version", "--help":
+	// No daemon behind these: how devopsy learns compose's words, and a project's logout.
+	case "__complete", "logout", "--version", "--help":
 		return doorExec(real, args)
+	case "login":
+		return doorLogin(args[1:])
 	case "compose":
 		return dockerCompose(real, args[1:])
 	}

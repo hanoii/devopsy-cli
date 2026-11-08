@@ -73,7 +73,7 @@ func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 
 // doorVerbs are Docker's commands the door answers, or says why it has no need to.
 var doorVerbs = map[string]string{
-	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
+	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
 	"buildx": "--context-hash, local", "info": "--server-info, the admin's", "system": "--server-info, the admin's",
 	"builder": "a hint to the admin", "not": "a message",

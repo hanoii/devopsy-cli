@@ -315,10 +315,12 @@ project runs it, inspects it or tags it, even when another project has
 it on the server already. The project cannot use a private image
 another project pulled with its login, and a public one costs it one
 pull. The door records what each project pulled this way, so later
-starts ask the registry nothing. A `docker login` by the project user
-cannot reach a registry that runs on the same server, since the
-firewall keeps it off the server's addresses and containers: add that
-registry's `auths` entry to its `~/.docker/config.json` by hand.
+starts ask the registry nothing. The project user's `docker login`
+goes through the door: Docker checks it, reaching the registry as for
+a pull, so a registry on the same server takes it, and the project
+user's own devopsy keeps it in its `~/.docker/config.json`. The
+password comes on stdin (`--password-stdin`) or at a prompt, never on
+the command line.
 
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
 A child on another server needs its own project user there

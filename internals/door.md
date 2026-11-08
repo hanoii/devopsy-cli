@@ -61,6 +61,9 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).
 - A root container holds no path a project user can change: input is copied in and output collected by that user's rights, and a restore streams through a container with no mounts.
 - A project's registry login reaches compose as its `auth` values alone, in the door's own directory: Docker's CLI loads plugins and helpers from a `DOCKER_CONFIG`, which would run the project's program as the deploy user.
+- A project user's `docker login` goes through the door (`doorLogin`, `doorSide.login`): the deploy user's `docker login` asks the daemon to check it, with a config directory of its own, gone after, since the project user's own client reaches no registry on its server under the firewall; then the project user's devopsy writes `auths` itself, as user and password (never an identity token, which the door's pulls do not read), under the key a pull looks up (`loginKey`, `door.HubLogin` for Docker Hub).
+- A login's password never comes on a command line (`-p` refused): it comes on stdin or at a prompt (`readSecret`, the terminal put back on an interrupt), and on stdin to the door.
+- A login's registry and user reach `docker login` only as values (`door.LoginRegistry`, `door.LoginUser`): a host and port, or Docker Hub's key, and one word.
 - A rendered file holds only `$$`: compose interpolates what it reads, after these checks, so a `$` not doubled refuses it (`variableIn`).
 - A util container's mounts sit only where devopsy's own commands look (`mountTarget`), and its sources hold nothing of `--mount`'s or `-v`'s syntax (`mountSource`).
 - `<space>/mnt/<name>` and `clones/<project>` are closed to every other user, and `sealed/<project>` to all but the deploy user, whatever modes a container gives its files.
