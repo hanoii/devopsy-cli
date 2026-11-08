@@ -1,7 +1,5 @@
 package remote
 
-
-
 // ServerFactsFlag is the hidden flag behind --server-info: run by its
 // session on the server, it prints the server's facts as one JSON
 // document (ServerInfo), which the operator's devopsy formats and judges.

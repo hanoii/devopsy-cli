@@ -73,4 +73,3 @@ func TestDoorTreeCheck(t *testing.T) {
 		}
 	}
 }
-
