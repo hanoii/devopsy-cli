@@ -293,8 +293,8 @@ func serverInfoSays(info remote.ServerInfo, host, ref, local string, now time.Ti
 	newEntryTable(&b, style{}, es).print(es)
 	var ws []said
 	for _, e := range es {
-		if e.Level == remote.StatusWarning || len(e.Fixes) > 0 {
-			ws = append(ws, said{strings.Join(e.Lines, "\n"), e.Fixes, e.Level != remote.StatusWarning})
+		if e.Level == remote.StatusWarning || len(e.Remedies) > 0 {
+			ws = append(ws, said{strings.Join(e.Lines, "\n"), e.Remedies, e.Level != remote.StatusWarning})
 		}
 	}
 	return b.String(), ws
@@ -412,7 +412,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	var fixes []string
 	for _, e := range r.Entries {
 		if e.Level == remote.StatusWarning && e.Key == "environments" {
-			for _, f := range e.Fixes {
+			for _, f := range e.Remedies {
 				fixes = append(fixes, f.Cmds...)
 			}
 		}

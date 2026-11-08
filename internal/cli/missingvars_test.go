@@ -27,7 +27,7 @@ func TestMissingVarsFix(t *testing.T) {
 		t.Errorf("details: %q", failure.Details)
 	}
 	want := report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @vm1:own/prod --vars set <KEY>...")
-	if len(failure.Fixes) != 1 || failure.Fixes[0].Text != want.Text || len(failure.Fixes[0].Cmds) != 1 || failure.Fixes[0].Cmds[0] != want.Cmds[0] {
-		t.Errorf("fixes: %+v\nwant: %+v", failure.Fixes, want)
+	if len(failure.Remedies) != 1 || failure.Remedies[0].Text != want.Text || len(failure.Remedies[0].Cmds) != 1 || failure.Remedies[0].Cmds[0] != want.Cmds[0] {
+		t.Errorf("fixes: %+v\nwant: %+v", failure.Remedies, want)
 	}
 }

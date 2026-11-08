@@ -393,7 +393,7 @@ func TestImportSessionLostWhileRunning(t *testing.T) {
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait, "FAKE_SSH_LOST_RUNNING=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	_ = s.wait(cmd, errs, "a session lost during the load")
-	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "the import was under way there") || !strings.Contains(errs.String(), "--status shows how it ends") {
+	if code := cmd.ProcessState.ExitCode(); code == 0 || !strings.Contains(errs.String(), "the import was under way there") || !strings.Contains(errs.String(), "see how it ends:\ndevopsy: | $ devopsy @devopsy@one:prod --status") {
 		t.Errorf("a session lost during the load (%d):\n%s", code, errs)
 	}
 	write(t, wait+".go", "", 0o644)

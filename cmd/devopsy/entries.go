@@ -46,9 +46,9 @@ func copyableEntries(es []remote.StatusEntry) []remote.StatusEntry {
 		for j := range e.Lines {
 			e.Lines[j] = report.Copyable(e.Lines[j])
 		}
-		e.Fixes = slices.Clone(e.Fixes)
-		for j := range e.Fixes {
-			f := &e.Fixes[j]
+		e.Remedies = slices.Clone(e.Remedies)
+		for j := range e.Remedies {
+			f := &e.Remedies[j]
 			f.Text = report.Copyable(f.Text)
 			f.Cmds = slices.Clone(f.Cmds)
 			for k := range f.Cmds {
@@ -112,12 +112,15 @@ func (t entryTable) print(es []remote.StatusEntry) {
 			}
 			fmt.Fprintln(t.w, paint(report.Copyable(t.row(key, l))))
 		}
-		for _, r := range report.RemedyLines(e.Fixes) {
+		for _, r := range report.RemedyLines(e.Remedies) {
 			for _, l := range strings.Split(r, "\n") {
+				// Quoted before it is painted: the quotes are the
+				// command's, inside its bold.
+				l = report.Copyable(l)
 				if lead, cmd, ok := report.SplitCmd(l); ok {
-					fmt.Fprintln(t.w, report.Copyable(t.row("", lead+t.st.head(cmd))))
+					fmt.Fprintln(t.w, t.row("", lead+t.st.head(cmd)))
 				} else {
-					fmt.Fprintln(t.w, paint(report.Copyable(t.row("", l))))
+					fmt.Fprintln(t.w, paint(t.row("", l)))
 				}
 			}
 		}

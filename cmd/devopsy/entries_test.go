@@ -10,17 +10,12 @@ import (
 
 // A remedy's command in the status table copies as shown with an
 // address in brackets quoted (report.Copyable), the whole command bold:
-// the quote belongs inside the bold, so the command reads as one.
-//
-// Review (refactor/fixes): entryTable.print quotes after painting
-// (report.Copyable(t.row("", lead+t.st.head(cmd)))), so an address that
-// ends the command gets its closing quote after the reset escape,
-// outside the bold: "@'[2001:db8::1]:prod\033[0m'". Before the branch
-// the row was quoted first, then painted.
+// the quote belongs inside the bold, so the command reads as one, never
+// a closing quote after the reset escape.
 func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	t.Parallel()
 	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "sync", Lines: []string{"none"},
-		Fixes: []report.Remedy{report.Hint("from its parent:", "devopsy @dev --sync --from @[2001:db8::1]:prod")}}}
+		Remedies: []report.Remedy{report.Hint("from its parent:", "devopsy @dev --sync --from @[2001:db8::1]:prod")}}}
 	var b bytes.Buffer
 	newEntryTable(&b, style{on: true}, es).print(es)
 	want := "sync  none\n" +

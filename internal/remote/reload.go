@@ -60,11 +60,11 @@ trap '' INT TERM HUP PIPE
 out="$rel/` + ServerLogFile + `"
 ` + followOutput + `mv -f "$rl_pending" "$rel/` + TargetEnvFile + `"
 unset ` + TargetPendingEnv + `
-` + call("--mnt-owners") + ` || { devopsy --say error "giving the entries of mnt to their owners failed: the reload step does not run" "devopsy @` + HintAddress(t) + ` --log shows it"; exit 1; }
+` + call("--mnt-owners") + ` || { devopsy --say error "giving the entries of mnt to their owners failed: the reload step does not run" ` + sayRemedies(LogHint(HintAddress(t))) + `; exit 1; }
 rs=0
 with_tty ` + Quote(call("--release-steps", "reload", "run")) + ` || rs=$?
 img ran "$base" "$rel" || true
-[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" ` + sayRemedies(report.Hint("", "devopsy @"+HintAddress(t)+" --log")) + ` || true
+[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" ` + sayRemedies(LogHint(HintAddress(t))) + ` || true
 exit "$rs"
 `
 }

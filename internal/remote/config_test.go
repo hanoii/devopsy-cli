@@ -120,7 +120,7 @@ func TestServerAndInstanceVariables(t *testing.T) {
 		env["DEVOPSY_SERVER"] = server
 		_, err := LoadTarget(dir, "b/prod", projectEnv)
 		var f *report.Failure
-		if !errors.As(err, &f) || f.Msg != fmt.Sprintf("server %q: not [user@]host[:port]", server) || !strings.Contains(fmt.Sprint(f.Fixes), "~/.ssh/config") {
+		if !errors.As(err, &f) || f.Msg != fmt.Sprintf("server %q: not [user@]host[:port]", server) || !strings.Contains(fmt.Sprint(f.Remedies), "~/.ssh/config") {
 			t.Errorf("%s: %v", server, err)
 		}
 	}
@@ -665,7 +665,7 @@ environments:
 	}
 	// The parent's server is never the child's: without a variable it
 	// has none, which only a sync minds.
-	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "dev's parent, prod, has no server" || len(report.Details(tg.ParentErr)) != 1 || len(report.Fixes(tg.ParentErr)) != 1 || !strings.Contains(report.Fixes(tg.ParentErr)[0].Text, "DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER") || tg.From["parent"] != filepath.Join(dir, ConfigFile) {
+	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "dev's parent, prod, has no server" || len(report.Details(tg.ParentErr)) != 1 || len(report.Remedies(tg.ParentErr)) != 1 || !strings.Contains(report.Remedies(tg.ParentErr)[0].Text, "DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER") || tg.From["parent"] != filepath.Join(dir, ConfigFile) {
 		t.Fatalf("dev: %+v %v", tg, tg.ParentErr)
 	}
 	t.Setenv("DEVOPSY_SERVER", "vm1")
@@ -706,7 +706,7 @@ environments:
 	// A parent that cannot be resolved is no error for the child, until
 	// something syncs.
 	t.Setenv("DEVOPSY_SERVER_PROD", "bad:host")
-	if tg := load("vm1:dev"); tg.ParentTarget != nil || tg.ParentErr == nil || !strings.HasPrefix(tg.ParentErr.Error(), "environment dev: parent prod: server \"bad:host\"") || !strings.Contains(fmt.Sprint(report.Fixes(tg.ParentErr)), "~/.ssh/config") {
+	if tg := load("vm1:dev"); tg.ParentTarget != nil || tg.ParentErr == nil || !strings.HasPrefix(tg.ParentErr.Error(), "environment dev: parent prod: server \"bad:host\"") || !strings.Contains(fmt.Sprint(report.Remedies(tg.ParentErr)), "~/.ssh/config") {
 		// Wrapped, its fixes with it.
 		t.Errorf("unresolved parent: %+v %v", tg.ParentTarget, tg.ParentErr)
 	}

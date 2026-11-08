@@ -103,9 +103,9 @@ func ServerError(server string) error {
 		return nil
 	}
 	return &report.Failure{
-		Msg:     fmt.Sprintf("server %q: not [user@]host[:port]", server),
-		Details: []string{"an IPv6 address goes alone (2001:db8::1), or in brackets with a port ([2001:db8::1]:22)"},
-		Fixes:   []report.Remedy{report.Fix("the server as [user@]host[:port], or a Host of ~/.ssh/config")},
+		Msg:      fmt.Sprintf("server %q: not [user@]host[:port]", server),
+		Details:  []string{"an IPv6 address goes alone (2001:db8::1), or in brackets with a port ([2001:db8::1]:22)"},
+		Remedies: []report.Remedy{report.Fix("the server as [user@]host[:port], or a Host of ~/.ssh/config")},
 	}
 }
 
@@ -123,9 +123,9 @@ func PortError(server string) error {
 		return nil
 	}
 	return &report.Failure{
-		Msg:     fmt.Sprintf("server %q names port %s, and ssh would connect to %s", server, port, eff["port"]),
-		Details: []string{"DEVOPSY_SSH_COMMAND's options come first, and ssh keeps the first value of each: a -p there applies to every server a command reaches"},
-		Fixes:   []report.Remedy{report.Fix("take the port out of DEVOPSY_SSH_COMMAND, or out of the server")},
+		Msg:      fmt.Sprintf("server %q names port %s, and ssh would connect to %s", server, port, eff["port"]),
+		Details:  []string{"DEVOPSY_SSH_COMMAND's options come first, and ssh keeps the first value of each: a -p there applies to every server a command reaches"},
+		Remedies: []report.Remedy{report.Fix("take the port out of DEVOPSY_SSH_COMMAND, or out of the server")},
 	}
 }
 

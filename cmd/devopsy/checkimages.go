@@ -135,9 +135,9 @@ func runCheckImages(cwd string, args []string) int {
 		fixes = []report.Remedy{report.Fix("the mark refuses a release: restore it with its code and images, which fetches them:", "devopsy @"+addr+" --snapshots restore "+snapshot)}
 	}
 	report.Fail(&report.Failure{
-		Msg:     "the variables now need another image than the release fetched, and only a release fetches one",
-		Details: needs,
-		Fixes:   fixes,
+		Msg:      "the variables now need another image than the release fetched, and only a release fetches one",
+		Details:  needs,
+		Remedies: fixes,
 	})
 	return checkImagesExit
 }

@@ -80,9 +80,9 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 				service = running[0]
 			} else {
 				return nil, &ExitError{Code: 1, Err: &report.Failure{
-					Msg:     "--shell: which service?",
-					Details: []string{"services: " + strings.Join(services, ", ")},
-					Fixes:   []report.Remedy{report.Fix("name it:", "devopsy --shell <service>"), report.Fix("label it " + ShellLabel + "=true in compose.yaml")},
+					Msg:      "--shell: which service?",
+					Details:  []string{"services: " + strings.Join(services, ", ")},
+					Remedies: []report.Remedy{report.Fix("name it:", "devopsy --shell <service>"), report.Fix("label it " + ShellLabel + "=true in compose.yaml")},
 				}}
 			}
 		}

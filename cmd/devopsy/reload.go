@@ -21,14 +21,14 @@ var reloadingIn = regexp.MustCompile(regexp.QuoteMeta(report.Prefix+remote.Reloa
 // reloadWords are what liveSession says of a reload: past its checks it
 // goes on.
 func reloadWords(t *remote.Target) liveWords {
-	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
+	logs := seeHint(targetRef(t), "how it ends", "--log")
 	return liveWords{
 		goesOn:     goesOnSays(t, "reload", "past its checks", logs),
-		cancelling: []string{"interrupted: cancelling the reload on @" + t.Address},
-		slow:       []string{"the server is cancelling it, first waiting for the release lock if another holds it", leavesNow},
-		lostAfter:  []string{lostSays(t, "after the reload's checks", "the reload was under way there"), logs},
-		lostBefore: []string{lostSays(t, "before the reload's checks passed", "nothing changed there"), "devopsy @" + targetRef(t) + " --status shows it"},
-		hadGone:    []string{"it was past its checks already, and went on", logs},
+		cancelling: says("interrupted: cancelling the reload on @" + t.Address),
+		slow:       utterance{msg: "the server is cancelling it, first waiting for the release lock if another holds it", details: []string{leavesNow}},
+		lostAfter:  says(lostSays(t, "after the reload's checks", "the reload was under way there"), logs),
+		lostBefore: says(lostSays(t, "before the reload's checks passed", "nothing changed there"), seeHint(targetRef(t), "its state", "--status")),
+		hadGone:    says("it was past its checks already, and went on", logs),
 	}
 }
 

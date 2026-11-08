@@ -116,7 +116,7 @@ trap - INT TERM HUP
 : >"$base/` + SnapshotHoldingFile + `"
 `
 	s := "set -eu\n" + basePrelude(t) + "exec 1>&2\n" + NoExit255
-	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release')"; exit 1; }
+	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "") + `; exit 1; }
 `
 	s += watchSession(false)
 	s += "export " + snapshotEnv(t, keep) + `
@@ -361,7 +361,7 @@ exec tar -C "$snaps" -cf - ` + Quote(id) + `
 // its tars (--snapshot-step imported), renamed into place. It needs a
 // current release, as a restore does: on a new server, release first.
 func SnapshotImportScript(t *Target, projectName string) string {
-	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release'), then import the snapshot and restore it (--with-env brings its shared/.env back)"; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "release it first, then import the snapshot and restore it (--with-env brings its shared/.env back):") + `; exit 1; }
 umask 077
 mkdir -p "$snaps"
 ` + snapshotLock(false) + lockedGate(false, "") + `tmp="$snaps/.import.$$"

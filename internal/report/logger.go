@@ -108,10 +108,10 @@ func (l *Logger) Error(msg string, details ...string) { l.Say(ErrorLevel, msg, d
 // Fail says why the command fails, from err: its message, then the
 // details and fixes a Failure in its chain carries, then more fixes.
 func (l *Logger) Fail(err error, more ...Remedy) {
-	fixes := Fixes(err)
+	fixes := Remedies(err)
 	l.Say(ErrorLevel, err.Error(), Details(err), append(fixes[:len(fixes):len(fixes)], more...)...)
 	for _, f := range Also(err) {
-		l.Say(ErrorLevel, f.Msg, f.Details, f.Fixes...)
+		l.Say(ErrorLevel, f.Msg, f.Details, f.Remedies...)
 	}
 }
 

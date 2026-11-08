@@ -105,9 +105,10 @@ func Fix(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: c
 func Hint(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds, Hint: true} }
 
 // RemedyLines lays out rs, without a bar (a string of several lines
-// stays one), an empty one skipped: each hint's text then its commands, in order; then the
-// fixes, one under "to fix it:", more under "to fix it, do one of
-// these:", each numbered, a text of several lines under its number.
+// stays one), an empty one skipped: each hint's text then its commands,
+// in order; then the fixes, one under "to fix it:", more under "to fix
+// it, do one of these:", each numbered, a text of several lines under
+// its number.
 func RemedyLines(rs []Remedy) []string {
 	var out []string
 	var fixes []Remedy
@@ -211,16 +212,17 @@ func bracketsIPv6(w string) bool {
 	return ok && closed && err == nil && a.Is6()
 }
 
-// Failure is an error with details (why it happens) and fixes (what to
-// do about it). Error() is the message alone, so wrapping keeps the usual
-// "context: message" shape; Fail prints the rest under it. Also are
-// failures of the same kind found with it (each data service without a
-// label), which Fail says after it, each with its own message, in order.
+// Failure is an error with details (why it happens) and remedies (what
+// to do about it: fixes and hints). Error() is the message alone, so
+// wrapping keeps the usual "context: message" shape; Fail prints the
+// rest under it. Also are failures of the same kind found with it (each
+// data service without a label), which Fail says after it, each with its
+// own message, in order.
 type Failure struct {
-	Msg     string
-	Details []string
-	Fixes   []Remedy
-	Also    []*Failure
+	Msg      string
+	Details  []string
+	Remedies []Remedy
+	Also     []*Failure
 }
 
 func (e *Failure) Error() string { return e.Msg }
@@ -259,11 +261,11 @@ func Messages(err error) []string {
 	return ms
 }
 
-// Fixes are err's, when a Failure is in its chain.
-func Fixes(err error) []Remedy {
+// Remedies are err's, when a Failure is in its chain.
+func Remedies(err error) []Remedy {
 	var e *Failure
 	if errors.As(err, &e) {
-		return e.Fixes
+		return e.Remedies
 	}
 	return nil
 }

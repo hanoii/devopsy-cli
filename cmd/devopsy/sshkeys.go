@@ -163,7 +163,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		switch len(matches) {
 		case 0:
-			return fail(words[0] + " matches none of " + t.Host + "'s keys (devopsy @" + targetRef(t) + " --ssh-keys lists them)")
+			return failErr(&report.Failure{Msg: words[0] + " matches none of " + t.Host + "'s keys", Remedies: []report.Remedy{seeHint(targetRef(t), "them", "--ssh-keys")}})
 		case 1:
 		default:
 			return fail(words[0] + " matches several keys: give more of the fingerprint")

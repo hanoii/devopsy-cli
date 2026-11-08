@@ -1519,7 +1519,7 @@ func (r importRun) complete(down func() error) int {
 		}
 	}
 	if err := restoreServices(r.cwd, r.services, restoreOpts{recreate: r.imgs != nil, written: []string{r.name}}); err != nil {
-		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(r.cwd) + " --import " + r.name + " --resolved starts them)")
+		return failErr(&report.Failure{Msg: err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does", Remedies: []report.Remedy{report.Fix("start them:", "devopsy @"+targetAddress(r.cwd)+" "+cli.ImportFlag+" "+r.name+" --resolved")}})
 	}
 	if r.imgs != nil {
 		// What runs on the data now, for whatever reads its history next
@@ -1608,9 +1608,9 @@ func (r importRun) failed(cause error) int {
 		if len(down) > 0 {
 			fixes = append(fixes, report.Fix("start them on the data as it is:", "devopsy start "+strings.Join(down, " ")))
 		}
-		return failErr(&report.Failure{Msg: "the import of " + r.name + " did not complete: its data may be partial, and " + what, Fixes: fixes})
+		return failErr(&report.Failure{Msg: "the import of " + r.name + " did not complete: its data may be partial, and " + what, Remedies: fixes})
 	}
-	report.Error("the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", "devopsy @"+targetAddress(r.cwd)+" --status shows it, and the ways out")
+	report.Say(report.ErrorLevel, "the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", nil, seeHint(targetAddress(r.cwd), "the ways out", "--status"))
 	return 1
 }
 
@@ -1643,7 +1643,7 @@ func runResolved(cwd, name string) int {
 		return fail(err.Error())
 	}
 	if !cli.InRelease(projectDir) {
-		return failErr(&report.Failure{Msg: "--resolved works on a target only: locally nothing records what a failed import kept down", Fixes: []report.Remedy{report.Fix("start what it kept down (the import's error names it):", "devopsy start <service>...")}})
+		return failErr(&report.Failure{Msg: "--resolved works on a target only: locally nothing records what a failed import kept down", Remedies: []report.Remedy{report.Fix("start what it kept down (the import's error names it):", "devopsy start <service>...")}})
 	}
 	base := filepath.Dir(cwd)
 	m := readMark(base)
@@ -1905,7 +1905,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 		return fail(err.Error())
 	}
 	if code == sshLost {
-		report.Error(lostSays(t, "", "the export is incomplete, and "+staysDown), "devopsy @"+targetRef(t)+" --status shows it")
+		report.Say(report.ErrorLevel, lostSays(t, "", "the export is incomplete, and "+staysDown), nil, seeHint(targetRef(t), "its state", "--status"))
 	}
 	return code
 }
@@ -2014,8 +2014,7 @@ wait:
 			first := !interrupted
 			interrupted = true
 			if first && started {
-				w := goesOnSays(t, "import of "+name, "", "devopsy @"+targetRef(t)+" --status shows how it ends")
-				report.Warn(w[0], w[1:]...)
+				goesOnSays(t, "import of "+name, "", seeHint(targetRef(t), "how it ends", "--status")).say(report.Default(), report.WarnLevel)
 			} else if first {
 				report.Error("interrupted: nothing imported into @" + t.Address + ", and what was stopped there comes back")
 				closeIn()
@@ -2042,10 +2041,10 @@ wait:
 	}
 	switch {
 	case wasStarted && ctx.Err() != nil:
-		report.Warn("the session is ended: the import of "+name+" goes on on @"+t.Address, "devopsy @"+targetRef(t)+" --status shows it")
+		report.Say(report.WarnLevel, "the session is ended: the import of "+name+" goes on on @"+t.Address, nil, seeHint(targetRef(t), "how it ends", "--status"))
 		return 130
 	case wasStarted && res.code == sshLost:
-		report.Error(lostSays(t, "during the import", "the import was under way there"), "devopsy @"+targetRef(t)+" --status shows how it ends")
+		report.Say(report.ErrorLevel, lostSays(t, "during the import", "the import was under way there"), nil, seeHint(targetRef(t), "how it ends", "--status"))
 		return sshLost
 	case interrupted && !wasStarted:
 		return 130
@@ -2053,7 +2052,7 @@ wait:
 		// Before the byte the server waits for (ImportMarker), it never
 		// writes: no byte within its quiet time, it restores what it
 		// stopped (killed, the next lock-taker does).
-		report.Error(lostSays(t, "before the import started", "nothing imported there, and "+staysDown), "devopsy @"+targetRef(t)+" --status shows it")
+		report.Say(report.ErrorLevel, lostSays(t, "before the import started", "nothing imported there, and "+staysDown), nil, seeHint(targetRef(t), "its state", "--status"))
 		return sshLost
 	}
 	return res.code
@@ -2093,16 +2092,16 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	}
 	switch {
 	case importing:
-		return fail("an import into @" + t.Address + " still runs: nothing resolved (devopsy @" + targetRef(t) + " --status shows it)")
+		return failErr(&report.Failure{Msg: "an import into @" + t.Address + " still runs: nothing resolved", Remedies: []report.Remedy{seeHint(targetRef(t), "it", "--status")}})
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
 	case mark.IsRestore():
 		fixes := remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "")
-		return failErr(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Fixes: fixes})
+		return failErr(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Remedies: fixes})
 	case !mark.IsImport() || settle:
-		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), remote.ResetFix(targetRef(t))}})
+		return failErr(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Remedies: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), remote.ResetFix(targetRef(t))}})
 	case mark.From != name:
-		return failErr(&report.Failure{Msg: "the import that did not complete on @" + t.Address + " is " + mark.From + "'s, not " + name + "'s: nothing resolved", Fixes: []report.Remedy{report.Fix("resolve that one:", "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+mark.From+" --resolved")}})
+		return failErr(&report.Failure{Msg: "the import that did not complete on @" + t.Address + " is " + mark.From + "'s, not " + name + "'s: nothing resolved", Remedies: []report.Remedy{report.Fix("resolve that one:", "devopsy @"+targetRef(t)+" "+cli.ImportFlag+" "+mark.From+" --resolved")}})
 	}
 	if !yes {
 		// What the record holds is what starts: the imported service only

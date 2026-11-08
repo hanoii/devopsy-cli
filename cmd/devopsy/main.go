@@ -219,7 +219,7 @@ func run() int {
 		if len(names) > 0 {
 			details = append(details, "targets: "+strings.Join(names, ", "))
 		}
-		return failErr(&report.Failure{Msg: args[0] + " needs a target", Details: details, Fixes: []report.Remedy{report.Fix("", "devopsy @<target> "+args[0])}})
+		return failErr(&report.Failure{Msg: args[0] + " needs a target", Details: details, Remedies: []report.Remedy{report.Fix("", "devopsy @<target> "+args[0])}})
 	}
 
 	plan, err := cli.Build(cwd, args, os.Environ())

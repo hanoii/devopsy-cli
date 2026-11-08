@@ -256,6 +256,21 @@ func sayRemedies(rs ...report.Remedy) string {
 	return strings.Join(words, " ")
 }
 
+// LogHint is the command that shows why what failed on ref failed.
+func LogHint(ref string) report.Remedy {
+	return report.Hint("see why:", "devopsy @"+ref+" --log")
+}
+
+// releaseFirst is the --say words of the way out of an environment with
+// no release yet, t's first release: text says it, empty for "release it
+// first:".
+func releaseFirst(t *Target, text string) string {
+	if text == "" {
+		text = "release it first:"
+	}
+	return sayRemedies(report.Fix(text, "devopsy @"+HintAddress(t)+" --release"))
+}
+
 // ResetFix is the way out that starts a child over from its parent.
 func ResetFix(ref string) report.Remedy {
 	return report.Fix("start it over from its parent (all its data goes, its shared/.env stays):", "devopsy @"+ref+" --reset")
@@ -849,12 +864,12 @@ var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -
 // deployed decides, never the checkout). o says where from (From, the
 // parent's address).
 func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) string {
-	s := "set -eu\n" + NoExit255 + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	s := "set -eu\n" + NoExit255 + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: nothing to sync into"
   exit 1
 fi
-[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, HintAddress(t)) + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
+[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "release it first, which syncs on its own (--release-no-sync releases without the data, and --sync later fills it):") + `; exit 1; }
+` + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
@@ -934,7 +949,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
 ` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixes(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + HintAddress(p) + ` --sync)"
+  devopsy --say error "the parent $base holds data from a sync that did not complete" ` + sayRemedies(report.Fix("sync it first:", "devopsy @"+HintAddress(p)+" --sync")) + `
   exit 1
 fi
 cd "$base/current"
@@ -980,8 +995,8 @@ func ImportScript(t *Target, projectName, service, end, accept string) string {
 	if accept != "" {
 		acceptLine = "export " + ImagesAcceptEnv + "=" + Quote(accept) + "\n"
 	}
-	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
-`, HintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release" ` + releaseFirst(t, "") + `; exit 1; }
+` + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
 trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
 ` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then

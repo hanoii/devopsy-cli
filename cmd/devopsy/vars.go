@@ -295,7 +295,7 @@ func confirmUnnamedSecrets(names []string, p *remote.Project, yes bool) error {
 	why := fmt.Sprintf("devopsy would print %s in --env, --vars and its messages", its)
 	fix := report.Fix(fmt.Sprintf("add %s to secrets: in %s to mask %s, or to public: if not secret", them, file, its))
 	if yes || !atTerminal() {
-		return &report.Failure{Msg: warning, Details: []string{why}, Fixes: []report.Remedy{fix}}
+		return &report.Failure{Msg: warning, Details: []string{why}, Remedies: []report.Remedy{fix}}
 	}
 	report.Default().Say(report.WarnLevel, warning, []string{why}, fix)
 	if !report.Default().Confirm(stdinReader, "go on anyway?") {

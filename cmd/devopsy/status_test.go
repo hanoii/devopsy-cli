@@ -14,7 +14,8 @@ import (
 )
 
 // The status capability's lines: consecutive lines of one key are one
-// entry, at the highest of their levels, with every fix they give once;
+// entry, at the highest of their levels, with every command they give
+// once, a fix if a warning gave it, else a hint;
 // a key coming back after another is a second entry; a line of any other
 // shape is bad, and empty lines are skipped.
 func TestParseStatusShow(t *testing.T) {
@@ -34,10 +35,10 @@ func TestParseStatusShow(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("entries: %+v", entries)
 	}
-	if e := entries[0]; e.Key != "url" || e.Level != remote.StatusInfo || strings.Join(e.Lines, "|") != "https://shop.example|https://www.shop.example" || e.Fixes != nil {
+	if e := entries[0]; e.Key != "url" || e.Level != remote.StatusInfo || strings.Join(e.Lines, "|") != "https://shop.example|https://www.shop.example" || e.Remedies != nil {
 		t.Errorf("a key over two lines: %+v", e)
 	}
-	if e := entries[1]; e.Key != "cron" || e.Level != remote.StatusWarning || strings.Join(e.Lines, "|") != "last run failed|database is locked" || len(e.Fixes) != 1 || strings.Join(e.Fixes[0].Cmds, "|") != "devopsy drush cron" {
+	if e := entries[1]; e.Key != "cron" || e.Level != remote.StatusWarning || strings.Join(e.Lines, "|") != "last run failed|database is locked" || len(e.Remedies) != 1 || strings.Join(e.Remedies[0].Cmds, "|") != "devopsy drush cron" || e.Remedies[0].Hint {
 		t.Errorf("a warning on its second line, its fix given twice: %+v", e)
 	}
 	if e := entries[2]; e.Key != "url" || strings.Join(e.Lines, "|") != "https://shop.example/admin" {
@@ -93,7 +94,7 @@ func TestStatusPrint(t *testing.T) {
 		},
 		Entries: []remote.StatusEntry{
 			{Level: remote.StatusInfo, Key: "url", Lines: []string{"https://shop.example", "https://www.shop.example"}},
-			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Fixes: []report.Remedy{report.Fix("", "devopsy maintenance off")}},
+			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Remedies: []report.Remedy{report.Fix("", "devopsy maintenance off")}},
 		},
 		Disks: []remote.Disk{
 			{Paths: []string{"releases=/srv", "/=/"}, Type: "ext4", Size: 100e9, Free: 50e9, Used: 50e9},
@@ -183,7 +184,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	for _, e := range r.Entries {
 		keys[e.Key] = e
 	}
-	if e := keys["maintenance"]; e.Level != remote.StatusWarning || len(e.Fixes) != 1 || strings.Join(e.Fixes[0].Cmds, " ") != "devopsy maintenance off" {
+	if e := keys["maintenance"]; e.Level != remote.StatusWarning || len(e.Remedies) != 1 || strings.Join(e.Remedies[0].Cmds, " ") != "devopsy maintenance off" {
 		t.Errorf("the capability's warning in JSON: %+v", e)
 	}
 	if e, ok := keys["disks"]; !ok || e.Level != remote.StatusInfo {
@@ -262,7 +263,7 @@ func TestStatusJSONCopyable(t *testing.T) {
 	}
 	var cmds []string
 	for _, e := range got.Entries {
-		for _, f := range e.Fixes {
+		for _, f := range e.Remedies {
 			cmds = append(cmds, f.Cmds...)
 		}
 	}
@@ -297,7 +298,7 @@ func TestStatusHeaderFixes(t *testing.T) {
 		}
 		e := warned[0]
 		found := false
-		for _, f := range e.Fixes {
+		for _, f := range e.Remedies {
 			for _, cmd := range f.Cmds {
 				found = found || strings.HasSuffix(cmd, " "+c.cmd)
 			}
@@ -326,7 +327,7 @@ func TestStatusPrintColors(t *testing.T) {
 		},
 		Entries: []remote.StatusEntry{
 			{Level: remote.StatusInfo, Key: "url", Lines: []string{"https://shop.example"}},
-			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Fixes: []report.Remedy{report.Fix("bring it back:", "devopsy maintenance off")}},
+			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Remedies: []report.Remedy{report.Fix("bring it back:", "devopsy maintenance off")}},
 		},
 	}, "vm1:")
 	var out bytes.Buffer
@@ -440,7 +441,7 @@ func TestStatusRefusedByOlderServer(t *testing.T) {
 	write(t, filepath.Join(lacks, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ status-facts / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	write(t, filepath.Join(lacks, "lacksssh"), "#!/bin/sh\nPATH="+lacks+":$PATH exec "+filepath.Join(bin, "fakessh")+" \"$@\"\n", 0o755)
 	out, code := s.run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(lacks, "lacksssh")}, "@prod", "--status")
-	if code != 1 || !strings.Contains(out, "the server's devopsy lacks what this needs (status-facts): upgrade it (devopsy @devopsy@one: --upgrade)") || strings.Contains(out, "containers") || strings.Contains(out, "cannot read") {
+	if code != 1 || !strings.Contains(out, "the server's devopsy lacks what this needs (status-facts)\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. upgrade it:\ndevopsy: |    $ devopsy @devopsy@one: --upgrade") || strings.Contains(out, "containers") || strings.Contains(out, "cannot read") {
 		t.Errorf("--status against a server lacking status-facts (%d):\n%s", code, out)
 	}
 }
@@ -469,7 +470,7 @@ func TestStatusHeaderFixesHintAddress(t *testing.T) {
 		var r statusReport
 		r.addHeader(parseStatus(c.header), tgt)
 		for _, e := range r.Entries {
-			for _, f := range e.Fixes {
+			for _, f := range e.Remedies {
 				for _, cmd := range f.Cmds {
 					for _, verb := range []string{" --rollback", " --sync", " --snapshots restore ", " --release"} {
 						if strings.Contains(cmd+" ", verb) && !strings.HasPrefix(cmd, hint) {

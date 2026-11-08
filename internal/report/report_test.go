@@ -38,8 +38,8 @@ func TestLines(t *testing.T) {
 		// command copies as shown: in a fix's command, a script's detail
 		// line or a command named in prose, the message included. One
 		// already in quotes, and the punctuation after it, stay as they are.
-		{"brackets", ErrorLevel, "@[::1]:22:dev is locked", []string{"$ devopsy @[::1]:22:dev --status", "devopsy @[::1]:22:dev --log shows why, or run 'devopsy @[::1]:22:dev --release'", "(devopsy @[::1]:22:dev), or @[::1]:22:", "@[::1]:22:dev's .env", "devopsy @[<server>:]<env>"}, []Remedy{Fix("", "devopsy @vm1:dev --sync --from @[::1]:22:prod")},
-			"devopsy: error: @'[::1]:22:dev' is locked\ndevopsy: | $ devopsy @'[::1]:22:dev' --status\ndevopsy: | devopsy @'[::1]:22:dev' --log shows why, or run 'devopsy @[::1]:22:dev --release'\ndevopsy: | (devopsy @'[::1]:22:dev'), or @'[::1]:22:'\ndevopsy: | @[::1]:22:dev's .env\ndevopsy: | devopsy @[<server>:]<env>\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:dev --sync --from @'[::1]:22:prod'"},
+		{"brackets", ErrorLevel, "@[::1]:22:dev is locked", []string{"devopsy @[::1]:22:dev --log shows why, or run 'devopsy @[::1]:22:dev --release'", "(devopsy @[::1]:22:dev), or @[::1]:22:", "@[::1]:22:dev's .env", "devopsy @[<server>:]<env>"}, []Remedy{Fix("", "devopsy @vm1:dev --sync --from @[::1]:22:prod")},
+			"devopsy: error: @'[::1]:22:dev' is locked\ndevopsy: | devopsy @'[::1]:22:dev' --log shows why, or run 'devopsy @[::1]:22:dev --release'\ndevopsy: | (devopsy @'[::1]:22:dev'), or @'[::1]:22:'\ndevopsy: | @[::1]:22:dev's .env\ndevopsy: | devopsy @[<server>:]<env>\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:dev --sync --from @'[::1]:22:prod'"},
 	} {
 		if got := strings.Join(Lines(c.lv, c.msg, c.details, c.fixes), "\n"); got != c.want {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, got, c.want)
@@ -49,7 +49,7 @@ func TestLines(t *testing.T) {
 
 func TestFail(t *testing.T) {
 	t.Parallel()
-	err := fmt.Errorf("environment dev: parent prod: %w", &Failure{Msg: "no server", Details: []string{"why"}, Fixes: []Remedy{Fix("set DEVOPSY_SERVER_PROD")}})
+	err := fmt.Errorf("environment dev: parent prod: %w", &Failure{Msg: "no server", Details: []string{"why"}, Remedies: []Remedy{Fix("set DEVOPSY_SERVER_PROD")}})
 	if err.Error() != "environment dev: parent prod: no server" {
 		t.Fatalf("message: %q", err.Error())
 	}
@@ -67,7 +67,7 @@ func TestFail(t *testing.T) {
 		t.Fatalf("also: got\n%s\nwant\n%s", out.String(), want)
 	}
 	// The fixes the error carries are never changed by more.
-	if f := Fixes(err); len(f) != 1 {
+	if f := Remedies(err); len(f) != 1 {
 		t.Fatalf("the error's fixes changed: %v", f)
 	}
 }

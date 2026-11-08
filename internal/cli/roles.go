@@ -379,7 +379,7 @@ func PrepareRelease(cwd string, environ []string, reload bool) ([]string, error)
 		}
 		if !e.Found {
 			if !imp.Optional {
-				return said, &report.Failure{Msg: fmt.Sprintf("%s: %s", imp, e.Why(imp)), Fixes: []report.Remedy{report.Fix(e.Fix(imp)), report.Fix(fmt.Sprintf("set %s for this target (empty for none)", imp.Var)), report.Fix(fmt.Sprintf("make the import optional for every target, a ? at the end of its label in compose.yaml:\n- %s?", imp))}}
+				return said, &report.Failure{Msg: fmt.Sprintf("%s: %s", imp, e.Why(imp)), Remedies: []report.Remedy{report.Fix(e.Fix(imp)), report.Fix(fmt.Sprintf("set %s for this target (empty for none)", imp.Var)), report.Fix(fmt.Sprintf("make the import optional for every target, a ? at the end of its label in compose.yaml:\n- %s?", imp))}}
 			}
 			said = append(said, fmt.Sprintf("%s: %s, not imported (optional)", imp.Var, e.Why(imp)))
 			continue

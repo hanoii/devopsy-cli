@@ -75,8 +75,8 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return failErr(&report.Failure{
-				Msg:   "--releases remove asks first, and there is no terminal to ask at",
-				Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --releases "+strings.Join(args, " ")+" --yes")},
+				Msg:      "--releases remove asks first, and there is no terminal to ask at",
+				Remedies: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --releases "+strings.Join(args, " ")+" --yes")},
 			})
 		}
 		var lines []string
@@ -152,15 +152,15 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 				m = append(m, r.ID)
 			}
 			return nil, &report.Failure{
-				Msg:     fmt.Sprintf("%s names several releases of %s: nothing removed", w, t.Address),
-				Details: []string{"it starts " + strings.Join(m, " and ")},
-				Fixes:   []report.Remedy{report.Fix("give more of the id")},
+				Msg:      fmt.Sprintf("%s names several releases of %s: nothing removed", w, t.Address),
+				Details:  []string{"it starts " + strings.Join(m, " and ")},
+				Remedies: []report.Remedy{report.Fix("give more of the id")},
 			}
 		case match[0].Current:
 			return nil, &report.Failure{
 				Msg:     fmt.Sprintf("release %s is the current one of %s: nothing removed", match[0].ID, t.Address),
 				Details: []string{"the release running there stays"},
-				Fixes: []report.Remedy{
+				Remedies: []report.Remedy{
 					report.Fix("release again, then remove it:", "devopsy @"+remote.HintAddress(t)+" --release"),
 					report.Fix("roll back, then remove it:", "devopsy @"+remote.HintAddress(t)+" --rollback"),
 				},

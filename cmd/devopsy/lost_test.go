@@ -543,16 +543,19 @@ func TestDestroyCutLeavesMovedBase(t *testing.T) {
 func TestActivationLostWords(t *testing.T) {
 	t.Parallel()
 	tg := &remote.Target{Address: "vm1:prod"}
+	text := func(u utterance) string {
+		return strings.Join(report.Lines(report.ErrorLevel, u.msg, u.details, u.remedies), "\n")
+	}
 	for _, kind := range []string{"release", "rollback"} {
 		w := releaseWords(tg, kind)
-		if !strings.Contains(strings.Join(w.lostAfter, "\n"), "--status") {
-			t.Errorf("a %s's session lost past its switch does not name --status: %q", kind, w.lostAfter)
+		if !strings.Contains(text(w.lostAfter), "--status") {
+			t.Errorf("a %s's session lost past its switch does not name --status: %+v", kind, w.lostAfter)
 		}
 	}
 	w := restoreWords(tg, false)
-	for _, words := range [][]string{w.goesOn, w.lostAfter, w.hadGone} {
-		if strings.Contains(strings.Join(words, "\n"), "past its switch") {
-			t.Errorf("a full restore past its point of no return, writing its data before its switch, says past its switch: %q", words)
+	for _, u := range []utterance{w.goesOn, w.lostAfter, w.hadGone} {
+		if strings.Contains(text(u), "past its switch") {
+			t.Errorf("a full restore past its point of no return, writing its data before its switch, says past its switch: %+v", u)
 		}
 	}
 }

@@ -482,6 +482,30 @@ func TestSayFeatures(t *testing.T) {
 	}
 }
 
+// A script offers a command only as a remedy, after a --fix or a --hint
+// of its --say (sayRemedies), never in a message's or a detail's words:
+// report lays out a remedy as every local error's, under "to fix it:",
+// numbered, its command bold.
+func TestScriptsOfferCommandsAsRemedies(t *testing.T) {
+	t.Parallel()
+	for name, s := range allScripts() {
+		for _, l := range strings.Split(s, "\n") {
+			say := strings.Index(l, SayFlag+" ")
+			cmd := strings.Index(l, "devopsy @")
+			if say < 0 || cmd < say {
+				continue
+			}
+			remedy := strings.Index(l, " "+SayFixFlag+" ")
+			if h := strings.Index(l, " "+SayHintFlag+" "); h >= 0 && (remedy < 0 || h < remedy) {
+				remedy = h
+			}
+			if remedy < 0 || cmd < remedy {
+				t.Errorf("%s offers a command in its words:\n%s", name, l)
+			}
+		}
+	}
+}
+
 // A lock wait says its time once it ends, and nothing when there was no
 // wait, or when the wait gave up, which says its error.
 func TestLockWaitSaysItsTime(t *testing.T) {

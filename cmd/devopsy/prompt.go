@@ -21,7 +21,7 @@ func atTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 // something else is typed. Without a terminal it fails, with --yes as the
 // fix. tty asks on the terminal itself, when stdin carries data.
 func typeToGoOn(what, name, nothing string, tty bool) error {
-	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: []string{what}, Fixes: []report.Remedy{report.Fix("add --yes to go on without asking")}}
+	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: []string{what}, Remedies: []report.Remedy{report.Fix("add --yes to go on without asking")}}
 	in, log := report.LineReader(stdinReader), report.Default()
 	if tty {
 		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)

@@ -1541,7 +1541,7 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 				// Reported as a sentence: "dev's parent, prod, has no
 				// server". Any other failure stays wrapped, its details and
 				// fixes with it.
-				t.ParentErr = &report.Failure{Msg: fmt.Sprintf("%s's parent, %s, %s", t.Name, t.Parent, ns.Msg), Details: ns.Details, Fixes: ns.Fixes}
+				t.ParentErr = &report.Failure{Msg: fmt.Sprintf("%s's parent, %s, %s", t.Name, t.Parent, ns.Msg), Details: ns.Details, Remedies: ns.Remedies}
 			}
 		}
 		t.ParentTarget = p
@@ -1656,9 +1656,9 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		if parent {
 			// Never the child's server: a guess could sync the wrong data.
 			return nil, noParentServer{&report.Failure{
-				Msg:     "has no server",
-				Details: []string{"devopsy reads a parent's server from variables only: it never takes it from the child's address, since the parent can live on another server"},
-				Fixes:   []report.Remedy{report.Fix("set " + a.env + "'s server in .devopsy/.env, as the templates do: " + EnvironmentVar(a.env) + "=<server> (or " + ServerVar + " for every environment)")},
+				Msg:      "has no server",
+				Details:  []string{"devopsy reads a parent's server from variables only: it never takes it from the child's address, since the parent can live on another server"},
+				Remedies: []report.Remedy{report.Fix("set " + a.env + "'s server in .devopsy/.env, as the templates do: " + EnvironmentVar(a.env) + "=<server> (or " + ServerVar + " for every environment)")},
 			}}
 		}
 		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))

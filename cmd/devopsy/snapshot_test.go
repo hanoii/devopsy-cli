@@ -654,7 +654,7 @@ func TestSnapshotExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, []byte("not a tar"), "@prod", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "nothing imported") {
 		t.Errorf("no snapshot on stdin (%d):\n%s", code, errs)
 	}
-	if _, errs, code := s.runIO(nil, exported, "@solo", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "has no current release: release it first") {
+	if _, errs, code := s.runIO(nil, exported, "@solo", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "has no current release\ndevopsy: | to fix it:\ndevopsy: | release it first, then import the snapshot") {
 		t.Errorf("into an environment never released (%d):\n%s", code, errs)
 	}
 }

@@ -160,7 +160,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--shell-host":
 		root := len(args) == 2 && args[1] == "--root"
 		if len(args) > 1 && !root {
-			return fail("--shell-host takes only --root: for one command, use 'devopsy @" + targetRef(t) + " <command>'")
+			return failErr(&report.Failure{Msg: "--shell-host takes only --root", Remedies: []report.Remedy{report.Fix("for one command:", "devopsy @"+targetRef(t)+" <command>")}})
 		}
 		if root {
 			// -l comes before the destination, so it wins over its user@
@@ -490,7 +490,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 			q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
 			creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
 			if !atTerminal() {
-				return failErr(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+remote.HintAddress(t)+" --release --yes")}})
+				return failErr(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Remedies: []report.Remedy{report.Fix("add --yes:", "devopsy @"+remote.HintAddress(t)+" --release --yes")}})
 			}
 			report.Info(q, creates)
 			if !report.Default().Confirm(stdinReader, "create it?") {
@@ -523,7 +523,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		first := !current
 		syncs := !noSync && (syncFlag || first)
 		if cur.Importing {
-			return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, remote.HintAddress(t)))
+			return failErr(&report.Failure{Msg: "an import into @" + t.Address + " is running: release once it is done: nothing changed", Remedies: []report.Remedy{seeHint(targetRef(t), "it", "--status")}})
 		}
 		// A partial copy from a sync is never run on: only a sync
 		// completes it (the activation checks again); a sync is one
@@ -540,7 +540,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 			} else if !current {
 				fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
 			}
-			return failErr(&report.Failure{Msg: msg, Fixes: fixes})
+			return failErr(&report.Failure{Msg: msg, Remedies: fixes})
 		}
 		// A sync reads the data labels, which an older devopsy takes
 		// for none: refused here, before the upload; a release that
@@ -554,7 +554,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		}
 		if !noSync {
 			if from != "" && !syncFlag && !first {
-				return failErr(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", remote.HintAddress(t), from))}})
+				return failErr(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Remedies: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", remote.HintAddress(t), from))}})
 			}
 			if syncFlag || first {
 				p := t.ParentTarget
@@ -1051,7 +1051,29 @@ type liveWords struct {
 	// cancelling when interrupted before it, slow when the server takes
 	// a while to cancel, lostAfter and lostBefore when the connection is
 	// lost, hadGone when it had passed that point already.
-	goesOn, cancelling, slow, lostAfter, lostBefore, hadGone []string
+	goesOn, cancelling, slow, lostAfter, lostBefore, hadGone utterance
+}
+
+// utterance is one line to say: its message, details and remedies.
+type utterance struct {
+	msg      string
+	details  []string
+	remedies []report.Remedy
+}
+
+// says is an utterance of msg and its remedies alone.
+func says(msg string, remedies ...report.Remedy) utterance {
+	return utterance{msg: msg, remedies: remedies}
+}
+
+func (s utterance) say(log *report.Logger, lv report.Level) {
+	log.Say(lv, s.msg, s.details, s.remedies...)
+}
+
+// seeHint is the command that shows what of ref (how it ends, whether
+// it was taken) through flag (--log, --status, --snapshots).
+func seeHint(ref, what, flag string) report.Remedy {
+	return report.Hint("see "+what+":", "devopsy @"+ref+" "+flag)
 }
 
 // goesOnSays is what every session says once interrupted past its point
@@ -1059,12 +1081,12 @@ type liveWords struct {
 // first write, a sync's copy): what goes on, where it is (past, or
 // empty), and what shows how it ends; a second Ctrl-C ends the session,
 // never what goes on.
-func goesOnSays(t *remote.Target, what, past, shows string) []string {
+func goesOnSays(t *remote.Target, what, past string, shows report.Remedy) utterance {
 	s := "interrupted: the " + what + " goes on on @" + t.Address
 	if past != "" {
 		s += ", " + past
 	}
-	return []string{s, shows + "; Ctrl-C again ends the session, not the " + what}
+	return utterance{msg: s, details: []string{"Ctrl-C again ends the session, not the " + what}, remedies: []report.Remedy{shows}}
 }
 
 // leavesNow is the detail of a cancel that takes a while: a second
@@ -1074,15 +1096,15 @@ const leavesNow = "Ctrl-C again leaves now"
 // releaseWords are an activation's, named by its kind: a release, a
 // rollback, a full restore (a release of the snapshot's copy).
 func releaseWords(t *remote.Target, kind string) liveWords {
-	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
+	logs := seeHint(targetRef(t), "how it ends", "--log")
 	return liveWords{
 		goesOn:     goesOnSays(t, kind, "at or past its switch", logs),
-		cancelling: []string{"interrupted: cancelling the " + kind + " on @" + t.Address},
-		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", leavesNow},
+		cancelling: says("interrupted: cancelling the " + kind + " on @" + t.Address),
+		slow:       utterance{msg: "the server is cancelling it, first waiting for the release lock if another release holds it", details: []string{leavesNow}},
 		// Killed there, it never ends: --status names it (cut).
-		lostAfter:  []string{lostSays(t, "at or after the switch", "the "+kind+" was at or past its switch there"), "devopsy @" + targetRef(t) + " --log shows how it ends, --status whether it was cut off"},
-		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
-		hadGone:    []string{"it had switched already, and went on", logs},
+		lostAfter:  says(lostSays(t, "at or after the switch", "the "+kind+" was at or past its switch there"), logs, seeHint(targetRef(t), "whether it was cut off", "--status")),
+		lostBefore: says(lostSays(t, "before the switch", "nothing went live there"), seeHint(targetRef(t), "its releases", "--releases")),
+		hadGone:    says("it had switched already, and went on", logs),
 	}
 }
 
@@ -1136,7 +1158,7 @@ func liveSession(t *remote.Target, script string, rlog *releaseLog, log *report.
 	goesOn := func() {
 		if !said {
 			said, slow = true, nil
-			log.Warn(words.goesOn[0], words.goesOn[1:]...)
+			words.goesOn.say(log, report.WarnLevel)
 		}
 	}
 wait:
@@ -1151,7 +1173,7 @@ wait:
 		case <-slow:
 			// The server takes the cancel once it holds the lock it
 			// waits for, which another may hold.
-			log.Warn(words.slow[0], words.slow[1:]...)
+			words.slow.say(log, report.WarnLevel)
 		case <-sigs:
 			if interrupted {
 				cancel()
@@ -1163,7 +1185,7 @@ wait:
 			if live() {
 				goesOn()
 			} else {
-				log.Error(words.cancelling[0], words.cancelling[1:]...)
+				words.cancelling.say(log, report.ErrorLevel)
 				slow = time.After(5 * time.Second)
 			}
 		}
@@ -1173,13 +1195,13 @@ wait:
 	}
 	if res.err == nil && res.code == sshLost {
 		if live() {
-			log.Error(words.lostAfter[0], words.lostAfter[1:]...)
+			words.lostAfter.say(log, report.ErrorLevel)
 		} else {
-			log.Error(words.lostBefore[0], words.lostBefore[1:]...)
+			words.lostBefore.say(log, report.ErrorLevel)
 		}
 	}
 	if interrupted && !said {
-		log.Warn(words.hadGone[0], words.hadGone[1:]...)
+		words.hadGone.say(log, report.WarnLevel)
 	}
 	if res.err != nil {
 		return stop(res.err)

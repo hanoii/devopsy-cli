@@ -1136,7 +1136,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	old := filepath.Join(tmp, "old")
 	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/^protocol=.*/protocol=1/'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	write(t, filepath.Join(bin, "oldssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+old+":$PATH exec sh -c \"$s\"\n", 0o755)
-	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs: upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "a new instance") {
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. upgrade it:\ndevopsy: |    $ devopsy @devopsy@server: --upgrade\ndevopsy: | 2. set DEVOPSY_PROTOCOL_CHECK=warn") || strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server (%d):\n%s", code, out)
 	}
 	// Older still, without --release-settings: the hint upgrades the
@@ -1145,7 +1145,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	ancient := filepath.Join(tmp, "ancient")
 	write(t, filepath.Join(ancient, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then echo 'devopsy: error: unknown flag --release-settings' >&2; exit 1; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	write(t, filepath.Join(bin, "ancientssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+ancient+":$PATH exec sh -c \"$s\"\n", 0o755)
-	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "ancientssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "upgrade it (devopsy @devopsy@server: --upgrade)") {
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "ancientssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "upgrade it:\ndevopsy: | $ devopsy @devopsy@server: --upgrade") {
 		t.Fatalf("a server without --release-settings (%d):\n%s", code, out)
 	}
 	// DEVOPSY_PROTOCOL_CHECK=warn goes on, at the operator's risk: here to
@@ -1160,7 +1160,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	write(t, filepath.Join(lacks, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ release-id / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	write(t, filepath.Join(bin, "lacksssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+lacks+":$PATH exec sh -c \"$s\"\n", 0o755)
 	lacking := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "lacksssh")}
-	if out, code := run(lacking, "@b/prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (release-id): upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "uploaded") {
+	if out, code := run(lacking, "@b/prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (release-id)\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. upgrade it:\ndevopsy: |    $ devopsy @devopsy@server: --upgrade") || strings.Contains(out, "uploaded") {
 		t.Fatalf("a server lacking a feature (%d):\n%s", code, out)
 	}
 	if out, code := run(lacking, "@devopsy@server", "--environments"); code != 0 || strings.Contains(out, "lacks") {

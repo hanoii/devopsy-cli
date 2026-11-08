@@ -596,13 +596,15 @@ export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
 // --release-settings in $settings. Its lines are a plain echo: the
 // server's devopsy may lack --say.
 func serverCheck(ref string) string {
-	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy @"+ref+" --upgrade)") + `; exit 1; }
+	upgrade := report.Fix("upgrade it:", "devopsy @"+ref+" --upgrade")
+	risk := report.Fix("set " + ProtocolCheckEnv + "=warn to go on at your own risk")
+	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings", upgrade) + `; exit 1; }
 server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
 if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
   if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+ref+" --upgrade)") + `
+    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway", upgrade) + `
   else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+ref+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs", upgrade, risk) + `
     exit 1
   fi
 fi
@@ -614,9 +616,9 @@ for f in ${` + needsEnv + `:-}; do
 done
 if [ -n "$missing" ]; then
   if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway: upgrade it (devopsy @"+ref+" --upgrade)") + `
+    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway", upgrade) + `
   else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing): upgrade it (devopsy @"+ref+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing)", upgrade, risk) + `
     exit 1
   fi
 fi
@@ -1310,15 +1312,15 @@ fi
 // enter changes to where commands run: the current release, or the path
 // itself for a plain devopsy directory (a project maintained in place).
 func enter(t *Target) string {
-	return basePrelude(t) + fmt.Sprintf(`if [ -d "$base/current" ]; then
+	return basePrelude(t) + `if [ -d "$base/current" ]; then
   cd "$base/current"
 elif [ -d "$base/.devopsy" ]; then
   cd "$base"
 else
-  devopsy --say error "$base has no release and no .devopsy/ project: run 'devopsy @%s --release' first"
+  devopsy --say error "$base has no release and no .devopsy/ project" ` + releaseFirst(t, "") + `
   exit 1
 fi
-`, HintAddress(t))
+`
 }
 
 // RunScript runs args in the current release, or in a plain directory.

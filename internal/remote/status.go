@@ -51,10 +51,10 @@ const StatusNoContainer = "none"
 // StatusEntry is a fact --status shows under its key: one or more lines
 // at a level (StatusInfo, StatusWarning), with the ways to act on it.
 type StatusEntry struct {
-	Level string          `json:"level"`
-	Key   string          `json:"key"`
-	Lines []string        `json:"lines"`
-	Fixes []report.Remedy `json:"fixes,omitempty"`
+	Level    string          `json:"level"`
+	Key      string          `json:"key"`
+	Lines    []string        `json:"lines"`
+	Remedies []report.Remedy `json:"remedies,omitempty"`
 }
 
 // An entry's levels: a warning needs attention, and --status then exits

@@ -776,8 +776,9 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // review).
 // A restore's skips the entries its snapshot carries (carried): they are
 // replaced, their links checked in its tars. what is the refusal's own
-// words (the rollback: it does not go live).
-func CheckLeavingBinds(services []SyncService, carried []string, what string) error {
+// words (the rollback: it does not go live), more its own fixes, after
+// the check's.
+func CheckLeavingBinds(services []SyncService, carried []string, what string, more ...report.Remedy) error {
 	bad, fixes := LeavingLines(services, carried)
 	if len(bad) == 0 {
 		return nil
@@ -786,7 +787,8 @@ func CheckLeavingBinds(services []SyncService, carried []string, what string) er
 	for _, f := range fixes {
 		remedies = append(remedies, report.Fix(f))
 	}
-	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Fixes: remedies}
+	remedies = append(remedies, more...)
+	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Remedies: remedies}
 }
 
 // LeavingLines are what services' LeavingBinds and HiddenBinds refuse,
@@ -892,7 +894,7 @@ func CheckMounts(services []SyncService) error {
 	for _, f := range leavingFixes {
 		fixes = append(fixes, report.Fix(f))
 	}
-	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
+	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Remedies: fixes}
 }
 
 // SyncDirs are the entries of mnt a sync rsyncs: those of the services

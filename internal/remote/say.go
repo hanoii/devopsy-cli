@@ -55,10 +55,15 @@ func sayTook(name, msg string) string {
 	return "devopsy " + SayFlag + " info " + SaySinceFlag + ` "${` + name + `:-}" ` + msg + " || true\n"
 }
 
-// echoLine is a script's command saying msg at level lv without the
-// server's devopsy, for what runs before basePrelude knows it works, or
-// without it (the --ssh-keys scripts): msg is shell text in double
-// quotes, so its $f expands.
-func echoLine(lv report.Level, msg string) string {
-	return `echo "` + report.Head(lv) + report.Copyable(msg) + `" >&2`
+// echoLine is a script's command saying msg at level lv, with its
+// remedies, without the server's devopsy, for what runs before
+// basePrelude knows it works, or without it (the --ssh-keys scripts):
+// each line report lays out is shell text in double quotes, so its $f
+// expands.
+func echoLine(lv report.Level, msg string, remedies ...report.Remedy) string {
+	s := "printf '%s\\n'"
+	for _, l := range report.Lines(lv, msg, nil, remedies) {
+		s += ` "` + l + `"`
+	}
+	return s + " >&2"
 }

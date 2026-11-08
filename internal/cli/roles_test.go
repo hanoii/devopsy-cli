@@ -143,7 +143,7 @@ func TestPrepareRelease(t *testing.T) {
 		_, err := PrepareRelease(root, nil, false)
 		if err == nil {
 			t.Errorf("%s: want an error", name)
-		} else if fixes := report.Fixes(err); c.fix != "" && (len(fixes) != 3 || fixes[0].Text != c.fix || fixes[1].Text != "set DEVOPSY_WILDCARD_DOMAIN for this target (empty for none)" || fixes[2].Text != "make the import optional for every target, a ? at the end of its label in compose.yaml:\n- devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN?") {
+		} else if fixes := report.Remedies(err); c.fix != "" && (len(fixes) != 3 || fixes[0].Text != c.fix || fixes[1].Text != "set DEVOPSY_WILDCARD_DOMAIN for this target (empty for none)" || fixes[2].Text != "make the import optional for every target, a ? at the end of its label in compose.yaml:\n- devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN?") {
 			t.Errorf("%s: fixes %+v", name, fixes)
 		}
 		if targetEnv(root) != before {
