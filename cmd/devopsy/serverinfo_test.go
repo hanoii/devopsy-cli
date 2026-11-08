@@ -127,7 +127,9 @@ func TestServerInfoReport(t *testing.T) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
 		}, "", "the door refuses every request|/space /space none bind,nosuid,nodev 0 0"},
 		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
-		{"door firewall", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", FirewallMissing: []string{"-o br-+"}} }, "",
+		{"door firewall", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", FirewallMissing: []string{"-o br-+"}}
+		}, "",
 			"keeps them off: -o br-+|iptables -I OUTPUT -m owner --gid-owner devopsy-projects --suppl-groups -o br-+ -j REJECT"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
