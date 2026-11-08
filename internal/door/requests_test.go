@@ -33,10 +33,13 @@ func (d fakeDaemon) Containers() ([]string, error) {
 }
 
 var testDaemon = fakeDaemon{
-	"mine":   {"com.docker.compose.project": "shop-prod", "traefik.enable": "true"},
-	"task":   {"devopsy.env": "shop-dev", "devopsy.task": "owners"},
+	"mine":   {"com.docker.compose.project": "shop-prod", "traefik.enable": "true", "devopsy.door": "devopsy-shop"},
+	"task":   {"devopsy.env": "shop-dev", "devopsy.task": "owners", "devopsy.door": "devopsy-shop"},
 	"victim": {"com.docker.compose.project": "other-prod", "traefik.http.routers.x.rule": "secret", "devopsy.export.BASE": "b", "devopsy.role": "proxy"},
 	"bare":   {},
+	// Under this project's names, made outside the door: by the deploy user, or for another user.
+	"adopted": {"com.docker.compose.project": "shop-prod", "secret": "s"},
+	"theirs":  {"devopsy.env": "shop-prod", "devopsy.task": "owners", "devopsy.door": "devopsy-other", "secret": "s"},
 }
 
 // fakeHost is fakePaths with the door's own space.
@@ -250,6 +253,51 @@ func TestDecideInspectLabels(t *testing.T) {
 	}
 	if strings.Contains(a.Output, "gone") {
 		t.Errorf("a missing container shows: %s", a.Output)
+	}
+}
+
+// The door acts only on containers it made for this user (DoorLabel): compose's and devopsy's
+// labels are anyone's to set outside it, so a container the deploy user made under this
+// project's names, as root and with any mount, stays out of the project user's reach.
+func TestDecideOnlyWhatTheDoorMade(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"adopted", "theirs"} {
+		for _, argv := range [][]string{
+			{"inspect", id}, {"rm", "-f", id}, {"port", id, "873"}, {"exec", id, "rsync", "rsync://127.0.0.1/"},
+		} {
+			if _, err := decide(t, argv...); err == nil {
+				t.Errorf("%q: not refused", argv)
+			}
+		}
+		if a, err := decide(t, "ps", "-a"); err != nil || slices.Contains(a.Docker, "id="+id) {
+			t.Errorf("ps lists %s: %v, %v", id, a, err)
+		}
+		if a, err := decide(t, "inspect", "--format", "{{.Id}} {{json .Config.Labels}}", id); err != nil || strings.Contains(a.Output, "secret") {
+			t.Errorf("its labels show: %v, %v", a, err)
+		}
+	}
+	got := testPolicy.Foreign(testDaemon)
+	if !slices.Equal(got, []string{"adopted", "theirs"}) {
+		t.Errorf("foreign under its names: %q", got)
+	}
+	// What it starts carries its label, the caller's own refused.
+	a, err := decide(t, "run", "-v", "/space/mnt/shop-prod:/m:ro", "util:1", "du", "-sk", "/m/data")
+	if err != nil || !strings.Contains(strings.Join(a.Docker, " "), "--label devopsy.door=devopsy-shop ") {
+		t.Errorf("a util container's labels: %v, %v", a, err)
+	}
+	if _, err := decide(t, "run", "--label", "devopsy.door=devopsy-shop", "-v", "/space/mnt/shop-prod:/m:ro", "util:1", "du", "-sk", "/m/data"); err == nil {
+		t.Error("a caller's door label: not refused")
+	}
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{
+		"web": map[string]any{"image": "busybox:1.37"},
+		"db":  map[string]any{"image": "busybox:1.37", "labels": map[string]any{"a": "b"}},
+	}}
+	testPolicy.Label(file)
+	for _, svc := range []string{"web", "db"} {
+		labels, _ := file["services"].(map[string]any)[svc].(map[string]any)["labels"].(map[string]any)
+		if labels["devopsy.door"] != "devopsy-shop" {
+			t.Errorf("%s: labels %v", svc, labels)
+		}
 	}
 }
 

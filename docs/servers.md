@@ -272,6 +272,15 @@ A project's name may not extend another's on the server, or be
 extended by one (`shop` and `shop-admin`): compose names are flat, so
 `shop`'s environment `admin-prod` is `shop-admin`'s `prod`.
 
+The door acts only on containers it made for the project user. A
+project the deploy user already runs moves to its own user once it is
+down: `add` refuses while containers the door did not make are under
+the project's names, naming the `docker compose -p <name> down` that
+takes them down with their volumes kept, and so does every compose
+command of the project user's while one is there. `add` also refuses a
+tree that is there already and not the project user's, the deploy
+user's releases of the project for example: move it aside first.
+
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
 A child on another server needs its own project user there, with the
 operator's key, since a sync across servers goes through the operator's

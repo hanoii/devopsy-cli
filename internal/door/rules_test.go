@@ -105,6 +105,7 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a hook as root", svc(`,"post_start":[{"command":["x"],"user":"0"}]`), "hook may hold only"},
 		{"a compose label", svc(`,"labels":{"com.docker.compose.project":"other-prod"}`), "label com.docker.compose.project"},
 		{"devopsy's container label", svc(`,"labels":{"devopsy.env":"other-prod"}`), "label devopsy.env"},
+		{"the door's label", svc(`,"labels":{"devopsy.door":"devopsy-shop"}`), "label devopsy.door"},
 		{"a role not given", svc(`,"labels":{"devopsy.role":"proxy"}`), "the role proxy"},
 		{"a bind mount of type npipe", svc(`,"volumes":[{"type":"npipe","source":"x"}]`), "a mount of type npipe"},
 		{"a bind of the host", svc(`,"volumes":[{"type":"bind","source":"/","target":"/h"}]`), "a host path"},

@@ -439,7 +439,7 @@ func (p Policy) userRefused(user string) string {
 func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	labels, _ := s["labels"].(map[string]any)
 	for _, k := range sortedKeys(labels) {
-		if strings.HasPrefix(k, "com.docker.compose.") || k == "devopsy.env" || k == "devopsy.task" {
+		if strings.HasPrefix(k, "com.docker.compose.") || k == envLabel || k == taskLabel || k == DoorLabel {
 			fail("%s: label %s", svc, k)
 		}
 		// A role is the admin's to give: others import from whoever claims it.

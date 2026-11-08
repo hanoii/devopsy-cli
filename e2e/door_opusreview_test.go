@@ -13,61 +13,6 @@ const startWaitE2E = time.Minute
 // An attack round on project users (step 2), by one reviewer: what a project user reaches
 // on a real server, each with its control.
 
-// BUG: --project-users add takes a project the deploy user already runs on the server (the
-// same name is let through, "a release root's project moving to its own user"), and the
-// door then answers for every container under its compose names by their labels alone. A
-// container the deploy user made, never checked by the door (root, any mount), is reached
-// by the project user's `docker compose exec`, which runs as that container's own user.
-// Here the deploy user's old container runs as root with the host's /etc: the project user
-// reads /etc/shadow through it. add should refuse while anything the door did not make is
-// under the project's names (or the project's directory in the release root is still the
-// deploy user's), the deploy user's --destroy first.
-func TestDoorOpusReviewAddTakesTheDeployUsersContainers(t *testing.T) {
-	const project = "adoptopus"
-	user := "devopsy-" + project
-	name := doorServer(t)
-	deploy := func(script string) (string, int) {
-		t.Helper()
-		return execIn(t, []string{"-u", "devopsy", "-w", "/home/devopsy", name}, script)
-	}
-	t.Cleanup(func() {
-		deploy("cd /home/devopsy/" + project + "/old && docker compose -p " + project + "-prod down >/dev/null 2>&1; rm -rf /home/devopsy/" + project)
-		op(t, "/", "devopsy @devopsy@doorsrv: --project-users remove "+project)
-		doorRoot(t, "pkill -u "+user+"; userdel -r "+user+" 2>/dev/null; true")
-	})
-	// The deploy user's own project, before it had a user: its environment's directory in
-	// the release root, and its container, which compose made, root with the host's /etc.
-	if out, code := deploy(`set -e
-mkdir -p ` + project + `/prod/releases ` + project + `/old
-cd ` + project + `/old
-printf 'services:\n  web:\n    image: busybox:1.37\n    command: [sleep, infinity]\n    volumes: [/etc:/hostetc:ro]\n' >compose.yaml
-docker compose -p ` + project + `-prod up -d --quiet-pull 2>&1`); code != 0 {
-		t.Fatalf("the deploy user's own project (%d): %s", code, out)
-	}
-	out, code := op(t, "/", "devopsy @devopsy@doorsrv: --project-users add "+project+" 2>&1")
-	if code != 0 {
-		t.Logf("add refused (the fix): %s", out)
-		return
-	}
-	// add went through: what the project user reaches now, by a file the door checks.
-	compose := `name: ` + project + `-prod
-services:
-  web:
-` + doorService + `    command: [sleep, infinity]
-`
-	exploit := `set -e
-mkdir -p ~/` + project + `/prod/x
-cd ~/` + project + `/prod/x
-printf '%s' ` + quote(compose) + ` >compose.yaml
-docker compose exec -T web sh -c 'id -u; head -n 1 /hostetc/shadow'`
-	got, code := doorAs(t, user, exploit)
-	if code == 0 && strings.Contains(got, "root:") {
-		t.Errorf("BUG: --project-users add took a project the deploy user runs, and its user reads the host's /etc/shadow as root through the deploy user's container:\n%s", got)
-		return
-	}
-	t.Errorf("add took a project the deploy user runs (%s), and the exec did not reach its container (%d): %s", strings.TrimSpace(out), code, got)
-}
-
 // BUG: the door's firewall rule is IPv4 only (DoorFirewall, --server-info, docs/servers.md),
 // while the rules let a project's network have IPv6 (topNetworkKeys' enable_ipv6), which
 // Docker gives a subnet of its own pools with no ipam: another project user then reaches

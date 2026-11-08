@@ -794,3 +794,41 @@ func TestProjectNameClash(t *testing.T) {
 		}
 	}
 }
+
+// No compose command runs while a container the door did not make for this user is under the
+// project's names, the deploy user's or another project user's: compose acts on whatever its
+// project's label finds, and such a container runs as root with any mount.
+func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	rows := filepath.Join(dir, "rows")
+	docker := filepath.Join(dir, "docker")
+	if err := testfile.Write(docker, []byte("#!/bin/sh\n[ \"$1 $2\" = 'ps -a' ] || exit 1\ncat "+rows+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Others: []string{"shop-two"}}, real: docker}
+	mine := `["aaa","shop-prod","","devopsy-shop"]` + "\n" + `["bbb","","shop-dev","devopsy-shop"]` + "\n" +
+		`["ccc","other-prod","",""]` + "\n" + `["ddd","shop-two-prod","",""]` + "\n"
+	for _, c := range []struct {
+		name, rows, want string
+	}{
+		{"the door's own, and others' under other names", mine, ""},
+		{"the deploy user's", mine + `["eee","shop-prod","",""]` + "\n", "shop-prod"},
+		{"another project user's", mine + `["fff","","shop-stage","devopsy-other"]` + "\n", "shop-stage"},
+		{"a label with spaces", mine + `["ggg","shop-prod","","devopsy-shop x"]` + "\n", "shop-prod"},
+	} {
+		if err := testfile.Write(rows, []byte(c.rows), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := side.foreign()
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %v, want it named", c.name, err)
+		}
+	}
+	if err := (&doorSide{policy: side.policy, real: "/nonexistent"}).foreign(); err == nil {
+		t.Error("with no answer from Docker: not refused")
+	}
+}

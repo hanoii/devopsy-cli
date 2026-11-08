@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -141,9 +142,20 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	if why := projectNameClash(project, serverProjects(d, r.Root)); why != "" {
+	projects := serverProjects(d, r.Root)
+	if why := projectNameClash(project, projects); why != "" {
 		report.Fail(errors.New("a project "+project+" here would share compose names: "+why),
 			report.Fix("a project gone from the release root ("+r.Root+") holds its name while its directory stays, its .env kept by --destroy: removed with its last environment's --destroy --purge"))
+		return 1
+	}
+	// What runs under the project's names stays out of the door's reach (door.Policy.Foreign),
+	// so a project the deploy user runs moves only once it is down.
+	all, err := containerLabels(exec.Command("docker", containerRows...))
+	if err != nil {
+		return failErr(err)
+	}
+	if ids := (door.Policy{Project: project, User: who, Others: projects}).Foreign(all); len(ids) > 0 {
+		report.Fail(foreignError(project, ids, all))
 		return 1
 	}
 	me, err := user.Current()

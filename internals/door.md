@@ -28,6 +28,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - An entry the door made a directory, not knowing it is a file, is replaced while empty: the two are told apart only by an import or a sync.
 - A service on a shared network is named `<project>-<name>` (`OwnName`), and holds no alias or fixed address there: compose makes each service's name an alias on its networks, which would answer for another's name (for example `traefik` on `tunnel`).
 - A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.
+- The door acts only on containers it made for the asking user (`devopsy.door`, `door.DoorLabel`, on every service it runs and every util container), and runs no compose command while a container it did not make is under the project's names (`Policy.Foreign`): compose's and devopsy's labels are anyone's to set outside it, and such a container runs as root with any mount.
 - Of another project's labels, only its role, compose project and exports are ever read (`exportedLabel`).
 - A util container is one of the forms in `internal/door/forms.go`, its command, its arguments and its mounts checked together, never one a caller gives: it is root on the host's files, and a command paired with another's mounts writes where a bind goes by.
 - A new util container gets a form and a line in `TestDoorTakesWhatDevopsyRuns`, which runs devopsy's own against a fake docker: else a project user's release fails on it at runtime.
@@ -45,6 +46,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - Each host piece lands only when missing or different, and only after its check (`visudo -c`, `sh -n`, `sshd -t`, with the old drop-in put back on a refusal): a broken sudoers file breaks every sudo on the server, and a broken sshd config every login.
 - sshd takes the drop-in at a reboot, never a reload by devopsy (`DoorRebootMarker`, `/run/reboot-required`): a reload is a privileged container in the host's pid namespace, and a service name per distribution.
 - `add` refuses while the deploy user or root is in `devopsy-projects`: sshd would ignore their own keys for devopsy's, and once sshd has the door, that locks them out at once.
+- `add` refuses while a container the door did not make is under the project's names, and a tree that is there and not the project user's (`doorTreeCheck`), before it makes anything: either would hand that user what another made.
 - `add` refuses a project name that extends another's on the server, or another extends (`projectNameClash`, over the door's users and the release root): compose names are flat, so whichever came first would hold the other's networks, volumes and containers.
 - What `add` writes in a project user's home is written as that user (`runuser`), and only when the user is new: root writing in a home its user owns follows the links that user put there.
 - `remove` drops a project user's entry and keys, never its Unix user: deleting a user that holds a tree and data is not one subcommand's.

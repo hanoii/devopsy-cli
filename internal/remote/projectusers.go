@@ -52,6 +52,17 @@ func doorSudoers(deploy, devopsy string) string {
 		deploy + " ALL=(%" + DoorGroup + ") NOPASSWD: " + devopsy + " --door-read *\n"
 }
 
+// doorTreeCheck refuses a tree that is there and not the user's ($1 the user, $2 the tree): it
+// would hand that user what another made there, whose entries it could then rename. A link
+// there is never the user's.
+const doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
+  if [ -L "$2" ] || [ -z "$(find "$2" -maxdepth 0 -user "$1" 2>/dev/null)" ]; then
+    echo "` + errorHead + `$2 is there already, and not $1's: move it aside first, since a project user gets only a tree --project-users add made" >&2
+    exit 3
+  fi
+fi
+`
+
 // DoorHostScript is what --project-users add does as root on the host, through the util
 // image (chroot into /host): the door's pieces when missing or different, each checked before
 // it lands (visudo, sshd -t), then the user, its home and its tree. Its arguments: the user,
@@ -70,6 +81,8 @@ for u in root ` + Quote(deploy) + `; do
     exit 3
   fi
 done
+(set -- "$user" "$tree"
+` + doorTreeCheck + `)
 # put <file> <mode> <check> <content>: content into file when it differs, checked before it
 # lands. Never in a pipeline, whose subshell an exit would leave alone.
 put() {
@@ -110,7 +123,7 @@ fi
 id -nG "$user" | tr ' ' '\n' | grep -qx "$group" || usermod -aG "$group" "$user"
 home=$(getent passwd "$user" | cut -d: -f6)
 chmod 750 "$home"
-[ -z "$tree" ] || install -d -m 750 -o "$user" -g "$user" "$tree"
+[ -z "$tree" ] || [ -e "$tree" ] || install -d -m 750 -o "$user" -g "$user" "$tree"
 # The project user's own releases root, so its devopsy releases into that tree: written as
 # that user, whose home it is, and only when the user is new.
 if [ -n "$made" ] && [ -n "$root" ]; then

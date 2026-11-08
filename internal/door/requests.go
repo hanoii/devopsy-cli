@@ -122,12 +122,53 @@ const (
 	projectLabel = "com.docker.compose.project"
 	envLabel     = "devopsy.env"
 	taskLabel    = "devopsy.task"
+	// DoorLabel is on every container the door makes, its value the project user it made it
+	// for; a file or a caller never sets it, and an image under devopsy. refuses.
+	DoorLabel = "devopsy.door"
 )
 
-// ownLabels says whether a container's labels make it this project's: compose's
-// project, or the environment devopsy's own containers carry.
+// ownLabels says whether a container's labels make it this project's: one the door made for
+// this user, under one of its names (compose's project, or the environment devopsy's own
+// containers carry). Those two labels are anyone's to set outside the door: a container the
+// deploy user made under this project's names runs as root with any mount.
 func (p Policy) ownLabels(labels map[string]string) bool {
+	return labels[DoorLabel] == p.User && p.underName(labels)
+}
+
+func (p Policy) underName(labels map[string]string) bool {
 	return p.OwnName(labels[projectLabel]) || p.OwnName(labels[envLabel])
+}
+
+// Foreign are the containers, by id with their labels, under this project's names that the
+// door did not make for its user, sorted: compose acts on whatever its project's label
+// finds, so none of its commands runs while one is there.
+func (p Policy) Foreign(containers map[string]map[string]string) []string {
+	var ids []string
+	for id, labels := range containers {
+		if p.underName(labels) && labels[DoorLabel] != p.User {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// Label puts the door's label on every service of a checked file, so each container compose
+// makes from it says it is the door's (DoorLabel).
+func (p Policy) Label(file map[string]any) {
+	services, _ := file["services"].(map[string]any)
+	for _, svc := range services {
+		s, ok := svc.(map[string]any)
+		if !ok {
+			continue
+		}
+		labels, _ := s["labels"].(map[string]any)
+		if labels == nil {
+			labels = map[string]any{}
+		}
+		labels[DoorLabel] = p.User
+		s["labels"] = labels
+	}
 }
 
 func (p Policy) ownContainer(d Daemon, target string) bool {
@@ -553,6 +594,7 @@ scan:
 	if image < 0 {
 		return nil, refuse("docker run: only devopsy's own image, and only its own scripts")
 	}
+	out = append(out, "--label", DoorLabel+"="+p.User)
 	// A name of devopsy's says whose by its label: without one it could take a name
 	// another project's container is about to need.
 	for i, a := range out {

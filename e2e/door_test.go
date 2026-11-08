@@ -462,6 +462,61 @@ func TestDoorKeepsProjectsApart(t *testing.T) {
 	}
 }
 
+// The door acts only on containers it made for the project user: a project the deploy user
+// runs moves to its own user once it is down, and a container the deploy user makes under
+// its names afterwards, as root with the host's /etc, refuses that user's compose.
+func TestDoorTakesOnlyWhatItMade(t *testing.T) {
+	const project = "doormade"
+	user := "devopsy-" + project
+	name := doorServer(t)
+	deploy := func(script string) (string, int) {
+		t.Helper()
+		return execIn(t, []string{"-u", "devopsy", "-w", "/tmp/" + project + "-old", name}, script)
+	}
+	t.Cleanup(func() {
+		deploy("docker compose -p " + project + "-prod down >/dev/null 2>&1")
+		execIn(t, []string{"-u", "devopsy", name}, "rm -rf /tmp/"+project+"-old")
+		op(t, "/", "devopsy @devopsy@doorsrv: --project-users remove "+project)
+		doorRoot(t, "pkill -u "+user+"; userdel -r "+user+" 2>/dev/null; true")
+	})
+	if out, code := execIn(t, []string{"-u", "devopsy", name}, `set -e
+mkdir -p /tmp/`+project+`-old
+printf 'services:\n  web:\n    image: busybox:1.37\n    command: [sleep, infinity]\n    volumes: [/etc:/hostetc:ro]\n' >/tmp/`+project+`-old/compose.yaml`); code != 0 {
+		t.Fatal(out)
+	}
+	up := func() {
+		t.Helper()
+		if out, code := deploy("docker compose -p " + project + "-prod up -d --quiet-pull 2>&1"); code != 0 {
+			t.Fatalf("the deploy user's own project (%d): %s", code, out)
+		}
+	}
+	up()
+	if out, code := deploy("docker compose -p " + project + "-prod exec -T web head -n 1 /hostetc/shadow"); code != 0 || !strings.Contains(out, "root:") {
+		t.Fatalf("the control: the deploy user's container does not read the host's /etc (%d): %s", code, out)
+	}
+	out, code := op(t, "/", "devopsy @devopsy@doorsrv: --project-users add "+project+" 2>&1")
+	if code == 0 || !strings.Contains(out, "the door did not make are under "+project+"'s names: "+project+"-prod") ||
+		!strings.Contains(out, "docker compose -p "+project+"-prod down") {
+		t.Fatalf("add over the deploy user's running project (%d):\n%s", code, out)
+	}
+	if out, code := deploy("docker compose -p " + project + "-prod down 2>&1"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --project-users add "+project+" 2>&1"); code != 0 {
+		t.Fatalf("add once it is down (%d):\n%s", code, out)
+	}
+	up()
+	compose := "name: " + project + "-prod\nservices:\n  web:\n" + doorService + "    command: [sleep, infinity]\n"
+	got, code := doorAs(t, user, `set -e
+mkdir -p ~/`+project+`/prod/x
+cd ~/`+project+`/prod/x
+printf '%s' `+quote(compose)+` >compose.yaml
+docker compose exec -T web sh -c 'id -u; head -n 1 /hostetc/shadow' 2>&1`)
+	if code == 0 || strings.Contains(got, "root:") || !strings.Contains(got, "the door did not make") {
+		t.Errorf("the project user's compose beside the deploy user's container (%d):\n%s", code, got)
+	}
+}
+
 // What an image gives its containers, past any check of a file's, and the admin's say over
 // labels: both only show on a real build and a real up.
 func TestDoorLabelsFromAnImageAndTheVet(t *testing.T) {

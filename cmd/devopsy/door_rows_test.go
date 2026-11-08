@@ -105,6 +105,11 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := filepath.Join(dir, "seen")
+	// Docker answers only the door's look at what runs, which has nothing of another's.
+	docker := filepath.Join(dir, "docker")
+	if err := testfile.Write(docker, []byte("#!/bin/sh\n[ \"$1\" = ps ]\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	vet := filepath.Join(dir, "vet")
 	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho no >&2\nexit 2\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -118,7 +123,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	}
 	side := func(command string) *doorSide {
 		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
-			vets: []remote.DoorVet{{Prefix: "vetted.", Command: command}}, real: "/bin/false"}
+			vets: []remote.DoorVet{{Prefix: "vetted.", Command: command}}, real: docker}
 	}
 	for _, label := range []string{"vetted.x", "VETTED.X", "Vetted.Host"} {
 		if err := os.Remove(seen); err != nil && !errors.Is(err, os.ErrNotExist) {
