@@ -140,6 +140,8 @@ func run() int {
 			return runServerFacts()
 		case remote.ProjectUsersFlag:
 			return runProjectUsersStep(args[1:])
+		case remote.SyncKeyFlag:
+			return runSyncKey(args[1:])
 		case "--server-info":
 			return runServerInfo(nil, args[1:])
 		case imagesFlag:

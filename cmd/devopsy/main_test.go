@@ -1597,8 +1597,11 @@ func TestRemoteSSHKeysForAProjectUser(t *testing.T) {
 	if out, code := run(true, "@devopsy-shop@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code == 0 || !strings.Contains(out, "devopsy-shop is a project user") || !strings.Contains(out, "--ssh-keys --for shop remove op@laptop") || !strings.Contains(readString(keys), "op@laptop") {
 		t.Errorf("asked as the project user (%d):\n%s", code, out)
 	}
-	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code != 0 || strings.Contains(readString(keys), "op@laptop") {
-		t.Errorf("its last key (%d):\n%s", code, out)
+	// Removing any of its keys drops its sync keys too: a leaked key could have added them.
+	syncKeys := filepath.Join(home, "door", "sync-keys", "devopsy-shop")
+	write(t, syncKeys, "a sync's key\n", 0o600)
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code != 0 || strings.Contains(readString(keys), "op@laptop") || fileExists(syncKeys) {
+		t.Errorf("its last key, its sync keys with it (%d):\n%s", code, out)
 	}
 	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "Shop!"); code == 0 || !strings.Contains(out, "usage:") {
 		t.Errorf("a project name devopsy refuses (%d):\n%s", code, out)

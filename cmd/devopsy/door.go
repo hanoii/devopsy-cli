@@ -595,8 +595,25 @@ func runDoor(args []string) int {
 		if len(args) >= 3 {
 			return side.request(args[1], args[2:])
 		}
+	case "sync-key":
+		return side.syncKey(args[1:])
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
+}
+
+// syncKey is --sync-key for the caller: its sync keys (remote.DoorSyncKeysFile), never its
+// keys, each line the door's own (remote.SyncKeyLine: the id's and the key's form checked,
+// its options and expiry the door's), for an environment in the caller's tree. A sync's gate
+// there is no boundary, the tree being the caller's: what a sync key may do runs as the
+// caller, so it does nothing the caller cannot already.
+func (s *doorSide) syncKey(args []string) int {
+	if len(args) == 6 && args[0] == "add" && !s.policy.InTree(args[2]) {
+		return doorRefused(fmt.Errorf("refused: a sync key for %s, outside %s's tree", args[2], s.policy.User))
+	}
+	if err := editSyncKeys(remote.DoorSyncKeysFile(s.policy.User), selfPath(), args, time.Now()); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
+	return 0
 }
 
 // spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a

@@ -128,6 +128,7 @@ if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
 fi
 id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
 f=${DEVOPSY_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/devopsy}/door/keys/` + user + `
+sf=${DEVOPSY_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/devopsy}/door/sync-keys/` + user + `
 `
 }
 
@@ -164,7 +165,8 @@ printf '%s\n' "$f"
 
 // KeysRemoveScript drops from user's keys ("" the deploy user's) the lines whose key is the
 // blob on stdin: none (exit 3). The deploy user's last key stays (exit 4: it would lock
-// everyone out); a project user's goes, which is how its logins stop.
+// everyone out); a project user's goes, which is how its logins stop, and its sync keys
+// with it (DoorSyncKeysFile).
 func KeysRemoveScript(user string) string {
 	last := ""
 	if user == "" {
@@ -181,6 +183,8 @@ fi
 grep -qF -- " $blob" "$f" || { ` + echoLine(report.ErrorLevel, "that key is not authorized") + `; exit 3; }
 grep -vF -- " $blob" "$f" > "$f.tmp" || true
 ` + last + `mv -f "$f.tmp" "$f"
+# A project user's sync keys go with any of its keys: a leaked one could have added them.
+[ -z "${sf:-}" ] || rm -f "$sf"
 printf '%s\n' "$f"
 `
 }
@@ -194,4 +198,12 @@ const DoorGroup = "devopsy-projects"
 // never the login's. keysPrelude finds the same file in a script.
 func DoorKeysFile(user string) string {
 	return filepath.Join(DoorDir(), "keys", user)
+}
+
+// DoorSyncKeysFile is a project user's sync keys (SyncKeyLine), apart from its keys: the
+// door writes them for that user's syncs (--sync-key), --authorized-keys prints them after
+// its keys, and removing any of its keys drops them all, since a leaked key could have
+// added one.
+func DoorSyncKeysFile(user string) string {
+	return filepath.Join(DoorDir(), "sync-keys", user)
 }

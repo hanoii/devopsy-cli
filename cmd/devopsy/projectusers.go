@@ -215,6 +215,9 @@ func removeProjectUser(d *remote.Door, project, who, entry string) int {
 	if err := os.Remove(entry); err != nil {
 		return failErr(err)
 	}
+	if err := os.Remove(remote.DoorSyncKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return failErr(err)
+	}
 	if err := os.Remove(remote.DoorKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return failErr(err)
 	}
