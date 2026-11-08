@@ -174,8 +174,8 @@ func startLane(l lane) error {
 		return err
 	}
 	// The operator's key, authorized for the deploy user of both servers,
-	// and an agent holding it, for syncs across servers (agent()).
-	if out, err := docker("exec", l.operator, "sh", "-c", `ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519 && printf 'Host server server2 doorsrv doorsrv2\n  User devopsy\nHost *\n  StrictHostKeyChecking accept-new\n' >/root/.ssh/config && chmod 600 /root/.ssh/config && ssh-agent -a /tmp/agent.sock >/dev/null && SSH_AUTH_SOCK=/tmp/agent.sock ssh-add -q`); err != nil {
+	// with no agent: a sync across servers needs none.
+	if out, err := docker("exec", l.operator, "sh", "-c", `ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519 && printf 'Host server server2 doorsrv doorsrv2\n  User devopsy\nHost *\n  StrictHostKeyChecking accept-new\n' >/root/.ssh/config && chmod 600 /root/.ssh/config`); err != nil {
 		return fmt.Errorf("%v: %s", err, out)
 	}
 	return l.startServer(l.server, "server")
@@ -516,9 +516,9 @@ func srv2(t *testing.T, script string) (string, int) {
 	return execIn(t, []string{"-u", "devopsy", "-w", "/home/devopsy", server2}, script)
 }
 
-// agent is the operator's environment with its SSH agent, which a sync
-// across servers forwards to the parent's.
-const agent = "SSH_AUTH_SOCK=/tmp/agent.sock"
+// noAgent runs a command with no SSH agent: a sync across servers needs
+// none, the parent reaching the child with a key made for the sync.
+const noAgent = "env -u SSH_AUTH_SOCK"
 
 // loginShell makes shell the deploy user's login shell on the server
 // for the test: the image's is dash (/bin/sh), devopsy-server's bash,

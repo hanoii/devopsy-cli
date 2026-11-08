@@ -87,7 +87,7 @@ func TestOwnerSyncAcross(t *testing.T) {
 	if got := owner(t, srv, "ownsync/prod/shared/mnt/data/stamp"); got != "1000:1000" {
 		t.Fatalf("the parent's file is %s's", got)
 	}
-	out, code := op(t, dir, agent+" devopsy @dev --release")
+	out, code := op(t, dir, noAgent+" devopsy @dev --release")
 	stamp, _ := srv2(t, "cat ownsync/dev/shared/mnt/data/stamp")
 	if code != 0 || strings.TrimSpace(stamp) != "one" || srv2State(t, "ownsync", "dev", "data") != "running" {
 		t.Fatalf("dev's first release, syncing across servers (%d), stamp %q:\n%s", code, stamp, out)

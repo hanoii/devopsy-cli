@@ -10,7 +10,7 @@ import (
 
 // acrossProject is syncProject with dev on the second server, on its
 // sshd's other port: the parent's server reaches the child's with the
-// operator's agent, at the port the child's server names (port 22 closed
+// sync's key, at the port the child's server names (port 22 closed
 // to it), the rsync through a reverse forward, the streams through
 // --sync-exec.
 func acrossProject(t *testing.T, name string) string {
@@ -49,12 +49,12 @@ func TestSyncAcrossServers(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 || stamp() != "one" || srv2State(t, "across", "dev", "data") != "running" {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 || stamp() != "one" || srv2State(t, "across", "dev", "data") != "running" {
 		t.Fatalf("dev's first release, syncing across servers (%d), stamp %q:\n%s", code, stamp(), out)
 	}
 
 	srv(t, "echo two >across/prod/shared/mnt/data/stamp && touch fail-export")
-	out, code := op(t, dir, agent+" devopsy @dev --sync --yes")
+	out, code := op(t, dir, noAgent+" devopsy @dev --sync --yes")
 	finish, _ := srv2(t, "cat finish.log")
 	if code == 0 || stamp() != "two" || !marked() || srv2State(t, "across", "dev", "data") != "exited" || !strings.Contains(finish, "child partial") {
 		t.Errorf("a cut copy (%d), stamp %q, marked %v, data %q, finish %q:\n%s", code, stamp(), marked(), srv2State(t, "across", "dev", "data"), finish, out)
@@ -64,7 +64,7 @@ func TestSyncAcrossServers(t *testing.T) {
 	}
 
 	srv(t, "rm -f fail-export; echo three >across/prod/shared/mnt/data/stamp")
-	if out, code := op(t, dir, agent+" devopsy @dev --sync --yes"); code != 0 || stamp() != "three" || marked() || srv2State(t, "across", "dev", "data") != "running" {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --sync --yes"); code != 0 || stamp() != "three" || marked() || srv2State(t, "across", "dev", "data") != "running" {
 		t.Errorf("a complete sync (%d), stamp %q, marked %v:\n%s", code, stamp(), marked(), out)
 	}
 
@@ -72,7 +72,7 @@ func TestSyncAcrossServers(t *testing.T) {
 	// (an entry no label copies goes too), then the copy and the run step.
 	srv2(t, "mkdir -p across/dev/shared/mnt/extra && echo dev >across/dev/shared/mnt/extra/left")
 	srv(t, "echo four >across/prod/shared/mnt/data/stamp")
-	out, code = op(t, dir, agent+" devopsy @dev --reset --yes")
+	out, code = op(t, dir, noAgent+" devopsy @dev --reset --yes")
 	_, extra := srv2(t, "test -e across/dev/shared/mnt/extra")
 	if code != 0 || stamp() != "four" || marked() || extra == 0 || srv2State(t, "across", "dev", "data") != "running" || !strings.Contains(out, "resetting @") {
 		t.Errorf("a reset across servers (%d), stamp %q, marked %v, extra kept %v:\n%s", code, stamp(), marked(), extra == 0, out)
@@ -90,12 +90,12 @@ func TestSyncAcrossDropParent(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	srv2(t, "rm -f importing-acrossdrop-dev; echo 120 >import-wait-acrossdrop-dev")
 	t.Cleanup(func() { srv2(t, "rm -f import-wait-acrossdrop-dev importing-acrossdrop-dev") })
-	background(t, dir, fast()+" "+agent+" devopsy @dev --sync --yes", "/tmp/acrossdrop.log")
+	background(t, dir, fast()+" "+noAgent+" devopsy @dev --sync --yes", "/tmp/acrossdrop.log")
 	eventually(t, time.Minute, "the import running", func() bool {
 		_, code := srv2(t, "test -e importing-acrossdrop-dev")
 		return code == 0
@@ -130,7 +130,7 @@ func acrossReleased(t *testing.T, name string) string {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	return dir
@@ -159,7 +159,7 @@ func TestSyncAcrossDropHolder(t *testing.T) {
 	dir := acrossReleased(t, "acrosshold")
 	srv2(t, "rm -f importing-acrosshold-dev; echo 120 >import-wait-acrosshold-dev")
 	t.Cleanup(func() { srv2(t, "rm -f import-wait-acrosshold-dev importing-acrosshold-dev") })
-	background(t, dir, fast()+" "+agent+" devopsy @dev --sync --yes", "/tmp/acrosshold.log")
+	background(t, dir, fast()+" "+noAgent+" devopsy @dev --sync --yes", "/tmp/acrosshold.log")
 	eventually(t, time.Minute, "the import running", func() bool { return exists2(t, "importing-acrosshold-dev") })
 
 	dropHost(t, "server2")
@@ -210,7 +210,7 @@ func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func())
 		_, _ = docker("exec", server2, "sh", "-c", "docker ps -q --filter ancestor=devopsy-util:4 | xargs -r docker rm -f")
 	})
 	throttleServer(t, "4mbit")
-	background(t, dir, fast()+" "+agent+" devopsy @dev --sync --yes", "/tmp/"+name+".log")
+	background(t, dir, fast()+" "+noAgent+" devopsy @dev --sync --yes", "/tmp/"+name+".log")
 	eventually(t, time.Minute, "the rsync into the child's server", func() bool { return receiving(t) != "" })
 	time.Sleep(2 * time.Second)
 	cut()
@@ -257,15 +257,12 @@ func TestSyncAcrossRsyncDrop(t *testing.T) {
 	})
 }
 
-// A CI key in an agent of its own, authorized on both servers with
-// --ssh-keys add --restricted: a sync across servers works with it (the
-// agent forwarded to the parent, the parent's reverse forward on the
-// child). With a plain restrict, sshd refuses either: devopsy names the
-// cause, and the child's data is as it was, its services back.
+// A CI key, plain restrict on both servers (--ssh-keys add --restricted),
+// in a file and no agent: a sync across servers works with it, since the
+// parent reaches the child with a key of the sync's own.
 func TestSyncAcrossRestrictedKey(t *testing.T) {
 	dir := acrossReleased(t, "acrossci")
-	ci := "SSH_AUTH_SOCK=/tmp/agent-ci.sock"
-	if out, code := op(t, "/", "rm -f /root/.ssh/ci-e2e /root/.ssh/ci-e2e.pub /tmp/agent-ci.sock && devopsy --ssh-keys-generate ci-e2e && ssh-agent -a /tmp/agent-ci.sock >/dev/null && "+ci+" ssh-add -q /root/.ssh/ci-e2e"); code != 0 {
+	if out, code := op(t, "/", "rm -f /root/.ssh/ci-e2e /root/.ssh/ci-e2e.pub && devopsy --ssh-keys-generate ci-e2e"); code != 0 {
 		t.Fatalf("the CI key (%d):\n%s", code, out)
 	}
 	blob, _ := op(t, "/", "cut -d' ' -f2 /root/.ssh/ci-e2e.pub")
@@ -274,54 +271,75 @@ func TestSyncAcrossRestrictedKey(t *testing.T) {
 	t.Cleanup(func() {
 		srv(t, unauthorize)
 		srv2(t, unauthorize)
-		op(t, "/", "pkill -f '[a]gent-ci.sock' || true")
 	})
 	for _, s := range []string{"@server:", "@server2:"} {
 		if out, code := op(t, "/", "devopsy "+s+" --ssh-keys add /root/.ssh/ci-e2e.pub --restricted"); code != 0 {
 			t.Fatalf("authorizing on %s (%d):\n%s", s, code, out)
 		}
 	}
+	if out, _ := srv(t, "grep "+quote(blob)+" ~/.ssh/authorized_keys"); !strings.HasPrefix(out, "restrict ssh-ed25519 ") {
+		t.Fatalf("the CI key's line: %s", out)
+	}
 	stamp := func() string {
 		out, _ := srv2(t, "cat acrossci/dev/shared/mnt/data/stamp")
 		return strings.TrimSpace(out)
 	}
 	srv(t, "echo two >acrossci/prod/shared/mnt/data/stamp")
-	if out, code := op(t, dir, ci+" devopsy @dev --sync --yes"); code != 0 || stamp() != "two" {
+	ci := noAgent + " devopsy --ssh-option IdentityFile=/root/.ssh/ci-e2e --ssh-option IdentitiesOnly=yes"
+	if out, code := op(t, dir, ci+" @dev --sync --yes"); code != 0 || stamp() != "two" {
 		t.Fatalf("a sync with the restricted key (%d), stamp %q:\n%s", code, stamp(), out)
 	}
+	if out, _ := srv2(t, "cat ~/.ssh/authorized_keys"); strings.Contains(out, "devopsy-sync-") {
+		t.Errorf("the sync's key stayed on the child:\n%s", out)
+	}
+}
 
-	// The CI key is the one line with options.
-	plain := "sed -i 's/^restrict,agent-forwarding,port-forwarding /restrict /' ~/.ssh/authorized_keys"
-	asWas := func(what string) {
+// A sync key's line on a real sshd: it runs only --sync-child for its
+// sync, while that sync is open there, and nothing else the key would
+// otherwise open: no shell, no pty, no agent, no local forward (an -L or
+// a -W), a reverse forward on the loopback only.
+func TestSyncKeyLineOnSSHD(t *testing.T) {
+	acrossReleased(t, "acrosskey")
+	id := "1762600000.0a1b2c"
+	base := "/home/devopsy/acrosskey/dev"
+	if out, code := srv(t, "rm -f /tmp/synckey /tmp/synckey.pub && ssh-keygen -q -t ed25519 -N '' -f /tmp/synckey"); code != 0 {
+		t.Fatalf("the key (%d): %s", code, out)
+	}
+	blob, _ := srv(t, "cut -d' ' -f2 /tmp/synckey.pub")
+	if out, code := srv2(t, "devopsy --sync-key add "+id+" "+base+" server2:2222:dev - "+strings.TrimSpace(blob)); code != 0 {
+		t.Fatalf("--sync-key add (%d): %s", code, out)
+	}
+	t.Cleanup(func() { srv2(t, "devopsy --sync-key remove "+id+"; rm -f "+base+"/.devopsy-sync.open."+id) })
+	child := func(opts, req string) (string, int) {
 		t.Helper()
-		if stamp() != "two" || exists2(t, "acrossci/dev/.devopsy-sync.incomplete") || srv2State(t, "acrossci", "dev", "data") != "running" {
-			t.Errorf("%s: stamp %q, marked %v, dev data %q", what, stamp(), exists2(t, "acrossci/dev/.devopsy-sync.incomplete"), srv2State(t, "acrossci", "dev", "data"))
-		}
-		if !lockFree(t, "acrossci/prod/.devopsy-sync.lock") || syncState(t, "acrossci", "prod", "data") != "running" {
-			t.Errorf("%s: the parent's data %q", what, syncState(t, "acrossci", "prod", "data"))
-		}
+		return srv(t, "ssh -i /tmp/synckey -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o BatchMode=yes -o ExitOnForwardFailure=yes -p 2222 "+opts+" devopsy@server2 "+quote(req)+" </dev/null 2>&1")
 	}
-	srv(t, "echo three >acrossci/prod/shared/mnt/data/stamp")
-
-	// The child's: no reverse forward.
-	srv2(t, plain)
-	out, code := op(t, dir, ci+" devopsy @dev --sync --yes")
-	if code == 0 || !strings.Contains(out, "refused the reverse forward") || !strings.Contains(out, "port-forwarding") {
-		t.Errorf("a plain restrict on the child's server (%d):\n%s", code, out)
+	list := `{"exec":["--sync-services","list"]}`
+	if out, code := child("-T", list); code == 0 || !strings.Contains(out, "is not open") {
+		t.Fatalf("no gate (%d):\n%s", code, out)
 	}
-	asWas("the child's key")
-	srv2(t, unauthorize)
-	if out, code := op(t, "/", "devopsy @server2: --ssh-keys add /root/.ssh/ci-e2e.pub --restricted"); code != 0 {
-		t.Fatalf("authorizing on server2 again (%d):\n%s", code, out)
+	srv2(t, "echo 'server:prod "+id+"' >"+base+"/.devopsy-sync.open."+id)
+	if out, code := child("-T", list); code != 0 || !strings.Contains(out, "data\t") {
+		t.Fatalf("its sync's request (%d):\n%s", code, out)
 	}
-
-	// The parent's: no agent.
-	srv(t, plain)
-	out, code = op(t, dir, ci+" devopsy @dev --sync --yes")
-	if code == 0 || !strings.Contains(out, "no SSH agent was forwarded") || !strings.Contains(out, "restrict,agent-forwarding") {
-		t.Errorf("a plain restrict on the parent's server (%d):\n%s", code, out)
+	if out, code := child("-T", "id"); code == 0 || !strings.Contains(out, "not a sync's request") || strings.Contains(out, "uid=") {
+		t.Errorf("a command (%d):\n%s", code, out)
 	}
-	asWas("the parent's key")
+	if out, _ := child("-tt", list); !strings.Contains(out, "PTY allocation request failed") {
+		t.Errorf("a pty:\n%s", out)
+	}
+	if out, code := child("-T -W 127.0.0.1:22", ""); code == 0 || !strings.Contains(out, "administratively prohibited") {
+		t.Errorf("a -W to the child's loopback (%d):\n%s", code, out)
+	}
+	if out, code := child("-T -R 0.0.0.0:23456:127.0.0.1:1", list); code == 0 || !strings.Contains(out, "remote port forwarding failed") {
+		t.Errorf("a -R off the loopback (%d):\n%s", code, out)
+	}
+	if out, code := child("-T -R 127.0.0.1:23456:127.0.0.1:1", list); code != 0 {
+		t.Errorf("a -R on the loopback, as the receive's (%d):\n%s", code, out)
+	}
+	if out, code := child("-T -A", "env"); code == 0 || strings.Contains(out, "SSH_AUTH_SOCK") {
+		t.Errorf("an agent forwarded (%d):\n%s", code, out)
+	}
 }
 
 // The instance's and project's .env are each server's own: a child on
@@ -336,7 +354,7 @@ func TestParentEnvAcrossServersE2E(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 || !strings.Contains(out, "copied 3 variables of @server:prod's instance and project .env into @server2:2222:dev's shared/parent.env") {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 || !strings.Contains(out, "copied 3 variables of @server:prod's instance and project .env into @server2:2222:dev's shared/parent.env") {
 		t.Fatalf("dev's first release (%d):\n%s", code, out)
 	}
 	copied, _ := srv2(t, "cat parentenv/dev/shared/parent.env")
@@ -363,7 +381,7 @@ func TestParentEnvAcrossServersE2E(t *testing.T) {
 		t.Errorf("URL:\n%s", out)
 	}
 	srv(t, "sed -i 's/^FROM_ONE=one/FROM_ONE=uno/' parentenv/.env")
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 {
 		t.Fatalf("dev's release (%d):\n%s", code, out)
 	}
 	if out := get("FROM_ONE"); !strings.HasSuffix(out, "\nuno\n") {

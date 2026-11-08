@@ -249,7 +249,7 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	_, dev1 := container(t, srv2, "imgsy-dev", "database")
@@ -259,7 +259,7 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 		t.Fatalf("prod again (%d):\n%s", code, out)
 	}
 	_, prod2 := container(t, srv, "imgsy-prod", "database")
-	out, code := op(t, dir, agent+" devopsy @dev --sync --yes")
+	out, code := op(t, dir, noAgent+" devopsy @dev --sync --yes")
 	_, dev2 := container(t, srv2, "imgsy-dev", "database")
 	stamp, _ := srv2(t, "cat imgsy/dev/shared/mnt/database/stamp")
 	if code != 0 || dev2 != dev1 || dev2 == prod2 || strings.TrimSpace(stamp) != "two" {
@@ -274,7 +274,7 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 		t.Fatalf("prod at 2 (%d):\n%s", code, out)
 	}
 	srv(t, "echo three >imgsy/prod/shared/mnt/database/stamp")
-	out, code = op(t, dir, agent+" devopsy @dev --sync --yes")
+	out, code = op(t, dir, noAgent+" devopsy @dev --sync --yes")
 	stamp, _ = srv2(t, "cat imgsy/dev/shared/mnt/database/stamp")
 	if code == 0 || strings.TrimSpace(stamp) != "two" || !strings.Contains(out, "devopsy.data.version=1 is lower than the parent's data's version, 2") {
 		t.Fatalf("a sync onto a child below the parent (%d), stamp %q:\n%s", code, stamp, out)

@@ -696,11 +696,11 @@ sleep 1`); code != 0 {
 	if out, _ := doorAs(t, "devopsy-doorfwo", "rm -f /tmp/stolen2; RSYNC_PASSWORD=0123456789abcdef0123456789abcdef USER=nobody rsync rsync://127.0.0.1:18873/d/f /tmp/stolen2 </dev/null 2>&1; cat /tmp/stolen2 2>/dev/null"); !strings.Contains(out, "s3cret-sync") {
 		t.Errorf("the control: with its password the daemon does not answer: %s", out)
 	}
-	// The real thing under the rule: a child at another address of the server, the agent
-	// forwarded to the project's user there. On GitHub's runners that address is inside
+	// The real thing under the rule: a child at another address of the server, the sync's
+	// key reaching the project's user there. On GitHub's runners that address is inside
 	// doorDockerPool, which a rule by address range refused.
 	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
-	if out, code := op(t, dir, agent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release"); code != 0 {
 		t.Errorf("a child at another address, under the rule (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))
 	}
 }
@@ -815,7 +815,7 @@ docker run --rm -v "$c2/volumes/mnt/link:/x/data:ro" devopsy-util:4 sh -c "$expo
 
 // A child on another door server, both set up as an admin does (doorUserOn: its project user
 // on each, the operator's key for both): the child's release syncs the parent's data from
-// one project user to the other through the operator's forwarded agent, an entry and a named
+// one project user to the other with the sync's own key, an entry and a named
 // volume, and its run step writes in the entry it was given. The second server's door is
 // its own: the first's project user is not the second's.
 func TestDoorSyncAcrossDoorServers(t *testing.T) {
@@ -836,7 +836,7 @@ volumes:
 	if out, code := doorRoot(t, "echo dat-parent >"+doorSpace+"/mnt/doorpair-prod/data/f && docker run --rm -v doorpair-prod_db:/v busybox:1.37 sh -c 'echo vol-parent >/v/f'"); code != 0 {
 		t.Fatal(out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @"+user+"@doorsrv2:dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @"+user+"@doorsrv2:dev --release"); code != 0 {
 		t.Fatalf("a child on the second door server (%d):\n%s\nits entries:\n%s", code, out, doorEntries2(t, "doorpair-dev"))
 	}
 	second := doorServerAs(t, "doorsrv2")
