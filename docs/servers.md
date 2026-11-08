@@ -152,9 +152,22 @@ since a `-p` there applies to every server a command reaches, a parent's
 on another server included. devopsy refuses a server whose port
 `DEVOPSY_SSH_COMMAND` overrides.
 
+For one command, `--ssh-option <key=value>` before everything else, as
+many as needed, adds an ssh `-o` to every session it opens, after
+`DEVOPSY_SSH_COMMAND`'s options and before devopsy's:
+
+```sh
+devopsy --ssh-option ForwardAgent=yes @vm1 --shell-host
+```
+
 devopsy adds `-o ClearAllForwardings=yes` to every session. It needs none
 of the host's `LocalForward` lines, and each session would try to bind
-them again while another holds them.
+them again while another holds them. It adds `-o ForwardAgent=no` too,
+whatever `~/.ssh/config` says: a session's user, a project user's above
+all, would otherwise reach every server your agent's keys open. A sync
+across servers forwards it to the parent's server for the push
+([Syncs](syncs.md)), and `--ssh-option ForwardAgent=yes` asks for it by
+hand; on `--shell` it reaches the server, not the container.
 
 A key for CI is set up with `--ssh-keys` (Keys on a server, below).
 

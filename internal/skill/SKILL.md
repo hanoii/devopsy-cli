@@ -228,7 +228,10 @@ what `config.yaml` sets.
   `devopsy @<server> --ssh-keys add <key>.pub`, from a machine already
   let in. `devopsy @<server> --shell-host` is a shell on the server, the
   way in when a project is broken; `--root` logs in as root, with a key
-  in root's `authorized_keys`.
+  in root's `authorized_keys`. devopsy never forwards the SSH agent,
+  whatever `~/.ssh/config` says; `devopsy --ssh-option ForwardAgent=yes
+  @<server> --shell-host` does, for that command (`--ssh-option
+  <key=value>` goes first, repeatable, an ssh `-o` for every session).
 - CI releases with a restricted key: `devopsy --ssh-keys-generate`, then
   `devopsy @t --ssh-keys add <key>.pub --restricted`; the job loads the
   private key into an agent and runs `devopsy @t --release`.

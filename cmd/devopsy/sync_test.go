@@ -824,7 +824,7 @@ func TestSyncSameHost(t *testing.T) {
 		}
 		rest = rest[i+len(want):]
 	}
-	if strings.Contains(docker, "run --rm -d") || strings.Contains(ssh, "ForwardAgent") || strings.Contains(docker, "stop app") {
+	if strings.Contains(docker, "run --rm -d") || strings.Contains(ssh, "ForwardAgent=yes") || strings.Contains(docker, "stop app") {
 		t.Errorf("same host used a daemon or the agent:\n%s\n%s", docker, ssh)
 	}
 	// The push holds the parent's release lock shared and its sync lock
@@ -1343,7 +1343,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ForwardAgent=yes -T devopsy@one") {
+	if !strings.Contains(push, "-o ForwardAgent=yes -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
 	// The parent's sessions to the child: never the forwarded agent, no

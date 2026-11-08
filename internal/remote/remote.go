@@ -1602,6 +1602,11 @@ func SSHOptions() []string {
 	if v := os.Getenv(SSHAllowPasswordEnv); v == "" || v == "0" || strings.EqualFold(v, "false") {
 		opts = append(opts, "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
 	}
+	// Never the operator's agent, whatever an ssh config says (a Host *
+	// with ForwardAgent yes): a session's user, a project user's above
+	// all, would reach every server its keys open. --ssh-option, before
+	// these, is how a person asks for it.
+	opts = append(opts, "-o", "ForwardAgent=no")
 	return append(opts, connectOptions()...)
 }
 
@@ -1625,8 +1630,8 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 	return SSHWith(t, nil, script, stdin, stdout, tty, log)
 }
 
-// SSHWith is SSHLog with extra ssh options after SSHOptions (a sync's push
-// session forwards the agent: -o ForwardAgent=yes).
+// SSHWith is SSHLog with extra ssh options before SSHOptions, so they win
+// (a sync's push session forwards the agent: -o ForwardAgent=yes).
 func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	return SSHContext(context.Background(), t, extra, script, stdin, stdout, tty, log)
 }
@@ -1657,7 +1662,9 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
 	script = WithNeeds(script, alsoNeeds(ctx)...)
-	args := append(append(append(SSHOptions(), extra...), ttyFlag), SSHArgs(t.Host)...)
+	// extra first: ssh keeps the first value, so a session's own option
+	// (the push's ForwardAgent=yes) wins over SSHOptions.
+	args := append(append(append(extra[:len(extra):len(extra)], SSHOptions()...), ttyFlag), SSHArgs(t.Host)...)
 	args = append(args, "sh -c "+Quote(script))
 	if Trace != nil {
 		// As ssh gets them, but devopsy's own options and the script.
@@ -1921,9 +1928,29 @@ func WithoutInterrupt(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noInterruptKey{}, true)
 }
 
+// SSHOptionsEnv holds the operator's --ssh-option values, one key=value a
+// line: set by the first devopsy, read by every ssh it and the devopsy
+// calls it nests start (a project command's), on this machine only.
+const SSHOptionsEnv = "DEVOPSY_INTERNAL_SSH_OPTIONS"
+
+// SSHOptionArgs are the -o arguments of SSHOptionsEnv's value v.
+func SSHOptionArgs(v string) []string {
+	var args []string
+	for _, o := range strings.Split(v, "\n") {
+		if o != "" {
+			args = append(args, "-o", o)
+		}
+	}
+	return args
+}
+
 // SSHCommand is ssh with args, or DEVOPSY_SSH_COMMAND, which replaces
-// "ssh" like GIT_SSH_COMMAND, with them.
+// "ssh" like GIT_SSH_COMMAND, with them, the operator's --ssh-option
+// values between the two (SSHOptionsEnv): after the variable's own, so
+// those win, and before every caller's, ssh -G's included, so what ssh
+// resolves is what the sessions use.
 func SSHCommand(args ...string) *exec.Cmd {
+	args = append(SSHOptionArgs(os.Getenv(SSHOptionsEnv)), args...)
 	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {
 		// exec: signals reach the command itself, never only a shell
 		// around it (a cancel would leave the session open, a kill

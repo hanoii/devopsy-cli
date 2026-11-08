@@ -51,18 +51,45 @@ func run() int {
 		return runDoorRead(args[1:])
 	}
 
-	// -v or -vv goes before everything else, and is passed on through
-	// DEVOPSY_VERBOSE to nested devopsy calls: project commands calling
-	// devopsy, and devopsy on servers.
-	for len(args) > 0 && (args[0] == "-v" || args[0] == "-vv") {
+	// -v or -vv, and --ssh-option, go before everything else, in any
+	// order. -v is passed on through DEVOPSY_VERBOSE to nested devopsy
+	// calls: project commands calling devopsy, and devopsy on servers;
+	// --ssh-option through remote.SSHOptionsEnv, to nested calls only,
+	// since a server's sessions to another are its own.
+	var sshOptions []string
+	var badSSHOption string
+	for len(args) > 0 && (args[0] == "-v" || args[0] == "-vv" || args[0] == cli.SSHOptionFlag) {
+		if args[0] == cli.SSHOptionFlag {
+			if len(args) < 2 || !cli.SSHOptionValue.MatchString(args[1]) {
+				badSSHOption = "(none)"
+				if len(args) > 1 {
+					badSSHOption = args[1]
+				}
+				break
+			}
+			sshOptions = append(sshOptions, args[1])
+			args = args[2:]
+			continue
+		}
 		os.Setenv(cli.VerboseEnv, strconv.Itoa(len(args[0])-1))
 		args = args[1:]
+	}
+	if len(sshOptions) > 0 {
+		if prev := os.Getenv(remote.SSHOptionsEnv); prev != "" {
+			sshOptions = append(strings.Split(prev, "\n"), sshOptions...)
+		}
+		os.Setenv(remote.SSHOptionsEnv, strings.Join(sshOptions, "\n"))
 	}
 	verboseLevel := cli.VerboseLevel(os.Getenv(cli.VerboseEnv))
 	// Everything devopsy says goes through report, on errOut: never a
 	// broken pipe when the session that called a server's devopsy is
 	// gone.
 	report.SetDefault(report.New(errOut, color, verboseLevel))
+	if badSSHOption != "" {
+		report.Fail(&report.Failure{Msg: cli.SSHOptionFlag + " takes key=value, as ssh's -o does, not " + badSSHOption,
+			Remedies: []report.Remedy{report.Fix("for example:", "devopsy "+cli.SSHOptionFlag+" ForwardAgent=yes @<server> --shell-host")}})
+		return 2
+	}
 	if os.Getenv(hookStartEnv) != "" && !awaitHookStart() {
 		report.Error("the data capability's hook did not run: the devopsy that started it could not record it, or is gone")
 		return 1

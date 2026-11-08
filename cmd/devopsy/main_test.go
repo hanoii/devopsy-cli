@@ -329,6 +329,33 @@ func TestUserTargets(t *testing.T) {
 	}
 }
 
+// No session forwards the operator's agent, whatever an ssh config says
+// (Host * with ForwardAgent yes, say): devopsy's -o ForwardAgent=no comes
+// before the config files, and ssh keeps the first value; only
+// --ssh-option ForwardAgent=yes, before it, forwards it. Real ssh, -G:
+// it resolves the options and never connects.
+func TestSessionsForwardNoAgent(t *testing.T) {
+	t.Parallel()
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("no ssh")
+	}
+	tmp := t.TempDir()
+	cfg := filepath.Join(tmp, "config")
+	write(t, cfg, "Host *\n  ForwardAgent yes\n", 0o644)
+	g := filepath.Join(tmp, "gssh")
+	write(t, g, "#!/bin/sh\nexec "+ssh+" -F "+cfg+" -G \"$@\"\n", 0o755)
+	for _, c := range []struct {
+		opts []string
+		want string
+	}{{nil, "forwardagent no"}, {[]string{"--ssh-option", "ForwardAgent=yes"}, "forwardagent yes"}} {
+		out, code := runDevopsy(t, tmp, []string{"DEVOPSY_SSH_COMMAND=" + g}, append(c.opts, "@devopsy@vm1.example.com", "--shell-host")...)
+		if !strings.Contains(out, "\n"+c.want+"\n") {
+			t.Errorf("%q: want %s (%d):\n%s", c.opts, c.want, code, out)
+		}
+	}
+}
+
 // A target's host can come from the project's .env, read before connecting.
 // Every session, a compose command's too, bounds its connection (a
 // connect timeout, keepalives counted in beats), after
@@ -345,8 +372,22 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv\n", 0o644)
 	// echo stands in for ssh: it prints the destination.
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo -o ConnectTimeout=5"}, "@prod", "ps")
-	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
+	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
+	}
+	// --ssh-option, first and repeatable like -v, goes after
+	// DEVOPSY_SSH_COMMAND's options and before devopsy's, so it wins over
+	// devopsy's and loses to the variable's.
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo -o ConnectTimeout=5"}, "--ssh-option", "ForwardAgent=yes", "-v", "--ssh-option", "IdentityFile=/k", "@prod", "ps")
+	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ForwardAgent=yes -o IdentityFile=/k -o ClearAllForwardings=yes") {
+		t.Errorf("--ssh-option (%d):\n%s", code, out)
+	}
+	// Only key=value, as ssh's -o takes it: never another argument of ssh's.
+	for _, bad := range [][]string{{"--ssh-option"}, {"--ssh-option", "-A"}, {"--ssh-option", "ForwardAgent"}, {"--ssh-option", "Forward Agent=yes"}} {
+		out, code := runDevopsy(t, project, nil, append(bad, "@prod", "ps")...)
+		if code == 0 || !strings.Contains(out, "--ssh-option takes key=value") {
+			t.Errorf("%q (%d):\n%s", bad, code, out)
+		}
 	}
 	// A server's port goes to ssh as -p, after DEVOPSY_SSH_COMMAND's
 	// options: one there that sets another port (ssh -G says so) is
@@ -361,12 +402,21 @@ func TestTargetHostFromDotenv(t *testing.T) {
 		t.Errorf("a port (%d):\n%s", code, out)
 	}
 	ssh := filepath.Join(tmp, "ssh")
-	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) echo 'port 22' ;; *) echo \"$@\" ;; esac\n", 0o755)
-	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + ssh + " -p 22"}, "@prod", "ps")
-	if code == 0 || strings.Contains(out, "sh -c") ||
-		!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\" names port 5369, and ssh would connect to 22\n") ||
-		!strings.Contains(out, "take the port out of DEVOPSY_SSH_COMMAND, or out of the server") {
-		t.Errorf("a port DEVOPSY_SSH_COMMAND overrides (%d):\n%s", code, out)
+	// As ssh -G: the port from a -p 22 or -o Port=22 it is given, else the
+	// server's.
+	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) case \" $* \" in *\" -p 22 \"*|*\" Port=22 \"*) echo 'port 22' ;; *) echo 'port 5369' ;; esac ;; *) echo \"$@\" ;; esac\n", 0o755)
+	// --ssh-option's go to ssh -G too: what ssh resolves is what the
+	// sessions use.
+	for _, c := range []struct {
+		env  string
+		args []string
+	}{{ssh + " -p 22", nil}, {ssh, []string{"--ssh-option", "Port=22"}}} {
+		out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + c.env}, append(c.args, "@prod", "ps")...)
+		if code == 0 || strings.Contains(out, "sh -c") ||
+			!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\" names port 5369, and ssh would connect to 22\n") ||
+			!strings.Contains(out, "take the port out of DEVOPSY_SSH_COMMAND or --ssh-option, or out of the server") {
+			t.Errorf("a port %q %q overrides (%d):\n%s", c.env, c.args, code, out)
+		}
 	}
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=ssh://devopsy@from-dotenv\n", 0o644)
 	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
@@ -1116,7 +1166,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	write(t, filepath.Join(bin, "fakeshell"), "#!/bin/sh\necho \"shell $*\"\n", 0o755)
 	for _, addr := range []string{"@devopsy@server", "@b/prod"} {
 		out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "argsssh"), "SHELL=" + filepath.Join(bin, "fakeshell")}, addr, "--shell-host", "--root")
-		if code != 0 || !strings.Contains(out, "-l root -T devopsy@server") || !strings.Contains(out, "shell -l") {
+		if code != 0 || !strings.Contains(out, "ssh -l root -o ") || !strings.Contains(out, " -T devopsy@server") || !strings.Contains(out, "shell -l") {
 			t.Fatalf("%s --shell-host --root (%d):\n%s", addr, code, out)
 		}
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -106,6 +107,7 @@ var Flags = []FlagGroup{
 		{Name: "--ai-skill", Args: "[--stub] [install [--global]]", Scope: Local, Desc: "the skill for agents: print it,\nor install it"},
 		{Name: "--version", Scope: Local, Desc: "devopsy's, docker's and compose's versions"},
 		{Name: "-v", Also: "-vv", Scope: Local, Desc: "first: what devopsy runs; -vv: scripts too"},
+		{Name: SSHOptionFlag, Args: "<key=value>", Scope: Local, Desc: "first, repeatable: an ssh -o for every\nsession this command opens"},
 		{Name: "--help", Also: "-h", Scope: LocalOrTarget, Desc: "this help; after a flag, its own"},
 	}},
 }
@@ -262,3 +264,11 @@ func flagsHelp() string {
 	}
 	return b.String()
 }
+
+// SSHOptionFlag is --ssh-option <key=value>, before everything else like
+// -v: an ssh -o for every session of this command (remote.SSHOptionsEnv).
+const SSHOptionFlag = "--ssh-option"
+
+// SSHOptionValue is what --ssh-option takes: ssh's -o key=value, never
+// another of ssh's arguments, and one line.
+var SSHOptionValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*=[^\n]+$`)
