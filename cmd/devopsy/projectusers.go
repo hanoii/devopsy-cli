@@ -130,6 +130,23 @@ func serverProjects(d *remote.Door, root string) []string {
 	return ps
 }
 
+// doorNameOwner is the project user whose names compose project name sits under, by the
+// door's rule (door.Policy.OwnName) among the server's projects (serverProjects, root the
+// release root), "" for none or no door: the door acts only on containers it made, and
+// refuses that user's every compose command while another's are under its names.
+func doorNameOwner(d *remote.Door, root, name string) string {
+	if d == nil {
+		return ""
+	}
+	projects := serverProjects(d, root)
+	for who, u := range d.Users {
+		if (door.Policy{Project: u.Project, User: who, Others: projects}).OwnName(name) {
+			return who
+		}
+	}
+	return ""
+}
+
 func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if err := spaceGuarded(d.Space); err != nil {
 		report.Fail(err, report.Fix("mount it so, for example with this line in /etc/fstab:", d.Space+" "+d.Space+" none bind,nosuid,nodev 0 0"))

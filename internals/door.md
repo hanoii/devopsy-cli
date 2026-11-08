@@ -48,6 +48,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - sshd takes the drop-in at a reboot, never a reload by devopsy (`DoorRebootMarker`, `/run/reboot-required`): a reload is a privileged container in the host's pid namespace, and a service name per distribution.
 - `add` refuses while the deploy user or root is in `devopsy-projects`: sshd would ignore their own keys for devopsy's, and once sshd has the door, that locks them out at once.
 - `add` refuses while a container the door did not make is under the project's names, and a tree that is there and not the project user's (`doorTreeCheck`), before it makes anything: either would hand that user what another made.
+- A release by the deploy user of a compose project under a project user's names is refused before its switch (`--check-names`, `doorNameOwner`, the door's own `OwnName` among the server's projects): the door would then refuse that user's every compose command.
 - `add` refuses a project name that extends another's on the server, or another extends (`projectNameClash`, over the door's users and the release root): compose names are flat, so whichever came first would hold the other's networks, volumes and containers.
 - What `add` writes in a project user's home is written as that user (`runuser`), and only when the user is new: root writing in a home its user owns follows the links that user put there.
 - `remove` drops a project user's entry, keys and sync keys, never its Unix user: deleting a user that holds a tree and data is not one subcommand's.

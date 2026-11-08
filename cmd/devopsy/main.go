@@ -200,6 +200,17 @@ func run() int {
 		if err != nil {
 			return failErr(err)
 		}
+		// The deploy user's release under a project user's names: the door would refuse
+		// that user's every compose command while it runs.
+		if !behindDoor() {
+			d, _ := remote.ServerDoor()
+			r, _ := remote.ReleaseSettings()
+			name := composeName(cwd)
+			if who := doorNameOwner(d, r.Root, name); who != "" {
+				return failErr(&report.Failure{Msg: "compose project " + name + " is under the names of project user " + who + " here: the door would refuse that user's every compose command while it runs",
+					Remedies: []report.Remedy{report.Fix("release it as that user:", "DEVOPSY_SERVER="+who+"@<server> devopsy @<target> --release")}})
+			}
+		}
 		return 0
 	}
 	// A sync's parts on servers, run by its sessions (cmd/devopsy/sync.go).

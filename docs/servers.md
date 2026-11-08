@@ -292,7 +292,9 @@ the project's names, naming the `docker compose -p <name> down` that
 takes them down with their volumes kept, and so does every compose
 command of the project user's while one is there. `add` also refuses a
 tree that is there already and not the project user's, the deploy
-user's releases of the project for example: move it aside first.
+user's releases of the project for example: move it aside first. Once
+the project has its user, a release by the deploy user under its names
+is refused before it goes live.
 
 The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
 A child on another server needs its own project user there: a sync
