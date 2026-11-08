@@ -211,7 +211,10 @@ func TestActivationCuts(t *testing.T) {
 					if cur == "" || !fileExists(filepath.Join(base, cur, "code", ".devopsy")) {
 						t.Errorf("current %q (was %q) is no whole release: %s", cur, was, said())
 					}
-					if st, c := cutRun(s, nil, "@"+m.env, "--status"); c != 0 && !strings.Contains(st, "did not complete") {
+					// --status works, and what a cut left needs attention there
+					// (statusWarned): stops recorded, a release cut off past its
+					// switch, a mark.
+					if st, c := cutRun(s, nil, "@"+m.env, "--status"); c != 0 && c != statusWarned && !strings.Contains(st, "did not complete") {
 						t.Errorf("--status after it (%d):\n%s\n%s", c, st, said())
 					}
 					// A mark has its own way out, which a release refuses by
