@@ -21,7 +21,7 @@ import (
 // calls that is not listed here.
 var featureFlags = []string{
 	"check-images", "check-mounts", "check-names", "destroy-data", "env-trace", "export", "images",
-	"import", "missing-vars", "mnt-owners", "mnt-ready", "prepare-release",
+	"import", "missing-vars", "mnt-owners", "mnt-ready", "prepare-release", "project-users-step",
 	"release-id", "release-inherit", "release-settings", "release-steps",
 	"say", "server-facts",
 	"snapshot-step", "status-facts", "stdin-guard", "sync-push",

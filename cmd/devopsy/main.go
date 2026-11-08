@@ -94,6 +94,11 @@ func run() int {
 			return runProbe(args[1:], color)
 		case "--ssh-keys-generate":
 			return runSSHKeysGenerate(args[1:], color)
+		case "--project-users":
+			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
+				return 0
+			}
 		case "--ssh-keys":
 			// Its help needs no target; the rest does (below).
 			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
@@ -106,6 +111,8 @@ func run() int {
 			return runMntReady(args[1:])
 		case remote.ServerFactsFlag:
 			return runServerFacts()
+		case remote.ProjectUsersFlag:
+			return runProjectUsersStep(args[1:])
 		case "--server-info":
 			return runServerInfo(nil, args[1:])
 		case imagesFlag:

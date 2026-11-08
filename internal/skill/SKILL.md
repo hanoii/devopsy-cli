@@ -232,6 +232,11 @@ what `config.yaml` sets.
 - CI releases with a restricted key: `devopsy --ssh-keys-generate`, then
   `devopsy @t --ssh-keys add <key>.pub --restricted`; the job loads the
   private key into an agent and runs `devopsy @t --release`.
+- A project with a user of its own, no Docker socket (`devopsy-<project>`):
+  made as the deploy user with `devopsy @devopsy@<server>: --project-users
+  add <project>`, its keys `--ssh-keys --for <project> add <key>.pub`. A
+  project user cannot edit its own keys. The first `add` on a server waits
+  for a reboot before project users log in.
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`

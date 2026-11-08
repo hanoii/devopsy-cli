@@ -1152,6 +1152,40 @@ Examples:
   devopsy @prod --status
   devopsy @prod --status --json
 `,
+	"--project-users": `Usage: devopsy @<server> --project-users [list | add <project> | remove <project>]
+
+A server's project users: one Unix user per project, devopsy-<project>,
+with no Docker socket. What it finds as docker is devopsy, which asks the
+deploy user's devopsy through sudo, and that one checks every request, so
+a project user's leaked key reaches its project and not the server or
+the others. Asked as the deploy user, the server named with its user
+(@devopsy@vm1:). The server needs a door: space: first (devopsy-server's
+door step).
+
+  --project-users           list them: project, whether the Unix user is
+                            there, how many keys
+  --project-users add <p>   make devopsy-<p>, its home and, with releases:
+                            root elsewhere than the deploy user's home, its
+                            tree there, and its entry in the deploy user's
+                            config directory. The first one also puts the
+                            door on the host (its group, its sudo rules, and
+                            sshd's part, which sshd takes at the next
+                            reboot). A name that extends another project's,
+                            or another extends, is refused: compose names
+                            are flat, so shop's admin-prod is shop-admin's
+                            prod.
+  --project-users remove <p>
+                            drop devopsy-<p>'s entry and keys: it logs in no
+                            more and the door answers it no more. Its Unix
+                            user, home and tree stay.
+
+Its keys are --ssh-keys --for <project>.
+
+Examples:
+  devopsy @devopsy@vm1: --project-users add shop
+  devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
+  devopsy @devopsy@vm1: --project-users
+`,
 	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
        devopsy --ssh-keys-generate [<name>] [--out <file>]
 

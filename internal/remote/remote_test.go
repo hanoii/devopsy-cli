@@ -244,6 +244,8 @@ func allScripts() map[string]string {
 		"server info":     ServerInfoScript(&Target{Host: "h"}),
 		"keys add":        KeysAddScript(""),
 		"keys remove":     KeysRemoveScript(""),
+		"keys for":        KeysRemoveScript("devopsy-shop") + KeysAddScript("devopsy-shop"),
+		"project users":   ProjectUsersScript(&Target{Host: "h"}, []string{"add", "shop"}),
 		"destroy":         DestroyScript(tg, "app"),
 		"reload":          ReloadScript(tg, "app"),
 		"vars hint":       VarsHintScript(tg),

@@ -548,7 +548,7 @@ func runDoor(args []string) int {
 		return doorRefused(err)
 	}
 	if err := spaceGuarded(policy.Space); err != nil {
-		report.Fail(err, report.Fix("mount it so, for example in /etc/fstab, as devopsy-server's door step does:", policy.Space+" "+policy.Space+" none bind,nosuid,nodev 0 0"))
+		report.Fail(err, report.Fix("mount it so, for example with this line in /etc/fstab:", policy.Space+" "+policy.Space+" none bind,nosuid,nodev 0 0"))
 		doorRecord(err.Error())
 		return 2
 	}

@@ -778,3 +778,19 @@ func TestAuthorizedKeysPrintsOnlyKeys(t *testing.T) {
 		}
 	}
 }
+
+// Compose names are flat, so a project whose name extends another's, or that another's
+// extends, would share names with it: whichever came first holds the other's networks,
+// volumes and containers. The same name is the project itself, as a release root's project
+// moving to its own user is.
+func TestProjectNameClash(t *testing.T) {
+	t.Parallel()
+	others := []string{"shop", "blog-admin", "traefik"}
+	for project, clash := range map[string]bool{
+		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true,
+	} {
+		if why := projectNameClash(project, others); (why != "") != clash {
+			t.Errorf("%s: %q", project, why)
+		}
+	}
+}

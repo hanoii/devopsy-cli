@@ -20,42 +20,52 @@ const (
 	doorMount      = "nosuid,nodev"
 )
 
-// doorServer is this lane's door server, started by the first test that asks: each test
-// is a process of its own (runTest), so what says it is there is the container.
-func doorServer(t *testing.T) string {
+// doorServer is this lane's door server, doorsrv (doorServerAs).
+func doorServer(t *testing.T) string { return doorServerAs(t, "doorsrv") }
+
+// doorServerAs is one of this lane's door servers by its alias (doorsrv, doorsrv2), started
+// by the first test that asks: each test is a process of its own (runTest), so what says it
+// is there is the container. Here is what the admin sets up: the door's space on a mount of
+// its own with nosuid and nodev, and door: in the deploy user's config with a vet of the
+// admin's. What devopsy puts on the host (the group, the sudo rules, sshd's part, the docker
+// link) comes with the first --project-users add (doorUserOn).
+func doorServerAs(t *testing.T, alias string) string {
 	t.Helper()
 	l := laneOf(run)
 	name := "devopsy-e2e-door-" + l.run
+	if alias != "doorsrv" {
+		name = "devopsy-e2e-" + alias + "-" + l.run
+	}
 	if _, err := docker("inspect", "--type", "container", name); err == nil {
 		return name
 	}
-	if err := l.startServer(name, "doorsrv"); err != nil {
+	if err := l.startServer(name, alias); err != nil {
 		_, _ = docker("rm", "-f", "-v", name)
 		t.Fatal(err)
 	}
 	out, code := execIn(t, []string{name}, `set -e
-groupadd devopsy-projects
-cat >/etc/sudoers.d/door <<'S'
-%devopsy-projects ALL=(devopsy) NOPASSWD: /usr/local/bin/devopsy --door *
-devopsy ALL=(%devopsy-projects) NOPASSWD: /usr/local/bin/devopsy --door-read *
-S
-chmod 440 /etc/sudoers.d/door
 install -d `+doorSpace+`
 mount --bind `+doorSpace+` `+doorSpace+`
 mount -o remount,bind,`+doorMount+` `+doorSpace+`
 chown devopsy `+doorSpace+`
 chown devopsy /usr/local/bin/devopsy
-ln -sf /usr/local/bin/devopsy /usr/local/bin/docker
 cat >/usr/local/bin/door-vet <<'V'
 #!/bin/sh
 # The admin's program: refuses a label naming what it was told to.
 if grep -q '"vetted.refuse"'; then echo "refused by the vet" >&2; exit 2; fi
 V
 chmod 755 /usr/local/bin/door-vet
+install -d -o devopsy -g devopsy /home/devopsy/.config /home/devopsy/.config/devopsy
+cat >/home/devopsy/.config/devopsy/config.yaml <<'C'
+door:
+  space: `+doorSpace+`
+  vets: [{prefix: vetted., command: /usr/local/bin/door-vet}]
+C
+chown devopsy /home/devopsy/.config/devopsy/config.yaml
 su -s /bin/sh devopsy -c 'devopsy --util-image'
 `)
 	if code != 0 {
-		t.Fatalf("the door's setup (%d): %s", code, out)
+		t.Fatalf("the door's setup on %s (%d): %s", alias, code, out)
 	}
 	return name
 }
@@ -80,30 +90,33 @@ func doorAs(t *testing.T, user, script string) (string, int) {
 	return execIn(t, []string{"-u", user, "-w", "/", doorServer(t)}, script)
 }
 
-// doorUser makes a project's user and its line in the deploy user's config.
-func doorUser(t *testing.T, project string) string {
+// doorUser is doorUserOn the lane's door server.
+func doorUser(t *testing.T, project string) string { return doorUserOn(t, "doorsrv", project) }
+
+// doorUserOn makes a project's user on a door server the way an admin does, from the
+// operator: --project-users add, then the operator's key for it (--ssh-keys --for), then the
+// admin's joinable: [shared] in its entry. The first add puts the door on the host, sshd's
+// part taken at a reboot: here sshd reloads, and the marker goes as a boot would take it.
+func doorUserOn(t *testing.T, alias, project string) string {
 	t.Helper()
 	user := "devopsy-" + project
-	out, code := doorRoot(t, `set -e
-useradd -m -s /bin/sh -G devopsy-projects `+user+`
-chmod 750 /home/`+user+`
-install -d -m 700 -o `+user+` -g `+user+` /home/`+user+`/.ssh
-install -m 600 -o `+user+` -g `+user+` /home/devopsy/.ssh/authorized_keys /home/`+user+`/.ssh/authorized_keys
-usermod -p '*' `+user+`
-mkdir -p /home/devopsy/.config/devopsy
-echo '    `+user+`: {project: `+project+`, joinable: [shared]}' >>/var/lib/door-users.yaml
-{ cat <<'C'
-door:
-  space: `+doorSpace+`
-  vets: [{prefix: vetted., command: /usr/local/bin/door-vet}]
-  users:
-C
-cat /var/lib/door-users.yaml; } >/home/devopsy/.config/devopsy/config.yaml
-chown -R devopsy /home/devopsy/.config
-`)
-	if code != 0 {
-		t.Fatalf("the user of %s (%d): %s", project, code, out)
+	name := doorServerAs(t, alias)
+	if out, code := op(t, "/", "devopsy @devopsy@"+alias+": --project-users add "+project+" 2>&1"); code != 0 {
+		t.Fatalf("--project-users add %s on %s (%d): %s", project, alias, code, out)
 	}
+	if out, code := op(t, "/", "devopsy @devopsy@"+alias+": --ssh-keys --for "+project+" add /root/.ssh/id_ed25519.pub 2>&1"); code != 0 && !strings.Contains(out, "authorized already") {
+		t.Fatalf("--ssh-keys --for %s on %s (%d): %s", project, alias, code, out)
+	}
+	entry := "/home/devopsy/.config/devopsy/door/users/" + user + ".yaml"
+	if out, code := execIn(t, []string{"-w", "/", name}, `set -e
+if [ -e /run/devopsy-door-reboot ]; then kill -HUP "$(cat /run/sshd.pid)"; rm -f /run/devopsy-door-reboot; fi
+grep -q joinable `+entry+` || echo 'joinable: [shared]' >>`+entry); code != 0 {
+		t.Fatalf("the reboot and the entry on %s (%d): %s", alias, code, out)
+	}
+	eventually(t, time.Minute, user+"'s login on "+alias, func() bool {
+		_, code := op(t, "/", "ssh -o BatchMode=yes "+user+"@"+alias+" true")
+		return code == 0
+	})
 	return user
 }
 
@@ -743,4 +756,73 @@ docker run --rm -v "$c2/volumes/mnt/link:/x/data:ro" devopsy-util:4 sh -c "$expo
 	} else if !strings.Contains(out, "refused") {
 		t.Fatalf("neither read nor refused, so the setup broke:\n%s", out)
 	}
+}
+
+// A child on another door server, both set up as an admin does (doorUserOn: its project user
+// on each, the operator's key for both): the child's release syncs the parent's data from
+// one project user to the other through the operator's forwarded agent, an entry and a named
+// volume, and its run step writes in the entry it was given. The second server's door is
+// its own: the first's project user is not the second's.
+func TestDoorSyncAcrossDoorServers(t *testing.T) {
+	dir := doorProject(t, "doorpair", `services:
+  web:
+`+doorService+`    command: [sleep, infinity]
+    volumes: [./mnt/data:/d, db:/v]
+    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any}
+volumes:
+  db: {}
+`, map[string]string{
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nset -e\nmkdir -p \"$DEVOPSY_PROJECT_DIR/mnt/data/seeded\"\nexec devopsy up -d --wait\n",
+	})
+	user := doorUserOn(t, "doorsrv2", "doorpair")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("the parent's release (%d):\n%s", code, out)
+	}
+	if out, code := doorRoot(t, "echo dat-parent >"+doorSpace+"/mnt/doorpair-prod/data/f && docker run --rm -v doorpair-prod_db:/v busybox:1.37 sh -c 'echo vol-parent >/v/f'"); code != 0 {
+		t.Fatal(out)
+	}
+	if out, code := op(t, dir, agent+" devopsy @"+user+"@doorsrv2:dev --release"); code != 0 {
+		t.Fatalf("a child on the second door server (%d):\n%s\nits entries:\n%s", code, out, doorEntries2(t, "doorpair-dev"))
+	}
+	second := doorServerAs(t, "doorsrv2")
+	if out, _ := execIn(t, []string{second}, "cat "+doorSpace+"/mnt/doorpair-dev/data/f; docker run --rm -v doorpair-dev_db:/v busybox:1.37 cat /v/f"); !strings.Contains(out, "dat-parent") || !strings.Contains(out, "vol-parent") {
+		t.Errorf("the child's data on the second server: %s", out)
+	}
+	if out, _ := execIn(t, []string{second}, "test -d "+doorSpace+"/mnt/doorpair-dev/data/seeded && echo seeded"); !strings.Contains(out, "seeded") {
+		t.Errorf("the child's run step did not write in its entry: %s", out)
+	}
+	// A key the project user puts in its own home is never read, or a leaked key would add a
+	// second one that outlives rotation; the same key through --ssh-keys --for logs in (the
+	// control).
+	if out, code := op(t, "/", "rm -f /tmp/planted /tmp/planted.pub && ssh-keygen -q -t ed25519 -N '' -f /tmp/planted && cat /tmp/planted.pub"); code != 0 {
+		t.Fatal(out)
+	} else if out, code := execIn(t, []string{"-u", user, "-w", "/", second}, "mkdir -p ~/.ssh && echo '"+strings.TrimSpace(out)+"' >>~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"); code != 0 {
+		t.Fatal(out)
+	}
+	login := "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /tmp/planted " + user + "@doorsrv2 true 2>&1"
+	if out, code := op(t, "/", login); code == 0 {
+		t.Errorf("a key planted in the project user's home logged in: %s", out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --ssh-keys --for doorpair add /tmp/planted.pub 2>&1 && "+login); code != 0 {
+		t.Errorf("the control: the same key, the deploy user's to give (%d): %s", code, out)
+	}
+	// add refuses a name sharing compose names with a project there, and refuses while the
+	// deploy user is in the project users' group, which has sshd ignore its own keys: once sshd
+	// has the door that locks its logins out at once, so the add is asked on the server.
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add doorpair-eu 2>&1"); code == 0 || !strings.Contains(out, "doorpair-eu extends doorpair's name") {
+		t.Errorf("a name extending another project's (%d): %s", code, out)
+	}
+	execIn(t, []string{second}, "usermod -aG devopsy-projects devopsy")
+	out, code := execIn(t, []string{"-u", "devopsy", "-w", "/home/devopsy", second}, "devopsy --project-users-step add doorpairb 2>&1")
+	execIn(t, []string{second}, "gpasswd -d devopsy devopsy-projects >/dev/null")
+	if code == 0 || !strings.Contains(out, "devopsy is in devopsy-projects") {
+		t.Errorf("an add with the deploy user in the group (%d): %s", code, out)
+	}
+}
+
+// doorEntries2 is doorEntries on the second door server.
+func doorEntries2(t *testing.T, name string) string {
+	t.Helper()
+	out, _ := execIn(t, []string{doorServerAs(t, "doorsrv2")}, "cd "+doorSpace+"/mnt/"+name+" 2>&1 && ls -lna . && getfacl -p . * 2>&1")
+	return out
 }

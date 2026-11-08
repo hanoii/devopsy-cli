@@ -216,4 +216,57 @@ remove the old one.
 
 ## Project users with no Docker socket
 
-A deploy user's key is root on the server, since its group reaches Docker's socket. A project can have a Unix user of its own that does not: it finds devopsy as `docker`, and asks the deploy user through sudo for what its compose file needs, each request checked. A leaked key of that user then reaches its project, not the server or the others. Nothing sets this up yet: a server takes `door:` in its deploy user's config, shown by `devopsy --debug schema`, and what `internals/door.md` lists. Everything else stays as it is on a server without it.
+A deploy user's key is root on the server, since its group reaches
+Docker's socket. A project can have a Unix user of its own that does
+not: it finds devopsy as `docker`, and asks the deploy user's devopsy
+through sudo for what its compose file needs, each request checked. A
+leaked key of that user then reaches its project, not the server or the
+others. Everything else stays as it is on a server without it.
+
+A server takes project users once its deploy user's config names the
+door's space, a directory of the deploy user's on a mount of its own
+with `nosuid` and `nodev` (the door refuses every request otherwise):
+
+```yaml
+door:
+  space: /var/lib/devopsy-door
+```
+
+```
+/var/lib/devopsy-door /var/lib/devopsy-door none bind,nosuid,nodev 0 0
+```
+
+Then, as the deploy user, with the server named with its user:
+
+```sh
+devopsy @devopsy@vm1: --project-users add shop
+devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
+```
+
+`add` makes `devopsy-shop` (no password, its home closed to others),
+and, with `releases: root` elsewhere than the deploy user's home, its
+tree there. Its entry is a file of the deploy user's,
+`~/.config/devopsy/door/users/devopsy-shop.yaml`, where an admin may add
+`joinable:`, `roles:` or `read_all:` (`devopsy --debug schema`). The
+first `add` also puts on the server what devopsy needs there, each piece
+checked before it lands: the `devopsy-projects` group, the door's sudo
+rules, a `docker` that is devopsy, and sshd's part, which asks devopsy
+for a project user's keys and never reads its own
+`~/.ssh/authorized_keys`. sshd takes that part at the next reboot: until
+then no project user logs in, and `--project-users` says so. It refuses
+while the deploy user or root is in `devopsy-projects`, which would have
+sshd ignore their own keys.
+
+A project's name may not extend another's on the server, or be
+extended by one (`shop` and `shop-admin`): compose names are flat, so
+`shop`'s environment `admin-prod` is `shop-admin`'s `prod`.
+
+The project's address then names its user: `DEVOPSY_SERVER=devopsy-shop@vm1`.
+A child on another server needs its own project user there, with the
+operator's key, since a sync across servers goes through the operator's
+forwarded agent.
+
+`--project-users remove shop` drops its entry and keys, so it logs in no
+more and the door answers it no more; its Unix user, home and tree stay.
+Removing a key ends no session running, and clears nothing a leaked key
+left in that user's home: kill its processes and reset the home too.
