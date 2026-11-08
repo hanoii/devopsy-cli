@@ -473,7 +473,7 @@ func TestSyncKeyFeature(t *testing.T) {
 		t.Errorf("the keyed push's words:\n%s", s["push keyed"])
 	}
 	h := s["holder keyed"]
-	order := []string{"export " + SyncKeyEnv + "=", "export " + SyncParentKindEnv + "=yes", `if [ "$sync_me" != "$` + SyncParentKindEnv + `" ]; then`, "'--sync-services' 'prepare'", "devopsy --sync-key add \"$sync_id\" \"$base\"", "ready for sync in", `"${sync_hostkeys:-}"`, `mv -f "$base/.devopsy-sync.started"`, `devopsy --sync-key remove "$sync_id"`}
+	order := []string{"export " + SyncKeyEnv + "=", "export " + SyncParentKindEnv + "=yes", `if [ "$sync_me" != "$` + SyncParentKindEnv + `" ]; then`, "sync_hostkeys=$(", "'--sync-services' 'prepare'", "devopsy --sync-key add \"$sync_id\" \"$base\"", "ready for sync in", `"${sync_hostkeys:-}"`, `mv -f "$base/.devopsy-sync.started"`, `devopsy --sync-key remove "$sync_id"`}
 	at := 0
 	for _, w := range order {
 		i := strings.Index(h[at:], w)

@@ -836,20 +836,23 @@ func syncBlock(projectName, failed string, release bool) string {
 	// (DoneLine).
 	return syncFinish(projectName) + timerStart("sync_t") + `sync_id=$` + SyncIDEnv + `
 : >"$base/` + SyncHoldingFile + `"
-` + syncKinds + `if [ "$status" = 0 ]; then
+` + syncKinds + `# Across servers, the host keys the push checks this server by, before
+# anything stops.
+if [ "$status" = 0 ] && [ -n "${` + SyncKeyEnv + `:-}" ]; then
+  sync_hostkeys=$(` + hostKeys + `)
+  if [ -z "$sync_hostkeys" ]; then
+    status=1
+    devopsy --say error "no ssh_host_*_key.pub in ${` + HostKeysDirEnv + `:-/etc/ssh}: the parent's server could not check it reaches this one: nothing changed" || true
+  fi
+fi
+if [ "$status" = 0 ]; then
 ` + syncPrepare(projectName, release) + `fi
 # Across servers, the key the push reaches this side with, once prepared:
 # without its gate open it does nothing. Failing, what was stopped comes back.
 if [ "$status" = 0 ] && [ -n "${` + SyncKeyEnv + `:-}" ]; then
-  sync_hostkeys=$(` + hostKeys + `)
   sk_reset=-
   [ -z "${` + SyncResetEnv + `:-}" ] || sk_reset=reset
-  if [ -z "$sync_hostkeys" ]; then
-    status=1
-    devopsy --say error "this server's sshd host keys are not in ${` + HostKeysDirEnv + `:-/etc/ssh}: the parent's server could not check it is this one" || true
-  else
-    devopsy ` + SyncKeyFlag + ` add "$sync_id" "$base" "$` + SyncToTargetEnv + `" "$sk_reset" "$` + SyncKeyEnv + `" || status=$?
-  fi
+  devopsy ` + SyncKeyFlag + ` add "$sync_id" "$base" "$` + SyncToTargetEnv + `" "$sk_reset" "$` + SyncKeyEnv + `" || status=$?
   if [ "$status" != 0 ]; then
     sync_finish abort || true
     devopsy --say error "authorizing the sync's key failed ($status): nothing changed" || true

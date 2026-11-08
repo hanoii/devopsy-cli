@@ -1430,6 +1430,12 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if left, _ := filepath.Glob(keyDir + "*"); len(left) != 0 {
 		t.Errorf("a failed sync's key stayed on the parent: %v", left)
 	}
+	// A child with no host keys to send: refused before anything stops.
+	out, code = s.run(append(agent, remote.HostKeysDirEnv+"="+t.TempDir()), "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "no ssh_host_*_key.pub in ") || strings.Contains(docker, " stop ") || strings.Contains(out, "copying @") {
+		t.Fatalf("no host keys (%d):\n%s\n%s", code, out, docker)
+	}
 	// A key the child cannot authorize: the holder brings back what it
 	// stopped, and the push never starts.
 	if err := os.Remove(authorized); err != nil && !os.IsNotExist(err) {
