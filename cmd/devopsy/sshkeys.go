@@ -20,10 +20,15 @@ import (
 // [--restricted] | remove <key>]: the deploy user's authorized_keys on the
 // target's server, edited over the usual session, as that user. Public
 // keys only ever travel; runSSHKeysGenerate makes a local pair.
+// errSaid is a failure already said, with its fix: nothing more to say.
+var errSaid = errors.New("said")
+
 func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	say := func(msg string, details ...string) { report.Info(msg, details...) }
-	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a local key pair, no target)"
+	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a local key pair, no target)"
 	restricted := false
+	// user is the project user whose keys these are (--for), "" for the deploy user's own.
+	user, project := "", ""
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -32,6 +37,12 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return 0
 		case "--restricted":
 			restricted = true
+		case "--for":
+			if i+1 >= len(args) || user != "" || !remote.ValidName(args[i+1]) {
+				return fail(usage)
+			}
+			i++
+			project, user = args[i], remote.DoorUserOf(args[i])
 		default:
 			if strings.HasPrefix(a, "-") && a != "-" {
 				return fail(usage)
@@ -43,14 +54,35 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	if len(words) > 0 {
 		action, words = words[0], words[1:]
 	}
+	// whose names the keys in what devopsy says: the server's, or its project user's.
+	whose := t.Host + "'s"
+	if user != "" {
+		whose = user + "'s on " + t.Host
+	}
+	// asked runs a script, and turns a --for asked as a project user into the hint: the
+	// script knows the deploy user's name, and the host is the one typed.
+	asked := func(script string, in io.Reader, out *bytes.Buffer) (int, error) {
+		code, err := remote.SSH(t, script, in, out, false)
+		if err == nil && user != "" && code == remote.AskedAsProjectUser {
+			deploy := cmp.Or(strings.TrimSpace(out.String()), "<deploy user>")
+			login, host, ok := strings.Cut(t.Host, "@")
+			if !ok {
+				login, host = "this login", t.Host
+			}
+			report.Fail(errors.New(login+" is a project user, and a project user's keys are its deploy user's to edit"),
+				report.Fix("ask as the deploy user:", "devopsy @"+deploy+"@"+host+": --ssh-keys --for "+project+" "+strings.Join(append([]string{action}, words...), " ")))
+			return 0, errSaid
+		}
+		return code, err
+	}
 	list := func() ([]remote.AuthorizedKey, error) {
 		var buf bytes.Buffer
-		code, err := remote.SSH(t, remote.KeysReadScript(), bytes.NewReader(nil), &buf, false)
+		code, err := asked(remote.KeysReadScript(user), bytes.NewReader(nil), &buf)
 		if err != nil {
 			return nil, err
 		}
 		if code != 0 {
-			return nil, fmt.Errorf("reading %s's authorized keys failed (%d)", t.Host, code)
+			return nil, fmt.Errorf("reading %s authorized keys failed (%d)", whose, code)
 		}
 		return remote.ParseAuthorizedKeys(buf.String()), nil
 	}
@@ -63,7 +95,10 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		var buf bytes.Buffer
-		code, err := remote.SSH(t, remote.KeysAddScript(), strings.NewReader(k.Line()+"\n"), &buf, false)
+		code, err := asked(remote.KeysAddScript(user), strings.NewReader(k.Line()+"\n"), &buf)
+		if err == errSaid {
+			return 1
+		}
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -74,7 +109,11 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if k.Comment != "" {
 			what += " (" + k.Comment + ")"
 		}
-		what += " for " + t.Host + " in " + strings.TrimSpace(buf.String())
+		if user != "" {
+			what += " for " + user + " on " + t.Host + " in " + strings.TrimSpace(buf.String())
+		} else {
+			what += " for " + t.Host + " in " + strings.TrimSpace(buf.String())
+		}
 		if restricted {
 			say(what, "restricted: commands only, no shell, with the agent and port forwarding syncs across servers need")
 		} else {
@@ -89,14 +128,21 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(usage)
 		}
 		keys, err := list()
+		if err == errSaid {
+			return 1
+		}
 		if err != nil {
 			return fail(err.Error())
 		}
+		where := "~/.ssh/authorized_keys of its deploy user"
+		if user != "" {
+			where = "the door's, for project " + project
+		}
 		if len(keys) == 0 {
-			say(t.Host + " has no authorized keys")
+			say(strings.TrimSuffix(whose, "'s") + " has no authorized keys")
 			return 0
 		}
-		say(t.Host + "'s authorized keys (~/.ssh/authorized_keys of its deploy user):")
+		say(whose + " authorized keys (" + where + "):")
 		for _, k := range keys {
 			fp, _ := k.Fingerprint()
 			line := fp + "  " + strings.TrimPrefix(k.Type, "ssh-")
@@ -150,6 +196,9 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(usage)
 		}
 		keys, err := list()
+		if err == errSaid {
+			return 1
+		}
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -163,19 +212,27 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		switch len(matches) {
 		case 0:
-			return failErr(&report.Failure{Msg: words[0] + " matches none of " + t.Host + "'s keys", Remedies: []report.Remedy{remote.SeeHint(targetRef(t), "them", "--ssh-keys")}})
+			lists := "--ssh-keys"
+			if user != "" {
+				lists += " --for " + project
+			}
+			return failErr(&report.Failure{Msg: words[0] + " matches none of " + whose + " keys", Remedies: []report.Remedy{remote.SeeHint(targetRef(t), "them", lists)}})
 		case 1:
 		default:
 			return fail(words[0] + " matches several keys: give more of the fingerprint")
 		}
 		k := matches[0]
 		fp, _ := k.Fingerprint()
-		// The server checks too (KeysRemoveScript), under its lock.
-		if len(keys) == 1 {
+		// The server checks too (KeysRemoveScript), under its lock. A project user's last key
+		// goes: that is how its logins stop.
+		if len(keys) == 1 && user == "" {
 			return fail(fp + " is " + t.Host + "'s last key: removing it would lock everyone out")
 		}
 		var buf bytes.Buffer
-		code, err := remote.SSH(t, remote.KeysRemoveScript(), strings.NewReader(k.Blob+"\n"), &buf, false)
+		code, err := asked(remote.KeysRemoveScript(user), strings.NewReader(k.Blob+"\n"), &buf)
+		if err == errSaid {
+			return 1
+		}
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -186,7 +243,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if k.Comment != "" {
 			what += " (" + k.Comment + ")"
 		}
-		say(what + " from " + t.Host + "'s " + strings.TrimSpace(buf.String()))
+		say(what + " from " + whose + " " + strings.TrimSpace(buf.String()))
 		return 0
 
 	}

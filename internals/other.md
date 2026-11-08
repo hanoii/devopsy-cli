@@ -32,7 +32,8 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 
 ## --ssh-keys
 
-- `--ssh-keys` edits only the deploy user's own `~/.ssh/authorized_keys`, over the usual session: no root, so devopsy stays out of host setup except for this file, which that user owns.
+- `--ssh-keys` edits the deploy user's own `~/.ssh/authorized_keys`, or with `--for <project>` a project user's keys in the door's directory (`DoorKeysFile`), over the usual session as the deploy user: no root, both files that user's. A project user's last key may go, the deploy user's never.
+- The same scripts edit both, the file a parameter (`keysPrelude`), and asked as a project user a `--for` script exits `AskedAsProjectUser` with the deploy user's name, for the hint: only the server knows it.
 - Lines are parsed locally (`ParseAuthorizedKey`, the fingerprint from the blob, no ssh-keygen) and edited on the server under a lock next to the file, by blob: a comment never identifies a key.
 - `add` refuses a duplicate (exit 3) and `remove` the last key (exit 4; commented-out keys are none, and devopsy refuses it locally before opening a session); `--restricted` on `add` writes `RestrictedKeyOptions`, the one place that line is written.
 - `--ssh-keys-generate [<name>] [--out <file>]` is local and its own flag: `ssh-keygen`, nothing sent; the `.pub` is added per server.

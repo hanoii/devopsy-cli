@@ -1152,7 +1152,7 @@ Examples:
   devopsy @prod --status
   devopsy @prod --status --json
 `,
-	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
+	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
        devopsy --ssh-keys-generate [<name>] [--out <file>]
 
 The keys that may log in as the deploy user on the server: its
@@ -1169,6 +1169,11 @@ root. Any target on the server does too; the keys are the server's.
   --ssh-keys remove <key>   remove the key with that fingerprint (a prefix
                             will do) or that exact comment. The last key is
                             never removed: it would lock everyone out.
+  --for <project>           a project user's keys instead (devopsy-<project>,
+                            on a server with project users): the door's,
+                            which only the deploy user edits and sshd asks
+                            devopsy for. Its last key may go: that is how
+                            its logins stop.
 
 --ssh-keys-generate, without a target, makes a local ed25519 pair with ssh-keygen,
 ~/.ssh/<name> and .pub (default devopsy-ci; --out another file), the
@@ -1186,6 +1191,7 @@ Examples:
   devopsy @prod --ssh-keys add ~/.ssh/ci-prod1.pub --restricted
   devopsy @prod --ssh-keys add ~/.ssh/id_ed25519.pub
   devopsy @prod --ssh-keys remove ci-prod1
+  devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
 `,
 }
 

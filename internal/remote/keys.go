@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -104,31 +106,50 @@ func ParseAuthorizedKeys(content string) []AuthorizedKey {
 	return keys
 }
 
-// keysPrelude is the deploy user's authorized_keys, and a lock next to it:
-// two edits at once would lose one.
-const keysPrelude = `set -eu
+// AskedAsProjectUser is a --for script's exit when the session's user is a project user,
+// whose keys are its deploy user's to edit: the deploy user's name is on stdout.
+const AskedAsProjectUser = 5
+
+// keysPrelude is the file whose keys a --ssh-keys script edits: the deploy user's own
+// authorized_keys, or with user a project user's keys in the door's directory (DoorKeysFile),
+// which the deploy user edits and sshd asks it for (--authorized-keys).
+func keysPrelude(user string) string {
+	if user == "" {
+		return `set -eu
 umask 077
 f=$HOME/.ssh/authorized_keys
 `
-
-// keysLock takes the lock; the --ssh-keys scripts say their lines with
-// echoLine, since they need nothing of the server's devopsy.
-var keysLock = `mkdir -p "$HOME/.ssh"
-chmod 700 "$HOME/.ssh"
-exec 9>"$HOME/.ssh/.authorized_keys.lock"
-flock -w 60 9 || { ` + echoLine(report.ErrorLevel, "another edit of $f did not end in a minute") + `; exit 75; }
-`
-
-// KeysReadScript prints the deploy user's authorized_keys, if any.
-func KeysReadScript() string {
-	return keysPrelude + `[ ! -f "$f" ] || cat "$f"
+	}
+	return `set -eu
+umask 077
+if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
+  stat -c %U "$(readlink -f "$(command -v devopsy)")" 2>/dev/null || :
+  exit ` + fmt.Sprint(AskedAsProjectUser) + `
+fi
+id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
+f=${DEVOPSY_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/devopsy}/door/keys/` + user + `
 `
 }
 
-// KeysAddScript appends the authorized_keys line on stdin, unless its key
-// is there already (exit 3). It prints the file's path.
-func KeysAddScript() string {
-	return keysPrelude + keysLock + `line=$(cat)
+// keysLock is a lock beside the file: two edits at once would lose one. The --ssh-keys
+// scripts say their lines with echoLine, since they need nothing of the server's devopsy.
+var keysLock = `d=$(dirname "$f")
+mkdir -p "$d"
+chmod 700 "$d"
+exec 9>"$d/.$(basename "$f").lock"
+flock -w 60 9 || { ` + echoLine(report.ErrorLevel, "another edit of $f did not end in a minute") + `; exit 75; }
+`
+
+// KeysReadScript prints the keys of user ("" the deploy user), if any.
+func KeysReadScript(user string) string {
+	return keysPrelude(user) + `[ ! -f "$f" ] || cat "$f"
+`
+}
+
+// KeysAddScript appends the authorized_keys line on stdin to user's keys ("" the deploy
+// user's), unless its key is there already (exit 3). It prints the file's path.
+func KeysAddScript(user string) string {
+	return keysPrelude(user) + keysLock + `line=$(cat)
 blob=$(printf '%s\n' "$line" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) { print $(i + 1); exit } }')
 [ -n "$blob" ] || { ` + echoLine(report.ErrorLevel, "not a public key") + `; exit 1; }
 if [ -f "$f" ] && grep -qF -- " $blob" "$f"; then
@@ -141,20 +162,36 @@ printf '%s\n' "$f"
 `
 }
 
-// KeysRemoveScript drops the lines whose key is the blob on stdin: none
-// (exit 3), or the last key left (exit 4: it would lock everyone out).
-func KeysRemoveScript() string {
-	return keysPrelude + keysLock + `blob=$(cat)
-[ -f "$f" ] || { ` + echoLine(report.ErrorLevel, "no authorized keys on this server") + `; exit 3; }
-grep -qF -- " $blob" "$f" || { ` + echoLine(report.ErrorLevel, "that key is not authorized") + `; exit 3; }
-grep -vF -- " $blob" "$f" > "$f.tmp" || true
-# Keys left, comments and blank lines aside (a commented-out key is none).
+// KeysRemoveScript drops from user's keys ("" the deploy user's) the lines whose key is the
+// blob on stdin: none (exit 3). The deploy user's last key stays (exit 4: it would lock
+// everyone out); a project user's goes, which is how its logins stop.
+func KeysRemoveScript(user string) string {
+	last := ""
+	if user == "" {
+		last = `# Keys left, comments and blank lines aside (a commented-out key is none).
 if ! grep -Ev '^[[:space:]]*(#|$)' "$f.tmp" | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'; then
   rm -f "$f.tmp"
   ` + echoLine(report.ErrorLevel, "that is the last key: removing it would lock everyone out") + `
   exit 4
 fi
-mv -f "$f.tmp" "$f"
+`
+	}
+	return keysPrelude(user) + keysLock + `blob=$(cat)
+[ -f "$f" ] || { ` + echoLine(report.ErrorLevel, "no authorized keys on this server") + `; exit 3; }
+grep -qF -- " $blob" "$f" || { ` + echoLine(report.ErrorLevel, "that key is not authorized") + `; exit 3; }
+grep -vF -- " $blob" "$f" > "$f.tmp" || true
+` + last + `mv -f "$f.tmp" "$f"
 printf '%s\n' "$f"
 `
+}
+
+// DoorGroup is the group every project user is in: sshd's Match, the door's sudo rules and
+// the firewall rule go by it.
+const DoorGroup = "devopsy-projects"
+
+// DoorKeysFile is a project user's keys, in the door's directory (DoorDir): what
+// --authorized-keys prints for sshd, whose environment for it is its own (HOME, USER, PATH),
+// never the login's. keysPrelude finds the same file in a script.
+func DoorKeysFile(user string) string {
+	return filepath.Join(DoorDir(), "keys", user)
 }

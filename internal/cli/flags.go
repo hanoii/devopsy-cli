@@ -91,7 +91,7 @@ var Flags = []FlagGroup{
 	}},
 	{"Servers and SSH", []Flag{
 		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "a local SSH key pair, for CI"},
-		{Name: "--ssh-keys", Args: "[list | add <file> | remove <key>]", Scope: Server, Desc: "who may log in as the deploy user"},
+		{Name: "--ssh-keys", Args: "[--for <project>] [list | add <file> | remove <key>]", Scope: Server, Desc: "keys of the deploy user, or a project user"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},

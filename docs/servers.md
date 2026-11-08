@@ -199,6 +199,11 @@ too.
   and port forwarding a sync across servers needs.
 - `--ssh-keys remove <fingerprint or comment>` removes one. It refuses
   the last, which would lock everyone out.
+- `--ssh-keys --for <project>`, with any of the above, edits a project
+  user's keys instead, on a server with project users (below), logged in
+  as the deploy user: they are kept in its config directory, out of the
+  project user's reach, and sshd asks devopsy for them. Its last key may
+  go, which is how its logins stop.
 - Without a target, `devopsy --ssh-keys-generate [<name>]` makes an
   ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>` for
   elsewhere), sending nothing anywhere.

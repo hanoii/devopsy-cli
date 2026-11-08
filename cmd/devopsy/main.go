@@ -37,6 +37,10 @@ func run() int {
 		report.SetDefault(report.New(errOut, color, 0))
 		return runDocker(args)
 	}
+	// sshd's, before any login: nothing of a project or the network (authorizedkeys.go).
+	if len(args) > 0 && args[0] == authorizedKeysFlag {
+		return runAuthorizedKeys(args[1:])
+	}
 	if len(args) > 0 && (args[0] == doorFlag || args[0] == doorReadFlag) {
 		report.SetDefault(report.New(errOut, color, 0))
 		if args[0] == doorFlag {

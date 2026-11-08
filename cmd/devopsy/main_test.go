@@ -1497,6 +1497,64 @@ func TestRemoteSSHKeys(t *testing.T) {
 	}
 }
 
+// A project user's keys are in the door's directory, which the deploy user edits with --for and
+// sshd asks it for (--authorized-keys): its last key goes, which is how its logins stop. Asked
+// as a project user, which cannot edit its own, the server names the deploy user for the hint.
+func TestRemoteSSHKeysForAProjectUser(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, home := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	// id knows devopsy-shop, and says the session's user is in its group when FAKE_PROJECT is.
+	write(t, filepath.Join(bin, "id"), "#!/bin/sh\ncase \"$*\" in\n  '-nG') [ -n \"${FAKE_PROJECT:-}\" ] && echo 'devopsy-shop devopsy-projects' || echo devopsy ;;\n  '-u devopsy-shop') echo 10002 ;;\n  *) exit 1 ;;\nesac\n", 0o755)
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	run := func(asProject bool, args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = []string{"DEVOPSY_HOME=" + home, "DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
+		if asProject {
+			cmd.Env = append(cmd.Env, "FAKE_PROJECT=1")
+		}
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		return string(out), code
+	}
+	pub := filepath.Join(tmp, "op.pub")
+	write(t, pub, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o644)
+	keys := filepath.Join(home, "door", "keys", "devopsy-shop")
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "add", pub); code != 0 || !strings.Contains(out, "for devopsy-shop on devopsy@vm1 in "+keys) {
+		t.Fatalf("add for a project user (%d):\n%s", code, out)
+	}
+	if !strings.Contains(readString(keys), "op@laptop") || fileExists(filepath.Join(tmp, ".ssh", "authorized_keys")) {
+		t.Errorf("the key went elsewhere than the door's keys: %q", readString(keys))
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop"); code != 0 || !strings.Contains(out, "devopsy-shop's on devopsy@vm1 authorized keys (the door's, for project shop)") || !strings.Contains(out, "op@laptop") {
+		t.Errorf("list for a project user (%d):\n%s", code, out)
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "blog"); code == 0 || !strings.Contains(out, "no project user devopsy-blog here") {
+		t.Errorf("a project with no user (%d):\n%s", code, out)
+	}
+	if out, code := run(true, "@devopsy-shop@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code == 0 || !strings.Contains(out, "devopsy-shop is a project user") || !strings.Contains(out, "--ssh-keys --for shop remove op@laptop") || !strings.Contains(readString(keys), "op@laptop") {
+		t.Errorf("asked as the project user (%d):\n%s", code, out)
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code != 0 || strings.Contains(readString(keys), "op@laptop") {
+		t.Errorf("its last key (%d):\n%s", code, out)
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "Shop!"); code == 0 || !strings.Contains(out, "usage:") {
+		t.Errorf("a project name devopsy refuses (%d):\n%s", code, out)
+	}
+}
+
 // run2 is a test helper returning only the output.
 func run2(t *testing.T, run func(string, ...string) (string, int), args ...string) string {
 	t.Helper()

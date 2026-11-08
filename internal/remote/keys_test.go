@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 func TestAuthorizedKeys(t *testing.T) {
@@ -47,7 +49,7 @@ func TestKeysRemoveLast(t *testing.T) {
 	}
 	keys := filepath.Join(home, ".ssh", "authorized_keys")
 	remove := func(blob string) int {
-		cmd := exec.Command("sh", "-c", KeysRemoveScript())
+		cmd := exec.Command("sh", "-c", KeysRemoveScript(""))
 		cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
 		cmd.Stdin = strings.NewReader(blob + "\n")
 		_ = cmd.Run()
@@ -60,5 +62,31 @@ func TestKeysRemoveLast(t *testing.T) {
 	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
 	if code := remove("AAAAone"); code != 0 || strings.Contains(readFile(keys), "AAAAone") {
 		t.Errorf("one of two keys: exit %d, file %q", code, readFile(keys))
+	}
+}
+
+// A project user's keys are found by two: the --for scripts, from the deploy user's
+// environment, and --authorized-keys, from sshd's (DoorKeysFile). Both are one file, wherever
+// the deploy user's config is (DEVOPSY_HOME, XDG_CONFIG_HOME, else ~/.config).
+//
+// Not parallel: it sets DEVOPSY_HOME, XDG_CONFIG_HOME and HOME (t.Setenv).
+func TestDoorKeysFileOneRule(t *testing.T) {
+	bin := t.TempDir()
+	if err := testfile.Write(filepath.Join(bin, "id"), []byte("#!/bin/sh\n[ \"$1\" = -u ] && echo 10002 || echo devopsy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range [][2]string{{"DEVOPSY_HOME", t.TempDir()}, {"XDG_CONFIG_HOME", t.TempDir()}, {"HOME", t.TempDir()}} {
+		t.Setenv("DEVOPSY_HOME", "")
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv(env[0], env[1])
+		cmd := exec.Command("sh", "-c", keysPrelude("devopsy-shop")+`printf '%s' "$f"`)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v", env[0], err)
+		}
+		if want := DoorKeysFile("devopsy-shop"); string(out) != want {
+			t.Errorf("%s: the script's %s, --authorized-keys's %s", env[0], out, want)
+		}
 	}
 }

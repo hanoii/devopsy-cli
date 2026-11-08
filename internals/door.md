@@ -9,6 +9,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A server's `door:` is read only from the deploy user's own config: a project's could grant itself.
 - A project user's entry is a file of its own, `door/users/<user>.yaml` beside the deploy user's config (`DoorDir`), merged into `door: users:`, and a user in both refuses: devopsy-server rewrites the config it marked at each run, and a round trip through YAML loses the admin's comments.
 - Who asks comes from `SUDO_USER`, and every word of the request is treated as hostile.
+- A project user's keys are the deploy user's to edit, in `DoorDir`'s `keys/<user>` (`--ssh-keys --for`), and sshd reads them only through `--authorized-keys`, dispatched before anything else, printing only lines that parse: a key a project user puts in its own home is never read, or a leaked key would add a second one that outlives rotation.
 - Who the socket lets in has no door (`runDocker`): the deploy user, and a project an admin put in the docker group.
 - `--door` and `--door-read` are dispatched first in `run`, before anything loads a project or reads the environment.
 - The deploy user never reads a project's tree: what it needs comes from `--door-read`, run as that project's user, so no link or swap there can show it anything of the deploy user's.

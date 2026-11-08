@@ -163,6 +163,10 @@ func ServerDoor() (*Door, error) {
 	return d, nil
 }
 
+// DoorUserOf is a project's user: devopsy-<project>, the name sudo's rules and sshd's Match
+// know it by, through its group.
+func DoorUserOf(project string) string { return "devopsy-" + project }
+
 // DoorSettingsOf reads what the deploy user's own config says of a project user.
 func DoorSettingsOf(who string) (DoorUser, error) {
 	d, err := ServerDoor()

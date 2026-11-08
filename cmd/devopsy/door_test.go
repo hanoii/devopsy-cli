@@ -756,3 +756,25 @@ func TestDoorRefusesASpaceWithSetuid(t *testing.T) {
 		t.Error("a space that is not there")
 	}
 }
+
+// sshd lets a project user in by what --authorized-keys prints: only lines that are keys, none
+// for a user with no keys, and nothing at all for a name that is no project user's.
+func TestAuthorizedKeysPrintsOnlyKeys(t *testing.T) {
+	t.Parallel()
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop"
+	file := filepath.Join(t.TempDir(), "devopsy-shop")
+	write(t, file, "# a comment\nnot a key at all\n"+key+"\n", 0o600)
+	var out strings.Builder
+	if code := printAuthorizedKeys(&out, file); code != 0 || out.String() != key+"\n" {
+		t.Errorf("printed (%d) %q", code, out.String())
+	}
+	out.Reset()
+	if code := printAuthorizedKeys(&out, file+"-none"); code != 0 || out.Len() != 0 {
+		t.Errorf("no keys (%d) %q", code, out.String())
+	}
+	for _, args := range [][]string{nil, {"root"}, {"devopsy-"}, {"devopsy-Shop"}, {"devopsy-shop", "x"}, {"devopsy-../x"}} {
+		if code := runAuthorizedKeys(args); code == 0 {
+			t.Errorf("%q: answered", args)
+		}
+	}
+}
