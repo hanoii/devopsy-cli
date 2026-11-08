@@ -142,7 +142,9 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		return failErr(err)
 	}
 	if why := projectNameClash(project, serverProjects(d, r.Root)); why != "" {
-		return fail("a project " + project + " here would share compose names: " + why)
+		report.Fail(errors.New("a project "+project+" here would share compose names: "+why),
+			report.Fix("a project gone from the release root ("+r.Root+") holds its name while its directory stays, its .env kept by --destroy: removed with its last environment's --destroy --purge"))
+		return 1
 	}
 	me, err := user.Current()
 	if err != nil {
