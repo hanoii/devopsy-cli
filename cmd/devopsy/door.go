@@ -116,6 +116,13 @@ func runDoorRead(args []string) int {
 		}
 		os.Stdout.Write(out)
 		return 0
+	case "environments":
+		// --server-info's, of this user's tree: as the deploy user would list them, but by this
+		// user's rights.
+		if json.NewEncoder(os.Stdout).Encode(projectEnvironments(filepath.Dir(path), path)) != nil {
+			return 1
+		}
+		return 0
 	case "isdir":
 		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 			return 0

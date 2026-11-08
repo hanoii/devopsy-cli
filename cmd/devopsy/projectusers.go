@@ -184,6 +184,9 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if r.Root != me.HomeDir {
 		tree, root = filepath.Join(r.Root, project), r.Root
 	}
+	if err := remote.DoorDevopsyPath(devopsyPath()); err != nil {
+		return failErr(err)
+	}
 	// The project users' firewall, loaded and checked before any project user can log in.
 	wrong, err := doorFirewall(remote.DoorFirewallInstall(), true)
 	if err != nil {

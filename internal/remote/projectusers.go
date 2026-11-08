@@ -1,7 +1,9 @@
 package remote
 
 import (
+	"fmt"
 	"path"
+	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -43,7 +45,7 @@ func doorDropIn(deploy string) string {
 // not own, and the binary is the deploy user's so that it upgrades itself.
 func doorKeysCommand(devopsy string) string {
 	return "#!/bin/sh\n# Written by devopsy (devopsy @<server> --project-users add): sshd's\n" +
-		"# AuthorizedKeysCommand for project users.\nexec " + devopsy + " --authorized-keys \"$1\"\n"
+		"# AuthorizedKeysCommand for project users.\nexec " + Quote(devopsy) + " --authorized-keys \"$1\"\n"
 }
 
 // doorSudoers is the door's two rules: a project user asks its deploy user, which reads a
@@ -80,6 +82,32 @@ var hostPut = `put() {
   mv -f "$tmp" "$1"
 }
 `
+
+// doorSSHDTakes fails unless sshd takes the drop-in for $user, as it resolves that user's
+// settings (sshd -T): devopsy's keys command as the deploy user, and no file of keys. A
+// sshd_config with no Include of sshd_config.d, or with it below a Match, parses (sshd -t)
+// and leaves the user on its own ~/.ssh/authorized_keys, where a leaked key adds a second one.
+// The user stays with no keys: its entry is written only after this script.
+func doorSSHDTakes(deploy string) string {
+	return `[ -d /run/sshd ] || mkdir -p -m 755 /run/sshd
+eff=$(sshd -T -C "user=$user,host=devopsy,addr=127.0.0.1" 2>&1) || { ` + echoLine(report.ErrorLevel, "sshd -T for $user failed: $eff") + `; exit 4; }
+if ! { printf '%s\n' "$eff" | grep -qx 'authorizedkeysfile none' &&
+  printf '%s\n' "$eff" | grep -qxF 'authorizedkeyscommand ` + DoorKeysCommand + ` %u' &&
+  printf '%s\n' "$eff" | grep -qxF 'authorizedkeyscommanduser '` + Quote(deploy) + `; }; then
+  ` + echoLine(report.ErrorLevel, "sshd does not take "+DoorSSHDropIn+" for $user, which would log in by its own ~/.ssh/authorized_keys", report.Fix("include it in /etc/ssh/sshd_config, at its top, before any Match:", "Include /etc/ssh/sshd_config.d/*.conf")) + `
+  exit 4
+fi
+`
+}
+
+// DoorDevopsyPath refuses a path of devopsy's that sudoers would read as more than a path: it
+// has no quoting, and a space, a comma, a colon, an equals sign or a backslash mean something.
+func DoorDevopsyPath(p string) error {
+	if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t,:=\\\n\"'") {
+		return fmt.Errorf("devopsy is at %s, which sudo's rules cannot name: put it at a path with none of space , : = \\ or quotes", p)
+	}
+	return nil
+}
 
 // DoorHostScript is what --project-users add does as root on the host, through the util
 // image (chroot into /host): the door's pieces when missing or different, each checked before
@@ -128,6 +156,11 @@ if ! id -u "$user" >/dev/null 2>&1; then
   made=1
 fi
 id -nG "$user" | tr ' ' '\n' | grep -qx "$group" || usermod -aG "$group" "$user"
+` + doorSSHDTakes(deploy) + `# No cron or at job of the project user's: it runs with no session, so a leaked key's job
+# would outlive the key's removal. A cron.allow the admin keeps does not list it anyway.
+for f in /etc/cron.deny /etc/at.deny; do
+  grep -qxF "$user" "$f" 2>/dev/null || printf '%s\n' "$user" >>"$f"
+done
 home=$(getent passwd "$user" | cut -d: -f6)
 chmod 750 "$home"
 [ -z "$tree" ] || [ -e "$tree" ] || install -d -m 750 -o "$user" -g "$user" "$tree"

@@ -146,7 +146,7 @@ func serverFacts() (remote.ServerInfo, error) {
 		}
 	}
 	info.Containers = hostContainers()
-	info.Environments = environments(info.Root)
+	info.Environments = environments(info.Root, doorTrees(info.Root), treeEnvironments)
 	return info, nil
 }
 
@@ -497,27 +497,45 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 // environments is every environment under the release root,
 // <project>/[<instance>/]<environment> (a directory with releases/),
 // with its state lines (remote.EnvStatus). Not one a --destroy cut off
-// while removing it left (<base>.rm.<pid>, removeBase).
-func environments(root string) []remote.Environment {
+// while removing it left (<base>.rm.<pid>, removeBase). A project user's
+// tree there (trees, by its path) is read as that user (readTree): the
+// deploy user never reads a project's tree, where a link would show it
+// its own files.
+func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment) []remote.Environment {
+	var envs []remote.Environment
+	for _, p := range envDirs(root) {
+		if user, ok := trees[p]; ok {
+			envs = append(envs, readTree(user, p)...)
+			continue
+		}
+		envs = append(envs, projectEnvironments(root, p)...)
+	}
+	return envs
+}
+
+// envDirs are dir's directories, a link to one included: a project or an
+// environment moved to another disk and linked back is one, as the
+// scripts reach it.
+func envDirs(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") || removing.MatchString(e.Name()) {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// projectEnvironments are the environments of the project at p under root.
+func projectEnvironments(root, p string) []remote.Environment {
 	var envs []remote.Environment
 	isEnv := func(dir string) bool {
 		fi, err := os.Stat(filepath.Join(dir, "releases"))
 		return err == nil && fi.IsDir()
-	}
-	dirs := func(dir string) []string {
-		entries, _ := os.ReadDir(dir)
-		var out []string
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), ".") || removing.MatchString(e.Name()) {
-				continue
-			}
-			// A project or an environment moved to another disk and linked
-			// back is one, as the scripts reach it.
-			if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {
-				out = append(out, filepath.Join(dir, e.Name()))
-			}
-		}
-		return out
 	}
 	add := func(dir string) {
 		rel, _ := filepath.Rel(root, dir)
@@ -526,18 +544,53 @@ func environments(root string) []remote.Environment {
 		out, _ := cmd.Output()
 		envs = append(envs, remote.Environment{Path: filepath.ToSlash(rel), Status: string(out)})
 	}
-	for _, p := range dirs(root) {
-		for _, e := range dirs(p) {
-			if isEnv(e) {
-				add(e)
-				continue
-			}
-			for _, i := range dirs(e) {
-				if isEnv(i) {
-					add(i)
-				}
+	for _, e := range envDirs(p) {
+		if isEnv(e) {
+			add(e)
+			continue
+		}
+		for _, i := range envDirs(e) {
+			if isEnv(i) {
+				add(i)
 			}
 		}
+	}
+	return envs
+}
+
+// doorTrees are the project users' trees under root, each to its user.
+func doorTrees(root string) map[string]string {
+	d, err := remote.ServerDoor()
+	if err != nil || d == nil {
+		return nil
+	}
+	trees := map[string]string{}
+	for who, u := range d.Users {
+		tree := u.Tree
+		if tree == "" {
+			pu, err := user.Lookup(who)
+			if err != nil {
+				continue
+			}
+			tree = filepath.Join(pu.HomeDir, u.Project)
+		}
+		if filepath.Dir(filepath.Clean(tree)) == filepath.Clean(root) {
+			trees[filepath.Clean(tree)] = who
+		}
+	}
+	return trees
+}
+
+// treeEnvironments are a project user's environments as that user reads them (--door-read
+// environments), none when it cannot.
+func treeEnvironments(who, tree string) []remote.Environment {
+	out, err := exec.Command("sudo", sudoArgs(who, doorReadFlag, "environments", tree)...).Output()
+	if err != nil {
+		return nil
+	}
+	var envs []remote.Environment
+	if json.Unmarshal(out, &envs) != nil {
+		return nil
 	}
 	return envs
 }

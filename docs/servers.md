@@ -256,7 +256,8 @@ devopsy @devopsy@vm1: --project-users add shop
 devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
 ```
 
-`add` makes `devopsy-shop` (no password, its home closed to others),
+`add` makes `devopsy-shop` (no password, its home closed to others, no
+cron or at jobs),
 and, with `releases: root` elsewhere than the deploy user's home, its
 tree there. Its entry is a file of the deploy user's,
 `~/.config/devopsy/door/users/devopsy-shop.yaml`, where an admin may add
@@ -268,7 +269,11 @@ for a project user's keys and never reads its own
 `~/.ssh/authorized_keys`. sshd takes that part at the next reboot: until
 then no project user logs in, and `--project-users` says so. It refuses
 while the deploy user or root is in `devopsy-projects`, which would have
-sshd ignore their own keys.
+sshd ignore their own keys, and on a server whose sshd would not read
+its part for the project user: an `sshd_config` with no `Include
+/etc/ssh/sshd_config.d/*.conf` at its top, before any `Match`. It also
+refuses a devopsy at a path sudo's rules cannot name, one with a space,
+`,`, `:`, `=`, `\` or a quote.
 
 `add` also loads a firewall for project users, one for the whole
 server, for IPv4 and, where the kernel supports it, IPv6. A project

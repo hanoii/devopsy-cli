@@ -21,7 +21,9 @@ func TestDoorHostScript(t *testing.T) {
 	for _, want := range []string{
 		"%devopsy-projects ALL=(deploy) NOPASSWD: /opt/bin/devopsy --door *",
 		"deploy ALL=(%devopsy-projects) NOPASSWD: /opt/bin/devopsy --door-read *",
-		"exec /opt/bin/devopsy --authorized-keys",
+		"--authorized-keys",
+		"sshd -T -C",
+		"for f in /etc/cron.deny /etc/at.deny; do",
 		"Match Group devopsy-projects",
 		"AuthorizedKeysFile none",
 		"AuthorizedKeysCommandUser deploy",
@@ -31,6 +33,44 @@ func TestDoorHostScript(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("no %q", want)
 		}
+	}
+}
+
+// add refuses a host whose sshd would not take its drop-in for the project user: a sshd_config
+// with no Include of sshd_config.d, or with it below a Match, parses (sshd -t) and leaves the
+// user on its own ~/.ssh/authorized_keys, where a leaked key adds a second one that outlives
+// its rotation and remove. What sshd resolves for that user says (sshd -T).
+func TestDoorSSHDTakes(t *testing.T) {
+	t.Parallel()
+	taken := "authorizedkeyscommand " + DoorKeysCommand + " %u\nauthorizedkeyscommanduser deploy\nauthorizedkeysfile none\n"
+	for name, c := range map[string]struct {
+		effective string
+		ok        bool
+	}{
+		"taken":            {taken, true},
+		"no include":       {"authorizedkeyscommand none\nauthorizedkeyscommanduser none\nauthorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\n", false},
+		"another's user":   {strings.Replace(taken, "user deploy", "user nobody", 1), false},
+		"its own keys too": {strings.Replace(taken, "authorizedkeysfile none", "authorizedkeysfile none .ssh/authorized_keys", 1), false},
+	} {
+		script := "sshd() { [ \"$1 $2\" = \"-T -C\" ] && [ \"$3\" = user=devopsy-shop,host=devopsy,addr=127.0.0.1 ] && printf '" + strings.ReplaceAll(c.effective, "%", "%%") + "'; }\nuser=devopsy-shop\n" + doorSSHDTakes("deploy")
+		out, err := exec.Command("sh", "-c", script).CombinedOutput()
+		if (err == nil) != c.ok {
+			t.Errorf("%s: %v %s", name, err, out)
+		}
+	}
+}
+
+// devopsy's path goes into sudoers, which has no quoting, so add takes only a plain one, and
+// into scripts quoted.
+func TestDoorDevopsyPath(t *testing.T) {
+	t.Parallel()
+	for p, ok := range map[string]bool{"/home/devopsy/.local/bin/devopsy": true, "/opt/dev opsy/devopsy": false, "/opt/a,b/devopsy": false, "devopsy": false, "/opt/x=y/devopsy": false} {
+		if (DoorDevopsyPath(p) == nil) != ok {
+			t.Errorf("%q: %v", p, !ok)
+		}
+	}
+	if s := doorKeysCommand("/opt/bin/devopsy"); !strings.Contains(s, "exec '/opt/bin/devopsy' --authorized-keys") {
+		t.Errorf("the keys command:\n%s", s)
 	}
 }
 

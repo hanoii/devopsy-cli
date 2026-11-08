@@ -798,6 +798,43 @@ docker run -d --name doorv6-web --network doorv6 busybox:1.37 sh -c 'mkdir -p /w
 	}
 }
 
+// --project-users add refuses a host whose sshd would not take its drop-in for the project
+// user: a sshd_config with no Include of sshd_config.d (older Debian and Ubuntu, an admin's
+// own), or with it below a Match, parses (sshd -t) and leaves the user on its own
+// ~/.ssh/authorized_keys, where a leaked key adds a second one that outlives its rotation and
+// --project-users remove. With the Include back, add goes through.
+func TestDoorAddRefusesAnUnincludedDropIn(t *testing.T) {
+	const project = "doorinc"
+	user := "devopsy-" + project
+	name := doorServerAs(t, "doorsrv2")
+	root := func(script string) (string, int) {
+		t.Helper()
+		return execIn(t, []string{"-w", "/", name}, script)
+	}
+	if out, code := root(`set -e
+cp /etc/ssh/sshd_config /tmp/sshd_config.doorinc
+sed -i '/^Include \/etc\/ssh\/sshd_config.d\//d' /etc/ssh/sshd_config
+if grep -q '^Include' /etc/ssh/sshd_config; then echo 'an Include stays'; exit 1; fi
+sshd -t`); code != 0 {
+		t.Fatalf("taking the Include out (%d): %s", code, out)
+	}
+	t.Cleanup(func() {
+		root(`cp /tmp/sshd_config.doorinc /etc/ssh/sshd_config; rm -f /run/devopsy-door-reboot /run/reboot-required /run/reboot-required.pkgs`)
+		op(t, "/", "devopsy @devopsy@doorsrv2: --project-users remove "+project)
+		root("pkill -u " + user + "; userdel -r " + user + " 2>/dev/null; true")
+	})
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code == 0 || !strings.Contains(out, "sshd does not take /etc/ssh/sshd_config.d/devopsy.conf for "+user) {
+		t.Errorf("add on a host whose sshd does not read the drop-in (%d): %s", code, out)
+	}
+	if out, _ := root("cat /home/devopsy/.config/devopsy/door/users/" + user + ".yaml 2>&1"); !strings.Contains(out, "No such file") {
+		t.Errorf("an entry written: %s", out)
+	}
+	root("cp /tmp/sshd_config.doorinc /etc/ssh/sshd_config")
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 {
+		t.Errorf("the control: add with the Include back (%d): %s", code, out)
+	}
+}
+
 // A door project builds on a BuildKit of its own: on one builder, a cache mount is shared
 // across projects by its id, and one project's build fills a cache another's trusts. The
 // control: the same two builds on the server's own builder see each other's.

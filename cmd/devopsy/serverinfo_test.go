@@ -481,11 +481,32 @@ func TestServerInfoEnvironments(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	for _, e := range environments(root) {
+	for _, e := range environments(root, nil, nil) {
 		got = append(got, e.Path)
 	}
 	if !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
 		t.Errorf("environments: %v", got)
+	}
+	// A project user's tree is never the deploy user's to read, a link there least of all:
+	// its environments come from what that user reads (--door-read), and nothing of the
+	// deploy user's is walked through a link the project user put there.
+	secret := filepath.Join(t.TempDir(), "deploy-only")
+	if err := os.MkdirAll(filepath.Join(secret, "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, "app", "stolen")); err != nil {
+		t.Fatal(err)
+	}
+	asked := ""
+	got = nil
+	for _, e := range environments(root, map[string]string{filepath.Join(root, "app"): "devopsy-app"}, func(user, tree string) []remote.Environment {
+		asked = user + " " + tree
+		return []remote.Environment{{Path: "app/prod", Status: "as its user\n"}}
+	}) {
+		got = append(got, e.Path+"="+e.Status)
+	}
+	if asked != "devopsy-app "+filepath.Join(root, "app") || !slices.Contains(got, "app/prod=as its user\n") || slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, "app/stolen") }) {
+		t.Errorf("a project user's tree (asked %q): %v", asked, got)
 	}
 }
 
