@@ -314,12 +314,12 @@ func TestCheckFileBuild(t *testing.T) {
 			if errs := CheckFile(file, testPolicy, verb, &fakePaths{}); len(errs) != 0 {
 				t.Fatalf("%s %s: %v", verb, image, errs)
 			}
-			if got := service(file)["image"]; got != "devopsy.invalid/shop-prod/web" {
+			if got := service(file)["image"]; got != "devopsy.internal/shop-prod/web" {
 				t.Errorf("%s of image %q runs %v", verb, image, got)
 			}
 		}
 	}
-	for _, image := range []string{"registry.example.com/shop/app:1@sha256:abc", "devopsy.invalid/shop-prod/web:devopsy-shop-prod-20260101000000", "devopsy.invalid/shop-stage/web"} {
+	for _, image := range []string{"registry.example.com/shop/app:1@sha256:abc", "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000", "devopsy.internal/shop-stage/web"} {
 		file = parse(t, named(image))
 		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
 			t.Fatalf("%s: %v", image, errs)
@@ -490,7 +490,7 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 	// moves only its own image); a registry's name is anyone's to pull, a project's name at
 	// its start included (no build is named so).
 	p.Others = []string{"mongo"}
-	for image, refused := range map[string]bool{"devopsy.invalid/blog-prod/web": true, "devopsy.invalid/blog-prod/web:1": true, "devopsy.invalid/shop-prod/web": false, "mongo-express:1": false} {
+	for image, refused := range map[string]bool{"devopsy.internal/blog-prod/web": true, "devopsy.internal/blog-prod/web:1": true, "devopsy.internal/shop-prod/web": false, "mongo-express:1": false} {
 		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
 		if errs := CheckFile(file, p, "pull", &fakePaths{}); (len(errs) > 0) != refused {
 			t.Errorf("a pull of %s: %v", image, errs)

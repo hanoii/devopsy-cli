@@ -34,9 +34,9 @@ func (d fakeDaemon) Containers() ([]string, error) {
 
 // testImages are the images on the fake daemon, by every name they go by: id first.
 var testImages = [][]string{
-	{"sha256:aaa", "devopsy.invalid/shop-prod/web", "devopsy.invalid/shop-prod/web:latest"},
+	{"sha256:aaa", "devopsy.internal/shop-prod/web", "devopsy.internal/shop-prod/web:latest"},
 	{"sha256:bbb", "busybox:devopsy-shop-prod-20240101000000"},
-	{"sha256:ccc", "devopsy.invalid/blog-prod/web", "devopsy.invalid/blog-prod/web:latest"},
+	{"sha256:ccc", "devopsy.internal/blog-prod/web", "devopsy.internal/blog-prod/web:latest"},
 	// A name without a host is a registry's, whoever put it here (the deploy user's build).
 	{"sha256:abd", "shop-prod-web"},
 	{"sha256:ddd", "busybox:devopsy-blog-prod-20240101000000"},
@@ -350,7 +350,7 @@ func TestDecideAllows(t *testing.T) {
 		{"network", "inspect", "-f", "x", "shop-prod_default"},
 		{"network", "inspect", "traefik"},
 		{"image", "inspect", "--format", "{{json .}}", "busybox:1.37"},
-		{"image", "rm", "busybox:devopsy-shop-prod-1", "devopsy.invalid/shop-prod/app:latest"},
+		{"image", "rm", "busybox:devopsy-shop-prod-1", "devopsy.internal/shop-prod/app:latest"},
 		{"volume", "inspect", "--format", "{{.Name}}", "shop-prod_data"},
 		{"tag", "sha256:abc", "busybox:devopsy-shop-prod-20260101"},
 		{"rm", "-f", "mine"},
@@ -554,7 +554,7 @@ func TestDecideRunRemovals(t *testing.T) {
 // nothing to do, nothing was refused for it, and a release says nothing about it.
 func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	t.Parallel()
-	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.invalid/blog-prod/web"}} {
+	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}} {
 		a, err := decide(t, argv...)
 		if err != nil || len(a.Docker) != 0 || a.Exit != 0 {
 			t.Errorf("%q: %+v, %v", argv, a, err)
@@ -711,7 +711,7 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 		}
 		return a.Claims
 	}
-	for _, image := range []string{"devopsy.invalid/shop-prod/web", "devopsy.invalid/shop-prod/web:latest", "sha256:aaa", "busybox:devopsy-shop-prod-20240101000000", "sha256:bbb", "postgres:16", testKnown.Image} {
+	for _, image := range []string{"devopsy.internal/shop-prod/web", "devopsy.internal/shop-prod/web:latest", "sha256:aaa", "busybox:devopsy-shop-prod-20240101000000", "sha256:bbb", "postgres:16", testKnown.Image} {
 		if c := claims("image", "inspect", "--format", "{{.Id}}", image); len(c) != 0 {
 			t.Errorf("its own %s claimed: %v", image, c)
 		}
@@ -736,7 +736,7 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	// move before the tag, which would make another's image a hold of this project's. A name
 	// only this project writes stays as it is. (A claimed source goes by the digest its
 	// claim got, the door's to put in: TestDoorClaimActsByDigest.)
-	for image, want := range map[string]string{"postgres:16": "sha256:", "devopsy.invalid/shop-prod/web": "devopsy.invalid/shop-prod/web"} {
+	for image, want := range map[string]string{"postgres:16": "sha256:", "devopsy.internal/shop-prod/web": "devopsy.internal/shop-prod/web"} {
 		a, err := Decide([]string{"tag", image, "busybox:devopsy-shop-prod-20240101000001"}, p, testDaemon, &fakeHost{}, testKnown)
 		if err != nil || len(a.Docker) != 3 || !strings.HasPrefix(a.Docker[1], want) || a.Docker[1] == "postgres:16" {
 			t.Errorf("a tag of its own %s tags %v (%v)", image, a, err)
@@ -744,15 +744,15 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	}
 	// A tag puts a hold of its own or its own build's name on an image of its own (a
 	// rollback puts its build's name back, Restore), never a name another reads.
-	for _, target := range []string{"devopsy.invalid/shop-prod/web", "devopsy.invalid/shop-stage/web:1"} {
+	for _, target := range []string{"devopsy.internal/shop-prod/web", "devopsy.internal/shop-stage/web:1"} {
 		if _, err := Decide([]string{"tag", "sha256:aaa", target}, p, testDaemon, &fakeHost{}, testKnown); err != nil {
 			t.Errorf("a tag onto its own %s: %v", target, err)
 		}
 	}
 	for _, argv := range [][]string{
 		{"tag", "sha256:aaa", "shop-prod-web"},
-		{"tag", "sha256:aaa", "devopsy.invalid/blog-prod/web"},
-		{"tag", "sha256:aaa", "devopsy.invalid/shop-prod/web:devopsy-blog-prod-1"},
+		{"tag", "sha256:aaa", "devopsy.internal/blog-prod/web"},
+		{"tag", "sha256:aaa", "devopsy.internal/shop-prod/web:devopsy-blog-prod-1"},
 		{"pull", "-q", "registry.example.com/x:devopsy-blog-prod-20240101000000"},
 		{"image", "inspect", "busybox:devopsy-blog-prod-20240101000000"},
 		{"tag", "busybox:devopsy-blog-prod-20240101000000", "busybox:devopsy-shop-prod-20240101000001"},
@@ -774,7 +774,7 @@ func TestClaimWritesNoHoldAndNoBuildName(t *testing.T) {
 	t.Parallel()
 	p := testPolicy
 	p.Others = []string{"blog"}
-	for _, ref := range []string{"devopsy.invalid/blog-prod/web", "devopsy.invalid/blog-prod/web:latest", "registry.example.com/x:devopsy-blog-prod-20240101000000"} {
+	for _, ref := range []string{"devopsy.internal/blog-prod/web", "devopsy.internal/blog-prod/web:latest", "registry.example.com/x:devopsy-blog-prod-20240101000000"} {
 		for _, argv := range [][]string{
 			{"pull", "-q", ref},
 			{"image", "inspect", ref},
@@ -798,7 +798,7 @@ func TestClaimWritesNoHoldAndNoBuildName(t *testing.T) {
 		}
 	}
 	blog := Policy{Project: "blog", User: "devopsy-blog", Space: "/space", Tree: "/home/devopsy-blog/blog", Others: []string{"shop"}}
-	if a, err := Decide([]string{"image", "inspect", "devopsy.invalid/blog-prod/web"}, blog, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 0 {
+	if a, err := Decide([]string{"image", "inspect", "devopsy.internal/blog-prod/web"}, blog, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 0 {
 		t.Errorf("the control, blog's own build for blog: %v, %+v", err, a)
 	}
 }

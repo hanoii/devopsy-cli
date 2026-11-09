@@ -668,8 +668,8 @@ func TestDoorChecksWhatAServiceBuilds(t *testing.T) {
 	docker := filepath.Join(bin, "docker")
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 case "$*" in
-  *" devopsy.invalid/shop-prod/labelled") echo '{"Config":{"Labels":{"devopsy.role":"proxy"}}}' ;;
-  *" devopsy.invalid/shop-prod/plain") echo '{"Config":{"Labels":{"a":"b"}}}' ;;
+  *" devopsy.internal/shop-prod/labelled") echo '{"Config":{"Labels":{"devopsy.role":"proxy"}}}' ;;
+  *" devopsy.internal/shop-prod/plain") echo '{"Config":{"Labels":{"a":"b"}}}' ;;
   *) exit 1 ;;
 esac
 `), 0o755); err != nil {
@@ -944,11 +944,11 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		"registry.example.com/blog/labelled@sha256:l1|sha256:l1|registry.example.com/blog/labelled@sha256:l1||{\"devopsy.role\":\"proxy\"}",
 		"blog-prod-web|sha256:b1||blog-prod-web blog-prod-web:latest|{}",
 		"blog-prod-web:latest|sha256:b1||blog-prod-web blog-prod-web:latest|{}",
-		"devopsy.invalid/blog-prod/web|sha256:b2||devopsy.invalid/blog-prod/web|{}",
+		"devopsy.internal/blog-prod/web|sha256:b2||devopsy.internal/blog-prod/web|{}",
 		"registry.example.com/app:2|sha256:a2|registry.example.com/app@sha256:a2||{}",
 		"registry.example.com/app:devopsy-blog-prod-20260101000000|sha256:a2|registry.example.com/app@sha256:a2||{}",
 		"sha256:0123|sha256:0123|||{}",
-		"devopsy.invalid/shop-prod/web|sha256:s1||devopsy.invalid/shop-prod/web|{}",
+		"devopsy.internal/shop-prod/web|sha256:s1||devopsy.internal/shop-prod/web|{}",
 		"busybox:devopsy-shop-prod-20260101000000|sha256:bb|busybox@sha256:bb|busybox:devopsy-shop-prod-20260101000000|{}",
 		"busybox@sha256:bb|sha256:bb|busybox@sha256:bb||{}",
 		remote.UtilImage+"|sha256:u4|||{}",
@@ -1003,14 +1003,14 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	}
 	// A build blog runs is under devopsy's name for it, which only the door writes for blog:
 	// never pulled over.
-	if _, err := start("devopsy.invalid/blog-prod/web"); err == nil || pulled() || !strings.Contains(err.Error(), "another project's build") {
+	if _, err := start("devopsy.internal/blog-prod/web"); err == nil || pulled() || !strings.Contains(err.Error(), "another project's build") {
 		t.Errorf("blog's build ran or pulled (%v):\n%s", err, readString(calls))
 	}
 	if _, err := start("registry.example.com/app:devopsy-blog-prod-20260101000000"); err == nil || pulled() {
 		t.Errorf("another's hold pulled or ran (%v):\n%s", err, readString(calls))
 	}
 	// Its own built image, its own hold and devopsy's util image need no claim and no pin.
-	for _, image := range []string{"devopsy.invalid/shop-prod/web", "busybox:devopsy-shop-prod-20260101000000", remote.UtilImage} {
+	for _, image := range []string{"devopsy.internal/shop-prod/web", "busybox:devopsy-shop-prod-20260101000000", remote.UtilImage} {
 		if got, err := start(image); err != nil || pulled() || got != image {
 			t.Errorf("its own %s (%v), pulled %v, goes to compose as %q:\n%s", image, err, pulled(), got, readString(calls))
 		}

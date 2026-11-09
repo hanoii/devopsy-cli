@@ -2,12 +2,14 @@ package images
 
 import "strings"
 
-// DoorHost is the registry host of a door project's builds: a reserved domain (RFC 2606),
-// so no registry serves it, and no pull writes a name under it.
-const DoorHost = "devopsy.invalid"
+// DoorHost is the registry host of a door project's builds: devopsy's own, under .internal,
+// which is reserved for private networks and never exists on the public internet, so no
+// public registry serves it; the door pulls no name under it but a project's own, which
+// moves only its own image (door.Policy.Claimable).
+const DoorHost = "devopsy.internal"
 
 // DoorBuild is the name of the image a door project builds for service in the environment
-// of composeName, whatever image: its file says: devopsy.invalid/<compose name>/<service>.
+// of composeName, whatever image: its file says: devopsy.internal/<compose name>/<service>.
 // Only the door writes it (the render, internal/door), and the listing names the build so
 // too (ParseComposeConfig), so every name a door project writes has a host no registry
 // serves, and a registry's names only ever move by a pull of them.

@@ -10,14 +10,14 @@ import (
 // and the listing give the same one, and nothing else is taken for it.
 func TestDoorBuildName(t *testing.T) {
 	t.Parallel()
-	if got := DoorBuild("shop-prod", "web"); got != "devopsy.invalid/shop-prod/web" {
+	if got := DoorBuild("shop-prod", "web"); got != "devopsy.internal/shop-prod/web" {
 		t.Fatalf("DoorBuild: %s", got)
 	}
 	for ref, want := range map[string][2]string{
-		"devopsy.invalid/shop-prod/web":                                  {"shop-prod", "web"},
-		"devopsy.invalid/shop-prod/web:1":                                {"shop-prod", "web"},
-		"devopsy.invalid/shop-prod/web:devopsy-shop-prod-20260101000000": {"shop-prod", "web"},
-		"devopsy.invalid/shop-eu-prod/my_worker":                         {"shop-eu-prod", "my_worker"},
+		"devopsy.internal/shop-prod/web":                                  {"shop-prod", "web"},
+		"devopsy.internal/shop-prod/web:1":                                {"shop-prod", "web"},
+		"devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000": {"shop-prod", "web"},
+		"devopsy.internal/shop-eu-prod/my_worker":                         {"shop-eu-prod", "my_worker"},
 	} {
 		name, svc, ok := IsDoorBuild(ref)
 		if !ok || name != want[0] || svc != want[1] {
@@ -25,9 +25,9 @@ func TestDoorBuildName(t *testing.T) {
 		}
 	}
 	for _, ref := range []string{
-		"shop-prod-web", "mongo-express:1", "docker.io/devopsy.invalid/shop-prod/web",
-		"devopsy.invalid/shop-prod", "devopsy.invalid/shop-prod/web/x", "devopsy.invalid//web",
-		"devopsy.invalid/shop-prod/web@sha256:abc", "devopsy.invalid:5000/shop-prod/web",
+		"shop-prod-web", "mongo-express:1", "docker.io/devopsy.internal/shop-prod/web",
+		"devopsy.internal/shop-prod", "devopsy.internal/shop-prod/web/x", "devopsy.internal//web",
+		"devopsy.internal/shop-prod/web@sha256:abc", "devopsy.internal:5000/shop-prod/web",
 	} {
 		if _, _, ok := IsDoorBuild(ref); ok {
 			t.Errorf("%s taken for a door build", ref)
@@ -49,7 +49,7 @@ func TestListingNamesADoorProjectsBuilds(t *testing.T) {
 		door bool
 		want map[string]string
 	}{
-		{true, map[string]string{"app": "devopsy.invalid/shop-prod/app", "named": "devopsy.invalid/shop-prod/named", "db": "mariadb:11.8"}},
+		{true, map[string]string{"app": "devopsy.internal/shop-prod/app", "named": "devopsy.internal/shop-prod/named", "db": "mariadb:11.8"}},
 		{false, map[string]string{"app": "shop-prod-app", "named": "mongo-express:1", "db": "mariadb:11.8"}},
 	} {
 		svcs, err := ParseComposeConfig(config, tt.door)

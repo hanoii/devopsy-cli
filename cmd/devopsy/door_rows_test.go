@@ -152,7 +152,7 @@ esac
 			continue
 		}
 		// The build goes by devopsy's name for it, the pulled image pinned.
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.invalid/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@sha256:b1"`) {
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.internal/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@sha256:b1"`) {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
 		}
 	}

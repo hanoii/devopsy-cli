@@ -300,7 +300,7 @@ func TestDoorProjectsLife(t *testing.T) {
 }
 
 // A door project's life in build mode: what it builds runs under devopsy's name for it
-// (devopsy.invalid/<compose name>/<service>), whatever image: says, so a name a registry
+// (devopsy.internal/<compose name>/<service>), whatever image: says, so a name a registry
 // serves, which another project may pull and run, is never the project's to write; a
 // rollback puts that name back on the build it ran, and --status reads it. (The life in
 // image mode: TestDoorProjectsLife.)
@@ -333,8 +333,8 @@ func TestDoorBuildModeLife(t *testing.T) {
 	runs := func(after, want string) {
 		t.Helper()
 		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker exec doorbuild-prod-web-1 cat /v")
-		if got := strings.Fields(out); len(got) != 2 || got[0] != "devopsy.invalid/doorbuild-prod/web" || got[1] != want {
-			t.Errorf("after %s, web runs %q, want devopsy.invalid/doorbuild-prod/web with %s", after, out, want)
+		if got := strings.Fields(out); len(got) != 2 || got[0] != "devopsy.internal/doorbuild-prod/web" || got[1] != want {
+			t.Errorf("after %s, web runs %q, want devopsy.internal/doorbuild-prod/web with %s", after, out, want)
 		}
 	}
 	commitAll(t, dir)
@@ -1096,11 +1096,11 @@ COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, project, dockerfile(pr
 		if out, code := doorAs(t, user, script); code != 0 {
 			t.Fatalf("%s's build (%d):\n%s", project, code, out)
 		}
-		out, _ := doorRoot(t, "docker run --rm devopsy.invalid/"+project+"-prod/app cat /seen")
+		out, _ := doorRoot(t, "docker run --rm devopsy.internal/"+project+"-prod/app cat /seen")
 		return strings.TrimSpace(out)
 	}
 	t.Cleanup(func() {
-		doorRoot(t, "docker image rm -f devopsy.invalid/doorcachea-prod/app devopsy.invalid/doorcacheb-prod/app doorcachec doorcached >/dev/null 2>&1")
+		doorRoot(t, "docker image rm -f devopsy.internal/doorcachea-prod/app devopsy.internal/doorcacheb-prod/app doorcachec doorcached >/dev/null 2>&1")
 	})
 	if got := build("doorcachea"); got != "none" {
 		t.Fatalf("the first build saw a cache: %q", got)

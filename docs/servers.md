@@ -327,12 +327,12 @@ is refused before it goes live.
 
 A project user has images of its own too: those it builds, and those
 its releases hold. devopsy names what a project user builds
-`devopsy.invalid/<compose name>/<service>`, whatever the service's
+`devopsy.internal/<compose name>/<service>`, whatever the service's
 `image:` says, which is the name `docker ps` and `--releases` show;
-`devopsy -- config` shows the `image:` the project wrote. No registry
-serves the reserved `.invalid` domain, so a project user's build never
-lands on a name a registry serves, which another project may pull and
-run. Any other image is pulled once with the project's registry logins
+`devopsy -- config` shows the `image:` the project wrote. `.internal`
+is reserved for private networks and never exists on the public
+internet, so a project user's build never lands on a name a registry
+serves, which another project may pull and run. Any other image is pulled once with the project's registry logins
 (the `auths` of its `~/.docker/config.json`) before the project runs
 it, inspects it or tags it, even when another project has it on the
 server already. So a private image another project pulled is never
