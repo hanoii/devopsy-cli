@@ -471,7 +471,7 @@ parent and an import of each on the child:
                        (rsync -a --no-D --delete --numeric-ids
                        --modify-window=-1: no device nodes or FIFOs,
                        times to the nanosecond, as root in devopsy's own
-                       image, devopsy-util, built on each server), an
+                       image, devopsy.internal/util, built on each server), an
                        entry the child owns as its owner's
                        (devopsy.mnt.owner, --chown)
   devopsy.data.copy=custom
@@ -578,7 +578,7 @@ through SSH.
   custom   the data capability's export <service> (a dump)
   volumes  a tar of the entries of .devopsy/mnt it mounts and its named
            volumes (devopsy.data.exclude honored), made as root in
-           devopsy-util with numeric owners and modes: files,
+           devopsy.internal/util with numeric owners and modes: files,
            directories and links only
 
 Stopped meanwhile, then started again: the service when it is labeled
@@ -607,7 +607,7 @@ does anything change, and the file is removed afterwards.
            service brought up first (--no-deps) unless stopped, and
            down again after if it was
   volumes  a tar: each entry of mnt and named volume it carries is
-           emptied, then extracted as root in devopsy-util, owners and
+           emptied, then extracted as root in devopsy.internal/util, owners and
            modes as they were, and an entry its labels own given to its
            owner (devopsy.mnt.owner). A truncated tar, one carrying
            entries the service does not mount, or one whose links make
@@ -984,7 +984,7 @@ Removes the environment from the server, under the release lock, in its
 current release: the environment's destroy step if it has one (destroy:
 in config.yaml, optional: one devopsy command, while everything runs),
 then docker compose down with volumes and the images built without an
-image: name, then shared/mnt emptied as root in devopsy-util; then each
+image: name, then shared/mnt emptied as root in devopsy.internal/util; then each
 release's images, as pruning removes them, then its directory (releases, shared/ with its data
 and .env). A failure before the removal removes nothing. Asks for the
 target's name, unless --yes (CI, like when a pull request

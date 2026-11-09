@@ -527,7 +527,7 @@ script=${script%x}
 docker run --rm --name devopsy-import-doormnt-prod-1 --label devopsy.env=doormnt-prod --label devopsy.task=import --network none \
   --mount type=bind,source=`+entry+`,target=/mnt/data \
   --mount type=bind,source=`+base+`/.devopsy-sync.stream.evil,target=/in/evil,readonly \
-  devopsy-util:4 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
+  devopsy.internal/util:5 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
 		t.Fatalf("devopsy's own import, asked directly (%d): %s", code, out)
 	}
 	asRootID := func() string {
@@ -621,7 +621,7 @@ func TestDoorKeepsProjectsApart(t *testing.T) {
 	if out, _ := doorAs(t, "devopsy-doorsep", "docker inspect --format '{{.Id}} {{json .Config.Labels}}' "+strings.TrimSpace(id)); !strings.Contains(out, `com.docker.compose.project`) {
 		t.Errorf("the control: imports read nothing of another's: %s", out)
 	}
-	doorAs(t, "devopsy-doorsep", "docker rm -f "+web+"; docker tag devopsy-util:4 busybox:1.37; docker image rm busybox:1.37")
+	doorAs(t, "devopsy-doorsep", "docker rm -f "+web+"; docker tag devopsy.internal/util:5 busybox:1.37; docker image rm busybox:1.37")
 	if out, code := doorRoot(t, "docker inspect -f '{{.State.Running}}' "+web); code != 0 || !strings.Contains(out, "true") {
 		t.Errorf("another's container removed: %s", out)
 	}
@@ -1272,13 +1272,13 @@ door entry "$mnt" mnt dir
 mkdir "$mnt/mnt/hide"
 ln -s /root "$mnt/mnt/hide/link"
 chmod 000 "$mnt/mnt/hide"
-echo "the control: $(docker run --rm -v "$mnt/mnt/hide/link:/x/data:ro" devopsy-util:4 sh -c "$export" sh data 2>"$HOME/said" | tar -xOf - data/doorclone-s3cret 2>/dev/null || :; tr '\n' ' ' <"$HOME/said")"
+echo "the control: $(docker run --rm -v "$mnt/mnt/hide/link:/x/data:ro" devopsy.internal/util:5 sh -c "$export" sh data 2>"$HOME/said" | tar -xOf - data/doorclone-s3cret 2>/dev/null || :; tr '\n' ' ' <"$HOME/said")"
 c1=$(door clone "$tree/prod/one")
 c2=$(door clone "$tree/prod/two")
-docker run --rm -v "$mnt:/m/mnt:ro" -v "$c1:/c" devopsy-util:4 sh -c "$first" 2>&1
-docker run --rm -v "$c1/mnt/mnt/hide:/m/volumes/mnt:ro" -v "$c2:/c" devopsy-util:4 sh -c "$second" 2>&1
+docker run --rm -v "$mnt:/m/mnt:ro" -v "$c1:/c" devopsy.internal/util:5 sh -c "$first" 2>&1
+docker run --rm -v "$c1/mnt/mnt/hide:/m/volumes/mnt:ro" -v "$c2:/c" devopsy.internal/util:5 sh -c "$second" 2>&1
 echo "the link: $(ls -ld "$c2/volumes/mnt" 2>&1)"
-docker run --rm -v "$c2/volumes/mnt/link:/x/data:ro" devopsy-util:4 sh -c "$export" sh data | tar -xOf - data/doorclone-s3cret
+docker run --rm -v "$c2/volumes/mnt/link:/x/data:ro" devopsy.internal/util:5 sh -c "$export" sh data | tar -xOf - data/doorclone-s3cret
 `
 	out, _ := doorAs(t, user, script)
 	control, _, _ := strings.Cut(out, "\n")

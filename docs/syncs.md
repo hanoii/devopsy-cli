@@ -156,15 +156,15 @@ them back together.
 
 ## How the data travels
 
-The rsync runs as root in `devopsy-util`, devopsy's image (alpine 3
+The rsync runs as root in `devopsy.internal/util`, devopsy's image (alpine 3
 with rsync and GNU tar, find and chown), so ownership and the deploy
 user's permissions do not matter. The image is built on each server the
 first time it is needed. Wherever it is used, an image a week old is
 built again with its base pulled, so what runs as root on your data gets
 alpine's fixes. A rebuild that fails (the registry out of reach) warns
-and goes on with the image already there. It replaced `devopsy-rsync`,
-`devopsy-util:1` and `:2`, which `docker image rm devopsy-rsync:2
-devopsy-util:1 devopsy-util:2` removes.
+and goes on with the image already there. It replaced `devopsy-rsync` and
+`devopsy-util:1` to `:4`, which `docker image rm devopsy-rsync:2
+devopsy-util:1 devopsy-util:2 devopsy-util:3 devopsy-util:4` removes.
 
 On one server, a single container copies between the two directories,
 without SSH, and a stream is written straight into the child's

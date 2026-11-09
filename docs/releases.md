@@ -383,7 +383,7 @@ release lock, in the current release (else the newest one), it runs:
    by the project's name alone, so it takes every profile, the images
    built without an `image:` name, and the networks and volumes only an
    older release named;
-3. `shared/mnt` emptied as root in `devopsy-util`, since its files
+3. `shared/mnt` emptied as root in `devopsy.internal/util`, since its files
    belong to container users;
 4. each release's images, as pruning removes them;
 5. the environment's directory: its releases, and `shared/` with its

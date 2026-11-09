@@ -59,7 +59,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 
 ## The util image
 
-- `UtilImage` (`devopsy-util:4`, built on each host from `UtilDockerfile`, `alpine:3` with rsync, GNU tar, find, chown, zstd and setfacl) runs every step on the data as root: the owners, a sync's rsync, `--export`'s and `--import`'s tars, a snapshot's tars and `--destroy`'s emptying of `mnt`, so owners and modes survive and the deploy user's permissions do not matter.
+- `UtilImage` (`devopsy.internal/util:5`, built on each host from `UtilDockerfile`, `alpine:3` with rsync, GNU tar, find, chown, zstd and setfacl) runs every step on the data as root: the owners, a sync's rsync, `--export`'s and `--import`'s tars, a snapshot's tars and `--destroy`'s emptying of `mnt`, so owners and modes survive and the deploy user's permissions do not matter.
 - `ensureUtilImage` readies it before every use (the scripts through the hidden `--util-image`, a feature), built when missing and built again once older than `UtilImageMaxAge` (a week), `build --pull --no-cache`: it runs as root on the data and serves rsync across servers, so `alpine:3`'s patches must reach it.
 - The image a rebuild replaced is removed without `-f`, so a container still running it keeps it.
 - A rebuild that fails warns and goes on with the image there, since a registry out of reach must never stop a sync, an import or `--destroy`; a missing one that fails to build fails.

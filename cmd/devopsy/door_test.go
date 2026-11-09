@@ -807,7 +807,7 @@ func TestAuthorizedKeysPrintsOnlyKeys(t *testing.T) {
 func TestProjectNameClash(t *testing.T) {
 	t.Parallel()
 	others := []string{"shop", "blog-admin", "traefik"}
-	// devopsy's own names are under devopsy-: the util image (devopsy-util, root with host
+	// devopsy's own names are under devopsy-: the util image's old names (devopsy-util, root with host
 	// mounts, which a project named devopsy could build and remove), the project users, the
 	// group, the builders.
 	for project, clash := range map[string]bool{
@@ -1157,5 +1157,19 @@ func TestDoorCloneRequestsFollowNoLinkInAClone(t *testing.T) {
 	side.mark(filepath.Join(own, "sub"), "id1")
 	if _, err := os.Lstat(filepath.Join(victim, remote.SnapshotComplete)); err == nil {
 		t.Errorf("mark wrote as the deploy user through a link in a clone")
+	}
+}
+
+// devopsy's util image runs as root on the host's files, by its name: no project user's pull
+// may write that name (Claimable), as none may write a build's, so it is under the door's own
+// host, which no public registry serves.
+func TestDoorPullsNoUtilImage(t *testing.T) {
+	t.Parallel()
+	p := door.Policy{Project: "shop", User: "devopsy-shop"}
+	if err := p.Claimable(remote.UtilImage); err == nil {
+		t.Errorf("a project user may pull %s, which root runs", remote.UtilImage)
+	}
+	if _, err := door.Decide([]string{"pull", "-q", remote.UtilImage}, p, nil, doorTestHost{}, doorKnown()); err == nil {
+		t.Errorf("the door pulls %s for a project user", remote.UtilImage)
 	}
 }

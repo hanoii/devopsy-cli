@@ -21,7 +21,7 @@ The alternatives:
 - Absolute paths work, but devopsy does not manage them. Keeping, backing
   up and removing them is the project's job.
 
-`--destroy` empties `shared/mnt` as root in `devopsy-util`, and forgets
+`--destroy` empties `shared/mnt` as root in `devopsy.internal/util`, and forgets
 the history of the images that ran on the data. Back up `shared/.env`,
 `shared/mnt` (databases as dumps) and `.devopsy-data-images` beside them.
 
@@ -78,7 +78,7 @@ A `volumes` copy:
   The child's copy then equals the parent's, with its owners and modes,
   except that an entry the child owns gets the child's owner (Owners,
   below). `--export` and `--import` move them as a tar. Both run
-  as root in `devopsy-util`.
+  as root in `devopsy.internal/util`.
 - Device nodes, FIFOs and sockets are never copied, nor given to an
   owner. As root, rsync and tar would make them on the server, where a
   block device given to the app's UID is its raw disk.
@@ -247,7 +247,7 @@ sharing a mount, would each claim it.
 Two services with different owners on one entry are refused. A service
 without the label may write an owned entry (a tool sharing it).
 
-devopsy gives the entries away as root in `devopsy-util`, without a
+devopsy gives the entries away as root in `devopsy.internal/util`, without a
 network and never following a symbolic link. Each entry is done in a
 container that mounts that entry alone, so a directory the app swaps for
 a link meanwhile cannot lead anywhere else. Only files, directories and
@@ -267,7 +267,7 @@ Where owners are applied:
   - In a rollback or a restart, labels that cannot be read (names from
     before a change, a compose error) are only a warning and nothing is
     given away: a rollback never fails for its release's labels.
-  - Before its switch, a rollback makes sure `devopsy-util` is there when
+  - Before its switch, a rollback makes sure `devopsy.internal/util` is there when
     the release it restores owns entries, so an image pruned since fails
     it before anything changes.
 - A sync: an entry the child owns lands with the child's owner, by the
@@ -352,7 +352,7 @@ release, are fine.
 
 Labels that the owners' step after the switch could not read (a value it
 does not know) refuse the release here too. With an entry owned, the
-check also builds `devopsy-util` when the server lacks it, so a registry
+check also builds `devopsy.internal/util` when the server lacks it, so a registry
 that cannot be reached refuses the release before it goes live.
 
 Absolute paths are not checked. A service with data's named volumes are
@@ -375,7 +375,7 @@ devopsy @staging --import database < database.sql   # asks for staging's full na
 - A `custom` service goes through the data capability's `export` and
   `import`.
 - A `volumes` service goes as a tar of its entries of `mnt` and its named
-  volumes, made and extracted as root in `devopsy-util`, numeric owners
+  volumes, made and extracted as root in `devopsy.internal/util`, numeric owners
   and modes kept. An import empties each entry the tar carries first, as
   a sync's `--delete` does, and extracts it in a container without a
   network that mounts that entry alone, so a running service that swaps a

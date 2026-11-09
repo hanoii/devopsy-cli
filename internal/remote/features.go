@@ -107,7 +107,7 @@ var namedFeatures = []struct {
 	// run step) and a restore's snapshot, which a devopsy without them
 	// refuses as usage after the switch.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
-	// The util image a script runs, devopsy-util:4 (setfacl, for the door's
+	// The util image a script runs, devopsy.internal/util:5 (setfacl, for the door's
 	// grants), whose tag a devopsy without it never readies, where a sync's
 	// receive runs it after its claim (the copy then counted as cut).
 	// childNeeds carries it to the child's first session, so a child
@@ -142,8 +142,8 @@ const ContainerLabelsFeature = "container-labels"
 // images' settings itself, each release's mode from its record first.
 const RecordModeFeature = "record-mode"
 
-// UtilImageFeature is UtilImage's tag's named feature: devopsy-util:4.
-const UtilImageFeature = "util-image-4"
+// UtilImageFeature is UtilImage's tag's named feature: devopsy.internal/util:5.
+const UtilImageFeature = "util-image-5"
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"

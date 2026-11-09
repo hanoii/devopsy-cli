@@ -835,8 +835,8 @@ func TestSyncSameHost(t *testing.T) {
 	// alone, keeps running. A first release then creates every labeled
 	// service, whatever containers it found.
 	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/db/ /dst/db/",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/storage/ /dst/storage/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/db/ /dst/db/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/storage/ /dst/storage/",
 		"shop-prod compose", "start db", "shop-dev compose", "up -d --wait app db"}
 	rest := docker
 	for _, want := range order {
@@ -1076,7 +1076,7 @@ func TestSyncReflinkClone(t *testing.T) {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
 	inOrder("first release", docker, "shop-prod compose", "-reflink ", "stop db", "-clone ", "shop-prod compose", "start db",
-		" -v "+clone, "/mnt:/src:ro -v "+s.mnt("dev")+":/dst devopsy-util:4 rsync", "/src/db/ /dst/db/", "-unclone ")
+		" -v "+clone, "/mnt:/src:ro -v "+s.mnt("dev")+":/dst devopsy.internal/util:5 rsync", "/src/db/ /dst/db/", "-unclone ")
 	noClone("first release")
 	// The clone's containers are the parent's, never named as the sync's
 	// own, which the child's holder removes as writers into the child.
@@ -1247,7 +1247,7 @@ func TestSyncReflinkShare(t *testing.T) {
 		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
 	}
 	// db rsynced, storage cloned, then given to its owner; never rsynced.
-	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-shop-dev-([0-9.a-f]+)-share-1 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:4`).MatchString(docker) {
+	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-shop-dev-([0-9.a-f]+)-share-1 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy.internal/util:5`).MatchString(docker) {
 		t.Errorf("shared docker:\n%s", docker)
 	}
 	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {
@@ -1292,7 +1292,7 @@ func TestSyncFileEntry(t *testing.T) {
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+	if code != 0 || !strings.Contains(docker, "devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -1421,7 +1421,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !regexp.MustCompile(childSSH+` -T -p 22 devopsy@two\n`).MatchString(ssh) {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/etc/rsyncd.conf .\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-", " --network none -v " + s.mnt("dev") + "/db:/mnt/db devopsy-util:4 sh -c ", "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse devopsy::db/ /mnt/db/\n", "devopsy::storage/ /mnt/storage/\n", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/etc/rsyncd.conf .\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-", " --network none -v " + s.mnt("dev") + "/db:/mnt/db devopsy.internal/util:5 sh -c ", "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse devopsy::db/ /mnt/db/\n", "devopsy::storage/ /mnt/storage/\n", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -1430,7 +1430,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	// in Go, the child's through devopsy --util-image before the parent
 	// stops anything (a weekly rebuild would lengthen its downtime), and
 	// each receive's again, db's and storage's.
-	check := "image inspect -f {{.Id}} {{.Created}} devopsy-util:4\n"
+	check := "image inspect -f {{.Id}} {{.Created}} devopsy.internal/util:5\n"
 	if n := strings.Count(docker, check); n != 4 {
 		t.Errorf("the util image checked %d times, want 4 (push, the child's before the stop, each receive):\n%s", n, docker)
 	}
@@ -2955,7 +2955,7 @@ func TestExportImport(t *testing.T) {
 	out, errs, code = s.runIO(nil, nil, "--export", "app")
 	docker, _ = s.logs()
 	mnt := filepath.Join(s.dot, "mnt")
-	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "--mount type=bind,source="+mnt+"/storage,target=/x/storage,readonly devopsy-util:4 sh -c ") || !strings.Contains(docker, " sh storage\n") {
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "--mount type=bind,source="+mnt+"/storage,target=/x/storage,readonly devopsy.internal/util:5 sh -c ") || !strings.Contains(docker, " sh storage\n") {
 		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
@@ -3042,7 +3042,7 @@ func TestExportImport(t *testing.T) {
 	}
 	// The spool mounted read-only and read there, never on the
 	// container's stdin (Docker's stream is slow).
-	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy-util:4 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy.internal/util:5 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
 	// An entry that is a file: made empty when missing, for its
@@ -3068,7 +3068,7 @@ func TestExportImport(t *testing.T) {
 	// user writes the Mac's files anyway.
 	_, errs, code = s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app")
 	docker, _ = s.logs()
-	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy-util:4 sh -c set -eu`).MatchString(docker)
+	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy.internal/util:5 sh -c set -eu`).MatchString(docker)
 	if code != 0 || owners != (runtime.GOOS != "darwin") || strings.Contains(errs, "devopsy: giving mnt/storage to 10001:10001\n") != (runtime.GOOS != "darwin") || strings.Contains(docker, ":/mnt devopsy-util") {
 		t.Errorf("--import of an owned entry (%d), the owners' container %v:\n%s\n%s", code, owners, errs, docker)
 	}
@@ -3162,7 +3162,7 @@ func TestExportImport(t *testing.T) {
 		// descends, so each x/.. pair path.Clean cancels climbs one
 		// directory for real. Judged lexically, storage/w's target was
 		// storage/etc/shadow, inside its entry; GNU tar extracts both
-		// links (checked in devopsy-util:4, one container mounting
+		// links (checked in devopsy.internal/util:5, one container mounting
 		// storage alone), and on the server `realpath
 		// shared/mnt/storage/w` was /etc/shadow, which Docker follows for
 		// a bind of mnt/storage/w. A link alone is the data's
@@ -3410,7 +3410,7 @@ func TestExportImport(t *testing.T) {
 // however path.Clean reads the way, a loop refused. A pax global
 // header is no member, but GNU tar applies its records (linkpath, path,
 // size...) to every member after it, where archive/tar, which the check
-// reads the tar with, applies none (checked in devopsy-util:4, GNU tar
+// reads the tar with, applies none (checked in devopsy.internal/util:5, GNU tar
 // 1.35, 2026-10-24: a global linkpath made storage/x -> sub into storage/x
 // -> ../../../../etc): a global header carrying anything but the export's
 // own record (images.ExportKey), wherever it is, must be refused, or the
@@ -4434,15 +4434,15 @@ func TestUtilImage(t *testing.T) {
 	out, code = s.run(old, "--util-image")
 	docker, _ = s.logs()
 	built()
-	if dockerfile, _ := os.ReadFile(df); code != 0 || !strings.Contains(out, "updating devopsy-util:4, built over a week ago") ||
-		!strings.Contains(docker, " build -q --pull --no-cache -t devopsy-util:4 -\n") || !strings.Contains(docker, " image rm sha256:old\n") ||
+	if dockerfile, _ := os.ReadFile(df); code != 0 || !strings.Contains(out, "updating devopsy.internal/util:5, built over a week ago") ||
+		!strings.Contains(docker, " build -q --pull --no-cache -t devopsy.internal/util:5 -\n") || !strings.Contains(docker, " image rm sha256:old\n") ||
 		string(dockerfile) != "FROM alpine:3\nRUN apk add --no-cache rsync tar findutils coreutils zstd acl\n" {
 		t.Errorf("a week old (%d):\n%s\n%s\n%s", code, out, docker, dockerfile)
 	}
 
 	out, code = s.run(append(old, "FAIL_UTIL_BUILD=1"), "--util-image")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "warning: updating devopsy-util:4 failed: going on with the one there") || strings.Contains(docker, " image rm ") {
+	if code != 0 || !strings.Contains(out, "warning: updating devopsy.internal/util:5 failed: going on with the one there") || strings.Contains(docker, " image rm ") {
 		t.Errorf("a failed rebuild (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -4450,11 +4450,11 @@ func TestUtilImage(t *testing.T) {
 	out, code = s.run(missing, "--util-image")
 	docker, _ = s.logs()
 	built()
-	if code != 0 || !strings.Contains(out, "building devopsy-util:4") || !strings.Contains(docker, " build -q -t devopsy-util:4 -\n") || strings.Contains(docker, " image rm ") {
+	if code != 0 || !strings.Contains(out, "building devopsy.internal/util:5") || !strings.Contains(docker, " build -q -t devopsy.internal/util:5 -\n") || strings.Contains(docker, " image rm ") {
 		t.Errorf("missing (%d):\n%s\n%s", code, out, docker)
 	}
 	out, code = s.run(append(missing, "FAIL_UTIL_BUILD=1"), "--util-image")
-	if code != 1 || !strings.Contains(out, "error: building devopsy-util:4: exit status 1") {
+	if code != 1 || !strings.Contains(out, "error: building devopsy.internal/util:5: exit status 1") {
 		t.Errorf("missing, its build failing (%d):\n%s", code, out)
 	}
 }

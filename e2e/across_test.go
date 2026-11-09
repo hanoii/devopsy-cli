@@ -208,7 +208,7 @@ func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func())
 	dir := acrossReleased(t, name)
 	srv(t, "head -c 16000000 /dev/urandom >"+name+"/prod/shared/mnt/data/big")
 	t.Cleanup(func() {
-		_, _ = docker("exec", server2, "sh", "-c", "docker ps -q --filter ancestor=devopsy-util:4 | xargs -r docker rm -f")
+		_, _ = docker("exec", server2, "sh", "-c", "docker ps -q --filter ancestor=devopsy.internal/util:5 | xargs -r docker rm -f")
 	})
 	throttleServer(t, "4mbit")
 	background(t, dir, fast()+" "+noAgent+" devopsy @dev --sync --yes", "/tmp/"+name+".log")
@@ -226,7 +226,7 @@ func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func())
 	eventually(t, 30*time.Second, "the parent restored", func() bool {
 		return lockFree(t, name+"/prod/.devopsy-sync.lock") && syncState(t, name, "prod", "data") == "running"
 	})
-	if out, _ := srv(t, "docker ps -q --filter ancestor=devopsy-util:4"); strings.TrimSpace(out) != "" {
+	if out, _ := srv(t, "docker ps -q --filter ancestor=devopsy.internal/util:5"); strings.TrimSpace(out) != "" {
 		t.Errorf("the parent's rsync daemon still runs: %s", out)
 	}
 }

@@ -424,9 +424,11 @@ const (
 // root on the data and serves rsync across servers, so its base floats
 // on alpine:3 and gets its fixes within a week. Its tag changes with the
 // Dockerfile's packages. It was devopsy-rsync until October 2026, then
-// devopsy-util:1, :2 and :3 (:3 added zstd, for snapshots, :4 acl, for the
-// door's grants): hosts keep those until removed.
-const UtilImage = "devopsy-util:4"
+// devopsy-util:1, :2, :3 and :4 (:3 added zstd, for snapshots, :4 acl, for the
+// door's grants), then devopsy.internal/util:5, under the door's build host
+// (images.DoorHost), so no project user's pull writes the name root runs:
+// hosts keep the older ones until removed.
+const UtilImage = "devopsy.internal/util:5"
 
 // UtilImageMaxAge is how old UtilImage may get before it is rebuilt.
 const UtilImageMaxAge = 7 * 24 * time.Hour

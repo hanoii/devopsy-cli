@@ -102,7 +102,7 @@ func listProjectUsers(d *remote.Door) int {
 // flat, so project a's environment b-c and project a-b's environment c are one name, and
 // whichever came first would hold the other's networks, volumes and containers.
 func projectNameClash(project string, others []string) string {
-	// devopsy's own names are under it: the util image (devopsy-util, root with host mounts),
+	// devopsy's own names are under it: the util image's old names (devopsy-util),
 	// the project users, their group, the builders.
 	if project == "devopsy" || door.Extends(project, "devopsy") {
 		return project + " is under devopsy's own names"
