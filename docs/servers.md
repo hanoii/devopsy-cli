@@ -291,6 +291,16 @@ credentials from them needs credentials of its own. DNS at those
 addresses still answers, since some clouds run their resolver there.
 Syncs still work with the firewall loaded.
 
+Docker's daemon contacts registries for project users too, as root, so
+the firewall keeps it off the host's loopback and the metadata
+services, DNS aside, by its cgroup (`docker.service`'s, or the running
+`dockerd`'s): a registry a project runs could otherwise send it there.
+On a server with project users, the deploy user's own pulls and logins
+reach no registry on loopback either, a mirror included: put one on a
+build server, or reach it by its name or Docker's bridge address. With
+Docker's daemon in no cgroup of its own, `--server-info` warns that
+nothing covers it.
+
 A project user's containers, like any container on a Docker host, still
 reach what the host listens on at its other addresses, its bridges'
 included: the firewall leaves them alone, since refusing them would
@@ -378,8 +388,8 @@ the login against the registry as it does for a pull, so a registry on
 the same server accepts it, reached by its name or the address of
 Docker's bridge: a registry at the server's loopback, link-local or a
 cloud metadata address is refused, for a login and a pull alike, since
-Docker would contact it for the project user, outside its firewall. The project user's devopsy then keeps the
-login in its own docker config (`~/.docker/config.json`, or under
+Docker would contact it for the project user. The project user's
+devopsy then keeps the login in its own docker config (`~/.docker/config.json`, or under
 `DOCKER_CONFIG`). The password is read from stdin (`--password-stdin`,
 with `--username`) or at a prompt, never from the command line.
 

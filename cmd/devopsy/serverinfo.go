@@ -101,8 +101,9 @@ func doorFirewallWrong(read string) ([]string, error) {
 	return remote.DoorFirewallWrong(read, g.Gid), nil
 }
 
-// doorHostRead runs script as root on the host with its network, through the util image
-// (writing the host's files when write), and returns what it prints.
+// doorHostRead runs script as root on the host with its network, its processes and its
+// cgroups, through the util image (writing the host's files when write), and returns what it
+// prints: the firewall finds Docker's daemon and names its cgroup as the host has them.
 func doorHostRead(script string, write bool) (string, error) {
 	if err := ensureUtilImage(context.Background()); err != nil {
 		return "", err
@@ -111,7 +112,7 @@ func doorHostRead(script string, write bool) (string, error) {
 	if write {
 		bind = "/:/host"
 	}
-	c := exec.Command("docker", "run", "--rm", "--network", "host", "--cap-add", "NET_ADMIN", "-v", bind, remote.UtilImage,
+	c := exec.Command("docker", "run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "-v", bind, remote.UtilImage,
 		"chroot", "/host", "/bin/sh", "-c", script)
 	c.Stderr = os.Stderr
 	out, err := c.Output()

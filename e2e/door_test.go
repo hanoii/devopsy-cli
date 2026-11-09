@@ -63,6 +63,10 @@ door:
   vets: [{prefix: vetted., command: /usr/local/bin/door-vet}]
 C
 chown devopsy /home/devopsy/.config/devopsy/config.yaml
+# Docker's daemon in a cgroup of its own, as systemd's docker.service has it on a server: the
+# firewall covers what it contacts by that cgroup.
+mkdir -p /sys/fs/cgroup/dockerd
+pidof -s dockerd >/sys/fs/cgroup/dockerd/cgroup.procs
 # The project builders pull through the lane's mirror too, as the daemon does: the admin's.
 m=$(getent hosts mirror | awk '{print $1; exit}')
 : >`+doorBuildkitBase+`
@@ -958,6 +962,29 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 	out, code := op(t, dir, noAgent+" devopsy @devopsy-doorfw@"+strings.TrimSpace(addr)+":dev --release")
 	if code != 0 || !strings.Contains(out, ":dev, same server") {
 		t.Errorf("a child at another address of the server (%d):\n%s\nits entries:\n%s", code, out, doorEntries(t, "doorfw-dev"))
+	}
+}
+
+// Docker's daemon, root and outside the project users' firewall, contacts a registry for a
+// project user's pull or login: the firewall keeps it off the host's loopback and the metadata
+// services too, by its cgroup, wherever a name sends it (a name the door cannot tell, here one
+// in /etc/hosts). The control: root reaches the same registry on loopback.
+func TestDoorDaemonFirewall(t *testing.T) {
+	user := doorUser(t, "doordaemon")
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doordaemon-reg >/dev/null 2>&1; grep -v doordaemon-reg /etc/hosts >/tmp/doordaemon-hosts && cat /tmp/doordaemon-hosts >/etc/hosts")
+	})
+	if out, code := doorRoot(t, `set -e
+echo '127.0.0.1 doordaemon-reg.test' >>/etc/hosts
+docker run -d --name doordaemon-reg --network host -e REGISTRY_HTTP_ADDR=127.0.0.1:5007 registry:3 >/dev/null
+for i in $(seq 150); do curl -s -o /dev/null http://doordaemon-reg.test:5007/v2/ && exit 0; sleep 0.2; done
+exit 1`); code != 0 {
+		t.Fatalf("the registry on loopback (%d): %s", code, out)
+	}
+	out, code := doorAs(t, user, "printf x | docker login -u u --password-stdin doordaemon-reg.test:5007 2>&1")
+	if code == 0 || strings.Contains(out, "Login Succeeded") {
+		jumps, _ := doorRoot(t, "iptables -S OUTPUT")
+		t.Errorf("the daemon logged in to a registry on the host's loopback for a project user (%d):\n%s\n%s", code, out, jumps)
 	}
 }
 
