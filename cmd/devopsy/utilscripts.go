@@ -1,5 +1,7 @@
 package main
 
+import "github.com/hanoii/devopsy-cli/internal/remote"
+
 // The scripts devopsy's util containers run, as root on the host's files, named
 // so that the door can take exactly these from a project user and nothing else
 // (doorKnown). One given by a caller is never run.
@@ -21,7 +23,9 @@ done`
 	// spaceProbeScript says, per path, its filesystem (its parent's while
 	// missing), that one's free kilobytes, and the path's own use.
 	spaceProbeScript = `for p; do d=$p; [ -e "$d" ] || d=${d%/*}; set -- $(df -Pk "$d" | tail -n 1); u=0; [ ! -e "$p" ] || u=$(du -sk "$p" | cut -f1); printf '%s\t%s\t%s\t%s\n' "$p" "$1" "$4" "$u"; done`
+	// receiveScript is a sync's receive: rsync, its $0, over the session (remote.ReceiveShim).
+	receiveScript = remote.ReceiveShim
 	// rsyncDaemonScript is a sync's read-only rsync daemon, from its settings: they wait
-	// for each connection, which runs door.DaemonServe through docker exec.
-	rsyncDaemonScript = `umask 077 && printf "nobody:%s\n" "$RSYNC_SECRET" > /etc/rsyncd.secrets && printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec sleep infinity`
+	// for each session, which runs door.DaemonServe through docker exec.
+	rsyncDaemonScript = `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec sleep infinity`
 )

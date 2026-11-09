@@ -44,24 +44,3 @@ func TestOpusReviewDoorContainerReachesTheHostE2E(t *testing.T) {
 	}
 }
 
-// BUG: through the door's receive form, a project user reaches any port on the host's
-// loopback, as root on the host's network, and reads what answers: the firewall rejects the
-// project user's own connection to the host's sshd, while the receive's rsync, asked for
-// rsync://127.0.0.1:22/, prints sshd's banner ("server sent ... rather than greeting"). A
-// loopback rsync daemon (a backup's, with modules open to local users) would be read into the
-// project's entry whole.
-func TestOpusReviewDoorReceiveReadsTheLoopbackE2E(t *testing.T) {
-	dir := doorProject(t, "opusrx", "services:\n  web:\n"+doorService+"    command: [sleep, \"3600\"]\n", nil)
-	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
-		t.Fatalf("a release (%d):\n%s", code, out)
-	}
-	// Control: the project user's own connection to sshd on the loopback is rejected.
-	if out, _ := doorAs(t, "devopsy-opusrx", "curl -s -m 3 telnet://127.0.0.1:22 </dev/null 2>&1"); strings.Contains(out, "SSH-2.0") {
-		t.Fatalf("control: the project user's process read sshd's banner: %s", out)
-	}
-	out, _ := doorAs(t, "devopsy-opusrx", "RSYNC_PASSWORD=$(printf '%032d' 0) docker run --rm --network host -e RSYNC_PASSWORD -v "+doorSpace+"/mnt/opusrx-prod:/mnt devopsy-util:4 "+
-		"rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:22/data/ /mnt/data/ 2>&1")
-	if strings.Contains(out, "SSH-2.0") {
-		t.Errorf("BUG: the door's receive, asked by the project user, read sshd's banner on the host's loopback: %s", out)
-	}
-}

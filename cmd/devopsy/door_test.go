@@ -27,7 +27,7 @@ import (
 var utilScripts = map[string]string{
 	"exportTarScript": exportTarScript, "reflinkProbeScript": reflinkProbeScript, "snapshotTarScript": snapshotTarScript,
 	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
-	"rsyncDaemonScript": rsyncDaemonScript, "restoreStreamScript": restoreStreamScript,
+	"rsyncDaemonScript": rsyncDaemonScript, "restoreStreamScript": restoreStreamScript, "receiveScript": receiveScript,
 }
 
 // TestDoorKnowsDevopsysUtilScripts fails when devopsy runs a util container whose
@@ -35,7 +35,7 @@ var utilScripts = map[string]string{
 func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 	t.Parallel()
 	known := doorKnown()
-	scripts := []string{known.Owners, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore}
+	scripts := []string{known.Owners, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
 	for name, script := range utilScripts {
 		if !slices.Contains(scripts, script) {
 			t.Errorf("%s is not in doorKnown", name)
@@ -159,13 +159,20 @@ func TestDoorTakesComputedForms(t *testing.T) {
 	}
 	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
 	daemon := []string{"run", "--rm", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + rsyncdConf([]string{"storage", "app.ini"}, []string{"app.ini"}, []string{"db"}),
-		"-e", "RSYNC_SECRET", "-v", "/space/mnt/shop-prod:/mnt:ro", "-v", "shop-prod_db:/vol/db:ro", remote.UtilImage, "sh", "-c", rsyncDaemonScript}
+		"-v", "/space/mnt/shop-prod:/mnt:ro", "-v", "shop-prod_db:/vol/db:ro", remote.UtilImage, "sh", "-c", rsyncDaemonScript}
 	if _, err := door.Decide(daemon, p, nil, doorTestHost{}, doorKnown()); err != nil {
 		t.Errorf("the door does not take devopsy's own rsync daemon: %v", err)
 	}
-	receive := append(append([]string{"run", "--rm", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", remote.UtilImage}, remote.RsyncCopy...), "--inplace", "--chown=1:2", "rsync://127.0.0.1:20001/storage/", "/mnt/storage/")
-	if _, err := door.Decide(receive, p, nil, doorTestHost{}, doorKnown()); err != nil {
-		t.Errorf("the door does not take devopsy's own receive: %v", err)
+	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "1:2"}}}
+	c := container{remote.SyncContainerPrefix + "1.abcdef-receive", "shop-dev", remote.SyncTask("1.abcdef")}
+	for _, r := range []syncReceive{{Entry: "storage"}, {Entry: "app.ini", File: true}, {Volume: "db"}} {
+		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev")
+		if err != nil {
+			t.Fatalf("%+v: %v", r, err)
+		}
+		if _, err := door.Decide(receiveRun(c, plan), p, nil, doorTestHost{}, doorKnown()); err != nil {
+			t.Errorf("the door does not take devopsy's own receive of %+v: %v", r, err)
+		}
 	}
 }
 

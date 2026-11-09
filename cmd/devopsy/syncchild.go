@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -14,9 +16,11 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // syncRequest is what the parent's push asks of the child across servers, one per
@@ -26,8 +30,8 @@ type syncRequest struct {
 	// Exec is devopsy's arguments in the child's release: --sync-services list, wipe
 	// (a reset's only) or import <service> [last], or --util-image.
 	Exec []string `json:"exec,omitempty"`
-	// Receive is the rsync of entries and volumes from the parent's daemon, behind the
-	// session's reverse forward of Port.
+	// Receive is the rsync of one entry or volume from the parent's daemon, over the
+	// session's own stdin and stdout.
 	Receive *syncReceive `json:"receive,omitempty"`
 	// Spool is a custom service whose export the session's stdin carries into the
 	// child's spool for it.
@@ -36,16 +40,14 @@ type syncRequest struct {
 	Beat int `json:"beat,omitempty"`
 }
 
-// syncReceive is a Receive request: the entries of mnt, those that are files, and the
-// named volumes by key, each one the child's labels name; whether it is the copy's last
-// write; whether stdin's first line is the daemon's password.
+// syncReceive is a Receive request: one entry of mnt or one named volume by its key, which
+// the child's labels name; whether the entry is a file on the parent, which the child's own
+// entry decides where it has one; whether it is the copy's last write.
 type syncReceive struct {
-	Port    int      `json:"port"`
-	Dirs    []string `json:"dirs,omitempty"`
-	Files   []string `json:"files,omitempty"`
-	Volumes []string `json:"volumes,omitempty"`
-	Last    bool     `json:"last,omitempty"`
-	Secret  bool     `json:"secret,omitempty"`
+	Entry  string `json:"entry,omitempty"`
+	Volume string `json:"volume,omitempty"`
+	File   bool   `json:"file,omitempty"`
+	Last   bool   `json:"last,omitempty"`
 }
 
 // syncName is what a request may name of the child's: an entry, a volume's key, a service.
@@ -96,6 +98,9 @@ func runSyncChild(args []string) int {
 	if req.Beat > 0 && req.Beat <= 300 {
 		env[remote.HeartbeatEnv] = strconv.Itoa(req.Beat)
 	}
+	if req.Receive != nil && len(req.Exec) == 0 && req.Spool == "" {
+		return receiveOne(req.Receive, id, base, toDir, toProject, env, reset)
+	}
 	script, err := syncChildScript(req, id, base, toDir, toProject, env, reset)
 	if err != nil {
 		return fail(err.Error())
@@ -138,39 +143,166 @@ func syncChildScript(req syncRequest, id, base, toDir, toProject string, env map
 		}
 		return "umask 077; exec cat > " + remote.Quote(remote.StreamSpool(base, req.Spool, id)) + "\n", nil
 	}
-	r := req.Receive
-	if r.Port < 1 || r.Port > 65535 {
-		return "", fmt.Errorf("not a port: %d", r.Port)
-	}
-	child, err := childListAt(toDir, toProject, env)
-	if err != nil {
-		return "", err
-	}
+	return "", errors.New("not a sync's request: one of exec, receive and spool")
+}
+
+// receivePlan is what a receive writes and how, from the child's own list: the entry or
+// volume, its mount, and rsync's words after RsyncCopy (owners, in place, from, into). An
+// entry's kind is the child's where it has the entry (file says the parent's, for one it
+// has not yet), so the parent's word never turns the child's directory into a file.
+type receivePlan struct {
+	what, entry, mount string
+	file               bool
+	args               []string
+}
+
+func planReceive(r *syncReceive, child []childService, mnt, toProject string) (receivePlan, error) {
 	var dirs, vols []string
 	for _, c := range child {
 		dirs = append(dirs, c.Dirs...)
 		vols = append(vols, c.Volumes...)
 	}
-	for _, d := range r.Dirs {
-		if !syncName.MatchString(d) || !slices.Contains(dirs, d) {
-			return "", fmt.Errorf("the child's labels name no entry %q", d)
+	switch {
+	case (r.Entry == "") == (r.Volume == ""):
+		return receivePlan{}, errors.New("not a sync's request: one entry or one volume")
+	case r.Volume != "":
+		if !syncName.MatchString(r.Volume) || !slices.Contains(vols, r.Volume) || r.File {
+			return receivePlan{}, fmt.Errorf("the child's labels name no volume %q", r.Volume)
+		}
+		return receivePlan{what: "the volume " + r.Volume, mount: toProject + "_" + r.Volume + ":/vol/" + r.Volume,
+			args: []string{remote.ReceiveFrom + r.Volume + "/", "/vol/" + r.Volume + "/"}}, nil
+	}
+	e := r.Entry
+	if !syncName.MatchString(e) || !slices.Contains(dirs, e) {
+		return receivePlan{}, fmt.Errorf("the child's labels name no entry %q", e)
+	}
+	file := r.File
+	if fi, err := os.Lstat(filepath.Join(mnt, e)); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return receivePlan{}, fmt.Errorf("mnt/%s is a symbolic link: nothing copied", e)
+		}
+		if file != !fi.IsDir() {
+			return receivePlan{}, fmt.Errorf("mnt/%s is a %s here and a %s on the parent: nothing copied", e, kindWord(!fi.IsDir()), kindWord(file))
 		}
 	}
-	for _, f := range r.Files {
-		if !slices.Contains(r.Dirs, f) {
-			return "", fmt.Errorf("not an entry of this copy: %q", f)
-		}
+	p := receivePlan{what: "mnt/" + e, entry: e, file: file, mount: filepath.Join(mnt, e) + ":/mnt/" + e}
+	if o := childOwners(child)[e]; o != "" {
+		// The child's owner for every file written (its labels, from its list).
+		p.args = append(p.args, "--chown="+o)
 	}
-	for _, v := range r.Volumes {
-		if !syncName.MatchString(v) || !slices.Contains(vols, v) {
-			return "", fmt.Errorf("the child's labels name no volume %q", v)
-		}
+	if file {
+		// A file: its module serves it alone, into the file mounted, in place (a
+		// container bind-mounts the file's inode).
+		p.args = append(p.args, "--inplace", remote.ReceiveFrom+e+"/"+e, "/mnt/"+e)
+	} else {
+		p.args = append(p.args, remote.ReceiveFrom+e+"/", "/mnt/"+e+"/")
+	}
+	return p, nil
+}
+
+// receiveRun is docker's words for a receive as the container c, labeled for its holder,
+// which removes it by them.
+func receiveRun(c container, plan receivePlan) []string {
+	return slices.Concat([]string{"run", "--rm", "-i"}, c.runArgs(), []string{"--network", "none", "-v", plan.mount, remote.UtilImage, "sh", "-c", receiveScript},
+		remote.RsyncCopy, plan.args)
+}
+
+func kindWord(file bool) string {
+	if file {
+		return "file"
+	}
+	return "directory"
+}
+
+// receiveOne copies one entry or volume of sync id from the parent's daemon over this
+// session's stdin and stdout (remote.ReceiveShim), into the child at base: claimed first,
+// with a reset's wipe at its first write, the entry made as the child has it or the parent
+// says, mounted alone so nothing the daemon serves can replace it, and the copy ended once
+// the holder decided. With Last, it records the copy done.
+func receiveOne(r *syncReceive, id, base, toDir, toProject string, env map[string]string, reset bool) int {
+	// Signals of the session's end never stop the watchdog before the copy does.
+	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
+	mnt, err := filepath.EvalSymlinks(path.Join(toDir, "mnt"))
+	if err != nil {
+		return fail("the child's mnt: " + err.Error())
+	}
+	child, err := childListAt(toDir, toProject, env)
+	if err != nil {
+		return fail(err.Error())
+	}
+	plan, err := planReceive(r, child, mnt, toProject)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if err := ensureUtilImage(context.Background()); err != nil {
+		return failErr(err)
 	}
 	wipe := ""
 	if reset {
 		wipe = remote.SyncExecScript(toDir, toProject, env, []string{cli.SyncServicesFlag, "wipe"})
 	}
-	return remote.SyncReceiveScript(toDir, base, id, strconv.Itoa(r.Port), r.Dirs, r.Files, r.Volumes, toProject, childOwners(child), r.Last, wipe, r.Secret), nil
+	// Its stdout to stderr, and no stdin: the session's carry rsync's protocol alone.
+	claim := exec.Command("sh", "-c", remote.SyncClaimScript(base, id, r.Volume, toProject, wipe))
+	claim.Stdout, claim.Stderr = os.Stderr, os.Stderr
+	if err := claim.Run(); err != nil {
+		return 1
+	}
+	started := filepath.Join(base, remote.SyncStartedFile)
+	mine := func() bool { _, ok := gateOf(started, id); return ok }
+	if !mine() {
+		return fail("the child's side decided already: " + plan.what + " not copied")
+	}
+	if plan.entry != "" {
+		if err := readyEntry(mnt, tarEntry{name: plan.entry, file: plan.file}); err != nil {
+			return fail(err.Error())
+		}
+	}
+	report.Info("rsync " + plan.what)
+	c := container{remote.SyncContainerPrefix + id + "-receive", toProject, remote.SyncTask(id)}
+	run := receiveRun(c, plan)
+	trace(append([]string{"docker"}, run...))
+	cmd := exec.Command("docker", run...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Once the holder decided (its record gone, or another sync's), nothing may be
+	// written: the copy's container goes.
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(time.Second):
+				if !mine() {
+					_ = exec.Command("docker", "rm", "-f", c.name).Run()
+					return
+				}
+			}
+		}
+	}()
+	err = cmd.Run()
+	close(done)
+	if err != nil {
+		if exitCode(err) != remote.RsyncVanished {
+			return fail(plan.what + " " + remote.HalfCopiedNotice)
+		}
+		report.Warn("rsync " + plan.what + ": " + remote.RsyncVanishedNotice)
+	}
+	if r.Last {
+		// Appended to the record, never created: once the holder took it, the copy is
+		// not this sync's to complete.
+		f, err := os.OpenFile(started, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil || !mine() {
+			return fail("the child's side decided already: the copy does not count")
+		}
+		_, err = f.WriteString(remote.DoneLine(id) + "\n")
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return fail("recording the copy done: " + err.Error())
+		}
+	}
+	return 0
 }
 
 // syncExecAllowed says whether args are one of the devopsy calls a sync makes in the

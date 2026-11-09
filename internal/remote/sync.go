@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1425,104 +1424,34 @@ const RsyncVanished = 24
 // RsyncVanishedNotice follows "rsync mnt/<entry>: " on both paths.
 const RsyncVanishedNotice = "some files vanished during the copy (a running service removed them), the rest is copied"
 
-// SyncReceiveScript runs on the child's server, from the parent's over SSH
-// with a reverse forward of port to the parent's rsync daemon: one rsync
-// per entry of the child's mnt (toDir is its current .devopsy/, base its
-// directory), from the daemon's module of that name, as
-// root in UtilImage, on the host's network to reach the forward: owners
-// kept (--numeric-ids), or the child's for an entry it owns (owners,
-// --chown); then one per named volume (volumes, by key), from the
-// module of its key into the child's volume of that key
-// (<toProject>_<key>), which must be there before anything is written
-// (the child's prepare, or a reset's wipe, makes it). secret says the first line of
-// stdin is the daemon's password, which a command line would show.
-// SyncStartedFile goes first, and with last (no stream follows)
-// a DoneLine once every entry is copied.
-//
-// Once the holder decided (SyncStartedFile gone, or another sync's),
-// nothing may be written: a watchdog removes the copy's container. Why:
-// after a silent cut between the servers, the rsync otherwise waits for
-// TCP to give up, writing again if the link comes back; sshd sends
-// nothing on a quiet forward, and rsync's own --timeout counts its
-// keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []string, toProject string, owners map[string]string, last bool, wipe string, secret bool) string {
+// ReceiveShim is a sync's receive in the child's container: rsync ($0, with its arguments) as
+// a client of the parent's daemon over the container's stdin and stdout, which are the
+// session's, so it needs no network and no port. rsync talks to its remote shell's pipes,
+// relayed to fds 3 and 4 kept before rsync's stdout goes to stderr for its messages; the
+// relay ends when the session's input does (the daemon done), and a background job's stdin
+// is /dev/null, hence fd 5.
+const ReceiveShim = `exec 3<&0 4>&1 1>&2; exec "$0" -e "sh -c 'exec 5<&0; cat <&5 >&4 & exec cat <&3'" "$@"`
+
+// ReceiveFrom is the parent's daemon as the receive's rsync names it, over its session.
+const ReceiveFrom = "devopsy::"
+
+// SyncClaimScript claims the child at base for sync id before a receive's first write, or
+// fails: the holder decided already. volume is the receive's named volume (toProject_<key>),
+// which must be there before anything is written (the child's prepare, or a reset's wipe,
+// makes it), "" for an entry. With wipe (a reset's), the sync's first write wipes the child
+// first.
+func SyncClaimScript(base, id, volume, toProject, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
-	if wipe == "" {
-		// Before the claim: nothing written when a volume is missing. (A
-		// reset's wipe takes them down with the rest, and makes them
-		// again.)
-		for _, v := range volumes {
-			name := Quote(toProject + "_" + v)
-			claim = "docker volume inspect " + name + " >/dev/null 2>&1 || { devopsy --say error \"the child's volume \"" + name + "\" is missing: nothing copied\"; exit 1; }\n" + claim
-		}
-	}
 	if wipe != "" {
-		// A reset: the first write wipes the child first.
 		open := Quote(path.Join(base, SyncOpenFile(id)))
-		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
+		return "set -eu\nif mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
 	}
-	// Labeled as the holder of sync id finds what writes its copy. The password is this
-	// sync's, for the parent's daemon behind the forward, which any local user reaches.
-	labels := ""
-	for _, a := range ContainerLabels(toProject, SyncTask(id)) {
-		labels += " " + Quote(a)
+	if volume != "" {
+		name := Quote(toProject + "_" + volume)
+		claim = "docker volume inspect " + name + " >/dev/null 2>&1 || { devopsy --say error \"the child's volume \"" + name + "\" is missing: nothing copied\"; exit 1; }\n" + claim
 	}
-	pass, readPass := "", ""
-	if secret {
-		pass = " -e RSYNC_PASSWORD"
-		readPass = "IFS= read -r RSYNC_PASSWORD\nexport RSYNC_PASSWORD\n"
-	}
-	script := "set -eu\n" + readPass + "mnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
-		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
-mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
-( while sleep 1; do
-    mine || { docker rm -f "$rs_name"; exit 0; }
-  done ) </dev/null >/dev/null 2>&1 &
-rs_watch=$!
-trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
-copy() {
-  mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
-  devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name"` + labels + ` --network host` + pass + ` -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
-    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
-    devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
-  }
-}
-copyvol() {
-  mine || { devopsy --say error "the child's side decided already: the volume $1 not copied"; exit 1; }
-  devopsy --say info "rsync volume $1"
-  docker run --rm --name "$rs_name"` + labels + ` --network host` + pass + ` -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
-    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "the volume $1 ` + HalfCopiedNotice + `"; exit 1; }
-    devopsy --say warning "rsync volume $1: ` + RsyncVanishedNotice + `"
-  }
-}
-`
-	for _, d := range dirs {
-		src, dst, opts := d+"/", d+"/", ""
-		if slices.Contains(files, d) {
-			// A file: its module serves it alone, into mnt, and in place
-			// (a container bind-mounts the file's inode).
-			src, dst, opts = d+"/"+d, "", "--inplace"
-		}
-		if o := owners[d]; o != "" {
-			// The child's owner for every file written (its labels,
-			// from its list).
-			opts = strings.TrimSpace(opts + " --chown=" + o)
-		}
-		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
-	}
-	for _, v := range volumes {
-		script += "copyvol " + Quote(v) + " " + Quote(toProject+"_"+v) + "\n"
-	}
-	if last {
-		// Appended to the record, never created: once the holder took it,
-		// the copy is not this sync's to complete. (A take between the
-		// check and the append leaves a record of this line alone, which
-		// the next lock-taker settles.)
-		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
-	}
-	return script
+	return "set -eu\n" + claim
 }
 
 // SyncExecScript runs devopsy args in the child's current release (toDir

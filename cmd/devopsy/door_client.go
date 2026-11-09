@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -126,10 +125,6 @@ func doorExec(path string, args []string) int {
 	return 1
 }
 
-// secretFlag finds a secret docker would read from this environment, `-e NAME`: it
-// goes on stdin to the door, since sudo clears the environment and a command line shows.
-var secretFlag = regexp.MustCompile(`^RSYNC_(SECRET|PASSWORD)$`)
-
 // doorHandOver asks the door, as the deploy user, and becomes that: sudo relays
 // signals and exits with the code of what it runs.
 func doorHandOver(args []string) int {
@@ -142,15 +137,6 @@ func doorHandOver(args []string) int {
 	if err != nil {
 		report.Error("a project user's docker goes through sudo: " + err.Error())
 		return 1
-	}
-	for i, a := range args {
-		if a == "-e" && i+1 < len(args) && secretFlag.MatchString(args[i+1]) {
-			if err := stdinIs(os.Getenv(args[i+1])); err != nil {
-				report.Error(err.Error())
-				return 1
-			}
-			break
-		}
 	}
 	err = syscall.Exec(sudo, append([]string{"sudo"}, sudoArgs(deploy.Username, doorFlag, args...)...), os.Environ())
 	report.Error("running sudo: " + err.Error())
@@ -172,26 +158,6 @@ func filledPipe(text string) (*os.File, error) {
 		return nil, err
 	}
 	return r, nil
-}
-
-// stdinIs makes stdin hold text.
-func stdinIs(text string) error {
-	r, err := filledPipe(text)
-	if err != nil {
-		return err
-	}
-	// The lowest free descriptor is what Dup gives: closed first, that is stdin.
-	if err := syscall.Close(0); err != nil {
-		return err
-	}
-	fd, err := syscall.Dup(int(r.Fd()))
-	if err != nil {
-		return err
-	}
-	if fd != 0 {
-		return errors.New("stdin was not free for the door's secret")
-	}
-	return nil
 }
 
 // dockerConfig is where this user's registry logins are.

@@ -40,8 +40,6 @@ type form struct {
 	mounts  []mountRule
 	// network is what it gets: none unless it says so.
 	network string
-	// secret is the variable it takes on stdin.
-	secret string
 	// conf says it takes a sync daemon's settings.
 	conf bool
 	// narrow, for an rsync, is the one entry it writes, out of the mnt it asked for.
@@ -142,8 +140,8 @@ func forms(known Known) []form {
 	copied := []sourceKind{kindEntry, kindVolume, kindClone}
 	localSrc := regexp.MustCompile(`^/src/(` + word + `)(/?)$`)
 	localDst := regexp.MustCompile(`^/dst/((` + word + `)/)?$`)
-	recvSrc := regexp.MustCompile(`^rsync://127\.0\.0\.1:\d+/(` + word + `)/(` + word + `)?$`)
-	recvDst := regexp.MustCompile(`^/(mnt|vol)/((` + word + `)/)?$`)
+	recvSrc := regexp.MustCompile(`^devopsy::(` + word + `)/(` + word + `)?$`)
+	recvDst := regexp.MustCompile(`^/(mnt|vol)/(` + word + `)/?$`)
 	return []form{
 		{name: "owners", matches: script(known.Owners, wordOnly, ownerArg),
 			mounts: []mountRule{{target(`/mnt/` + word), false, []sourceKind{kindEntry}}}},
@@ -216,29 +214,34 @@ func forms(known Known) []form {
 			m := localSrc.FindStringSubmatch(src)
 			return m[1], true, m[2] == "" && slices.Contains(cmd, "--inplace")
 		}},
-		// A sync's receive: the one thing with the host's network, from the forward on its
-		// loopback, by the sync's password, into one entry or volume.
-		{name: "receive", network: "host", secret: "RSYNC_PASSWORD", matches: func(cmd []string) bool {
-			src, dst, ok := rsyncArgs(cmd, known)
-			return ok && recvSrc.MatchString(src) && recvDst.MatchString(dst)
+		// A sync's receive: rsync as a client of the parent's daemon over its session's
+		// stdin and stdout (known.Receive, its $0 rsync), no network, into one entry, mounted
+		// alone so nothing the daemon serves can replace it, or one volume. An entry that is
+		// a file is mounted as the file, written in place.
+		{name: "receive", matches: func(cmd []string) bool {
+			if len(cmd) < 4 || cmd[0] != "sh" || cmd[1] != "-c" || cmd[2] != known.Receive {
+				return false
+			}
+			src, dst, ok := rsyncArgs(cmd[3:], known)
+			if !ok || !recvSrc.MatchString(src) || !recvDst.MatchString(dst) {
+				return false
+			}
+			s, d := recvSrc.FindStringSubmatch(src), recvDst.FindStringSubmatch(dst)
+			file := s[2] != ""
+			switch {
+			case d[1] == "vol":
+				return !file && s[1] == d[2] && strings.HasSuffix(dst, "/")
+			case file:
+				return s[2] == d[2] && !strings.HasSuffix(dst, "/") && slices.Contains(cmd, "--inplace")
+			}
+			return s[1] == d[2] && strings.HasSuffix(dst, "/")
 		}, mounts: []mountRule{
-			{target(`/mnt`), false, []sourceKind{kindMnt}},
+			{target(`/mnt/` + word), false, []sourceKind{kindEntry}},
 			{target(`/vol/` + word), false, []sourceKind{kindVolume}},
-		}, narrow: func(cmd []string) (string, bool, bool) {
-			src, dst, _ := rsyncArgs(cmd, known)
-			d := recvDst.FindStringSubmatch(dst)
-			if d[1] == "vol" {
-				return "", false, true
-			}
-			if d[3] != "" {
-				return d[3], false, true
-			}
-			s := recvSrc.FindStringSubmatch(src)
-			return s[2], true, s[2] != "" && slices.Contains(cmd, "--inplace")
 		}},
 		// A sync's read-only daemon: its settings in one form, no network (it serves over
-		// docker exec, DaemonServe), by a password of that sync's.
-		{name: "daemon", secret: "RSYNC_SECRET", conf: true, matches: func(cmd []string) bool {
+		// docker exec, DaemonServe), so no password: nothing reaches it but its own push.
+		{name: "daemon", conf: true, matches: func(cmd []string) bool {
 			return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && cmd[2] == known.Daemon
 		}, mounts: []mountRule{
 			{target(`/mnt`), true, []sourceKind{kindMnt, kindClone}},
@@ -300,7 +303,7 @@ func (r mountRule) takes(m mount, kind sourceKind) bool {
 }
 
 // decideForm checks a util container against the table, and says what it comes to.
-func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secret string, p Policy, h Host, known Known) (*Action, error) {
+func decideForm(cmd []string, mounts []mount, opts []string, network, conf string, p Policy, h Host, known Known) (*Action, error) {
 	var f *form
 	table := forms(known)
 	for i := range table {
@@ -312,19 +315,10 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 	if f == nil {
 		return nil, refuse("docker run: a script not devopsy's own: %.120q", strings.Join(cmd, " "))
 	}
-	if network != "" && network != "none" && network != f.network {
-		return nil, refuse("docker run: network %s, for %s", network, f.name)
-	}
-	if (f.network == "host") != (network == "host") {
-		return nil, refuse("docker run: the host's network, only and always for a sync's receive")
-	}
-	if secret != f.secret {
-		return nil, refuse("docker run: an environment, for %s", f.name)
-	}
 	if f.conf != (conf != "") {
 		return nil, refuse("docker run: settings, for %s", f.name)
 	}
-	action := &Action{Secret: secret}
+	action := &Action{}
 	entry, file := "", false
 	if f.narrow != nil {
 		var ok bool

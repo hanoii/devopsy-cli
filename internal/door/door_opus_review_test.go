@@ -37,26 +37,3 @@ func TestOpusReviewBuildWritesANameAnotherProjectRuns(t *testing.T) {
 		t.Errorf("BUG: mongo's build writes mongo-express:1 (Docker Hub's official image), which shop claims and runs by name under its own image lock only; mongo owns it without a claim: %v", ownedWithoutClaim)
 	}
 }
-
-// BUG: a sync's receive reaches any port on the host's loopback. The form takes
-// rsync://127.0.0.1:<any port>/, on the host's network, as root: the project users' firewall
-// rejects their own processes' loopback connections by their group, but this container's
-// rsync is root's, so a project user asks the door for a connection to any local service
-// (sshd, a database another project publishes on 127.0.0.1, the deploy user's own) and reads
-// the first line it answers in rsync's error ("server sent ... rather than greeting"). Only the
-// caller's own forward, the port its sync session's sshd listens on, is a sync's receive.
-func TestOpusReviewReceiveReachesAnyLoopbackPort(t *testing.T) {
-	t.Parallel()
-	recv := func(src string) error {
-		_, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", src, "/mnt/data/")
-		return err
-	}
-	// Control, which holds now: another host is refused.
-	if err := recv("rsync://localhost:22/data/"); err == nil {
-		t.Fatal("control: a receive from localhost by name taken")
-	}
-	// The host's sshd, nobody's sync forward.
-	if err := recv("rsync://127.0.0.1:22/data/"); err == nil {
-		t.Error("BUG: a receive from 127.0.0.1:22, no forward of the caller's, runs as root on the host's network past the project users' firewall")
-	}
-}

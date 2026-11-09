@@ -17,7 +17,7 @@ type Known struct {
 	// Dockerfile is what the door builds it from.
 	Dockerfile string
 	// The scripts, each with its own mounts and arguments.
-	Owners, Export, Import, ReflinkProbe, SnapshotTar, Space, Share, Daemon, Restore string
+	Owners, Export, Import, ReflinkProbe, SnapshotTar, Space, Share, Daemon, Restore, Receive string
 	// RsyncCopy is how every rsync starts.
 	RsyncCopy []string
 	// Clone says whether a script is a reflink clone's, which is computed.
@@ -95,8 +95,6 @@ type Action struct {
 	Output string
 	// Exit is the exit code when Docker is empty.
 	Exit int
-	// Secret names a variable the caller sends on stdin, for docker's environment.
-	Secret string
 	// Claims are images the project must claim before Docker runs: each pulled with
 	// its registry logins and, pulled, its id recorded as the project's (Policy.Images).
 	// One that does not pull refuses the request.
@@ -541,7 +539,7 @@ var (
 	mountTarget = regexp.MustCompile(`^/(mnt|m|v|src|dst|c|d|s|o|in|x|vol)(/` + word + `)*$`)
 	// A source goes back into a --mount and a -v by these words, so none of their syntax.
 	mountSource = regexp.MustCompile(`^/[A-Za-z0-9_./+@=-]*$`)
-	daemonConf  = regexp.MustCompile(`^RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n(\[` + word + `\]\npath = /(mnt|vol)(/` + word + `)?\n(include = /` + word + `\nexclude = \*\n)?)*$`)
+	daemonConf  = regexp.MustCompile(`^RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n(\[` + word + `\]\npath = /(mnt|vol)(/` + word + `)?\n(include = /` + word + `\nexclude = \*\n)?)*$`)
 )
 
 type mount struct {
@@ -557,7 +555,7 @@ type mount struct {
 func decideRun(args []string, p Policy, h Host, known Known) (*Action, error) {
 	var out []string
 	var mounts []mount
-	network, conf, secret, image := "", "", "", -1
+	network, conf, image := "", "", -1
 scan:
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -599,7 +597,7 @@ scan:
 			if err != nil {
 				return nil, err
 			}
-			if v != "none" && v != "host" {
+			if v != "none" {
 				return nil, refuse("docker run: network %s", v)
 			}
 			network = v
@@ -609,15 +607,10 @@ scan:
 			if err != nil {
 				return nil, err
 			}
-			// A secret comes by name: its value on stdin, never in a command line.
-			switch {
-			case daemonConf.MatchString(v):
-				conf = v
-			case v == "RSYNC_SECRET" || v == "RSYNC_PASSWORD":
-				secret = v
-			default:
+			if !daemonConf.MatchString(v) {
 				return nil, refuse("docker run: an environment")
 			}
+			conf = v
 			out = append(out, a, v)
 		case "--mount":
 			v, err := value()
@@ -682,7 +675,7 @@ scan:
 	if len(cmd) >= 3 && cmd[0] == "rm" && cmd[1] == "-rf" {
 		return decideRemoval(cmd[2:], mounts, p, h, known)
 	}
-	return decideForm(cmd, mounts, out, network, conf, secret, p, h, known)
+	return decideForm(cmd, mounts, out, network, conf, p, h, known)
 }
 
 var removePath = regexp.MustCompile(`^/s/` + word + `(/` + word + `)*$`)

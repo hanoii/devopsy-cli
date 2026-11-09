@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	crand "crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2202,7 +2199,7 @@ func shareInto(ctx context.Context, c container, src, dst, what string) (ok, clo
 // the directory of a service without data). The daemon lives for one
 // copy and publishes no port.
 func rsyncdConf(entries, files, volumes []string) string {
-	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n"
+	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
 	for _, e := range entries {
 		if slices.Contains(files, e) {
 			// A module is a directory: mnt, filtered down to the file.
@@ -2276,8 +2273,9 @@ func (d dataSet) in(dir string) dataSet {
 // written. parent is the parent's compose name, whose daemon an earlier
 // push may have left (remote.TaskSource).
 // Same server: one container with both mounts. Across servers: an rsync
-// daemon on this server, reached by the child's server through a reverse forward of
-// an SSH session with the sync's key.
+// daemon on this server with no network, and per entry or volume an SSH
+// session with the sync's key whose stdin and stdout are the daemon's, the
+// child's rsync at the other end (receiveOne).
 func syncRsync(ctx context.Context, src dataSet, parent string, owners map[string]string, shares map[string]bool, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
@@ -2378,19 +2376,12 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
 		keys = append(keys, v.Key)
 	}
-	// With no network: it serves each connection over docker exec, relayed from a socket
-	// only this push's user enters (relayDaemon). A password of this sync's still, for the
-	// forward's port on the child's loopback.
-	secret := make([]byte, 16)
-	if _, err := crand.Read(secret); err != nil {
-		return err
-	}
-	password := hex.EncodeToString(secret)
-	start := append(daemon, "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), "-e", "RSYNC_SECRET", remote.UtilImage,
+	// With no network and no password: it serves each session over docker exec
+	// (daemonServe), and nothing else reaches it.
+	start := append(daemon, "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), remote.UtilImage,
 		"sh", "-c", rsyncDaemonScript)
 	trace(append([]string{"docker"}, start...))
 	startCmd := exec.CommandContext(ctx, "docker", start...)
-	startCmd.Env = append(os.Environ(), "RSYNC_SECRET="+password)
 	startCmd.Stderr = errOut
 	out, err := startCmd.Output()
 	id := strings.TrimSpace(string(out))
@@ -2424,57 +2415,68 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 	if !ready {
 		return fmt.Errorf("the rsync daemon did not answer in 5 seconds")
 	}
-	dir, err := os.MkdirTemp("", "devopsy-sync-")
+	// One session per entry and volume: the child's rsync and this daemon at its two ends.
+	var items []syncReceive
+	for _, d := range present {
+		items = append(items, syncReceive{Entry: d, File: slices.Contains(files, d)})
+	}
+	for _, k := range keys {
+		items = append(items, syncReceive{Volume: k})
+	}
+	items[len(items)-1].Last = last
+	for _, it := range items {
+		if err := receiveSession(ctx, to, id, it); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// receiveSession is one receive on the child at to, the session's stdout into the daemon's
+// stdin and the daemon's stdout into the session's stdin, through pipes: nothing of devopsy's
+// writes to either, and either end's exit ends the other's input.
+func receiveSession(ctx context.Context, to, id string, it syncReceive) error {
+	ssh := remote.SSHCommandContext(ctx, childSSHArgs(to, syncRequest{Receive: &it}, "ClearAllForwardings=yes")...)
+	serve := daemonServe(ctx, id)
+	toDaemon, fromSSH, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
-	// Short, in a directory of 0700: a unix socket's path has about 100 bytes.
-	address := filepath.Join(dir, "r.sock")
-	ln, err := net.Listen("unix", address)
+	toSSH, fromDaemon, err := os.Pipe()
 	if err != nil {
-		return fmt.Errorf("the rsync daemon's socket: %v", err)
+		toDaemon.Close()
+		fromSSH.Close()
+		return err
 	}
-	defer ln.Close()
-	go relayDaemon(ctx, ln, id, errOut)
-
-	// A port free on the child's server: ssh fails at once when the
-	// forward cannot listen (ExitOnForwardFailure), then another. Never
-	// ClearAllForwardings here: it clears command-line forwardings too.
-	for attempt := 0; ; attempt++ {
-		port := fmt.Sprint(20000 + rand.IntN(40000))
-		pn, _ := strconv.Atoi(port)
-		sshArgs := childSSHArgs(to, syncRequest{Receive: &syncReceive{Port: pn, Dirs: present, Files: files, Volumes: keys, Last: last, Secret: true}}, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+address)
-		cmd := remote.SSHCommandContext(ctx, sshArgs...)
-		var stderr bytes.Buffer
-		// On stdin, since a command line shows to every user of the server.
-		secretIn, err := filledPipe(password + "\n")
-		if err != nil {
-			return err
+	ssh.Stdin, ssh.Stdout, ssh.Stderr = toSSH, fromSSH, errOut
+	serve.Stdin, serve.Stdout, serve.Stderr = toDaemon, fromDaemon, errOut
+	startErr := ssh.Start()
+	if startErr == nil {
+		if startErr = serve.Start(); startErr != nil {
+			_ = ssh.Process.Kill()
+			_ = ssh.Wait()
 		}
-		cmd.Stdin = secretIn
-		cmd.Stdout = errOut
-		cmd.Stderr = io.MultiWriter(errOut, &stderr)
-		err = cmd.Run()
-		secretIn.Close()
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			// The child's script says which entry when rsync fails; cut
-			// by the session's end, it says nothing.
-			report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
-			return interrupted(ctx, err)
-		}
-		if strings.Contains(stderr.String(), "remote port forwarding failed") {
-			if attempt < 2 {
-				continue
-			}
-			// sshd answers a refused forward as it does a taken port.
-			return fmt.Errorf("copying into %s: its server refused the reverse forward %d times: sshd's AllowTcpForwarding must allow remote forwards", to, attempt+1)
-		}
-		return fmt.Errorf("copying into %s: %w", to, err)
 	}
+	for _, f := range []*os.File{toDaemon, fromSSH, toSSH, fromDaemon} {
+		f.Close()
+	}
+	if startErr != nil {
+		return startErr
+	}
+	err = ssh.Wait()
+	if serr := serve.Wait(); err == nil && serr != nil && ctx.Err() == nil {
+		err = fmt.Errorf("the rsync daemon: %w", serr)
+	}
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		// The child's side says which entry when rsync fails; cut by the session's end,
+		// it says nothing.
+		report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
+		return interrupted(ctx, err)
+	}
+	return fmt.Errorf("copying into %s: %w", to, err)
 }
 
 // daemonServe is a sync's daemon serving one connection on the command's stdin and stdout.
@@ -2493,31 +2495,6 @@ func daemonListing(ctx context.Context, id string) (*exec.Cmd, error) {
 	c := daemonServe(ctx, id)
 	c.Stdin = in
 	return c, nil
-}
-
-// relayDaemon serves the push's socket, each connection by daemonServe on the socket itself:
-// the daemon has no network, and the socket's directory is this user's alone. A port on the
-// host's loopback would be every local user's, and the project users' firewall drops theirs.
-func relayDaemon(ctx context.Context, ln net.Listener, id string, errOut io.Writer) {
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		go func() {
-			// The socket's own descriptor, so the copy needs no goroutine of devopsy's and
-			// ends with the daemon's rsync.
-			f, err := conn.(*net.UnixConn).File()
-			conn.Close()
-			if err != nil {
-				return
-			}
-			defer f.Close()
-			c := daemonServe(ctx, id)
-			c.Stdin, c.Stdout, c.Stderr = f, f, errOut
-			_ = c.Run()
-		}()
-	}
 }
 
 // cleanEnvKeys are what the child's devopsy gets of the parent's

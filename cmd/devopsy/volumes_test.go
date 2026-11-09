@@ -60,7 +60,7 @@ func TestSyncVolumes(t *testing.T) {
 	if id == nil {
 		t.Fatalf("across servers, no receive:\n%s", docker)
 	}
-	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " --network host -e RSYNC_PASSWORD -v shop-dev_dbdata:/vol/dbdata devopsy-util:4 rsync", "/dbdata/ /vol/dbdata/"} {
+	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " --network none -v shop-dev_dbdata:/vol/dbdata devopsy-util:4 sh -c ", "devopsy::dbdata/ /vol/dbdata/"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("across servers, missing %q in:\n%s", want, docker)
 		}

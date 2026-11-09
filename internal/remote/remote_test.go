@@ -201,7 +201,7 @@ func TestSyncFilesPrefixed(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
 		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end", "") + StatusScript(tg) +
-		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, "", nil, true, "", false)
+		ClaimWriteScript("$base", "1.2") + SyncClaimScript("$base", "1.2", "db", "app-dev", "wipe")
 	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
 		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
 			t.Errorf("a sync's file not prefixed: %s", m[1])
@@ -264,9 +264,9 @@ func allScripts() map[string]string {
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataCopyFeature}),
 		"parent check":    ParentCheckScript(tg, "app-prod", []string{"sync-push"}),
-		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, []string{"dbdata"}, "it's-dev", map[string]string{"storage": "10001:10001"}, true, "", true),
-		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, []string{"dbdata"}, "app-dev", nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"}), false),
-		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, "", map[string]string{"app.ini": "1:2"}, false, "", false),
+		"receive claim":   SyncClaimScript("/srv/it's", "1.2", "dbdata", "it's-dev", ""),
+		"receive reset":   SyncClaimScript("/srv/it's", "1.2", "", "app-dev", SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
+		"receive shim":    ReceiveShim,
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
 		"export":          ExportScript(tg, "app-prod", "it's db"),
@@ -368,19 +368,6 @@ func TestRsyncCopySkipsDevices(t *testing.T) {
 	specials := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-specials")
 	if devices || specials {
 		t.Errorf("RsyncCopy %q copies device nodes (%v) and FIFOs or sockets (%v): rsync -a includes -D", RsyncCopy, devices, specials)
-	}
-}
-
-// The receive's rsync gives an entry the child owns to its owner
-// (--chown), and keeps the others' (--numeric-ids).
-func TestSyncReceiveOwners(t *testing.T) {
-	t.Parallel()
-	s := allScripts()["receive"]
-	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse $4 ") {
-		t.Errorf("receive:\n%s", s)
-	}
-	if s := allScripts()["receive bare"]; !strings.Contains(s, "copy 'app.ini' 'app.ini/app.ini' '' '--inplace --chown=1:2'\n") {
-		t.Errorf("a file's owner:\n%s", s)
 	}
 }
 
@@ -571,17 +558,14 @@ func TestLockWaitSaysItsTime(t *testing.T) {
 }
 
 // devopsy's containers found by their labels: only the push needs it,
-// since its receive script labels the child's rsync, which the child's
-// holder removes by them; the receive's container is labeled so.
+// since the child's receive labels its rsync, which the child's holder
+// removes by them (TestSyncDifferentHosts).
 func TestContainerLabelsFeature(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
 		if slices.Contains(Needs(s), ContainerLabelsFeature) != (name == "push" || name == "push keyed") {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
-	}
-	if s := allScripts()["receive"]; strings.Count(s, `--name "$rs_name" '--label' 'devopsy.env=it'\''s-dev' '--label' 'devopsy.task=sync-1.2' --network host`) != 2 {
-		t.Errorf("the receive's containers not labeled for its holder:\n%s", s)
 	}
 }
 
@@ -607,10 +591,14 @@ func TestFeaturesCoverScripts(t *testing.T) {
 			}
 		}
 	}
-	// The receive script gets the util image ready on the child's server
-	// before using it, which an older devopsy there lacks.
-	if got := Needs(SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"db"}, nil, nil, "", nil, true, "", false)); !slices.Contains(got, "util-image") {
-		t.Errorf("receive script needs: %v", got)
+	// A sync across servers needs its receive over the session on both sides: the
+	// parent's push and the child's key.
+	push := PushScript(&Target{Path: "app/prod"}, "app-prod", map[string]string{SyncKeyedEnv: "1"})
+	holder := HolderScript(&Target{Path: "app/dev", Project: &Project{Name: "app"}}, "app-dev", &SyncOptions{From: "vm1:prod", Key: "AAAA"}, true)
+	for name, s := range map[string]string{"push": push, "holder": holder} {
+		if got := Needs(s); !slices.Contains(got, SyncSessionFeature) {
+			t.Errorf("the %s's needs: %v", name, got)
+		}
 	}
 	// The operator's own command is no need of the script's.
 	if got := Needs(RunScript(&Target{Path: "app/prod"}, "app", []string{"--env"})); slices.Contains(got, "env") {

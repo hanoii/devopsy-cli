@@ -94,14 +94,13 @@ func sshString(buf, b []byte) []byte {
 }
 
 // SyncKeyLine is the authorized_keys line of sync id's key blob (an
-// ssh-ed25519's) on the child: no shell, no pty, no agent, no -L (permitopen
-// to an address nothing listens on), a -R only on the loopback (the
-// receive's, to the parent's rsync daemon; named 127.0.0.1, since sshd
-// reads a forward with no address as localhost's), until expiry, and only
-// devopsy (its absolute path: sshd runs a forced command with its own
-// PATH) as --sync-child for that sync in the child's directory base, to
-// its address and whether it is a reset. Every part is checked, since a
-// project user's door writes it from what that user asks.
+// ssh-ed25519's) on the child: no shell, no pty, no agent and no forward of
+// any kind (restrict: the receive's rsync goes over the session itself,
+// which a forward would let a key use with no sync open), until expiry, and
+// only devopsy (its absolute path: sshd runs a forced command with its own
+// PATH) as --sync-child for that sync in the child's directory base, to its
+// address and whether it is a reset. Every part is checked, since a project
+// user's door writes it from what that user asks.
 func SyncKeyLine(devopsy, id, base, to string, reset bool, blob string, expiry time.Time) (string, error) {
 	if err := CheckSyncChild(id, base, to); err != nil {
 		return "", err
@@ -116,7 +115,7 @@ func SyncKeyLine(devopsy, id, base, to string, reset bool, blob string, expiry t
 	if reset {
 		command += " reset"
 	}
-	return `restrict,port-forwarding,permitopen="127.0.0.1:1",permitlisten="127.0.0.1:*",expiry-time="` + expiry.UTC().Format("20060102150405") + `Z",command="` + command + `" ssh-ed25519 ` + blob + " " + syncKeyPrefix + id, nil
+	return `restrict,expiry-time="` + expiry.UTC().Format("20060102150405") + `Z",command="` + command + `" ssh-ed25519 ` + blob + " " + syncKeyPrefix + id, nil
 }
 
 // CheckSyncChild refuses what a sync key's forced command may not name: an id not a

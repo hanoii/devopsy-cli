@@ -176,15 +176,13 @@ So an environment addressed by a host name and another by the server's
 IP address count as one server.
 
 Across servers, the parent's server starts an rsync daemon for the
-copy. It is read-only, serves only the entries being copied, has no
-network, and takes a password made for that sync. The parent's server
-connects to the child's over SSH, and a reverse forward on that
-connection lets the child's rsync reach the daemon. The forward
-listens on a port on the child server's loopback, which the password
-guards, and ends at a socket on the parent's server that only the
-parent address's user can open. A stream is written to a file on the
-child's server over a second SSH session from the parent's. Data goes
-from server to server, never through your machine.
+copy. It is read-only, serves only the entries being copied, and has
+no network. For each entry and volume, the parent's server opens an SSH
+session to the child's, and the child's rsync talks to the daemon over
+that session itself: no port is opened on either server, and the
+child's rsync has no network either. A stream is written to a file on
+the child's server over a session of its own. Data goes from server to
+server, never through your machine.
 
 The parent's server connects with a key made for that sync, never with
 your SSH agent ([CI](servers.md#ci)):
@@ -196,11 +194,12 @@ your SSH agent ([CI](servers.md#ci)):
   its own until the push ends.
 - On the child, the key runs only devopsy's command for that sync, and
   only while the sync is open there: no shell, no terminal, no agent,
-  no local forwarding. Only a reverse forward on the server itself is
-  allowed. The child builds every step from its own release and labels:
-  the parent only picks which of the sync's steps to run, and only for
-  names in the child's labels. The key is removed once the child's side
-  has the sync's result, and expires within two days in any case.
+  and no forwarding of any kind. The child builds every step from its
+  own release and labels: the parent picks which of the sync's steps to
+  run, only for names in the child's labels, and says which entries are
+  files, which an entry the child has already decides. The key is
+  removed once the child's side has the sync's result, and expires
+  within two days in any case.
 - The child's host keys come from the child's side too, over your own
   session, so the parent's first connection checks the child's host key
   instead of accepting whatever it is offered. A child whose `/etc/ssh`
@@ -222,9 +221,8 @@ A sync across servers needs:
   `ProxyCommand` or `ProxyJump` is refused, since a relay through your
   machine is not supported. Two users on one machine count as two
   servers here.
-- The child's sshd allowing remote forwards (`AllowTcpForwarding`), and
-  reading `permitlisten` and `expiry-time` in a key's options (OpenSSH
-  7.8 or later).
+- The child's sshd reading `expiry-time` in a key's options (OpenSSH
+  7.7 or later).
 - Both sides project users ([Servers](servers.md)), or neither: a
   project user would otherwise drive a copy the deploy user runs, or
   the other way round. devopsy refuses before anything stops, and

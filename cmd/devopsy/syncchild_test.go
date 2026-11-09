@@ -44,17 +44,21 @@ func TestSyncChild(t *testing.T) {
 		t.Fatalf("the list, the gate open (%d):\n%s", code, out)
 	}
 	for req, want := range map[string]string{
-		`{"exec":["inheritfile"]}`:                       "not a sync's request",
-		`{"exec":["--sync-services","wipe"]}`:            "not a sync's request",
-		`{"exec":["--sync-services","import","db"]}`:     "no such custom service",
-		`{"spool":"db"}`:                                 "no such custom service",
-		`{"spool":"../x"}`:                               "not a service",
-		`{"receive":{"port":20001,"dirs":["etc"]}}`:      `no entry "etc"`,
-		`{"receive":{"port":20001,"volumes":["other"]}}`: `no volume "other"`,
-		`{"receive":{"port":0,"dirs":["storage"]}}`:      "not a port",
-		`{"exec":["--util-image"],"spool":"db"}`:         "one of exec, receive and spool",
-		`{"exec":["--util-image"],"run":"sh"}`:           "unknown field",
-		`sh -c 'id'`:                                     "not a sync's request",
+		`{"exec":["inheritfile"]}`:                      "not a sync's request",
+		`{"exec":["--sync-services","wipe"]}`:           "not a sync's request",
+		`{"exec":["--sync-services","import","db"]}`:    "no such custom service",
+		`{"spool":"db"}`:                                "no such custom service",
+		`{"spool":"../x"}`:                              "not a service",
+		`{"receive":{"entry":"etc"}}`:                   `no entry "etc"`,
+		`{"receive":{"volume":"other"}}`:                `no volume "other"`,
+		`{"receive":{"entry":"storage","volume":"db"}}`: "one entry or one volume",
+		`{"receive":{}}`:                                "one entry or one volume",
+		// The parent names no port: the receive goes over the session, never to a port
+		// on the child's loopback, which a root rsync there would reach for anyone.
+		`{"receive":{"port":22,"entry":"storage"}}`: "unknown field",
+		`{"exec":["--util-image"],"spool":"db"}`:    "one of exec, receive and spool",
+		`{"exec":["--util-image"],"run":"sh"}`:      "unknown field",
+		`sh -c 'id'`:                                "not a sync's request",
 	} {
 		if out, code := child(req); code == 0 || !strings.Contains(out, want) {
 			t.Errorf("%s: want %q (%d):\n%s", req, want, code, out)

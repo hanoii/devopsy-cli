@@ -50,6 +50,10 @@ var namedFeatures = []struct {
 	// (--sync-key, a flag of its own). An older parent would wait for an
 	// agent and read the key as its session's beats.
 	{SyncKeyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push([ '\\]{1,8}reset)?[ '\\]{1,8}key\b`)},
+	// A sync's receive over its session, its key with no forward: the push relays each
+	// entry's session to its daemon, and the holder's key runs a child that receives so.
+	// An older parent would ask for a forward, an older child for a port.
+	{SyncSessionFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push([ '\\]{1,8}reset)?[ '\\]{1,8}key\b|devopsy[ '\\]{1,8}--sync-key[ '\\]{1,8}add\b`)},
 	// --reset: the parent's push wipes the child at its first write,
 	// through the child's --sync-services wipe. An older parent would
 	// sync without wiping, an older child refuse the word.
@@ -163,6 +167,9 @@ const ResetFeature = "reset"
 // SyncKeyFeature is the push's named feature for a sync's key, in place of
 // the operator's forwarded agent.
 const SyncKeyFeature = "sync-push-key"
+
+// SyncSessionFeature is the named feature of a sync's receive over its session.
+const SyncSessionFeature = "sync-session"
 
 // DataCopyFeature is the data labels' named feature: devopsy.data=true
 // and devopsy.data.copy (the data-labels before it read devopsy.data as

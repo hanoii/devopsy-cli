@@ -570,6 +570,7 @@ func doorKnown() door.Known {
 		Space:        spaceProbeScript,
 		Share:        shareScript,
 		Daemon:       rsyncDaemonScript,
+		Receive:      receiveScript,
 		Restore:      restoreStreamScript,
 		RsyncCopy:    remote.RsyncCopy,
 		Clone:        door.CloneScriptForm,
@@ -1354,8 +1355,6 @@ func (s *doorSide) logins(config string) (string, error) {
 	return dir, os.Rename(tmp, filepath.Join(dir, "config.json"))
 }
 
-var doorSecret = regexp.MustCompile(`^[a-f0-9]{32}$`)
-
 // request answers a Docker command other than compose.
 func (s *doorSide) request(config string, argv []string) int {
 	s.sweepWork()
@@ -1400,14 +1399,6 @@ func (s *doorSide) request(config string, argv []string) int {
 	}
 	env := s.env
 	stdin := io.Reader(os.Stdin)
-	if a.Secret != "" {
-		value, err := io.ReadAll(io.LimitReader(os.Stdin, 64))
-		if err != nil || !doorSecret.Match(value) {
-			return doorRefused(errors.New("refused: not a secret of a sync's"))
-		}
-		env = append(slices.Clone(env), a.Secret+"="+string(value))
-		stdin = strings.NewReader("")
-	}
 	if a.Logins {
 		d, err := s.logins(config)
 		if err != nil {
@@ -1419,7 +1410,7 @@ func (s *doorSide) request(config string, argv []string) int {
 		stdin = strings.NewReader(a.Stdin)
 	}
 	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
-	if a.Stdin == "" && a.Secret == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
+	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
 		err := s.execKeeping(append([]string{"docker"}, a.Docker...), env)
 		return doorRefused(err)
 	}

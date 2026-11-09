@@ -56,7 +56,7 @@ func TestSyncKeyLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `restrict,port-forwarding,permitopen="127.0.0.1:1",permitlisten="127.0.0.1:*",expiry-time="20261110090807Z",command="/usr/local/bin/devopsy --sync-child 1762590000.0a1b2c /srv/shop/stage vm2:stage reset" ssh-ed25519 ` + blob + ` devopsy-sync-1762590000.0a1b2c`
+	want := `restrict,expiry-time="20261110090807Z",command="/usr/local/bin/devopsy --sync-child 1762590000.0a1b2c /srv/shop/stage vm2:stage reset" ssh-ed25519 ` + blob + ` devopsy-sync-1762590000.0a1b2c`
 	if line != want {
 		t.Fatalf("line:\n%s\nwant:\n%s", line, want)
 	}

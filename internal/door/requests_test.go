@@ -85,10 +85,16 @@ func (h *fakeHost) WorkDir() (string, error) {
 var testKnown = Known{
 	Image: "util:1", Dockerfile: "FROM alpine\n", Owners: "own script", Export: "export script", Import: "import script",
 	ReflinkProbe: "probe", SnapshotTar: "tar script", Space: "space script", Share: "share script",
-	Daemon: "daemon script", Restore: "restore script", RsyncCopy: []string{"rsync", "-a"}, Clone: CloneScriptForm,
+	Daemon: "daemon script", Restore: "restore script", Receive: "receive script", RsyncCopy: []string{"rsync", "-a"}, Clone: CloneScriptForm,
 }
 
-const daemonSettings = "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n"
+const daemonSettings = "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
+
+// receive is a sync's receive as devopsy's child runs it (receiveOne): the entry or volume at
+// mount alone, no network, rsync's words after RsyncCopy over the session (known.Receive).
+func receive(mount string, args ...string) []string {
+	return slices.Concat([]string{"run", "--rm", "-i", "--network", "none", "-v", mount, "util:1", "sh", "-c", "receive script"}, testKnown.RsyncCopy, args)
+}
 
 func decide(t *testing.T, argv ...string) (*Action, error) {
 	t.Helper()
@@ -159,17 +165,18 @@ func TestDecideRefuses(t *testing.T) {
 		{"an environment", []string{"run", "-e", "A=1", "util:1", "sh", "-c", "own script"}},
 		{"its daemon's settings for its own script", []string{"run", "-e", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n", "util:1", "sh", "-c", "own script"}},
 		{"a daemon with another's settings", []string{"run", "-e", "RSYNCD_CONF=uid = 0\n[x]\npath = /", "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon with no auth", []string{"run", "-e", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[x]\npath = /mnt/x\n", "util:1", "sh", "-c", "daemon script"}},
 		{"a daemon writing", []string{"run", "-e", "RSYNCD_CONF=" + strings.Replace(daemonSettings, "read only = yes", "read only = no", 1), "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon serving the host", []string{"run", "-e", "RSYNCD_CONF=" + daemonSettings + "[x]\npath = /etc\n", "-e", "RSYNC_SECRET", "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon serving the host", []string{"run", "-e", "RSYNCD_CONF=" + daemonSettings + "[x]\npath = /etc\n", "util:1", "sh", "-c", "daemon script"}},
 		{"a daemon with no settings", []string{"run", "util:1", "sh", "-c", "daemon script"}},
 		{"a daemon published to the world", []string{"run", "-p", "873:873", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon on the host's loopback", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + daemonSettings, "-e", "RSYNC_SECRET", "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon on a network", []string{"run", "--network", "bridge", "-e", "RSYNCD_CONF=" + daemonSettings, "-e", "RSYNC_SECRET", "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon on the host's loopback", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon on a network", []string{"run", "--network", "bridge", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
+		{"a receive on the host's network", slices.Concat([]string{"run", "--network", "host", "-v", "/space/mnt/shop-prod/data:/mnt/data", "util:1", "sh", "-c", "receive script"}, testKnown.RsyncCopy, []string{"devopsy::data/", "/mnt/data/"})},
+		{"a receive from a daemon on a port", receive("/space/mnt/shop-prod/data:/mnt/data", "rsync://127.0.0.1:22/data/", "/mnt/data/")},
+		{"a receive into the whole mnt", receive("/space/mnt/shop-prod:/mnt", "devopsy::data/", "/mnt/data/")},
+		{"a receive into another entry than its own module", receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::other/", "/mnt/data/")},
 		{"a password for its own script", []string{"run", "-e", "RSYNC_PASSWORD", "util:1", "sh", "-c", "own script"}},
 		{"a secret in the command line", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD=x", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}},
-		{"a receive with no password", []string{"run", "--network", "host", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}},
-		{"a daemon with no password", []string{"run", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
 		{"a volume of another's", []string{"volume", "create", "--label", "com.docker.compose.project=other-prod", "--label", "com.docker.compose.volume=d", "other-prod_d"}},
 		{"a volume with options", []string{"volume", "create", "-o", "device=/", "--label", "com.docker.compose.volume=d", "shop-prod_d"}},
 		{"a pull with a flag", []string{"pull", "--platform", "x", "busybox"}},
@@ -347,8 +354,8 @@ func TestDecideAllows(t *testing.T) {
 		{"run", "-v", "/space/mnt/shop-prod:/m:ro", "-v", "shop-prod_db:/v/db:ro", "util:1", "du", "-sk", "/m/data", "/v/db"},
 		{"run", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"},
 		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown=1:1", "/src/data/", "/dst/data/"},
-		{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"},
-		{"run", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-e", "RSYNC_SECRET", "-v", "/space/mnt/shop-prod:/mnt:ro", "util:1", "sh", "-c", "daemon script"},
+		receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"),
+		{"run", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-v", "/space/mnt/shop-prod:/mnt:ro", "util:1", "sh", "-c", "daemon script"},
 		{"run", "-v", "/space/clones/shop/abc/mnt:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"},
 		{"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", "/space/clones/shop/abc:/c", "util:1", "sh", "-c", "probe", "sh", "/m/mnt/data"},
 	} {
@@ -386,9 +393,8 @@ func TestDecideRunTargetsLeaveTheImageAlone(t *testing.T) {
 			t.Errorf("a project's files over %s: %q", target, a.Docker)
 		}
 	}
-	if a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", bin+":/usr/bin:ro", "-v", "/space/mnt/shop-prod:/mnt",
-		"util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"); err == nil {
-		t.Errorf("a project's rsync, as root on the host's network: %q", a.Docker)
+	if a, err := decide(t, slices.Insert(receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"), 5, "-v", bin+":/usr/bin:ro")...); err == nil {
+		t.Errorf("a project's files over a receive's rsync, as root: %q", a.Docker)
 	}
 }
 
@@ -539,15 +545,6 @@ func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	}
 }
 
-// A secret comes by name. Its value on stdin is the door's to read, never a word.
-func TestDecideRunSecretByName(t *testing.T) {
-	t.Parallel()
-	a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/")
-	if err != nil || a.Secret != "RSYNC_PASSWORD" {
-		t.Errorf("%+v, %v", a, err)
-	}
-}
-
 // A read-only copy goes after its container: nothing stays in the door's space.
 func TestDecideRunCleansUp(t *testing.T) {
 	t.Parallel()
@@ -597,6 +594,41 @@ func TestDecidePSCutsAShortFilter(t *testing.T) {
 	}
 }
 
+// A sync's receive holds the one entry or volume it writes, mounted alone, with no network:
+// what the parent's daemon serves cannot replace the entry, a file entry is the file itself
+// written in place, and what it wrote comes back to the project user (Regrant).
+func TestDecideRunReceive(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		argv    []string
+		regrant string
+	}{
+		{receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"), "/space/mnt/shop-prod/data"},
+		{receive("/space/mnt/shop-prod/app.ini:/mnt/app.ini", "--inplace", "devopsy::app.ini/app.ini", "/mnt/app.ini"), "/space/mnt/shop-prod/app.ini"},
+		{receive("shop-prod_db:/vol/db", "devopsy::db/", "/vol/db/"), ""},
+	} {
+		a, err := decide(t, tt.argv...)
+		if err != nil {
+			t.Errorf("%q: %v", tt.argv, err)
+			continue
+		}
+		if !strings.Contains(strings.Join(a.Docker, " "), "--network none") || len(a.Entries) != 0 || (tt.regrant != "") != slices.Contains(a.Regrant, tt.regrant) {
+			t.Errorf("%q: %q, entries %+v, regrant %q", tt.argv, a.Docker, a.Entries, a.Regrant)
+		}
+	}
+	// A file entry written other than in place, into its directory, or a directory into a file.
+	for _, argv := range [][]string{
+		receive("/space/mnt/shop-prod/app.ini:/mnt/app.ini", "devopsy::app.ini/app.ini", "/mnt/app.ini"),
+		receive("/space/mnt/shop-prod/app.ini:/mnt/app.ini", "--inplace", "devopsy::app.ini/app.ini", "/mnt/app.ini/"),
+		receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data"),
+		receive("shop-prod_db:/vol/db", "devopsy::db/db", "/vol/db"),
+	} {
+		if a, err := decide(t, argv...); err == nil {
+			t.Errorf("%q: %q", argv, a.Docker)
+		}
+	}
+}
+
 // An rsync that names a whole mnt gets only the entry it writes: what it copies cannot
 // leave a link at the top, where a bind's source goes by.
 func TestDecideRunNarrowsAnRsync(t *testing.T) {
@@ -609,8 +641,6 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 	}{
 		{"a local entry", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, "/space/mnt/shop-dev/data:/dst/data", false},
 		{"a local file", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--inplace", "/src/app.ini", "/dst/"}, "/space/mnt/shop-dev/app.ini:/dst/app.ini", true},
-		{"a receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9/data/", "/mnt/data/"}, "/space/mnt/shop-prod/data:/mnt/data", false},
-		{"a file received", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "--inplace", "rsync://127.0.0.1:9/app.ini/app.ini", "/mnt/"}, "/space/mnt/shop-prod/app.ini:/mnt/app.ini", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -627,10 +657,9 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 			}
 		})
 	}
-	// A file by a local rsync with no --inplace, and a receive into a mnt with no entry.
+	// A file by a local rsync with no --inplace.
 	for _, argv := range [][]string{
 		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/app.ini", "/dst/"},
-		{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9/data/", "/mnt/"},
 	} {
 		if a, err := decide(t, argv...); err == nil {
 			t.Errorf("%q: %q", argv, a.Docker)

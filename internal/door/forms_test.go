@@ -106,24 +106,28 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"a walking destination": {"/dst/data/", "/dst/../"},
 			"a far source":          {"/src/data/", "evil:/data/"},
 		}},
-		{"receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt + ":/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}, map[string][2]string{
-			"another's mnt":     {mnt + ":/mnt", "/space/mnt/other-prod:/mnt"},
-			"another host":      {"rsync://127.0.0.1:9000/data/", "rsync://evil:9000/data/"},
-			"a name like it":    {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1.evil:9000/data/"},
-			"no port":           {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1/data/"},
-			"a walking module":  {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1:9000/../"},
-			"no host's network": {"host", "none"},
-			"no password":       {"RSYNC_PASSWORD", "RSYNC_SECRET"},
-			"elsewhere":         {"/mnt/data/", "/etc/data/"},
+		// A sync's receive reaches its parent's daemon over its session alone: never a port,
+		// on the host's loopback or elsewhere, which a root rsync on the host's network would
+		// reach past the project users' firewall, reading what any local service answers.
+		{"receive", receive(mnt+"/data:/mnt/data", "devopsy::data/", "/mnt/data/"), map[string][2]string{
+			"another's entry":    {mnt + "/data:/mnt/data", "/space/mnt/other-prod/data:/mnt/data"},
+			"the whole mnt":      {mnt + "/data:/mnt/data", mnt + ":/mnt"},
+			"a daemon on a port": {"devopsy::data/", "rsync://127.0.0.1:22/data/"},
+			"another host":       {"devopsy::data/", "evil::data/"},
+			"a walking module":   {"devopsy::data/", "devopsy::../"},
+			"another module":     {"devopsy::data/", "devopsy::db/"},
+			"the host's network": {"--network\x00none", "--network\x00host"},
+			"another script":     {"receive script", "own script"},
+			"elsewhere":          {"/mnt/data/", "/etc/data/"},
 		}},
-		{"daemon", []string{"run", "-e", conf, "-e", "RSYNC_SECRET", "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
+		{"daemon", []string{"run", "-e", conf, "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
 			"written":            {mnt + ":/mnt:ro", mnt + ":/mnt"},
 			"another's mnt":      {mnt + ":/mnt:ro", "/space/mnt/other-prod:/mnt:ro"},
-			"a port":             {"-e\x00RSYNC_SECRET", "-e\x00RSYNC_SECRET\x00-p\x00127.0.0.1::873"},
+			"a port":             {"util:1", "-p\x00127.0.0.1::873\x00util:1"},
 			"a walking path":     {"path = /mnt/data", "path = /mnt/.."},
 			"a path of its own":  {"path = /mnt/data", "path = /etc"},
 			"a setting appended": {"path = /mnt/data\n", "path = /mnt/data\nread only = no\n"},
-			"the host's network": {"-e\x00RSYNC_SECRET", "--network\x00host\x00-e\x00RSYNC_SECRET"},
+			"the host's network": {"util:1", "--network\x00host\x00util:1"},
 		}},
 		{"restore", []string{"run", "-v", tree + "/s:/s:ro", "-v", tree + "/f:/o", "util:1", "sh", "-c", "restore script", "sh", "f.zst"}, map[string][2]string{
 			"another's file": {tree + "/s:/s:ro", "/home/devopsy-other/other/s:/s:ro"},
@@ -186,25 +190,14 @@ func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	}
 }
 
-// A receive into a volume holds no mnt, as an rsync that names a whole mnt holds only the
-// entry it writes. Bound whole, the mnt would be rw in a root rsync on the host's network,
-// and made as its entry, a new mnt would give this user rwX on it (makeEntry): it could then
+// A receive into a volume holds no mnt: bound whole, the mnt would be rw in a root rsync, and
+// made as its entry, a new mnt would give this user rwX on it (makeEntry): it could then
 // replace an entry with a link, which a bind's next start follows.
 func TestDecideRunReceiveIntoAVolumeHoldsNoMnt(t *testing.T) {
 	t.Parallel()
 	mnt := "/space/mnt/shop-new"
-	a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt+":/mnt", "-v", "shop-new_db:/vol/db",
-		"util:1", "rsync", "-a", "rsync://127.0.0.1:9/db/", "/vol/db/")
-	if err != nil {
-		return
-	}
-	if slices.Contains(a.Docker, mnt+":/mnt") {
-		t.Errorf("a whole mnt, rw, in a root rsync: %q", a.Docker)
-	}
-	for _, e := range a.Entries {
-		if e.Path == mnt {
-			t.Errorf("the mnt is made as an entry, for this user to write: %+v", e)
-		}
+	if a, err := decide(t, slices.Insert(receive("shop-new_db:/vol/db", "devopsy::db/", "/vol/db/"), 5, "-v", mnt+":/mnt")...); err == nil {
+		t.Errorf("a whole mnt, rw, beside a receive into a volume: %q", a.Docker)
 	}
 }
 
@@ -298,7 +291,7 @@ func TestDecideRunSaysWhatItWrites(t *testing.T) {
 		want []string
 	}{
 		{"an rsync, narrowed to its entry", []string{"run", "-v", mnt + ":/src:ro", "-v", dev + ":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, []string{dev + "/data"}},
-		{"a receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt + ":/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}, []string{mnt + "/data"}},
+		{"a receive", receive(mnt+"/data:/mnt/data", "devopsy::data/", "/mnt/data/"), []string{mnt + "/data"}},
 		{"a share", []string{"run", "-v", mnt + "/data:/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"}, []string{dev + "/data"}},
 		{"an emptying of the whole mnt", []string{"run", "-v", mnt + ":/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"}, nil},
 	} {

@@ -192,9 +192,10 @@ func throttleServer(t *testing.T, rate string) {
 }
 
 // receiving is what of an rsync into the second server runs there: the
-// receive script's docker run and the rsync in its container.
+// receive's docker run and the rsync in its container, which name the
+// parent's daemon over their session (devopsy::<module>).
 func receiving(t *testing.T) string {
-	out, _ := srv2(t, "pgrep -af '[r]sync://127.0.0.1' || true")
+	out, _ := srv2(t, "pgrep -af '[d]evopsy::' || true")
 	return strings.TrimSpace(out)
 }
 
@@ -230,11 +231,11 @@ func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func())
 	}
 }
 
-// The parent's session to the child's server for the rsync (its reverse
-// forward) killed mid-copy: the child's side sees it close.
+// The parent's session to the child's server for the rsync (the one whose
+// request is a receive) killed mid-copy: the child's side sees it close.
 func TestSyncAcrossRsyncCut(t *testing.T) {
 	acrossRsyncCut(t, "acrosscut", 45*time.Second, func() {
-		if out, code := srv(t, "pkill -9 -f '[E]xitOnForwardFailure=yes'"); code != 0 {
+		if out, code := srv(t, `pkill -9 -f '["]receive["]'`); code != 0 {
 			t.Fatalf("killing the rsync's session (%d): %s", code, out)
 		}
 	})
@@ -243,8 +244,8 @@ func TestSyncAcrossRsyncCut(t *testing.T) {
 // The two servers cut from each other silently mid-rsync: the parent's
 // ssh gives up on its keepalive (its own beat, 5 seconds: 45 seconds),
 // the push fails and the holder decides. The child's side sees nothing
-// of the cut (sshd sends nothing on a quiet forward): its receive script
-// removes its rsync container once the holder decided.
+// of the cut (sshd sends nothing on a quiet session): its receive removes
+// its rsync container once the holder decided.
 func TestSyncAcrossRsyncDrop(t *testing.T) {
 	acrossRsyncCut(t, "acrossrdrop", 2*time.Minute, func() {
 		script := `ip=$(getent hosts server2 | cut -d' ' -f1) && iptables -I OUTPUT -d "$ip" -j DROP && iptables -I INPUT -s "$ip" -j DROP`
@@ -296,8 +297,8 @@ func TestSyncAcrossRestrictedKey(t *testing.T) {
 
 // A sync key's line on a real sshd: it runs only --sync-child for its
 // sync, while that sync is open there, and nothing else the key would
-// otherwise open: no shell, no pty, no agent, no local forward (an -L or
-// a -W), a reverse forward on the loopback only.
+// otherwise open: no shell, no pty, no agent, no forward of any kind (an
+// -L, a -W, a -R, on the loopback too: the receive goes over its session).
 func TestSyncKeyLineOnSSHD(t *testing.T) {
 	acrossReleased(t, "acrosskey")
 	id := "1762600000.0a1b2c"
@@ -334,8 +335,19 @@ func TestSyncKeyLineOnSSHD(t *testing.T) {
 	if out, code := child("-T -R 0.0.0.0:23456:127.0.0.1:1", list); code == 0 || !strings.Contains(out, "remote port forwarding failed") {
 		t.Errorf("a -R off the loopback (%d):\n%s", code, out)
 	}
-	if out, code := child("-T -R 127.0.0.1:23456:127.0.0.1:1", list); code != 0 {
-		t.Errorf("a -R on the loopback, as the receive's (%d):\n%s", code, out)
+	if out, code := child("-T -R 127.0.0.1:23456:127.0.0.1:1", list); code == 0 || !strings.Contains(out, "remote port forwarding failed") {
+		t.Errorf("a -R on the loopback (%d):\n%s", code, out)
+	}
+	// With no command run (-N), so with no sync open, nothing either: a listener held on
+	// the child's loopback for the key's two days, a unix socket planted where its user
+	// writes.
+	for _, fwd := range []string{"-R 127.0.0.1:23457:127.0.0.1:1", "-R /home/devopsy/planted.sock:127.0.0.1:1"} {
+		if out, code := child("-N "+fwd, ""); code == 0 || !strings.Contains(out, "remote port forwarding failed") {
+			t.Errorf("%s with no command (%d):\n%s", fwd, code, out)
+		}
+	}
+	if out, code := srv2(t, "test -S ~/planted.sock && echo planted"); code == 0 || strings.Contains(out, "planted") {
+		t.Errorf("a unix socket planted: %s", out)
 	}
 	if out, code := child("-T -A", "env"); code == 0 || strings.Contains(out, "SSH_AUTH_SOCK") {
 		t.Errorf("an agent forwarded (%d):\n%s", code, out)
