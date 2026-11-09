@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,5 +43,36 @@ func TestSyncAcrossRefusesAnUnnamedEntryBeforeAnythingChanges(t *testing.T) {
 	marked := fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile))
 	if parentChanged(docker) || marked || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) == "newest rows\n" {
 		t.Errorf("refused after the parent stopped and the child was written (marked %v, the child's db %q):\n%s\n%s", marked, strings.TrimSpace(readString(filepath.Join(s.mnt("dev"), "db", "ibdata"))), out, docker)
+	}
+}
+
+// BUG: a reset across servers refuses on the kind of an entry its own wipe is about to
+// remove, and only for the copy's first entry: the child's receive reads the entry's kind
+// before the claim (planReceive), so the first entry is judged as the child has it, and
+// every later one after the wipe emptied mnt. A child whose mnt/db is a file where the
+// parent's is a directory (Docker made one for a bind mount, say) is refused the reset that
+// starts it over, while the same mismatch on a later entry resets.
+func TestResetAcrossWipesAnEntryOfAnotherKind(t *testing.T) {
+	t.Parallel()
+	for _, entry := range []string{"storage", "db"} {
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+				t.Fatalf("the child's first release (%d):\n%s", code, out)
+			}
+			s.logs()
+			// The child's entry is a file, the parent's a directory.
+			if err := os.RemoveAll(filepath.Join(s.mnt("dev"), entry)); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(s.mnt("dev"), entry), "a file\n", 0o644)
+			env := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+			out, code := s.run(env, "@devopsy@two:dev", "--reset", "--yes")
+			if code != 0 {
+				t.Errorf("a reset over mnt/%s of another kind (%d):\n%s", entry, code, out)
+			}
+		})
 	}
 }
