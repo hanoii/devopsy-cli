@@ -151,10 +151,16 @@ if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
 fi
 made=
 if ! id -u "$user" >/dev/null 2>&1; then
-  useradd --create-home --shell /bin/sh --groups "$group" "$user"
+  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 --create-home --shell /bin/sh --groups "$group" "$user"
   usermod -p '*' "$user"
   made=1
 fi
+# No subordinate ids: with newuidmap on the host, a user namespace mapping them takes a process
+# of the user's out of its groups, and so past the firewall, which goes by its group.
+uid=$(id -u "$user")
+for f in /etc/subuid /etc/subgid; do
+  [ ! -f "$f" ] || sed -i -e "/^$user:/d" -e "/^$uid:/d" "$f"
+done
 id -nG "$user" | tr ' ' '\n' | grep -qx "$group" || usermod -aG "$group" "$user"
 ` + doorSSHDTakes(deploy) + `# No cron or at job of the project user's: it runs with no session, so a leaked key's job
 # would outlive the key's removal. A cron.allow the admin keeps does not list it anyway.

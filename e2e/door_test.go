@@ -999,6 +999,38 @@ docker run -d --name doorv6-web --network doorv6 busybox:1.37 sh -c 'mkdir -p /w
 	}
 }
 
+// The firewall holds on a host with newuidmap and newgidmap (the uidmap package, which
+// rootless tools need): it goes by the devopsy-projects group of a socket's owner, and a user
+// namespace mapping subordinate ids would take a process of the user's out of its groups,
+// to the host's loopback, Docker's bridges and a metadata service. A project user has no
+// subordinate ids (--project-users add), so none maps. Skipped where uidmap is not there and
+// cannot be installed.
+func TestDoorFirewallHoldsUnderSubordinateIDs(t *testing.T) {
+	user := doorUser(t, "doorr3bsub")
+	if out, code := doorRoot(t, "command -v newgidmap >/dev/null && exit 0; apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq --no-install-recommends uidmap >/dev/null 2>&1 && touch /tmp/doorr3bsub-uidmap"); code != 0 {
+		t.Skipf("no uidmap on the door's server, and none to install (%d): %s", code, out)
+	}
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doorr3bsub-loopback; [ ! -e /tmp/doorr3bsub-uidmap ] || { apt-get remove -y -qq uidmap; rm -f /tmp/doorr3bsub-uidmap; }; true")
+	})
+	if out, code := doorRoot(t, "docker run -d --name doorr3bsub-loopback -p 127.0.0.1:18081:8080 busybox:1.37 sh -c 'mkdir -p /w && echo hello-from-loopback >/w/index.html && exec httpd -f -p 8080 -h /w' >/dev/null"); code != 0 {
+		t.Fatalf("the admin's port on the loopback (%d): %s", code, out)
+	}
+	site := "curl -s --max-time 3 http://127.0.0.1:18081/"
+	eventually(t, startWaitE2E, "the port answering the deploy user", func() bool {
+		out, _ := doorAs(t, "devopsy", site)
+		return strings.Contains(out, "hello-from-loopback")
+	})
+	if out, _ := doorAs(t, user, site); strings.Contains(out, "hello-from-loopback") {
+		t.Fatalf("the control: the firewall lets a project user's plain process through: %s", out)
+	}
+	// A subordinate uid and gid, and no groups: all the user's own to take.
+	hidden := "unshare --user --map-root-user --map-users=auto --map-groups=auto --setgroups allow setpriv --reuid 1 --regid 1 --clear-groups "
+	if out, _ := doorAs(t, user, hidden+site+" 2>&1"); strings.Contains(out, "hello-from-loopback") {
+		t.Errorf("under a subordinate id with its groups dropped, a project user's process reached the host's loopback: %s", out)
+	}
+}
+
 // --project-users add refuses a host whose sshd would not take its drop-in for the project
 // user: a sshd_config with no Include of sshd_config.d (older Debian and Ubuntu, an admin's
 // own), or with it below a Match, parses (sshd -t) and leaves the user on its own
