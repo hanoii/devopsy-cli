@@ -22,7 +22,7 @@ const (
 // firewallFamily is one of iptables' families: its command, how it rejects, and the cloud
 // metadata services' addresses in it. In IPv4, all of link-local (AWS's, Google's, Azure's
 // IMDS, DigitalOcean's, Tencent's, Scaleway's, ECS's), then Alibaba's and Azure's WireServer;
-// in IPv6, AWS's, Google's and OpenStack's. Link-local is never another server's, so a range
+// in IPv6, AWS's, Google's, OpenStack's and Oracle's. Link-local is never another server's, so a range
 // costs a sync nothing there.
 type firewallFamily struct {
 	cmd, reject string
@@ -31,7 +31,7 @@ type firewallFamily struct {
 
 var firewallFamilies = []firewallFamily{
 	{"iptables", "icmp-port-unreachable", []string{"169.254.0.0/16", "100.100.100.200/32", "168.63.129.16/32"}},
-	{"ip6tables", "icmp6-port-unreachable", []string{"fd00:ec2::254/128", "fd20:ce::254/128", "fe80::a9fe:a9fe/128"}},
+	{"ip6tables", "icmp6-port-unreachable", []string{"fd00:ec2::254/128", "fd20:ce::254/128", "fe80::a9fe:a9fe/128", "fd00:c1::a9fe:a9fe/128"}},
 }
 
 // bridges are Docker's: the default one and every network compose makes.
