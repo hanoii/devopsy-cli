@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"net"
 	"path"
 	"slices"
 	"strings"
@@ -180,11 +181,16 @@ WantedBy=timers.target
 `
 
 // DoorFirewallRead prints each family's tables as iptables -S does, for DoorFirewallWrong, a
-// "# <iptables> <table>" line before each, or "# ip6tables off" where the kernel has no IPv6.
+// "# <iptables> <table>" line before each, or "# ip6tables off" where the kernel has no IPv6;
+// then the host's TCP listeners and sshd's ports, for DoorListeners.
 const DoorFirewallRead = `for c in iptables ip6tables; do
   if [ "$c" = ip6tables ] && [ ! -e /proc/net/if_inet6 ]; then echo "# $c off"; continue; fi
   for t in filter raw; do echo "# $c $t"; "$c" -t "$t" -S; done
 done
+echo "# listeners"
+ss -Htlnp 2>/dev/null || :
+echo "# sshd ports"
+sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || :
 `
 
 // DoorFirewallInstall is what add does for the firewall as root, chrooted into the host
@@ -263,4 +269,62 @@ func jumpedFirst(table []string, j doorJump) string {
 		}
 	}
 	return "nothing in " + j.from + " jumps to " + j.chain
+}
+
+// DoorListeners are the host's TCP listeners beyond loopback, from DoorFirewallRead's output,
+// as "<address> (<process>)": every container reaches them through its bridge, which the
+// firewall does not close (it would refuse a site's call to another on its own server). Not
+// sshd's (its ports, 22 when unread, whoever holds them, systemd's socket included), nor
+// docker-proxy's, a published port being public anyway.
+func DoorListeners(read string) []string {
+	var lines, ports []string
+	section := ""
+	for line := range strings.SplitSeq(read, "\n") {
+		if k, ok := strings.CutPrefix(line, "# "); ok {
+			section = k
+			continue
+		}
+		switch section {
+		case "listeners":
+			lines = append(lines, line)
+		case "sshd ports":
+			if p := strings.TrimSpace(line); p != "" {
+				ports = append(ports, p)
+			}
+		}
+	}
+	if len(ports) == 0 {
+		ports = []string{"22"}
+	}
+	var out []string
+	for _, line := range lines {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[0] != "LISTEN" {
+			continue
+		}
+		local := f[3]
+		i := strings.LastIndex(local, ":")
+		if i < 0 {
+			continue
+		}
+		host, port := strings.Trim(local[:i], "[]"), local[i+1:]
+		host, _, _ = strings.Cut(host, "%")
+		if ip := net.ParseIP(host); (ip != nil && ip.IsLoopback()) || slices.Contains(ports, port) {
+			continue
+		}
+		process := ""
+		if len(f) > 5 {
+			if _, rest, ok := strings.Cut(f[5], `(("`); ok {
+				process, _, _ = strings.Cut(rest, `"`)
+			}
+		}
+		if process == "docker-proxy" {
+			continue
+		}
+		if process != "" {
+			local += " (" + process + ")"
+		}
+		out = append(out, local)
+	}
+	return out
 }

@@ -835,6 +835,57 @@ sshd -t`); code != 0 {
 	}
 }
 
+// What the host serves beyond loopback, every container reaches through its bridge, a project
+// user's included, as on any Docker host: the firewall keeps only that user's own processes
+// off the host's addresses, since refusing containers would refuse a site's call to another
+// on its own server. A host service on 127.0.0.1 is out of every container's reach, and
+// --server-info names the others, with that fix.
+func TestDoorHostServices(t *testing.T) {
+	web := `    image: busybox:1.37
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, "3600"]
+`
+	dir := doorProject(t, "doorhostsvc", "services:\n  web:\n"+web, nil)
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+	t.Cleanup(func() { doorRoot(t, "docker rm -f doorhostsvc-all doorhostsvc-lo") })
+	// The admin's own services: one on all the host's addresses, one on its loopback.
+	if out, code := doorRoot(t, `set -e
+docker run -d --name doorhostsvc-all --network host busybox:1.37 sh -c 'mkdir -p /w && echo on-all-addresses >/w/index.html && exec httpd -f -p 18181 -h /w' >/dev/null
+docker run -d --name doorhostsvc-lo --network host busybox:1.37 sh -c 'mkdir -p /w && echo on-loopback >/w/index.html && exec httpd -f -p 127.0.0.1:18182 -h /w' >/dev/null`); code != 0 {
+		t.Fatalf("the host's services (%d): %s", code, out)
+	}
+	addr, _ := doorRoot(t, "hostname -i | cut -d' ' -f1")
+	all, lo := "http://"+strings.TrimSpace(addr)+":18181/", "http://127.0.0.1:18182/"
+	eventually(t, startWaitE2E, "the host's services answering the deploy user", func() bool {
+		a, _ := doorAs(t, "devopsy", "curl -s --max-time 3 "+all)
+		l, _ := doorAs(t, "devopsy", "curl -s --max-time 3 "+lo)
+		return strings.Contains(a, "on-all-addresses") && strings.Contains(l, "on-loopback")
+	})
+	for _, url := range []string{all, lo} {
+		if out, _ := doorAs(t, "devopsy-doorhostsvc", "curl -s --max-time 3 "+url); strings.Contains(out, "on-") {
+			t.Errorf("the project user's own process reached %s: %s", url, out)
+		}
+	}
+	// A container reaches the host by its address, never its loopback.
+	in := func(url string) string {
+		out, _ := op(t, dir, "devopsy @prod exec -T web wget -qO- -T 3 "+url+" 2>&1")
+		return out
+	}
+	if out := in(all); !strings.Contains(out, "on-all-addresses") {
+		t.Errorf("the container did not reach %s, which this test documents: %s", all, out)
+	}
+	if out := in("http://" + strings.TrimSpace(addr) + ":18182/"); strings.Contains(out, "on-loopback") {
+		t.Errorf("the container reached the host's loopback service: %s", out)
+	}
+	out, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
+	if !strings.Contains(out, "every container reaches what the host listens on beyond loopback") || !strings.Contains(out, ":18181 (httpd)") || strings.Contains(out, ":18182") {
+		t.Errorf("--server-info:\n%s", out)
+	}
+}
+
 // A door project builds on a BuildKit of its own: on one builder, a cache mount is shared
 // across projects by its id, and one project's build fills a cache another's trusts. The
 // control: the same two builds on the server's own builder see each other's.

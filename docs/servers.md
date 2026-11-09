@@ -281,12 +281,21 @@ user's processes on the host reach no container on Docker's networks
 and no cloud metadata service. At the host's own addresses, loopback
 included, they reach only port 53, for a DNS resolver. The metadata
 addresses are IPv4's link-local (`169.254.0.0/16`), Alibaba's and
-Azure's addresses outside it, and the IPv6 addresses of AWS, Google
-and OpenStack. Containers on Docker's networks, the deploy user's
+Azure's addresses outside it, and the IPv6 addresses of AWS, Google,
+OpenStack and Oracle. Containers on Docker's networks, the deploy user's
 included, cannot reach them either: an app that takes the instance's
 credentials from them needs credentials of its own. DNS at those
 addresses still answers, since some clouds run their resolver there.
 Syncs still work with the firewall loaded.
+
+A project user's containers, like any container on a Docker host, still
+reach what the host listens on at its other addresses, its bridges'
+included: the firewall leaves them alone, since refusing them would
+also refuse a site's call to another site on the same server. A
+service on the host that containers must not reach listens on
+`127.0.0.1` only, which no container reaches. `--server-info` warns of
+every TCP listener beyond loopback, other than sshd's and the ports
+Docker publishes.
 
 The rules are in two chains devopsy owns, `DEVOPSY-PROJECTS` in
 iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table, and

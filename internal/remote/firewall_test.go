@@ -82,7 +82,7 @@ func TestDoorFirewallWrong(t *testing.T) {
 // resolver is its metadata server, AWS's 169.254.169.253), and the answers to a connection
 // another made (a sync's forward is the project user's sshd). The metadata services are all
 // of link-local, never another server's, and the clouds' others: Alibaba's, Azure's
-// WireServer, OpenStack's in IPv6.
+// WireServer, OpenStack's and Oracle's in IPv6.
 func TestDoorRules(t *testing.T) {
 	t.Parallel()
 	in := func(rules []string, want ...string) {
@@ -136,5 +136,34 @@ func TestDoorFirewallScripts(t *testing.T) {
 	}
 	if strings.Contains(doorFirewallUnitText, "RemainAfterExit") || !strings.Contains(doorFirewallTimerText, "OnUnitInactiveSec=") {
 		t.Errorf("the units:\n%s\n%s", doorFirewallUnitText, doorFirewallTimerText)
+	}
+}
+
+// What every container reaches on the host beyond loopback is a listener there that is
+// neither sshd's (on its ports, under systemd's socket too) nor docker-proxy's, a published
+// port being public anyway: those --server-info names, TCP only.
+func TestDoorListeners(t *testing.T) {
+	t.Parallel()
+	read := "# iptables filter\n-P OUTPUT ACCEPT\n# listeners\n" +
+		"LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:((\"docker-proxy\",pid=1234,fd=7))\n" +
+		"LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:((\"sshd\",pid=812,fd=3))\n" +
+		"LISTEN 0      4096               *:2222             *:*    users:((\"systemd\",pid=1,fd=50))\n" +
+		"LISTEN 0      4096       127.0.0.1:8080       0.0.0.0:*    users:((\"docker-proxy\",pid=1240,fd=7))\n" +
+		"LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:((\"systemd-resolve\",pid=600,fd=15))\n" +
+		"LISTEN 0      4096           [::1]:9000          [::]:*    users:((\"php-fpm\",pid=700,fd=6))\n" +
+		"LISTEN 0      244          0.0.0.0:5432       0.0.0.0:*    users:((\"postgres\",pid=900,fd=5))\n" +
+		"LISTEN 0      4096      172.17.0.1:9100       0.0.0.0:*    users:((\"node_exporter\",pid=950,fd=3))\n" +
+		"LISTEN 0      4096            [::]:6379          [::]:*\n" +
+		"# sshd ports\n2222\n22\n"
+	want := []string{"0.0.0.0:5432 (postgres)", "172.17.0.1:9100 (node_exporter)", "[::]:6379"}
+	if got := DoorListeners(read); !slices.Equal(got, want) {
+		t.Errorf("listeners: %q, want %q", got, want)
+	}
+	if got := DoorListeners("# listeners\n# sshd ports\n22\n"); len(got) != 0 {
+		t.Errorf("none: %q", got)
+	}
+	// sshd's ports unread (its config), port 22 is sshd's.
+	if got := DoorListeners("# listeners\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"); len(got) != 0 {
+		t.Errorf("sshd's default port: %q", got)
 	}
 }

@@ -95,6 +95,8 @@ type DoorFacts struct {
 	// loads the firewall again for.
 	FirewallWrong []string `json:"firewall_wrong,omitempty"`
 	FirewallError string   `json:"firewall_error,omitempty"`
+	// Listeners are the host's TCP listeners every container reaches (DoorListeners).
+	Listeners []string `json:"listeners,omitempty"`
 	Project       string   `json:"project,omitempty"`
 }
 

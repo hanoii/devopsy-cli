@@ -132,6 +132,9 @@ func TestServerInfoReport(t *testing.T) {
 			i.Door = &remote.DoorFacts{Space: "/space", Project: "blog", FirewallWrong: []string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}}
 		}, "",
 			"keeps them off\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --project-users add blog"},
+		{"door listeners", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
+		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {

@@ -68,8 +68,13 @@ func doorFacts() *remote.DoorFacts {
 			f.Project = p
 		}
 	}
-	f.FirewallWrong, err = doorFirewall(remote.DoorFirewallRead, false)
+	read, err := doorHostRead(remote.DoorFirewallRead, false)
 	if err != nil {
+		f.FirewallError = err.Error()
+		return f
+	}
+	f.Listeners = remote.DoorListeners(read)
+	if f.FirewallWrong, err = doorFirewallWrong(read); err != nil {
 		f.FirewallError = err.Error()
 	}
 	return f
@@ -80,8 +85,27 @@ func doorFacts() *remote.DoorFacts {
 // host lacks from what it prints (remote.DoorFirewallRead): the deploy user can neither
 // read nor change it.
 func doorFirewall(script string, write bool) ([]string, error) {
-	if err := ensureUtilImage(context.Background()); err != nil {
+	read, err := doorHostRead(script, write)
+	if err != nil {
 		return nil, err
+	}
+	return doorFirewallWrong(read)
+}
+
+// doorFirewallWrong is what of the project users' firewall read lacks, by the group's id.
+func doorFirewallWrong(read string) ([]string, error) {
+	g, err := user.LookupGroup(remote.DoorGroup)
+	if err != nil {
+		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
+	}
+	return remote.DoorFirewallWrong(read, g.Gid), nil
+}
+
+// doorHostRead runs script as root on the host with its network, through the util image
+// (writing the host's files when write), and returns what it prints.
+func doorHostRead(script string, write bool) (string, error) {
+	if err := ensureUtilImage(context.Background()); err != nil {
+		return "", err
 	}
 	bind := "/:/host:ro"
 	if write {
@@ -92,13 +116,9 @@ func doorFirewall(script string, write bool) ([]string, error) {
 	c.Stderr = os.Stderr
 	out, err := c.Output()
 	if err != nil {
-		return nil, fmt.Errorf("the project users' firewall: %v", err)
+		return "", fmt.Errorf("the project users' firewall: %v", err)
 	}
-	g, err := user.LookupGroup(remote.DoorGroup)
-	if err != nil {
-		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
-	}
-	return remote.DoorFirewallWrong(string(out), g.Gid), nil
+	return string(out), nil
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
@@ -838,6 +858,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		case len(dr.FirewallWrong) > 0:
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"project users reach what their firewall keeps them off"}, dr.FirewallWrong...),
 				Remedies: []report.Remedy{report.Fix("load it again, for any of its projects:", "devopsy @"+ref+" --project-users add "+cmp.Or(dr.Project, "<project>"))}})
+		}
+		if len(dr.Listeners) > 0 {
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),
+				Remedies: []report.Remedy{report.Fix("make each listen on 127.0.0.1, which no container reaches")}})
 		}
 	}
 
