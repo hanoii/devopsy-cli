@@ -621,7 +621,13 @@ func TestDoorImageLockHoldsTheProject(t *testing.T) {
 		t.Error("execKeeping has no lock to keep")
 	}
 	unlock()
-	if syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	// A parallel test's fork shares the lock's open file until its exec closes it, so the
+	// lock may stay a moment after unlock: polled, bounded by a second.
+	free := false
+	for end := time.Now().Add(time.Second); !free && time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		free = syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+	}
+	if !free {
 		t.Error("the lock stays after unlock")
 	}
 }
@@ -662,8 +668,8 @@ func TestDoorChecksWhatAServiceBuilds(t *testing.T) {
 	docker := filepath.Join(bin, "docker")
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 case "$*" in
-  *" shop-prod-labelled") echo '{"devopsy.role":"proxy"}' ;;
-  *" shop-prod-plain") echo '{"a":"b"}' ;;
+  *" shop-prod-labelled") echo '{"Config":{"Labels":{"devopsy.role":"proxy"}}}' ;;
+  *" shop-prod-plain") echo '{"Config":{"Labels":{"a":"b"}}}' ;;
   *) exit 1 ;;
 esac
 `), 0o755); err != nil {
@@ -801,7 +807,7 @@ func TestProjectNameClash(t *testing.T) {
 	// group, the builders.
 	// BUG: devopsy is taken as a project name.
 	for project, clash := range map[string]bool{
-		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true, "devopsy": true,
+		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true, "devopsy": true, "devopsy-util": true,
 	} {
 		if why := projectNameClash(project, others); (why != "") != clash {
 			t.Errorf("%s: %q", project, why)
@@ -1049,15 +1055,42 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	}
 }
 
+// A request that claims an image (a tag's source, an inspect) then acts on it by the digest
+// its claim's pull got: the name is anyone's on the server to move right after the pull,
+// and a tag would make the mover's image a hold of this project's, which it then runs by
+// its own name, unpinned. In a helper process (doorComposeHelper), since the door execs
+// Docker, here the fake, which logs its calls.
+func TestDoorClaimActsByDigest(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	private := "registry.example.com/blog/private"
+	write(t, filepath.Join(dir, "store"), private+":1|sha256:mmm|"+private+"@sha256:mmm|"+private+":1|{}\n"+private+"@sha256:p1|sha256:p1|"+private+"@sha256:p1||{}\n", 0o644)
+	write(t, filepath.Join(dir, "registry"), private+":1|sha256:p1\n", 0o644)
+	hold := "busybox:devopsy-shop-prod-20260101000000"
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_REQUEST=tag "+private+":1 "+hold)
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("the request (%v):\n%s", err, out)
+	}
+	if calls := readString(filepath.Join(dir, "calls")); !strings.Contains(calls, "\ntag "+private+"@sha256:p1 "+hold+"\n") {
+		t.Errorf("the tag is not by the claim's digest:\n%s", calls)
+	}
+}
+
 // doorComposeHelper runs the door's compose on a file naming a pulled image, with the
 // fakes in dir and the verb in DEVOPSY_TEST_DOOR_VERB (TestDoorComposeHandsThePinnedFile),
-// and exits as it does: compose is exec'd, so what it prints is the fake docker's.
+// or the request in DEVOPSY_TEST_DOOR_REQUEST (TestDoorClaimActsByDigest), and exits as it
+// does: compose or Docker is exec'd, so what it prints is the fake docker's.
 func doorComposeHelper(dir string) {
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
 		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH")},
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	if req := os.Getenv("DEVOPSY_TEST_DOOR_REQUEST"); req != "" {
+		os.Exit(side.request(filepath.Join(dir, "none.json"), strings.Fields(req)))
+	}
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
 		"image": "registry.example.com/blog/private:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
 	}}}

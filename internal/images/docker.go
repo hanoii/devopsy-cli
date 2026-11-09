@@ -81,21 +81,35 @@ func (d CLI) Prune() (string, error) {
 }
 
 func (d CLI) Inspect(ref string) (Image, error) {
-	out, err := d.run("image", "inspect", "--format", "{{json .}}", ref)
+	out, err := d.run("image", "inspect", "--format", InspectFormat, ref)
 	if err != nil {
 		return Image{}, err
 	}
+	img, err := ParseImage([]byte(out))
+	if err != nil {
+		return Image{}, fmt.Errorf("docker image inspect %s: %w", ref, err)
+	}
+	return img, nil
+}
+
+// InspectFormat is docker image inspect's format ParseImage reads.
+const InspectFormat = "{{json .}}"
+
+// ParseImage reads one image as docker image inspect prints it in
+// InspectFormat: the one reader, devopsy's and the door's.
+func ParseImage(out []byte) (Image, error) {
 	var v struct {
 		ID          string `json:"Id"`
+		RepoTags    []string
 		RepoDigests []string
 		Created     string
 		Config      struct{ Labels map[string]string }
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &v); err != nil {
-		return Image{}, fmt.Errorf("docker image inspect %s: %w", ref, err)
+	if err := json.Unmarshal(bytes.TrimSpace(out), &v); err != nil {
+		return Image{}, err
 	}
 	created, _ := time.Parse(time.RFC3339Nano, v.Created)
-	return Image{ID: v.ID, Digests: v.RepoDigests, Created: created, Version: v.Config.Labels[VersionLabel]}, nil
+	return Image{ID: v.ID, Digests: v.RepoDigests, Tags: v.RepoTags, Labels: v.Config.Labels, Created: created, Version: v.Config.Labels[VersionLabel]}, nil
 }
 
 func (d CLI) Pull(ref string) error {

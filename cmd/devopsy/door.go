@@ -26,6 +26,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -513,42 +514,65 @@ func (s *doorSide) Image(ref string) (string, []string, error) {
 }
 
 // claim pulls ref with the project's registry logins (config, the caller's docker config)
-// and records the image it then names as the project's (door.Policy.Images, ImagesFile):
+// and records the image the pull got as the project's (door.Policy.Images, ImagesFile):
 // an image another project pulled with its own logins is this one's only once its own
-// pull of it goes through, a public one at the cost of one pull. Under the project's image
-// lock; what the pull says goes to stderr, stdout being the request's answer.
-func (s *doorSide) claim(ref, config string) error {
+// pull of it goes through, a public one at the cost of one pull. It gives the digest the
+// pull got and that image, read by that digest: the name is anyone's on the server to move
+// right after the pull (a project user's build of a registry's name), so nothing reads it
+// again. Under the project's image lock; what the pull says goes to stderr on a failure,
+// stdout being the request's answer.
+func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	d, err := s.logins(config)
 	if err != nil {
-		return err
+		return "", images.Image{}, err
 	}
-	pull := s.docker("pull", "-q", ref)
+	var said bytes.Buffer
+	pull := s.docker("pull", ref)
 	pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
-	pull.Stdout, pull.Stderr = os.Stderr, os.Stderr
+	pull.Stdout, pull.Stderr = &said, &said
 	if pull.Run() != nil {
-		return fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
+		os.Stderr.Write(said.Bytes())
+		return "", images.Image{}, fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
 	}
-	id, _, err := s.Image(ref)
+	digest := ""
+	for _, line := range strings.Split(said.String(), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Digest: "); ok && strings.HasPrefix(v, "sha256:") {
+			digest = v
+		}
+	}
+	if digest == "" {
+		return "", images.Image{}, fmt.Errorf("refused: %s: its pull gave no digest to run it by", ref)
+	}
+	img, err := s.inspectImage(images.RepoOf(ref) + "@" + digest)
 	if err != nil {
-		return fmt.Errorf("refused: %s: %v", ref, err)
+		return "", images.Image{}, fmt.Errorf("refused: %s: %v", ref, err)
 	}
-	if slices.Contains(s.policy.Images, id) {
-		return nil
+	if slices.Contains(s.policy.Images, img.ID) {
+		return digest, img, nil
 	}
 	file := s.policy.ImagesFile()
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		return err
+		return "", images.Image{}, err
 	}
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		return err
+		return "", images.Image{}, err
 	}
-	_, err = f.WriteString(id + "\n")
+	_, err = f.WriteString(img.ID + "\n")
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	s.policy.Images = append(s.policy.Images, id)
-	return err
+	s.policy.Images = append(s.policy.Images, img.ID)
+	return digest, img, err
+}
+
+// inspectImage is ref's image as Docker has it now, read once.
+func (s *doorSide) inspectImage(ref string) (images.Image, error) {
+	out, err := s.docker("image", "inspect", "--format", images.InspectFormat, ref).Output()
+	if err != nil {
+		return images.Image{}, fmt.Errorf("no image %s", ref)
+	}
+	return images.ParseImage(out)
 }
 
 // claimedImages reads a project user's record of claimed images (door.Policy.ImagesFile).
@@ -1041,10 +1065,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	}
 	name, _ := file["name"].(string)
 	s.policy.Label(file)
-	checked, err := json.Marshal(file)
-	if err != nil {
-		return doorRefused(err)
-	}
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
 	if starts || argv[0] == "build" || argv[0] == "pull" {
 		unlock, err := s.imageLock()
@@ -1052,6 +1072,17 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			return doorRefused(err)
 		}
 		defer unlock()
+	}
+	// The image check pins what it checked into the file (startImage), so the file compose
+	// gets, and the vets judge, is marshalled after it.
+	if starts {
+		if err := s.checkImageLabels(file, config); err != nil {
+			return doorRefused(err)
+		}
+	}
+	checked, err := json.Marshal(file)
+	if err != nil {
+		return doorRefused(err)
 	}
 	if starts {
 		for _, v := range s.vets {
@@ -1069,9 +1100,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 	}
 	if starts {
-		if err := s.checkImageLabels(file, config); err != nil {
-			return doorRefused(err)
-		}
 		// The checked file's sources are real paths already.
 		same := func(p string) (string, error) { return p, nil }
 		if err := s.bindEntries(file, name, same); err != nil {
@@ -1129,9 +1157,8 @@ func (s *doorSide) downProject(name string, flags []string) int {
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a
 // proxy reads: a build's or an image's LABEL lands in a container's labels, past any check
-// of a file's. An image not here yet comes first, with this project's logins, and one
-// still missing refuses the start: compose would pull or build it after this check. The
-// image lock (imageLock) keeps what was checked until compose has created its containers.
+// of a file's. It also decides the image compose runs, written into the file (startImage):
+// one compose must not resolve again after this check.
 func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 	services, _ := file["services"].(map[string]any)
 	name, _ := file["name"].(string)
@@ -1145,24 +1172,12 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 		if image == "" {
 			continue
 		}
-		// The image a start runs is this project's, or claimed first: compose would pull a
-		// missing one after this check, and one another project pulled is on disk already.
-		// What builds is never pulled: its name is this project's alone.
-		if !builds && !s.policy.OwnsImage(s, image, doorKnown()) {
-			if err := s.policy.Claimable(image); err != nil {
-				return err
-			}
-			if err := s.claim(image, config); err != nil {
-				return fmt.Errorf("%s: %w", svc, err)
-			}
-		}
-		out, err := s.docker("image", "inspect", "--format", "{{json .Config.Labels}}", image).Output()
+		run, labels, err := s.startImage(svc, image, builds, config)
 		if err != nil {
-			return fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
+			return err
 		}
-		labels := map[string]string{}
-		if json.Unmarshal(out, &labels) != nil {
-			continue
+		if run != image {
+			sv["image"] = run
 		}
 		for k := range labels {
 			low := strings.ToLower(k)
@@ -1177,6 +1192,45 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 		}
 	}
 	return nil
+}
+
+// startImage is the image svc's start runs, as compose is to name it, and that image's
+// labels. A name only this project writes (a build's, a hold of its own, OwnRef) or
+// devopsy's util image goes by its name: nothing else moves it, and the project's image
+// lock (imageLock) keeps its own builds off it until compose has created its containers.
+// Any other name is anyone's on the server to move between this check and compose's create
+// (another project user's build of a registry's name under its own names, mongo's
+// mongo-express:1), so it goes pinned, <image>@<digest> (images.Pin): an image of this
+// project's (claimed by its id, or named by a hold of its own) by its digest in the image's
+// repository, as the devopsy.digest label chooses it, read in one inspect; else claimed
+// first, by the digest its pull got. A reference by digest, or an id, is a pin already.
+// An image not here yet is claimed too, with this project's logins, and one still missing
+// refuses the start: compose would pull or build it after this check.
+func (s *doorSide) startImage(svc, image string, builds bool, config string) (string, map[string]string, error) {
+	missing := fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
+	if builds || image == doorKnown().Image || s.policy.OwnRef(image) {
+		img, err := s.inspectImage(image)
+		if err != nil {
+			return "", nil, missing
+		}
+		return image, img.Labels, nil
+	}
+	img, err := s.inspectImage(image)
+	owned := err == nil && (slices.Contains(s.policy.Images, img.ID) || slices.ContainsFunc(img.Tags, s.policy.OwnRef))
+	pinned := strings.Contains(image, "@") || strings.HasPrefix(image, "sha256:")
+	digest := ""
+	if owned && !pinned {
+		digest = images.DigestIn(img, image)
+	}
+	if !owned || !pinned && digest == "" {
+		if err := s.policy.Claimable(image); err != nil {
+			return "", nil, err
+		}
+		if digest, img, err = s.claim(image, config); err != nil {
+			return "", nil, fmt.Errorf("%s: %w", svc, err)
+		}
+	}
+	return images.Pin(image, digest), img.Labels, nil
 }
 
 // imageLock holds this project's image lock until the door's process ends, compose's
@@ -1386,8 +1440,16 @@ func (s *doorSide) request(config string, argv []string) int {
 		defer unlock()
 	}
 	for _, ref := range a.Claims {
-		if err := s.claim(ref, config); err != nil {
+		digest, _, err := s.claim(ref, config)
+		if err != nil {
 			return doorRefused(err)
+		}
+		// What Docker then runs names the image the claim got, by its digest: the name is
+		// anyone's to move right after the pull (a tag's source would take the mover's).
+		for i := 1; i < len(a.Docker); i++ {
+			if a.Docker[i] == ref {
+				a.Docker[i] = images.RepoOf(ref) + "@" + digest
+			}
 		}
 	}
 	if a.Stream != nil {

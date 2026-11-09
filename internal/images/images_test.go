@@ -362,8 +362,8 @@ func TestRepo(t *testing.T) {
 		"x:1@sha256:abc":            "x",
 		"docker.io/library/nginx:1": "docker.io/library/nginx",
 	} {
-		if got := repoOf(ref); got != want {
-			t.Errorf("repoOf(%q) = %q, want %q", ref, got, want)
+		if got := RepoOf(ref); got != want {
+			t.Errorf("RepoOf(%q) = %q, want %q", ref, got, want)
 		}
 	}
 	if repoKey("docker.io/library/nginx:1") != "nginx" || repoKey("library/nginx") != "nginx" || repoKey("index.docker.io/x/y") != "x/y" {

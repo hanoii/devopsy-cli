@@ -91,7 +91,8 @@ func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
 }
 
 // A door's vet refuses by anything but 0, a missing program included; it reads what compose
-// would run, its build block gone, and says in the log. Case does not get a label past it.
+// would run, its build block gone and its images pinned, and says in the log. Case does not
+// get a label past it.
 //
 // Not parallel: it sets doorLog and doorWho, and PATH (doorFakes).
 func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
@@ -106,9 +107,17 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := filepath.Join(dir, "seen")
-	// Docker answers only the door's look at what runs, which has nothing of another's.
+	// Docker answers the door's look at what runs, which has nothing of another's, and the
+	// claim of the image: its pull's digest, and the image by that digest.
 	docker := filepath.Join(dir, "docker")
-	if err := testfile.Write(docker, []byte("#!/bin/sh\n[ \"$1\" = ps ]\n"), 0o755); err != nil {
+	if err := testfile.Write(docker, []byte(`#!/bin/sh
+case "$1 $2" in
+  "ps "*) ;;
+  "pull busybox:1.37") echo "Digest: sha256:b1" ;;
+  "image inspect") echo '{"Id":"sha256:b1","RepoDigests":["busybox@sha256:b1"],"Config":{"Labels":{}}}' ;;
+  *) exit 1 ;;
+esac
+`), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	vet := filepath.Join(dir, "vet")
@@ -138,7 +147,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 			t.Errorf("%s: the vet was not asked: %v", label, err)
 			continue
 		}
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) {
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"busybox:1.37@sha256:b1"`) {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
 		}
 	}

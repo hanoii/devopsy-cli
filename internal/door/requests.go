@@ -224,9 +224,15 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if len(args) != 2 || !p.ownHold(args[1]) || strings.HasPrefix(args[0], "-") {
 			return nil, refuse("docker tag %s: only a hold of this project's", strings.Join(args, " "))
 		}
-		// Its source is an image this project names too: its own, or claimed.
+		// Its source is an image this project names too: its own, or claimed. An own one
+		// by the id that made it so, a claimed one by the digest its claim got (Claims):
+		// a name another writes may move before Docker tags.
 		a := &Action{Docker: argv, Images: true}
-		if !p.OwnsImage(d, args[0], known) {
+		id, owned := p.ownedImage(d, args[0], known)
+		if owned && id != "" {
+			a.Docker = []string{"tag", id, args[1]}
+		}
+		if !owned {
 			if err := p.Claimable(args[0]); err != nil {
 				return nil, err
 			}
@@ -399,10 +405,12 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 			if strings.HasPrefix(t, "-") {
 				return nil, refuse("docker image rm %s", t)
 			}
-			repo, _, _ := strings.Cut(t, ":")
+			repo, tag := splitRef(t)
 			// A plain name is the server's: its pruning asks, and the name may be others'.
-			// Nothing to do, and nothing a release should hear as a failure.
-			if !p.ownHold(t) && !p.OwnName(repo) {
+			// Another's hold under a repository this project names is that project's
+			// reference count on the image it runs. Nothing to do, and nothing a release
+			// should hear as a failure.
+			if !p.ownHold(t) && (!p.OwnName(repo) || strings.HasPrefix(tag, "devopsy-")) {
 				return &Action{}, nil
 			}
 		}
@@ -484,22 +492,27 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 // claimed first (Action.Claims): pulled with this project's own registry logins, so an
 // image another project pulled with its own is never this one's by being on disk.
 func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
-	if ref == known.Image || p.ownRef(ref) {
-		return true
+	_, owned := p.ownedImage(d, ref, known)
+	return owned
+}
+
+// ownedImage is OwnsImage, with the id it read when it read one ("" for a name only this
+// project writes, or devopsy's util image): what a request then acts on by id, read once.
+func (p Policy) ownedImage(d Daemon, ref string, known Known) (string, bool) {
+	if ref == known.Image || p.OwnRef(ref) {
+		return "", true
 	}
 	id, tags, err := d.Image(ref)
 	if err != nil {
-		return false
+		return "", false
 	}
-	if slices.Contains(p.Images, id) {
-		return true
-	}
-	return slices.ContainsFunc(tags, p.ownRef)
+	return id, slices.Contains(p.Images, id) || slices.ContainsFunc(tags, p.OwnRef)
 }
 
-// ownRef says whether ref is a name only this project writes: a build's (its repository
-// under the project's names) or a hold of its own.
-func (p Policy) ownRef(ref string) bool {
+// OwnRef says whether ref is a name only this project writes: a build's (its repository
+// under the project's names) or a hold of its own. Its image stays this project's until it
+// moves the name, under its image lock; any other name is anyone's on the server to move.
+func (p Policy) OwnRef(ref string) bool {
 	if strings.Contains(ref, "@") {
 		return false
 	}

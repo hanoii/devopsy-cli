@@ -714,6 +714,17 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	if c := claims("pull", "-q", "postgres:16"); !slices.Equal(c, []string{"postgres:16"}) {
 		t.Errorf("a pull is a claim: %v", c)
 	}
+	// A tag's source this project owns by its image (claimed, or named by a hold of its
+	// own) goes to Docker by the id the door read: the name is anyone's on the server to
+	// move before the tag, which would make another's image a hold of this project's. A name
+	// only this project writes stays as it is. (A claimed source goes by the digest its
+	// claim got, the door's to put in: TestDoorClaimActsByDigest.)
+	for image, want := range map[string]string{"postgres:16": "sha256:", "shop-prod-web": "shop-prod-web"} {
+		a, err := Decide([]string{"tag", image, "busybox:devopsy-shop-prod-20240101000001"}, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil || len(a.Docker) != 3 || !strings.HasPrefix(a.Docker[1], want) || a.Docker[1] == "postgres:16" {
+			t.Errorf("a tag of its own %s tags %v (%v)", image, a, err)
+		}
+	}
 	for _, argv := range [][]string{
 		{"pull", "-q", "registry.example.com/x:devopsy-blog-prod-20240101000000"},
 		{"image", "inspect", "busybox:devopsy-blog-prod-20240101000000"},

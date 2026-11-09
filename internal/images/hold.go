@@ -188,7 +188,7 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 		if d := DigestIn(Image{Digests: l.Digests}, l.Ref); d != "" {
 			src.Kind, src.Digest = KindPulled, d
 			if e, ok := match(readList(rel), entry{Service: service}); ok && ownOf(e).Kind != KindOwn {
-				src.Digest = repoOf(ownOf(e).Ref) + "@" + digestOf(d)
+				src.Digest = RepoOf(ownOf(e).Ref) + "@" + digestOf(d)
 			}
 		}
 	}

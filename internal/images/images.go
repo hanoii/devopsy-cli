@@ -135,6 +135,9 @@ type Image struct {
 	// Docker's containerd store an image built or loaded has them too, so
 	// they never tell a pulled image from an own one (Service.own does).
 	Digests []string
+	// Tags are its names (RepoTags), Labels its image's labels.
+	Tags    []string
+	Labels  map[string]string
 	Created time.Time
 	// Version is its org.opencontainers.image.version label: display
 	// only, never compared (images have no common version field).
@@ -328,8 +331,8 @@ func bookmarkPrefix(composeName string) string {
 	return "devopsy-" + composeName + "-"
 }
 
-// repoOf is a ref's repository: no digest, no tag; a registry's port stays.
-func repoOf(ref string) string {
+// RepoOf is a ref's repository: no digest, no tag; a registry's port stays.
+func RepoOf(ref string) string {
 	r, _, _ := strings.Cut(ref, "@")
 	slash := strings.LastIndex(r, "/")
 	if colon := strings.LastIndex(r, ":"); colon > slash {
@@ -341,7 +344,7 @@ func repoOf(ref string) string {
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
 func repoKey(ref string) string {
-	r := repoOf(ref)
+	r := RepoOf(ref)
 	r = strings.TrimPrefix(r, "index.docker.io/")
 	r = strings.TrimPrefix(r, "docker.io/")
 	return strings.TrimPrefix(r, "library/")
@@ -354,7 +357,7 @@ func familiar(ref string) string {
 	if _, digest, ok := strings.Cut(ref, "@"); ok {
 		return repoKey(ref) + "@" + digest
 	}
-	rest := ref[len(repoOf(ref)):]
+	rest := ref[len(RepoOf(ref)):]
 	if rest == "" {
 		rest = ":latest"
 	}
@@ -365,14 +368,14 @@ func familiar(ref string) string {
 // digest dropped (nginx@sha256:..., not nginx:1.27@sha256:...).
 func digestRef(ref string) string {
 	if _, digest, ok := strings.Cut(ref, "@"); ok {
-		return repoOf(ref) + "@" + digest
+		return RepoOf(ref) + "@" + digest
 	}
 	return ref
 }
 
 // isBookmark says whether a tag (repo:tag) is a release's bookmark.
 func isBookmark(tag string) bool {
-	r := repoOf(tag)
+	r := RepoOf(tag)
 	return len(tag) > len(r) && strings.HasPrefix(tag[len(r)+1:], "devopsy-")
 }
 
@@ -394,7 +397,7 @@ func bookmarks(entries []entry, name, id string) []string {
 	prefix := bookmarkPrefix(name)
 	bs := make([]string, len(entries))
 	for i, e := range entries {
-		b := repoOf(e.Ref) + ":" + prefix + id
+		b := RepoOf(e.Ref) + ":" + prefix + id
 		if count[repoKey(e.Ref)] > 1 {
 			sum := e.Ref
 			if len(images[familiar(e.Ref)]) > 1 {

@@ -210,7 +210,7 @@ type StatusLine struct {
 // short, else its short id.
 func shownImage(ref string, img Image) string {
 	if d := DigestIn(img, ref); d != "" {
-		return repoOf(d) + "@" + short(digestOf(d))
+		return RepoOf(d) + "@" + short(digestOf(d))
 	}
 	return short(img.ID)
 }
@@ -232,7 +232,7 @@ func sameImage(img Image, label string) bool {
 // shortName is a digest name or an id, short.
 func shortName(n string) string {
 	if d := digestOf(n); d != "" {
-		return repoOf(n) + "@" + short(d)
+		return RepoOf(n) + "@" + short(d)
 	}
 	return short(n)
 }
