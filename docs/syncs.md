@@ -424,3 +424,49 @@ which only `inherit:` copies, key by key.
 On the parent's own server, its instance and project files are already
 the child's, so the child gets only the parent's `parent.env`, down a
 chain.
+
+## Previews
+
+A preview (for example one environment for each pull request) runs
+code nobody has reviewed yet. Keep previews on a server of their own,
+away from production, and release the project as a project user on
+both servers ([project
+users](servers.md#project-users-with-no-docker-socket)), since a sync
+goes between two project users or two deploy users. `--project-users
+add shop` makes `devopsy-shop` on each server, with its own keys there,
+and each address names it ([Targets](config.md#targets)).
+
+Let previews sync from a base environment on their own server, not
+from production. A preview whose parent is production would stop
+production's data services for each of its syncs, and production's
+server would connect to the preview's to copy into it. The base's
+parent is production, and you sync it yourself when you want newer
+data in it:
+
+```yaml
+environments:
+  prod: {}
+  base: {parent: prod}       # on the preview server, synced by you
+  "pr-*": {parent: base}     # @pr-12, @pr-feature, on the same server
+```
+
+`DEVOPSY_SERVER_PROD` names production's server, and
+`DEVOPSY_SERVER_BASE` and `DEVOPSY_SERVER_PR` the preview server, each
+with the project user (`devopsy-shop@vm2`).
+
+The base and its previews run as one user on their server, so a
+preview's code can read and change the base, its data and releases
+included. The base keeps previews' syncs off production's server, not
+the previews off the base: its next sync from production copies into
+whatever a preview left there.
+
+Previews get production's data, personal data included, unless the
+base's `finish` step cleans it ([Order](#order)). They also
+get its instance and project `.env` through the base's `parent.env`
+([A parent on another server](#a-parent-on-another-server)), every key
+of them, on the preview server: set a key on that server and the
+previews use your value, but the copy still holds production's. So a
+secret only production may know goes in production's `shared/.env`,
+never in its instance or project `.env`. Nothing gets `shared/.env`
+but what a parent's `inherit:` names, and a preview only if the base's
+`inherit:` names it again.
