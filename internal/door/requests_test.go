@@ -737,6 +737,14 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	if c := claims("pull", "-q", "postgres:16"); !slices.Equal(c, []string{"postgres:16"}) {
 		t.Errorf("a pull is a claim: %v", c)
 	}
+	// A tag and a pull change what a name in the image store is, so each takes the
+	// project's image lock, which a start holds into compose (Action.Images); a read does not.
+	for argv, locks := range map[string]bool{"tag sha256:aaa busybox:devopsy-shop-prod-20240101000001": true, "pull -q postgres:16": true, "image inspect postgres:16": false, "image rm busybox:devopsy-shop-prod-20240101000000": false} {
+		a, err := Decide(strings.Fields(argv), p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil || a.Images != locks {
+			t.Errorf("%s: under the image lock %v, want %v (%v)", argv, a != nil && a.Images, locks, err)
+		}
+	}
 	// A tag's source this project owns by its image (claimed, or named by a hold of its
 	// own) goes to Docker by the id the door read: the name is anyone's on the server to
 	// move before the tag, which would make another's image a hold of this project's. A name

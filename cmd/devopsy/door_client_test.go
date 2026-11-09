@@ -63,12 +63,15 @@ func TestDoorIsAnsweredBeforeAnyProject(t *testing.T) {
 		t.Fatalf("the control: the project loads (%d):\n%s", code, out)
 	}
 	// A config of the caller's that names it a project user, which the server's devopsy
-	// reads as such (the control), with keys of its own beside it.
+	// reads as such (the control), with keys of its own beside it, and a sync's key, which
+	// sshd is given after them.
 	const who = "devopsy-review4cgrant"
 	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop"
 	home := t.TempDir()
 	write(t, filepath.Join(home, "config.yaml"), "door:\n  space: "+t.TempDir()+"\n  users:\n    "+who+": {project: review4cgrant}\n", 0o644)
 	write(t, filepath.Join(home, "door", "keys", who), "# a comment\n"+key+"\n", 0o600)
+	syncKey := `restrict,command="/usr/local/bin/devopsy --sync-child 1762600000.0a1b2c /srv/x vm2:x" ` + strings.TrimSuffix(key, "op@laptop") + "devopsy-sync-1762600000.0a1b2c"
+	write(t, filepath.Join(home, "door", "sync-keys", who), syncKey+"\n", 0o600)
 	caller := []string{"DEVOPSY_HOME=" + home, "XDG_CONFIG_HOME=" + home, "SUDO_USER=" + who}
 	if out, code := runDevopsy(t, t.TempDir(), caller, "--project-users-step", "list"); code != 0 || !strings.Contains(out, who+"\tproject review4cgrant") {
 		t.Fatalf("the control: that config names %s a project user (%d):\n%s", who, code, out)
@@ -80,7 +83,7 @@ func TestDoorIsAnsweredBeforeAnyProject(t *testing.T) {
 	if out, code := runDevopsy(t, project, caller, doorReadFlag, "isdir", project); code != 0 {
 		t.Errorf("a read as a project user, in a project that does not load (%d):\n%s", code, out)
 	}
-	if out, code := runDevopsy(t, project, caller, authorizedKeysFlag, who); code != 0 || out != key+"\n" {
+	if out, code := runDevopsy(t, project, caller, authorizedKeysFlag, who); code != 0 || out != key+"\n"+syncKey+"\n" {
 		t.Errorf("sshd's question, in a project that does not load (%d):\n%s", code, out)
 	}
 }

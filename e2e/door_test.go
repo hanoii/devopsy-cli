@@ -1169,7 +1169,8 @@ runuser -u devopsy -- sh -c 'umask 002 && mkdir -p "$1" && echo s3cret >"$1/read
 // user: a sshd_config with no Include of sshd_config.d (older Debian and Ubuntu, an admin's
 // own), or with it below a Match, parses (sshd -t) and leaves the user on its own
 // ~/.ssh/authorized_keys, where a leaked key adds a second one that outlives its rotation and
-// --project-users remove. With the Include back, add goes through.
+// --project-users remove. With the Include back, add goes through, and leaves the user with
+// no cron or at job and no subordinate ids, which remove and a second add keep so.
 func TestDoorAddRefusesAnUnincludedDropIn(t *testing.T) {
 	const project = "doorinc"
 	user := "devopsy-" + project
@@ -1199,6 +1200,36 @@ sshd -t`); code != 0 {
 	root("cp /tmp/sshd_config.doorinc /etc/ssh/sshd_config")
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 {
 		t.Errorf("the control: add with the Include back (%d): %s", code, out)
+	}
+	// What add leaves on the host for the user it made: no cron or at job (they run with no
+	// session, past a key's removal), no subordinate ids (a user namespace mapping them
+	// leaves the firewall's group), and devopsy as its docker.
+	host := `for f in /etc/cron.deny /etc/at.deny; do echo "$f $(grep -cx ` + user + ` "$f")"; done
+echo "sub $(cat /etc/subuid /etc/subgid 2>/dev/null | grep -c '^` + user + `:')"
+echo "docker $(readlink /usr/local/bin/docker)"
+echo "user $(id -un ` + user + ` 2>&1)"
+echo "entry $(ls /home/devopsy/.config/devopsy/door/users/ 2>/dev/null | grep -c '^` + user + `.yaml$')"`
+	made := "/etc/cron.deny 1\n/etc/at.deny 1\nsub 0\ndocker /usr/local/bin/devopsy\nuser " + user + "\n"
+	if out, _ := root(host); out != made+"entry 1\n" {
+		t.Errorf("the host after add:\n%s\nwant:\n%sentry 1", out, made)
+	}
+	// remove takes its entry, never its Unix user, which holds a tree and data; and an add
+	// of a user that is there takes the subordinate ids it was given meanwhile, and lists
+	// it once more nowhere.
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users remove "+project+" 2>&1"); code != 0 {
+		t.Fatalf("remove (%d): %s", code, out)
+	}
+	if out, _ := root(host); out != made+"entry 0\n" {
+		t.Errorf("the host after remove:\n%s\nwant:\n%sentry 0", out, made)
+	}
+	if out, code := root("echo " + user + ":100000:65536 | tee -a /etc/subuid >>/etc/subgid"); code != 0 {
+		t.Fatalf("subordinate ids for %s (%d): %s", user, code, out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 {
+		t.Fatalf("add again (%d): %s", code, out)
+	}
+	if out, _ := root(host); out != made+"entry 1\n" {
+		t.Errorf("the host after a second add:\n%s\nwant:\n%sentry 1", out, made)
 	}
 }
 
