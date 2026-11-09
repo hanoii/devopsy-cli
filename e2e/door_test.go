@@ -5,6 +5,7 @@ package e2e
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1585,6 +1586,108 @@ func TestDoorReleaseCutOff(t *testing.T) {
 	}
 	if out, _ := as("cat doorcut/prod/current/../devopsy-log-server 2>&1"); !strings.Contains(out, "waiting") {
 		t.Errorf("the server's log of a release with no session: %s", out)
+	}
+}
+
+// Reflinks through the door, a project's data and its clones on an XFS in the door's space
+// (a loop device, bound where the door puts this project's mnt and clones, with the space's
+// own options): a child's first release clones the parent's data, in a clone's directory the
+// door made, and shares the entry labeled devopsy.data.copy.reflink, which takes next to no
+// room; a snapshot clones too, and its restore brings the data back; no clone stays. The
+// child's entry, whose files are another uid's, is the project user's to read and never to
+// replace. (The deploy user's own: TestSyncReflinkE2E, TestSnapshotReflinkE2E.)
+func TestDoorReflinks(t *testing.T) {
+	data := `    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any`
+	dir := doorProject(t, "doorxfs", `services:
+  db:
+`+doorService+`    command: [sleep, infinity]
+    volumes: [./mnt/db:/db]
+`+data+`, devopsy.data.stop: own}
+  app:
+`+doorService+`    command: [sleep, infinity]
+    volumes: [./mnt/files:/files]
+`+data+`, devopsy.data.copy.reflink: "true"}
+`, nil)
+	user, xfs := "devopsy-doorxfs", "/var/tmp/doorxfs"
+	binds := map[string]string{"prod": doorSpace + "/mnt/doorxfs-prod", "dev": doorSpace + "/mnt/doorxfs-dev", "clones": doorSpace + "/clones/doorxfs"}
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doorxfs-prod-db-1 doorxfs-prod-app-1 doorxfs-dev-db-1 doorxfs-dev-app-1 >/dev/null 2>&1; for d in "+binds["prod"]+" "+binds["dev"]+" "+binds["clones"]+" "+xfs+"; do umount -l $d; done; rm -rf "+xfs+" "+xfs+".img")
+	})
+	setup := "set -e\ntruncate -s 300M " + xfs + ".img\nmkfs.xfs -q -f " + xfs + ".img\nmkdir -p " + xfs + "\nmount -o loop," + doorMount + " " + xfs + ".img " + xfs + "\n"
+	for _, name := range []string{"prod", "dev", "clones"} {
+		// Closed as the door makes them (closedDir), which then gives its user its part.
+		setup += "install -d -o devopsy " + doorSpace + "/mnt " + doorSpace + "/clones\ninstall -d -m 750 -o devopsy -g devopsy " + xfs + "/" + name + " " + binds[name] + "\n" +
+			"mount --bind " + xfs + "/" + name + " " + binds[name] + "\nmount -o remount,bind," + doorMount + " " + binds[name] + "\n"
+	}
+	if out, code := doorRoot(t, setup); code != 0 {
+		t.Fatalf("the XFS (%d): %s", code, out)
+	}
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	// The services' own files, as they would write them.
+	if out, code := doorRoot(t, "cd "+binds["prod"]+" && dd if=/dev/urandom of=files/a.bin bs=1M count=60 2>/dev/null && dd if=/dev/urandom of=db/table bs=1M count=3 2>/dev/null && chown 10001:10001 files/a.bin db/table"); code != 0 {
+		t.Fatalf("writing the data (%d): %s\n%s", code, out, doorEntries(t, "doorxfs-prod"))
+	}
+	used := func() int {
+		t.Helper()
+		out, _ := doorRoot(t, "sync; df --output=used -k "+xfs+" | tail -n 1")
+		n, err := strconv.Atoi(strings.TrimSpace(out))
+		if err != nil {
+			t.Fatalf("df: %q", out)
+		}
+		return n
+	}
+	noClone := func(when string) {
+		t.Helper()
+		if left, _ := doorRoot(t, "find "+binds["clones"]+" -mindepth 2 | head -n 5"); strings.TrimSpace(left) != "" {
+			t.Errorf("%s, the clone left: %s", when, left)
+		}
+	}
+	before := used()
+	out, code := op(t, dir, "devopsy @dev --release")
+	if code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s\nthe parent's entries:\n%s", code, out, doorEntries(t, "doorxfs-prod"))
+	}
+	if !strings.Contains(out, "the data clones by reflinks") || !strings.Contains(out, "mnt/files shared with the parent by reflinks") {
+		t.Errorf("dev's first release did not clone:\n%s", out)
+	}
+	for _, f := range []string{"files/a.bin", "db/table"} {
+		if sums, _ := doorRoot(t, "md5sum "+binds["prod"]+"/"+f+" "+binds["dev"]+"/"+f+" | cut -d' ' -f1 | uniq | wc -l"); strings.TrimSpace(sums) != "1" {
+			t.Errorf("%s differs on the child", f)
+		}
+	}
+	// 63 MiB copied would take as much; the files shared take none.
+	if grew := used() - before; grew > 25*1024 {
+		t.Errorf("the child took %d KiB: its files not shared", grew)
+	}
+	noClone("after the child's release")
+	entry := binds["dev"] + "/files"
+	if out, code := doorAs(t, user, "ls "+entry); code != 0 || !strings.Contains(out, "a.bin") {
+		t.Errorf("the control: the project user does not list the child's entry (%d): %s", code, out)
+	}
+	doorAs(t, user, "rmdir "+entry+" 2>/dev/null; mv "+entry+" "+entry+".old 2>/dev/null; ln -sT / "+entry)
+	if out, code := doorRoot(t, "test -d "+entry+" && ! test -L "+entry+" && test -f "+entry+"/a.bin"); code != 0 {
+		t.Errorf("the child's entry was replaced: %s\n%s", out, doorEntries(t, "doorxfs-dev"))
+	}
+
+	out, code = op(t, dir, "devopsy @prod --snapshot")
+	m := takenID.FindStringSubmatch(out)
+	if code != 0 || m == nil || !strings.Contains(out, "the data clones by reflinks") {
+		t.Fatalf("a snapshot (%d):\n%s", code, out)
+	}
+	if manifest, _ := doorAs(t, user, "cat ~/doorxfs/prod/snapshots/"+m[1]+"/manifest"); !strings.Contains(manifest, "copy\treflink") {
+		t.Errorf("the manifest:\n%s", manifest)
+	}
+	noClone("after the snapshot")
+	if out, code := doorRoot(t, "rm "+binds["prod"]+"/files/a.bin"); code != 0 {
+		t.Fatalf("changing the data: %s", out)
+	}
+	if out, code := op(t, dir, "devopsy @prod --snapshots restore "+m[1]+" --no-code --yes"); code != 0 {
+		t.Fatalf("the restore (%d):\n%s", code, out)
+	}
+	if sums, _ := doorRoot(t, "md5sum "+binds["prod"]+"/files/a.bin "+binds["dev"]+"/files/a.bin | cut -d' ' -f1 | uniq | wc -l"); strings.TrimSpace(sums) != "1" {
+		t.Errorf("the restore did not bring the file back")
 	}
 }
 
