@@ -21,7 +21,8 @@ func TestDoorReadRunsInASessionOfItsOwn(t *testing.T) {
 	fake := filepath.Join(dir, "sudo")
 	write(t, fake, "#!/bin/sh\necho $$ >"+pidFile+".tmp && mv "+pidFile+".tmp "+pidFile+"\nexec sleep 30\n", 0o755)
 	c := doorRead("devopsy-shop", "environments", "/srv/shop")
-	c.Path, c.Args[0] = fake, fake
+	// The fake in sudo's place: where no sudo is on PATH, exec.Command recorded its lookup.
+	c.Path, c.Args[0], c.Err = fake, fake, nil
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
