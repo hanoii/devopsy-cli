@@ -93,7 +93,6 @@ func TestRecordListing(t *testing.T) {
 	// anyone's on the server to have moved since the fetch (a project user's build of a
 	// Docker Hub name). An own image goes by its name, which only this project writes.
 	// The label stays the digest alone, as Docker spells it.
-	// BUG: ComposeFile writes image: for holds alone, and an up follows the name.
 	imgs, labels, _ := composeFacts(e.rel(id))
 	for svc, want := range map[string]string{"app": "", "database": "mariadb:11.8@sha256:m1", "alwaysup": "caddy:2-alpine@sha256:c1"} {
 		if imgs[svc] != want {

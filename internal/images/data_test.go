@@ -566,8 +566,6 @@ func TestDataRelease(t *testing.T) {
 // the digest its listing records, a rollback's file too, and a landing
 // (derive) keeps the pin as it is, never taking it for an own image held
 // by a bookmark.
-// BUG: ComposeFile writes image: for holds alone; an up resolves the
-// plain name again after the fetch and runs whatever it holds then.
 func TestReleaseRunsWhatItFetched(t *testing.T) {
 	t.Parallel()
 	d := newFake()

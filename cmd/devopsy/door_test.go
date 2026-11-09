@@ -805,7 +805,6 @@ func TestProjectNameClash(t *testing.T) {
 	// devopsy's own names are under devopsy-: the util image (devopsy-util, root with host
 	// mounts, which a project named devopsy could build and remove), the project users, the
 	// group, the builders.
-	// BUG: devopsy is taken as a project name.
 	for project, clash := range map[string]bool{
 		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true, "devopsy": true, "devopsy-util": true,
 	} {
@@ -918,8 +917,6 @@ esac
 // resolves repo:tag@digest by the digest. The digest, the labels read and the id recorded
 // are the image the project's pull got, read by digest or id, never by the name again
 // after the pull; an image with no digest in its repository never goes by its plain name.
-// BUG: a claimed image goes to compose by its plain name, and the claim records the id the
-// name has after its pull.
 func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1019,7 +1016,6 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 // file carries the plain names the check pinned in its map alone. A pull keeps the names:
 // it is what moves them. In a helper process (doorComposeHelper), since the door execs
 // compose, here the fake docker, which prints the file it was given.
-// BUG: the file is marshalled before checkImageLabels.
 func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
