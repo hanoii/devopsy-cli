@@ -149,6 +149,9 @@ func TestDecideRefuses(t *testing.T) {
 		{"all of mnt", []string{"run", "-v", "/space/mnt:/d", "util:1", "sh", "-c", "own script"}},
 		{"under an entry", []string{"run", "-v", entry + "/x:/d", "util:1", "sh", "-c", "own script"}},
 		{"another's volume", []string{"run", "-v", "other-prod_data:/d", "util:1", "sh", "-c", "own script"}},
+		// A volume is <compose name>_<key> (OwnVolume), as every one a project makes is named:
+		// a name of its own with no key is no volume of its own.
+		{"a volume of its own name with no key", []string{"run", "-v", "/space/mnt/shop-prod:/m:ro", "-v", "shop-prod:/v/db:ro", "util:1", "du", "-sk", "/m/data", "/v/db"}},
 		{"bind propagation", []string{"run", "-v", entry + ":/d:rshared", "util:1", "sh", "-c", "own script"}},
 		{"a mount with options", []string{"run", "--mount", "type=bind,source=" + entry + ",target=/d,bind-propagation=rshared", "util:1", "sh", "-c", "own script"}},
 		{"a volume's driver options", []string{"run", "--mount", "type=volume,source=shop-prod_v,target=/d,volume-opt=device=/", "util:1", "sh", "-c", "own script"}},

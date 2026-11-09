@@ -63,6 +63,27 @@ func (p Policy) OwnName(name string) bool {
 	return true
 }
 
+// OwnVolume says whether name is a named volume of this project's as compose names one,
+// <compose name>_<key>: the one shape every volume a project makes has (a rendered file's
+// top volumes, the door's volume create), so a name of its own with no key is none.
+func (p Policy) OwnVolume(name string) bool {
+	for i := strings.Index(name, "_"); i > 0; i = next(name, i) {
+		if p.OwnName(name[:i]) && Word.MatchString(name[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// next is the index of the next _ in name after i, -1 without one.
+func next(name string, i int) int {
+	j := strings.Index(name[i+1:], "_")
+	if j < 0 {
+		return -1
+	}
+	return i + 1 + j
+}
+
 // Extends says whether name is under project's names, compose's flat <project>-<rest>: a
 // project's own compose name, or another project's whose name starts with it.
 func Extends(name, project string) bool { return strings.HasPrefix(name, project+"-") }

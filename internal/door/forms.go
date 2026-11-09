@@ -272,7 +272,7 @@ func forms(known Known) []form {
 // into a --mount or a -v, so it holds none of their syntax.
 func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 	if !strings.HasPrefix(m.source, "/") {
-		if m.kind == "bind" || !Word.MatchString(m.source) || !p.OwnName(m.source) {
+		if m.kind == "bind" || !p.OwnVolume(m.source) {
 			return 0, "", refuse("docker run: another's volume: %s", m.source)
 		}
 		return kindVolume, m.source, nil
