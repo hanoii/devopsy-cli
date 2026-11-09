@@ -99,7 +99,8 @@ func TestRollbackKeepsData(t *testing.T) {
 	if code != 0 || dbAfter != db2 || appAfter != app1 {
 		t.Errorf("rollback (%d): database on %s (want %s, what its tag holds now), app on %s (want %s):\n%s", code, dbAfter, db2, appAfter, app1, out)
 	}
-	if hold, _ := srv(t, "cat imgrb/prod/current/../devopsy-compose.yaml"); strings.Contains(hold, "image:") {
+	// Each pulled service is pinned there by its digest; a hold carries devopsy.held.
+	if hold, _ := srv(t, "cat imgrb/prod/current/../devopsy-compose.yaml"); strings.Contains(hold, "devopsy.held") {
 		t.Errorf("devopsy's compose file holds something:\n%s", hold)
 	}
 	if h, _ := srv(t, "cut -f2,3,7,8 imgrb/prod/.devopsy-data-images"); !strings.Contains(h, "database\tran\t1\tx") {

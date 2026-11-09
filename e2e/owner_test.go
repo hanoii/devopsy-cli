@@ -134,7 +134,8 @@ func TestOwnerImport(t *testing.T) {
 	if h, _ := srv(t, "cat ownimport/dev/.devopsy-data-images"); !strings.Contains(h, "\tdata\timport\tbusybox:1.37\t") {
 		t.Errorf("dev's history:\n%s", h)
 	}
-	if c, _ := srv(t, "cat ownimport/dev/current/../devopsy-compose.yaml"); strings.Contains(c, "image:") {
+	// Pinned by its digest, as every pulled service is; a hold carries devopsy.held.
+	if c, _ := srv(t, "cat ownimport/dev/current/../devopsy-compose.yaml"); strings.Contains(c, "devopsy.held") {
 		t.Errorf("dev's data service is held:\n%s", c)
 	}
 }
