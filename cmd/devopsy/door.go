@@ -543,7 +543,7 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if digest == "" {
 		return "", images.Image{}, fmt.Errorf("refused: %s: its pull gave no digest to run it by", ref)
 	}
-	img, err := s.inspectImage(images.RepoOf(ref) + "@" + digest)
+	img, err := s.inspectImage(images.ByDigest(ref, digest))
 	if err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %v", ref, err)
 	}
@@ -1212,7 +1212,7 @@ func (s *doorSide) startImage(svc, image string, builds bool, config string) (st
 		return image, img.Labels, nil
 	}
 	img, err := s.inspectImage(image)
-	owned := err == nil && (slices.Contains(s.policy.Images, img.ID) || slices.ContainsFunc(img.Tags, s.policy.OwnRef))
+	owned := err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
 	pinned := strings.Contains(image, "@") || strings.HasPrefix(image, "sha256:")
 	digest := ""
 	if owned && !pinned {
@@ -1441,10 +1441,11 @@ func (s *doorSide) request(config string, argv []string) int {
 			return doorRefused(err)
 		}
 		// What Docker then runs names the image the claim got, by its digest: the name is
-		// anyone's to move right after the pull (a tag's source would take the mover's).
+		// anyone's to move right after the pull (a tag's source would take the mover's). A
+		// format's value is no image.
 		for i := 1; i < len(a.Docker); i++ {
-			if a.Docker[i] == ref {
-				a.Docker[i] = images.RepoOf(ref) + "@" + digest
+			if a.Docker[i] == ref && a.Docker[i-1] != "--format" && a.Docker[i-1] != "-f" {
+				a.Docker[i] = images.ByDigest(ref, digest)
 			}
 		}
 	}

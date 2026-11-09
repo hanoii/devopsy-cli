@@ -506,7 +506,13 @@ func (p Policy) ownedImage(d Daemon, ref string, known Known) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return id, slices.Contains(p.Images, id) || slices.ContainsFunc(tags, p.OwnRef)
+	return id, p.OwnsImageOf(id, tags)
+}
+
+// OwnsImageOf says whether the image of id and tags, as one inspect read them, is this
+// project's: claimed by its id, or named by a name only this project writes.
+func (p Policy) OwnsImageOf(id string, tags []string) bool {
+	return slices.Contains(p.Images, id) || slices.ContainsFunc(tags, p.OwnRef)
 }
 
 // OwnRef says whether ref is a name only this project writes: a build's (its repository

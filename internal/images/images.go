@@ -566,7 +566,8 @@ func DigestIn(img Image, ref string) string {
 // repo@sha256:..., or the digest alone): Docker takes repo:tag@digest and
 // resolves the digest, which no build or tag moves, and docker ps shows
 // the tag; ref as it is when it carries a digest already, or without one.
-// Shared by ComposeFile and the door, so a pin has one spelling.
+// It is what compose runs, from ComposeFile and the door's file alike, so
+// a pin has one spelling there; a Docker command goes by ByDigest.
 func Pin(ref, digest string) string {
 	if i := strings.LastIndex(digest, "@"); i >= 0 {
 		digest = digest[i+1:]
@@ -575,6 +576,16 @@ func Pin(ref, digest string) string {
 		return ref
 	}
 	return ref + "@" + digest
+}
+
+// ByDigest is ref's image by digest as Docker names it, repo@sha256:...
+// (digest a name's or the digest alone): what a Docker command the door
+// runs after a claim takes, the name no longer read.
+func ByDigest(ref, digest string) string {
+	if i := strings.LastIndex(digest, "@"); i >= 0 {
+		digest = digest[i+1:]
+	}
+	return RepoOf(ref) + "@" + digest
 }
 
 // digestOf is a name's digest, sha256:...; "" without one.
