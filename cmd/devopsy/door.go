@@ -917,10 +917,8 @@ func (s *doorSide) clone(path string) int {
 		return doorRefused(err)
 	}
 	if rest, ok := strings.CutPrefix(real, root+"/"); ok {
-		for _, word := range strings.Split(rest, "/") {
-			if !door.Word.MatchString(word) {
-				return doorRefused(errors.New("refused: not a clone's name: " + path))
-			}
+		if !door.CloneDir(rest) {
+			return doorRefused(errors.New("refused: not a clone's name: " + path))
 		}
 		if err := os.MkdirAll(real, 0o750); err != nil {
 			return doorRefused(err)
@@ -945,7 +943,7 @@ func (s *doorSide) mark(dir, id string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	if !strings.HasPrefix(real, s.policy.Clones()+"/") || !door.Word.MatchString(id) {
+	if rest, ok := strings.CutPrefix(real, s.policy.Clones()+"/"); !ok || !door.CloneDir(rest) || !door.Word.MatchString(id) {
 		return doorRefused(errors.New("refused: not a clone of this project's: " + dir))
 	}
 	// Under a directory a root container filled, whose owner may be anyone's: a file of

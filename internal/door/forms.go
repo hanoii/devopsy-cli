@@ -78,15 +78,30 @@ func RootUtil() []string {
 // links, which a root container would follow.
 func cloneShape(rest string) bool {
 	parts := strings.Split(rest, "/")
-	for _, part := range parts {
-		if !Word.MatchString(part) {
+	for i := 1; i < len(parts) && i <= 2; i++ {
+		if kindDir.MatchString(parts[i]) {
+			return CloneDir(strings.Join(parts[:i], "/")) && len(parts)-i <= 2 && Word.MatchString(parts[len(parts)-1])
+		}
+	}
+	return CloneDir(rest)
+}
+
+// CloneDir says whether rest, a path under a project's clones, is a directory devopsy's own
+// clones make there: a clone's, and a take's in it, never named mnt or volumes. Every part of
+// those is the door's or a root copy's, so none is a link the project user swaps between the
+// door's check and its write; deeper is inside a copy, where directories keep the project
+// user as their owner. The door's clone, mark and removal take only these.
+func CloneDir(rest string) bool {
+	parts := strings.Split(rest, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for i, part := range parts {
+		if !Word.MatchString(part) || i == 1 && kindDir.MatchString(part) {
 			return false
 		}
 	}
-	if len(parts) > 1 && !kindDir.MatchString(parts[1]) {
-		parts = parts[1:] // a take
-	}
-	return len(parts) <= 3 && (len(parts) < 2 || kindDir.MatchString(parts[1]))
+	return true
 }
 
 func target(pattern string) *regexp.Regexp { return regexp.MustCompile(`^` + pattern + `$`) }

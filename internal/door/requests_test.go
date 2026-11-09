@@ -531,6 +531,12 @@ func TestDecideRunRemovals(t *testing.T) {
 	if a, err = run("/s/out"); err == nil {
 		t.Errorf("a link out of its tree: %+v", a)
 	}
+	// Inside a clone's copy, where the project user's own directories are (CloneDir), no
+	// removal goes: only a clone or a take, the door's and a root copy's.
+	host.links[snaps+"/.clone/1/mnt/data"] = clones + "/1/mnt/data"
+	if a, err = run("/s/.clone/1/mnt/data"); err == nil {
+		t.Errorf("a removal inside a clone's copy: %+v", a)
+	}
 }
 
 // What of the image store is the server's is the admin's: for a project user there is

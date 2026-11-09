@@ -1098,3 +1098,37 @@ func doorComposeHelper(dir string) {
 	}}}
 	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, "", dir, strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
 }
+
+// The door's clone and mark take only a clone's directory or a take's in it (door.CloneDir):
+// below, a clone is a root copy of the project's entries, owners kept, so a directory the
+// project user made is its own there, and it could swap what is in it for a link between the
+// door's Real and the deploy user's write, which would then land anywhere the deploy user
+// writes (its release root, another project's mnt). The fake's real answers what realpath
+// said before the swap; on disk the link is already there.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorCloneRequestsFollowNoLinkInAClone(t *testing.T) {
+	doorFakes(t)
+	root := t.TempDir()
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(root, "space")}}
+	// own is the project user's, made in its entry and copied with its owner.
+	own := filepath.Join(side.policy.Clones(), "abc", "1", "mnt", "data", "own")
+	if err := os.MkdirAll(own, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(root, "releases")
+	if err := os.Mkdir(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(own, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	side.clone(filepath.Join(own, "sub", "blog-prod"))
+	if _, err := os.Lstat(filepath.Join(victim, "blog-prod")); err == nil {
+		t.Errorf("clone made a directory as the deploy user through a link in a clone: %s", filepath.Join(victim, "blog-prod"))
+	}
+	side.mark(filepath.Join(own, "sub"), "id1")
+	if _, err := os.Lstat(filepath.Join(victim, remote.SnapshotComplete)); err == nil {
+		t.Errorf("mark wrote as the deploy user through a link in a clone")
+	}
+}
