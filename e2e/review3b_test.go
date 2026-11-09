@@ -46,3 +46,38 @@ func TestDoorKeylessUserCannotStopItsEnd(t *testing.T) {
 		t.Errorf("its last key removed (%d: %s), and its process still runs:\n%s", code, strings.TrimSpace(out), left)
 	}
 }
+
+// BUG: on a host with newuidmap and newgidmap (the uidmap package, which rootless tools
+// need), a project user's process leaves the firewall. useradd gives the user subordinate
+// ids, so in a user namespace its process takes one of them and drops its groups, and the
+// firewall goes by the devopsy-projects group of a socket's owner (--gid-owner, with
+// --suppl-groups), which that process no longer has: it reaches the host's loopback, and so
+// Docker's bridges and a metadata service.
+//
+// A project user's process reaches nothing the firewall closes, whatever ids the host lets
+// it take. Skipped where uidmap is not there and cannot be installed.
+func TestDoorFirewallHoldsUnderSubordinateIDs(t *testing.T) {
+	user := doorUser(t, "doorr3bsub")
+	if out, code := doorRoot(t, "command -v newgidmap >/dev/null && exit 0; apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq --no-install-recommends uidmap >/dev/null 2>&1 && touch /tmp/doorr3bsub-uidmap"); code != 0 {
+		t.Skipf("no uidmap on the door's server, and none to install (%d): %s", code, out)
+	}
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doorr3bsub-loopback; [ ! -e /tmp/doorr3bsub-uidmap ] || { apt-get remove -y -qq uidmap; rm -f /tmp/doorr3bsub-uidmap; }; true")
+	})
+	if out, code := doorRoot(t, "docker run -d --name doorr3bsub-loopback -p 127.0.0.1:18081:8080 busybox:1.37 sh -c 'mkdir -p /w && echo hello-from-loopback >/w/index.html && exec httpd -f -p 8080 -h /w' >/dev/null"); code != 0 {
+		t.Fatalf("the admin's port on the loopback (%d): %s", code, out)
+	}
+	site := "curl -s --max-time 3 http://127.0.0.1:18081/"
+	eventually(t, startWaitE2E, "the port answering the deploy user", func() bool {
+		out, _ := doorAs(t, "devopsy", site)
+		return strings.Contains(out, "hello-from-loopback")
+	})
+	if out, _ := doorAs(t, user, site); strings.Contains(out, "hello-from-loopback") {
+		t.Fatalf("the control: the firewall lets a project user's plain process through: %s", out)
+	}
+	// A subordinate uid and gid, and no groups: all the user's own to take.
+	hidden := "unshare --user --map-root-user --map-users=auto --map-groups=auto --setgroups allow setpriv --reuid 1 --regid 1 --clear-groups "
+	if out, _ := doorAs(t, user, hidden+site+" 2>&1"); strings.Contains(out, "hello-from-loopback") {
+		t.Errorf("under a subordinate id with its groups dropped, a project user's process reached the host's loopback: %s", out)
+	}
+}
