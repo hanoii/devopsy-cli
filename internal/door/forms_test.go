@@ -309,4 +309,14 @@ func TestDecideRunSaysWhatItWrites(t *testing.T) {
 			t.Errorf("%s: gives back %q, want %q", tt.name, a.Regrant, tt.want)
 		}
 	}
+	// A detached copy has not written yet when its run returns: nothing is given back then,
+	// and its removal names it, for the door to give back what it wrote (Removes).
+	a, err := decide(t, "run", "-d", "-v", mnt+":/src:ro", "-v", dev+":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/")
+	if err != nil || len(a.Regrant) != 0 {
+		t.Errorf("a detached copy gives back %q at its start (%v)", a.Regrant, err)
+	}
+	a, err = decide(t, "rm", "-f", "mine", "task")
+	if err != nil || !slices.Equal(a.Removes, []string{"mine", "task"}) {
+		t.Errorf("a removal names %q to give back (%v)", a.Removes, err)
+	}
 }

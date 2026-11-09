@@ -65,6 +65,17 @@ func TestCheckFileTakesWhatTemplatesUse(t *testing.T) {
 	}
 }
 
+// The pull policies under which compose runs the image the door read, and no network at all.
+func TestCheckFileTakesWhatPullsNothingAtAStart(t *testing.T) {
+	t.Parallel()
+	for _, extra := range []string{`,"pull_policy":"missing"`, `,"pull_policy":"never"`, `,"pull_policy":"if_not_present"`, `,"network_mode":"none"`} {
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(extra)+`}}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Errorf("%s refused: %v", extra, errs)
+		}
+	}
+}
+
 // A rendered file escapes its `$` by doubling: what compose then makes of it is a `$`.
 func TestCheckFileTakesEscapedDollars(t *testing.T) {
 	t.Parallel()
@@ -132,6 +143,9 @@ func TestCheckFileRefuses(t *testing.T) {
 		// IPv6 a project's network does without: fewer paths across its server to keep shut.
 		{"a network with IPv6", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":true}}}`, "plain network"},
 		{"a network's address space", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","ipam":{"config":[{"subnet":"10.0.0.0/8"}]}}}}`, "plain network"},
+		// A bridge of another name than Docker's (br-+) is one the project users' firewall
+		// does not match: only the deploy user renames one.
+		{"a network's bridge renamed", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","driver_opts":{"com.docker.network.bridge.name":"eth9"}}}}`, "plain network"},
 		{"labels in another form", svc(`,"labels":"a=b"`), "labels must be a map"},
 		{"mounts in another form", svc(`,"volumes":{"a":"b"}`), "volumes must be a list"},
 		{"ports in another form", svc(`,"ports":"80:80"`), "ports must be a list"},
@@ -140,6 +154,7 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a variable in a key", `{"name":"shop-prod","services":{"${X}":{}}}`, "a variable"},
 		// A start runs the image the door read: compose pulling or building one then would run another.
 		{"a pull at every start", svc(`,"pull_policy":"always"`), "pull_policy always"},
+		{"a pull once a day", svc(`,"pull_policy":"daily"`), "pull_policy daily"},
 		{"a build at every start", svc(`,"pull_policy":"build"`), "pull_policy build"},
 		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"shop-web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
 		// Compose makes a service's name an alias on each of its networks.
@@ -355,6 +370,8 @@ func TestCheckVerb(t *testing.T) {
 		{"up -d --wait --remove-orphans", true},
 		// A start runs the image the door read: compose pulling one then would run another.
 		{"up --pull never web", true},
+		{"up --pull missing web", true},
+		{"create --pull=never", true},
 		{"up --pull always web", false},
 		{"up -d --pull=always", false},
 		{"create --pull always", false},
