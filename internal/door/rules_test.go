@@ -447,3 +447,20 @@ func TestCheckFileBuildLabels(t *testing.T) {
 		t.Error("a role claimed through a build's labels")
 	}
 }
+
+// Compose's pull verb writes no hold of another project's, as the door's own pull and a
+// claim do not (Claimable): that project runs its hold by name, so whoever serves the tag
+// would choose what its next start, rollback or restart runs.
+func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
+	t.Parallel()
+	p := testPolicy
+	p.Others = []string{"blog"}
+	hold := "registry.example.com/blog/app:devopsy-blog-prod-20240101000000"
+	if _, err := Decide([]string{"pull", "-q", hold}, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+		t.Fatal("the control: the door's own pull takes another's hold")
+	}
+	file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+hold+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+	if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
+		t.Errorf("compose's pull of another project's hold %s is taken", hold)
+	}
+}

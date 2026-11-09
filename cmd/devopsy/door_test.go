@@ -968,9 +968,15 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if _, err := start("registry.example.com/blog/labelled:1"); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
 		t.Errorf("a claimed image labelled devopsy.role: %v", err)
 	}
-	for _, image := range []string{"blog-prod-web", "blog-prod-web:latest", "registry.example.com/app:2", "sha256:0123"} {
+	for _, image := range []string{"registry.example.com/app:2", "sha256:0123"} {
 		if _, err := start(image); err == nil || !strings.Contains(err.Error(), "its registry logins do not pull it") {
 			t.Errorf("%s, another's, ran: %v", image, err)
+		}
+	}
+	// One blog builds is under blog's names, which only blog writes: never pulled over.
+	for _, image := range []string{"blog-prod-web", "blog-prod-web:latest"} {
+		if _, err := start(image); err == nil || pulled() || !strings.Contains(err.Error(), "under project blog's names") {
+			t.Errorf("%s, blog's build, ran or pulled (%v):\n%s", image, err, readString(calls))
 		}
 	}
 	if _, err := start("registry.example.com/app:devopsy-blog-prod-20260101000000"); err == nil || pulled() {

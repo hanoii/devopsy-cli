@@ -702,7 +702,8 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 			t.Errorf("a tag of its own %s claimed: %v", image, c)
 		}
 	}
-	for _, image := range []string{"blog-prod-web", "sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123"} {
+	// (A name under another project's names is refused outright: TestClaimWritesNoNameAnotherProjectWrites.)
+	for _, image := range []string{"sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123"} {
 		if c := claims("image", "inspect", image); !slices.Equal(c, []string{image}) {
 			t.Errorf("another's or nobody's %s answered unclaimed: %v", image, c)
 		}
@@ -734,5 +735,47 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
 			t.Errorf("%q: taken: %+v", argv, a)
 		}
+	}
+}
+
+// A project writes no name another project writes: a claim (its pull, an inspect, a tag's
+// source, a start) and compose's pull verb refuse a name under another project's names, which
+// that project runs by name as its own (OwnRef, under its own image lock alone), so a pull of
+// it with this project's logins would choose what the other runs (mongo builds
+// mongo-express:1, a Docker Hub name; shop's pull would put Docker Hub's image under mongo's
+// next start). A name under nobody's names is claimed, and a project's own are its own.
+func TestClaimWritesNoNameAnotherProjectWrites(t *testing.T) {
+	t.Parallel()
+	p := testPolicy
+	p.Others = []string{"blog"}
+	for _, ref := range []string{"blog-prod-web", "blog-prod-web:latest", "blog-express:1"} {
+		for _, argv := range [][]string{
+			{"pull", "-q", ref},
+			{"image", "inspect", ref},
+			{"tag", ref, "busybox:devopsy-shop-prod-20240101000001"},
+		} {
+			if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+				t.Errorf("%q: taken, with a claim that pulls over blog's name: %+v", argv, a)
+			}
+		}
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
+		file["services"].(map[string]any)["web"].(map[string]any)["image"] = ref
+		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
+			t.Errorf("compose's pull of %s, blog's name, is taken", ref)
+		}
+	}
+	// The controls: a name nobody on the server writes is claimed, and blog's own names
+	// are blog's to pull.
+	if a, err := Decide([]string{"pull", "-q", "postgres:16"}, p, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 1 {
+		t.Errorf("the control, a registry's name under nobody's: %v, %+v", err, a)
+	}
+	blog := Policy{Project: "blog", User: "devopsy-blog", Space: "/space", Tree: "/home/devopsy-blog/blog", Others: []string{"shop"}}
+	if a, err := Decide([]string{"image", "inspect", "blog-prod-web"}, blog, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 0 {
+		t.Errorf("the control, blog's own name for blog: %v, %+v", err, a)
+	}
+	file := parse(t, `{"name":"blog-prod","services":{"web":`+safe(``)+`}}`)
+	file["services"].(map[string]any)["web"].(map[string]any)["image"] = "blog-prod-web"
+	if errs := CheckFile(file, blog, "pull", &fakePaths{}); len(errs) != 0 {
+		t.Errorf("the control, compose's pull of blog's own name for blog: %v", errs)
 	}
 }

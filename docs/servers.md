@@ -333,9 +333,12 @@ never this project's without its own login, and a public image is
 pulled once more for it. The door records what each project pulled
 this way, so later starts do not contact the registry. Compose then
 runs such an image by its digest (`mongo-express:1@sha256:...`), so no
-other project's build of that name changes what a start runs. A project
-can't be named `devopsy` or anything starting with `devopsy-`, which
-are devopsy's own names.
+other project's build of that name changes what a start runs. A name
+starting with another project's name and a dash is that project's
+alone, so no other project pulls or runs an image by it, a registry's
+included (with a project `mongo`, no other project runs
+`mongo-express`). A project can't be named `devopsy` or anything
+starting with `devopsy-`, which are devopsy's own names.
 
 The project user's `docker login` goes through the door. Docker checks
 the login against the registry as it does for a pull, so a registry on

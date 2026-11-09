@@ -528,11 +528,25 @@ func splitRef(ref string) (repo, tag string) {
 	return ref, ""
 }
 
-// Claimable refuses a claim that would write a name another project's: a hold not this
-// project's (a registry's tag of that name, pulled, would be another's hold here).
+// Claimable refuses a claim, or any pull of a project's, that would write a name another
+// project's: a hold not this project's (a registry's tag of that name, pulled, would be
+// another's hold here), or a name under another project's names, which that project runs by
+// name as its own (OwnRef), so a pull moving it would choose what it runs. A pull by digest
+// writes no name.
 func (p Policy) Claimable(ref string) error {
-	if _, tag := splitRef(ref); strings.HasPrefix(tag, "devopsy-") && !strings.Contains(ref, "@") && !p.ownHold(ref) {
+	if strings.Contains(ref, "@") {
+		return nil
+	}
+	repo, tag := splitRef(ref)
+	if strings.HasPrefix(tag, "devopsy-") && !p.ownHold(ref) {
 		return refuse("%s: another project's hold", ref)
+	}
+	if !p.OwnName(repo) {
+		for _, o := range p.Others {
+			if Extends(repo, o) {
+				return refuse("%s: under project %s's names, which only it writes", ref, o)
+			}
+		}
 	}
 	return nil
 }

@@ -315,6 +315,12 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	if image, ok := s["image"].(string); ok && strings.HasPrefix(image, "-") {
 		fail("%s: an image named like a flag: %s", svc, image)
 	}
+	// A pull writes each name in the server's one image store, as a claim does.
+	if image, _ := s["image"].(string); verb == "pull" && image != "" && !p.OwnRef(image) {
+		if err := p.Claimable(image); err != nil {
+			fail("%s: %s", svc, strings.TrimPrefix(err.Error(), "refused: "))
+		}
+	}
 	checkIdentity(svc, s, p, fail)
 	checkLimits(svc, s, fail)
 	// Never Docker's default bridge, docker0: every service with it shares it, and talks to
