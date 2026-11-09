@@ -435,6 +435,12 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 	return nil, refuse("docker image %s: the admin's", strings.Join(args, " "))
 }
 
+// reservedVolumeLabel says whether a volume's label is compose's or devopsy's to set, which
+// they read as whose it is and what holds data: a file's or a request's would say otherwise.
+func reservedVolumeLabel(k string) bool {
+	return strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "devopsy.")
+}
+
 func decideVolume(args []string, p Policy) (*Action, error) {
 	// A volume of this project's, as compose would make it: its own two labels and any
 	// others of the file's, never a driver or options, which CheckFile refuses too.
@@ -444,7 +450,7 @@ func decideVolume(args []string, p Policy) (*Action, error) {
 		ok := args[1] == "--label" && args[3] == "--label" && p.OwnName(project) && keyed && args[len(args)-1] == project+"_"+key && Word.MatchString(key)
 		for i := 5; ok && i+1 < len(args)-1; i += 2 {
 			k, _, _ := strings.Cut(args[i+1], "=")
-			ok = args[i] == "--label" && !strings.HasPrefix(k, "com.docker.compose.") && !strings.HasPrefix(k, "devopsy.")
+			ok = args[i] == "--label" && !reservedVolumeLabel(k)
 		}
 		if ok {
 			return &Action{Docker: append([]string{"volume"}, args...)}, nil
@@ -557,16 +563,8 @@ func (p Policy) OwnRef(ref string) bool {
 		return true
 	}
 	name, _, ok := images.IsDoorBuild(ref)
-	_, tag := splitRef(ref)
-	return ok && p.OwnName(name) && !strings.HasPrefix(tag, "devopsy-")
-}
-
-// splitRef is ref's repository and tag, a registry's port kept in the repository.
-func splitRef(ref string) (repo, tag string) {
-	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
-		return ref[:i], ref[i+1:]
-	}
-	return ref, ""
+	_, hold := images.HoldOf(ref)
+	return ok && p.OwnName(name) && !hold
 }
 
 // Claimable refuses a claim, or any pull of a project's, that would write a name the door
@@ -580,8 +578,8 @@ func (p Policy) Claimable(ref string) error {
 	if strings.Contains(ref, "@") {
 		return nil
 	}
-	repo, tag := splitRef(ref)
-	if strings.HasPrefix(tag, "devopsy-") {
+	repo, _ := images.SplitRef(ref)
+	if _, hold := images.HoldOf(ref); hold {
 		return refuse("%s: a hold, which devopsy alone writes, never a pull", ref)
 	}
 	if strings.HasPrefix(repo, images.DoorHost+"/") {
@@ -590,9 +588,9 @@ func (p Policy) Claimable(ref string) error {
 	return nil
 }
 
-func (p Policy) ownHold(tag string) bool {
-	_, after, ok := strings.Cut(tag, ":devopsy-")
-	return ok && p.OwnName(after) && holdName.MatchString(after)
+func (p Policy) ownHold(ref string) bool {
+	rest, ok := images.HoldOf(ref)
+	return ok && p.OwnName(rest) && holdName.MatchString(rest)
 }
 
 var holdName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*-[A-Za-z0-9_.-]+$`)
@@ -739,6 +737,7 @@ func decideRemoval(paths []string, mounts []mount, p Policy, h Host, known Known
 		return nil, refuse("docker run: a removal outside its tree: %s", mounts[0].source)
 	}
 	a := &Action{}
+	var clones []string
 	for _, path := range paths {
 		if !removePath.MatchString(path) {
 			return nil, refuse("docker run: a removal of %s", path)
@@ -752,7 +751,7 @@ func decideRemoval(paths []string, mounts []mount, p Policy, h Host, known Known
 			if !CloneDir(rest) {
 				return nil, refuse("docker run: a removal inside a clone: %s", target)
 			}
-			a.Docker = slices.Concat([]string{"run", "--rm", "--network", "none"}, RootUtil(), []string{"-v", p.Clones() + ":/s", known.Image, "rm", "-rf", "/s/" + rest})
+			clones = append(clones, "/s/"+rest)
 			if parent, err := h.Real(filepath.Dir(target)); err == nil && p.InTree(parent) {
 				a.Remove = append(a.Remove, target)
 			}
@@ -762,6 +761,9 @@ func decideRemoval(paths []string, mounts []mount, p Policy, h Host, known Known
 			return nil, refuse("docker run: a removal outside its tree: %s", target)
 		}
 		a.Remove = append(a.Remove, target)
+	}
+	if len(clones) > 0 {
+		a.Docker = slices.Concat([]string{"run", "--rm", "--network", "none"}, RootUtil(), []string{"-v", p.Clones() + ":/s", known.Image, "rm", "-rf"}, clones)
 	}
 	return a, nil
 }

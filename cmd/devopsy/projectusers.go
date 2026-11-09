@@ -222,7 +222,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		return failErr(err)
 	}
 	if len(closed) > 0 {
-		report.Info("closed to project users the deploy user's projects in "+r.Root+": "+strings.Join(closed, ", "))
+		report.Info("closed to project users the deploy user's projects in " + r.Root + ": " + strings.Join(closed, ", "))
 	}
 	var out bytes.Buffer
 	c := exec.Command("docker", "run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,

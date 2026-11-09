@@ -333,12 +333,32 @@ func bookmarkPrefix(composeName string) string {
 
 // RepoOf is a ref's repository: no digest, no tag; a registry's port stays.
 func RepoOf(ref string) string {
+	repo, _ := SplitRef(ref)
+	return repo
+}
+
+// SplitRef is a ref's repository and tag ("" for none), its digest dropped: a colon is the
+// tag's only past the last slash, so a registry's port stays in the repository.
+func SplitRef(ref string) (repo, tag string) {
 	r, _, _ := strings.Cut(ref, "@")
-	slash := strings.LastIndex(r, "/")
-	if colon := strings.LastIndex(r, ":"); colon > slash {
-		r = r[:colon]
+	if colon := strings.LastIndex(r, ":"); colon > strings.LastIndex(r, "/") {
+		return r[:colon], r[colon+1:]
 	}
-	return r
+	return r, ""
+}
+
+// HoldOf says whether ref's tag is a bookmark or a hold devopsy writes (bookmarkPrefix,
+// devopsy-<compose name>-<release id>[-<cksum>]), and gives what follows devopsy-: the one
+// reading of that grammar, for the door's too.
+func HoldOf(ref string) (rest string, ok bool) {
+	_, tag := SplitRef(ref)
+	return strings.CutPrefix(tag, "devopsy-")
+}
+
+// Pinned says whether ref names an image by its content (a digest, or an id), which nothing
+// moves: any other name is anyone's on the server to move.
+func Pinned(ref string) bool {
+	return strings.Contains(ref, "@") || strings.HasPrefix(ref, "sha256:")
 }
 
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
@@ -375,8 +395,8 @@ func digestRef(ref string) string {
 
 // isBookmark says whether a tag (repo:tag) is a release's bookmark.
 func isBookmark(tag string) bool {
-	r := RepoOf(tag)
-	return len(tag) > len(r) && strings.HasPrefix(tag[len(r)+1:], "devopsy-")
+	_, ok := HoldOf(tag)
+	return ok
 }
 
 // bookmarks are the bookmark names of a release's entries, in order: a

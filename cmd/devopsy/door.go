@@ -1245,7 +1245,7 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 	}
 	img, err := s.inspectImage(image)
 	owned := err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
-	pinned := strings.Contains(image, "@") || strings.HasPrefix(image, "sha256:")
+	pinned := images.Pinned(image)
 	digest := ""
 	if owned && !pinned {
 		digest = images.DigestIn(img, image)

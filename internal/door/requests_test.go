@@ -535,6 +535,12 @@ func TestDecideRunRemovals(t *testing.T) {
 	if err != nil || !slices.Contains(a.Docker, "/s/abc") || !slices.Equal(a.Remove, []string{snaps + "/.clone"}) {
 		t.Errorf("the clones and their link: %+v, %v", a, err)
 	}
+	// Two clones in one removal: both go, in one root container.
+	host.links[snaps+"/.clone/2"] = clones + "/2"
+	a, err = run("/s/.clone/1", "/s/.clone/2")
+	if err != nil || !slices.Contains(a.Docker, "/s/abc/1") || !slices.Contains(a.Docker, "/s/abc/2") {
+		t.Errorf("two clones: %+v, %v", a, err)
+	}
 	a, err = run("/s/1.tmp")
 	if err != nil || len(a.Docker) != 0 || !slices.Equal(a.Remove, []string{snaps + "/1.tmp"}) {
 		t.Errorf("its own: %+v, %v", a, err)

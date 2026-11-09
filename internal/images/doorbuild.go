@@ -20,12 +20,13 @@ func DoorBuild(composeName, service string) string {
 // IsDoorBuild reads ref, a tag allowed and never a digest, as a DoorBuild name: the compose
 // name and service it is of.
 func IsDoorBuild(ref string) (composeName, service string, ok bool) {
-	rest, found := strings.CutPrefix(ref, DoorHost+"/")
-	if !found || strings.Contains(rest, "@") {
+	if strings.Contains(ref, "@") {
 		return "", "", false
 	}
-	if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
-		rest = rest[:i]
+	repo, _ := SplitRef(ref)
+	rest, found := strings.CutPrefix(repo, DoorHost+"/")
+	if !found {
+		return "", "", false
 	}
 	name, svc, found := strings.Cut(rest, "/")
 	if !found || name == "" || svc == "" || strings.Contains(svc, "/") {

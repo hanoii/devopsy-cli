@@ -126,6 +126,9 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a network's driver options on a service", svc(`,"networks":{"default":{"driver_opts":{"a":"b"}}}`), "network default: driver_opts"},
 		{"a mac address", svc(`,"networks":{"default":{"mac_address":"x"}}`), "network default: mac_address"},
 		{"a volume's labels and driver", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","driver":"x"}}}`, "volume v"},
+		// What compose and devopsy read of a volume is theirs, as on the door's volume create.
+		{"a volume labelled as compose's", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","labels":{"com.docker.compose.project":"other-prod"}}}}`, "volume v"},
+		{"a volume labelled as devopsy's", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","labels":{"devopsy.data":"true"}}}}`, "volume v"},
 		// IPv6 a project's network does without: fewer paths across its server to keep shut.
 		{"a network with IPv6", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":true}}}`, "plain network"},
 		{"a network's address space", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","ipam":{"config":[{"subnet":"10.0.0.0/8"}]}}}}`, "plain network"},

@@ -228,7 +228,7 @@ func KeysLeft(file string) bool {
 // under its lock, behind the operator's own check by KeysLeft's parse (sshkeys.go). A key's
 // blob is base64 and long; a line of words that only names a type is none.
 func keysLeft(file string) string {
-	return `grep -Ev '^[[:space:]]*(#|$)' ` + file + ` | grep -Ev ' ` + syncKeyPrefix + `[0-9]+\.[0-9a-f]{6}$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)[^[:space:]]+[[:space:]]+[A-Za-z0-9+/]{16,}={0,3}([[:space:]]|$)'`
+	return `grep -Ev '^[[:space:]]*(#|$)' ` + file + ` | grep -Ev ' ` + syncKeyPrefix + strings.Trim(SyncIDPattern.String(), "^$") + `$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)[^[:space:]]+[[:space:]]+[A-Za-z0-9+/]{16,}={0,3}([[:space:]]|$)'`
 }
 
 // EndProcessesArgs are docker's arguments to end every process of the user of uid: as root,

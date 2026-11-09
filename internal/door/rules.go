@@ -262,7 +262,9 @@ func checkTopVolumes(file map[string]any, name string, fail func(string, ...any)
 	for _, key := range sortedKeys(volumes) {
 		v, _ := volumes[key].(map[string]any)
 		n, _ := v["name"].(string)
-		if unknownKey(v, topVolumeKeys) != "" || !strings.HasPrefix(n, name+"_") {
+		labels, _ := v["labels"].(map[string]any)
+		reserved := slices.ContainsFunc(sortedKeys(labels), reservedVolumeLabel)
+		if unknownKey(v, topVolumeKeys) != "" || !strings.HasPrefix(n, name+"_") || reserved {
 			fail("volume %s: not the project's plain volume", key)
 		}
 	}
@@ -325,7 +327,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		// name of this project's own (a hold, another environment's build).
 		delete(s, "build")
 		image, _ := s["image"].(string)
-		if pinned := strings.Contains(image, "@") || strings.HasPrefix(image, "sha256:"); !pinned && !p.OwnRef(image) {
+		if !images.Pinned(image) && !p.OwnRef(image) {
 			s["image"] = images.DoorBuild(name, svc)
 		}
 	}
