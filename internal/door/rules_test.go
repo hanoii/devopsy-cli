@@ -154,9 +154,10 @@ func TestCheckFileRefuses(t *testing.T) {
 	}
 }
 
-// BUG: checkLabels and carriesLabel read labels only as a map, but the file is the
-// caller's and compose also takes a list (confirmed: docker compose config turns such a
-// list into these labels). A role, devopsy's own labels and the vet's prefix go unread.
+// A service's labels in a list are checked as in a map: the file is the caller's, and
+// compose takes a list too (docker compose config turns it into these labels), where
+// checkLabels and carriesLabel would leave a role, devopsy's own labels and the vet's
+// prefix unread.
 func TestCheckFileLabelsInListForm(t *testing.T) {
 	t.Parallel()
 	for _, label := range []string{"devopsy.role=proxy", "devopsy.env=other-prod", "devopsy.task=owners"} {
@@ -167,10 +168,10 @@ func TestCheckFileLabelsInListForm(t *testing.T) {
 	}
 }
 
-// BUG: the door checks words and compose then interpolates them, the file being the
-// caller's with no `$$` guaranteed (confirmed: docker compose config gives this source as
-// /space/mnt/shop-prod/..). The daemon then binds /space/mnt, every project's entries,
-// and the container's uid is the caller's to choose.
+// A source compose would interpolate is refused: the door checks words and compose then
+// interpolates them, the file being the caller's with no `$$` guaranteed (docker compose
+// config gives this source as /space/mnt/shop-prod/..). The daemon would then bind
+// /space/mnt, every project's entries, and the container's uid is the caller's to choose.
 func TestCheckFileBindSurvivesInterpolation(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/${X:-..}","target":"/d"}]`)+`}}`)
@@ -403,10 +404,10 @@ func TestNameOf(t *testing.T) {
 	}
 }
 
-// BUG: OwnName goes by a prefix and Mnt by filepath.Join, so a compose name holding `..`
-// is this project's and its mnt anywhere: CheckFile takes a bind of it, and the door's
-// `entries`, which runs on a file not yet checked, sets an ACL and makes a directory
-// there as the deploy user (TestDoorEntriesStayInItsMnt).
+// A compose name of this project's is one word: OwnName goes by a prefix and Mnt by
+// filepath.Join, so a name holding `..` would put its mnt anywhere. CheckFile would take a
+// bind of it, and the door's `entries`, which runs on a file not yet checked, would set an
+// ACL and make a directory there as the deploy user (TestDoorEntriesStayInItsMnt).
 func TestCheckFileNameIsOneWord(t *testing.T) {
 	t.Parallel()
 	name := "shop-x/../../../home/deploy/.docker"
@@ -419,10 +420,10 @@ func TestCheckFileNameIsOneWord(t *testing.T) {
 	}
 }
 
-// BUG: NameOf says nothing of Others, which OwnName leaves out: <tree>/eu-prod is the
-// compose name of the project shop-eu's prod, and the door's `mnt` then opens that
-// project's <space>/mnt/shop-eu-prod to this user by an ACL (closedDir), the rule
-// "closed to every other user" gone, and its data readable.
+// NameOf leaves out Others, as OwnName does: <tree>/eu-prod is the compose name of the
+// project shop-eu's prod, and the door's `mnt` would open that project's
+// <space>/mnt/shop-eu-prod to this user by an ACL (closedDir), no longer "closed to every
+// other user", its data readable.
 func TestNameOfLeavesLongerProjects(t *testing.T) {
 	t.Parallel()
 	p := testPolicy
@@ -434,10 +435,10 @@ func TestNameOfLeavesLongerProjects(t *testing.T) {
 	}
 }
 
-// BUG: checkLabels reads a service's labels only. A build's own go on the image and from
-// there on every container of it, as an image's LABEL does (confirmed: `docker inspect`
-// shows them in .Config.Labels), which is what imports read for a role and what a proxy
-// reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
+// A build takes no labels of its own, as checkLabels reads a service's only: a build's go
+// on the image and from there on every container of it, as an image's LABEL does (`docker
+// inspect` shows them in .Config.Labels), which is what imports read for a role and what a
+// proxy reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
 // needs a check at the daemon's side, which this test does not ask.
 func TestCheckFileBuildLabels(t *testing.T) {
 	t.Parallel()

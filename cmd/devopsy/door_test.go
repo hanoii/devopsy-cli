@@ -203,10 +203,10 @@ func TestRunDoorRead(t *testing.T) {
 	}
 }
 
-// BUG: Real resolves a path and the tar comes later, by the project user's rights: swapped
-// for a link between the two, the copy is that link, in a path of the deploy user's, and
-// Docker follows it at the bind: a sealed copy reaches the host's files, a CopyIn does so
-// from a root util container.
+// A copy holds no link: Real resolves a path and the tar comes later, by the project user's
+// rights. Swapped for a link between the two, the copy would be that link, in a path of the
+// deploy user's, and Docker follows it at the bind: a sealed copy would reach the host's
+// files, a CopyIn would do so from a root util container.
 //
 // Not parallel: it sets PATH, for a sudo that answers as a swapped tree would.
 func TestDoorCopiesHoldNoLink(t *testing.T) {
@@ -239,9 +239,10 @@ func TestDoorCopiesHoldNoLink(t *testing.T) {
 	check("a copy for a root container", copied, err)
 }
 
-// BUG: devopsy asks `--profile *` for a release's pull (remote.ProfilePull), its failure
-// report and --destroy, and the door drops what composeProfile does not match, without a
-// word: a service under a profile is then not pulled, listed or taken down.
+// The door keeps `--profile *`, which devopsy asks for a release's pull
+// (remote.ProfilePull), its failure report and --destroy: it drops what composeProfile does
+// not match, without a word, and a service under a profile would then not be pulled, listed
+// or taken down.
 func TestDoorKeepsTheStarProfile(t *testing.T) {
 	t.Parallel()
 	if !composeProfile.MatchString("*") {
@@ -338,10 +339,11 @@ esac
 	return acl, docker
 }
 
-// BUG: `entries` takes a file not yet checked, and OwnName takes a name holding `..`, so
-// mnt is anywhere: as the deploy user it gives this user rX on a directory of its choice,
-// and makes one inside, which that user writes. ~/.docker/cli-plugins is what the deploy
-// user's next `docker compose` loads a plugin from, so this is the socket.
+// `entries` makes nothing outside its mnt, though it takes a file not yet checked: with a
+// name holding `..` the mnt would be anywhere, and as the deploy user it would give this
+// user rX on a directory of its choice and make one inside, which that user writes.
+// ~/.docker/cli-plugins is what the deploy user's next `docker compose` loads a plugin
+// from, so this would be the socket.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorEntriesStayInItsMnt(t *testing.T) {
@@ -361,9 +363,9 @@ func TestDoorEntriesStayInItsMnt(t *testing.T) {
 	}
 }
 
-// BUG: mark writes as the deploy user with os.WriteFile, which follows a link, into a
-// directory a root container filled: a rsync or a tar can leave the link there, and the
-// deploy user's file of the caller's choice is overwritten with the id.
+// mark follows no link: it writes as the deploy user into a directory a root container
+// filled, where a rsync or a tar can leave one, and through it the deploy user's file of
+// the caller's choice would be overwritten with the id.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorMarkFollowsNoLink(t *testing.T) {
@@ -387,10 +389,10 @@ func TestDoorMarkFollowsNoLink(t *testing.T) {
 	}
 }
 
-// BUG: CopyIn opens its directory to the project user with write before anything else,
-// and for a directory the copy is the deploy user's tar, not that user's cp: it can swap
-// a directory tar has just made for a link to the deploy user's own, and tar writes that
-// user's file there. The write is needed only for the file's `copy`.
+// A CopyIn of a directory gives the project user no write on it: the copy is the deploy
+// user's tar, not that user's cp, and with write it could swap a directory tar has just
+// made for a link to the deploy user's own, where tar would write that user's file. The
+// write is needed only for a file's `copy`.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorCopyInOfADirectoryGivesNoWrite(t *testing.T) {
@@ -408,9 +410,9 @@ func TestDoorCopyInOfADirectoryGivesNoWrite(t *testing.T) {
 	}
 }
 
-// BUG: place copies each mount in turn, and a later refusal returns with the earlier copy
-// still there: nothing removes it, nothing sweeps <space>/work, and a project user fills
-// the disk with refused requests, against "Nothing stays in <space>/work".
+// A refusal leaves nothing in <space>/work: place copies each mount in turn, and a later
+// mount's refusal takes the earlier copies with it, or a project user would fill the disk
+// with refused requests.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorRefusalLeavesNoWork(t *testing.T) {
@@ -431,9 +433,10 @@ func TestDoorRefusalLeavesNoWork(t *testing.T) {
 	}
 }
 
-// BUG: StdoutPipe's reader stays open in the door until Wait, so a container that fails
-// early never ends the reader's writer: past a full pipe it blocks, and Wait waits on it.
-// A restore of a corrupt snapshot hangs here. untar has the same shape, when tar fails.
+// A stream ends with its container, as untar does when tar fails (pipeline): with a pipe's
+// reader held open in the door until Wait, a container that fails early would never end the
+// reader's writer, which blocks past a full pipe, and Wait would wait on it. A restore of a
+// corrupt snapshot would hang here.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorStreamEndsWithItsContainer(t *testing.T) {
@@ -455,10 +458,10 @@ func TestDoorStreamEndsWithItsContainer(t *testing.T) {
 	}
 }
 
-// BUG: "A util container runs only a script in doorKnown, never one a caller gives", but
-// the caller gives the arguments, and exportTarScript passes them to find as "$@":
-// `-exec` runs anything, as root, with no `--network none` asked (confirmed with the
-// image's find). The other scripts take one word per place.
+// A caller's arguments to a util script are never code: a util container runs only a
+// script in doorKnown, but the caller gives the arguments, and exportTarScript passes them
+// to find as "$@", where `-exec` would run anything, as root, with no `--network none`
+// asked. The other scripts take one word per place.
 func TestDoorScriptArgumentsAreNotCode(t *testing.T) {
 	t.Parallel()
 	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
@@ -468,15 +471,14 @@ func TestDoorScriptArgumentsAreNotCode(t *testing.T) {
 	}
 }
 
-// BUG: the door checks a command and its mounts apart, and devopsy's forms only make
-// sense paired. Paired otherwise, a root container leaves a link at the top of the mnt,
-// the deploy user's path a bind's source goes by, which is what pinning sources is for:
-// the daemon follows it at the next restart (restart: always needs no request), and a
-// race with a util container's Real gets a root /dst on the host. Confirmed: rsync with
-// RsyncCopy replaces an empty directory with a link to /. Devopsy's rsync mounts a whole
-// mnt as /src, and its extract one entry as /mnt/<entry>. The same goes for a receive from
-// the project user's own daemon on the loopback, which no form tells apart: a design
-// matter (a mnt's root bound rw into a root container), not asked here.
+// The door takes a command only with the mounts its form pairs it with: devopsy's rsync
+// mounts a whole mnt as /src, and its extract one entry as /mnt/<entry>. Paired otherwise,
+// a root container could leave a link at the top of the mnt, the deploy user's path a
+// bind's source goes by, which is what pinning sources is for: the daemon follows it at
+// the next restart (restart: always needs no request), and a race with a util container's
+// Real gets a root /dst on the host. rsync with RsyncCopy replaces an empty directory with
+// a link to /. A receive from the project user's own daemon on the loopback, which no form
+// tells apart, is held to the entry it writes instead (narrow, TestDecideRunNarrowsAnRsync).
 func TestDoorPairsCommandsWithTheirMounts(t *testing.T) {
 	t.Parallel()
 	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
@@ -493,10 +495,10 @@ func TestDoorPairsCommandsWithTheirMounts(t *testing.T) {
 	}
 }
 
-// BUG: mountTarget and duPath leave out /v, where duData and restoreSpace mount a named
-// volume: --snapshot fails for a project user with one ("measuring the data (du)"), and a
-// restore's space check says nothing. Its first-round fix broke this: no test sends what
-// devopsy computes here, so this one runs duData against a fake docker and asks the door.
+// The door takes a du of a named volume, which duData and restoreSpace mount at /v
+// (mountTarget, duPath): otherwise --snapshot fails for a project user with one ("measuring
+// the data (du)"), and a restore's space check says nothing. This test runs duData with a
+// named volume against a fake docker and asks the door.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorTakesDuOfANamedVolume(t *testing.T) {

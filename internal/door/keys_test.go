@@ -120,10 +120,10 @@ func TestCheckFileIdentityForms(t *testing.T) {
 	}
 }
 
-// BUG: ulimits is read as a resource limit, and rtprio and nice are the opposite: with them
-// a uid 10001 under no-new-privileges takes SCHED_FIFO or nice -20, whose spin starves every
-// project on the server. Run by hand: `docker run --ulimit rtprio=99 --user 10001:10001
-// --security-opt no-new-privileges` then `chrt -f 50 id -u` works, and is refused without it.
+// ulimits take only limits, never rtprio or nice, which are the opposite: with them a uid
+// 10001 under no-new-privileges takes SCHED_FIFO or nice -20, whose spin starves every project
+// on the server (`docker run --ulimit rtprio=99 --user 10001:10001 --security-opt
+// no-new-privileges` then `chrt -f 50 id -u` works, and is refused without it).
 func TestCheckFileUlimitsGiveNoPriority(t *testing.T) {
 	t.Parallel()
 	check := func(ulimits string) []error {
@@ -139,9 +139,10 @@ func TestCheckFileUlimitsGiveNoPriority(t *testing.T) {
 	}
 }
 
-// BUG: checkAliases refuses an alias on a shared network, so it cannot answer for another's
-// name, and a fixed address does the same to who looks by address: free while its holder is
-// stopped, it is taken for good. Nothing asks for one on a shared network.
+// A service takes no fixed address on a shared network, as it takes no alias there
+// (checkAliases): an alias would answer for another's name, and an address does the same to
+// who looks by address, taken for good while its holder is stopped. Nothing asks for one on a
+// shared network.
 func TestCheckFileTakesNoFixedAddressOnASharedNetwork(t *testing.T) {
 	t.Parallel()
 	file := func(net, opts string) map[string]any {
@@ -162,9 +163,9 @@ func TestCheckFileTakesNoFixedAddressOnASharedNetwork(t *testing.T) {
 	}
 }
 
-// BUG: gpus is refused, and deploy holds only resources, but a reservation's devices are the
-// same request by another key: compose takes it (`docker compose config` here) and asks the
-// daemon for them. Not run on a GPU.
+// deploy's resources hold no devices, as gpus is refused: a reservation's devices are the
+// same request by another key, which compose takes (`docker compose config`) and asks the
+// daemon for. Not run on a GPU.
 func TestCheckFileResourcesHoldNoDevices(t *testing.T) {
 	t.Parallel()
 	check := func(deploy string) []error {
@@ -178,9 +179,9 @@ func TestCheckFileResourcesHoldNoDevices(t *testing.T) {
 	}
 }
 
-// BUG: an image's name goes to `docker image inspect` and `docker pull -q` as the deploy user
-// (checkImageLabels), one word of a file's, where Decide's own pull refuses a dash: every word
-// is hostile, and this one is a flag there.
+// An image's name never starts with a dash, as Decide's own pull refuses one: it goes to
+// `docker image inspect` and `docker pull -q` as the deploy user (checkImageLabels), one word
+// of a file's, and a dash makes it a flag there.
 func TestCheckFileImageIsNoFlag(t *testing.T) {
 	t.Parallel()
 	check := func(image string) []error {

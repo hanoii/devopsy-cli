@@ -58,9 +58,10 @@ func TestDoorEnvironmentIsItsOwn(t *testing.T) {
 	}
 }
 
-// BUG: doorRecord writes what was refused as it is, and that holds a caller's words: a
-// newline there is a line of the log's own, naming whoever it likes. What a leaked key tried
-// is worth having only if it cannot write the log. Arguments are quoted (%q); the reason not.
+// doorRecord keeps each refusal on one line: what was refused holds a caller's words, and a
+// newline there would be a line of the log's own, naming whoever it likes. What a leaked key
+// tried is worth having only if it cannot write the log. Who asked is sudo's word, the reason
+// and the arguments quoted (%q).
 //
 // Not parallel: it sets doorLog and doorWho.
 func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
@@ -231,8 +232,8 @@ func TestDoorSweepsItsOwnWork(t *testing.T) {
 	}
 }
 
-// BUG: sweepWork goes by the prefix <project>-, and names are flat: shop sweeps shop-eu's
-// work, whose container may still read it, where OwnName exists for this.
+// sweepWork leaves a longer project's work (OwnName): names are flat, so by the prefix
+// <project>- alone shop would sweep shop-eu's, whose container may still read it.
 func TestDoorSweepLeavesALongerProject(t *testing.T) {
 	t.Parallel()
 	space := t.TempDir()
@@ -293,9 +294,9 @@ func TestDoorPrunesSealedCopies(t *testing.T) {
 	}
 }
 
-// BUG: pruneSealed skips names starting with a dot, and a door killed while sealing leaves
-// its .seal- behind: nothing ever sweeps it, against "Nothing stays" for what sweepWork does
-// in <space>/work, and every killed request adds a copy of the release.
+// pruneSealed sweeps the .seal- a door killed while sealing leaves behind, as sweepWork
+// leaves nothing in <space>/work: nothing else sweeps it, and every killed request would
+// add a copy of the release.
 func TestDoorPrunesAKilledSeal(t *testing.T) {
 	t.Parallel()
 	space := t.TempDir()

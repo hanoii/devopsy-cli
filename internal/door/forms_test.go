@@ -163,10 +163,9 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 	}
 }
 
-// BUG: word starts `[A-Za-z0-9_-]`, so a word may start with a dash, against "A word in a
-// util container's arguments never starts with a dash". TestDoorScriptArgumentsAreNotCode
-// does not show it: it is refused for its `.` and `;`, and takes no `-delete` alone. In this
-// image nothing writes for find past its read-only mounts, so no code runs yet (run by hand).
+// A word in a util container's arguments never starts with a dash, which `find "$@"` and
+// rsync would take for a flag. TestDoorScriptArgumentsAreNotCode does not show it: what it
+// sends is refused for its `.` and `;`, and it sends no `-delete` alone.
 func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	t.Parallel()
 	entry := "/space/mnt/shop-prod/data"
@@ -187,11 +186,10 @@ func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	}
 }
 
-// BUG: narrow says "" for a receive into a volume, and decideForm then puts the mnt back
-// whole: rw in a root rsync on the host's network, against "An rsync that names a whole mnt
-// holds only the entry it writes". Worse, it is asked to make that "entry", which is the mnt
-// itself: where the mnt is new, makeEntry gives this user rwX on it, so it can replace an
-// entry, and a bind's next start follows the link (TestDoorReceiveLeavesTheMntClosed).
+// A receive into a volume holds no mnt, as an rsync that names a whole mnt holds only the
+// entry it writes. Bound whole, the mnt would be rw in a root rsync on the host's network,
+// and made as its entry, a new mnt would give this user rwX on it (makeEntry): it could then
+// replace an entry with a link, which a bind's next start follows.
 func TestDecideRunReceiveIntoAVolumeHoldsNoMnt(t *testing.T) {
 	t.Parallel()
 	mnt := "/space/mnt/shop-new"
@@ -248,9 +246,9 @@ func TestDecideRunTakesNoPathInsideAClone(t *testing.T) {
 	}
 }
 
-// BUG: Real's answer is believed for a path it says is under the clones, or in a mnt, with
-// no look at its words: `..` there walks out, and Docker binds where it ends. realpath never
-// says that by itself, but its process is the project user's, to trace (kernel.yama permitting).
+// Real's answer is believed only once its words are clean, for a path under the clones or in
+// a mnt too: `..` there walks out, and Docker binds where it ends. realpath never says that by
+// itself, but its process is the project user's, to trace (kernel.yama permitting).
 func TestPathsAnswerIsCleanBeforeItIsBelieved(t *testing.T) {
 	t.Parallel()
 	link := "/home/devopsy-shop/shop/prod/link"
@@ -268,9 +266,9 @@ func TestPathsAnswerIsCleanBeforeItIsBelieved(t *testing.T) {
 	}
 }
 
-// BUG: a restore keeps every option of the caller's and sets no network: `--network host`,
-// a published port and a default bridge for a root zstd reading the caller's bytes, where any
-// other form is `none` unless it says so.
+// A restore runs with `--network none` and none of the caller's network options: a root
+// zstd reads the caller's bytes, and gets no `--network host`, published port or default
+// bridge, as any other form is `none` unless it says so.
 func TestDecideRestoreTakesNoNetwork(t *testing.T) {
 	t.Parallel()
 	tree := "/home/devopsy-shop/shop/prod"

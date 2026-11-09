@@ -358,10 +358,10 @@ func TestDecideAllows(t *testing.T) {
 	}
 }
 
-// BUG: parseMount splits a caller's --mount on commas, but place's answer is put back
-// into one unquoted. A link in the tree to a path holding `,source=/etc` passes as a
-// clone or an entry of this project's, and Docker takes the last source: a root util
-// container then holds any host path.
+// A --mount's source stays one path once place's answer is put back into it: a link in
+// the tree to a path holding `,source=/etc` passes as a clone or an entry of this
+// project's, and Docker takes the last source, so a root util container would hold any
+// host path.
 func TestDecideRunMountSourceStaysOnePath(t *testing.T) {
 	t.Parallel()
 	link := "/home/devopsy-shop/shop/prod/link"
@@ -374,9 +374,9 @@ func TestDecideRunMountSourceStaysOnePath(t *testing.T) {
 	}
 }
 
-// BUG: a mount's target is never checked, so a project's files, copied in read-only, can
-// sit over the util image's own binaries: "own script" then runs the project's find or
-// rsync as root, with --network host on a sync's receive. A util container runs only
+// A mount's target never sits over the util image's own files: a project's files, copied
+// in read-only, would replace its binaries, and "own script" would run the project's find
+// or rsync as root, with --network host on a sync's receive. A util container runs only
 // what devopsy gives it (internals/door.md).
 func TestDecideRunTargetsLeaveTheImageAlone(t *testing.T) {
 	t.Parallel()
@@ -392,11 +392,10 @@ func TestDecideRunTargetsLeaveTheImageAlone(t *testing.T) {
 	}
 }
 
-// BUG: what devopsy itself asks and the door has no answer for, so a project user's
-// release fails there: ensureVolumes (--import into a missing volume, a child's prepare,
-// --reset after its down --volumes), and images' Pull (a rollback or restart whose image
-// is gone from the server, a restore's landing). TestDoorKnowsDevopsysDockerCalls only
-// looks at `UtilImage, "sh", "-c"`, so it does not see these.
+// The door answers what devopsy itself asks outside its util containers, or a project
+// user's release fails there: ensureVolumes (--import into a missing volume, a child's
+// prepare, --reset after its down --volumes), and images' Pull (a rollback or restart
+// whose image is gone from the server, a restore's landing).
 func TestDecideAnswersWhatDevopsyAsks(t *testing.T) {
 	t.Parallel()
 	for _, argv := range [][]string{
@@ -569,10 +568,10 @@ func TestOwnNameLeavesLongerProjects(t *testing.T) {
 	}
 }
 
-// BUG: mountSource is checked only for a source starting with `/`, so a bare word passes
-// as this project's volume whatever follows its name, and goes back into a --mount
-// unquoted: Docker takes the last source, the host's /etc here, rw, in a root util
-// container. Run by hand: Docker takes `type=bind,source=shop-x,source=/etc,target=/mnt`.
+// A bare word as a --mount's source is checked too, and stays one word: put back into a
+// --mount with more after its name, Docker would take the last source, the host's /etc
+// here, rw, in a root util container (Docker takes
+// `type=bind,source=shop-x,source=/etc,target=/mnt`).
 func TestDecideRunBareSourceStaysOnePath(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"bind", "volume"} {
@@ -583,8 +582,8 @@ func TestDecideRunBareSourceStaysOnePath(t *testing.T) {
 	}
 }
 
-// BUG: flagValues knows `-f x` and `-f=x`, not `-fx`, and whatever it leaves goes to
-// docker as it is: `-fid=<another's>` widens the listing the door's own id filters cut.
+// A ps lets no filter of the caller's reach docker, `-fx` no more than `-f x` or `-f=x`:
+// `-fid=<another's>` would widen the listing the door's own id filters cut.
 func TestDecidePSCutsAShortFilter(t *testing.T) {
 	t.Parallel()
 	a, err := decide(t, "ps", "-a", "-fid=victim", "--format", "{{json .}}")
