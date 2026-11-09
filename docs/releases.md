@@ -342,20 +342,21 @@ environment that never went live, and `--releases remove failed` the
 release alone.
 
 `devopsy-compose.yaml` is the one compose file devopsy writes. It holds
-only facts of the release's last activation: the image each service was
-given (a `devopsy.digest` label), each image the release built or never
-pulls by the release's own name for it (`image:`), each pulled image by
-its digest (its `image:` as `mariadb:11.8@sha256:...`, so an `up` on the
-server runs what the release fetched whatever the name points to since,
-and `docker ps` still shows the tag), and the data services held on another
+only facts of the release's last activation. These are the image each
+service was given (a `devopsy.digest` label); each image the release
+built or never pulls, by the release's own name for it (`image:`); each
+pulled image that has a registry digest and is not held, by that digest,
+as `image: mariadb:11.8@sha256:...`, so an `up` on the server runs what
+the release fetched even if the name points elsewhere now, and `docker
+ps` still shows the tag; and the data services held on another
 image (a `devopsy.held` label, naming the image that holds them:
 [Holds](images.md#holds)). devopsy runs compose with it between the
 project's `compose.yaml` and your `compose.override.yaml`, so your
 override still wins; `devopsy -- config` shows the result. Run compose
 on a server through devopsy. A plain `docker compose up` lacks the file,
-so it recreates every container once, goes by the images' names, and
-builds what devopsy built, since devopsy's builds never write those
-names.
+so it recreates every container once, runs whatever the image names
+point to, and builds what devopsy built, since devopsy's builds never
+write those names.
 
 ## Removing releases by hand
 
