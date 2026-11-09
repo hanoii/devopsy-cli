@@ -428,7 +428,7 @@ func decideVolume(args []string, p Policy) (*Action, error) {
 	if len(args) >= 6 && args[0] == "create" && len(args)%2 == 0 {
 		project, _ := strings.CutPrefix(args[2], projectLabel+"=")
 		key, keyed := strings.CutPrefix(args[4], "com.docker.compose.volume=")
-		ok := args[1] == "--label" && args[3] == "--label" && p.OwnName(project) && keyed && args[len(args)-1] == project+"_"+key && plainWord.MatchString(key)
+		ok := args[1] == "--label" && args[3] == "--label" && p.OwnName(project) && keyed && args[len(args)-1] == project+"_"+key && Word.MatchString(key)
 		for i := 5; ok && i+1 < len(args)-1; i += 2 {
 			k, _, _ := strings.Cut(args[i+1], "=")
 			ok = args[i] == "--label" && !strings.HasPrefix(k, "com.docker.compose.") && !strings.HasPrefix(k, "devopsy.")
@@ -545,7 +545,6 @@ func (p Policy) ownHold(tag string) bool {
 var holdName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*-[A-Za-z0-9_.-]+$`)
 
 var (
-	plainWord = wordOnly
 	chownFlag = regexp.MustCompile(`^--chown=\d+:\d+$`)
 	// A util container's mounts sit where devopsy's own commands look, never over the
 	// image's binaries, which would then run as root.
@@ -759,7 +758,7 @@ func parseMount(v string) (mount, error) {
 // decideRestore turns a restore's decompression, a project's own file into its
 // own FIFO, into a stream through a container with no mounts: no root and no bind.
 func decideRestore(cmd []string, mounts []mount, out []string, p Policy, h Host, known Known) (*Action, error) {
-	if len(cmd) != 5 || !plainWord.MatchString(cmd[4]) || cmd[3] != "sh" || len(mounts) != 2 {
+	if len(cmd) != 5 || !Word.MatchString(cmd[4]) || cmd[3] != "sh" || len(mounts) != 2 {
 		return nil, refuse("docker run: a restore's stream")
 	}
 	var from, to string

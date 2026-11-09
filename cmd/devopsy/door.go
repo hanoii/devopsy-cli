@@ -892,7 +892,7 @@ func (s *doorSide) entry(mnt, e string, file bool) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	if !s.policy.OwnName(filepath.Base(real)) || real != s.policy.Mnt(filepath.Base(real)) || !doorPlainName.MatchString(e) {
+	if !s.policy.OwnName(filepath.Base(real)) || real != s.policy.Mnt(filepath.Base(real)) || !door.Word.MatchString(e) {
 		return doorRefused(fmt.Errorf("refused: not an entry of this project's: %s/%s", mnt, e))
 	}
 	if err := s.makeEntry(filepath.Join(real, e), file); err != nil {
@@ -918,7 +918,7 @@ func (s *doorSide) clone(path string) int {
 	}
 	if rest, ok := strings.CutPrefix(real, root+"/"); ok {
 		for _, word := range strings.Split(rest, "/") {
-			if !doorPlainName.MatchString(strings.TrimPrefix(word, ".")) {
+			if !door.Word.MatchString(word) {
 				return doorRefused(errors.New("refused: not a clone's name: " + path))
 			}
 		}
@@ -945,7 +945,7 @@ func (s *doorSide) mark(dir, id string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	if !strings.HasPrefix(real, s.policy.Clones()+"/") || !doorPlainName.MatchString(id) {
+	if !strings.HasPrefix(real, s.policy.Clones()+"/") || !door.Word.MatchString(id) {
 		return doorRefused(errors.New("refused: not a clone of this project's: " + dir))
 	}
 	// Under a directory a root container filled, whose owner may be anyone's: a file of
@@ -964,8 +964,6 @@ func (s *doorSide) mark(dir, id string) int {
 	}
 	return 0
 }
-
-var doorPlainName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 // makeEntry makes an entry the project user writes inside, and cannot replace.
 func (s *doorSide) makeEntry(path string, file bool) error {

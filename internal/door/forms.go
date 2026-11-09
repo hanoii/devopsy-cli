@@ -49,8 +49,11 @@ type form struct {
 var (
 	// A word of a path or an argument: never `.`, `..`, nor a leading dash, which
 	// `find "$@"` and rsync would take for a flag.
-	word      = `(?:[A-Za-z0-9_]|\.[A-Za-z0-9_-])[A-Za-z0-9_.-]*`
-	wordOnly  = regexp.MustCompile(`^` + word + `$`)
+	word = `(?:[A-Za-z0-9_]|\.[A-Za-z0-9_-])[A-Za-z0-9_.-]*`
+	// Word is a name safe as one path element and one argument, the one rule for every
+	// name a request carries (an entry, a volume's key, a clone): never `.`, `..`, nor a
+	// leading dash, which `find "$@"` and rsync would take for a flag.
+	Word      = regexp.MustCompile(`^` + word + `$`)
 	ownerArg  = regexp.MustCompile(`^\d+:\d+$`)
 	kindDir   = regexp.MustCompile(`^(mnt|volumes)$`)
 	tarMember = regexp.MustCompile(`^(\./)?` + word + `(/` + word + `)*/?$`)
@@ -76,7 +79,7 @@ func RootUtil() []string {
 func cloneShape(rest string) bool {
 	parts := strings.Split(rest, "/")
 	for _, part := range parts {
-		if !wordOnly.MatchString(part) {
+		if !Word.MatchString(part) {
 			return false
 		}
 	}
@@ -143,11 +146,11 @@ func forms(known Known) []form {
 	recvSrc := regexp.MustCompile(`^devopsy::(` + word + `)/(` + word + `)?$`)
 	recvDst := regexp.MustCompile(`^/(mnt|vol)/(` + word + `)/?$`)
 	return []form{
-		{name: "owners", matches: script(known.Owners, wordOnly, ownerArg),
+		{name: "owners", matches: script(known.Owners, Word, ownerArg),
 			mounts: []mountRule{{target(`/mnt/` + word), false, []sourceKind{kindEntry}}}},
-		{name: "export", matches: script(known.Export, wordOnly),
+		{name: "export", matches: script(known.Export, Word),
 			mounts: []mountRule{{target(`/x/` + word), true, copied}}},
-		{name: "import", matches: script(known.Import, inPath, wordOnly, tarMember),
+		{name: "import", matches: script(known.Import, inPath, Word, tarMember),
 			mounts: []mountRule{{target(`/mnt/` + word), false, entryOrVolume}, {target(`/in/` + word), true, []sourceKind{kindTreeIn, kindClone}}}},
 		{name: "probe", matches: script(known.ReflinkProbe, probePath),
 			mounts: []mountRule{
@@ -163,7 +166,7 @@ func forms(known Known) []form {
 			{target(`/c`), false, []sourceKind{kindClone}},
 		}},
 		{name: "snapshot tar", matches: func(cmd []string) bool {
-			return script(known.SnapshotTar, kindDir, wordOnly, wordOnly, ownerArg)(cmd) && len(cmd) == 8
+			return script(known.SnapshotTar, kindDir, Word, Word, ownerArg)(cmd) && len(cmd) == 8
 		}, mounts: []mountRule{
 			{target(`/m`), true, []sourceKind{kindClone}},
 			{target(`/m/mnt`), true, []sourceKind{kindMnt, kindClone}},
@@ -254,7 +257,7 @@ func forms(known Known) []form {
 // into a --mount or a -v, so it holds none of their syntax.
 func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 	if !strings.HasPrefix(m.source, "/") {
-		if m.kind == "bind" || !wordOnly.MatchString(m.source) || !p.OwnName(m.source) {
+		if m.kind == "bind" || !Word.MatchString(m.source) || !p.OwnName(m.source) {
 			return 0, "", refuse("docker run: another's volume: %s", m.source)
 		}
 		return kindVolume, m.source, nil
@@ -284,7 +287,7 @@ func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 		case !p.OwnName(name) || strings.Contains(entry, "/"):
 		case !nested:
 			return kindMnt, real, nil
-		case wordOnly.MatchString(entry):
+		case Word.MatchString(entry):
 			return kindEntry, real, nil
 		}
 		return 0, "", refuse("docker run: a host path: %s", m.source)

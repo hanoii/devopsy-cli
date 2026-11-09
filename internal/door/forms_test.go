@@ -173,11 +173,17 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	t.Parallel()
 	entry := "/space/mnt/shop-prod/data"
-	if !wordOnly.MatchString("data") {
-		t.Fatal("the control: a plain word is refused")
+	// Word is the one rule for every name a request carries (a util's argument, an entry a
+	// sync child takes, a clone's path), so it is checked whole here.
+	for _, w := range []string{"data", "_cache", ".env", "a.b-c", "x.."} {
+		if !Word.MatchString(w) {
+			t.Errorf("the control: %q is refused", w)
+		}
 	}
-	if wordOnly.MatchString("-delete") {
-		t.Error("-delete is a word")
+	for _, w := range []string{"-delete", ".", "..", "..x", ".", "", "a/b", "a b", "-"} {
+		if Word.MatchString(w) {
+			t.Errorf("%q is a word", w)
+		}
 	}
 	for what, argv := range map[string][]string{
 		"export":       {"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "-delete"},

@@ -52,7 +52,7 @@ func (p Policy) ImagesFile() string { return filepath.Join(p.Space, "images", p.
 // no other project's whose name extends this one's.
 func (p Policy) OwnName(name string) bool {
 	// One word: this names a directory (Mnt).
-	if !Extends(name, p.Project) || !wordOnly.MatchString(name) {
+	if !Extends(name, p.Project) || !Word.MatchString(name) {
 		return false
 	}
 	for _, other := range p.Others {

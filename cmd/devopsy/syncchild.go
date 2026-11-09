@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -49,9 +49,6 @@ type syncReceive struct {
 	File   bool   `json:"file,omitempty"`
 	Last   bool   `json:"last,omitempty"`
 }
-
-// syncName is what a request may name of the child's: an entry, a volume's key, a service.
-var syncName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // runSyncChild is --sync-child <id> <base> <to> [reset], a sync key's forced command on
 // the child's server (remote.SyncKeyLine): while sync id is open in the environment at
@@ -135,7 +132,7 @@ func syncChildScript(req syncRequest, id, base, toDir, toProject string, env map
 		}
 		return remote.SyncExecScript(toDir, toProject, env, req.Exec), nil
 	case req.Spool != "":
-		if !syncName.MatchString(req.Spool) {
+		if !door.Word.MatchString(req.Spool) {
 			return "", fmt.Errorf("not a service: %q", req.Spool)
 		}
 		if err := childHas(toDir, toProject, env, func(c childService) bool { return c.Name == req.Spool && c.Copy == cli.CopyCustom }); err != nil {
@@ -166,14 +163,14 @@ func planReceive(r *syncReceive, child []childService, mnt, toProject string) (r
 	case (r.Entry == "") == (r.Volume == ""):
 		return receivePlan{}, errors.New("not a sync's request: one entry or one volume")
 	case r.Volume != "":
-		if !syncName.MatchString(r.Volume) || !slices.Contains(vols, r.Volume) || r.File {
+		if !door.Word.MatchString(r.Volume) || !slices.Contains(vols, r.Volume) || r.File {
 			return receivePlan{}, fmt.Errorf("the child's labels name no volume %q", r.Volume)
 		}
 		return receivePlan{what: "the volume " + r.Volume, mount: toProject + "_" + r.Volume + ":/vol/" + r.Volume,
 			args: []string{remote.ReceiveFrom + r.Volume + "/", "/vol/" + r.Volume + "/"}}, nil
 	}
 	e := r.Entry
-	if !syncName.MatchString(e) || !slices.Contains(dirs, e) {
+	if !door.Word.MatchString(e) || !slices.Contains(dirs, e) {
 		return receivePlan{}, fmt.Errorf("the child's labels name no entry %q", e)
 	}
 	file := r.File
@@ -316,7 +313,7 @@ func syncExecAllowed(args []string, reset bool) bool {
 	case len(args) == 2:
 		return args[1] == "list" || (args[1] == "wipe" && reset)
 	case len(args) == 3 || (len(args) == 4 && args[3] == "last"):
-		return args[1] == "import" && syncName.MatchString(args[2])
+		return args[1] == "import" && door.Word.MatchString(args[2])
 	}
 	return false
 }
