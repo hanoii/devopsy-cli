@@ -517,6 +517,22 @@ func (p Policy) OwnsImageOf(id string, tags []string) bool {
 	return slices.Contains(p.Images, id) || slices.ContainsFunc(tags, p.OwnRef)
 }
 
+// OwnContainerName says whether a container's name is this project's: a compose name of its
+// own, or one of devopsy's containers of an environment of its own,
+// devopsy-<word>-<compose name>-<part> (cmd/devopsy's newContainer). A name says whose it is
+// by itself: any other could take the name another project's next container needs.
+func (p Policy) OwnContainerName(name string) bool {
+	if p.OwnName(name) {
+		return true
+	}
+	rest, ok := strings.CutPrefix(name, "devopsy-")
+	if !ok {
+		return false
+	}
+	word, rest, ok := strings.Cut(rest, "-")
+	return ok && word != "" && p.OwnName(rest)
+}
+
 // OwnRef says whether ref is a name only this project writes: its build's, which the door
 // names for one of its environments (images.DoorBuild, under a host no registry serves), or
 // a hold of its own. Its image stays this project's until it moves the name, under its image
@@ -611,8 +627,7 @@ scan:
 			if err != nil {
 				return nil, err
 			}
-			// devopsy's containers are named by task and pid: their label says whose.
-			if !strings.HasPrefix(v, "devopsy-") && !p.OwnName(v) {
+			if !p.OwnContainerName(v) {
 				return nil, refuse("docker run: another's name: %s", v)
 			}
 			out = append(out, a, v)
@@ -684,22 +699,6 @@ scan:
 		return nil, refuse("docker run: only devopsy's own image, and only its own scripts")
 	}
 	out = append(out, "--label", DoorLabel+"="+p.User)
-	// A name of devopsy's says whose by its label: without one it could take a name
-	// another project's container is about to need.
-	for i, a := range out {
-		if a != "--name" || p.OwnName(out[i+1]) {
-			continue
-		}
-		labelled := false
-		for j, l := range out {
-			if l == "--label" && strings.HasPrefix(out[j+1], envLabel+"=") {
-				labelled = true
-			}
-		}
-		if !labelled {
-			return nil, refuse("docker run: a name with no label: %s", out[i+1])
-		}
-	}
 	for _, m := range mounts {
 		if !mountTarget.MatchString(m.target) {
 			return nil, refuse("docker run: a mount over %s", m.target)

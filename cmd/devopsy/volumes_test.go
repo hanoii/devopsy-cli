@@ -29,7 +29,7 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "pages\n" {
 		t.Fatalf("first release (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
-	id := regexp.MustCompile(`devopsy-sync-([0-9.a-f]+)-rsync-v0 `).FindStringSubmatch(docker)
+	id := regexp.MustCompile(`devopsy-sync-shop-dev-([0-9.a-f]+)-rsync-v0 `).FindStringSubmatch(docker)
 	if id == nil {
 		t.Fatalf("no rsync of the volume:\n%s", docker)
 	}
@@ -56,7 +56,7 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "newer\n" {
 		t.Fatalf("across servers (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
-	id = regexp.MustCompile(`devopsy-sync-([0-9.a-f]+)-receive `).FindStringSubmatch(docker)
+	id = regexp.MustCompile(`devopsy-sync-shop-dev-([0-9.a-f]+)-receive `).FindStringSubmatch(docker)
 	if id == nil {
 		t.Fatalf("across servers, no receive:\n%s", docker)
 	}

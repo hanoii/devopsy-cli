@@ -147,11 +147,7 @@ func snapshotReflinks(ctx context.Context, cwd string, p snapshotPaths, d *snaps
 // (unique while it runs: every take and restore holds the snapshot lock;
 // no name when suffix is ""), remote.TaskSnapshot.
 func snapshotContainer(cwd, suffix string) container {
-	c := container{"", composeName(cwd), remote.TaskSnapshot}
-	if suffix != "" {
-		c.name = "devopsy-snapshot-" + c.env + suffix
-	}
-	return c
+	return newContainer("snapshot", composeName(cwd), strings.TrimPrefix(suffix, "-"), remote.TaskSnapshot)
 }
 
 // snapshotCloneData clones d into the clone's <id> (cloneData), then

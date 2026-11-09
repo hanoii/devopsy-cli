@@ -70,6 +70,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 ## devopsy's containers
 
 - Every container devopsy starts in `UtilImage` carries `devopsy.env=<compose name>`, the environment whose data it works on, and `devopsy.task=<task>`, what it does (`remote.ContainerLabels`, `container` in `cmd/devopsy/writers.go`), never a `devopsy.data*` label, which are the project's.
+- A container devopsy names is named `devopsy-<word>-<compose name>-<part>` (`newContainer`, the part what makes it unique while it runs: devopsy's pid, a sync's id), its compose name the one its label says: the door takes a name only of its project's own environments.
 - The tasks (`remote.TaskOwners` and the rest):
   - `owners`, a release's or a local command's owners' step;
   - `import`, an import's or a restore's extraction and its owners';

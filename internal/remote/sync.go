@@ -81,12 +81,6 @@ const (
 	SyncedFile = ".devopsy-sync.synced"
 )
 
-// ImportContainerPrefix and the compose project start the name of the
-// containers an mnt --import (or a restore) writes through, then
-// devopsy's pid, -extract-<n> or -owners-<n>: a name unique while they
-// run. What finds them is their labels (ContainerLabels, TaskImport).
-const ImportContainerPrefix = "devopsy-import-"
-
 // EnvLabel and TaskLabel label every container devopsy starts itself
 // (ContainerLabels): whose it is, the compose name of the environment
 // whose data it works on, and what it does, a task (TaskOwners and the
@@ -148,12 +142,6 @@ func SyncOpenFile(id string) string { return SyncOpenPrefix + id }
 func WriterLine(service string, pid int, was string) string {
 	return fmt.Sprintf("writer import %s %d %s", service, pid, cmp.Or(was, "none"))
 }
-
-// SyncContainerPrefix starts the names of the containers a sync runs
-// (rsync, on one server or across two; the parent's clone, as
-// devopsy-sync-parent-<id>), then the sync's id: a name unique while
-// they run. What finds them is their labels (SyncTask, TaskSource).
-const SyncContainerPrefix = "devopsy-sync-"
 
 // DoneLine records the copy's last write in SyncStartedFile.
 func DoneLine(id string) string {

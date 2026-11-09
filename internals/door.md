@@ -40,6 +40,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A listing is cut by container id, never by trusting a caller's filter: filters of one key widen each other.
 - The door acts only on containers it made for the asking user (`devopsy.door`, `door.DoorLabel`, on every service it runs and every util container), and runs no compose command while a container it did not make is under the project's names (`Policy.Foreign`): compose's and devopsy's labels are anyone's to set outside it, and such a container runs as root with any mount.
 - Of another project's labels, only its role, compose project and exports are ever read (`exportedLabel`).
+- A container's name is the project's own (`Policy.OwnContainerName`): a compose name of its own, or devopsy's `devopsy-<word>-<compose name>-<part>` of one of its environments, since a name of another's, or of none, could take the name another project's next container needs.
 - A util container is one of the forms in `internal/door/forms.go`, its command, its arguments and its mounts checked together, never one a caller gives: it is root on the host's files, and a command paired with another's mounts writes where a bind goes by.
 - A new util container gets a form and a line in `TestDoorTakesWhatDevopsyRuns`, which runs devopsy's own against a fake docker: else a project user's release fails on it at runtime.
 - An rsync that names a whole mnt holds only the entry it writes (`narrow`): what it copies could otherwise leave a link where a bind's source goes by.

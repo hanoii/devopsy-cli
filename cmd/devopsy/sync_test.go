@@ -1080,7 +1080,7 @@ func TestSyncReflinkClone(t *testing.T) {
 	noClone("first release")
 	// The clone's containers are the parent's, never named as the sync's
 	// own, which the child's holder removes as writers into the child.
-	if !regexp.MustCompile(`run --rm --name devopsy-sync-parent-[0-9.a-f]+-clone `).MatchString(docker) {
+	if !regexp.MustCompile(`run --rm --name devopsy-sync-shop-prod-parent-[0-9.a-f]+-clone `).MatchString(docker) {
 		t.Errorf("the clone's container name:\n%s", docker)
 	}
 
@@ -1247,7 +1247,7 @@ func TestSyncReflinkShare(t *testing.T) {
 		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
 	}
 	// db rsynced, storage cloned, then given to its owner; never rsynced.
-	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-([0-9.a-f]+)-share-1 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:4`).MatchString(docker) {
+	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-shop-dev-([0-9.a-f]+)-share-1 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:4`).MatchString(docker) {
 		t.Errorf("shared docker:\n%s", docker)
 	}
 	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {

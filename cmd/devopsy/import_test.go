@@ -1262,7 +1262,7 @@ func TestSyncReset(t *testing.T) {
 	// decides while it runs (the session cut mid-wipe) ends it
 	// (endWriters), and it never deletes what a later sync copies.
 	for _, l := range strings.Split(docker, "\n") {
-		if strings.Contains(l, " find /mnt -mindepth 1 -delete") && !strings.Contains(l, "--name "+remote.SyncContainerPrefix) {
+		if strings.Contains(l, " find /mnt -mindepth 1 -delete") && !strings.Contains(l, "--name devopsy-sync-") {
 			t.Errorf("the wipe empties mnt in a container no holder ends: %s", l)
 		}
 	}

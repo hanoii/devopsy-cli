@@ -211,6 +211,20 @@ func waitImports(pids []int, base string) {
 // what it does.
 type container struct{ name, env, task string }
 
+// newContainer is one of devopsy's own containers doing task for the environment env (its
+// compose name), named devopsy-<word>-<env>-<part>, part what makes it unique while it runs
+// (devopsy's pid, a sync's id, with what it does); none when part is "", Docker's then. The
+// name carries the environment its label does: the door takes a name only of its project's
+// own environments (door.Policy.OwnContainerName), so no project user takes the name
+// another's next container needs.
+func newContainer(word, env, part, task string) container {
+	c := container{env: env, task: task}
+	if part != "" {
+		c.name = "devopsy-" + word + "-" + env + "-" + part
+	}
+	return c
+}
+
 // with is c named name+suffix: one of several of a step's.
 func (c container) with(suffix string) container {
 	c.name += suffix
@@ -296,7 +310,7 @@ func dockerRm(names []string) error {
 // the next lock-taker removes what a killed devopsy left
 // (removeLeft(..., remote.TaskImport)), never another environment's.
 func importContainer(cwd string) container {
-	return container{fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()), composeName(cwd), remote.TaskImport}
+	return newContainer("import", composeName(cwd), strconv.Itoa(os.Getpid()), remote.TaskImport)
 }
 
 // endImport ends an import into name that failed or was cut, which may

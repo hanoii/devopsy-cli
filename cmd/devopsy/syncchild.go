@@ -255,7 +255,7 @@ func receiveOne(r *syncReceive, id, base, toDir, toProject string, env map[strin
 		}
 	}
 	report.Info("rsync " + plan.what)
-	c := container{remote.SyncContainerPrefix + id + "-receive", toProject, remote.SyncTask(id)}
+	c := newContainer("sync", toProject, id+"-receive", remote.SyncTask(id))
 	run := receiveRun(c, plan)
 	trace(append([]string{"docker"}, run...))
 	cmd := exec.Command("docker", run...)

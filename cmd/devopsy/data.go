@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -465,7 +466,7 @@ func runExport(cwd string, args []string, color bool) int {
 				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
 			run = append(append(run, remote.UtilImage, "sh", "-c", exportTarScript, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
-			err = dockerRunIO(ctx, container{fmt.Sprintf("devopsy-export-%d", os.Getpid()), composeName(cwd), remote.TaskExport}, nil, os.Stdout, run...)
+			err = dockerRunIO(ctx, newContainer("export", composeName(cwd), strconv.Itoa(os.Getpid()), remote.TaskExport), nil, os.Stdout, run...)
 		}
 	}
 	if err != nil {

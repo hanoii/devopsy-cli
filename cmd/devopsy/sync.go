@@ -1466,7 +1466,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 // removal. The next holder of the parent's sync lock removes what a
 // killed devopsy left (removeLeftoverClones).
 func cloneContainer(env, id string) container {
-	return container{remote.SyncContainerPrefix + "parent-" + id, env, remote.TaskSource}
+	return newContainer("sync", env, "parent-"+id, remote.TaskSource)
 }
 
 // cloneCheck says, before anything stops, whether src, the data of the
@@ -1479,7 +1479,7 @@ func cloneCheck(ctx context.Context, env, base, id string, src dataSet) bool {
 		_ = os.Remove(dir)
 		return false
 	}
-	if data, err := duData(ctx, container{"", env, remote.TaskSource}, src); err == nil && freeBytes(base) < data {
+	if data, err := duData(ctx, newContainer("sync", env, "", remote.TaskSource), src); err == nil && freeBytes(base) < data {
 		report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while the copy is made", size(freeBytes(base)), size(data), base))
 	}
 	return true
@@ -1518,7 +1518,7 @@ func removeLeftoverClones(env, base string) error {
 	}
 	for _, dir := range left {
 		report.Info("removing " + filepath.Base(dir) + ", a clone an earlier copy left")
-		if err := removeClone(context.Background(), container{fmt.Sprintf("%s%d-unclone", remote.SyncContainerPrefix, os.Getpid()), env, remote.TaskSource}, base, filepath.Base(dir)); err != nil {
+		if err := removeClone(context.Background(), newContainer("sync", env, strconv.Itoa(os.Getpid())+"-unclone", remote.TaskSource), base, filepath.Base(dir)); err != nil {
 			return fmt.Errorf("removing %s: %w", dir, err)
 		}
 	}
@@ -2316,7 +2316,7 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 			}
 		}
 		// The sync's writes into the child: what its holder ends.
-		write := container{remote.SyncContainerPrefix + syncID, toProject, remote.SyncTask(syncID)}
+		write := newContainer("sync", toProject, syncID, remote.SyncTask(syncID))
 		shares = shareable(src, childMnt, shares)
 		shared := map[string]string{}
 		// The first that will not clone says so for all, and the rest are
@@ -2370,7 +2370,7 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 	if err := removeLeft(parent, remote.TaskSource); err != nil {
 		return err
 	}
-	daemon := append(append([]string{"run", "--rm", "-d", "--network", "none"}, container{remote.SyncContainerPrefix + syncID + "-daemon", parent, remote.TaskSource}.runArgs()...), "-v", src.mnt+":/mnt:ro")
+	daemon := append(append([]string{"run", "--rm", "-d", "--network", "none"}, newContainer("sync", parent, syncID+"-daemon", remote.TaskSource).runArgs()...), "-v", src.mnt+":/mnt:ro")
 	var keys []string
 	for _, v := range volumes {
 		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
@@ -3052,7 +3052,7 @@ func wipeData(p place) error {
 	// The sync's task, so a holder deciding meanwhile removes it
 	// (endWriters): no write outlives its sync.
 	id := os.Getenv(remote.SyncIDEnv)
-	wipe := container{remote.SyncContainerPrefix + id + "-wipe", composeName(p.cwd), remote.SyncTask(id)}
+	wipe := newContainer("sync", composeName(p.cwd), id+"-wipe", remote.SyncTask(id))
 	if err := emptyMnt(context.Background(), p.projectDir, wipe); err != nil {
 		return err
 	}
@@ -3073,7 +3073,7 @@ func wipeData(p place) error {
 	// too, for the rsync to write into.
 	owners, mnt, err := projectOwners(p.cwd)
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, container{remote.SyncContainerPrefix + id + "-owners", composeName(p.cwd), remote.SyncTask(id)})
+		err = ownMnt(context.Background(), mnt, owners, newContainer("sync", composeName(p.cwd), id+"-owners", remote.SyncTask(id)))
 	}
 	if err != nil {
 		return err

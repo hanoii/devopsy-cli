@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -365,7 +366,7 @@ func destroyData(cwd string, step []string, color bool) int {
 	if err := composeDownProject(ctx, root, errOut, false, "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
 		return half("docker compose down: " + err.Error())
 	}
-	destroy := container{fmt.Sprintf("devopsy-destroy-%d", os.Getpid()), composeName(root), remote.TaskDestroy}
+	destroy := newContainer("destroy", composeName(root), strconv.Itoa(os.Getpid()), remote.TaskDestroy)
 	if err := emptyMnt(ctx, projectDir, destroy); err != nil {
 		return half(err.Error())
 	}

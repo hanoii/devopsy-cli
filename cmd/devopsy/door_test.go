@@ -165,7 +165,7 @@ func TestDoorTakesComputedForms(t *testing.T) {
 		t.Errorf("the door does not take devopsy's own rsync daemon: %v", err)
 	}
 	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "1:2"}}}
-	c := container{remote.SyncContainerPrefix + "1.abcdef-receive", "shop-dev", remote.SyncTask("1.abcdef")}
+	c := newContainer("sync", "shop-dev", "1.abcdef-receive", remote.SyncTask("1.abcdef"))
 	for _, r := range []syncReceive{{Entry: "storage"}, {Entry: "app.ini", File: true}, {Volume: "db"}} {
 		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev")
 		if err != nil {
@@ -512,7 +512,7 @@ func TestDoorPairsCommandsWithTheirMounts(t *testing.T) {
 func TestDoorTakesDuOfANamedVolume(t *testing.T) {
 	_, logged := doorFakes(t)
 	d := dataSet{mnt: "/space/mnt/shop-prod", entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
-	_, _ = duData(context.Background(), container{"devopsy-du-1", "shop-prod", remote.TaskExport}, d)
+	_, _ = duData(context.Background(), newContainer("export", "shop-prod", "1", remote.TaskExport), d)
 	out, err := os.ReadFile(logged)
 	if err != nil {
 		t.Fatal(err)
@@ -538,7 +538,7 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 	clone := space + "/clones/shop/abc/1"
 	tree := "/home/devopsy-shop/shop/prod"
 	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: "/home/devopsy-shop/shop"}
-	c := container{"devopsy-x-1", "shop-prod", remote.TaskExport}
+	c := newContainer("export", "shop-prod", "1", remote.TaskExport)
 	ctx := context.Background()
 	d := dataSet{mnt: mnt, entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
 	inClone := d.in(clone)

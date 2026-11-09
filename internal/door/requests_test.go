@@ -166,6 +166,11 @@ func TestDecideRefuses(t *testing.T) {
 		{"another's label", []string{"run", "--label", "devopsy.env=other-prod", "util:1", "sh", "-c", "own script"}},
 		{"a label of its choosing", []string{"run", "--label", "traefik.enable=true", "util:1", "sh", "-c", "own script"}},
 		{"another's name, no label", []string{"run", "--name", "devopsy-owners-other-prod-1", "util:1", "sh", "-c", "own script"}},
+		// devopsy's container names carry the environment's compose name: one of another's, or
+		// of none, could take the name that environment's next container needs.
+		{"devopsy's name of another's", []string{"run", "--name", "devopsy-sync-other-prod-12.abcdef-daemon", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
+		{"devopsy's name of no environment", []string{"run", "--name", "devopsy-sync-12.abcdef-daemon", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
+		{"devopsy's name, no word", []string{"run", "--name", "devopsy-shop-prod-1", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
 		{"a name of another's", []string{"run", "--name", "other-prod-web-1", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
 		{"an environment", []string{"run", "-e", "A=1", "util:1", "sh", "-c", "own script"}},
 		{"its daemon's settings for its own script", []string{"run", "-e", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n", "util:1", "sh", "-c", "own script"}},
@@ -350,7 +355,8 @@ func TestDecideAllows(t *testing.T) {
 		{"tag", "sha256:abc", "busybox:devopsy-shop-prod-20260101"},
 		{"rm", "-f", "mine"},
 		{"exec", "-i", "task", "rsync", "--server", "--daemon", "--config=/etc/rsyncd.conf", "."},
-		{"run", "--rm", "--name", "devopsy-owners-1", "--label", "devopsy.env=shop-prod", "--label", "devopsy.task=owners", "--network", "none",
+		{"run", "--rm", "--name", "devopsy-sync-shop-prod-12.abcdef-daemon", "util:1", "sh", "-c", "own script"},
+		{"run", "--rm", "--name", "devopsy-owners-shop-prod-1", "--label", "devopsy.env=shop-prod", "--label", "devopsy.task=owners", "--network", "none",
 			"--mount", "type=bind,source=" + entry + ",target=/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "10001:10001"},
 		{"run", "--mount", "type=bind,source=" + entry + ",target=/x/data,readonly", "-v", "shop-prod_db:/x/db:ro", "util:1", "sh", "-c", "export script", "sh", "data", "db"},
 		{"run", "--network", "none", "--mount", "type=bind,source=" + entry + ",target=/mnt/data", "--mount", "type=bind,source=/home/devopsy-shop/shop/prod/t.tar,target=/in/t.tar,readonly", "util:1", "sh", "-c", "import script", "sh", "/in/t.tar", "data", "data", "./data/x"},
