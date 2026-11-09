@@ -486,11 +486,11 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 	if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
 		t.Errorf("compose's pull of another project's hold %s is taken", hold)
 	}
-	// Another project's build name is the door's to write for it, never a pull's (its own
-	// moves only its own image); a registry's name is anyone's to pull, a project's name at
-	// its start included (no build is named so).
+	// A build's name is the door's to write, never a pull's, this project's own included; a
+	// registry's name is anyone's to pull, a project's name at its start included (no build
+	// is named so).
 	p.Others = []string{"mongo"}
-	for image, refused := range map[string]bool{"devopsy.internal/blog-prod/web": true, "devopsy.internal/blog-prod/web:1": true, "devopsy.internal/shop-prod/web": false, "mongo-express:1": false} {
+	for image, refused := range map[string]bool{"devopsy.internal/blog-prod/web": true, "devopsy.internal/blog-prod/web:1": true, "devopsy.internal/shop-prod/web": true, "mongo-express:1": false} {
 		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
 		if errs := CheckFile(file, p, "pull", &fakePaths{}); (len(errs) > 0) != refused {
 			t.Errorf("a pull of %s: %v", image, errs)

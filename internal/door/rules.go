@@ -338,8 +338,9 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	if image, ok := s["image"].(string); ok && strings.HasPrefix(image, "-") {
 		fail("%s: an image named like a flag: %s", svc, image)
 	}
-	// A pull writes each name in the server's one image store, as a claim does.
-	if image, _ := s["image"].(string); verb == "pull" && image != "" && !p.OwnRef(image) {
+	// A pull writes each name in the server's one image store, as a claim does: never one a
+	// project alone writes (Claimable), its own included.
+	if image, _ := s["image"].(string); verb == "pull" && image != "" {
 		if err := p.Claimable(image); err != nil {
 			fail("%s: %s", svc, strings.TrimPrefix(err.Error(), "refused: "))
 		}

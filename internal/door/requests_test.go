@@ -765,34 +765,41 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	}
 }
 
-// A project writes no name another project's devopsy reads: a claim (its pull, an inspect,
-// a tag's source, a start) and compose's pull verb refuse another project's hold, which its
-// rollback and restart run by name, and another's build name, which the door writes for that
-// project alone. Any other name is a registry's (no build is named so, DoorBuild): a project
-// named mongo does not make mongo-express:1 its own, and another project claims it.
-func TestClaimWritesNoHoldAndNoBuildName(t *testing.T) {
+// No pull writes a name the door takes for one a project alone writes (OwnRef): a hold, any
+// project's (its rollback and restart run it by name), and a build's name under
+// devopsy.internal, this project's own included. A pull lands where a registry's manifest
+// points, and Docker fetches no layer it holds, so a registry naming another project's
+// layers would make that image this project's by its name, with no claim and no proof. A
+// claim (its pull, an inspect, a tag's source, a start) and compose's pull verb refuse them
+// alike. Any other name is a registry's (no build is named so, DoorBuild): a project named
+// mongo does not make mongo-express:1 its own, and another project claims it.
+func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
 	t.Parallel()
 	p := testPolicy
 	p.Others = []string{"blog"}
-	for _, ref := range []string{"devopsy.internal/blog-prod/web", "devopsy.internal/blog-prod/web:latest", "registry.example.com/x:devopsy-blog-prod-20240101000000"} {
-		for _, argv := range [][]string{
-			{"pull", "-q", ref},
-			{"image", "inspect", ref},
-			{"tag", ref, "busybox:devopsy-shop-prod-20240101000001"},
-		} {
+	for _, ref := range []string{
+		"devopsy.internal/blog-prod/web", "devopsy.internal/blog-prod/web:latest", "registry.example.com/x:devopsy-blog-prod-20240101000000",
+		"evil.example.com/x:devopsy-shop-prod-1", "busybox:devopsy-shop-prod-20240101000000",
+		"devopsy.internal/shop-prod/web", "devopsy.internal/shop-prod/web:devopsy-shop-prod-1",
+	} {
+		argvs := [][]string{{"pull", "-q", ref}}
+		if !p.OwnRef(ref) {
+			argvs = append(argvs, []string{"image", "inspect", ref}, []string{"tag", ref, "busybox:devopsy-shop-prod-20240101000001"})
+		}
+		for _, argv := range argvs {
 			if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
-				t.Errorf("%q: taken, with a claim that pulls over blog's name: %+v", argv, a)
+				t.Errorf("%q: taken, a pull writing a name taken as a project's own: %+v", argv, a)
 			}
 		}
 		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
 		file["services"].(map[string]any)["web"].(map[string]any)["image"] = ref
 		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
-			t.Errorf("compose's pull of %s, blog's, is taken", ref)
+			t.Errorf("compose's pull of %s is taken", ref)
 		}
 	}
 	// The controls: a registry's name is claimed, under a project's name or not, and blog's
-	// own build name is blog's.
-	for _, ref := range []string{"postgres:16", "blog-prod-web", "blog-express:1"} {
+	// own build name is blog's to read.
+	for _, ref := range []string{"postgres:16", "blog-prod-web", "blog-express:1", "evil.example.com/x:1"} {
 		if a, err := Decide([]string{"pull", "-q", ref}, p, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 1 {
 			t.Errorf("the control, a registry's %s: %v, %+v", ref, err, a)
 		}

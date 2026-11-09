@@ -558,22 +558,23 @@ func splitRef(ref string) (repo, tag string) {
 	return ref, ""
 }
 
-// Claimable refuses a claim, or any pull of a project's, that would write a name another
-// project's devopsy reads: a hold not this project's (a registry's tag of that name, pulled,
-// would be another's hold here, which its rollback and restart run by name), or a build's
-// name the door writes for another project (images.DoorHost). Every other name is a
-// registry's, and a pull of it writes what that registry serves. A pull by digest writes no
-// name.
+// Claimable refuses a claim, or any pull of a project's, that would write a name the door
+// takes for one a project alone writes (OwnRef): a hold, any project's, this one's included
+// (a rollback and a restart run it by name), or a build's name under images.DoorHost. A pull
+// lands where a registry's manifest points, and Docker fetches no layer it holds: landing on
+// such a name, it would make another's image a project's with no claim and no proof. Every
+// other name is a registry's, and what a pull of it writes is claimed, then proven. A pull by
+// digest writes no name.
 func (p Policy) Claimable(ref string) error {
 	if strings.Contains(ref, "@") {
 		return nil
 	}
 	repo, tag := splitRef(ref)
-	if strings.HasPrefix(tag, "devopsy-") && !p.ownHold(ref) {
-		return refuse("%s: another project's hold", ref)
+	if strings.HasPrefix(tag, "devopsy-") {
+		return refuse("%s: a hold, which devopsy alone writes, never a pull", ref)
 	}
-	if strings.HasPrefix(repo, images.DoorHost+"/") && !p.OwnRef(ref) {
-		return refuse("%s: another project's build, which only the door names", ref)
+	if strings.HasPrefix(repo, images.DoorHost+"/") {
+		return refuse("%s: a build's name, which the door alone writes", ref)
 	}
 	return nil
 }

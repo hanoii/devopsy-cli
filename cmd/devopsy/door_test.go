@@ -1003,7 +1003,7 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	}
 	// A build blog runs is under devopsy's name for it, which only the door writes for blog:
 	// never pulled over.
-	if _, err := start("devopsy.internal/blog-prod/web"); err == nil || pulled() || !strings.Contains(err.Error(), "another project's build") {
+	if _, err := start("devopsy.internal/blog-prod/web"); err == nil || pulled() || !strings.Contains(err.Error(), "a build's name") {
 		t.Errorf("blog's build ran or pulled (%v):\n%s", err, readString(calls))
 	}
 	if _, err := start("registry.example.com/app:devopsy-blog-prod-20260101000000"); err == nil || pulled() {
