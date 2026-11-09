@@ -108,15 +108,20 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	}
 	seen := filepath.Join(dir, "seen")
 	// Docker answers the door's look at what runs, which has nothing of another's, and the
-	// claim of the image: its pull's digest, and the image by that digest.
+	// claim of the image: its manifest, its pull by that manifest's digest, and the image.
+	manifest := plainManifest("busybox")
+	b1 := digestOf([]byte(manifest))
 	docker := filepath.Join(dir, "docker")
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 case "$1 $2" in
   "ps "*) ;;
-  "pull busybox:1.37") echo "Digest: sha256:b1" ;;
+  "buildx imagetools") printf '%s' '`+manifest+`' ;;
+  "version --format") echo "linux amd64" ;;
+  "pull busybox@`+b1+`") echo "Digest: `+b1+`" ;;
+  "tag "*) ;;
   "buildx inspect") echo 'Driver Options: network="devopsy-shop-build"' ;;
   "buildx "*) cat >/dev/null ;;
-  "image inspect") echo '{"Id":"sha256:b1","RepoDigests":["busybox@sha256:b1"],"Config":{"Labels":{}}}' ;;
+  "image inspect") echo '{"Id":"sha256:b1","RepoDigests":["busybox@`+b1+`"],"Config":{"Labels":{}}}' ;;
   *) exit 1 ;;
 esac
 `), 0o755); err != nil {
@@ -153,7 +158,7 @@ esac
 			continue
 		}
 		// The build goes by devopsy's name for it, the pulled image pinned.
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.internal/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@sha256:b1"`) {
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.internal/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
 		}
 	}

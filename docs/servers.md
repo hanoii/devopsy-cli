@@ -356,9 +356,10 @@ starting with `devopsy-`, which are devopsy's own names.
 Each project builds on a BuildKit builder of its own, on a Docker
 network of its own (`devopsy-<project>-build`), so no project's build
 shares another's cache or reaches its builder. The first time a project
-uses an image this way, its own builder fetches the image again from the project's registry, to prove the
-registry serves its content and not only its name: Docker skips the
-layers it already has, so a registry could otherwise name another
+uses an image this way, its own builder fetches the image again from
+the project's registry, the image for the server's platform, to prove
+the registry serves its content and not only its name: Docker skips
+the layers it already has, so a registry could otherwise name another
 project's image without having it. That costs one more download of
 what the builder lacks, once per layer. The builders keep their own
 registry settings, in `<space>/buildx/buildkitd.default.toml`, read

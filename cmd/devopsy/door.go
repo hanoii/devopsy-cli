@@ -176,6 +176,8 @@ type doorSide struct {
 	made []string
 	// lock is the project's image lock, when this request holds it (imageLock).
 	lock *os.File
+	// daemonPlatform is the daemon's "<os> <architecture>", once read (platform).
+	daemonPlatform string
 }
 
 // read runs a read of the project's tree, as its user.
@@ -526,47 +528,148 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if err != nil {
 		return "", images.Image{}, err
 	}
+	refused := fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
+	m, err := s.platformManifest(ref, d)
+	if err != nil {
+		if err == errNoRead {
+			return "", images.Image{}, refused
+		}
+		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+	}
+	pinned := images.ByDigest(ref, m)
 	var said bytes.Buffer
-	pull := s.docker("pull", ref)
+	pull := s.docker("pull", pinned)
 	pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
 	pull.Stdout, pull.Stderr = &said, &said
 	if pull.Run() != nil {
 		os.Stderr.Write(said.Bytes())
-		return "", images.Image{}, fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
+		return "", images.Image{}, refused
 	}
-	digest := ""
-	for _, line := range strings.Split(said.String(), "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Digest: "); ok && strings.HasPrefix(v, "sha256:") {
-			digest = v
-		}
-	}
-	if digest == "" {
-		return "", images.Image{}, fmt.Errorf("refused: %s: its pull gave no digest to run it by", ref)
-	}
-	img, err := s.inspectImage(images.ByDigest(ref, digest))
+	img, err := s.inspectImage(pinned)
 	if err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %v", ref, err)
 	}
-	if slices.Contains(s.policy.Images, img.ID) {
-		return digest, img, nil
+	if !slices.Contains(s.policy.Images, img.ID) {
+		if err := s.prove(pinned, d); err != nil {
+			// The reference the pull made goes, and the image with it unless another name
+			// holds it: a later claim landing there would pull nothing.
+			_ = s.docker("image", "rm", pinned).Run()
+			return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+		}
+		if err := s.record(img.ID); err != nil {
+			return "", images.Image{}, err
+		}
 	}
-	if err := s.prove(images.ByDigest(ref, digest), d); err != nil {
-		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+	// The name asked, the registry's content proven under it, so a start finds it here and
+	// asks the registry nothing.
+	if !images.Pinned(ref) {
+		_ = s.docker("tag", pinned, ref).Run()
 	}
+	return m, img, nil
+}
+
+// record adds id to this project's claimed images (Policy.ImagesFile).
+func (s *doorSide) record(id string) error {
 	file := s.policy.ImagesFile()
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		return "", images.Image{}, err
+		return err
 	}
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		return "", images.Image{}, err
+		return err
 	}
-	_, err = f.WriteString(img.ID + "\n")
+	_, err = f.WriteString(id + "\n")
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	s.policy.Images = append(s.policy.Images, img.ID)
-	return digest, img, err
+	s.policy.Images = append(s.policy.Images, id)
+	return err
+}
+
+// errNoRead is a registry that gives a project's logins nothing for a ref.
+var errNoRead = errors.New("its registry logins do not read it")
+
+// platformManifest is the digest of the one image manifest ref comes to on this server, read
+// with the logins in the DOCKER_CONFIG dir logins: ref's own when it is a manifest, else the
+// entry of its index for the daemon's platform, itself a manifest, its bytes checked against
+// its digest. A claim pulls, proves and pins that digest, never an index's: Docker's pull and
+// BuildKit's fetch choose from an index by rules of their own, and one index could send each
+// to another image.
+func (s *doorSide) platformManifest(ref, logins string) (string, error) {
+	// Read as the proof fetches: the project's builder names the registries' settings (a
+	// mirror, a CA), as the admin gave them to the builders.
+	b, err := s.builder()
+	if err != nil {
+		return "", errors.New(strings.TrimPrefix(err.Error(), "refused: "))
+	}
+	raw := func(r string) ([]byte, error) {
+		c := s.docker("buildx", "imagetools", "inspect", "--raw", r)
+		c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
+		return c.Output()
+	}
+	type platform struct{ OS, Architecture, Variant string }
+	type manifest struct {
+		Manifests []struct {
+			Digest   string
+			Platform *platform
+		}
+		Config *struct{ Digest string }
+	}
+	data, err := raw(ref)
+	var m manifest
+	if err != nil || json.Unmarshal(data, &m) != nil {
+		return "", errNoRead
+	}
+	if len(m.Manifests) == 0 {
+		if m.Config == nil {
+			return "", errors.New("its registry serves no image manifest for it")
+		}
+		if _, digest, ok := strings.Cut(ref, "@"); ok {
+			return digest, nil
+		}
+		return digestOf(data), nil
+	}
+	goos, arch, variant, err := s.platform()
+	if err != nil {
+		return "", err
+	}
+	entry := ""
+	for _, e := range m.Manifests {
+		if p := e.Platform; p != nil && p.OS == goos && p.Architecture == arch && (p.Variant == "" || p.Variant == variant) {
+			entry = e.Digest
+			break
+		}
+	}
+	if entry == "" {
+		return "", fmt.Errorf("no image for %s/%s in its index", goos, arch)
+	}
+	data, err = raw(images.ByDigest(ref, entry))
+	m = manifest{}
+	if err != nil || digestOf(data) != entry || json.Unmarshal(data, &m) != nil || len(m.Manifests) > 0 || m.Config == nil {
+		return "", fmt.Errorf("its index's entry for %s/%s, %s, is no image manifest", goos, arch, entry)
+	}
+	return entry, nil
+}
+
+// digestOf is data's sha256 digest, as a registry names it.
+func digestOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// platform is the daemon's os, architecture and the variant an index's entry for it may name
+// (arm64's v8, arm's v7), read once.
+func (s *doorSide) platform() (goos, arch, variant string, err error) {
+	if s.daemonPlatform == "" {
+		out, err := s.docker("version", "--format", "{{.Server.Os}} {{.Server.Arch}}").Output()
+		if err != nil {
+			return "", "", "", fmt.Errorf("the daemon's platform: %v", err)
+		}
+		s.daemonPlatform = strings.TrimSpace(string(out))
+	}
+	goos, arch, _ = strings.Cut(s.daemonPlatform, " ")
+	variant = map[string]string{"arm64": "v8", "arm": "v7"}[arch]
+	return goos, arch, variant, nil
 }
 
 // prove fetches the image pinned names (<repo>@<digest>, what a claim's pull got) on the
@@ -586,7 +689,9 @@ func (s *doorSide) prove(pinned, logins string) error {
 	}
 	defer os.RemoveAll(dir)
 	var said bytes.Buffer
-	c := s.docker("buildx", "build", "--output", "type=oci,dest=/dev/null", "-f", "-", dir)
+	// A tar of its files: each layer unpacked, so checked against the image's own config,
+	// with no shell of the image's needed (RUN would refuse a distroless one).
+	c := s.docker("buildx", "build", "--output", "type=tar,dest=/dev/null", "-f", "-", dir)
 	c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
 	c.Stdin = strings.NewReader("FROM " + pinned + "\n")
 	c.Stdout, c.Stderr = &said, &said

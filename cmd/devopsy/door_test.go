@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
@@ -903,9 +906,13 @@ case "$all" in
     grep -qxF -- "$ref" `+in("fails")+` 2>/dev/null && exit 1
     case "$all" in
       'pull -q '*) echo "$ref" ;;
-      *) echo "$ref: Pulling from a registry"; d=$(registry "$ref"); [ -n "$d" ] && echo "Digest: $d"; echo "Status: Downloaded newer image for $ref" ;;
+      *) echo "$ref: Pulling from a registry"; d=$(registry "$ref"); case $ref in *@*) d=${ref#*@} ;; esac; [ -n "$d" ] && echo "Digest: $d"; echo "Status: Downloaded newer image for $ref" ;;
     esac ;;
-  'buildx imagetools inspect '*) registry "$ref" ;;
+  'buildx imagetools inspect --raw '*)
+    # What a registry serves for a ref (fakeManifest), nothing for one it does not know.
+    f=`+in("raw")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -f "$f" ] || exit 1; cat "$f" ;;
+  'version --format '*) echo "linux amd64" ;;
+  'tag '*|'image rm '*) ;;
   'buildx inspect '*) ;;
   'buildx build '*)
     # A claim's proof: what the project's builder fetches is on stdin, FROM <repo>@<digest>.
@@ -931,6 +938,23 @@ esac
 	return docker
 }
 
+// fakeManifest has the fake registry of doorImageFake serve body for each of refs and for the
+// first one's repository at body's digest, which it returns: a manifest, or an index.
+func fakeManifest(t *testing.T, dir, body string, refs ...string) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(body))
+	d := "sha256:" + hex.EncodeToString(sum[:])
+	for _, r := range append(refs, images.RepoOf(refs[0])+"@"+d) {
+		write(t, filepath.Join(dir, "raw", strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(r)), body, 0o644)
+	}
+	return d
+}
+
+// plainManifest is an image manifest's body, its config named for name.
+func plainManifest(name string) string {
+	return `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:config-` + name + `"},"layers":[]}`
+}
+
 // A start runs an image of this project's by name (a build's, a hold of its own, devopsy's
 // util image: names only this project or the deploy user writes, under this project's
 // lock), or one it claims first: pulled with its own registry logins, the id then recorded
@@ -954,12 +978,17 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	fake := doorImageFake(t, dir)
 	store := func(lines ...string) { write(t, filepath.Join(dir, "store"), strings.Join(lines, "\n")+"\n", 0o644) }
 	private := "registry.example.com/blog/private"
+	labelled := "registry.example.com/blog/labelled"
+	// What the registries serve: a manifest for each, by its tag and its digest.
+	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	l1 := fakeManifest(t, dir, plainManifest("labelled"), labelled+":1")
+	bb := fakeManifest(t, dir, plainManifest("busybox"), "busybox:1.37")
 	store(
 		// Pulled under two repositories, a mirror's digest first: the pin is this one's.
-		private+":1|sha256:p1|other.example.com/mirror@sha256:zz "+private+"@sha256:p1||{}",
-		private+"@sha256:p1|sha256:p1|"+private+"@sha256:p1||{}",
-		"registry.example.com/blog/labelled:1|sha256:l1|registry.example.com/blog/labelled@sha256:l1||{\"devopsy.role\":\"proxy\"}",
-		"registry.example.com/blog/labelled@sha256:l1|sha256:l1|registry.example.com/blog/labelled@sha256:l1||{\"devopsy.role\":\"proxy\"}",
+		private+":1|sha256:p1|other.example.com/mirror@sha256:zz "+private+"@"+p1+"||{}",
+		private+"@"+p1+"|sha256:p1|"+private+"@"+p1+"||{}",
+		labelled+":1|sha256:l1|"+labelled+"@"+l1+"||{\"devopsy.role\":\"proxy\"}",
+		labelled+"@"+l1+"|sha256:l1|"+labelled+"@"+l1+"||{\"devopsy.role\":\"proxy\"}",
 		"blog-prod-web|sha256:b1||blog-prod-web blog-prod-web:latest|{}",
 		"blog-prod-web:latest|sha256:b1||blog-prod-web blog-prod-web:latest|{}",
 		"devopsy.internal/blog-prod/web|sha256:b2||devopsy.internal/blog-prod/web|{}",
@@ -967,13 +996,11 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		"registry.example.com/app:devopsy-blog-prod-20260101000000|sha256:a2|registry.example.com/app@sha256:a2||{}",
 		"sha256:0123|sha256:0123|||{}",
 		"devopsy.internal/shop-prod/web|sha256:s1||devopsy.internal/shop-prod/web|{}",
-		"busybox:devopsy-shop-prod-20260101000000|sha256:bb|busybox@sha256:bb|busybox:devopsy-shop-prod-20260101000000|{}",
-		"busybox@sha256:bb|sha256:bb|busybox@sha256:bb||{}",
+		"busybox:devopsy-shop-prod-20260101000000|sha256:bb|busybox@"+bb+"|busybox:devopsy-shop-prod-20260101000000|{}",
+		"busybox@"+bb+"|sha256:bb|busybox@"+bb+"||{}",
 		remote.UtilImage+"|sha256:u4|||{}",
 		"loaded:1|sha256:n1||loaded:1|{}",
 	)
-	write(t, filepath.Join(dir, "registry"), private+":1|sha256:p1\nregistry.example.com/blog/labelled:1|sha256:l1\nbusybox@sha256:bb|sha256:bb\nmongo-express:1|sha256:hhh\n", 0o644)
-	write(t, filepath.Join(dir, "fails"), "blog-prod-web\nblog-prod-web:latest\nregistry.example.com/app:2\nsha256:0123\nloaded:1\n", 0o644)
 	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir, Others: []string{"blog"}}, real: fake}
 	calls := filepath.Join(dir, "calls")
 	// start checks a file naming image, and says what compose then gets as the image.
@@ -986,32 +1013,37 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		return got, err
 	}
 	pulled := func() bool { return strings.Contains(readString(calls), "pull ") }
-	pin := private + ":1@sha256:p1"
+	pin := private + ":1@" + p1
 	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
 		t.Errorf("claimed by its pull (%v), pulled %v, goes to compose as %q, want %q:\n%s", err, pulled(), got, pin, readString(calls))
 	}
 	if got := readString(side.policy.ImagesFile()); got != "sha256:p1\n" {
 		t.Errorf("the record: %q", got)
 	}
-	// The claim proved it: the project's builder fetched the image the pull got, by digest.
-	if c := readString(calls); !strings.Contains(c, "\nproof FROM "+private+"@sha256:p1\n") || !strings.Contains(c, "buildx build --output type=oci,dest=/dev/null") {
-		t.Errorf("a claim with no proof of the content:\n%s", c)
+	// The claim pulled the manifest's digest, never the name, proved it on the project's
+	// builder (its files exported, each layer unpacked), and named it as asked.
+	c := readString(calls)
+	for _, want := range []string{"\npull " + private + "@" + p1 + "\n", "\nproof FROM " + private + "@" + p1 + "\n", "buildx build --output type=tar,dest=/dev/null", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("a claim with no %q:\n%s", want, c)
+		}
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
 	if got, err := start(private + ":1"); err != nil || pulled() || got != pin || strings.Contains(readString(calls), "proof ") {
 		t.Errorf("claimed already (%v), pulled or proven again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
 	}
 	// A registry that names content the server has but serves none of it (Docker's pull
-	// fetches no layer it holds): the proof fails, the claim is refused, nothing recorded.
-	write(t, filepath.Join(dir, "unserved"), "registry.example.com/blog/labelled@sha256:l1\n", 0o644)
-	if _, err := start("registry.example.com/blog/labelled:1"); err == nil || !strings.Contains(err.Error(), "did not serve") {
+	// fetches no layer it holds): the proof fails, the claim is refused, nothing recorded,
+	// and the reference its pull made goes.
+	write(t, filepath.Join(dir, "unserved"), labelled+"@"+l1+"\n", 0o644)
+	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "did not serve") || !strings.Contains(readString(calls), "\nimage rm "+labelled+"@"+l1+"\n") {
 		t.Errorf("an image its registry did not serve: %v\n%s", err, readString(calls))
 	}
 	if got := readString(side.policy.ImagesFile()); strings.Contains(got, "sha256:l1") {
 		t.Errorf("an unproven claim recorded: %q", got)
 	}
 	os.Remove(filepath.Join(dir, "unserved"))
-	if _, err := start("registry.example.com/blog/labelled:1"); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
+	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
 		t.Errorf("a claimed image labelled devopsy.role: %v", err)
 	}
 	for _, image := range []string{"registry.example.com/app:2", "sha256:0123", "blog-prod-web", "blog-prod-web:latest"} {
@@ -1034,28 +1066,46 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		}
 	}
 	// A reference by digest is a pin already: claimed, and kept as given.
-	if got, err := start("busybox@sha256:bb"); err != nil || !pulled() || got != "busybox@sha256:bb" {
+	if got, err := start("busybox@" + bb); err != nil || !pulled() || got != "busybox@"+bb {
 		t.Errorf("a reference by digest (%v), pulled %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
 	}
 	// An image the project claimed that has no digest in its repository (loaded here, named
-	// by hand) and that its registry does not pull: refused, or pinned by what it has (its
+	// by hand) and that its registry does not serve: refused, or pinned by what it has (its
 	// id), never started by its plain name, which the check did not pin.
 	side.policy.Images = append(side.policy.Images, "sha256:n1")
 	if got, err := start("loaded:1"); err == nil && got == "loaded:1" {
 		t.Errorf("an image with no digest in its repository goes to compose by its plain name")
 	}
+	// An index: the claim takes the entry for the daemon's platform (linux amd64 here),
+	// pulled, proven and pinned by that manifest's digest, never the index's, which Docker's
+	// pull and BuildKit's fetch could each resolve to another entry.
+	amd := fakeManifest(t, dir, plainManifest("multi-amd64"), "registry.example.com/multi:amd64")
+	arm := fakeManifest(t, dir, plainManifest("multi-arm64"), "registry.example.com/multi:arm64")
+	fakeManifest(t, dir, `{"schemaVersion":2,"manifests":[{"digest":"`+arm+`","platform":{"os":"linux","architecture":"arm64","variant":"v8"}},{"digest":"`+amd+`","platform":{"os":"linux","architecture":"amd64"}}]}`, "registry.example.com/multi:1")
+	store("registry.example.com/multi@" + amd + "|sha256:ma|registry.example.com/multi@" + amd + "||{}")
+	if got, err := start("registry.example.com/multi:1"); err != nil || got != "registry.example.com/multi:1@"+amd || !strings.Contains(readString(calls), "\nproof FROM registry.example.com/multi@"+amd+"\n") {
+		t.Errorf("an index (%v) goes to compose as %q, want its amd64 entry:\n%s", err, got, readString(calls))
+	}
+	// One whose entry for the platform is itself an index, or that has none, is refused.
+	nested := fakeManifest(t, dir, `{"schemaVersion":2,"manifests":[{"digest":"`+amd+`","platform":{"os":"linux","architecture":"amd64"}}]}`, "registry.example.com/nested:inner")
+	fakeManifest(t, dir, `{"schemaVersion":2,"manifests":[{"digest":"`+nested+`","platform":{"os":"linux","architecture":"amd64"}}]}`, "registry.example.com/nested:1")
+	fakeManifest(t, dir, `{"schemaVersion":2,"manifests":[{"digest":"`+arm+`","platform":{"os":"linux","architecture":"arm64"}}]}`, "registry.example.com/armonly:1")
+	for image, why := range map[string]string{"registry.example.com/nested:1": "no image manifest", "registry.example.com/armonly:1": "no image for linux/amd64"} {
+		if _, err := start(image); err == nil || !strings.Contains(err.Error(), why) || pulled() {
+			t.Errorf("%s (%v), pulled %v:\n%s", image, err, pulled(), readString(calls))
+		}
+	}
 	// The swap: right after the claim's pull, something else lands on the name (the deploy
 	// user's own build of mongo-express:1, or another pull of a tag the registry moved),
 	// with a registry digest of its own, as Docker's containerd store gives built images.
-	// The name now resolves to that image; the pull got the registry's, and that is what the
-	// pin and the record must be.
+	// The pull went by the registry's digest; that is what the pin and the record must be.
+	hh := fakeManifest(t, dir, plainManifest("mongo-express"), "mongo-express:1")
 	store(
 		"mongo-express:1|sha256:mmm|mongo-express@sha256:mmm|mongo-express:1|{}",
-		"mongo-express@sha256:hhh|sha256:hhh|mongo-express@sha256:hhh||{}",
-		"sha256:hhh|sha256:hhh|mongo-express@sha256:hhh||{}",
+		"mongo-express@"+hh+"|sha256:hhh|mongo-express@"+hh+"||{}",
 	)
-	if got, err := start("mongo-express:1"); err != nil || !pulled() || got != "mongo-express:1@sha256:hhh" {
-		t.Errorf("a name moved right after its pull (%v), pulled %v, goes to compose as %q, want the digest the pull got:\n%s", err, pulled(), got, readString(calls))
+	if got, err := start("mongo-express:1"); err != nil || !pulled() || got != "mongo-express:1@"+hh {
+		t.Errorf("a name moved right after its pull (%v), pulled %v, goes to compose as %q, want the registry's digest:\n%s", err, pulled(), got, readString(calls))
 	}
 	if got := readString(side.policy.ImagesFile()); !strings.Contains(got, "sha256:hhh") || strings.Contains(got, "sha256:mmm") {
 		t.Errorf("the record after the swap holds the name's image, not the pull's: %q", got)
@@ -1074,8 +1124,8 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	// The door reads the project's tree as its user, through sudo: a path is itself.
 	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
 	private := "registry.example.com/blog/private"
-	write(t, filepath.Join(dir, "store"), private+":1|sha256:p1|"+private+"@sha256:p1||{}\n"+private+"@sha256:p1|sha256:p1|"+private+"@sha256:p1||{}\n", 0o644)
-	write(t, filepath.Join(dir, "registry"), private+":1|sha256:p1\n", 0o644)
+	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	write(t, filepath.Join(dir, "store"), private+"@"+p1+"|sha256:p1|"+private+"@"+p1+"||{}\n", 0o644)
 	for _, verb := range []string{"up -d", "create", "run --rm web true", "pull"} {
 		c := exec.Command(os.Args[0], "-test.run", "^$")
 		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -1092,7 +1142,7 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 			t.Errorf("%s: compose got no file:\n%s", verb, out)
 			continue
 		}
-		want := private + ":1@sha256:p1"
+		want := private + ":1@" + p1
 		if verb == "pull" {
 			want = private + ":1"
 		}
@@ -1112,15 +1162,15 @@ func TestDoorClaimActsByDigest(t *testing.T) {
 	dir := t.TempDir()
 	doorImageFake(t, dir)
 	private := "registry.example.com/blog/private"
-	write(t, filepath.Join(dir, "store"), private+":1|sha256:mmm|"+private+"@sha256:mmm|"+private+":1|{}\n"+private+"@sha256:p1|sha256:p1|"+private+"@sha256:p1||{}\n", 0o644)
-	write(t, filepath.Join(dir, "registry"), private+":1|sha256:p1\n", 0o644)
+	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	write(t, filepath.Join(dir, "store"), private+":1|sha256:mmm|"+private+"@sha256:mmm|"+private+":1|{}\n"+private+"@"+p1+"|sha256:p1|"+private+"@"+p1+"||{}\n", 0o644)
 	hold := "busybox:devopsy-shop-prod-20260101000000"
 	c := exec.Command(os.Args[0], "-test.run", "^$")
 	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_REQUEST=tag "+private+":1 "+hold)
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("the request (%v):\n%s", err, out)
 	}
-	if calls := readString(filepath.Join(dir, "calls")); !strings.Contains(calls, "\ntag "+private+"@sha256:p1 "+hold+"\n") {
+	if calls := readString(filepath.Join(dir, "calls")); !strings.Contains(calls, "\ntag "+private+"@"+p1+" "+hold+"\n") {
 		t.Errorf("the tag is not by the claim's digest:\n%s", calls)
 	}
 }
