@@ -1031,6 +1031,71 @@ func TestDoorFirewallHoldsUnderSubordinateIDs(t *testing.T) {
 	}
 }
 
+// A project user reads none of the deploy user's projects, in either layout: releases in the
+// deploy user's home (the default, its door trees in the project users' homes), the home open
+// here as the test server's tmpfs is, and a release root of its own (a block volume), which
+// every project user enters to reach its tree there. A release closes its project's directory;
+// --project-users add closes those made before the server had project users. Another project
+// user's tree is closed too, and a project user still reaches its own.
+func TestDoorProjectUsersReadNoneOfTheDeployUsers(t *testing.T) {
+	deployProject := func(name, root string) {
+		t.Helper()
+		dir := project(t, name, map[string]string{
+			".devopsy/.env":            "DEVOPSY_SERVER=devopsy@doorsrv\n",
+			".devopsy/config.yaml":     "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+			".devopsy/compose.yaml":    "services:\n  web:\n    image: busybox:1.37\n    volumes: [./mnt/data:/d]\n    command: [sh, -c, \"echo s3cret >/d/readable && exec sleep infinity\"]\n",
+			".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+		})
+		t.Cleanup(func() { doorRoot(t, "docker compose -p "+name+"-prod down -v >/dev/null 2>&1; rm -rf "+root+"/"+name) })
+		if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+			t.Fatalf("the deploy user's release of %s (%d):\n%s", name, code, out)
+		}
+		eventually(t, startWaitE2E, "what "+name+"'s container writes", func() bool {
+			out, _ := doorRoot(t, "cat "+root+"/"+name+"/prod/shared/mnt/data/readable 2>/dev/null")
+			return strings.Contains(out, "s3cret")
+		})
+	}
+	unread := func(peek, path string) {
+		t.Helper()
+		if out, code := doorAs(t, peek, "ls "+path+" 2>&1; cat "+path+"/prod/shared/mnt/data/readable 2>&1"); code == 0 || strings.Contains(out, "s3cret") {
+			modes, _ := doorRoot(t, "stat -c '%a %U %n' "+path+" "+path+"/prod 2>&1")
+			t.Errorf("%s read %s:\n%s\n%s", peek, path, out, modes)
+		}
+	}
+
+	// The default layout.
+	home := doorUser(t, "doorlayhome")
+	deployProject("doorlayown", "/home/devopsy")
+	unread(home, "/home/devopsy/doorlayown")
+
+	// A release root of its own, open as devopsy-server makes it (755): the deploy user's
+	// config names it, and the project users made meanwhile get their trees there.
+	const root = "/srv/doorlay"
+	config := "/home/devopsy/.config/devopsy/config.yaml"
+	t.Cleanup(func() {
+		doorRoot(t, "cp "+config+".doorlay "+config+" && rm -f "+config+".doorlay; rm -rf "+root)
+	})
+	if out, code := doorRoot(t, `set -e
+install -d -m 755 -o devopsy -g devopsy `+root+`
+cp `+config+` `+config+`.doorlay
+printf 'releases:\n  root: `+root+`\n' >>`+config+`
+# A project the deploy user ran here before the server had project users: open, as made then.
+runuser -u devopsy -- sh -c 'umask 002 && mkdir -p "$1" && echo s3cret >"$1/readable"' sh `+root+`/doorlayold/prod/shared/mnt/data`); code != 0 {
+		t.Fatalf("the release root (%d): %s", code, out)
+	}
+	peek := doorUser(t, "doorlaypeek")
+	other := doorUser(t, "doorlayother")
+	unread(peek, root+"/doorlayold")
+	deployProject("doorlaynew", root)
+	unread(peek, root+"/doorlaynew")
+	if out, code := doorAs(t, peek, "ls "+root+"/doorlayother 2>&1"); code == 0 {
+		t.Errorf("%s listed %s's tree: %s", peek, other, out)
+	}
+	if out, code := doorAs(t, peek, "ls "+root+"/doorlaypeek >/dev/null && touch "+root+"/doorlaypeek/mine 2>&1"); code != 0 {
+		t.Errorf("the control: %s does not reach its own tree (%d): %s", peek, code, out)
+	}
+}
+
 // --project-users add refuses a host whose sshd would not take its drop-in for the project
 // user: a sshd_config with no Include of sshd_config.d (older Debian and Ubuntu, an admin's
 // own), or with it below a Match, parses (sshd -t) and leaves the user on its own

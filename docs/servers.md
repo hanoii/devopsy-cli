@@ -327,6 +327,12 @@ user's releases of the project for example: move it aside first. Once
 the project has its user, a release by the deploy user under its names
 is refused before it goes live.
 
+Every release keeps its project's directory, `<root>/<project>`,
+closed to other users (mode 700), so a project user reads none of the
+deploy user's projects, even under a release root it enters to reach
+its own tree. `add` closes the deploy user's projects already in that
+root, and says which.
+
 A project user has images of its own too: those it builds, and those
 its releases hold. devopsy names what a project user builds
 `devopsy.internal/<compose name>/<service>`, whatever the service's

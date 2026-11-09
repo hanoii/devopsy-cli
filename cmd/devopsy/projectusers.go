@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
@@ -215,6 +216,14 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Error("the project users' firewall did not load as devopsy's: nothing else changed", wrong...)
 		return 1
 	}
+	// The deploy user's own projects, closed to project users: none reads another's.
+	closed, err := closeDeployProjects(r.Root, os.Getuid())
+	if err != nil {
+		return failErr(err)
+	}
+	if len(closed) > 0 {
+		report.Info("closed to project users the deploy user's projects in "+r.Root+": "+strings.Join(closed, ", "))
+	}
 	var out bytes.Buffer
 	c := exec.Command("docker", "run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,
 		"chroot", "/host", "/bin/sh", "-c", remote.DoorHostScript(me.Username, devopsyPath()), "sh", who, tree, root)
@@ -241,6 +250,33 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 			"devopsy-server's DEVOPSY_AUTO_REBOOT_TIME takes it, as a kernel update (/run/reboot-required)")
 	}
 	return 0
+}
+
+// closeDeployProjects closes to everyone else each directory in root that the deploy user
+// (uid) owns and others may enter, and says which: its projects, made before the server had
+// project users with the session's umask (a release closes its own since, remote's prelude),
+// while a project user enters root to reach its own tree when root is not the deploy user's
+// home.
+func closeDeployProjects(root string, uid int) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var closed []string
+	for _, e := range entries {
+		fi, err := e.Info()
+		if err != nil || !fi.IsDir() || fi.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != uid {
+			continue
+		}
+		if err := os.Chmod(filepath.Join(root, e.Name()), 0o700); err != nil {
+			return closed, err
+		}
+		closed = append(closed, e.Name())
+	}
+	return closed, nil
 }
 
 // removeProjectUser takes who's entry and keys, then ends its processes (end): the door

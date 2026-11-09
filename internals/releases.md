@@ -72,6 +72,7 @@ A release uploads the project as a new directory, then one activation session sw
 ## On disk
 
 - `releases/<id>/code/` (`remote.CodeDir`) is the project as uploaded, `current` points there, and the release's own files (`RecordFile`, `TargetEnvFile`, `LogFile`, `PendingFile`, `FailedFile`) sit beside it, never in it: inside the tree they are in every build context, and `COPY . .` misses the cache every release.
+- A release keeps its project's directory, `<root>/<project>`, closed to other users (`chmod 700` after its lock, `prelude`): a release root another user enters (a project user's, reaching its tree there) would otherwise show what the releases and their containers write; Docker, root, resolves a bind mount past it, and a container never walks the directories above its mounts.
 - Scripts keep `$rel` the release's directory and `$code` its tree; Go finds them with `remote.ReleaseFile` (symlinks resolved).
 - Live means none of pending (upload to switch), fetching, failed or rolled back: what `keep` counts and what a rollback goes to.
 - Failed and rolled-back releases go once older than the oldest kept; one that fails before going live stays, a first one included, until `--destroy` or `--releases remove failed`.
