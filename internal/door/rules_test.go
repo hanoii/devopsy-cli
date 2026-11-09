@@ -302,16 +302,39 @@ func TestCheckFileBuild(t *testing.T) {
 			}
 		})
 	}
-	// A build writes the tag it names, in the one image store.
-	for _, image := range []string{"other-prod-app", "busybox:1.37", "shop-prod-app:devopsy-other-prod-1"} {
-		file = parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"],"build":{"context":"`+ctx+`"}}}}`)
-		if errs := CheckFile(file, testPolicy, "build", &fakePaths{}); !anyHolds(errs, "an image not this project's") {
-			t.Errorf("%s: %v", image, errs)
+	// A build writes devopsy's name for it, whatever image: says (a registry's included),
+	// so no name a project writes is one a registry serves; a start runs that name, unless
+	// devopsy's own file holds the service on a pin or a hold of its own.
+	named := func(image string) string {
+		return `{"name":"shop-prod","services":{"web":{"image":"` + image + `","user":"10001:10001","security_opt":["no-new-privileges"],"build":{"context":"` + ctx + `"}}}}`
+	}
+	for _, image := range []string{"", "mongo-express:1", "other-prod-app", "shop-prod-app:1", "shop-prod-app:devopsy-other-prod-1", "registry.example.com/shop/app:1"} {
+		for _, verb := range []string{"build", "up", "run", "down"} {
+			file = parse(t, named(image))
+			if errs := CheckFile(file, testPolicy, verb, &fakePaths{}); len(errs) != 0 {
+				t.Fatalf("%s %s: %v", verb, image, errs)
+			}
+			if got := service(file)["image"]; got != "devopsy.invalid/shop-prod/web" {
+				t.Errorf("%s of image %q runs %v", verb, image, got)
+			}
 		}
 	}
-	file = parse(t, `{"name":"shop-prod","services":{"web":{"image":"shop-prod-app:1","user":"10001:10001","security_opt":["no-new-privileges"],"build":{"context":"`+ctx+`"}}}}`)
-	if errs := CheckFile(file, testPolicy, "build", &fakePaths{}); len(errs) != 0 {
-		t.Errorf("its own image: %v", errs)
+	for _, image := range []string{"registry.example.com/shop/app:1@sha256:abc", "devopsy.invalid/shop-prod/web:devopsy-shop-prod-20260101000000", "devopsy.invalid/shop-stage/web"} {
+		file = parse(t, named(image))
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Fatalf("%s: %v", image, errs)
+		}
+		if got := service(file)["image"]; got != image {
+			t.Errorf("a start held on %s runs %v", image, got)
+		}
+	}
+	// A pull fetches what a registry serves under image: (image mode's builds): never renamed.
+	file = parse(t, named("registry.example.com/shop/app:1"))
+	if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if got := service(file)["image"]; got != "registry.example.com/shop/app:1" {
+		t.Errorf("a pull renamed its image: %v", got)
 	}
 	// A context that is a link out of the tree.
 	paths := &fakePaths{links: map[string]string{ctx + "/ctx": "/home/devopsy"}}
@@ -462,5 +485,15 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 	file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+hold+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
 	if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
 		t.Errorf("compose's pull of another project's hold %s is taken", hold)
+	}
+	// Another project's build name is the door's to write for it, never a pull's (its own
+	// moves only its own image); a registry's name is anyone's to pull, a project's name at
+	// its start included (no build is named so).
+	p.Others = []string{"mongo"}
+	for image, refused := range map[string]bool{"devopsy.invalid/blog-prod/web": true, "devopsy.invalid/blog-prod/web:1": true, "devopsy.invalid/shop-prod/web": false, "mongo-express:1": false} {
+		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+		if errs := CheckFile(file, p, "pull", &fakePaths{}); (len(errs) > 0) != refused {
+			t.Errorf("a pull of %s: %v", image, errs)
+		}
 	}
 }

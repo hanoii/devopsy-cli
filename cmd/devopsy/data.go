@@ -514,7 +514,7 @@ func localServices(cwd string) ([]images.Service, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("compose config: %w", err)
 	}
-	return images.ParseComposeConfig(out.Bytes())
+	return images.ParseComposeConfig(out.Bytes(), false)
 }
 
 // imagesShared takes the server's image lock shared (imagesLockPath),

@@ -14,7 +14,7 @@
 
 ## The listing
 
-- Each release lists its images per service in `devopsy-images` (`ListFile`: name, image id, service, kind, registry digest, version label, build key), from `compose config --format json` without profiles and without devopsy's own compose file (`NoReleaseComposeEnv`).
+- Each release lists its images per service in `devopsy-images` (`ListFile`: name, image id, service, kind, registry digest, version label, build key), from `compose config --format json` without profiles and without devopsy's own compose file (`NoReleaseComposeEnv`), a door project's builds in build mode named as the door's render names them (`DoorBuild`, `doorBuildsIn`), since its config runs unrendered.
 - Own or pulled comes from compose and the mode of the release listed (`Service.own`, a build in build mode or `pull_policy: never`), never from `RepoDigests` alone: on Docker's containerd store built and loaded images carry `RepoDigests` too, and a pulled image's id is its index digest.
 - A pulled image without a registry digest is restored as own: nothing could hold it.
 - The version label is display only: no field is common to images.
@@ -52,7 +52,7 @@
 ## Holds and restores
 
 - Every activation writes `ComposeFile` with a `devopsy.digest` label per fetched service (`DigestLabel`, the image it was given, never a release id, since compose recreates on a label change).
-- `ComposeFile` pins every pulled service not held that has a registry digest in its listing, `image:` as `<ref>@<digest>` (`Pin`, the tag kept for `docker ps`), and a hold keeps its own `image:`: a name resolved again after the fetch is anyone's on the server to move (a project user's build of a registry's name), and the pin's string never changes for the same image, which would recreate.
+- `ComposeFile` pins every pulled service not held that has a registry digest in its listing, `image:` as `<ref>@<digest>` (`Pin`, the tag kept for `docker ps`), and a hold keeps its own `image:`: a name resolved again after the fetch is anyone's on the server to move (a registry moving a tag another environment pulls, the deploy user's own build of a registry's name), and the pin's string never changes for the same image, which would recreate.
 - A pulled service's `image:` in `ComposeFile` is its pin when it has a digest, never an own image by its bookmark (`derive` reads that for `KindOwn` only).
 - A data service is held, on another image than its release's own, exactly when the rule refuses its own label and tag against the window its data has then, on the image that window ends on (`holdsFor`, `holdLine`, `hold.go`).
 - A hold is never carried, every writer of `ComposeFile` deriving it again from the history (`Record`, `Restore`, `LastHold`, `derive`): carried holds go stale on the path that forgets them.
@@ -71,6 +71,7 @@
 - A held service's own build keeps a bookmark (`withOwnBuilds`, an entry of no service): nothing else names it, and the next pruning on the server would take it, leaving nothing to give back.
 - `Restore(target, against, fetched)` decides per service from target's compose now (`List`, never reading devopsy's own file): any pulled image what target's name holds now, pulled when gone; an own image its bookmark, a held one's from its kept bookmark, `ErrGone` (exit 1) to build again when there is none or its build key changed (`changed`, `rebuilt`).
 - A rollback brings back code, never a changed name's exact image: a floating tag goes forward to the patched image.
+- A restart's and a rollback's restore take what a floating tag's name holds now, a plain `up` the image the record pinned: two readings of one tag, both a registry's image unless the deploy user builds under that name.
 - Never retag a pulled name: a backward retag takes a database back on its upgraded data, and a rollback moving a shared pin back changes another environment.
 - A restart cannot refuse: it holds what the rule refuses and ignores `--accept-image` (`runImages`), which accepted the new image, never the old one back on the new data.
 - Its last try (`img restore --restart --as-built`) runs the listing's images by their bookmarks whatever their build keys, and for a hold on an image this server lacks runs one the data allows (`allowedHere`, never from a release that failed its fetch, `FetchFailedFile`), else its release's own, said (`ownInstead`).

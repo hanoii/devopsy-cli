@@ -83,7 +83,11 @@ func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll, Door: behindDoor(), Copied: copiedServices,
+	// A project user's builds are named by the door (images.DoorBuild), and listed so.
+	door := behindDoor()
+	list := func(rel string) ([]images.Service, error) { return images.ListCompose(rel, door) }
+	listAll := func(rel string) ([]images.Service, error) { return images.ListComposeAll(rel, door) }
+	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: list, ListAll: listAll, Door: door, Copied: copiedServices,
 		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
 }
 

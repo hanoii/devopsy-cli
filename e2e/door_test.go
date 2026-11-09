@@ -245,6 +245,64 @@ func TestDoorProjectsLife(t *testing.T) {
 	}
 }
 
+// A door project's life in build mode: what it builds runs under devopsy's name for it
+// (devopsy.invalid/<compose name>/<service>), whatever image: says, so a name a registry
+// serves, which another project may pull and run, is never the project's to write; a
+// rollback puts that name back on the build it ran, and --status reads it. (The life in
+// image mode: TestDoorProjectsLife.)
+func TestDoorBuildModeLife(t *testing.T) {
+	dir := doorProject(t, "doorbuild", `services:
+  web:
+    build: .
+    image: doorbuild-shared:1
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+`, map[string]string{
+		".devopsy/config.yaml": "project: doorbuild\ndefaults:\n  mode: build\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+		".devopsy/Dockerfile":  "FROM busybox:1.37\nRUN echo one >/v\n",
+	})
+	// A registry's name another project pulls: the project's image: names it.
+	t.Cleanup(func() { doorRoot(t, "docker image rm doorbuild-shared:1 >/dev/null 2>&1") })
+	shared, code := doorRoot(t, "docker pull -q busybox:1.37 >/dev/null && docker tag busybox:1.37 doorbuild-shared:1 && docker image inspect -f '{{.Id}}' doorbuild-shared:1")
+	if code != 0 {
+		t.Fatalf("the shared name (%d): %s", code, shared)
+	}
+	release := func(what, args string) string {
+		t.Helper()
+		out, code := op(t, dir, "devopsy @prod "+args)
+		if code != 0 {
+			t.Fatalf("%s (%d):\n%s", what, code, out)
+		}
+		return out
+	}
+	runs := func(after, want string) {
+		t.Helper()
+		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker exec doorbuild-prod-web-1 cat /v")
+		if got := strings.Fields(out); len(got) != 2 || got[0] != "devopsy.invalid/doorbuild-prod/web" || got[1] != want {
+			t.Errorf("after %s, web runs %q, want devopsy.invalid/doorbuild-prod/web with %s", after, out, want)
+		}
+	}
+	commitAll(t, dir)
+	release("a first release", "--release")
+	runs("a first release", "one")
+	op(t, dir, "printf 'FROM busybox:1.37\\nRUN echo two >/v\\n' >.devopsy/Dockerfile")
+	commitAll(t, dir)
+	release("a second release", "--release")
+	runs("a second release", "two")
+	release("a rollback", "--rollback --yes")
+	runs("a rollback", "one")
+	if out := release("--status", "--status"); !strings.Contains(out, "web") || strings.Contains(out, "error") {
+		t.Errorf("--status after the rollback:\n%s", out)
+	}
+	if out, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' doorbuild-shared:1"); strings.TrimSpace(out) != strings.TrimSpace(shared) {
+		t.Errorf("the project's build moved a registry's name: %s, was %s", out, shared)
+	}
+	if out, _ := doorRoot(t, "cat "+doorSpace+"/refused.log 2>/dev/null | grep doorbuild"); out != "" {
+		t.Errorf("refused:\n%s", out)
+	}
+}
+
 // The daemon resolves a bind at each start, so a path a project user can change would take
 // a restart anywhere. A control shows it would: the same swaps on paths as compose writes them.
 func TestDoorSwappedLinksReachNoRestart(t *testing.T) {
@@ -905,11 +963,11 @@ COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, project, dockerfile(pr
 		if out, code := doorAs(t, user, script); code != 0 {
 			t.Fatalf("%s's build (%d):\n%s", project, code, out)
 		}
-		out, _ := doorRoot(t, "docker run --rm "+project+"-prod-app cat /seen")
+		out, _ := doorRoot(t, "docker run --rm devopsy.invalid/"+project+"-prod/app cat /seen")
 		return strings.TrimSpace(out)
 	}
 	t.Cleanup(func() {
-		doorRoot(t, "docker image rm -f doorcachea-prod-app doorcacheb-prod-app doorcachec doorcached >/dev/null 2>&1")
+		doorRoot(t, "docker image rm -f devopsy.invalid/doorcachea-prod/app devopsy.invalid/doorcacheb-prod/app doorcachec doorcached >/dev/null 2>&1")
 	})
 	if got := build("doorcachea"); got != "none" {
 		t.Fatalf("the first build saw a cache: %q", got)

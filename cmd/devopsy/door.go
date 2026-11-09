@@ -1157,18 +1157,14 @@ func (s *doorSide) downProject(name string, flags []string) int {
 // one compose must not resolve again after this check.
 func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 	services, _ := file["services"].(map[string]any)
-	name, _ := file["name"].(string)
 	for _, svc := range slices.Sorted(maps.Keys(services)) {
 		sv, _ := services[svc].(map[string]any)
+		// The render named every build (images.DoorBuild) and dropped its build: section.
 		image, _ := sv["image"].(string)
-		_, builds := sv["build"]
-		if image == "" && builds {
-			image = name + "-" + svc // compose's name for what it builds
-		}
 		if image == "" {
 			continue
 		}
-		run, labels, err := s.startImage(svc, image, builds, config)
+		run, labels, err := s.startImage(svc, image, config)
 		if err != nil {
 			return err
 		}
@@ -1195,16 +1191,16 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 // devopsy's util image goes by its name: nothing else moves it, and the project's image
 // lock (imageLock) keeps its own builds off it until compose has created its containers.
 // Any other name is anyone's on the server to move between this check and compose's create
-// (another project user's build of a registry's name under its own names, mongo's
-// mongo-express:1), so it goes pinned, <image>@<digest> (images.Pin): an image of this
+// (another project's pull of a tag its registry moved, the deploy user's build of a
+// registry's name), so it goes pinned, <image>@<digest> (images.Pin): an image of this
 // project's (claimed by its id, or named by a hold of its own) by its digest in the image's
 // repository, as the devopsy.digest label chooses it, read in one inspect; else claimed
 // first, by the digest its pull got. A reference by digest, or an id, is a pin already.
 // An image not here yet is claimed too, with this project's logins, and one still missing
 // refuses the start: compose would pull or build it after this check.
-func (s *doorSide) startImage(svc, image string, builds bool, config string) (string, map[string]string, error) {
+func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
 	missing := fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
-	if builds || image == doorKnown().Image || s.policy.OwnRef(image) {
+	if image == doorKnown().Image || s.policy.OwnRef(image) {
 		img, err := s.inspectImage(image)
 		if err != nil {
 			return "", nil, missing

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 // Known says what devopsy's own util containers run, from its constants: they are root
@@ -221,8 +223,10 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 	case "volume":
 		return decideVolume(args, p)
 	case "tag":
-		if len(args) != 2 || !p.ownHold(args[1]) || strings.HasPrefix(args[0], "-") {
-			return nil, refuse("docker tag %s: only a hold of this project's", strings.Join(args, " "))
+		// Onto a name only this project writes: a hold of its own, or its build's name,
+		// which a rollback puts back on the build it runs (Restore).
+		if len(args) != 2 || !p.OwnRef(args[1]) || strings.HasPrefix(args[0], "-") {
+			return nil, refuse("docker tag %s: only onto a hold or a build of this project's", strings.Join(args, " "))
 		}
 		// Its source is an image this project names too: its own, or claimed. An own one
 		// by the id that made it so, a claimed one by the digest its claim got (Claims):
@@ -405,12 +409,10 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 			if strings.HasPrefix(t, "-") {
 				return nil, refuse("docker image rm %s", t)
 			}
-			repo, tag := splitRef(t)
-			// A plain name is the server's: its pruning asks, and the name may be others'.
-			// Another's hold under a repository this project names is that project's
-			// reference count on the image it runs. Nothing to do, and nothing a release
-			// should hear as a failure.
-			if !p.ownHold(t) && (!p.OwnName(repo) || strings.HasPrefix(tag, "devopsy-")) {
+			// Any other name is the server's (a registry's, or another project's hold, its
+			// reference count on the image it runs): its pruning asks, and the name may be
+			// others'. Nothing to do, and nothing a release should hear as a failure.
+			if !p.OwnRef(t) {
 				return &Action{}, nil
 			}
 		}
@@ -487,7 +489,7 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 // ownHold says whether a tag is a hold of this project's,
 // <repo>:devopsy-<compose name>-<id>: nothing moves a tag anyone else reads.
 // OwnsImage says whether ref is this project's image: devopsy's util image (known), a
-// name only this project writes (one it builds, OwnName, or a hold of its own), an image
+// name only this project writes (its build's or a hold of its own, OwnRef), an image
 // another of whose names is so, or one whose id the project claimed (Images). Any other is
 // claimed first (Action.Claims): pulled with this project's own registry logins, so an
 // image another project pulled with its own is never this one's by being on disk.
@@ -515,15 +517,21 @@ func (p Policy) OwnsImageOf(id string, tags []string) bool {
 	return slices.Contains(p.Images, id) || slices.ContainsFunc(tags, p.OwnRef)
 }
 
-// OwnRef says whether ref is a name only this project writes: a build's (its repository
-// under the project's names) or a hold of its own. Its image stays this project's until it
-// moves the name, under its image lock; any other name is anyone's on the server to move.
+// OwnRef says whether ref is a name only this project writes: its build's, which the door
+// names for one of its environments (images.DoorBuild, under a host no registry serves), or
+// a hold of its own. Its image stays this project's until it moves the name, under its image
+// lock; any other name is a registry's, or another project's, and anyone's on the server to
+// move by a pull.
 func (p Policy) OwnRef(ref string) bool {
 	if strings.Contains(ref, "@") {
 		return false
 	}
-	repo, tag := splitRef(ref)
-	return p.ownHold(ref) || (p.OwnName(repo) && !strings.HasPrefix(tag, "devopsy-"))
+	if p.ownHold(ref) {
+		return true
+	}
+	name, _, ok := images.IsDoorBuild(ref)
+	_, tag := splitRef(ref)
+	return ok && p.OwnName(name) && !strings.HasPrefix(tag, "devopsy-")
 }
 
 // splitRef is ref's repository and tag, a registry's port kept in the repository.
@@ -535,10 +543,11 @@ func splitRef(ref string) (repo, tag string) {
 }
 
 // Claimable refuses a claim, or any pull of a project's, that would write a name another
-// project's: a hold not this project's (a registry's tag of that name, pulled, would be
-// another's hold here), or a name under another project's names, which that project runs by
-// name as its own (OwnRef), so a pull moving it would choose what it runs. A pull by digest
-// writes no name.
+// project's devopsy reads: a hold not this project's (a registry's tag of that name, pulled,
+// would be another's hold here, which its rollback and restart run by name), or a build's
+// name the door writes for another project (images.DoorHost). Every other name is a
+// registry's, and a pull of it writes what that registry serves. A pull by digest writes no
+// name.
 func (p Policy) Claimable(ref string) error {
 	if strings.Contains(ref, "@") {
 		return nil
@@ -547,12 +556,8 @@ func (p Policy) Claimable(ref string) error {
 	if strings.HasPrefix(tag, "devopsy-") && !p.ownHold(ref) {
 		return refuse("%s: another project's hold", ref)
 	}
-	if !p.OwnName(repo) {
-		for _, o := range p.Others {
-			if Extends(repo, o) {
-				return refuse("%s: under project %s's names, which only it writes", ref, o)
-			}
-		}
+	if strings.HasPrefix(repo, images.DoorHost+"/") && !p.OwnRef(ref) {
+		return refuse("%s: another project's build, which only the door names", ref)
 	}
 	return nil
 }

@@ -227,7 +227,7 @@ func TestParseComposeConfig(t *testing.T) {
 			{"type":"volume","source":""}]},
 		"whole":{"image":"busybox","labels":{"devopsy.data":"true"},"volumes":[{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt"}]},
 		"tool":{"image":"local/tool","pull_policy":"never"},
-		"web":{"image":"caddy:2"}}}`))
+		"web":{"image":"caddy:2"}}}`), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestParseComposeConfig(t *testing.T) {
 			t.Errorf("%d: %+v, want %+v", i, svcs[i], want[i])
 		}
 	}
-	if _, err := ParseComposeConfig([]byte("")); err == nil {
+	if _, err := ParseComposeConfig([]byte(""), false); err == nil {
 		t.Error("no error for no config")
 	}
 }

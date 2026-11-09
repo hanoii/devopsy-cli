@@ -325,20 +325,29 @@ the project has its user, a release by the deploy user under its names
 is refused before it goes live.
 
 A project user has images of its own too: those it builds, and those
-its releases hold. Any other image is pulled once with the project's
-registry logins (the `auths` of its `~/.docker/config.json`) before the
-project runs it, inspects it or tags it, even when another project has
-it on the server already. So a private image another project pulled is
-never this project's without its own login, and a public image is
-pulled once more for it. The door records what each project pulled
-this way, so later starts do not contact the registry. Compose then
-runs such an image by its digest (`mongo-express:1@sha256:...`), so no
-other project's build of that name changes what a start runs. A name
-starting with another project's name and a dash is that project's
-alone, so no other project pulls or runs an image by that name, a
-registry's included (with a project `mongo`, no other project runs
-`mongo-express`). A project can't be named `devopsy` or anything
+its releases hold. devopsy names what a project user builds
+`devopsy.invalid/<compose name>/<service>`, whatever the service's
+`image:` says, which is the name `docker ps` and `--releases` show;
+`devopsy -- config` shows the `image:` the project wrote. No registry
+serves the reserved `.invalid` domain, so a project user's build never
+lands on a name a registry serves, which another project may pull and
+run. Any other image is pulled once with the project's registry logins
+(the `auths` of its `~/.docker/config.json`) before the project runs
+it, inspects it or tags it, even when another project has it on the
+server already. So a private image another project pulled is never
+this project's without its own login, and a public image is pulled once
+more for it. The door records what each project pulled this way, so
+later starts do not contact the registry. Compose then runs such an
+image by its digest (`nginx:1.27@sha256:...`), so nothing that moves
+its name afterwards changes what a start runs. An image with
+`pull_policy: never` and no registry host is pulled like any other: its
+name is a registry's. A project can't be named `devopsy` or anything
 starting with `devopsy-`, which are devopsy's own names.
+
+On a server with project users, the deploy user's own projects name
+their builds as compose does by default, under their compose name,
+never as an image a registry serves: a project user's pull of that name
+replaces the build with the registry's image.
 
 The project user's `docker login` goes through the door. Docker checks
 the login against the registry as it does for a pull, so a registry on

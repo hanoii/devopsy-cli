@@ -165,18 +165,19 @@ const NoReleaseComposeEnv = "DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE"
 // ListCompose lists the services a release runs: compose config in its
 // code, through the server's devopsy (its environment loaded, like any
 // command there), with the release script's variables, without devopsy's
-// own file and without profiles.
-func ListCompose(rel string) ([]Service, error) {
-	return listCompose(rel, "--", "config", "--format", "json")
+// own file and without profiles. door says the listing is a project
+// user's, behind the door, whose builds the door names (DoorBuild).
+func ListCompose(rel string, door bool) ([]Service, error) {
+	return listCompose(rel, door, "--", "config", "--format", "json")
 }
 
 // ListComposeAll is ListCompose of every profile's services: the labels of
 // what a copy, a take and an export write (parentData).
-func ListComposeAll(rel string) ([]Service, error) {
-	return listCompose(rel, "--", "--profile", "*", "config", "--format", "json")
+func ListComposeAll(rel string, door bool) ([]Service, error) {
+	return listCompose(rel, door, "--", "--profile", "*", "config", "--format", "json")
 }
 
-func listCompose(rel string, args ...string) ([]Service, error) {
+func listCompose(rel string, door bool, args ...string) ([]Service, error) {
 	var out bytes.Buffer
 	cmd := exec.Command("devopsy", args...)
 	cmd.Dir = filepath.Join(rel, codeDir)
@@ -185,7 +186,7 @@ func listCompose(rel string, args ...string) ([]Service, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("compose config: %w", err)
 	}
-	svcs, err := ParseComposeConfig(out.Bytes())
+	svcs, err := ParseComposeConfig(out.Bytes(), doorBuildsIn(rel, door))
 	for i := range svcs {
 		svcs[i].BuildKey = BuildKey(svcs[i].BuildSpec, cmd.Dir)
 	}
@@ -194,8 +195,11 @@ func listCompose(rel string, args ...string) ([]Service, error) {
 
 // ParseComposeConfig reads compose config --format json: each service's
 // image (compose's name for a build without one: <name>-<service>), in
-// the services' order by name.
-func ParseComposeConfig(data []byte) ([]Service, error) {
+// the services' order by name. With doorBuilds (doorBuildsIn) a build is
+// named as the door's render names it, DoorBuild, whatever image: says:
+// a project user's config runs unrendered, so the listing names it once
+// here, the only place it is named past the render.
+func ParseComposeConfig(data []byte, doorBuilds bool) ([]Service, error) {
 	var cfg struct {
 		Name     string
 		Services map[string]struct {
@@ -228,7 +232,10 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 		if data {
 			svc.DataVersion = c.Labels[DataVersionLabel]
 		}
-		if svc.Ref == "" {
+		switch {
+		case svc.Build && doorBuilds:
+			svc.Ref = DoorBuild(cfg.Name, n)
+		case svc.Ref == "":
 			svc.Ref = cfg.Name + "-" + n
 		}
 		svcs = append(svcs, svc)

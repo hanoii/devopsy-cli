@@ -125,11 +125,14 @@ esac
 		t.Fatal(err)
 	}
 	file := func(label string) map[string]any {
-		return map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
-			"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
-			"build":  map[string]any{"context": "/etc", "ssh": []any{"default"}},
-			"labels": map[string]any{label: "1"},
-		}}}
+		return map[string]any{"name": "shop-prod", "services": map[string]any{
+			"web": map[string]any{
+				"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
+				"build":  map[string]any{"context": "/etc", "ssh": []any{"default"}},
+				"labels": map[string]any{label: "1"},
+			},
+			"db": map[string]any{"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"}},
+		}}
 	}
 	side := func(command string) *doorSide {
 		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
@@ -147,7 +150,8 @@ esac
 			t.Errorf("%s: the vet was not asked: %v", label, err)
 			continue
 		}
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"busybox:1.37@sha256:b1"`) {
+		// The build goes by devopsy's name for it, the pulled image pinned.
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.invalid/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@sha256:b1"`) {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
 		}
 	}

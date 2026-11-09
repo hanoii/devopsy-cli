@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 // Policy is what the server says of one project user.
@@ -310,21 +312,21 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	case verb == "build":
 		block, _ := b.(map[string]any)
 		checkBuild(svc, block, p, paths, fail)
-		// A build writes the tag it names, in the server's one image store.
-		if image, _ := s["image"].(string); image != "" {
-			repo, tag, _ := strings.Cut(image, ":")
-			if !p.OwnName(repo) || strings.HasPrefix(tag, "devopsy-") {
-				fail("%s: build: an image not this project's: %s", svc, image)
-			}
-		}
+		// A build writes devopsy's name for it in the server's one image store, whatever
+		// image: says: under a host no registry serves, so no name a project writes is one
+		// a registry's pull writes too, or another project reads.
+		s["image"] = images.DoorBuild(name, svc)
 	case verb == "pull":
 		// A pull has only to skip what is built: nothing of the block is read.
 		s["build"] = map[string]any{"context": "."}
 	default:
-		// A build is its own request. Its image keeps compose's name.
+		// A build is its own request. Its image is the build's name, unless devopsy's own
+		// file holds the service on a pin (image mode's pull, a pulled image held) or on a
+		// name of this project's own (a hold, another environment's build).
 		delete(s, "build")
-		if s["image"] == nil {
-			s["image"] = name + "-" + svc
+		image, _ := s["image"].(string)
+		if pinned := strings.Contains(image, "@") || strings.HasPrefix(image, "sha256:"); !pinned && !p.OwnRef(image) {
+			s["image"] = images.DoorBuild(name, svc)
 		}
 	}
 	for _, k := range sortedKeys(s) {
