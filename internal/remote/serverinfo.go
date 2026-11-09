@@ -97,7 +97,7 @@ type DoorFacts struct {
 	FirewallError string   `json:"firewall_error,omitempty"`
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners).
 	Listeners []string `json:"listeners,omitempty"`
-	Project       string   `json:"project,omitempty"`
+	Project   string   `json:"project,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.
