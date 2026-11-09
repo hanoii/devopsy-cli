@@ -135,3 +135,33 @@ func TestDoorDirShell(t *testing.T) {
 		}
 	}
 }
+
+// add takes a Unix user only when it made it: one there already that is no project user (not
+// in the group) is someone's account, the deploy user's if it is named devopsy-<project>, and
+// adopting it would put it in the group (sshd then ignores its own keys, the firewall holds
+// it) and hand its home to the door. One add made before, and remove kept, is taken again.
+func TestDoorUserCheck(t *testing.T) {
+	t.Parallel()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "id"), `#!/bin/sh
+case "$1 $2" in
+  "-u devopsy-shop") echo 10002 ;;
+  "-nG devopsy-shop") echo "devopsy-shop `+DoorGroup+`" ;;
+  *) exec /usr/bin/id "$@" ;;
+esac
+`)
+	if err := os.Chmod(filepath.Join(bin, "id"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for who, ok := range map[string]bool{"devopsy-nosuchuser": true, "devopsy-shop": true, me.Username: false} {
+		c := exec.Command("sh", "-c", doorUserCheck, "sh", who)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		if out, err := c.CombinedOutput(); (err == nil) != ok {
+			t.Errorf("%s: %v %s", who, err, out)
+		}
+	}
+}

@@ -67,6 +67,16 @@ var doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
 fi
 `
 
+// doorUserCheck refuses a Unix user that is there and no project user ($1 the user): one add
+// made is in the group, remove keeping it there, while any other is someone's account (the
+// deploy user's, named devopsy-<project>), which the group would take from sshd's own keys
+// and put behind the firewall, its home handed to the door.
+var doorUserCheck = `if id -u "$1" >/dev/null 2>&1 && ! id -nG "$1" | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
+  ` + echoLine(report.ErrorLevel, "a Unix user $1 is there already, and no project user: a project user is one --project-users add made") + `
+  exit 3
+fi
+`
+
 // hostGroup makes the project users' group when it is not there yet.
 var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system " + DoorGroup + "\n"
 
@@ -127,7 +137,7 @@ group=` + DoorGroup + `
   fi
 done
 (set -- "$user" "$tree"
-` + doorTreeCheck + `)
+` + doorUserCheck + doorTreeCheck + `)
 ` + hostPut + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
 # Docker. A real docker there would put the project users on the socket.
 if [ ! -L ` + DoorDockerLink + ` ] && [ -e ` + DoorDockerLink + ` ]; then
