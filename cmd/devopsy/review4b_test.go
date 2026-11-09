@@ -2,8 +2,11 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -96,5 +99,47 @@ func TestReview4bServerInfoListsAProjectUsersTreeAnywhere(t *testing.T) {
 	}
 	if !slices.Contains(got, "shop/prod") {
 		t.Errorf("a project user's tree in its own home is not listed: %v", got)
+	}
+}
+
+// BUG: a project user's docker compose renders with compose's global flags and hands the door
+// only the verb and what follows it, so a global flag that changes what the command does is
+// dropped without a word: `docker compose --dry-run -p shop-prod down -v` takes the project
+// down and removes its volumes, and `--dry-run up -d` starts it. The door cannot carry such a
+// flag, so its client has to refuse it.
+func TestReview4bDoorClientDropsNoDryRun(t *testing.T) {
+	t.Parallel()
+	if syscall.Access(dockerSocket, 2) == nil {
+		t.Skip("this user reaches Docker's socket: its docker is no door")
+	}
+	dir := t.TempDir()
+	bin, realBin, asked := filepath.Join(dir, "bin"), filepath.Join(dir, "real"), filepath.Join(dir, "asked")
+	write(t, filepath.Join(realBin, "docker"), "#!/bin/sh\necho '{\"name\":\"shop-prod\",\"services\":{}}'\n", 0o755)
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >>"+asked+"\n", 0o755)
+	if err := os.Symlink(binary, filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"compose", "--dry-run", "-p", "shop-prod", "down", "-v"},
+		{"compose", "--dry-run", "up", "-d"},
+	} {
+		os.Remove(asked)
+		cmd := exec.Command(filepath.Join(bin, "docker"), args...)
+		cmd.Env = []string{"PATH=" + bin + ":" + realBin + ":/usr/bin:/bin", "HOME=" + dir, "TMPDIR=" + dir}
+		cmd.Dir = dir
+		out, _ := cmd.CombinedOutput()
+		got, _ := os.ReadFile(asked)
+		if strings.Contains(string(got), "--door") && !strings.Contains(string(got), "--dry-run") {
+			t.Errorf("docker %s asks the door for the real thing:\n%s%s", strings.Join(args, " "), got, out)
+		}
+	}
+	// The control: without the flag, the same command reaches the door.
+	os.Remove(asked)
+	cmd := exec.Command(filepath.Join(bin, "docker"), "compose", "-p", "shop-prod", "down", "-v")
+	cmd.Env = []string{"PATH=" + bin + ":" + realBin + ":/usr/bin:/bin", "HOME=" + dir, "TMPDIR=" + dir}
+	cmd.Dir = dir
+	out, _ := cmd.CombinedOutput()
+	if got, _ := os.ReadFile(asked); !strings.Contains(string(got), "--door down shop-prod -v") {
+		t.Fatalf("the control: a down by name did not reach the door:\n%s%s", got, out)
 	}
 }
