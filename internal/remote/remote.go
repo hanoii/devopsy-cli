@@ -412,6 +412,17 @@ func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// QuoteWord is s as one word of a command offered to copy: as it is when no shell reads
+// anything in it, else quoted (Quote).
+func QuoteWord(s string) string {
+	if plainWord.MatchString(s) {
+		return s
+	}
+	return Quote(s)
+}
+
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
+
 // runningLine is the line before a step runs.
 func runningLine(args []string, phase string) string {
 	return sayQuoted(report.InfoLevel, "running 'devopsy "+strings.Join(args, " ")+"' ("+phase+")")

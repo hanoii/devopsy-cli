@@ -604,7 +604,7 @@ func doorTrees(root string) map[string]string {
 // treeEnvironments are a project user's environments as that user reads them (--door-read
 // environments), none when it cannot.
 func treeEnvironments(who, tree string) []remote.Environment {
-	out, err := exec.Command("sudo", sudoArgs(who, doorReadFlag, "environments", tree)...).Output()
+	out, err := doorRead(who, "environments", tree).Output()
 	if err != nil {
 		return nil
 	}
@@ -1190,7 +1190,7 @@ func composeNameOf(path string) string {
 // under root on this machine (no host).
 func statusHint(host, root, path string) report.Remedy {
 	if host == "" {
-		return report.Hint("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
+		return report.Hint("", "cd "+remote.QuoteWord(filepath.Join(root, path, "current"))+" && devopsy --status")
 	}
 	project, rest, _ := strings.Cut(path, "/")
 	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")

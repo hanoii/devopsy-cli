@@ -62,6 +62,16 @@ func sudoArgs(as, flag string, args ...string) []string {
 	return append([]string{"-n", "-u", as, devopsyPath(), flag}, args...)
 }
 
+// doorRead is a read as the project user who (--door-read), the one way any caller starts
+// it: in a session of its own, with no controlling terminal, since its process is that
+// user's to trace, and in the caller's session it would hold the caller's terminal (an
+// admin's, under --server-info) to read and type into. It reads no terminal.
+func doorRead(who string, args ...string) *exec.Cmd {
+	c := exec.Command("sudo", sudoArgs(who, doorReadFlag, args...)...)
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return c
+}
+
 // realDocker is the docker on PATH that is not this binary.
 func realDocker() string {
 	self, _ := os.Executable()

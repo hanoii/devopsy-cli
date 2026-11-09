@@ -533,3 +533,19 @@ func TestServerInfoDocsNameContainerTroubles(t *testing.T) {
 		}
 	}
 }
+
+// The command a hint offers to copy for an environment on this machine quotes its path when
+// a shell would read any of it: the path is a project user's to name, and a copy must run
+// cd and --status, nothing it adds.
+func TestStatusHintQuotesItsPath(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{
+		"shop/prod":          "cd /srv/shop/prod/current && devopsy --status",
+		"shop/prod;rm -rf ~": "cd '/srv/shop/prod;rm -rf ~/current' && devopsy --status",
+		"shop/it's":          `cd '/srv/shop/it'\''s/current' && devopsy --status`,
+	} {
+		if got := statusHint("", "/srv", path).Cmds; len(got) != 1 || got[0] != want {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
+	}
+}

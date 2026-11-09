@@ -14,6 +14,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A project user's sync keys (`DoorSyncKeysFile`) are the door's to write (`--door sync-key`, from `--sync-key` as that user), each line the door's own (`remote.SyncKeyLine`), for an environment in that user's tree, and `--authorized-keys` prints them after its keys; a leaked key could add one that does that user's syncs' requests until its sync ends or it expires, so removing any of the user's keys, or the user, drops them all (internals/syncs.md).
 - Who the socket lets in has no door (`runDocker`): the deploy user, and a project an admin put in the docker group.
 - `--door` and `--door-read` are dispatched first in `run`, before anything loads a project or reads the environment.
+- A read as a project user (`--door-read`) starts through `doorRead` alone, in a session of its own: its process is that user's to trace, and in the caller's session it would hold the caller's terminal (an admin's, under `--server-info`) to read and type into.
 - The deploy user never reads a project's tree: what it needs comes from `--door-read`, run as that project's user, so no link or swap there can show it anything of the deploy user's.
 - A project user's answer about a path is believed only for a path whose every part is the deploy user's (`Paths.Real`).
 - Compose runs on a file the project user rendered, never on the project's own: compose reads `env_file` and `extends` and runs `provider` as whoever runs it.

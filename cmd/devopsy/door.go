@@ -180,7 +180,7 @@ type doorSide struct {
 
 // read runs a read of the project's tree, as its user.
 func (s *doorSide) read(op string, args ...string) *exec.Cmd {
-	return exec.Command("sudo", sudoArgs(s.policy.User, doorReadFlag, append([]string{op}, args...)...)...)
+	return doorRead(s.policy.User, append([]string{op}, args...)...)
 }
 
 // docker is a command of the real client's, in the door's environment.
@@ -865,7 +865,7 @@ func hostIDs(users []string) ([]int, error) {
 // takeFile reads a rendered file by the caller's rights, and removes it.
 func takeFile(who, path string) (map[string]any, error) {
 	var out bytes.Buffer
-	c := exec.Command("sudo", sudoArgs(who, doorReadFlag, "take", path)...)
+	c := doorRead(who, "take", path)
 	c.Stdout = &out
 	if err := c.Run(); err != nil {
 		return nil, errors.New("refused: not a file this project's user can read")
