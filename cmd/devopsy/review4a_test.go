@@ -76,3 +76,47 @@ func TestResetAcrossWipesAnEntryOfAnotherKind(t *testing.T) {
 		})
 	}
 }
+
+// BUG: a full restore makes a missing volume that has options with the compose of the
+// release it replaces, never of the one it restores: its data step runs in current, the
+// old release, and ensureVolumes runs compose create there, naming the restored code's
+// services. Where the two differ (the restored code added the service or the volume, its
+// volume pruned since a rollback; a snapshot imported from elsewhere) compose knows no such
+// service, or makes the volume with the old release's options, and the restore fails past
+// its mark, its services down. Before, docker volume create took the restored labels'.
+func TestRestoreMakesAVolumeWithTheRestoredCompose(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.labels(`FAKE_DB_VOLUME=dbdata FAKE_DB_VOLUME_OPTS='{"type":"cifs","o":"username=app,password=s3cret"}'`)
+	s.releaseProd(nil)
+	vol := filepath.Join(s.log+".vol", "shop-prod_dbdata")
+	write(t, filepath.Join(vol, "ibd"), "pages\n", 0o644)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	was := s.current("prod")
+	if err := os.RemoveAll(vol); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	if code != 0 || readString(filepath.Join(vol, "ibd")) != "pages\n" || s.current("prod") == was {
+		t.Fatalf("the restore (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol, "ibd")), out, docker)
+	}
+	made := false
+	for _, line := range strings.Split(docker, "\n") {
+		if !strings.Contains(line, " create --no-build --no-recreate ") {
+			continue
+		}
+		made = true
+		if !strings.Contains(line, "/"+s.current("prod")+"/") {
+			t.Errorf("the volume made with another release's compose than the restored one's (%s, current was %s):\n%s", s.current("prod"), was, line)
+		}
+	}
+	if !made {
+		t.Errorf("the volume not made by compose:\n%s", docker)
+	}
+}
