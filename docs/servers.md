@@ -215,9 +215,11 @@ too.
 - `--ssh-keys --for <project>`, with any of the above, edits a project
   user's keys instead, on a server with project users (below), logged in
   as the deploy user: they are kept in its config directory, out of the
-  project user's reach, and sshd asks devopsy for them. Its last key may
-  go, which is how its logins stop: that also ends every process it
-  runs, and the door answers it no more.
+  project user's reach, and sshd asks devopsy for them. Removing any of
+  its keys ends every process that user runs, a session of another key's
+  included (a release cut there is marked and settled by the next one);
+  its last key may go, which is how its logins stop, and the door
+  answers it no more.
 - Without a target, `devopsy --ssh-keys-generate [<name>]` makes an
   ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>` for
   elsewhere), sending nothing anywhere.

@@ -64,18 +64,23 @@ func TestKeysRemoveLast(t *testing.T) {
 	if code := remove("AAAAone"); code != 4 || !strings.Contains(readFile(keys), "AAAAone") {
 		t.Errorf("last key beside a sync's: exit %d, file %q", code, readFile(keys))
 	}
+	// A key's blob is long: a line naming a type with a word after it is none (a key cut short).
 	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
+	if code := remove("AAAAone"); code != 4 {
+		t.Errorf("last key beside a key cut short: exit %d, file %q", code, readFile(keys))
+	}
+	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItwo ci\n")
 	if code := remove("AAAAone"); code != 0 || strings.Contains(readFile(keys), "AAAAone") {
 		t.Errorf("one of two keys: exit %d, file %q", code, readFile(keys))
 	}
 }
 
-// A project user left with no key has its processes ended, as root through the util image
-// under the host's pids, by its uid: a process it left running (nohup, setsid) would outlive
-// its last key's removal, keep calling the door by its group, and so keep what the removal
-// took. While a key is left, nothing ends; the deploy user's own keys never end anything. A
-// kill that fails says so and fails: the key is gone, and the operator must know what runs.
-func TestKeysRemoveEndsAKeylessUser(t *testing.T) {
+// Removing any of a project user's keys ends every process it runs, as root through the util
+// image under the host's pids, which nothing of the user's can signal: a key removed is one
+// no longer trusted, and what it may have left running (nohup, setsid) would outlive it and
+// keep calling the door by its group. The deploy user's own keys never end anything. A kill
+// that fails says so and fails: the key is gone, and the operator must know what runs.
+func TestKeysRemoveEndsTheUsersProcesses(t *testing.T) {
 	t.Parallel()
 	home, bin := t.TempDir(), t.TempDir()
 	calls := filepath.Join(bin, "calls")
@@ -100,13 +105,17 @@ func TestKeysRemoveEndsAKeylessUser(t *testing.T) {
 		got, _ := os.ReadFile(calls)
 		return cmd.ProcessState.ExitCode(), string(out) + string(got)
 	}
-	kill := "docker run --rm --pid host --network none --user 10002 " + UtilImage
+	// As root (no --user), the uid an argument the kill matches each process's credentials by.
+	kill := "docker run --rm --pid host --network none " + UtilImage + " sh -c "
+	ended := func(out string) bool {
+		return strings.Contains(out, kill) && strings.Contains(out, " sh 10002\n") && !strings.Contains(out, "--user")
+	}
 	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
-	if code, out := remove("devopsy-shop", "AAAAone"); code != 0 || strings.Contains(out, "docker") {
-		t.Errorf("one of two keys (%d) ends its processes:\n%s", code, out)
+	if code, out := remove("devopsy-shop", "AAAAone"); code != 0 || !ended(out) {
+		t.Errorf("one of two keys (%d) leaves its processes:\n%s", code, out)
 	}
 	write(t, keys, "ssh-ed25519 AAAAtwo ci\n# ssh-ed25519 AAAAold retired\n")
-	if code, out := remove("devopsy-shop", "AAAAtwo"); code != 0 || !strings.Contains(out, kill) {
+	if code, out := remove("devopsy-shop", "AAAAtwo"); code != 0 || !ended(out) {
 		t.Errorf("its last key (%d) leaves its processes:\n%s", code, out)
 	}
 	write(t, filepath.Join(bin, "fails"), "")
@@ -115,15 +124,16 @@ func TestKeysRemoveEndsAKeylessUser(t *testing.T) {
 		t.Errorf("a kill that failed (%d) passes for one:\n%s", code, out)
 	}
 	os.Remove(filepath.Join(bin, "fails"))
-	write(t, filepath.Join(home, ".ssh", "authorized_keys"), "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
+	write(t, filepath.Join(home, ".ssh", "authorized_keys"), "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItwo ci\n")
 	if code, out := remove("", "AAAAone"); code != 0 || strings.Contains(out, "docker") {
 		t.Errorf("the deploy user's key (%d) ends processes:\n%s", code, out)
 	}
 }
 
-// A file has a key left when it holds one anyone logs in with: a commented-out key and a
-// sync's key (which only does its sync's requests) are none. The door's refusal of a keyless
-// user (KeysLeft) and the removal's kill (keysLeft, in its script) read it one way.
+// A file has a key left when it holds one anyone logs in with: a commented-out key, a sync's
+// key (which only does its sync's requests) and a line that only names a type are none. The
+// door's refusal of a keyless user (KeysLeft) and the deploy user's last key's guard
+// (keysLeft, in its script) read it one way.
 func TestKeysLeftOneRule(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -132,8 +142,11 @@ func TestKeysLeftOneRule(t *testing.T) {
 		"":                          false,
 		"# " + key + " retired\n\n": false,
 		`restrict,command="devopsy --sync-child 1.0a1b2c /srv/x vm2:x" ` + key + " devopsy-sync-1.0a1b2c\n": false,
-		key + " laptop\n":                          true,
-		RestrictedKeyOptions + " " + key + " ci\n": true,
+		key + " laptop\n":                              true,
+		RestrictedKeyOptions + " " + key + " ci\n":     true,
+		"ssh-ed25519 not*base64 laptop\n":              false,
+		"ssh-ed25519\n":                                false,
+		"the old ssh-ed25519 key went on 2026-01-01\n": false,
 	} {
 		f := filepath.Join(dir, "keys")
 		write(t, f, content)

@@ -175,9 +175,9 @@ printf '%s\n' "$f"
 // KeysRemoveScript drops from user's keys ("" the deploy user's) the lines whose key is the
 // blob on stdin: none (exit 3). The deploy user's last key stays (exit 4: it would lock
 // everyone out); a project user's goes, which is how its logins stop, and its sync keys
-// with it (DoorSyncKeysFile). A project user left with no key has its processes ended
-// (EndProcessesArgs): one it left running would outlive its logins, and keep the door by
-// its group.
+// with it (DoorSyncKeysFile). Any removal of a project user's key ends every process it runs
+// (EndProcessesArgs): a key removed is one no longer trusted, and what it may have left
+// running would outlive its logins, and keep the door by its group.
 func KeysRemoveScript(user string) string {
 	last, end := "", ""
 	if user == "" {
@@ -188,15 +188,13 @@ func KeysRemoveScript(user string) string {
 fi
 `
 	} else {
-		end = `if ! ` + keysLeft(`"$f"`) + `; then
-  uid=$(id -u ` + Quote(user) + `)
-  devopsy ` + UtilImageFlag + ` >/dev/null 2>&1 || :
-  docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || {
-    ` + echoLine(report.ErrorLevel, "its last key is removed, but the processes of "+user+" could not be ended") + `
-    exit 1
-  }
-  ` + echoLine(report.InfoLevel, "no key of "+user+" left: its processes are ended") + `
-fi
+		end = `uid=$(id -u ` + Quote(user) + `)
+devopsy ` + UtilImageFlag + ` >/dev/null 2>&1 || :
+docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || {
+  ` + echoLine(report.ErrorLevel, "the key is removed, but the processes of "+user+" could not be ended") + `
+  exit 1
+}
+` + echoLine(report.InfoLevel, "the processes of "+user+" are ended") + `
 `
 	}
 	return keysPrelude(user) + keysLock + `blob=$(cat)
@@ -226,20 +224,41 @@ func KeysLeft(file string) bool {
 	return false
 }
 
-// keysLeft is KeysLeft in a script, file a shell word.
+// keysLeft is KeysLeft in a script, file a shell word: the deploy user's last key's guard,
+// under its lock, behind the operator's own check by KeysLeft's parse (sshkeys.go). A key's
+// blob is base64 and long; a line of words that only names a type is none.
 func keysLeft(file string) string {
-	return `grep -Ev '^[[:space:]]*(#|$)' ` + file + ` | grep -Ev ' ` + syncKeyPrefix + `[0-9]+\.[0-9a-f]{6}$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'`
+	return `grep -Ev '^[[:space:]]*(#|$)' ` + file + ` | grep -Ev ' ` + syncKeyPrefix + `[0-9]+\.[0-9a-f]{6}$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)[^[:space:]]+[[:space:]]+[A-Za-z0-9+/]{16,}={0,3}([[:space:]]|$)'`
 }
 
-// EndProcessesArgs are docker's arguments to end every process of the user of uid: as that
-// user, in UtilImage under the host's pids, kill -9 -1 signals each process the user may
-// signal, which is every one of its own whatever /proc says of its owner (a process that
-// made itself undumpable shows root's there); twice, for one forked meanwhile. No
-// container runs as a project user's uid (hostIDs), so it ends none.
+// EndProcessesArgs are docker's arguments to end every process of the user of uid: as root,
+// which nothing of the user's can signal, in UtilImage under the host's pids, every process
+// whose real, effective or saved uid is the user's, read from its status (its credentials,
+// whatever the owner of its /proc directory shows), a zombie aside (no signal reaches one);
+// round after round until one finds none, so a process forked meanwhile goes too, failing
+// after 50. No container runs as a project user's uid (hostIDs), so it ends none.
 func EndProcessesArgs(uid string) []string {
-	return []string{"run", "--rm", "--pid", "host", "--network", "none", "--user", uid, UtilImage,
-		"sh", "-c", "kill -9 -1 2>/dev/null; kill -9 -1 2>/dev/null; true"}
+	return []string{"run", "--rm", "--pid", "host", "--network", "none", UtilImage, "sh", "-c", endProcesses, "sh", uid}
 }
+
+// endProcesses is EndProcessesArgs' script, its uid $1.
+const endProcesses = `for i in $(seq 50); do
+  left=
+  for f in /proc/[0-9]*/status; do
+    state= hit=
+    while read -r k a b c _; do
+      case $k in
+        State:) state=$a ;;
+        Uid:) [ "$a" = "$1" ] || [ "$b" = "$1" ] || [ "$c" = "$1" ] && hit=1; break ;;
+      esac
+    done <"$f" 2>/dev/null
+    [ -n "$hit" ] && [ "$state" != Z ] || continue
+    p=${f#/proc/}
+    kill -9 "${p%/status}" 2>/dev/null && left=1
+  done
+  [ -n "$left" ] || exit 0
+done
+exit 1`
 
 // endProcessesShell is EndProcessesArgs quoted for a script, the uid given as the shell word
 // uid (a variable's expansion).
