@@ -550,6 +550,9 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if slices.Contains(s.policy.Images, img.ID) {
 		return digest, img, nil
 	}
+	if err := s.prove(images.ByDigest(ref, digest), d); err != nil {
+		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+	}
 	file := s.policy.ImagesFile()
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 		return "", images.Image{}, err
@@ -564,6 +567,34 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	}
 	s.policy.Images = append(s.policy.Images, img.ID)
 	return digest, img, err
+}
+
+// prove fetches the image pinned names (<repo>@<digest>, what a claim's pull got) on the
+// project's own builder, with its logins (the DOCKER_CONFIG dir logins): the builder's store
+// holds only what the project fetched or built, so every blob it lacks comes from the
+// claimant's registry, checked by its digest, and the exporter needs every one. A pull alone
+// proves only that a registry answered: Docker fetches no layer it holds, so a registry that
+// names another project's layers, serving none, lands on them. Every first claim proves.
+func (s *doorSide) prove(pinned, logins string) error {
+	b, err := s.builder()
+	if err != nil {
+		return errors.New(strings.TrimPrefix(err.Error(), "refused: "))
+	}
+	dir, err := os.MkdirTemp("", "devopsy-door-proof-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	var said bytes.Buffer
+	c := s.docker("buildx", "build", "--output", "type=oci,dest=/dev/null", "-f", "-", dir)
+	c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
+	c.Stdin = strings.NewReader("FROM " + pinned + "\n")
+	c.Stdout, c.Stderr = &said, &said
+	if c.Run() != nil {
+		os.Stderr.Write(said.Bytes())
+		return errors.New("its registry did not serve the image to this project's logins")
+	}
+	return nil
 }
 
 // inspectImage is ref's image as Docker has it now, read once.

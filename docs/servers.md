@@ -345,6 +345,18 @@ its name afterwards changes what a start runs. An image with
 name is a registry's. A project can't be named `devopsy` or anything
 starting with `devopsy-`, which are devopsy's own names.
 
+The first time a project uses an image this way, its own builder
+fetches the image again from the project's registry, to prove the
+registry serves its content and not only its name: Docker skips the
+layers it already has, so a registry could otherwise name another
+project's image without having it. That costs one more download of
+what the builder lacks, once per layer. The builders keep their own
+registry settings, in `<space>/buildx/buildkitd.default.toml`, read
+when a project's builder is made: a registry the server's Docker
+trusts through `certs.d` or `insecure-registries`, or a mirror of
+Docker Hub it pulls through, goes there too, or no project user can
+use that registry's images.
+
 On a server with project users, the deploy user's own projects name
 their builds as compose does by default, under their compose name,
 never as an image a registry serves: a project user's pull of that name

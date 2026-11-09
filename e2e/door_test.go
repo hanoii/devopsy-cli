@@ -63,12 +63,66 @@ door:
   vets: [{prefix: vetted., command: /usr/local/bin/door-vet}]
 C
 chown devopsy /home/devopsy/.config/devopsy/config.yaml
+# The project builders pull through the lane's mirror too, as the daemon does: the admin's.
+m=$(getent hosts mirror | awk '{print $1; exit}')
+: >`+doorBuildkitBase+`
+[ -z "$m" ] || printf '[registry."docker.io"]\n  mirrors = ["%s:5000"]\n[registry."%s:5000"]\n  http = true\n' "$m" "$m" >`+doorBuildkitBase+`
+install -d -o devopsy -g devopsy `+doorSpace+`/buildx
+install -o devopsy -m 644 `+doorBuildkitBase+` `+doorSpace+`/buildx/buildkitd.default.toml
 su -s /bin/sh devopsy -c 'devopsy --util-image'
 `)
 	if code != 0 {
 		t.Fatalf("the door's setup on %s (%d): %s", alias, code, out)
 	}
 	return name
+}
+
+// doorBuildkitBase is the project builders' config as the door server's setup wrote it, the
+// lane's mirror in it: a test's registry adds itself to <space>/buildx/buildkitd.default.toml
+// and its cleanup puts this back (doorRegistry).
+const doorBuildkitBase = "/etc/devopsy-e2e-buildkitd.toml"
+
+// doorRegistry starts a registry of the test's on the door server, its container name, at the
+// address of the server's Docker bridge over TLS, alice's password s3cret when auth, and
+// returns its address. A project's builder is a container, so a registry on the host's
+// loopback would be its own: the admin's way is this address, its CA in Docker's certs.d and
+// in the builders' config (buildkitd.default.toml, read when a builder is made, so before the
+// test's projects claim). Its cleanup undoes all of it.
+func doorRegistry(t *testing.T, name, port string, auth bool) string {
+	t.Helper()
+	gw, code := doorRoot(t, "docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'")
+	if code != 0 {
+		t.Fatalf("the bridge's gateway (%d): %s", code, gw)
+	}
+	ip := strings.TrimSpace(gw)
+	addr := ip + ":" + port
+	r := "/reg/" + name
+	login := ""
+	if auth {
+		login = `docker run --rm httpd:2.4-alpine htpasswd -Bbn alice s3cret >` + r + `/auth/htpasswd
+`
+	}
+	opts := "-v " + r + "/certs:/certs -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/c.pem -e REGISTRY_HTTP_TLS_KEY=/certs/k.pem -e REGISTRY_STORAGE_DELETE_ENABLED=true"
+	if auth {
+		opts += " -v " + r + "/auth:/auth -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=r -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd"
+	}
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f "+name+" >/dev/null 2>&1; rm -rf "+r+" /etc/docker/certs.d/"+addr+" /usr/local/share/ca-certificates/"+name+".crt "+doorSpace+"/buildx/"+name+".pem; update-ca-certificates >/dev/null; install -o devopsy -m 644 "+doorBuildkitBase+" "+doorSpace+"/buildx/buildkitd.default.toml")
+	})
+	if out, code := doorRoot(t, `set -e
+mkdir -p `+r+`/auth `+r+`/certs /etc/docker/certs.d/`+addr+`
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout `+r+`/certs/k.pem -out `+r+`/certs/c.pem -subj /CN=`+ip+` -addext subjectAltName=IP:`+ip+` 2>/dev/null
+cp `+r+`/certs/c.pem /etc/docker/certs.d/`+addr+`/ca.crt
+cp `+r+`/certs/c.pem /usr/local/share/ca-certificates/`+name+`.crt
+update-ca-certificates >/dev/null
+install -o devopsy -m 644 `+r+`/certs/c.pem `+doorSpace+`/buildx/`+name+`.pem
+{ cat `+doorBuildkitBase+`; printf '[registry."%s"]\n  ca = ["%s"]\n' `+addr+` `+doorSpace+`/buildx/`+name+`.pem; } >`+doorSpace+`/buildx/buildkitd.default.toml
+`+login+`docker run -d --name `+name+` -p `+addr+`:5000 `+opts+` registry:3 >/dev/null
+for i in $(seq 150); do curl -s -o /dev/null https://`+addr+`/v2/ && exit 0; sleep 0.2; done
+exit 1`); code != 0 {
+		t.Fatalf("the registry %s (%d): %s", name, code, out)
+	}
+	return addr
 }
 
 // startWaitE2E bounds a wait for what a test then acts on (a container answering).
@@ -661,36 +715,29 @@ func TestDoorLabelsFromAnImageAndTheVet(t *testing.T) {
 
 // A project's registry login reaches the door as its logins alone: a plugin and helpers
 // beside it never run as the deploy user, and another project does not pull by it. On a real
-// registry over TLS, since Docker's CLI is what loads them.
+// registry over TLS, since Docker's CLI is what loads them. Its logged-in release is the
+// claim's proof passing too: its builder fetched the private image with its login
+// (TestDoorClaimProvesTheContent the proof failing).
 func TestDoorRegistryLogins(t *testing.T) {
+	reg := doorRegistry(t, "doorreg-reg", "5003", true)
 	dir := doorProject(t, "doorreg", `services:
   web:
-    image: localhost:5000/private/app:1
+    image: `+reg+`/private/app:1
     user: "10001:10001"
     security_opt: [no-new-privileges]
     command: sleep 100000
 `, nil)
 	doorUser(t, "doorregv")
 	if out, code := doorRoot(t, `set -e
-mkdir -p /reg/auth /reg/certs /etc/docker/certs.d/localhost:5000 /pusher
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout /reg/certs/k.pem -out /reg/certs/c.pem -subj /CN=localhost -addext subjectAltName=DNS:localhost 2>/dev/null
-cp /reg/certs/c.pem /etc/docker/certs.d/localhost:5000/ca.crt
-cp /reg/certs/c.pem /usr/local/share/ca-certificates/door.crt
-update-ca-certificates >/dev/null
-docker run --rm httpd:2.4-alpine htpasswd -Bbn alice s3cret >/reg/auth/htpasswd
-docker run -d --name doorreg --network host -v /reg/auth:/auth -v /reg/certs:/certs -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/c.pem -e REGISTRY_HTTP_TLS_KEY=/certs/k.pem -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=r -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd registry:3 >/dev/null
-until curl -sk -o /dev/null https://localhost:5000/v2/; do sleep 0.2; done
-printf s3cret | DOCKER_CONFIG=/pusher docker login -u alice --password-stdin localhost:5000 >/dev/null 2>&1
+mkdir -p /pusher
+printf s3cret | DOCKER_CONFIG=/pusher docker login -u alice --password-stdin `+reg+` >/dev/null 2>&1
 docker pull -q busybox:1.37 >/dev/null
-docker tag busybox:1.37 localhost:5000/private/app:1
-DOCKER_CONFIG=/pusher docker push -q localhost:5000/private/app:1 >/dev/null
-docker image rm localhost:5000/private/app:1 >/dev/null
+docker tag busybox:1.37 `+reg+`/private/app:1
+DOCKER_CONFIG=/pusher docker push -q `+reg+`/private/app:1 >/dev/null
+docker image rm `+reg+`/private/app:1 >/dev/null
 `); code != 0 {
-		t.Fatalf("the registry (%d): %s", code, out)
+		t.Fatalf("the image (%d): %s", code, out)
 	}
-	t.Cleanup(func() {
-		doorRoot(t, "docker rm -f doorreg; rm -f /usr/local/share/ca-certificates/door.crt; update-ca-certificates >/dev/null")
-	})
 	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 {
 		t.Errorf("with no login, a private image ran:\n%s", out)
 	}
@@ -698,22 +745,22 @@ docker image rm localhost:5000/private/app:1 >/dev/null
 	// its server, which the project users' firewall keeps it off. Never a password on the
 	// command line, and a wrong one is no login.
 	user := "devopsy-doorreg"
-	if out, code := doorAs(t, user, "docker login -u alice -p s3cret localhost:5000 2>&1"); code == 0 || !strings.Contains(out, "shows to every user of the server") {
+	if out, code := doorAs(t, user, "docker login -u alice -p s3cret "+reg+" 2>&1"); code == 0 || !strings.Contains(out, "shows to every user of the server") {
 		t.Errorf("a password on the command line (%d): %s", code, out)
 	}
-	if out, code := doorAs(t, user, "printf wrong | docker login -u alice --password-stdin localhost:5000 2>&1"); code == 0 || !strings.Contains(out, "docker login localhost:5000 failed") {
+	if out, code := doorAs(t, user, "printf wrong | docker login -u alice --password-stdin "+reg+" 2>&1"); code == 0 || !strings.Contains(out, "docker login "+reg+" failed") {
 		t.Errorf("a wrong password (%d): %s", code, out)
 	}
-	if out, _ := doorAs(t, user, "cat ~/.docker/config.json 2>/dev/null"); strings.Contains(out, "localhost:5000") {
+	if out, _ := doorAs(t, user, "cat ~/.docker/config.json 2>/dev/null"); strings.Contains(out, reg) {
 		t.Errorf("a wrong password kept: %s", out)
 	}
-	if out, code := doorAs(t, user, "printf s3cret | docker login -u alice --password-stdin localhost:5000 2>&1"); code != 0 || !strings.Contains(out, "Login Succeeded") {
+	if out, code := doorAs(t, user, "printf s3cret | docker login -u alice --password-stdin "+reg+" 2>&1"); code != 0 || !strings.Contains(out, "Login Succeeded") {
 		t.Fatalf("a login with no socket (%d): %s", code, out)
 	}
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("logged in, a private image (%d):\n%s", code, out)
 	}
-	doorRoot(t, "docker rm -f doorreg-prod-web-1; docker image rm -f localhost:5000/private/app:1")
+	doorRoot(t, "docker rm -f doorreg-prod-web-1; docker image rm -f "+reg+"/private/app:1")
 	plant := `set -e
 d=$HOME/cfg
 mkdir -p "$d/cli-plugins" "$HOME/planted"
@@ -722,9 +769,9 @@ cp "$d/cli-plugins/docker-compose" "$HOME/planted/docker-compose"
 cp "$d/cli-plugins/docker-compose" "$HOME/planted/docker-credential-evil"
 chmod 755 "$d/cli-plugins/docker-compose" "$HOME/planted/docker-compose" "$HOME/planted/docker-credential-evil"
 auth=$(sed -n 's/.*"auth": *"\([^"]*\)".*/\1/p' "$HOME/.docker/config.json" | head -n 1)
-printf '{"auths":{"localhost:5000":{"auth":"%s"}},"cliPluginsExtraDirs":["%s"],"credsStore":"evil","credHelpers":{"localhost:5000":"evil"}}' "$auth" "$HOME/planted" >"$d/config.json"
+printf '{"auths":{"REG":{"auth":"%s"}},"cliPluginsExtraDirs":["%s"],"credsStore":"evil","credHelpers":{"REG":"evil"}}' "$auth" "$HOME/planted" >"$d/config.json"
 cat >/tmp/doorreg.json <<'J'
-{"name":"doorreg-prod","services":{"web":{"image":"localhost:5000/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
+{"name":"doorreg-prod","services":{"web":{"image":"REG/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
 J
 cp /tmp/doorreg.json /tmp/doorreg-take.json
 sudo -n -u devopsy /usr/local/bin/devopsy --door compose "$d/config.json" /tmp/doorreg-take.json '' "$HOME/doorreg/prod/current" pull
@@ -732,24 +779,64 @@ sudo -n -u devopsy /usr/local/bin/devopsy --door compose "$d/config.json" /tmp/d
 	if out, code := doorRoot(t, ": >/tmp/doorreg-ran; chmod 666 /tmp/doorreg-ran"); code != 0 {
 		t.Fatal(out)
 	}
-	if out, code := doorAs(t, user, plant); code != 0 {
+	if out, code := doorAs(t, user, strings.ReplaceAll(plant, "REG", reg)); code != 0 {
 		t.Errorf("a pull with that config (%d): %s", code, out)
 	}
 	if out, _ := doorRoot(t, "cat /tmp/doorreg-ran"); strings.Contains(out, "devopsy\n") || strings.Contains(out, "root") {
 		t.Errorf("a project's plugin or helper ran as: %s", out)
 	}
-	if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' localhost:5000/private/app:1"); code != 0 {
+	if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' "+reg+"/private/app:1"); code != 0 {
 		t.Errorf("the control: its logins were not taken (%d): %s", code, out)
 	}
-	doorRoot(t, "docker image rm -f localhost:5000/private/app:1")
+	doorRoot(t, "docker image rm -f "+reg+"/private/app:1")
 	other := `cat >/tmp/doorregv.json <<'J'
-{"name":"doorregv-prod","services":{"web":{"image":"localhost:5000/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
+{"name":"doorregv-prod","services":{"web":{"image":"REG/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorregv/prod
 sudo -n -u devopsy /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorregv.json '' ~/doorregv/prod pull 2>&1`
-	doorAs(t, "devopsy-doorregv", other)
-	if _, code := doorRoot(t, "docker image inspect localhost:5000/private/app:1"); code == 0 {
+	doorAs(t, "devopsy-doorregv", strings.ReplaceAll(other, "REG", reg))
+	if _, code := doorRoot(t, "docker image inspect "+reg+"/private/app:1"); code == 0 {
 		t.Error("another project pulled by this one's login")
+	}
+}
+
+// A claim proves the project can fetch the image's content, not only that a registry answered.
+// Docker's pull fetches no layer it holds, so a registry serving only a manifest that names
+// another project's image (its digests, from a CI log) would land the claim on that image:
+// its configuration (Env, build arguments) shown to the claimant, its starts free to run it.
+// The proof fetches the image on the project's own builder, whose store holds only what the
+// project fetched or built: there, nothing is skipped. The manifest here is a real push whose
+// blobs are then deleted, which is what such a registry serves knowing only the digests; the
+// control is that the registry serves none of the content (and TestDoorRegistryLogins' release
+// the proof passing).
+func TestDoorClaimProvesTheContent(t *testing.T) {
+	user := doorUser(t, "doorclaim")
+	reg := doorRegistry(t, "doorclaim-reg", "5004", false)
+	t.Cleanup(func() {
+		doorRoot(t, "docker image rm -f doorclaimv-prod-web:1 "+reg+"/evil/x:1 >/dev/null 2>&1; true")
+	})
+	// Another's private image: the deploy user's build here, which the door holds apart from
+	// a project user as it does another project's.
+	if out, code := doorRoot(t, `set -e
+d=$(mktemp -d)
+printf 'FROM busybox:1.37\nENV SECRET=s3cret-image\n' >"$d/Dockerfile"
+docker build -q -t doorclaimv-prod-web:1 "$d" >/dev/null
+docker tag doorclaimv-prod-web:1 `+reg+`/evil/x:1
+docker push -q `+reg+`/evil/x:1 >/dev/null
+docker image rm `+reg+`/evil/x:1 >/dev/null
+docker exec doorclaim-reg sh -c 'for f in $(find /var/lib/registry -path "*/blobs/*" -name data); do grep -q schemaVersion "$f" || { rm "$f"; echo gone; }; done'
+`); code != 0 || strings.Count(out, "gone") < 2 {
+		// The control: the registry keeps manifests alone, its configuration and layers gone.
+		t.Fatalf("the registry (%d): %s", code, out)
+	}
+	id, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' doorclaimv-prod-web:1")
+	id = strings.TrimSpace(id)
+	out, code := doorAs(t, user, "docker image inspect --format '{{json .Config.Env}}' "+reg+"/evil/x:1 2>&1")
+	if code == 0 || strings.Contains(out, "s3cret-image") || !strings.Contains(out, "did not serve") {
+		t.Errorf("a registry serving only a manifest made another's image this project's (%d):\n%s", code, out)
+	}
+	if out, _ := doorRoot(t, "cat "+doorSpace+"/images/"+user+" 2>/dev/null"); strings.Contains(out, id) {
+		t.Errorf("the door recorded another's image %s as %s's", id, user)
 	}
 }
 
@@ -1341,7 +1428,9 @@ volumes:
 	}
 	check("--destroy of the child", "devopsy @dev --destroy --yes")
 	check("--destroy with data", "devopsy @prod --destroy --yes")
-	if out, _ := doorRoot(t, "ls -A "+mnt+" 2>&1; docker volume ls -q | grep doorflow"); strings.TrimSpace(out) != "" {
+	// The project's builder (its builds', its claims' proofs) is the project's, never an
+	// environment's to remove.
+	if out, _ := doorRoot(t, "ls -A "+mnt+" 2>&1; docker volume ls -q | grep doorflow | grep -v '^buildx_buildkit_devopsy-'"); strings.TrimSpace(out) != "" {
 		t.Errorf("after --destroy: %s", out)
 	}
 	must("a release after --destroy", "devopsy @prod --release")

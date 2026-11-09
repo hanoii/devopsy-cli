@@ -862,7 +862,8 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 // by spaces, a ref with no line not here, so a name and the digest it holds are separate
 // lines, which a test moves apart); its registry dir/registry, `<ref>|<digest>` a line,
 // what a pull of the ref gets, printed as docker pull prints it (`Digest: ...`), and what
-// buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails. It logs
+// buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails, and a
+// claim's proof (buildx build) of a <repo>@<digest> listed in dir/unserved. It logs
 // every call in dir/calls, lists no containers, and answers compose with its arguments
 // and the file it was given, for a door that execs it (doorComposeHelper). Image
 // inspects answer the two formats the door uses today and `{{json .}}`, as
@@ -887,6 +888,12 @@ case "$all" in
       *) echo "$ref: Pulling from a registry"; d=$(registry "$ref"); [ -n "$d" ] && echo "Digest: $d"; echo "Status: Downloaded newer image for $ref" ;;
     esac ;;
   'buildx imagetools inspect '*) registry "$ref" ;;
+  'buildx inspect '*) ;;
+  'buildx build '*)
+    # A claim's proof: what the project's builder fetches is on stdin, FROM <repo>@<digest>.
+    from=$(cat); echo "proof $from" >>`+in("calls")+`
+    grep -qxF -- "${from#FROM }" `+in("unserved")+` 2>/dev/null && exit 1
+    true ;;
   'ps -a '*) ;;
   'compose '*)
     f=; while [ $# -gt 0 ]; do [ "$1" = -f ] && f=$2; shift; done
@@ -968,10 +975,24 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if got := readString(side.policy.ImagesFile()); got != "sha256:p1\n" {
 		t.Errorf("the record: %q", got)
 	}
-	side.policy.Images = claimedImages(side.policy.ImagesFile())
-	if got, err := start(private + ":1"); err != nil || pulled() || got != pin {
-		t.Errorf("claimed already (%v), pulled again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	// The claim proved it: the project's builder fetched the image the pull got, by digest.
+	if c := readString(calls); !strings.Contains(c, "\nproof FROM "+private+"@sha256:p1\n") || !strings.Contains(c, "buildx build --output type=oci,dest=/dev/null") {
+		t.Errorf("a claim with no proof of the content:\n%s", c)
 	}
+	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	if got, err := start(private + ":1"); err != nil || pulled() || got != pin || strings.Contains(readString(calls), "proof ") {
+		t.Errorf("claimed already (%v), pulled or proven again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	}
+	// A registry that names content the server has but serves none of it (Docker's pull
+	// fetches no layer it holds): the proof fails, the claim is refused, nothing recorded.
+	write(t, filepath.Join(dir, "unserved"), "registry.example.com/blog/labelled@sha256:l1\n", 0o644)
+	if _, err := start("registry.example.com/blog/labelled:1"); err == nil || !strings.Contains(err.Error(), "did not serve") {
+		t.Errorf("an image its registry did not serve: %v\n%s", err, readString(calls))
+	}
+	if got := readString(side.policy.ImagesFile()); strings.Contains(got, "sha256:l1") {
+		t.Errorf("an unproven claim recorded: %q", got)
+	}
+	os.Remove(filepath.Join(dir, "unserved"))
 	if _, err := start("registry.example.com/blog/labelled:1"); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
 		t.Errorf("a claimed image labelled devopsy.role: %v", err)
 	}
