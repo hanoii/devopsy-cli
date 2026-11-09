@@ -821,3 +821,26 @@ func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
 		t.Errorf("the control, blog's own build for blog: %v, %+v", err, a)
 	}
 }
+
+// A pull or a login names no registry on the server's own loopback, link-local or metadata
+// addresses: Docker's daemon, root outside the project users' firewall, would contact it for
+// that project user, and its answers (a port open or not, an error page) come back. Any other
+// host is a registry's, a private address included (one on the server's own bridge, or
+// another server's). A name a C resolver reads as an address (127.1, 0x7f.1) is none.
+func TestNoRegistryOfTheServersOwn(t *testing.T) {
+	t.Parallel()
+	for _, ref := range []string{
+		"127.0.0.1:5000/x:1", "localhost:5000/x", "localhost/x", "reg.localhost/x", "[::1]:5000/x",
+		"169.254.169.254/latest:1", "[fe80::1]:5000/x", "[::ffff:127.0.0.1]:5000/x", "[fd00:ec2::254]/x",
+		"100.100.100.200/x", "168.63.129.16/x", "127.1:5000/x", "0x7f.1/x", "0.0.0.0:5000/x",
+	} {
+		if err := testPolicy.Claimable(ref); err == nil {
+			t.Errorf("a pull of %s is taken", ref)
+		}
+	}
+	for _, ref := range []string{"registry.example.com/x:1", "10.0.0.5:5000/x", "172.17.0.1:5003/x", "nginx:1", "ghcr.io/x/y:1", "library/2130706433:1"} {
+		if err := testPolicy.Claimable(ref); err != nil {
+			t.Errorf("a pull of %s: %v", ref, err)
+		}
+	}
+}

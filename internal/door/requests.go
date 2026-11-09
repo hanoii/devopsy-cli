@@ -585,6 +585,9 @@ func (p Policy) Claimable(ref string) error {
 	if strings.HasPrefix(repo, images.DoorHost+"/") {
 		return refuse("%s: a build's name, which the door alone writes", ref)
 	}
+	if ownHost(registryHost(ref)) {
+		return refuse("%s: a registry on the server's own or a metadata address, which Docker would contact for this project", ref)
+	}
 	return nil
 }
 

@@ -12,8 +12,11 @@ var loginRegistry = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?
 
 // LoginRegistry says whether a project user's login names a registry as Docker keeps its
 // logins (HubLogin, else a host and an optional port): never a flag, a path or a scheme of
-// the caller's, which docker login would read as more than a registry.
-func LoginRegistry(r string) bool { return r == HubLogin || loginRegistry.MatchString(r) }
+// the caller's, which docker login would read as more than a registry, nor a host of the
+// server's own or a metadata service's (ownHost), which Docker would contact for it.
+func LoginRegistry(r string) bool {
+	return r == HubLogin || loginRegistry.MatchString(r) && !ownHost(hostOf(r))
+}
 
 // LoginUser says whether a login's user name is one word of text, which docker login takes
 // as a value and nothing else.

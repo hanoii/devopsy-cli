@@ -375,7 +375,10 @@ replaces the build with the registry's image.
 
 The project user's `docker login` goes through the door. Docker checks
 the login against the registry as it does for a pull, so a registry on
-the same server accepts it. The project user's devopsy then keeps the
+the same server accepts it, reached by its name or the address of
+Docker's bridge: a registry at the server's loopback, link-local or a
+cloud metadata address is refused, for a login and a pull alike, since
+Docker would contact it for the project user, outside its firewall. The project user's devopsy then keeps the
 login in its own docker config (`~/.docker/config.json`, or under
 `DOCKER_CONFIG`). The password is read from stdin (`--password-stdin`,
 with `--username`) or at a prompt, never from the command line.
