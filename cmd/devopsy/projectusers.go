@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -70,7 +71,7 @@ func runProjectUsersStep(args []string) int {
 	who := remote.DoorUserOf(project)
 	entry := filepath.Join(remote.DoorDir(), "users", who+".yaml")
 	if args[0] == "remove" {
-		return removeProjectUser(d, project, who, entry)
+		return removeProjectUser(d, project, who, entry, endProcesses)
 	}
 	return addProjectUser(d, project, who, entry)
 }
@@ -242,7 +243,9 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	return 0
 }
 
-func removeProjectUser(d *remote.Door, project, who, entry string) int {
+// removeProjectUser takes who's entry and keys, then ends its processes (end): the door
+// answers it no more first, so nothing it runs meanwhile gets a new call through.
+func removeProjectUser(d *remote.Door, project, who, entry string, end func(who string) error) int {
 	if _, err := os.Stat(entry); err != nil {
 		if d != nil {
 			if _, ok := d.Users[who]; ok {
@@ -260,7 +263,26 @@ func removeProjectUser(d *remote.Door, project, who, entry string) int {
 	if err := os.Remove(remote.DoorKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return failErr(err)
 	}
-	report.Info("removed "+who+"'s entry and keys: it logs in no more, and the door answers it no more",
-		"its Unix user, home and tree stay, with what runs: a running session ends on its own")
+	if err := end(who); err != nil {
+		return fail("removed " + who + "'s entry and keys, but its processes could not be ended: " + err.Error())
+	}
+	report.Info("removed "+who+"'s entry and keys, and ended its processes: it logs in no more, and the door answers it no more",
+		"its Unix user, home and tree stay")
 	return 0
+}
+
+// endProcesses ends every process of the user who (remote.EndProcessesArgs), as root through
+// devopsy's util image.
+func endProcesses(who string) error {
+	u, err := user.Lookup(who)
+	if err != nil {
+		return err
+	}
+	if err := ensureUtilImage(context.Background()); err != nil {
+		return err
+	}
+	if out, err := exec.Command("docker", remote.EndProcessesArgs(u.Uid)...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

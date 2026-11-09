@@ -303,6 +303,48 @@ func TestDoorBuildModeLife(t *testing.T) {
 	}
 }
 
+// A project user whose last key is removed has its processes ended, and the door answers it
+// no more: a process it left running (setsid, nohup) would outlive its logins and keep the
+// door by its group. While a key is left, both stay.
+func TestDoorEndsAKeylessUser(t *testing.T) {
+	user := doorUser(t, "doorkeyless")
+	keys := func(args string) {
+		t.Helper()
+		if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for doorkeyless "+args+" 2>&1"); code != 0 {
+			t.Fatalf("--ssh-keys --for doorkeyless %s (%d): %s", args, code, out)
+		}
+	}
+	if out, code := op(t, "/", "rm -f /tmp/doorkeyless /tmp/doorkeyless.pub && ssh-keygen -q -t ed25519 -N '' -C doorkeyless-ci -f /tmp/doorkeyless"); code != 0 {
+		t.Fatalf("a second key (%d): %s", code, out)
+	}
+	keys("add /tmp/doorkeyless.pub")
+	if out, code := doorAs(t, user, "setsid sleep 100000 </dev/null >/dev/null 2>&1 &"); code != 0 {
+		t.Fatalf("its process (%d): %s", code, out)
+	}
+	// A zombie is no process: the test server's init never reaps one, a real server's does.
+	running := func() bool {
+		out, _ := doorRoot(t, "ps -u "+user+" -o stat=,comm= | awk '$1 !~ /^Z/ && $2 == \"sleep\"'")
+		return strings.TrimSpace(out) != ""
+	}
+	eventually(t, startWaitE2E, "its process", running)
+	keys("remove doorkeyless-ci")
+	if !running() {
+		t.Fatal("the control: its process ended with a key left")
+	}
+	if out, _ := doorAs(t, user, "docker ps -q 2>&1"); strings.Contains(out, "no key left") {
+		t.Fatalf("the control: the door refuses it with a key left: %s", out)
+	}
+	fp, code := op(t, "/", "ssh-keygen -lf /root/.ssh/id_ed25519.pub | awk '{print $2}'")
+	if code != 0 {
+		t.Fatalf("the operator's key (%d): %s", code, fp)
+	}
+	keys("remove " + strings.TrimSpace(fp))
+	eventually(t, 10*time.Second, "its process ended", func() bool { return !running() })
+	if out, _ := doorAs(t, user, "docker ps -q 2>&1"); !strings.Contains(out, "no key left") {
+		t.Errorf("the door answers a keyless user: %s", out)
+	}
+}
+
 // The daemon resolves a bind at each start, so a path a project user can change would take
 // a restart anywhere. A control shows it would: the same swaps on paths as compose writes them.
 func TestDoorSwappedLinksReachNoRestart(t *testing.T) {

@@ -640,6 +640,11 @@ func runDoor(args []string) int {
 		return 2
 	}
 	doorLog = filepath.Join(policy.Space, "refused.log")
+	// A project user with no key left logs in no more, and what it left running gets nothing
+	// from the door either (KeysRemoveScript ends it).
+	if !remote.KeysLeft(remote.DoorKeysFile(doorWho)) {
+		return doorRefused(errors.New("refused: " + doorWho + " has no key left"))
+	}
 	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets}
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))

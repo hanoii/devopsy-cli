@@ -70,6 +70,83 @@ func TestKeysRemoveLast(t *testing.T) {
 	}
 }
 
+// A project user left with no key has its processes ended, as root through the util image
+// under the host's pids, by its uid: a process it left running (nohup, setsid) would outlive
+// its last key's removal, keep calling the door by its group, and so keep what the removal
+// took. While a key is left, nothing ends; the deploy user's own keys never end anything. A
+// kill that fails says so and fails: the key is gone, and the operator must know what runs.
+func TestKeysRemoveEndsAKeylessUser(t *testing.T) {
+	t.Parallel()
+	home, bin := t.TempDir(), t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	for name, body := range map[string]string{
+		"flock":   "exit 0",
+		"id":      `case "$1" in -nG) echo devopsy ;; -u) [ "$2" = devopsy-shop ] && echo 10002 || /usr/bin/id -u ;; *) exit 1 ;; esac`,
+		"devopsy": `echo "devopsy $*" >>` + calls,
+		"docker":  `echo "docker $*" >>` + calls + `; [ ! -e ` + filepath.Join(bin, "fails") + ` ]`,
+	} {
+		if err := testfile.Write(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys := filepath.Join(home, "door", "keys", "devopsy-shop")
+	remove := func(user, blob string) (int, string) {
+		t.Helper()
+		os.Remove(calls)
+		cmd := exec.Command("sh", "-c", KeysRemoveScript(user))
+		cmd.Env = []string{"HOME=" + home, "DEVOPSY_HOME=" + filepath.Join(home), "PATH=" + bin + ":/usr/bin:/bin"}
+		cmd.Stdin = strings.NewReader(blob + "\n")
+		out, _ := cmd.CombinedOutput()
+		got, _ := os.ReadFile(calls)
+		return cmd.ProcessState.ExitCode(), string(out) + string(got)
+	}
+	kill := "docker run --rm --pid host --network none --user 10002 " + UtilImage
+	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
+	if code, out := remove("devopsy-shop", "AAAAone"); code != 0 || strings.Contains(out, "docker") {
+		t.Errorf("one of two keys (%d) ends its processes:\n%s", code, out)
+	}
+	write(t, keys, "ssh-ed25519 AAAAtwo ci\n# ssh-ed25519 AAAAold retired\n")
+	if code, out := remove("devopsy-shop", "AAAAtwo"); code != 0 || !strings.Contains(out, kill) {
+		t.Errorf("its last key (%d) leaves its processes:\n%s", code, out)
+	}
+	write(t, filepath.Join(bin, "fails"), "")
+	write(t, keys, "ssh-ed25519 AAAAtwo ci\n")
+	if code, out := remove("devopsy-shop", "AAAAtwo"); code == 0 || !strings.Contains(out, "could not be ended") {
+		t.Errorf("a kill that failed (%d) passes for one:\n%s", code, out)
+	}
+	os.Remove(filepath.Join(bin, "fails"))
+	write(t, filepath.Join(home, ".ssh", "authorized_keys"), "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
+	if code, out := remove("", "AAAAone"); code != 0 || strings.Contains(out, "docker") {
+		t.Errorf("the deploy user's key (%d) ends processes:\n%s", code, out)
+	}
+}
+
+// A file has a key left when it holds one anyone logs in with: a commented-out key and a
+// sync's key (which only does its sync's requests) are none. The door's refusal of a keyless
+// user (KeysLeft) and the removal's kill (keysLeft, in its script) read it one way.
+func TestKeysLeftOneRule(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g"
+	for content, want := range map[string]bool{
+		"":                          false,
+		"# " + key + " retired\n\n": false,
+		`restrict,command="devopsy --sync-child 1.0a1b2c /srv/x vm2:x" ` + key + " devopsy-sync-1.0a1b2c\n": false,
+		key + " laptop\n":                          true,
+		RestrictedKeyOptions + " " + key + " ci\n": true,
+	} {
+		f := filepath.Join(dir, "keys")
+		write(t, f, content)
+		shell := exec.Command("sh", "-c", keysLeft(`"$1"`), "sh", f).Run() == nil
+		if got := KeysLeft(f); got != want || shell != want {
+			t.Errorf("%q: KeysLeft %v, the script's %v, want %v", content, got, shell, want)
+		}
+	}
+	if KeysLeft(filepath.Join(dir, "missing")) {
+		t.Error("a missing file has keys")
+	}
+}
+
 // A project user's keys are found by two: the --for scripts, from the deploy user's
 // environment, and --authorized-keys, from sshd's (DoorKeysFile). Both are one file, wherever
 // the deploy user's config is (DEVOPSY_HOME, XDG_CONFIG_HOME, else ~/.config).

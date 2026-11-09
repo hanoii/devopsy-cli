@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -174,16 +175,27 @@ printf '%s\n' "$f"
 // KeysRemoveScript drops from user's keys ("" the deploy user's) the lines whose key is the
 // blob on stdin: none (exit 3). The deploy user's last key stays (exit 4: it would lock
 // everyone out); a project user's goes, which is how its logins stop, and its sync keys
-// with it (DoorSyncKeysFile).
+// with it (DoorSyncKeysFile). A project user left with no key has its processes ended
+// (EndProcessesArgs): one it left running would outlive its logins, and keep the door by
+// its group.
 func KeysRemoveScript(user string) string {
-	last := ""
+	last, end := "", ""
 	if user == "" {
-		last = `# Keys left, comments and blank lines aside (a commented-out key is none), and
-# sync keys (SyncKeyLine), which only do their sync's requests.
-if ! grep -Ev '^[[:space:]]*(#|$)' "$f.tmp" | grep -Ev ' ` + syncKeyPrefix + `[0-9]+\.[0-9a-f]{6}$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'; then
+		last = `if ! ` + keysLeft(`"$f.tmp"`) + `; then
   rm -f "$f.tmp"
   ` + echoLine(report.ErrorLevel, "that is the last key: removing it would lock everyone out") + `
   exit 4
+fi
+`
+	} else {
+		end = `if ! ` + keysLeft(`"$f"`) + `; then
+  uid=$(id -u ` + Quote(user) + `)
+  devopsy ` + UtilImageFlag + ` >/dev/null 2>&1 || :
+  docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || {
+    ` + echoLine(report.ErrorLevel, "its last key is removed, but the processes of "+user+" could not be ended") + `
+    exit 1
+  }
+  ` + echoLine(report.InfoLevel, "no key of "+user+" left: its processes are ended") + `
 fi
 `
 	}
@@ -194,8 +206,53 @@ grep -vF -- " $blob" "$f" > "$f.tmp" || true
 ` + last + `mv -f "$f.tmp" "$f"
 # A project user's sync keys go with any of its keys: a leaked one could have added them.
 [ -z "${sf:-}" ] || rm -f "$sf"
-printf '%s\n' "$f"
+` + end + `printf '%s\n' "$f"
 `
+}
+
+// KeysLeft says whether file holds a key anyone logs in with: comments and blank lines aside
+// (a commented-out key is none), and sync keys (SyncKeyLine), which only do their sync's
+// requests. keysLeft is the same test in a script (TestKeysLeftOneRule).
+func KeysLeft(file string) bool {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return false
+	}
+	for _, k := range ParseAuthorizedKeys(string(data)) {
+		if _, sync := SyncKeyID(k); !sync {
+			return true
+		}
+	}
+	return false
+}
+
+// keysLeft is KeysLeft in a script, file a shell word.
+func keysLeft(file string) string {
+	return `grep -Ev '^[[:space:]]*(#|$)' ` + file + ` | grep -Ev ' ` + syncKeyPrefix + `[0-9]+\.[0-9a-f]{6}$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'`
+}
+
+// EndProcessesArgs are docker's arguments to end every process of the user of uid: as that
+// user, in UtilImage under the host's pids, kill -9 -1 signals each process the user may
+// signal, which is every one of its own whatever /proc says of its owner (a process that
+// made itself undumpable shows root's there); twice, for one forked meanwhile. No
+// container runs as a project user's uid (hostIDs), so it ends none.
+func EndProcessesArgs(uid string) []string {
+	return []string{"run", "--rm", "--pid", "host", "--network", "none", "--user", uid, UtilImage,
+		"sh", "-c", "kill -9 -1 2>/dev/null; kill -9 -1 2>/dev/null; true"}
+}
+
+// endProcessesShell is EndProcessesArgs quoted for a script, the uid given as the shell word
+// uid (a variable's expansion).
+func endProcessesShell(uid string) string {
+	words := EndProcessesArgs("\x00")
+	for i, w := range words {
+		if w == "\x00" {
+			words[i] = uid
+		} else {
+			words[i] = Quote(w)
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // DoorGroup is the group every project user is in: sshd's Match, the door's sudo rules and

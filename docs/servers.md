@@ -216,7 +216,8 @@ too.
   user's keys instead, on a server with project users (below), logged in
   as the deploy user: they are kept in its config directory, out of the
   project user's reach, and sshd asks devopsy for them. Its last key may
-  go, which is how its logins stop.
+  go, which is how its logins stop: that also ends every process it
+  runs, and the door answers it no more.
 - Without a target, `devopsy --ssh-keys-generate [<name>]` makes an
   ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>` for
   elsewhere), sending nothing anywhere.
@@ -361,6 +362,6 @@ A child on another server needs its own project user there
 ([Syncs](syncs.md#how-the-data-travels)).
 
 `--project-users remove shop` drops its entry and keys, so it logs in no
-more and the door answers it no more; its Unix user, home and tree stay.
-Removing a key ends no session running, and clears nothing a leaked key
-left in that user's home: kill its processes and reset the home too.
+more and the door answers it no more, then ends every process it runs;
+its Unix user, home and tree stay. Neither clears what a leaked key left
+in that user's home: reset the home too.
