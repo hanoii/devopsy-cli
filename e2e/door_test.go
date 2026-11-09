@@ -1494,6 +1494,100 @@ func TestDoorRefusesBeforeTheSwitch(t *testing.T) {
 	}
 }
 
+// A project user's release cut off, its session and its steps that user's and what they ask of
+// Docker the deploy user's, through sudo. The operator killed before the switch cancels it:
+// the prepare step gone, the lock freed, nothing live changed, and the next release goes
+// through. Killed past the switch, the run step goes on with no session, the door answering
+// it still, and the release finishes. (The deploy user's own: TestDropSilentlyBeforeSwitch,
+// TestDropAfterSwitch.)
+func TestDoorReleaseCutOff(t *testing.T) {
+	dir := doorProject(t, "doorcut", `services:
+  web:
+`+doorService+`    command: [sleep, infinity]
+`, map[string]string{
+		".devopsy/config.yaml":     "project: doorcut\ndefaults:\n  mode: image\nenvironments:\n  prod:\n    release: {prepare: [wait], run: deploy}\n    rollback: deploy\n",
+		".devopsy/commands/wait":   "#!/bin/sh\n## Description: waits while ~/wait-prepare exists\nwhile [ -e \"$HOME/wait-prepare\" ]; do : >\"$HOME/preparing\"; echo waiting; sleep 0.2; done\n",
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts, after waiting while ~/wait-run exists\nwhile [ -e \"$HOME/wait-run\" ]; do : >\"$HOME/running\"; echo waiting; sleep 0.2; done\nexec devopsy up -d --wait\n",
+	})
+	user := "devopsy-doorcut"
+	as := func(script string) (string, int) {
+		t.Helper()
+		out, code := execIn(t, []string{"-u", user, "-w", "/home/" + user, doorServer(t)}, script)
+		return strings.TrimSpace(out), code
+	}
+	t.Cleanup(func() {
+		op(t, "/", "pkill -9 -f '^devopsy @prod'; pkill -9 -x ssh; true")
+		as("rm -f wait-prepare wait-run preparing running")
+	})
+	current := func() string {
+		t.Helper()
+		out, _ := as("readlink doorcut/prod/current")
+		return out
+	}
+	lockFree := func() bool {
+		t.Helper()
+		_, code := as("flock -n doorcut/prod/.lock true")
+		return code == 0
+	}
+	// The operator killed, devopsy and its ssh, as a CI job cancelled: the server sees the
+	// session close, and the project user's sshd session ends.
+	kill := func() {
+		t.Helper()
+		op(t, "/", "pkill -9 -f '^devopsy @prod'; pkill -9 -x ssh; true")
+		eventually(t, 30*time.Second, "the session's end on the server", func() bool {
+			_, code := doorRoot(t, "pgrep -u "+user+" -f sshd")
+			return code != 0
+		})
+	}
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("a first release (%d):\n%s", code, out)
+	}
+	first := current()
+
+	as("rm -f preparing; touch wait-prepare")
+	background(t, dir, fast()+" devopsy @prod --release", "/tmp/doorcut.log")
+	eventually(t, time.Minute, "the prepare step waiting", func() bool { _, code := as("test -e preparing"); return code == 0 })
+	kill()
+	took := eventually(t, quiet(6, 20*time.Second), "the release lock freed", lockFree)
+	t.Logf("cancelled %s after the operator's end", took)
+	if now := current(); now != first {
+		t.Errorf("before the switch, current changed: %s, was %s", now, first)
+	}
+	if out, _ := doorRoot(t, "pgrep -u "+user+" -f '[c]ommands/wait' || true"); strings.TrimSpace(out) != "" {
+		t.Errorf("the prepare step still runs: %s", out)
+	}
+	as("rm -f wait-prepare")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("the next release, which settles what the cut left (%d):\n%s", code, out)
+	}
+	second := current()
+	if second == first {
+		t.Fatalf("the next release did not switch: %s", second)
+	}
+
+	as("rm -f running; touch wait-run")
+	background(t, dir, fast()+" devopsy @prod --release", "/tmp/doorcut.log")
+	eventually(t, time.Minute, "the run step waiting", func() bool { _, code := as("test -e running"); return code == 0 })
+	kill()
+	as("rm -f wait-run")
+	eventually(t, time.Minute, "the release finished", lockFree)
+	third := current()
+	if third == second {
+		log, _ := as("cat doorcut/prod/current/../devopsy-log-server 2>&1")
+		t.Errorf("past the switch, the release did not stay: current is %s\n%s", third, log)
+	}
+	// The step's up went through the door with no session left, and nothing came back.
+	if out, _ := doorRoot(t, "docker ps --filter label=com.docker.compose.project=doorcut-prod --format '{{.State}}'"); strings.TrimSpace(out) != "running" {
+		t.Errorf("past the switch, not running: %q", out)
+	}
+	if out, code := op(t, dir, "devopsy @prod --releases 2>&1"); code != 0 || strings.Contains(out, "FAILED") || strings.Contains(out, "pending") {
+		t.Errorf("--releases after both cuts (%d):\n%s", code, out)
+	}
+	if out, _ := as("cat doorcut/prod/current/../devopsy-log-server 2>&1"); !strings.Contains(out, "waiting") {
+		t.Errorf("the server's log of a release with no session: %s", out)
+	}
+}
+
 // Data of every kind through a project user: a named volume, a file entry, a step writing
 // in an entry, --shell as devopsy.shell.user, at a terminal too, --log, --status, an import
 // into a volume removed, a child's sync, --sync again, --reset, --inherit, a restore with
