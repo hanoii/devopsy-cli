@@ -664,7 +664,9 @@ func lockExecHelper(space string) {
 
 // A start runs the image the door read: what a service builds is checked by the door's
 // name for it (images.DoorBuild, as the render gives it, whatever image: says), and an
-// image still missing refuses, since compose would pull or build one past the check.
+// image still missing refuses, since compose would pull or build one past the check. A label
+// under a vet's prefix refuses its image too, in any case, as what reads such labels takes
+// them: it would reach its containers past the vet, which judges the file's labels alone.
 func TestDoorChecksWhatAServiceBuilds(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
@@ -673,6 +675,7 @@ func TestDoorChecksWhatAServiceBuilds(t *testing.T) {
 case "$*" in
   *" devopsy.internal/shop-prod/labelled") echo '{"Config":{"Labels":{"devopsy.role":"proxy"}}}' ;;
   *" devopsy.internal/shop-prod/plain") echo '{"Config":{"Labels":{"a":"b"}}}' ;;
+  *" devopsy.internal/shop-prod/routed") echo '{"Config":{"Labels":{"Vetted.Enable":"true"}}}' ;;
   *) exit 1 ;;
 esac
 `), 0o755); err != nil {
@@ -695,6 +698,16 @@ esac
 	}
 	if err := side.checkImageLabels(file("missing"), ""); err == nil || !strings.Contains(err.Error(), "not here") {
 		t.Errorf("a build not here yet, which compose would build at the start: %v", err)
+	}
+	if err := side.checkImageLabels(file("routed"), ""); err != nil {
+		t.Errorf("the control: with no vet, a label of no one's is refused: %v", err)
+	}
+	side.vets = []remote.DoorVet{{Prefix: "vetted.", Command: "/bin/false"}}
+	if err := side.checkImageLabels(file("routed"), ""); err == nil || !strings.Contains(err.Error(), "Vetted.Enable") {
+		t.Errorf("a build labelled under a vet's prefix, in another case: %v", err)
+	}
+	if err := side.checkImageLabels(file("plain"), ""); err != nil {
+		t.Errorf("the control: with a vet, a plain build is refused: %v", err)
 	}
 }
 
