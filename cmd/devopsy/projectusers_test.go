@@ -32,6 +32,16 @@ func TestDoorNameOwner(t *testing.T) {
 	if got := doorNameOwner(nil, root, "shop-stage"); got != "" {
 		t.Errorf("no door: %q", got)
 	}
+	// A project in the release root holds its names too, the deploy user's own: one whose
+	// name extends a project user's is not that user's.
+	if err := os.Mkdir(filepath.Join(root, "shop-eu"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"shop-eu-prod": "", "shop-eur-prod": "devopsy-shop", "shop-stage": "devopsy-shop"} {
+		if got := doorNameOwner(d, root, name); got != want {
+			t.Errorf("%s, beside the release root's shop-eu: %q, want %q", name, got, want)
+		}
+	}
 }
 
 // --check-names, the activation's check before its switch, refuses it as the deploy user.
@@ -69,8 +79,17 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 		}
 	}
 	write(t, entry, "project: shop\n", 0o600)
+	// Its keys and its sync keys go with its entry: it logs in no more, by either.
+	keys, syncKeys := remote.DoorKeysFile("devopsy-shop"), remote.DoorSyncKeysFile("devopsy-shop")
+	write(t, keys, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o600)
+	write(t, syncKeys, "a sync's key\n", 0o600)
+	other := remote.DoorKeysFile("devopsy-blog")
+	write(t, other, "another's keys\n", 0o600)
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" {
 		t.Errorf("remove (exit %d) ended %q", code, ended)
+	}
+	if fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
+		t.Errorf("after remove: its entry %v, its keys %v, its sync keys %v, another's keys %v", fileExists(entry), fileExists(keys), fileExists(syncKeys), fileExists(other))
 	}
 	ended = nil
 	write(t, entry, "project: shop\n", 0o600)

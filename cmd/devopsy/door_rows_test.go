@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
@@ -91,7 +93,8 @@ func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
 }
 
 // A door's vet refuses by anything but 0, a missing program included; it reads what compose
-// would run, its build block gone and its images pinned, and says in the log. Case does not
+// would run, its build block gone and its images pinned, with the project in
+// DEVOPSY_DOOR_PROJECT, and says in the log. Case does not
 // get a label past it.
 //
 // Not parallel: it sets doorLog and doorWho, and PATH (doorFakes).
@@ -128,7 +131,7 @@ esac
 		t.Fatal(err)
 	}
 	vet := filepath.Join(dir, "vet")
-	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho no >&2\nexit 2\n"), 0o755); err != nil {
+	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho \"$DEVOPSY_DOOR_PROJECT\" >"+seen+".project\necho no >&2\nexit 2\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	file := func(label string) map[string]any {
@@ -160,6 +163,10 @@ esac
 		// The build goes by devopsy's name for it, the pulled image pinned.
 		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.internal/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
+		}
+		// Whose file it is, for a vet that judges by project.
+		if got := strings.TrimSpace(readString(seen + ".project")); got != "shop" {
+			t.Errorf("%s: the vet was told the project is %q", label, got)
 		}
 	}
 	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "refused by the vet: no") {
@@ -508,5 +515,179 @@ func TestDoorBindEntriesStayInTheirMnt(t *testing.T) {
 		if exists(p) {
 			t.Errorf("made %s", p)
 		}
+	}
+}
+
+// The file compose runs has no name: it holds a project's environment, and nothing of it
+// stays on disk after compose, which reads it by its descriptor.
+func TestDoorHandsComposeAFileWithNoName(t *testing.T) {
+	t.Parallel()
+	fd, err := unlinkedFile([]byte(`{"name":"shop-prod"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fd), "rendered")
+	defer f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil || st.Nlink != 0 {
+		t.Errorf("the file has %d names (%v)", st.Nlink, err)
+	}
+	got := make([]byte, 64)
+	n, err := f.ReadAt(got, 0)
+	if string(got[:n]) != `{"name":"shop-prod"}` {
+		t.Errorf("compose would read %q (%v)", got[:n], err)
+	}
+	// It survives the door's exec into compose.
+	if flags, err := unix.FcntlInt(uintptr(fd), syscall.F_GETFD, 0); err != nil || flags&syscall.FD_CLOEXEC != 0 {
+		t.Errorf("the descriptor closes at the exec: %d (%v)", flags, err)
+	}
+}
+
+// A project's registry logins reach Docker as their auth values alone, in a directory of
+// the door's: Docker's CLI runs the helpers and plugins a config names, as whoever runs it,
+// here the deploy user. An identity token is no login of the door's.
+//
+// Not parallel: it sets PATH, for a sudo that reads as the project user would.
+func TestDoorLoginsAreTheirAuthsAlone(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = cat ] || exit 1\nexec cat \"$2\"\n", 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	config := filepath.Join(t.TempDir(), "config.json")
+	write(t, config, `{"auths":{"registry.example.com":{"auth":"YWxpY2U6czNjcmV0","identitytoken":"t0ken","email":"a@example.com"}},
+	  "credsStore":"evil","credHelpers":{"registry.example.com":"evil"},"cliPluginsExtraDirs":["/home/devopsy-shop/plugins"],
+	  "plugins":{"compose":{"x":"y"}},"proxies":{"default":{"httpProxy":"http://evil"}},"currentContext":"evil","aliases":{"builder":"evil"}}`, 0o600)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: t.TempDir()}}
+	dir, err := side.logins(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != filepath.Join(side.policy.Space, "logins", "shop") {
+		t.Errorf("the logins are in %s", dir)
+	}
+	if got := readString(filepath.Join(dir, "config.json")); got != `{"auths":{"registry.example.com":{"auth":"YWxpY2U6czNjcmV0"}}}` {
+		t.Errorf("Docker's config for the project:\n%s", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("beside the config: %v", entries)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the directory's mode: %v (%v)", fi.Mode(), err)
+	}
+	// A config that is not there, or is no JSON, is no login: never the last one's.
+	for _, c := range []string{filepath.Join(t.TempDir(), "none"), bin + "/sudo"} {
+		if _, err := side.logins(c); err != nil {
+			t.Fatal(err)
+		}
+		if got := readString(filepath.Join(dir, "config.json")); got != `{"auths":{}}` {
+			t.Errorf("with %s for a config, Docker's:\n%s", c, got)
+		}
+	}
+}
+
+// What the door makes in its space is closed to every other user, whatever modes a container
+// gives the files inside: a mnt and the clones reached by this project user through an ACL
+// that lets it read and enter, never write, an entry written inside by it, and the sealed
+// copies and its work by nobody else at all. A mnt's name comes from where the environment
+// is in the user's tree.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorSpaceIsClosedToOthers(t *testing.T) {
+	acl, _ := doorFakes(t)
+	root := t.TempDir()
+	space, tree := filepath.Join(root, "space"), filepath.Join(root, "tree")
+	if err := os.MkdirAll(filepath.Join(tree, "prod", "conf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: tree}}
+	closed := func(what, path string) {
+		t.Helper()
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm()&0o007 != 0 {
+			t.Errorf("%s is open to others: %v (%v)", what, fi.Mode(), err)
+		}
+	}
+	mnt := side.policy.Mnt("shop-prod")
+	if code := side.mnt(filepath.Join(tree, "prod")); code != 0 {
+		t.Fatalf("mnt: exit %d", code)
+	}
+	closed("a mnt", mnt)
+	if code := side.mnt(filepath.Join(tree, "eu", "prod")); code != 0 {
+		t.Fatalf("an instance's mnt: exit %d", code)
+	}
+	closed("an instance's mnt", side.policy.Mnt("shop-eu-prod"))
+	if code := side.entry(mnt, "data", false); code != 0 {
+		t.Fatalf("entry: exit %d", code)
+	}
+	if code := side.clone(filepath.Join(tree, "prod", "snapshots", ".clone")); code != 0 {
+		t.Fatalf("clone: exit %d", code)
+	}
+	closed("the clones", side.policy.Clones())
+	sealed, err := side.Seal(filepath.Join(tree, "prod", "conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed("the sealed copies", side.policy.Sealed())
+	work, err := side.WorkDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(work); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("a work directory: %v (%v)", fi.Mode(), err)
+	}
+	got := strings.Split(strings.TrimSpace(readString(acl)), "\n")
+	want := []string{
+		"-m u:devopsy-shop:rX " + mnt,
+		"-m u:devopsy-shop:rX " + side.policy.Mnt("shop-eu-prod"),
+		"-m u:devopsy-shop:rwX -d -m u:devopsy-shop:rwX " + mnt + "/data",
+		"-m u:devopsy-shop:rX " + side.policy.Clones(),
+		"-m u:devopsy-shop:rX -d -m u:devopsy-shop:rX " + side.policy.Clones(),
+		"-m u:devopsy-shop:rX " + work,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("what the project user was given:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if strings.Contains(readString(acl), filepath.Dir(sealed)) || strings.Contains(readString(acl), side.policy.Sealed()) {
+		t.Errorf("the project user was given the sealed copies:\n%s", readString(acl))
+	}
+}
+
+// An entry the door made a directory, not knowing it is a file (as Docker would at up), is
+// replaced by the file while it is empty; one that holds something stays, and is refused.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorReplacesAnEmptyDirectoryWithAFileEntry(t *testing.T) {
+	doorFakes(t)
+	space := t.TempDir()
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: t.TempDir()}}
+	mnt := side.policy.Mnt("shop-prod")
+	if err := os.MkdirAll(mnt, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []string{"app.ini", "full.ini"} {
+		if code := side.entry(mnt, e, false); code != 0 {
+			t.Fatalf("%s as a directory: exit %d", e, code)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(mnt, "full.ini", "kept"), []byte("data\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.entry(mnt, "app.ini", true); code != 0 {
+		t.Errorf("a file over its empty directory: exit %d", code)
+	}
+	if fi, err := os.Lstat(filepath.Join(mnt, "app.ini")); err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("the entry is no file: %v (%v)", fi, err)
+	}
+	if code := side.entry(mnt, "full.ini", true); code == 0 {
+		t.Error("a file over a directory that holds something: taken")
+	}
+	if got := readString(filepath.Join(mnt, "full.ini", "kept")); got != "data\n" {
+		t.Errorf("what the directory held: %q", got)
+	}
+	// A file entry there already stays as it is.
+	if err := os.WriteFile(filepath.Join(mnt, "app.ini"), []byte("a=b\n"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.entry(mnt, "app.ini", true); code != 0 || readString(filepath.Join(mnt, "app.ini")) != "a=b\n" {
+		t.Errorf("a file entry asked again (exit %d) holds %q", code, readString(filepath.Join(mnt, "app.ini")))
 	}
 }

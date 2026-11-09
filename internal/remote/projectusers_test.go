@@ -29,11 +29,93 @@ func TestDoorHostScript(t *testing.T) {
 		"AuthorizedKeysCommandUser deploy",
 		"visudo -cqf",
 		"sshd -t",
+		// No subordinate ids, for a user made here or one that was there.
+		"useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0",
+		"for f in /etc/subuid /etc/subgid; do",
+		// The door's entrance for a project user, never over a real docker.
+		"ln -sfn '/opt/bin/devopsy' /usr/local/bin/docker",
+		"/usr/local/bin/docker is a real docker",
+		// sshd takes the drop-in at a reboot, which empties /run.
+		"touch /run/devopsy-door-reboot /run/reboot-required",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("no %q", want)
 		}
 	}
+	// Each check comes before what it protects: who is in the group and whose the user and
+	// the tree are before anything lands, each piece's own check inside put, sshd's reading
+	// of the user before its cron ban and its home, and the user's config written as that
+	// user, only for one made here.
+	last := -1
+	for _, step := range []string{
+		"sshd would ignore its own keys", "is there already, and no project user", "is there already, and not $1's",
+		"is a real docker", "put /etc/sudoers.d/devopsy-projects 440 'visudo -cqf \"$1\"'", "put /usr/local/libexec/devopsy-authorized-keys 755 'sh -n \"$1\"'",
+		"if put /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "useradd ", "sshd -T -C", "/etc/cron.deny",
+		`if [ -n "$made" ] && [ -n "$root" ]; then`, `runuser -u "$user" -- sh -c`,
+	} {
+		i := strings.Index(s, step)
+		if i < last {
+			t.Errorf("%q comes too early, or is not there (%d, after %d)", step, i, last)
+		}
+		last = max(last, i)
+	}
+}
+
+// A host piece lands only when it is missing or differs, and only once it passed its check:
+// a sudoers file or a sshd drop-in that does not parse breaks every sudo, or every login, on
+// the server. One that is the same is left as it is, which is how add knows nothing changed
+// (no reboot asked); one refused leaves what was there, and nothing beside it.
+func TestHostPut(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f := filepath.Join(dir, "piece")
+	put := func(check, content string) (int, string) {
+		t.Helper()
+		c := exec.Command("sh", "-c", "set -eu\n"+hostPut+`put "$1" 640 "$2" "$3"`, "sh", f, check, content)
+		out, _ := c.CombinedOutput()
+		return c.ProcessState.ExitCode(), string(out)
+	}
+	holds := func(what, want string) {
+		t.Helper()
+		data, _ := os.ReadFile(f)
+		entries, _ := os.ReadDir(dir)
+		if string(data) != want || len(entries) > 1 || (want == "" && len(entries) != 0) {
+			t.Errorf("%s: the piece holds %q, want %q, among %d files", what, data, want, len(entries))
+		}
+	}
+	// The check reads the new content, at the path it is given, before it lands.
+	seen := `grep -qx "rule one" "$1" && [ "$1" != ` + Quote(f) + ` ]`
+	if code, out := put(seen, "rule one\n"); code != 0 {
+		t.Fatalf("a missing piece (%d): %s", code, out)
+	}
+	holds("a missing piece", "rule one\n")
+	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("its mode: %v (%v)", fi.Mode(), err)
+	}
+	// The same again changes nothing, and says so by failing, with no check run.
+	before, _ := os.Stat(f)
+	if code, out := put("exit 9", "rule one\n"); code != 1 {
+		t.Errorf("the same piece again (%d): %s", code, out)
+	}
+	if after, _ := os.Stat(f); !os.SameFile(before, after) {
+		t.Error("the same piece was written again")
+	}
+	holds("the same piece again", "rule one\n")
+	if code, out := put("false", "rule two, broken\n"); code != 4 || !strings.Contains(out, "did not pass its check") {
+		t.Errorf("a piece its check refuses (%d): %s", code, out)
+	}
+	holds("a piece its check refuses", "rule one\n")
+	if code, out := put("true", "rule two\n"); code != 0 {
+		t.Errorf("a piece that differs (%d): %s", code, out)
+	}
+	holds("a piece that differs", "rule two\n")
+	if err := os.Remove(f); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := put("false", "broken\n"); code != 4 {
+		t.Errorf("a first piece its check refuses: exit %d", code)
+	}
+	holds("a first piece its check refuses", "")
 }
 
 // add refuses a host whose sshd would not take its drop-in for the project user: a sshd_config

@@ -792,6 +792,16 @@ func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
 	if string(got) != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
 	}
+	// A detached copy's entries are read from its mounts when it is removed (Removes): what
+	// it wrote in an entry, never a whole mnt, the deploy user's, nor a path elsewhere.
+	mounts := filepath.Join(dir, "mounts")
+	if err := testfile.Write(mounts, []byte("#!/bin/sh\n[ \"$1 $6\" = 'inspect daemon' ] || exit 1\nprintf '%s\\n' "+data+" "+filepath.Dir(data)+" /etc\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side.real = mounts
+	if got := side.writtenEntries([]string{"daemon", "gone"}); !slices.Equal(got, []string{data}) {
+		t.Errorf("a removed container's written entries: %q, want %q", got, data)
+	}
 }
 
 // The door's space on a mount that takes setuid files and devices lets a container's setuid

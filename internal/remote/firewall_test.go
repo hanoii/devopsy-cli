@@ -1,7 +1,9 @@
 package remote
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -174,6 +176,83 @@ func TestDoorFirewallScripts(t *testing.T) {
 	}
 	if strings.Contains(doorFirewallUnitText, "RemainAfterExit") || !strings.Contains(doorFirewallTimerText, "OnUnitInactiveSec=") {
 		t.Errorf("the units:\n%s\n%s", doorFirewallUnitText, doorFirewallTimerText)
+	}
+	// At boot it loads after what loads a whole ruleset, which would drop it, and before the
+	// network's services, sshd and Docker among them: no project user logs in ahead of it.
+	var after, before []string
+	for _, line := range strings.Split(doorFirewallUnitText, "\n") {
+		if v, ok := strings.CutPrefix(line, "After="); ok {
+			after = strings.Fields(v)
+		}
+		if v, ok := strings.CutPrefix(line, "Before="); ok {
+			before = strings.Fields(v)
+		}
+	}
+	for _, unit := range []string{"netfilter-persistent.service", "ufw.service", "firewalld.service", "network-pre.target"} {
+		if !slices.Contains(after, unit) {
+			t.Errorf("the unit does not load after %s: After=%q", unit, after)
+		}
+	}
+	for _, unit := range []string{"network.target", "docker.service"} {
+		if !slices.Contains(before, unit) {
+			t.Errorf("the unit does not load before %s: Before=%q", unit, before)
+		}
+	}
+	// add runs the loader it wrote before it reads the rules back, as the read is what it
+	// checks; and both go by the daemon's cgroup found one way.
+	if run, read := strings.LastIndex(install, "\n"+DoorFirewallScript+"\n"), strings.Index(install, `echo "# dockerd $cg"`); run < 0 || read < run {
+		t.Errorf("the install reads the rules before it loads them:\n%s", install)
+	}
+	if !strings.Contains(l, daemonCgroup) || !strings.Contains(DoorFirewallRead, daemonCgroup) {
+		t.Error("the loader and the read find the daemon's cgroup two ways")
+	}
+}
+
+// Docker's daemon's cgroup is docker.service's under systemd, before it starts too (at boot
+// the firewall loads ahead of Docker), else the running dockerd's own; with neither there is
+// none, and the daemon gets no jump (doorJumps), which --server-info then says.
+func TestDaemonCgroup(t *testing.T) {
+	t.Parallel()
+	own := ""
+	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if cg, ok := strings.CutPrefix(line, "0::"); ok {
+				own = cg
+			}
+		}
+	}
+	for name, c := range map[string]struct {
+		systemctl, pidof, want string
+	}{
+		"docker.service running":         {`[ "$1 $2 $3" = "show -p ControlGroup" ] && echo /system.slice/docker.service`, "exit 1", "/system.slice/docker.service"},
+		"docker.service not started yet": {`case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo system.slice ;; "cat docker.service") ;; *) exit 1 ;; esac`, "exit 1", "/system.slice/docker.service"},
+		"its slice the admin's":          {`case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo docker.slice ;; "cat docker.service") ;; *) exit 1 ;; esac`, "exit 1", "/docker.slice/docker.service"},
+		"no systemd, dockerd running":    {"exit 1", "echo self", own},
+		"no unit of that name":           {`[ "$1" = show ] && echo; [ "$1" != cat ]`, "echo self", own},
+		"neither":                        {"exit 1", "exit 1", ""},
+	} {
+		if c.pidof == "echo self" && own == "" {
+			continue // No /proc here (macOS): a running dockerd's cgroup is read on Linux.
+		}
+		bin := t.TempDir()
+		write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\n"+c.systemctl+"\n")
+		write(t, filepath.Join(bin, "pidof"), "#!/bin/sh\n"+c.pidof+"\n")
+		for _, f := range []string{"systemctl", "pidof"} {
+			if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command("sh", "-c", "set -eu\n"+daemonCgroup+`printf '%s' "$cg"`)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		if err != nil || string(out) != c.want {
+			t.Errorf("%s: %q (%v), want %q", name, out, err, c.want)
+		}
+	}
+	for _, cg := range []string{"", "/"} {
+		if j := doorJumps("1001", cg); slices.ContainsFunc(j, func(j doorJump) bool { return j.chain == DoorDaemonChain }) {
+			t.Errorf("a daemon in the cgroup %q, every process's, gets a jump: %+v", cg, j)
+		}
 	}
 }
 
