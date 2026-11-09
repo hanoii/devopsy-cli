@@ -543,6 +543,15 @@ func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 			t.Errorf("%q: %+v, %v", argv, a, err)
 		}
 	}
+	// Another project's hold under a repository this project names (its bookmark on a Docker
+	// Hub image under this project's names, mongo-express:devopsy-shop-prod-1 for mongo) is
+	// that project's reference count: never this one's to remove, whatever the repository.
+	// BUG: a tag under an own-named repository goes, another's hold included.
+	for _, argv := range [][]string{{"image", "rm", "shop-prod-web:devopsy-blog-prod-20260101000000"}, {"image", "rm", "shop-prod-web:latest", "shop-prod-web:devopsy-blog-prod-20260101000000"}} {
+		if a, err := decide(t, argv...); err == nil && len(a.Docker) != 0 {
+			t.Errorf("%q removes another project's hold: %+v", argv, a)
+		}
+	}
 }
 
 // A read-only copy goes after its container: nothing stays in the door's space.

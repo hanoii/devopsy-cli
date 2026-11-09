@@ -796,8 +796,12 @@ func TestAuthorizedKeysPrintsOnlyKeys(t *testing.T) {
 func TestProjectNameClash(t *testing.T) {
 	t.Parallel()
 	others := []string{"shop", "blog-admin", "traefik"}
+	// devopsy's own names are under devopsy-: the util image (devopsy-util, root with host
+	// mounts, which a project named devopsy could build and remove), the project users, the
+	// group, the builders.
+	// BUG: devopsy is taken as a project name.
 	for project, clash := range map[string]bool{
-		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true,
+		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true, "devopsy": true,
 	} {
 		if why := projectNameClash(project, others); (why != "") != clash {
 			t.Errorf("%s: %q", project, why)
