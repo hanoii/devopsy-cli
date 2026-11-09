@@ -31,6 +31,9 @@ func TestMain(m *testing.M) {
 	if space := os.Getenv("DEVOPSY_TEST_LOCK_EXEC"); space != "" {
 		lockExecHelper(space) // TestDoorImageLockOutlivesItsExec
 	}
+	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
+		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
+	}
 	dir, err := os.MkdirTemp("", "devopsy-test")
 	if err != nil {
 		panic(err)

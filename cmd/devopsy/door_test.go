@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -842,53 +843,219 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 	}
 }
 
-// A start runs an image of this project's, or one it claims first: pulled with its own
-// registry logins, the id then recorded in its space, so the next start asks the registry
-// nothing. One already on disk that another project pulled (a private one with that
-// project's login), built (blog-prod-web) or holds, or an id alone, is refused when this
-// project's pull of it fails, and a hold of another's is never pulled at all.
+// doorImageFake is a docker for the door's image checks: its store is dir/store, one
+// image a line, `<ref>|<id>|<digests>|<tags>|<labels json>` (digests and tags separated
+// by spaces, a ref with no line not here, so a name and the digest it holds are separate
+// lines, which a test moves apart); its registry dir/registry, `<ref>|<digest>` a line,
+// what a pull of the ref gets, printed as docker pull prints it (`Digest: ...`), and what
+// buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails. It logs
+// every call in dir/calls, lists no containers, and answers compose with its arguments
+// and the file it was given, for a door that execs it (doorComposeHelper). Image
+// inspects answer the two formats the door uses today and `{{json .}}`, as
+// images.CLI.Inspect reads it.
+func doorImageFake(t *testing.T, dir string) string {
+	t.Helper()
+	in := func(name string) string { return filepath.Join(dir, name) }
+	docker := in("docker")
+	write(t, docker, `#!/bin/sh
+all="$*"
+echo "$all" >>`+in("calls")+`
+for a; do ref=$a; done
+entry() { awk -F'|' -v r="$1" '$1==r' `+in("store")+` 2>/dev/null | head -1; }
+field() { printf '%s\n' "$1" | cut -d'|' -f"$2"; }
+tojson() { printf '['; first=1; for x in $1; do [ $first = 1 ] || printf ','; printf '"%s"' "$x"; first=0; done; printf ']'; }
+registry() { awk -F'|' -v r="$1" '$1==r{print $2}' `+in("registry")+` 2>/dev/null; }
+case "$all" in
+  'pull -q '*|'pull '*)
+    grep -qxF -- "$ref" `+in("fails")+` 2>/dev/null && exit 1
+    case "$all" in
+      'pull -q '*) echo "$ref" ;;
+      *) echo "$ref: Pulling from a registry"; d=$(registry "$ref"); [ -n "$d" ] && echo "Digest: $d"; echo "Status: Downloaded newer image for $ref" ;;
+    esac ;;
+  'buildx imagetools inspect '*) registry "$ref" ;;
+  'ps -a '*) ;;
+  'compose '*)
+    f=; while [ $# -gt 0 ]; do [ "$1" = -f ] && f=$2; shift; done
+    echo "ARGS: $all"
+    # The file's descriptor was written and then handed over at its end: from its start.
+    perl -e 'open(F, "<&=", $ARGV[0]) or die; seek(F, 0, 0); print while <F>;' "${f#/dev/fd/}" ;;
+  'image inspect '*)
+    e=$(entry "$ref"); [ -n "$e" ] || { echo "Error: No such image: $ref" >&2; exit 1; }
+    id=$(field "$e" 2); ds=$(field "$e" 3); ts=$(field "$e" 4); ls=$(field "$e" 5); [ -n "$ls" ] || ls='{}'
+    case "$all" in
+      *'{{.Id}}{{range .RepoTags}} {{.}}{{end}}'*) printf '%s %s\n' "$id" "$ts" ;;
+      *'{{json .Config.Labels}}'*) echo "$ls" ;;
+      *) printf '{"Id":"%s","RepoTags":%s,"RepoDigests":%s,"Config":{"Labels":%s}}\n' "$id" "$(tojson "$ts")" "$(tojson "$ds")" "$ls" ;;
+    esac ;;
+esac
+`, 0o755)
+	return docker
+}
+
+// A start runs an image of this project's by name (a build's, a hold of its own, devopsy's
+// util image: names only this project or the deploy user writes, under this project's
+// lock), or one it claims first: pulled with its own registry logins, the id then recorded
+// in its space, so the next start asks the registry nothing. One already on disk that
+// another project pulled (a private one with that project's login), built (blog-prod-web)
+// or holds, or an id alone, is refused when this project's pull of it fails, and a hold of
+// another's is never pulled at all.
+//
+// A claimed image goes to compose pinned, `<image as given>@<digest>`, the digest the
+// image has in the service's repository (as the devopsy.digest label chooses it, the tag
+// kept so docker ps shows it, a reference by digest kept as given): the name is anyone's
+// on the server to move between this check and compose's create (a project user's build of
+// a Docker Hub name, mongo's mongo-express:1, under mongo's lock alone), and Docker
+// resolves repo:tag@digest by the digest. The digest, the labels read and the id recorded
+// are the image the project's pull got, read by digest or id, never by the name again
+// after the pull; an image with no digest in its repository never goes by its plain name.
+// BUG: a claimed image goes to compose by its plain name, and the claim records the id the
+// name has after its pull.
 func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	calls, fails := filepath.Join(dir, "calls"), filepath.Join(dir, "fails")
-	fake := filepath.Join(dir, "docker")
-	// Every image is on disk, sha256:<its name's length> its id; a pull fails for a ref
-	// listed in fails.
-	write(t, fake, "#!/bin/sh\necho \"$*\" >>"+calls+"\nfor a; do ref=$a; done\ncase \"$*\" in\n"+
-		"  'pull -q '*) ! grep -qxF \"$ref\" "+fails+" ;;\n"+
-		"  'image inspect --format {{.Id}}'*) echo \"sha256:${#ref} $ref\" ;;\n"+
-		"  'image inspect'*) echo '{}' ;;\nesac\n", 0o755)
+	fake := doorImageFake(t, dir)
+	store := func(lines ...string) { write(t, filepath.Join(dir, "store"), strings.Join(lines, "\n")+"\n", 0o644) }
+	private := "registry.example.com/blog/private"
+	store(
+		// Pulled under two repositories, a mirror's digest first: the pin is this one's.
+		private+":1|sha256:p1|other.example.com/mirror@sha256:zz "+private+"@sha256:p1||{}",
+		private+"@sha256:p1|sha256:p1|"+private+"@sha256:p1||{}",
+		"registry.example.com/blog/labelled:1|sha256:l1|registry.example.com/blog/labelled@sha256:l1||{\"devopsy.role\":\"proxy\"}",
+		"registry.example.com/blog/labelled@sha256:l1|sha256:l1|registry.example.com/blog/labelled@sha256:l1||{\"devopsy.role\":\"proxy\"}",
+		"blog-prod-web|sha256:b1||blog-prod-web blog-prod-web:latest|{}",
+		"blog-prod-web:latest|sha256:b1||blog-prod-web blog-prod-web:latest|{}",
+		"registry.example.com/app:2|sha256:a2|registry.example.com/app@sha256:a2||{}",
+		"registry.example.com/app:devopsy-blog-prod-20260101000000|sha256:a2|registry.example.com/app@sha256:a2||{}",
+		"sha256:0123|sha256:0123|||{}",
+		"shop-prod-web|sha256:s1||shop-prod-web|{}",
+		"busybox:devopsy-shop-prod-20260101000000|sha256:bb|busybox@sha256:bb|busybox:devopsy-shop-prod-20260101000000|{}",
+		"busybox@sha256:bb|sha256:bb|busybox@sha256:bb||{}",
+		remote.UtilImage+"|sha256:u4|||{}",
+		"loaded:1|sha256:n1||loaded:1|{}",
+	)
+	write(t, filepath.Join(dir, "registry"), private+":1|sha256:p1\nregistry.example.com/blog/labelled:1|sha256:l1\nbusybox@sha256:bb|sha256:bb\nmongo-express:1|sha256:hhh\n", 0o644)
+	write(t, filepath.Join(dir, "fails"), "blog-prod-web\nblog-prod-web:latest\nregistry.example.com/app:2\nsha256:0123\nloaded:1\n", 0o644)
 	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir, Others: []string{"blog"}}, real: fake}
-	start := func(image string) error {
+	calls := filepath.Join(dir, "calls")
+	// start checks a file naming image, and says what compose then gets as the image.
+	start := func(image string) (string, error) {
 		t.Helper()
 		os.Remove(calls)
 		file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
-		return side.checkImageLabels(file, filepath.Join(dir, "none.json"))
+		err := side.checkImageLabels(file, filepath.Join(dir, "none.json"))
+		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
+		return got, err
 	}
-	pulled := func() bool { return strings.Contains(readString(calls), "pull -q ") }
-	if err := start("registry.example.com/blog/private:1"); err != nil || !pulled() {
-		t.Fatalf("claimed by its pull (%v), pulled %v:\n%s", err, pulled(), readString(calls))
+	pulled := func() bool { return strings.Contains(readString(calls), "pull ") }
+	pin := private + ":1@sha256:p1"
+	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
+		t.Errorf("claimed by its pull (%v), pulled %v, goes to compose as %q, want %q:\n%s", err, pulled(), got, pin, readString(calls))
 	}
-	if got := readString(side.policy.ImagesFile()); got != "sha256:35\n" {
+	if got := readString(side.policy.ImagesFile()); got != "sha256:p1\n" {
 		t.Errorf("the record: %q", got)
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
-	if err := start("registry.example.com/blog/private:1"); err != nil || pulled() {
-		t.Errorf("claimed already, pulled again (%v):\n%s", err, readString(calls))
+	if got, err := start(private + ":1"); err != nil || pulled() || got != pin {
+		t.Errorf("claimed already (%v), pulled again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
 	}
-	write(t, fails, "blog-prod-web\nblog-prod-web:latest\nregistry.example.com/app:2\nsha256:0123\n", 0o644)
+	if _, err := start("registry.example.com/blog/labelled:1"); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
+		t.Errorf("a claimed image labelled devopsy.role: %v", err)
+	}
 	for _, image := range []string{"blog-prod-web", "blog-prod-web:latest", "registry.example.com/app:2", "sha256:0123"} {
-		if err := start(image); err == nil || !strings.Contains(err.Error(), "its registry logins do not pull it") {
+		if _, err := start(image); err == nil || !strings.Contains(err.Error(), "its registry logins do not pull it") {
 			t.Errorf("%s, another's, ran: %v", image, err)
 		}
 	}
-	if err := start("registry.example.com/app:devopsy-blog-prod-20260101000000"); err == nil || pulled() {
+	if _, err := start("registry.example.com/app:devopsy-blog-prod-20260101000000"); err == nil || pulled() {
 		t.Errorf("another's hold pulled or ran (%v):\n%s", err, readString(calls))
 	}
-	// Its own built image and its own hold need no claim.
-	for _, image := range []string{"shop-prod-web", "busybox:devopsy-shop-prod-20260101000000"} {
-		if err := start(image); err != nil || pulled() {
-			t.Errorf("its own %s (%v):\n%s", image, err, readString(calls))
+	// Its own built image, its own hold and devopsy's util image need no claim and no pin.
+	for _, image := range []string{"shop-prod-web", "busybox:devopsy-shop-prod-20260101000000", remote.UtilImage} {
+		if got, err := start(image); err != nil || pulled() || got != image {
+			t.Errorf("its own %s (%v), pulled %v, goes to compose as %q:\n%s", image, err, pulled(), got, readString(calls))
 		}
 	}
+	// A reference by digest is a pin already: claimed, and kept as given.
+	if got, err := start("busybox@sha256:bb"); err != nil || !pulled() || got != "busybox@sha256:bb" {
+		t.Errorf("a reference by digest (%v), pulled %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	}
+	// An image the project claimed that has no digest in its repository (loaded here, named
+	// by hand) and that its registry does not pull: refused, or pinned by what it has (its
+	// id), never started by its plain name, which the check did not pin.
+	side.policy.Images = append(side.policy.Images, "sha256:n1")
+	if got, err := start("loaded:1"); err == nil && got == "loaded:1" {
+		t.Errorf("an image with no digest in its repository goes to compose by its plain name")
+	}
+	// The swap: right after the claim's pull, another project's build lands on the name
+	// (mongo's mongo-express:1, a Docker Hub name under mongo's names), with a registry
+	// digest of its own, as Docker's containerd store gives built images. The name now
+	// resolves to mongo's image; the pull got the registry's, and that is what the pin
+	// and the record must be.
+	store(
+		"mongo-express:1|sha256:mmm|mongo-express@sha256:mmm|mongo-express:1|{}",
+		"mongo-express@sha256:hhh|sha256:hhh|mongo-express@sha256:hhh||{}",
+		"sha256:hhh|sha256:hhh|mongo-express@sha256:hhh||{}",
+	)
+	if got, err := start("mongo-express:1"); err != nil || !pulled() || got != "mongo-express:1@sha256:hhh" {
+		t.Errorf("a name moved right after its pull (%v), pulled %v, goes to compose as %q, want the digest the pull got:\n%s", err, pulled(), got, readString(calls))
+	}
+	if got := readString(side.policy.ImagesFile()); !strings.Contains(got, "sha256:hhh") || strings.Contains(got, "sha256:mmm") {
+		t.Errorf("the record after the swap holds the name's image, not the pull's: %q", got)
+	}
+}
+
+// What compose receives for a verb that creates a container (up, create, run) is the
+// checked file with its pins, marshalled after the image check: marshalled before it, the
+// file carries the plain names the check pinned in its map alone. A pull keeps the names:
+// it is what moves them. In a helper process (doorComposeHelper), since the door execs
+// compose, here the fake docker, which prints the file it was given.
+// BUG: the file is marshalled before checkImageLabels.
+func TestDoorComposeHandsThePinnedFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	// The door reads the project's tree as its user, through sudo: a path is itself.
+	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
+	private := "registry.example.com/blog/private"
+	write(t, filepath.Join(dir, "store"), private+":1|sha256:p1|"+private+"@sha256:p1||{}\n"+private+"@sha256:p1|sha256:p1|"+private+"@sha256:p1||{}\n", 0o644)
+	write(t, filepath.Join(dir, "registry"), private+":1|sha256:p1\n", 0o644)
+	for _, verb := range []string{"up -d", "create", "run --rm web true", "pull"} {
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Errorf("%s: the door did not exec compose (%v):\n%s", verb, err, out)
+			continue
+		}
+		var file struct {
+			Services map[string]struct{ Image string }
+		}
+		_, body, ok := strings.Cut(string(out), "\n{")
+		if !ok || json.Unmarshal([]byte("{"+body), &file) != nil {
+			t.Errorf("%s: compose got no file:\n%s", verb, out)
+			continue
+		}
+		want := private + ":1@sha256:p1"
+		if verb == "pull" {
+			want = private + ":1"
+		}
+		if got := file.Services["web"].Image; got != want {
+			t.Errorf("%s: compose got web's image as %q, want %q:\n%s", verb, got, want, out)
+		}
+	}
+}
+
+// doorComposeHelper runs the door's compose on a file naming a pulled image, with the
+// fakes in dir and the verb in DEVOPSY_TEST_DOOR_VERB (TestDoorComposeHandsThePinnedFile),
+// and exits as it does: compose is exec'd, so what it prints is the fake docker's.
+func doorComposeHelper(dir string) {
+	side := &doorSide{
+		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
+		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH")},
+	}
+	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
+		"image": "registry.example.com/blog/private:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
+	}}}
+	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, "", dir, strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
 }
