@@ -558,6 +558,68 @@ func TestDataRelease(t *testing.T) {
 	}
 }
 
+// A release's run step, and every up after it (a plain one, a reload's,
+// a rollback's), runs the image the release fetched, whatever its name
+// holds by then: a name is anyone's on the server to move (a project
+// user's build of a Docker Hub name, mongo's mongo-express:1, outside
+// this environment's locks), so ComposeFile pins each pulled service to
+// the digest its listing records, a rollback's file too, and a landing
+// (derive) keeps the pin as it is, never taking it for an own image held
+// by a bookmark.
+// BUG: ComposeFile writes image: for holds alone; an up resolves the
+// plain name again after the fetch and runs whatever it holds then.
+func TestReleaseRunsWhatItFetched(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, appSvc, db118)
+	if err != nil || m.runs("database") != "I1" {
+		m.fail("the control, r1 (%v): %s", err, m.runs("database"))
+	}
+	// Another project's build lands on the name, with a registry digest of its own, as
+	// Docker's containerd store gives built images: a digest tells no pulled image apart.
+	swap := func() {
+		d.images["X1"] = true
+		d.names["mariadb:11.8"] = "X1"
+		d.digests["X1"] = []string{"mariadb@X1"}
+	}
+	swap()
+	m.up()
+	if m.runs("database") != "I1" || len(d.outside) != 0 {
+		m.fail("a plain up after the name moved runs %s, not I1 the release fetched (pulled by the up: %v)", m.runs("database"), d.outside)
+	}
+	// A copy landing (derive) sees the pin and leaves it: a pulled service's image: is no
+	// own image by a bookmark.
+	before, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile))
+	if err := m.e.set.derive(m.base(), m.e.rel(r1), map[string]Service{"app": appSvc, "database": db118}, false); err != nil {
+		m.fail("derive: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile))
+	if imgs, _, held := composeFacts(m.e.rel(r1)); string(after) != string(before) || held["database"] != "" || isBookmark(imgs["database"]) {
+		m.fail("a landing changed the pin:\n%s\nwas:\n%s", after, before)
+	}
+	// A rollback takes what the name holds at the time, under the lock (a floating tag
+	// goes forward), and pins that: the next up runs it whatever the name holds then.
+	d.names["mariadb:11.8"] = "I1"
+	d.publish("mariadb:11.8", "I2")
+	if _, err := m.release(false, appSvc, db118); err != nil || m.runs("database") != "I2" {
+		m.fail("r2 (%v): %s", err, m.runs("database"))
+	}
+	if err := m.rollback(r1, false); err != nil || m.runs("database") != "I2" {
+		m.fail("the rollback (%v): %s", err, m.runs("database"))
+	}
+	if imgs, _, _ := composeFacts(m.e.rel(r1)); imgs["database"] != "mariadb:11.8@I2" {
+		m.fail("the rollback's pin: %q", imgs["database"])
+	}
+	swap()
+	m.up()
+	if m.runs("database") != "I2" || len(d.outside) != 0 {
+		m.fail("an up after the rollback, the name moved, runs %s, not I2 (pulled by the up: %v)", m.runs("database"), d.outside)
+	}
+}
+
 // A rollback is checked as a release is: within a version and a tag it
 // goes, a floating tag forward; to a lower version it is refused before
 // any pull (nothing changes), naming the release that fixes forward, the
