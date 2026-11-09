@@ -414,7 +414,8 @@ func TestDoorKeyRemovalEndsTheUsersProcesses(t *testing.T) {
 }
 
 // The daemon resolves a bind at each start, so a path a project user can change would take
-// a restart anywhere. A control shows it would: the same swaps on paths as compose writes them.
+// a restart anywhere: an entry, which only the door replaces, shared/mnt and a release's file.
+// A control shows it would: the same swaps on paths as compose writes them.
 func TestDoorSwappedLinksReachNoRestart(t *testing.T) {
 	victim := doorSpace + "/mnt/doorswapv-prod/secret"
 	doorUser(t, "doorswapv")
@@ -438,6 +439,19 @@ func TestDoorSwappedLinksReachNoRestart(t *testing.T) {
 			return strings.Contains(out, "s3cret")
 		}
 		return false
+	}
+	// An entry is the door's own: its project user writes inside it and never replaces it,
+	// so the path the container holds stays a directory.
+	entry := doorSpace + "/mnt/doorswap-prod/data"
+	if out, code := doorAs(t, user, "touch "+base+"/shared/mnt/data/mine"); code != 0 {
+		t.Errorf("the control: the project user does not write in its entry (%d): %s\n%s", code, out, doorEntries(t, "doorswap-prod"))
+	}
+	doorAs(t, user, "rm -rf "+base+"/shared/mnt/data "+entry+"; ln -sT "+victim+" "+base+"/shared/mnt/data; ln -sT "+victim+" "+entry)
+	if out, code := doorRoot(t, "test -d "+entry+" && ! test -L "+entry); code != 0 {
+		t.Errorf("the entry is no directory any more: %s\n%s", out, doorEntries(t, "doorswap-prod"))
+	}
+	if reached("doorswap-prod-web-1") {
+		t.Error("an entry swapped for a link: a restart reached another project")
 	}
 	if out, code := doorAs(t, user, "rm -f "+base+"/shared/mnt && ln -s "+doorSpace+"/mnt/doorswapv-prod "+base+"/shared/mnt"); code != 0 {
 		t.Fatal(out)
@@ -590,10 +604,37 @@ func TestDoorKeepsProjectsApart(t *testing.T) {
 	if out, _ := doorAs(t, "devopsy-doorsepv", "cat "+file); !strings.Contains(out, "s3cret-file") {
 		t.Errorf("the control: its own project does not read it: %s", out)
 	}
+	// What its own user keeps: a file of its tree and its registry logins, in its home, and a
+	// clone's directory, the door's to make. Each is readable by anyone by its own mode, so
+	// only the directories above keep another out.
+	home := "/home/devopsy-doorsepv"
+	t.Cleanup(func() { doorRoot(t, "rm -rf "+doorSpace+"/clones/doorsepv") })
+	clone, code := doorAs(t, "devopsy-doorsepv", `set -e
+echo s3cret-tree >~/doorsepv/prod/shared/open
+mkdir -p ~/.docker
+echo '{"auths":{"registry.example.com":{"auth":"s3cret-login"}}}' >~/.docker/config.json
+chmod 644 ~/doorsepv/prod/shared/open ~/.docker/config.json
+sudo -n -u devopsy /usr/local/bin/devopsy --door clone ~/doorsepv/prod/taken`)
+	clone = strings.TrimSpace(clone)
+	if code != 0 || !strings.HasPrefix(clone, doorSpace+"/clones/doorsepv/") {
+		t.Fatalf("its files and its clone's directory (%d): %s", code, clone)
+	}
+	if out, code := doorRoot(t, "echo s3cret-clone >"+clone+"/f && chmod 644 "+clone+"/f"); code != 0 {
+		t.Fatal(out)
+	}
+	theirs := []string{home + "/doorsepv/prod/shared/open", home + "/.docker/config.json", clone + "/f"}
+	if out, _ := doorAs(t, "devopsy-doorsepv", "cat "+strings.Join(theirs, " ")); strings.Count(out, "s3cret") != len(theirs) {
+		t.Errorf("the control: its own project does not read its tree, its logins and its clone: %s", out)
+	}
 	web := "doorsepv-prod-web-1"
 	id, _ := doorRoot(t, "docker inspect -f '{{.Id}}' "+web)
 	for name, cmd := range map[string]string{
 		"a file by a path, readable by anyone": "cat " + file,
+		"its tree, its logins and its clone":   "cat " + strings.Join(theirs, " "),
+		"its clones":                           "ls " + doorSpace + "/clones/doorsepv && echo LISTED",
+		"its home":                             "ls " + home + " && echo LISTED",
+		"sudo to the deploy user":              "sudo -n -u devopsy id",
+		"sudo to root":                         "sudo -n id",
 		"its sealed copies":                    "ls " + doorSpace + "/sealed/doorsepv && echo LISTED",
 		"the real client":                      "/usr/bin/docker inspect " + web,
 		"the socket by hand":                   "curl -s --unix-socket /var/run/docker.sock http://d/containers/json",
