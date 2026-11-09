@@ -460,7 +460,7 @@ chown `+user+` `+base+`/.devopsy-sync.stream.evil`); code != 0 {
 	if out, code := doorAs(t, user, `set -u
 script=$(printf '%sx' `+quote(importScript)+`)
 script=${script%x}
-docker run --rm --name devopsy-evil --label devopsy.env=doormnt-prod --label devopsy.task=import --network none \
+docker run --rm --name devopsy-import-doormnt-prod-1 --label devopsy.env=doormnt-prod --label devopsy.task=import --network none \
   --mount type=bind,source=`+entry+`,target=/mnt/data \
   --mount type=bind,source=`+base+`/.devopsy-sync.stream.evil,target=/in/evil,readonly \
   devopsy-util:4 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
@@ -608,6 +608,10 @@ printf 'services:\n  web:\n    image: busybox:1.37\n    command: [sleep, infinit
 	}
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --project-users add "+project+" 2>&1"); code != 0 {
 		t.Fatalf("add once it is down (%d):\n%s", code, out)
+	}
+	// A key of its own: the door answers no user with none.
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for "+project+" add /root/.ssh/id_ed25519.pub 2>&1"); code != 0 {
+		t.Fatalf("its key (%d):\n%s", code, out)
 	}
 	up()
 	compose := "name: " + project + "-prod\nservices:\n  web:\n" + doorService + "    command: [sleep, infinity]\n"
