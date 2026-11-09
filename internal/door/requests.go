@@ -389,18 +389,29 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 	case "inspect":
 		// An image holds its project's configuration (its Env, a build argument
 		// included): only one this project's, or claimed with its own logins.
-		a := &Action{Docker: append([]string{"image"}, args...)}
-		_, targets := flagValues(args[1:], "--format", "-f")
+		// An image of its own by its id goes to Docker by the id the door read, as a tag's
+		// source does: the name is anyone's on the server to move before Docker reads it.
+		formats, targets := flagValues(args[1:], "--format", "-f")
+		a := &Action{Docker: []string{"image", "inspect"}}
+		for _, f := range formats {
+			a.Docker = append(a.Docker, "--format", f)
+		}
 		for _, t := range targets {
 			if strings.HasPrefix(t, "-") {
 				return nil, refuse("docker image inspect %s", t)
 			}
-			if !p.OwnsImage(d, t, known) {
+			id, owned := p.ownedImage(d, t, known)
+			switch {
+			case owned && id != "":
+				a.Docker = append(a.Docker, id)
+				continue
+			case !owned:
 				if err := p.Claimable(t); err != nil {
 					return nil, err
 				}
 				a.Claims, a.Logins = append(a.Claims, t), true
 			}
+			a.Docker = append(a.Docker, t)
 		}
 		return a, nil
 	case "rm":

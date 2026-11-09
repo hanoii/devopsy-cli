@@ -741,6 +741,12 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 		if err != nil || len(a.Docker) != 3 || !strings.HasPrefix(a.Docker[1], want) || a.Docker[1] == "postgres:16" {
 			t.Errorf("a tag of its own %s tags %v (%v)", image, a, err)
 		}
+		// An inspect reads its configuration (Env, build arguments) by the same id, for the
+		// same reason.
+		a, err = Decide([]string{"image", "inspect", "--format", "{{json .}}", image}, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil || len(a.Claims) != 0 || !strings.HasPrefix(a.Docker[len(a.Docker)-1], want) || slices.Contains(a.Docker, "postgres:16") {
+			t.Errorf("an inspect of its own %s reads %v (%v)", image, a, err)
+		}
 	}
 	// A tag puts a hold of its own or its own build's name on an image of its own (a
 	// rollback puts its build's name back, Restore), never a name another reads.
