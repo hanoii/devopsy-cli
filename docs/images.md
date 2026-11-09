@@ -10,11 +10,12 @@ Once fetched, every image a release runs gets a second tag for that
 release, `devopsy-<compose name>-<release id>`. A long compose name is
 shortened, and a checksum is added when a release names one repository
 twice. Images pulled by digest are tagged too. A pulled name Compose
-runs (`mariadb:11.8`) doesn't change. An image the release builds, or
-never pulls, runs by the release's own tag instead, which no other
-environment writes: in build mode the fetch builds under it, never under
-the `image:` name, which every environment building the project on the
-server shares.
+runs (`mariadb:11.8`) doesn't change, and it runs pinned to the digest
+its release fetched (`mariadb:11.8@sha256:...`): [Releases](releases.md)
+says where. An image the release builds, or never pulls, runs by the
+release's own tag instead, which no other environment writes: in build
+mode the fetch builds under it, never under the `image:` name, which
+every environment building the project on the server shares.
 
 devopsy never moves a pulled name back to an older image, because
 another environment, instance or project may be running it.
@@ -159,10 +160,10 @@ allows runs as it would have. `--release`, `--rollback`,
 and `--snapshots restore <id> --no-code` take it. `--yes` never accepts
 an image: it only skips prompts.
 
-Within one version, image names are taken as they are. Nothing is held
-by digest, and a plain `up` follows the names, as for any service. A tag
-pushed again onto an older image, or a stale mirror, goes unseen, since
-both are still the same tag; that limit is accepted.
+Within one version, image names are taken as they are when a release
+fetches them, and an `up` runs that image until the next release fetches
+again. A tag pushed again onto an older image, or a stale mirror, goes
+unseen, since both are still the same tag; that limit is accepted.
 
 ## Rollback against restore
 

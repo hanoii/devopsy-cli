@@ -52,6 +52,8 @@
 ## Holds and restores
 
 - Every activation writes `ComposeFile` with a `devopsy.digest` label per fetched service (`DigestLabel`, the image it was given, never a release id, since compose recreates on a label change).
+- `ComposeFile` pins every pulled service not held to its listing's digest, `image:` as `<ref>@<digest>` (`Pin`, the tag kept for `docker ps`), and a hold stays `repo@digest`: a name resolved again after the fetch is anyone's on the server to move (a project user's build of a registry's name), and the pin's string never changes for the same image, which would recreate.
+- A pulled service's `image:` in `ComposeFile` is its pin, never an own image by its bookmark (`derive` reads that for `KindOwn` only).
 - A data service is held, on another image than its release's own, exactly when the rule refuses its own label and tag against the window its data has then, on the image that window ends on (`holdsFor`, `holdLine`, `hold.go`).
 - A hold is never carried, every writer of `ComposeFile` deriving it again from the history (`Record`, `Restore`, `LastHold`, `derive`): carried holds go stale on the path that forgets them.
 - A held entry records its release's own image (`entry.OwnRef`, `ownOf`), which every derivation judges, `ReloadCheck` compares the variables with and a hold that ends gives back.

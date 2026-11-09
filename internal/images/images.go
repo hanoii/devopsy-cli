@@ -525,7 +525,7 @@ func (s *Set) entryOf(svc Service, ref, mode string) entry {
 	}
 	e.ID = img.ID
 	if e.Kind != KindOwn {
-		e.Digest = digestIn(img, svc.Ref)
+		e.Digest = DigestIn(img, svc.Ref)
 		e.Version = sanitize(img.Version)
 		if e.Digest == "" {
 			// Nothing to hold it by: restored like an own image.
@@ -545,18 +545,33 @@ func (svc Service) tag() string {
 	return TagOf(svc.Ref)
 }
 
-// digestIn is img's registry digest for ref's repository, as a name,
+// DigestIn is img's registry digest for ref's repository, as a name,
 // spelled as Docker shows it (mariadb@sha256:..., not
 // docker.io/library/mariadb@...): every hold written the same way, so a
 // rollback holding the same image never changes the reference compose
 // sees, which would recreate the container; "" without one.
-func digestIn(img Image, ref string) string {
+func DigestIn(img Image, ref string) string {
 	for _, d := range img.Digests {
 		if repoKey(d) == repoKey(ref) {
 			return repoKey(ref) + "@" + digestOf(d)
 		}
 	}
 	return ""
+}
+
+// Pin is ref pinned to digest's content, ref@sha256:... (digest a name's,
+// repo@sha256:..., or the digest alone): Docker takes repo:tag@digest and
+// resolves the digest, which no build or tag moves, and docker ps shows
+// the tag; ref as it is when it carries a digest already, or without one.
+// Shared by ComposeFile and the door, so a pin has one spelling.
+func Pin(ref, digest string) string {
+	if i := strings.LastIndex(digest, "@"); i >= 0 {
+		digest = digest[i+1:]
+	}
+	if strings.Contains(ref, "@") || digest == "" {
+		return ref
+	}
+	return ref + "@" + digest
 }
 
 // digestOf is a name's digest, sha256:...; "" without one.

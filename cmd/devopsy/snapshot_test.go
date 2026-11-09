@@ -3478,7 +3478,7 @@ func TestRestoreDataVersion(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("%v: the restore (%d):\n%s", args, code, out)
 		}
-		if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") {
+		if c := readString(releaseFile(t, current, images.ComposeFile)); heldIn(c, strings.TrimPrefix(env[0], "FAKE_DB_IMAGE=")) {
 			t.Errorf("%v: something held after the restore:\n%s", args, c)
 		}
 		h := readString(history)
@@ -3520,7 +3520,7 @@ func TestRestoreDataUnholds(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "db runs ") || !strings.Contains(out, "own image again") {
 		t.Fatalf("the --no-code restore (%d):\n%s", code, out)
 	}
-	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "mariadb@sha256:snap") {
+	if c := readString(releaseFile(t, current, images.ComposeFile)); heldIn(c, "mariadb:11.8") || !strings.Contains(c, "mariadb@sha256:snap") {
 		t.Errorf("still held after the restore:\n%s", c)
 	}
 	if l := readString(releaseFile(t, current, images.ListFile)); !strings.Contains(l, "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap") {

@@ -1895,7 +1895,7 @@ exit 0
 	if out, err := release("1", "DB=mariadb:11.8", "IMG=I1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("release 1 (%v):\n%s", err, out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "image:") || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); heldIn(got, "mariadb:11.8") || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
 		t.Errorf("devopsy's compose file:\n%s", got)
 	}
 	// What ran on the data: none here (no container), so written by hand,
@@ -3100,8 +3100,8 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	if err != nil || current() != "releases/1/code" {
 		t.Fatalf("rollback (%v), current %q: its fetch pulled release 1's old hold of the database:\n%s", err, current(), out)
 	}
-	// No hold: the database by its name, the app it built again by its bookmark.
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "mariadb@I1") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
+	// No hold: the database by its pin, the app it built again by its bookmark.
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); heldIn(got, "mariadb:11.8") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
 		t.Errorf("release 1's compose file after the rollback holds what nothing asked for:\n%s", got)
 	}
 }
@@ -3509,4 +3509,16 @@ func TestSyncToOwn(t *testing.T) {
 	if s := PushScript(&Target{Path: "shop/prod"}, "shop", env); !strings.Contains(s, syncToOwn("shop/dev")) || !strings.Contains(s, SameMachineClear("1.abcdef")) {
 		t.Errorf("the push on one server:\n%s", s)
 	}
+}
+
+// heldIn says whether a release's devopsy-compose.yaml, c, holds a service: a hold's label,
+// or an image: other than a pin of ref, the service's own name (`<ref>@<digest>`, which
+// every pulled service gets).
+func heldIn(c, ref string) bool {
+	for _, line := range strings.Split(c, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "image: "); ok && !strings.HasPrefix(strings.Trim(v, `"`), ref+"@") {
+			return true
+		}
+	}
+	return strings.Contains(c, images.HeldLabel)
 }

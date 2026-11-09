@@ -344,7 +344,10 @@ release alone.
 `devopsy-compose.yaml` is the one compose file devopsy writes. It holds
 only facts of the release's last activation: the image each service was
 given (a `devopsy.digest` label), each image the release built or never
-pulls by the release's own name for it (`image:`), and the data services held on another
+pulls by the release's own name for it (`image:`), each pulled image by
+its digest (its `image:` as `mariadb:11.8@sha256:...`, so an `up` on the
+server runs what the release fetched whatever the name points to since,
+and `docker ps` still shows the tag), and the data services held on another
 image (a `devopsy.held` label, naming the image that holds them:
 [Holds](images.md#holds)). devopsy runs compose with it between the
 project's `compose.yaml` and your `compose.override.yaml`, so your

@@ -1069,7 +1069,7 @@ func TestDataLastResortUnholds(t *testing.T) {
 		m.fail("the last resort: %v", err)
 	}
 	imgs, labels, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != "" || held["database"] != "" || labels["database"] != "mariadb@I1" || !strings.Contains(out.String(), "database runs "+r1+"'s own image again") {
+	if imgs["database"] != "mariadb:11.8@I1" || held["database"] != "" || labels["database"] != "mariadb@I1" || !strings.Contains(out.String(), "database runs "+r1+"'s own image again") {
 		m.fail("devopsy's compose file: images %v, labels %v, held %v", imgs, labels, held)
 	}
 	m.cur = r1
@@ -1354,8 +1354,10 @@ func TestRemoveHistory(t *testing.T) {
 	}
 }
 
-// --status names a service a plain up moved off the image its activation
-// gave it; nothing is held by digest any more on a release.
+// --status names a service running another image than its activation gave
+// it: a plain up runs the pin whatever the name holds since, so only
+// something outside devopsy's file does that (an override's image:, a
+// container made by hand under the label); nothing is held by digest.
 func TestStatusLines(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1367,9 +1369,17 @@ func TestStatusLines(t *testing.T) {
 	d.publish("caddy:2-alpine", "C2")
 	d.pull("caddy:2-alpine", "C2")
 	stage.up()
+	if got := statusTexts(StatusLines(d, "app-stage", stage.e.rel(stage.cur))); len(got) != 0 {
+		t.Errorf("an up after the name moved: %v", got)
+	}
+	for i, c := range d.containers {
+		if c.service == "alwaysup" {
+			d.containers[i].image = "C2"
+		}
+	}
 	lines := StatusLines(d, "app-stage", stage.e.rel(stage.cur))
 	got := statusTexts(lines)
-	want := []string{"alwaysup runs caddy@C2, not caddy@C1 its activation gave it: caddy:2-alpine moved since (a plain up follows names)"}
+	want := []string{"alwaysup runs caddy@C2, not caddy@C1 its activation gave it: something outside devopsy's compose file made it"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("status lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
@@ -1760,7 +1770,7 @@ func TestDataCopyDropsHold(t *testing.T) {
 		rel := m.e.rel(m.cur)
 		imgs, _, h := composeFacts(rel)
 		e, _ := match(readList(rel), entry{Service: "database"})
-		if m.runs("database") != "I1" || imgs["database"] != "" || h["database"] != "" || e.held() || e.ID != "I1" || e.DataVersion != "11.8" {
+		if m.runs("database") != "I1" || imgs["database"] != "mariadb:11.8@I1" || h["database"] != "" || e.held() || e.ID != "I1" || e.DataVersion != "11.8" {
 			m.fail("after %s: runs %s, compose %v %v, listing %+v", what, m.runs("database"), imgs, h, e)
 		}
 		if !strings.Contains(out.String(), "database runs "+m.cur+"'s own image again") {

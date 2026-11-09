@@ -185,7 +185,7 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 	// line's (Land keeps only what is safe of a line from an export's
 	// header: review).
 	if l.Tag != "" || ModeOf(rel) == ModeImage {
-		if d := digestIn(Image{Digests: l.Digests}, l.Ref); d != "" {
+		if d := DigestIn(Image{Digests: l.Digests}, l.Ref); d != "" {
 			src.Kind, src.Digest = KindPulled, d
 			if e, ok := match(readList(rel), entry{Service: service}); ok && ownOf(e).Kind != KindOwn {
 				src.Digest = repoOf(ownOf(e).Ref) + "@" + digestOf(d)

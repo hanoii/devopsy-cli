@@ -13,10 +13,11 @@ import (
 // ComposeFile is devopsy's own compose file, in a release's directory
 // beside its code: the facts of its activation a project could not write
 // in advance, and nothing the project chooses. Every service the
-// activation fetched gets DigestLabel, the image it gave it, and each own
+// activation fetched gets DigestLabel, the image it gave it, each own
 // image image: its release's bookmark (resolveBookmarks), which only that
-// release writes; a data service held on another image than its release's
-// own (holdsFor: the rule refuses its own against its data's history) gets
+// release writes, and a pulled one image: its name pinned to that digest
+// (Pin); a data service held on another image than its release's own
+// (holdsFor: the rule refuses its own against its data's history) gets
 // HeldLabel, and image: the reference that holds it (its digest, the
 // release's own bookmark of it). devopsy runs compose with
 // it between the project's compose.yaml and the operator's
@@ -67,9 +68,16 @@ func composeText(es []entry, holds map[string]composeHold) string {
 		if label == "" {
 			label = hold.Image
 		}
+		image := hold.Image
+		if image == "" && e.Kind == KindPulled && e.Digest != "" {
+			// Pinned: the run step, a plain up, a reload resolve the name again
+			// otherwise, and a name is anyone's on the server to move after the
+			// fetch (a project user's build of a registry's name).
+			image = Pin(e.Ref, e.Digest)
+		}
 		svcs.WriteString("  " + strconv.Quote(e.Service) + ":\n")
-		if hold.Image != "" {
-			svcs.WriteString("    image: " + strconv.Quote(hold.Image) + "\n")
+		if image != "" {
+			svcs.WriteString("    image: " + strconv.Quote(image) + "\n")
 		}
 		if hold.From != "" {
 			// Held: no build of the project's code lands on the image it is held
@@ -141,9 +149,9 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // another activation's: one cut off past its switch, a rollback's whose
 // newer containers run on; OrbStack cuts, round 8), another image than
 // its activation gave it (DigestLabel: something outside devopsy's file for
-// a service it names an image for, else a plain up that followed a pulled
-// name another environment moved), or held on another image than the
-// release's own (HeldLabel).
+// a service it names an image for, every own image and every pulled one
+// with a digest, else a plain up that followed a name another environment
+// moved), or held on another image than the release's own (HeldLabel).
 // A hold is said, the rest warned.
 func StatusLines(d Docker, project, rel string) []StatusLine {
 	pins, labels, held := composeFacts(rel)
@@ -201,7 +209,7 @@ type StatusLine struct {
 // shownImage is an image for messages: its digest in ref's repository,
 // short, else its short id.
 func shownImage(ref string, img Image) string {
-	if d := digestIn(img, ref); d != "" {
+	if d := DigestIn(img, ref); d != "" {
 		return repoOf(d) + "@" + short(digestOf(d))
 	}
 	return short(img.ID)
