@@ -53,11 +53,15 @@ func copiedVolumes(services []cli.SyncService) []cli.Volume {
 }
 
 // ensureVolumes makes each of vols that Docker lacks, as compose would:
-// its driver, options and labels, and compose's own two, the project's
-// and the volume's key, so compose takes it for its own (checked on
-// compose v5.5.0: no warning, where an unlabeled one gets one on every
-// up). project is the environment's compose project.
-func ensureVolumes(ctx context.Context, project string, vols []cli.Volume) error {
+// its driver and labels, and compose's own two, the project's and the
+// volume's key, so compose takes it for its own (checked on compose
+// v5.5.0: no warning, where an unlabeled one gets one on every up).
+// project is the environment's compose project, at cwd. One with options
+// (driver_opts: a share's, its password in them) is made by the project's
+// own compose, for the services that mount it (create, which starts none),
+// through Docker's API: on docker volume create's command line, which
+// every user of the server reads in /proc, its options would show.
+func ensureVolumes(ctx context.Context, cwd, project string, vols []cli.Volume, services []cli.SyncService) error {
 	for _, v := range vols {
 		ok, err := volumeExists(ctx, v.Name)
 		if err != nil {
@@ -66,12 +70,24 @@ func ensureVolumes(ctx context.Context, project string, vols []cli.Volume) error
 		if ok {
 			continue
 		}
+		if len(v.Opts) > 0 {
+			var mounts []string
+			for _, s := range services {
+				if slices.ContainsFunc(s.Volumes, func(x cli.Volume) bool { return x.Key == v.Key }) {
+					mounts = append(mounts, s.Name)
+				}
+			}
+			if err := composeContext(ctx, cwd, errOut, append([]string{"create", "--no-build", "--no-recreate"}, mounts...)...); err != nil {
+				return errors.New("making the volume " + v.Name + ": " + err.Error())
+			}
+			if ok, err := volumeExists(ctx, v.Name); err != nil || !ok {
+				return errors.New("making the volume " + v.Name + ": compose made no such volume")
+			}
+			continue
+		}
 		args := []string{"volume", "create", "--label", "com.docker.compose.project=" + project, "--label", "com.docker.compose.volume=" + v.Key}
 		if v.Driver != "" {
 			args = append(args, "--driver", v.Driver)
-		}
-		for _, k := range sortedKeys(v.Opts) {
-			args = append(args, "--opt", k+"="+v.Opts[k])
 		}
 		for _, k := range sortedKeys(v.Labels) {
 			args = append(args, "--label", k+"="+v.Labels[k])

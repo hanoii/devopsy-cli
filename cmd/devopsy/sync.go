@@ -2808,7 +2808,7 @@ func childPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []
 	// The volumes a copy writes into, made when missing (a first
 	// release, a volume added since) as compose would: the parent's
 	// rsync never makes one.
-	if err := ensureVolumes(context.Background(), composeName(p.cwd), copiedVolumes(services)); err != nil {
+	if err := ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(services), services); err != nil {
 		return fail(err.Error())
 	}
 	if _, err := stopServices(p.cwd, set); err != nil {
@@ -3080,7 +3080,7 @@ func wipeData(p place) error {
 	}
 	_, services, err := cli.SyncServices(p.cwd, os.Environ())
 	if err == nil {
-		err = ensureVolumes(context.Background(), composeName(p.cwd), copiedVolumes(services))
+		err = ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(services), services)
 	}
 	if err != nil {
 		return err

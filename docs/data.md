@@ -86,7 +86,10 @@ A `volumes` copy:
   copied by their compose key, into the other environment's volume of
   the same key (`<project>_<key>`, the name compose gives it). devopsy
   creates that volume when it is missing, with its driver, options and
-  labels, as compose would. In a tar, a volume sits at the top level
+  labels, as compose would; one with options (a share's, its password
+  among them) through the project's own compose, which also creates its
+  services' containers, stopped, so the options never show on a command
+  line. In a tar, a volume sits at the top level
   under its key, beside the entries.
 - A volume keeps the owners it is copied with (its image's users);
   `devopsy.mnt.owner` only owns entries of `mnt`.

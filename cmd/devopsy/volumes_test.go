@@ -137,3 +137,26 @@ func TestExportImportVolumes(t *testing.T) {
 		t.Errorf("a volume carried as a file (%d):\n%s", code, errs)
 	}
 }
+
+// A volume made for a copy with options (a share's, its password in them) is made by the
+// project's own compose, through Docker's API: on docker volume create's command line, which
+// every user of the server reads in /proc, its options would show. One with none is made as
+// compose would make it, by its name.
+func TestVolumeOptionsNeverOnACommandLine(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.labels(`FAKE_DB_VOLUME=dbdata FAKE_DB_VOLUME_OPTS='{"type":"cifs","o":"username=app,password=s3cret"}'`)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.log+".vol", "shop-prod_dbdata", "ibd"), "pages\n", 0o644)
+	out, code := s.run(nil, "@dev", "--release")
+	docker, _ := s.logs()
+	if code != 0 || readString(filepath.Join(s.log+".vol", "shop-dev_dbdata", "ibd")) != "pages\n" {
+		t.Fatalf("first release (%d):\n%s\n%s", code, out, docker)
+	}
+	if strings.Contains(docker, "s3cret") || strings.Contains(docker, "volume create") {
+		t.Errorf("a volume's options on a command line:\n%s", docker)
+	}
+	if !strings.Contains(docker, "create --no-build --no-recreate db") {
+		t.Errorf("the volume not made by compose, for the service that mounts it:\n%s", docker)
+	}
+}

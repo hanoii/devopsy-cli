@@ -2507,7 +2507,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			e.volume = &v
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
-		if err := extractEntry(ctx, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd)); err != nil {
+		if err := extractEntry(ctx, cwd, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd), restored); err != nil {
 			return stayDown(err.Error())
 		}
 	}

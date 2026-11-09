@@ -172,7 +172,8 @@ app2=
 # (<project>_<key>); FAKE_APP_VOLUME one app mounts. Volumes are
 # directories of $DOCKER_LOG.vol, by name.
 dbvol= appvol= topvols=
-[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME"); }
+# FAKE_DB_VOLUME_OPTS: that volume's driver_opts, as JSON (a share's password, say).
+[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"%s}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME" "${FAKE_DB_VOLUME_OPTS:+,\"driver_opts\":$FAKE_DB_VOLUME_OPTS}"); }
 # FAKE_APP_BUILD: app has a build: section, its context the release's
 # code, its argument APP_UID FAKE_APP_UID (10001 by default).
 appbuild=
@@ -205,6 +206,9 @@ case "$*" in
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
   "volume create "*) mkdir -p "$vols/$last" ;;
+  # compose's create makes the volumes of db, the one service that mounts one.
+  *" create --no-build --no-recreate "*)
+    case " $* " in *" db "*) [ -z "${FAKE_DB_VOLUME:-}" ] || mkdir -p "$vols/${COMPOSE_PROJECT_NAME:-}_$FAKE_DB_VOLUME" ;; esac ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   # down removes every container, until an up creates them again.
