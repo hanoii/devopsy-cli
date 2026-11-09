@@ -1351,16 +1351,34 @@ func (s *doorSide) writtenEntries(containers []string) []string {
 // the door's (BUILDX_CONFIG), apart from the directory of logins a build gets.
 func (s *doorSide) builder() ([]string, error) {
 	name := "devopsy-" + s.policy.Project
+	// Its network is its own: on Docker's default bridge, which every container shares, a
+	// build step is a member of it, and reaches another project's builder and what its build
+	// listens on.
+	network := name + "-build"
 	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name}
 	env := append(slices.Clone(s.env), b[0])
-	inspect := s.docker("buildx", "inspect", name)
-	inspect.Env = env
-	if inspect.Run() != nil {
-		create := s.docker("buildx", "create", "--name", name, "--driver", "docker-container")
-		create.Env, create.Stdout, create.Stderr = env, os.Stderr, os.Stderr
-		if err := create.Run(); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
+	run := func(args ...string) ([]byte, error) {
+		c := s.docker(args...)
+		c.Env, c.Stderr = env, os.Stderr
+		return c.Output()
+	}
+	out, err := run("buildx", "inspect", name)
+	if err == nil && strings.Contains(string(out), `network="`+network+`"`) {
+		return b, nil
+	}
+	if err == nil {
+		// Made otherwise, on the default bridge: made again.
+		if _, err := run("buildx", "rm", name); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder is on Docker's default bridge, and could not be removed: %v", s.policy.Project, err)
 		}
+	}
+	if _, err := run("network", "inspect", network); err != nil {
+		if _, err := run("network", "create", network); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
+		}
+	}
+	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network); err != nil {
+		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
 	}
 	return b, nil
 }

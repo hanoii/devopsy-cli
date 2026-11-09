@@ -695,37 +695,55 @@ esac
 	}
 }
 
-// A project's build runs on a BuildKit of its own, made at its first build: on one builder,
-// a cache mount is shared across projects by its id. Its settings stay the door's.
+// A project's build runs on a BuildKit of its own, made at its first build, on a network of
+// its own: on one builder, a cache mount is shared across projects by its id, and on Docker's
+// default bridge, which every container shares, one project's build step reaches another's
+// builder and what its build listens on. A builder made otherwise (on that bridge) is made
+// again. Its settings stay the door's.
 func TestDoorBuildsOnTheProjectsBuilder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "docker.log")
+	made := filepath.Join(dir, "made")
 	docker := filepath.Join(dir, "docker")
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 echo "$BUILDX_CONFIG $*" >>`+log+`
 case "$*" in
-  "buildx inspect "*) [ -e `+dir+`/made ] ;;
-  "buildx create "*) touch `+dir+`/made ;;
+  "buildx inspect "*) [ -e `+made+` ] && cat `+made+` ;;
+  "buildx create "*) echo "Driver Options: network=\"${8#network=}\"" >`+made+` ;;
+  "buildx rm "*) rm -f `+made+` ;;
+  "network inspect "*) [ -e `+dir+`/net ] ;;
+  "network create "*) touch `+dir+`/net ;;
 esac
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}, real: docker}
-	for range 2 {
+	space := filepath.Join(dir, "space", "buildx")
+	build := func() string {
+		t.Helper()
+		os.Remove(log)
 		env, err := side.builder()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Contains(env, "BUILDX_BUILDER=devopsy-shop") || !slices.Contains(env, "BUILDX_CONFIG="+filepath.Join(dir, "space", "buildx")) {
+		if !slices.Contains(env, "BUILDX_BUILDER=devopsy-shop") || !slices.Contains(env, "BUILDX_CONFIG="+space) {
 			t.Errorf("a build's environment: %q", env)
 		}
+		got, _ := os.ReadFile(log)
+		return string(got)
 	}
-	got, _ := os.ReadFile(log)
-	space := filepath.Join(dir, "space", "buildx")
-	want := space + " buildx inspect devopsy-shop\n" + space + " buildx create --name devopsy-shop --driver docker-container\n" + space + " buildx inspect devopsy-shop\n"
-	if string(got) != want {
-		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
+	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build\n"
+	if got := build(); got != space+" buildx inspect devopsy-shop\n"+space+" network inspect devopsy-shop-build\n"+space+" network create devopsy-shop-build\n"+create {
+		t.Errorf("the first build asked:\n%s", got)
+	}
+	if got := build(); got != space+" buildx inspect devopsy-shop\n" {
+		t.Errorf("a build on the builder made asked:\n%s", got)
+	}
+	// One made on the default bridge, before builders had networks of their own.
+	write(t, made, "Driver Options: \n", 0o644)
+	if got := build(); got != space+" buildx inspect devopsy-shop\n"+space+" buildx rm devopsy-shop\n"+space+" network inspect devopsy-shop-build\n"+create {
+		t.Errorf("a builder on the default bridge, asked:\n%s", got)
 	}
 }
 

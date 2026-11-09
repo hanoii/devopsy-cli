@@ -114,6 +114,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 case "$1 $2" in
   "ps "*) ;;
   "pull busybox:1.37") echo "Digest: sha256:b1" ;;
+  "buildx inspect") echo 'Driver Options: network="devopsy-shop-build"' ;;
   "buildx "*) cat >/dev/null ;;
   "image inspect") echo '{"Id":"sha256:b1","RepoDigests":["busybox@sha256:b1"],"Config":{"Labels":{}}}' ;;
   *) exit 1 ;;

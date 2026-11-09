@@ -1184,10 +1184,11 @@ docker run -d --name doorhostsvc-lo --network host busybox:1.37 sh -c 'mkdir -p 
 	}
 }
 
-// A door project builds on a BuildKit of its own: on one builder, a cache mount is shared
-// across projects by its id, and one project's build fills a cache another's trusts. The
-// control: the same two builds on the server's own builder see each other's.
-func TestDoorBuildCachesStayApart(t *testing.T) {
+// A door project builds on a BuildKit of its own, on a network of its own: on one builder, a
+// cache mount is shared across projects by its id, and one project's build fills a cache
+// another's trusts; on Docker's default bridge, one project's build step reaches another's
+// builder. The control: the same two builds on the server's own builder see each other's.
+func TestDoorBuildersStayApart(t *testing.T) {
 	target := fmt.Sprintf("/cache-%d", time.Now().UnixNano())
 	dockerfile := func(name string) string {
 		return "FROM busybox:1.37\nRUN --mount=type=cache,target=" + target + " sh -c 'cat " + target + "/mark 2>/dev/null || echo none; echo " + name + " >" + target + "/mark' >/seen\n"
@@ -1214,6 +1215,15 @@ COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, project, dockerfile(pr
 	}
 	if got := build("doorcacheb"); got != "none" {
 		t.Errorf("a project's build saw another's cache: %q", got)
+	}
+	// Nor another's builder on the network: a build step is a member of its builder's, which
+	// is its project's own, not Docker's default bridge that every container shares.
+	ip, _ := doorRoot(t, "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' buildx_buildkit_devopsy-doorcacheb0")
+	if strings.TrimSpace(ip) == "" {
+		t.Fatalf("doorcacheb's builder has no address: %q", ip)
+	}
+	if out, code := doorRoot(t, "docker exec buildx_buildkit_devopsy-doorcachea0 ping -c1 -W2 "+strings.TrimSpace(ip)); code == 0 {
+		t.Errorf("doorcachea's builder reaches doorcacheb's (%s):\n%s", strings.TrimSpace(ip), out)
 	}
 	// The control: the deploy user's own builds share the server's builder.
 	control := fmt.Sprintf(`set -e

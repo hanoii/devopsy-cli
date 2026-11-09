@@ -353,8 +353,10 @@ its name afterwards changes what a start runs. An image with
 name is a registry's. A project can't be named `devopsy` or anything
 starting with `devopsy-`, which are devopsy's own names.
 
-The first time a project uses an image this way, its own builder
-fetches the image again from the project's registry, to prove the
+Each project builds on a BuildKit builder of its own, on a Docker
+network of its own (`devopsy-<project>-build`), so no project's build
+shares another's cache or reaches its builder. The first time a project
+uses an image this way, its own builder fetches the image again from the project's registry, to prove the
 registry serves its content and not only its name: Docker skips the
 layers it already has, so a registry could otherwise name another
 project's image without having it. That costs one more download of
