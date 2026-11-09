@@ -166,7 +166,7 @@ func planReceive(r *syncReceive, child []childService, mnt, toProject string) (r
 		if !door.Word.MatchString(r.Volume) || !slices.Contains(vols, r.Volume) || r.File {
 			return receivePlan{}, fmt.Errorf("the child's labels name no volume %q", r.Volume)
 		}
-		return receivePlan{what: "the volume " + r.Volume, mount: toProject + "_" + r.Volume + ":/vol/" + r.Volume,
+		return receivePlan{what: "volume " + r.Volume, mount: toProject + "_" + r.Volume + ":/vol/" + r.Volume,
 			args: []string{remote.ReceiveFrom + r.Volume + "/", "/vol/" + r.Volume + "/"}}, nil
 	}
 	e := r.Entry
