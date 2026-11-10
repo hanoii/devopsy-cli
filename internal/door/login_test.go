@@ -12,6 +12,7 @@ func TestLoginNames(t *testing.T) {
 		HubLogin: true, "registry.example.com": true, "localhost:5000": false, "127.0.0.1:5000": false, "169.254.169.254": false, "10.0.0.5:443": true,
 		"": false, "-x": false, "--config=/tmp": false, "https://registry.example.com": false, "registry.example.com/v2": false,
 		"a b": false, "..": false, "registry.example.com:": false, "[::1]:5000": false,
+		"LOCALHOST:5000": false, "Reg.Localhost": false, "127.0.0.0x1:5000": false, "0x7f000001": false, "0xa9fea9fe:5000": false,
 	} {
 		if LoginRegistry(r) != ok {
 			t.Errorf("registry %q: %v", r, !ok)

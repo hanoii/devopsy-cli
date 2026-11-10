@@ -834,19 +834,26 @@ func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
 // addresses: Docker's daemon, root outside the project users' firewall, would contact it for
 // that project user, and its answers (a port open or not, an error page) come back. Any other
 // host is a registry's, a private address included (one on the server's own bridge, or
-// another server's). A name a C resolver reads as an address (127.1, 0x7f.1) is none.
+// another server's). Each is read as Docker and a C resolver read it: a first part with a
+// capital is a registry's host (Localhost/x), a host is the same in any case (LOCALHOST), and a
+// name inet_aton reads as an address (127.1, 0x7f.1, 0x7f000001, 127.0.0.0x1) is that address.
 func TestNoRegistryOfTheServersOwn(t *testing.T) {
 	t.Parallel()
 	for _, ref := range []string{
 		"127.0.0.1:5000/x:1", "localhost:5000/x", "localhost/x", "reg.localhost/x", "[::1]:5000/x",
 		"169.254.169.254/latest:1", "[fe80::1]:5000/x", "[::ffff:127.0.0.1]:5000/x", "[fd00:ec2::254]/x",
 		"100.100.100.200/x", "168.63.129.16/x", "127.1:5000/x", "0x7f.1/x", "0.0.0.0:5000/x",
+		"0177.0.0.1:5000/x", "LOCALHOST:5000/x:1", "Localhost/x:1", "reg.LocalHost:5000/x", "0x7f000001:5000/x",
+		"127.0.0.0x1:5000/x", "0x7f.0.0.0x1:5000/x", "0xa9fea9fe:5000/x", "169.254.169.0xfe:5000/x", "0X7F000001:5000/x",
 	} {
 		if err := testPolicy.Claimable(ref); err == nil {
 			t.Errorf("a pull of %s is taken", ref)
 		}
 	}
-	for _, ref := range []string{"registry.example.com/x:1", "10.0.0.5:5000/x", "172.17.0.1:5003/x", "nginx:1", "ghcr.io/x/y:1", "library/2130706433:1"} {
+	for _, ref := range []string{
+		"registry.example.com/x:1", "10.0.0.5:5000/x", "172.17.0.1:5003/x", "nginx:1", "ghcr.io/x/y:1", "library/2130706433:1",
+		"Registry.Example.com/x:1", "0x7f.example.com:5000/x",
+	} {
 		if err := testPolicy.Claimable(ref); err != nil {
 			t.Errorf("a pull of %s: %v", ref, err)
 		}

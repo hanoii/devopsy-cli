@@ -275,6 +275,10 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 	for _, key := range sortedKeys(networks) {
 		n, _ := networks[key].(map[string]any)
 		nm, _ := n["name"].(string)
+		if k := notBool(n, "external", "internal", "attachable", "enable_ipv6"); k != "" {
+			fail("network %s: %s must be true or false", key, k)
+			continue
+		}
 		if truthy(n["external"]) {
 			if !slices.Contains(p.Joinable, nm) {
 				fail("network %s: another's: %s", key, nm)
@@ -621,6 +625,20 @@ func isMap(v any) bool {
 func isList(v any) bool {
 	_, ok := v.([]any)
 	return ok
+}
+
+// notBool is the first of keys m holds as anything but a boolean. Compose reads a word for one
+// too ("true", "yes", "on"), which truthy reads as false: a key the rules read so is refused
+// in any other form.
+func notBool(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			if _, b := v.(bool); !b {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 func truthy(v any) bool {

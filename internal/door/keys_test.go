@@ -53,7 +53,10 @@ func TestCheckFileRefusesWhatIsNotListed(t *testing.T) {
 		{"a network with no name", `{"name":"shop-prod","networks":{"n":null}}`, "plain network"},
 		{"a network of the host's driver", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","driver":"host"}}}`, "plain network"},
 		{"a shared network's name, not external", `{"name":"shop-prod","networks":{"n":{"name":"traefik"}}}`, "plain network"},
-		{"an external network by a word, not its own", `{"name":"shop-prod","networks":{"n":{"name":"other-prod_default","external":"true"}}}`, "plain network"},
+		{"an external network by a word, not its own", `{"name":"shop-prod","networks":{"n":{"name":"other-prod_default","external":"true"}}}`, "external must be true or false"},
+		{"IPv6 of its own", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":true}}}`, "plain network"},
+		// Compose takes a word for a boolean, IPv6 by "true", "yes" or "on" (v5.5.0).
+		{"IPv6 of its own by a word", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":"yes"}}}`, "enable_ipv6 must be true or false"},
 		{"another container's namespace", svc(`,"network_mode":"service:x"`), "network_mode service:x"},
 		{"a capability by its other name", svc(`,"cap_add":["CAP_SYS_ADMIN"]`), "cap_add CAP_SYS_ADMIN"},
 		{"a capability in lower case", svc(`,"cap_add":["sys_admin"]`), "cap_add sys_admin"},

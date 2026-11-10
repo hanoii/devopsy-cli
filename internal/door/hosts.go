@@ -2,6 +2,7 @@ package door
 
 import (
 	"net/netip"
+	"regexp"
 	"strings"
 )
 
@@ -16,10 +17,11 @@ var (
 )
 
 // registryHost is the host a ref pulls from, as Docker reads it: the first part when it holds a
-// dot or a colon or is localhost, else Docker Hub's (""), its port and brackets dropped.
+// dot, a colon or a capital, or is localhost, else Docker Hub's (""), its port and brackets
+// dropped.
 func registryHost(ref string) string {
 	first, _, ok := strings.Cut(ref, "/")
-	if !ok || (!strings.ContainsAny(first, ".:") && first != "localhost") {
+	if !ok || (!strings.ContainsAny(first, ".:") && first != "localhost" && strings.ToLower(first) == first) {
 		return ""
 	}
 	return hostOf(first)
@@ -37,13 +39,15 @@ func hostOf(registry string) string {
 
 // ownHost says whether host is the server's own or a metadata service's: loopback (an
 // address, localhost, a name under .localhost), link-local, unspecified, a metadata address,
-// or a name a C resolver reads as an address (127.1, 0x7f.1: no letter in its last label).
+// or a name a C resolver reads as an address (127.1, 0x7f.1, 0x7f000001: its last label a
+// number, hexadecimal included), in any case.
 // Docker's daemon contacts a registry as root, outside the project users' firewall, so a
 // project user's pull or login of one would reach for it what the firewall closes.
 func ownHost(host string) bool {
 	if host == "" {
 		return false
 	}
+	host = strings.ToLower(host)
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
@@ -60,5 +64,8 @@ func ownHost(host string) bool {
 		return false
 	}
 	labels := strings.Split(host, ".")
-	return !strings.ContainsFunc(labels[len(labels)-1], func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' })
+	return addressLabel.MatchString(labels[len(labels)-1])
 }
+
+// addressLabel is a label inet_aton reads as a number: decimal, octal or hexadecimal.
+var addressLabel = regexp.MustCompile(`^(0x[0-9a-f]*|[0-9]+)$`)
