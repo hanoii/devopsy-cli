@@ -93,13 +93,18 @@ func doorFirewall(script string, write bool) ([]string, error) {
 	return doorFirewallWrong(read)
 }
 
-// doorFirewallWrong is what of the project users' firewall read lacks, by the group's id.
+// doorFirewallWrong is what of the project users' firewall read lacks, by the ids of the
+// project users' group and the door's.
 func doorFirewallWrong(read string) ([]string, error) {
 	g, err := user.LookupGroup(remote.DoorGroup)
 	if err != nil {
 		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
 	}
-	return remote.DoorFirewallWrong(read, g.Gid), nil
+	d, err := user.LookupGroup(remote.DoorRunGroup)
+	if err != nil {
+		return nil, fmt.Errorf("no %s group yet", remote.DoorRunGroup)
+	}
+	return remote.DoorFirewallWrong(read, g.Gid, d.Gid), nil
 }
 
 // doorHostRead runs script as root on the host with its network, its processes and its

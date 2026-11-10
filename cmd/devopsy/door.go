@@ -49,6 +49,20 @@ func doorEnvironment() (home string, err error) {
 	return u.HomeDir, nil
 }
 
+// doorGroupHeld refuses a door not running under remote.DoorRunGroup, its effective group, by
+// which the firewall covers what it starts on the host: sudo's rule gives it that group (-g),
+// and a door asked without it would start registry clients nothing holds.
+func doorGroupHeld() error {
+	g, err := user.LookupGroup(remote.DoorRunGroup)
+	if err != nil {
+		return fmt.Errorf("refused: no group %s here: --project-users add makes it", remote.DoorRunGroup)
+	}
+	if strconv.Itoa(os.Getegid()) != g.Gid {
+		return fmt.Errorf("refused: the door runs under the group %s (sudo -g %s), which the firewall covers", remote.DoorRunGroup, remote.DoorRunGroup)
+	}
+	return nil
+}
+
 // doorNotHere is the door's exit when it has nothing to say of this user.
 const doorNotHere = 3
 
@@ -686,74 +700,28 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 }
 
 // registryRead gives what reads a ref's manifest, with the logins in the DOCKER_CONFIG dir
-// logins: the deploy user's buildx in UtilImage, on the project's build network as the proof
-// fetches, its builder's mirrors from its instance file and the host's CAs (hostCABundle),
-// which buildx's client trusts where it takes no CA of a builder's. Never a client on the
-// host: a registry the project user names answers as it likes (a redirect, a token's realm),
-// and the deploy user's process would ask the server's loopback or a metadata service, which
-// the firewall keeps the project user, its containers and the daemon from. The container holds
-// nothing else of the deploy user's, read-only, as that user with no capability. A registry's refusal is errNoRead, what it said
-// on stderr, a read that could not run (Docker's 125, the plugin's 126 or 127) its own error.
+// logins: buildx's client on the host, its builder's settings (a mirror, as the admin gave
+// them to the builders; a CA from the host's store), under the door's group, which the
+// firewall keeps off the host's loopback and the metadata services (remote.DoorRunGroup), as a
+// registry the project user names answers as it likes (a redirect, a token's realm). A
+// registry's refusal is errNoRead, what it said on stderr, as a refused pull's.
 func (s *doorSide) registryRead(logins string) (func(ref string) ([]byte, error), error) {
-	if _, err := s.builder(); err != nil {
+	b, err := s.builder()
+	if err != nil {
 		return nil, errors.New(strings.TrimPrefix(err.Error(), "refused: "))
 	}
-	if err := ensureUtilImageWith(context.Background(), s.real); err != nil {
-		return nil, err
-	}
-	out, err := s.docker("info", "--format", `{{range .ClientInfo.Plugins}}{{if eq .Name "buildx"}}{{.Path}}{{end}}{{end}}`).Output()
-	plugin := strings.TrimSpace(string(out))
-	if err != nil || !filepath.IsAbs(plugin) {
-		return nil, fmt.Errorf("the deploy user's docker has no buildx plugin to read a registry with: %v", err)
-	}
-	name := "devopsy-" + s.policy.Project
-	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	args := []string{"run", "--rm", "--network", name + "-build", "--read-only", "--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges", "--user", user,
-		"--tmpfs", "/bx:uid=" + strconv.Itoa(os.Getuid()) + ",gid=" + strconv.Itoa(os.Getgid()) + ",mode=0700",
-		"-v", plugin + ":/usr/local/bin/buildx:ro", "-v", logins + ":/cfg:ro",
-		"-v", filepath.Join(s.policy.Space, "buildx", "instances", name) + ":/bx/instances/" + name + ":ro",
-		"-e", "HOME=/bx", "-e", "DOCKER_CONFIG=/cfg", "-e", "BUILDX_CONFIG=/bx", "-e", "BUILDX_BUILDER=" + name,
-		"-e", "BUILDX_GIT_INFO=false"}
-	if ca := hostCABundle(s.env); ca != "" {
-		args = append(args, "-v", ca+":/etc/ssl/certs/ca-certificates.crt:ro")
-	}
-	args = append(args, remote.UtilImage, "buildx", "imagetools", "inspect", "--raw")
 	return func(ref string) ([]byte, error) {
 		var said bytes.Buffer
-		c := s.docker(append(args, ref)...)
+		c := s.docker("buildx", "imagetools", "inspect", "--raw", ref)
+		c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
 		c.Stderr = &said
 		data, err := c.Output()
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() >= 125 && exit.ExitCode() <= 127 {
-			return nil, fmt.Errorf("its registry could not be read: %s", strings.TrimSpace(said.String()))
-		}
 		if err != nil {
-			// What the registry said, as a refused pull's: the container reaches only what
-			// the project's own containers do.
 			os.Stderr.Write(said.Bytes())
 			return nil, errNoRead
 		}
 		return data, nil
 	}, nil
-}
-
-// hostCABundle is the file of CAs Go's TLS on the host trusts with env: SSL_CERT_FILE, else
-// the first of the files it looks for on Linux, "" for none.
-func hostCABundle(env []string) string {
-	files := []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem",
-		"/etc/pki/tls/cacert.pem", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", "/etc/ssl/cert.pem"}
-	for _, e := range env {
-		if f, ok := strings.CutPrefix(e, "SSL_CERT_FILE="); ok {
-			files = []string{f}
-		}
-	}
-	for _, f := range files {
-		if fi, err := os.Stat(f); err == nil && fi.Mode().IsRegular() {
-			return f
-		}
-	}
-	return ""
 }
 
 // digestOf is data's sha256 digest, as a registry names it.
@@ -878,6 +846,9 @@ func runDoor(args []string) int {
 	}
 	policy, err := doorPolicy(doorWho, settings)
 	if err != nil {
+		return doorRefused(err)
+	}
+	if err := doorGroupHeld(); err != nil {
 		return doorRefused(err)
 	}
 	// From here every refusal is recorded, the space's own included.

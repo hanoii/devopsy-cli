@@ -702,7 +702,7 @@ echo s3cret-tree >~/doorsepv/prod/shared/open
 mkdir -p ~/.docker
 echo '{"auths":{"registry.example.com":{"auth":"s3cret-login"}}}' >~/.docker/config.json
 chmod 644 ~/doorsepv/prod/shared/open ~/.docker/config.json
-sudo -n -u devopsy /usr/local/bin/devopsy --door clone ~/doorsepv/prod/taken`)
+sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door clone ~/doorsepv/prod/taken`)
 	clone = strings.TrimSpace(clone)
 	if code != 0 || !strings.HasPrefix(clone, doorSpace+"/clones/doorsepv/") {
 		t.Fatalf("its files and its clone's directory (%d): %s", code, clone)
@@ -733,7 +733,7 @@ sudo -n -u devopsy /usr/local/bin/devopsy --door clone ~/doorsepv/prod/taken`)
 		"a compose file naming it, its logs":   "printf 'name: doorsepv-prod\\nservices:\\n  web:\\n" + strings.ReplaceAll(doorService, "\n", "\\n") + "' >/tmp/doorsep.yaml; cd ~ && docker compose -p doorsepv-prod -f /tmp/doorsep.yaml logs",
 		"sudo to its user":                     "sudo -n -u devopsy-doorsepv id",
 		"the door's read, by itself":           "sudo -n -u devopsy /usr/local/bin/devopsy --door-read cat /home/devopsy/.ssh/authorized_keys",
-		"a link to the deploy user's key":      "ln -sf /home/devopsy/.ssh/authorized_keys /tmp/doorsep.link; sudo -n -u devopsy /usr/local/bin/devopsy --door compose /x /tmp/doorsep.link '' /tmp ps",
+		"a link to the deploy user's key":      "ln -sf /home/devopsy/.ssh/authorized_keys /tmp/doorsep.link; sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose /x /tmp/doorsep.link '' /tmp ps",
 	} {
 		out, _ := doorAs(t, "devopsy-doorsep", cmd)
 		for _, word := range []string{"s3cret", "LISTED", "ssh-ed25519", "uid=", "traefik."} {
@@ -917,7 +917,7 @@ cat >/tmp/doorreg.json <<'J'
 {"name":"doorreg-prod","services":{"web":{"image":"REG/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
 J
 cp /tmp/doorreg.json /tmp/doorreg-take.json
-sudo -n -u devopsy /usr/local/bin/devopsy --door compose "$d/config.json" /tmp/doorreg-take.json '' "$HOME/doorreg/prod/current" pull
+sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose "$d/config.json" /tmp/doorreg-take.json '' "$HOME/doorreg/prod/current" pull
 `
 	if out, code := doorRoot(t, ": >/tmp/doorreg-ran; chmod 666 /tmp/doorreg-ran"); code != 0 {
 		t.Fatal(out)
@@ -936,7 +936,7 @@ sudo -n -u devopsy /usr/local/bin/devopsy --door compose "$d/config.json" /tmp/d
 {"name":"doorregv-prod","services":{"web":{"image":"REG/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorregv/prod
-sudo -n -u devopsy /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorregv.json '' ~/doorregv/prod pull 2>&1`
+sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorregv.json '' ~/doorregv/prod pull 2>&1`
 	doorAs(t, "devopsy-doorregv", strings.ReplaceAll(other, "REG", reg))
 	if _, code := doorRoot(t, "docker image inspect "+reg+"/private/app:1"); code == 0 {
 		t.Error("another project pulled by this one's login")
@@ -983,12 +983,13 @@ docker exec doorclaim-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	}
 }
 
-// A claim's registry client is held where the project's builder is: a registry the project
-// user names answers it as it likes, here with a token's realm on the server's loopback, which
-// the firewall keeps the project user, its containers and the daemon from. The read runs on
-// the project's build network, where loopback is its own; the deploy user's process on the
-// host asked the server's loopback what the registry chose.
-func TestDoorClaimReadsOnTheBuildNetwork(t *testing.T) {
+// No registry client the door starts on the host reaches the server's loopback: a registry the
+// project user names answers each as it likes, here with a token's realm there, which the
+// firewall keeps the project user, its containers and the daemon from. Both clients are
+// buildx's or compose's, a claim's read of a manifest and a build's FROM, whose token BuildKit
+// asks its client for; the door runs under its own group (devopsy-door), which the firewall
+// holds as it holds the daemon.
+func TestDoorClientsReachNoLoopback(t *testing.T) {
 	user := doorUser(t, "doortoken")
 	t.Cleanup(func() { doorRoot(t, "docker rm -f doortoken-lo >/dev/null 2>&1; true") })
 	// The admin's own, on the server's loopback: it logs every request.
@@ -1005,13 +1006,36 @@ exit 1`); code != 0 {
 	if out, _ := doorRoot(t, "curl -s -D - -o /dev/null https://"+reg+"/v2/x/manifests/1"); !strings.Contains(out, "127.0.0.1:5015/token") {
 		t.Fatalf("the registry's answer names no realm on loopback:\n%s", out)
 	}
+	asked := func(what, said string) {
+		t.Helper()
+		if logs, _ := doorRoot(t, "docker logs doortoken-lo 2>&1"); strings.Contains(logs, "/token") {
+			t.Errorf("%s asked the server's loopback for a token:\n%s\nit said:\n%s", what, logs, said)
+		}
+	}
+	// A door asked without its group starts nothing: the firewall would not hold it.
+	if out, code := doorAs(t, user, "sudo -n -u devopsy /usr/local/bin/devopsy --door version 2>&1"); code == 0 || !strings.Contains(out, "runs under the group devopsy-door") {
+		t.Errorf("a door without its group (%d): %s", code, out)
+	}
 	out, code := doorAs(t, user, "docker image inspect "+reg+"/x:1 2>&1")
 	if code == 0 {
 		t.Errorf("a claim of an image no registry served passed:\n%s", out)
 	}
-	if logs, _ := doorRoot(t, "docker logs doortoken-lo 2>&1"); strings.Contains(logs, "/token") {
-		t.Errorf("a claim's read asked the server's loopback for a token:\n%s", logs)
+	asked("a claim's read", out)
+	dir := doorProject(t, "doortokenb", `services:
+  web:
+    build: .
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+`, map[string]string{
+		".devopsy/config.yaml": "project: doortokenb\ndefaults:\n  mode: build\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+		".devopsy/Dockerfile":  "FROM " + reg + "/x:1\n",
+	})
+	commitAll(t, dir)
+	if out, code = op(t, dir, "devopsy @prod --release 2>&1"); code == 0 {
+		t.Fatalf("a build from an image no registry served passed:\n%s", out)
 	}
+	asked("a build", out)
 }
 
 // The project users' firewall, devopsy's own (--project-users add): a project user's process
@@ -1459,7 +1483,7 @@ docker run --rm doorcached cat /seen`, dockerfile("doorcachec"), dockerfile("doo
 }
 
 // doorAsk is the door asked by hand, as a project user's own shell would.
-const doorAsk = `door() { sudo -n -u devopsy /usr/local/bin/devopsy --door "$@"; }
+const doorAsk = `door() { sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door "$@"; }
 `
 
 // doorExport is exportTarScript, as a caller would have to send it.
@@ -2053,7 +2077,7 @@ docker exec doorholdp-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 {"name":"doorholdp-prod","services":{"web":{"image":"HOLD","user":"10001:10001","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorholdp/prod
-sudo -n -u devopsy /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorholdp.json '' ~/doorholdp/prod pull 2>&1`
+sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorholdp.json '' ~/doorholdp/prod pull 2>&1`
 	pulled, _ = doorAs(t, user, strings.ReplaceAll(compose, "HOLD", hold))
 	if out, code := doorAs(t, user, inspect); code == 0 || strings.Contains(out, "s3cret-image") {
 		t.Errorf("after compose's pull of a hold-shaped name (%s), another's image is this project's (%d):\n%s", strings.TrimSpace(pulled), code, out)
@@ -2117,8 +2141,8 @@ func TestDoorSudoKeepsNoVariable(t *testing.T) {
 		t.Fatalf("the control: root's sudo did not keep GODEBUG:\n%s", out)
 	}
 	for _, call := range []string{
-		"GODEBUG=inittrace=1 sudo -n -u devopsy /usr/local/bin/devopsy --door version 2>&1",
-		"sudo -n -u devopsy GODEBUG=inittrace=1 /usr/local/bin/devopsy --door version 2>&1",
+		"GODEBUG=inittrace=1 sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door version 2>&1",
+		"sudo -n -u devopsy -g devopsy-door GODEBUG=inittrace=1 /usr/local/bin/devopsy --door version 2>&1",
 	} {
 		if out, _ := doorAs(t, user, call); strings.Contains(out, "init runtime") {
 			t.Errorf("the door's runtime read the caller's GODEBUG (%s):\n%s", call, out)

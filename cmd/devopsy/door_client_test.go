@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // A read as a project user (--door-read) runs in a session of its own: in the caller's, its
@@ -129,7 +131,7 @@ func TestDockerHasNoDoorForWhoReachesTheSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Join([]string{"-n", "-u", me.Username, self, doorFlag, "request", filepath.Join(home, ".docker", "config.json"), "ps", "-a"}, "\n") + "\n"
+	want := strings.Join([]string{"-n", "-u", me.Username, "-g", remote.DoorRunGroup, self, doorFlag, "request", filepath.Join(home, ".docker", "config.json"), "ps", "-a"}, "\n") + "\n"
 	if got := readString(log); code != 0 || got != want || strings.Contains(out, "[ps]") {
 		t.Errorf("with no socket (%d), sudo was asked:\n%s\nwant:\n%s\nand docker said:\n%s", code, got, want, out)
 	}

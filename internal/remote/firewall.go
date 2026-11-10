@@ -107,13 +107,16 @@ func doorRules(f firewallFamily, chain string) []string {
 // the jump as iptables -S prints it after "-A <built-in> ".
 type doorJump struct{ table, from, chain, rule string }
 
-// doorJumps are the chains' jumps, the project users' group by its id, and Docker's daemon by
-// its cgroup (daemonCgroup), none when it has none of its own: its cgroup the root, every
-// process's, it would firewall the whole host. A jump is as iptables -S prints it, a path
-// quoted.
-func doorJumps(gid, cgroup string) []doorJump {
+// doorJumps are the chains' jumps, the project users' group by its id (gid), the door's
+// own processes by theirs (doorGid, DoorRunGroup's, their effective group) to the daemon's
+// chain, as what the door starts on the host (compose's and buildx's registry clients, a
+// claim's read) is a registry's to send where it likes too, and Docker's daemon by its cgroup
+// (daemonCgroup), none when it has none of its own: its cgroup the root, every process's, it
+// would firewall the whole host. A jump is as iptables -S prints it, a path quoted.
+func doorJumps(gid, doorGid, cgroup string) []doorJump {
 	j := []doorJump{
 		{"filter", "OUTPUT", DoorChain, "-m owner --gid-owner " + gid + " --suppl-groups -j " + DoorChain},
+		{"filter", "OUTPUT", DoorDaemonChain, "-m owner --gid-owner " + doorGid + " -j " + DoorDaemonChain},
 		{"raw", "PREROUTING", DoorContainerChain, "-j " + DoorContainerChain},
 	}
 	if cgroup != "" && cgroup != "/" {
@@ -163,6 +166,8 @@ func DoorFirewallLoader() string {
 set -eu
 gid=$(getent group ` + DoorGroup + ` | cut -d: -f3)
 [ -n "$gid" ] || { echo "no group ` + DoorGroup + `" >&2; exit 1; }
+doorgid=$(getent group ` + DoorRunGroup + ` | cut -d: -f3)
+[ -n "$doorgid" ] || { echo "no group ` + DoorRunGroup + `" >&2; exit 1; }
 ` + daemonCgroup + `# first <iptables> <table> <chain> <rule>: rule at the top of chain, and only there. The rule is
 # as iptables -S prints it, a cgroup's path quoted: eval reads the quotes.
 first() {
@@ -171,16 +176,17 @@ first() {
     "$1" -t "$2" -D "$3" "$n"
   done
 }
-# stale <iptables>: the jumps to the daemon's chain that are not the current cgroup's go.
+# stale <iptables>: the jumps to the daemon's chain that are neither the current cgroup's nor
+# the door's group's go.
 stale() {
-  "$1" -t filter -S OUTPUT | awk -v r="-A OUTPUT -m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `" '/^-A /{n++; if ($0 ~ / -j ` + DoorDaemonChain + `$/ && $0 != r) print n}' | sort -rn | while read -r n; do
+  "$1" -t filter -S OUTPUT | awk -v r="-A OUTPUT -m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `" -v d="-A OUTPUT -m owner --gid-owner $doorgid -j ` + DoorDaemonChain + `" '/^-A /{n++; if ($0 ~ / -j ` + DoorDaemonChain + `$/ && $0 != r && $0 != d) print n}' | sort -rn | while read -r n; do
     "$1" -t filter -D OUTPUT "$n"
   done
 }
 `
 	for _, f := range firewallFamilies {
 		load := "printf '%s' " + Quote(doorRestore(f)) + " | " + f.cmd + "-restore --noflush\n"
-		for _, j := range doorJumps("$gid", "") {
+		for _, j := range doorJumps("$gid", "$doorgid", "") {
 			load += "first " + f.cmd + " " + j.table + " " + j.from + ` "` + strings.ReplaceAll(j.rule, `"`, `\"`) + `"` + "\n"
 		}
 		load += `[ -z "$cg" ] || [ "$cg" = / ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
@@ -256,10 +262,10 @@ func DoorFirewallInstall() string {
 }
 
 // DoorFirewallWrong says what of the project users' firewall the host lacks, from
-// DoorFirewallRead's output and the group's id: a chain not exactly devopsy's, a jump
+// DoorFirewallRead's output and the ids of the project users' group and the door's: a chain not exactly devopsy's, a jump
 // missing, or one behind a rule that may let a packet through (an ACCEPT, another chain's
 // jump), which only a DROP or a REJECT may be. Empty when it is all there.
-func DoorFirewallWrong(read, gid string) []string {
+func DoorFirewallWrong(read, gid, doorGid string) []string {
 	tables := map[string][]string{}
 	var key, cgroup string
 	for line := range strings.SplitSeq(read, "\n") {
@@ -284,10 +290,14 @@ func DoorFirewallWrong(read, gid string) []string {
 		if _, off := tables[f.cmd+" off"]; off {
 			continue
 		}
-		for _, j := range doorJumps(gid, cgroup) {
+		var checked []string
+		for _, j := range doorJumps(gid, doorGid, cgroup) {
 			t, ok := tables[f.cmd+" "+j.table]
 			if !ok {
-				wrong = append(wrong, f.cmd+": its "+j.table+" table unread")
+				if !slices.Contains(checked, j.table) {
+					wrong = append(wrong, f.cmd+": its "+j.table+" table unread")
+				}
+				checked = append(checked, j.table)
 				continue
 			}
 			var got []string
@@ -296,9 +306,11 @@ func DoorFirewallWrong(read, gid string) []string {
 					got = append(got, r)
 				}
 			}
-			if !slices.Equal(got, doorRules(f, j.chain)) {
+			// A chain two jumps lead to is checked once.
+			if !slices.Contains(checked, j.chain) && !slices.Equal(got, doorRules(f, j.chain)) {
 				wrong = append(wrong, f.cmd+": "+j.chain+" is not devopsy's")
 			}
+			checked = append(checked, j.chain)
 			if why := jumpedFirst(t, j); why != "" {
 				wrong = append(wrong, f.cmd+": "+why)
 			}

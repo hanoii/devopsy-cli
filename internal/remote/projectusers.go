@@ -64,7 +64,7 @@ func doorSudoers(deploy, devopsy string) string {
 	return "# Written by devopsy (devopsy @<server> --project-users add): the door's rules.\n" +
 		"Cmnd_Alias DEVOPSY_DOOR = " + devopsy + " --door *\n" +
 		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, !setenv\n" +
-		"%" + DoorGroup + " ALL=(" + deploy + ") NOPASSWD: DEVOPSY_DOOR\n" +
+		"%" + DoorGroup + " ALL=(" + deploy + " : " + DoorRunGroup + ") NOPASSWD: DEVOPSY_DOOR\n" +
 		deploy + " ALL=(%" + DoorGroup + ") NOPASSWD: " + devopsy + " --door-read *\n"
 }
 
@@ -90,7 +90,8 @@ fi
 `
 
 // hostGroup makes the project users' group when it is not there yet.
-var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system " + DoorGroup + "\n"
+var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system " + DoorGroup + "\n" +
+	"getent group " + DoorRunGroup + " >/dev/null || groupadd --system " + DoorRunGroup + "\n"
 
 // hostPut is put <file> <mode> <check> <content>: content into file when it differs, checked
 // before it lands, failing otherwise when it changed nothing. Never in a pipeline, whose

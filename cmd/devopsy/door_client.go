@@ -60,9 +60,14 @@ func devopsyPath() string {
 	return "/usr/local/bin/devopsy"
 }
 
-// sudoArgs are sudo's arguments to run devopsy with flag as another user.
+// sudoArgs are sudo's arguments to run devopsy with flag as another user, the door under its
+// own group (remote.DoorRunGroup), which the firewall covers.
 func sudoArgs(as, flag string, args ...string) []string {
-	return append([]string{"-n", "-u", as, devopsyPath(), flag}, args...)
+	head := []string{"-n", "-u", as}
+	if flag == doorFlag {
+		head = append(head, "-g", remote.DoorRunGroup)
+	}
+	return append(append(head, devopsyPath(), flag), args...)
 }
 
 // doorCommand is the door asked as the deploy user through sudo (--door), the one way every

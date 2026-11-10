@@ -177,7 +177,10 @@ logins, as root, so the firewall keeps it off the host's loopback and
 the metadata services too, DNS aside, by its cgroup (`docker.service`'s,
 or the running `dockerd`'s): a registry a project runs could otherwise
 redirect the daemon there. That also holds for the deploy user's own
-pulls ([Registries](#registries)).
+pulls ([Registries](#registries)). The door's own registry clients (a
+build's, the read of an image's manifest) are held the same way: the
+door runs under a group of its own, `devopsy-door`, which no user is in,
+and refuses to run under any other.
 
 A project user's containers still reach what the host listens on at its
 other addresses, its bridges' included, as on any Docker host: a site's
@@ -289,8 +292,8 @@ user's entry goes in the deploy user's config directory ([Shared
 networks, roles and vets](#shared-networks-roles-and-vets)).
 
 The first `add` also puts on the server what the door needs, each piece
-checked before it lands: the `devopsy-projects` group, the door's sudo
-rules, a `docker` that is devopsy, sshd's part, which asks devopsy for a
+checked before it lands: the `devopsy-projects` and `devopsy-door`
+groups, the door's sudo rules, a `docker` that is devopsy, sshd's part, which asks devopsy for a
 project user's keys, and the firewall. `add` refuses:
 
 - while `<space>` is not mounted `nosuid,nodev`;

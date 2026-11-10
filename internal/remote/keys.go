@@ -250,6 +250,12 @@ const EndProjectUserFlag = "--end-project-user"
 // the firewall rule go by it.
 const DoorGroup = "devopsy-projects"
 
+// DoorRunGroup is the group the door runs under, its primary one through sudo's -g: the
+// firewall covers every process the door starts on the host by it (doorJumps), so a registry
+// client of compose's or buildx's, which a project's registry answers as it likes, reaches no
+// loopback or metadata address. No user is in it.
+const DoorRunGroup = "devopsy-door"
+
 // DoorKeysFile is a project user's keys, in the door's directory (DoorDir): what
 // --authorized-keys prints for sshd, whose environment for it is its own (HOME, USER, PATH),
 // never the login's. keysPrelude finds the same file in a script.

@@ -13,7 +13,7 @@ import (
 const testDaemonCgroup = "/system.slice/docker.service"
 
 // firewallRead is DoorFirewallRead's output for a host where the project users' firewall is
-// loaded, gid 1001, Docker's daemon in testDaemonCgroup, with before put ahead of each jump of
+// loaded, gid 1001 (the door's 1003), Docker's daemon in testDaemonCgroup, with before put ahead of each jump of
 // devopsy's.
 func firewallRead(before string) string {
 	var b strings.Builder
@@ -21,14 +21,20 @@ func firewallRead(before string) string {
 	for _, f := range firewallFamilies {
 		for _, table := range []string{"filter", "raw"} {
 			var jumps []doorJump
-			for _, j := range doorJumps("1001", testDaemonCgroup) {
+			for _, j := range doorJumps("1001", "1003", testDaemonCgroup) {
 				if j.table == table {
 					jumps = append(jumps, j)
 				}
 			}
-			b.WriteString("# " + f.cmd + " " + table + "\n-P " + jumps[0].from + " ACCEPT\n")
+			var chains []string
 			for _, j := range jumps {
-				b.WriteString("-N " + j.chain + "\n")
+				if !slices.Contains(chains, j.chain) {
+					chains = append(chains, j.chain)
+				}
+			}
+			b.WriteString("# " + f.cmd + " " + table + "\n-P " + jumps[0].from + " ACCEPT\n")
+			for _, c := range chains {
+				b.WriteString("-N " + c + "\n")
 			}
 			if before != "" {
 				b.WriteString("-A " + jumps[0].from + " " + before + "\n")
@@ -37,9 +43,9 @@ func firewallRead(before string) string {
 				b.WriteString("-A " + j.from + " " + j.rule + "\n")
 			}
 			b.WriteString("-A " + jumps[0].from + " -j ufw-before-output\n")
-			for _, j := range jumps {
-				for _, r := range doorRules(f, j.chain) {
-					b.WriteString("-A " + j.chain + " " + r + "\n")
+			for _, c := range chains {
+				for _, r := range doorRules(f, c) {
+					b.WriteString("-A " + c + " " + r + "\n")
 				}
 			}
 		}
@@ -53,24 +59,27 @@ func firewallRead(before string) string {
 // lets a project user's packet past rules that are all there.
 func TestDoorFirewallWrong(t *testing.T) {
 	t.Parallel()
-	if got := DoorFirewallWrong(firewallRead(""), "1001"); len(got) != 0 {
+	if got := DoorFirewallWrong(firewallRead(""), "1001", "1003"); len(got) != 0 {
 		t.Errorf("all there: %q", got)
 	}
-	if got := DoorFirewallWrong(firewallRead("-d 10.0.0.1/32 -j DROP"), "1001"); len(got) != 0 {
+	if got := DoorFirewallWrong(firewallRead("-d 10.0.0.1/32 -j DROP"), "1001", "1003"); len(got) != 0 {
 		t.Errorf("a DROP ahead: %q", got)
 	}
-	if got := DoorFirewallWrong(firewallRead("-o eth1 -j REJECT --reject-with icmp-port-unreachable"), "1001"); len(got) != 0 {
+	if got := DoorFirewallWrong(firewallRead("-o eth1 -j REJECT --reject-with icmp-port-unreachable"), "1001", "1003"); len(got) != 0 {
 		t.Errorf("a REJECT ahead: %q", got)
 	}
 	for _, ahead := range []string{"-j ACCEPT", "-o lo -j ACCEPT", "-j ufw-track-output", "-j RETURN"} {
-		got := DoorFirewallWrong(firewallRead(ahead), "1001")
-		if len(got) != 6 || !strings.Contains(got[0], "lets packets through before its jump to "+DoorChain+": "+ahead) {
+		got := DoorFirewallWrong(firewallRead(ahead), "1001", "1003")
+		if len(got) != 8 || !strings.Contains(got[0], "lets packets through before its jump to "+DoorChain+": "+ahead) {
 			t.Errorf("%q ahead of each jump: %q", ahead, got)
 		}
 	}
-	// Another group's jump is not the project users'.
-	if got := DoorFirewallWrong(firewallRead(""), "1002"); len(got) != 2 || !strings.Contains(got[0], "OUTPUT") || !strings.Contains(got[1], "ip6tables") {
+	// Another group's jump is not the project users', nor the door's.
+	if got := DoorFirewallWrong(firewallRead(""), "1002", "1003"); len(got) != 2 || !strings.Contains(got[0], "OUTPUT") || !strings.Contains(got[1], "ip6tables") {
 		t.Errorf("another group's: %q", got)
+	}
+	if got := DoorFirewallWrong(firewallRead(""), "1001", "1004"); len(got) != 2 || !strings.Contains(got[0], "jump to "+DoorDaemonChain) {
+		t.Errorf("another group's for the door: %q", got)
 	}
 	// A rule of the chain gone, changed or added, IPv6's included.
 	all := firewallRead("")
@@ -84,7 +93,7 @@ func TestDoorFirewallWrong(t *testing.T) {
 		if !strings.Contains(all, edit[0]) {
 			t.Fatalf("%s: the read has no %q", name, edit[0])
 		}
-		if got := DoorFirewallWrong(strings.Replace(all, edit[0], edit[1], 1), "1001"); len(got) == 0 {
+		if got := DoorFirewallWrong(strings.Replace(all, edit[0], edit[1], 1), "1001", "1003"); len(got) == 0 {
 			t.Errorf("%s: nothing wrong", name)
 		}
 	}
@@ -92,19 +101,19 @@ func TestDoorFirewallWrong(t *testing.T) {
 	// root's, every process's, or none found) nothing covers what it contacts for a project.
 	for _, cg := range []string{"/", ""} {
 		read := strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+cg+"\n", 1)
-		if got := DoorFirewallWrong(read, "1001"); len(got) == 0 || !strings.Contains(got[0], "Docker's daemon has no cgroup of its own") {
+		if got := DoorFirewallWrong(read, "1001", "1003"); len(got) == 0 || !strings.Contains(got[0], "Docker's daemon has no cgroup of its own") {
 			t.Errorf("the daemon in %q: %q", cg, got)
 		}
 	}
-	if got := DoorFirewallWrong(strings.Replace(all, "-A OUTPUT -m cgroup --path \""+testDaemonCgroup+"\" -j "+DoorDaemonChain+"\n", "", 1), "1001"); len(got) != 1 || !strings.Contains(got[0], DoorDaemonChain) {
+	if got := DoorFirewallWrong(strings.Replace(all, "-A OUTPUT -m cgroup --path \""+testDaemonCgroup+"\" -j "+DoorDaemonChain+"\n", "", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], DoorDaemonChain) {
 		t.Errorf("the daemon's jump gone: %q", got)
 	}
 	// A kernel with no IPv6 has nothing to filter there.
 	v4 := all[:strings.Index(all, "# ip6tables")] + "# ip6tables off\n"
-	if got := DoorFirewallWrong(v4, "1001"); len(got) != 0 {
+	if got := DoorFirewallWrong(v4, "1001", "1003"); len(got) != 0 {
 		t.Errorf("no IPv6: %q", got)
 	}
-	if got := DoorFirewallWrong(all[:strings.Index(all, "# ip6tables")], "1001"); len(got) != 3 {
+	if got := DoorFirewallWrong(all[:strings.Index(all, "# ip6tables")], "1001", "1003"); len(got) != 2 {
 		t.Errorf("IPv6 unread: %q", got)
 	}
 }
@@ -250,7 +259,7 @@ func TestDaemonCgroup(t *testing.T) {
 		}
 	}
 	for _, cg := range []string{"", "/"} {
-		if j := doorJumps("1001", cg); slices.ContainsFunc(j, func(j doorJump) bool { return j.chain == DoorDaemonChain }) {
+		if j := doorJumps("1001", "1003", cg); slices.ContainsFunc(j, func(j doorJump) bool { return strings.Contains(j.rule, "-m cgroup") }) {
 			t.Errorf("a daemon in the cgroup %q, every process's, gets a jump: %+v", cg, j)
 		}
 	}
