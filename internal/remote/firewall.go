@@ -82,12 +82,15 @@ func doorRules(f firewallFamily, chain string) []string {
 		for _, m := range f.metadata {
 			r = append(r, "-d "+m+" -j REJECT --reject-with "+f.reject)
 		}
-	case DoorDaemonChain:
+	case DoorDaemonChain, DoorRunChain:
 		// Docker's daemon contacts registries as root, a project user's pull and login
-		// included: a registry the project runs could send it (a redirect, a token's realm, a
-		// name) to the host's loopback or a metadata service. The host's other addresses stay
-		// its to reach (a registry on this server, by its name or Docker's bridge), and so
-		// does DNS on loopback (systemd-resolved).
+		// included, and what the door starts on the host (a claim's read, compose's and
+		// buildx's registry clients) answers a registry the project names too: either can be
+		// sent (a redirect, a token's realm, a name) to the host's loopback or a metadata
+		// service. The host's other addresses stay theirs to reach (a registry on this server,
+		// by its name or Docker's bridge address, goes out on loopback), and so does DNS on
+		// loopback (systemd-resolved). The door's clients reach no container on Docker's
+		// bridges either, any project's; the daemon must, its cgroup holding docker-proxy.
 		r = append(r, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN")
 		for _, d := range append([]string{f.loopback}, f.metadata...) {
 			dns("-m conntrack --ctorigdstport 53", "-d "+d)
@@ -95,22 +98,10 @@ func doorRules(f firewallFamily, chain string) []string {
 		for _, d := range append([]string{f.loopback}, f.metadata...) {
 			r = append(r, "-d "+d+" -j REJECT --reject-with "+f.reject)
 		}
-	case DoorRunChain:
-		// What the door starts on the host (a claim's read, compose's and buildx's registry
-		// clients) answers a registry the project names, which can send it anywhere: none of
-		// the host's loopback, a metadata service or a container on Docker's bridges, any
-		// project's. The host's other addresses stay its to reach, as the daemon's (a registry
-		// on this server, by its name or Docker's bridge address, goes out on loopback), and
-		// so does DNS.
-		r = append(r, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN")
-		for _, d := range append([]string{f.loopback}, f.metadata...) {
-			dns("-m conntrack --ctorigdstport 53", "-d "+d)
-		}
-		for _, d := range append([]string{f.loopback}, f.metadata...) {
-			r = append(r, "-d "+d+" -j REJECT --reject-with "+f.reject)
-		}
-		for _, out := range bridges {
-			r = append(r, "-o "+out+" -j REJECT --reject-with "+f.reject)
+		if chain == DoorRunChain {
+			for _, out := range bridges {
+				r = append(r, "-o "+out+" -j REJECT --reject-with "+f.reject)
+			}
 		}
 	case DoorContainerChain:
 		for _, m := range f.metadata {

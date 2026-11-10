@@ -70,6 +70,11 @@ func runEndProjectUser(args []string) int {
 	if len(args) != 1 || !projectUserName(args[0]) {
 		return fail("usage: devopsy " + remote.EndProjectUserFlag + " <project user>")
 	}
+	// A Unix user of that name that is no project user is someone's own account: nothing of
+	// its ends here.
+	if _, err := user.Lookup(args[0]); err == nil && !inDoorGroup(args[0]) {
+		return fail(args[0] + " is no project user here: it is not in " + remote.DoorGroup)
+	}
 	if err := endProjectUser(args[0], endUser); err != nil {
 		return fail("the key is removed, but " + args[0] + ": " + err.Error())
 	}
@@ -199,6 +204,6 @@ func processesOf(uid int) []int {
 
 // projectUserName says whether name is a project user's, devopsy-<project>.
 func projectUserName(name string) bool {
-	project, ok := strings.CutPrefix(name, "devopsy-")
+	project, ok := strings.CutPrefix(name, remote.DoorUserOf(""))
 	return ok && remote.ValidName(project)
 }

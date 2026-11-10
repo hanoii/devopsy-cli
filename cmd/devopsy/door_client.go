@@ -41,13 +41,9 @@ func behindDoor() bool {
 	if err != nil || reachesDocker() {
 		return false
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	a, errA := filepath.EvalSymlinks(found)
-	b, errB := filepath.EvalSymlinks(self)
-	return errA == nil && errB == nil && a == b
+	self := selfPath()
+	a, err := filepath.EvalSymlinks(found)
+	return self != "" && err == nil && a == self
 }
 
 // devopsyPath is what sudo's rules name and what a project user asks sudo to run: this
@@ -119,10 +115,7 @@ func doorAnswer(c *exec.Cmd, max int, within time.Duration) ([]byte, error) {
 
 // realDocker is the docker on PATH that is not this binary.
 func realDocker() string {
-	self, _ := os.Executable()
-	if r, err := filepath.EvalSymlinks(self); err == nil {
-		self = r
-	}
+	self := selfPath()
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		candidate := filepath.Join(dir, "docker")
 		r, err := filepath.EvalSymlinks(candidate)
@@ -138,12 +131,9 @@ func realDocker() string {
 
 // deployUser is who owns this binary: devopsy upgrades itself as its deploy user.
 func deployUser() (*user.User, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	if r, err := filepath.EvalSymlinks(self); err == nil {
-		self = r
+	self := selfPath()
+	if self == "" {
+		return nil, errors.New("this binary's path is not known")
 	}
 	fi, err := os.Stat(self)
 	if err != nil {

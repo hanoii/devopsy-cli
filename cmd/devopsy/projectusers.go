@@ -303,8 +303,15 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	if err := os.Remove(entry); err != nil {
 		return failErr(err)
 	}
-	if err := os.Remove(remote.DoorKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// Its keys go under their lock, as every edit of them: an add meanwhile would bring the
+	// file back.
+	if err := lockedKeys(remote.DoorKeysFile(who), func([]string) ([]string, error) { return nil, nil }); err != nil {
 		return failErr(err)
+	}
+	// It ends before anything else may fail: what it left running must not outlive a removal
+	// that stopped halfway.
+	if err := endProjectUser(who, end); err != nil {
+		return fail("removed " + who + "'s entry and keys, but " + err.Error())
 	}
 	// What the door kept for it: its registry logins and the record of the images it claimed.
 	if d != nil && d.Space != "" {
@@ -314,9 +321,6 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 		if err := os.Remove(filepath.Join(d.Space, "images", who)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return failErr(err)
 		}
-	}
-	if err := endProjectUser(who, end); err != nil {
-		return fail("removed " + who + "'s entry and keys, but " + err.Error())
 	}
 	stays := "its Unix user, home and tree stay"
 	if _, err := user.Lookup(who); err != nil {

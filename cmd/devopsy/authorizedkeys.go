@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -24,8 +23,7 @@ func runAuthorizedKeys(args []string) int {
 	if len(args) != 1 {
 		return 2
 	}
-	project, ok := strings.CutPrefix(args[0], remote.DoorUserOf(""))
-	if !ok || !remote.ValidName(project) {
+	if !projectUserName(args[0]) {
 		return 2
 	}
 	if code := printAuthorizedKeys(os.Stdout, remote.DoorKeysFile(args[0])); code != 0 {

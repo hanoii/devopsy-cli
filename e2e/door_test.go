@@ -471,6 +471,28 @@ NR=$nr CHAIN='`+chain+`' setsid perl -e '`+reaper+`' </dev/null >/dev/null 2>&1 
 	}
 }
 
+// The end of a project user's processes ends no one else's: a Unix user named like a project
+// user but outside the project users' group is someone's own account, which the end refuses,
+// its processes left alone.
+func TestDoorEndsNoAccountOutsideTheGroup(t *testing.T) {
+	doorServer(t)
+	const who = "devopsy-doornotone"
+	t.Cleanup(func() { doorRoot(t, "pkill -9 -u "+who+"; userdel -r "+who+" 2>/dev/null; true") })
+	if out, code := doorRoot(t, "useradd -m "+who+" && runuser -u "+who+" -- setsid sleep 300 </dev/null >/dev/null 2>&1 &"); code != 0 {
+		t.Fatalf("an account (%d): %s", code, out)
+	}
+	eventually(t, startWaitE2E, "its process", func() bool {
+		out, _ := doorRoot(t, "pgrep -u "+who)
+		return strings.TrimSpace(out) != ""
+	})
+	if out, code := doorAs(t, "devopsy", "devopsy --end-project-user "+who+" 2>&1"); code == 0 || !strings.Contains(out, "is no project user here") {
+		t.Errorf("the end of an account outside the group (%d): %s", code, out)
+	}
+	if out, _ := doorRoot(t, "pgrep -u "+who); strings.TrimSpace(out) == "" {
+		t.Error("its process was ended")
+	}
+}
+
 // A key's removal takes the project's builder with its caches (cache mounts, layers), which the
 // door makes anew at the next build: a leaked key's build writes into them, and the owner's
 // next build, the one the doc says to run after a leak, would read what it put there.
