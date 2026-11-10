@@ -133,6 +133,9 @@ type HostContainer struct {
 type Environment struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
+	// User is the project user whose tree holds it, "" for the deploy user's: set by the
+	// deploy user's devopsy after that user's read, never taken from its answer.
+	User string `json:"user,omitempty"`
 }
 
 // ServerInfoScript runs ServerFactsFlag on the server, after the

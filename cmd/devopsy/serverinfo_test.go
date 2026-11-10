@@ -571,7 +571,7 @@ func TestStatusHintQuotesItsPath(t *testing.T) {
 		"shop/prod;rm -rf ~": "cd '/srv/shop/prod;rm -rf ~/current' && devopsy --status",
 		"shop/it's":          `cd '/srv/shop/it'\''s/current' && devopsy --status`,
 	} {
-		if got := statusHint("", "/srv", path).Cmds; len(got) != 1 || got[0] != want {
+		if got := statusHint("", "/srv", remote.Environment{Path: path}).Cmds; len(got) != 1 || got[0] != want {
 			t.Errorf("%s: %q, want %q", path, got, want)
 		}
 	}
@@ -579,7 +579,7 @@ func TestStatusHintQuotesItsPath(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
 	for _, env := range []string{"prod$(touch ran)", "prod;touch ran", "it's"} {
-		cmds := statusHint("vm1", "/srv", "shop/"+env).Cmds
+		cmds := statusHint("vm1", "/srv", remote.Environment{Path: "shop/" + env}).Cmds
 		if len(cmds) != 1 {
 			t.Fatalf("%q: commands %q", env, cmds)
 		}
@@ -591,5 +591,54 @@ func TestStatusHintQuotesItsPath(t *testing.T) {
 			t.Errorf("%q: the offered command %q gives a shell %q (%v, ran what the name holds: %v), want %q", env, cmds[0], out, err, fileExists(marker), want)
 		}
 		os.Remove(marker)
+	}
+}
+
+// --server-info offers a project user's environment's --status as that user, from the
+// project's checkout, never `cd <tree> && devopsy --status` for whoever reads it on the
+// server, the deploy user: devopsy there would load that user's project and run its programs
+// (the env capability, a status capability) with the deploy user's Docker socket, and whether
+// the warning shows is that user's to choose, its state lines being its own read's answer.
+// The environment's user is the deploy user's devopsy's to set, never the read's.
+func TestServerInfoOffersNoStatusInAProjectUsersTree(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	tree := filepath.Join(root, "shop")
+	info := remote.ServerInfo{Version: "0.53.0", Root: root}
+	// As serverFacts lists them: the tree read as its user, who answers a first release
+	// that failed, which --server-info warns of.
+	info.Environments = environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
+		return []remote.Environment{{Path: "shop/prod", Status: "none\t20261027110000\n", User: ""}}
+	})
+	_, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
+	warned := false
+	for _, w := range warnings {
+		if !strings.Contains(w.msg, "shop/prod") {
+			continue
+		}
+		warned = true
+		for _, f := range w.fixes {
+			for _, c := range f.Cmds {
+				if strings.HasPrefix(c, "cd "+filepath.Join(tree, "prod", "current")+" ") && strings.Contains(c, "devopsy") {
+					t.Errorf("offered to whoever reads --server-info on the server, the deploy user: %s", c)
+				}
+				if c != "devopsy @devopsy-shop@<server>:prod --status" {
+					t.Errorf("offered for a project user's environment: %s", c)
+				}
+			}
+		}
+	}
+	if !warned {
+		t.Fatalf("the control: no warning of shop/prod: %+v", warnings)
+	}
+}
+
+// Asked of a server, the address offered names the project user on that server.
+func TestStatusHintNamesTheProjectUser(t *testing.T) {
+	t.Parallel()
+	for host, want := range map[string]string{"devopsy@vm1": "devopsy @devopsy-shop@vm1:prod --status", "vm1": "devopsy @devopsy-shop@vm1:prod --status"} {
+		if got := statusHint(host, "/srv", remote.Environment{Path: "shop/prod", User: "devopsy-shop"}).Cmds; len(got) != 1 || got[0] != want {
+			t.Errorf("%s: %q, want %q", host, got, want)
+		}
 	}
 }

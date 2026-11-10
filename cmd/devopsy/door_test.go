@@ -1484,4 +1484,3 @@ func TestDoorFlagsTakeNoWordThatOnlyStartsLikeThem(t *testing.T) {
 		}
 	}
 }
-

@@ -537,7 +537,11 @@ func environments(root string, trees map[string]string, readTree func(user, tree
 	}
 	// A project user's tree, in the release root or elsewhere (by default its own home).
 	for _, tree := range slices.Sorted(maps.Keys(trees)) {
-		envs = append(envs, readTree(trees[tree], tree)...)
+		got := readTree(trees[tree], tree)
+		for i := range got {
+			got[i].User = trees[tree]
+		}
+		envs = append(envs, got...)
 	}
 	return envs
 }
@@ -1092,7 +1096,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			for _, p := range problems {
 				lines = append(lines, env.Path+": "+p)
 			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env.Path)}})
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env)}})
 		}
 	}
 	return es
@@ -1210,11 +1214,20 @@ func composeNameOf(path string) string {
 // statusHint is the --status of the environment at path, which says
 // how to fix what it warns of, in its project, or in its current release
 // under root on this machine (no host).
-func statusHint(host, root, path string) report.Remedy {
-	if host == "" {
-		return report.Hint("", "cd "+remote.QuoteWord(filepath.Join(root, path, "current"))+" && devopsy --status")
+func statusHint(host, root string, env remote.Environment) report.Remedy {
+	project, rest, _ := strings.Cut(env.Path, "/")
+	if env.User != "" {
+		// A project user's: its --status runs as that user, from the project's checkout, never
+		// as whoever reads this in that user's tree, where devopsy would run its programs.
+		server := "<server>"
+		if host != "" {
+			server = host[strings.LastIndex(host, "@")+1:]
+		}
+		return report.Hint("as "+env.User+", in "+project+"'s checkout:", "devopsy @"+env.User+"@"+server+":"+remote.QuoteWord(rest)+" --status")
 	}
-	project, rest, _ := strings.Cut(path, "/")
+	if host == "" {
+		return report.Hint("", "cd "+remote.QuoteWord(filepath.Join(root, env.Path, "current"))+" && devopsy --status")
+	}
 	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+remote.QuoteWord(rest)+" --status")
 }
 
