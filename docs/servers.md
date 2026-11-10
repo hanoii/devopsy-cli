@@ -310,9 +310,9 @@ service on the host that containers must not reach listens on
 every TCP listener beyond loopback, other than sshd's and the ports
 Docker publishes.
 
-The rules are in two chains devopsy owns, `DEVOPSY-PROJECTS` in
-iptables' filter table and `DEVOPSY-CONTAINERS` in its raw table, and
-the server's other rules stay as they are. `devopsy-firewall.service`
+The rules are in three chains devopsy owns, `DEVOPSY-PROJECTS` and
+`DEVOPSY-DOCKERD` in iptables' filter table and `DEVOPSY-CONTAINERS` in
+its raw table, and the server's other rules stay as they are. `devopsy-firewall.service`
 loads them at every boot. From the next boot on, which the first `add`
 needs anyway for sshd, `devopsy-firewall.timer` loads them every five
 minutes too, so if a reload of the server's own firewall drops them,
