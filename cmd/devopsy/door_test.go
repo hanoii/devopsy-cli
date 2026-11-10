@@ -801,9 +801,11 @@ func TestProjectNameClash(t *testing.T) {
 	others := []string{"shop", "blog-admin", "traefik"}
 	// devopsy's own names are under devopsy-: the util image's old names (devopsy-util, root with host
 	// mounts, which a project named devopsy could build and remove), the project users, the
-	// group, the builders.
+	// group, the builders. Nor is a project whose user would bear a group of devopsy's name
+	// (devopsy-projects, devopsy-door): useradd gives a user a group of its own name.
 	for project, clash := range map[string]bool{
 		"shop": false, "shopadmin": false, "admin-shop": false, "blog": true, "shop-admin": true, "traefik-x": true, "blog-admin": false, "blog-admin-eu": true, "devopsy": true, "devopsy-util": true,
+		"projects": true, "door": true,
 	} {
 		if why := projectNameClash(project, others); (why != "") != clash {
 			t.Errorf("%s: %q", project, why)

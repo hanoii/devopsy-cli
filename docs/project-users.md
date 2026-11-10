@@ -311,7 +311,8 @@ project user's keys, and the firewall. `add` refuses:
   of another's (`shop` and `shop-admin`): compose names are flat, so
   `shop`'s environment `admin-prod` would be `shop-admin`'s `prod`;
 - `devopsy` and any name starting with `devopsy-`, which are devopsy's
-  own.
+  own, and `projects` and `door`, whose users would bear the names of
+  devopsy's groups.
 
 Every release keeps its project's directory, `<root>/<project>`,
 closed to other users (mode 700). A project user passes through the

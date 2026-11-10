@@ -106,6 +106,11 @@ func projectNameClash(project string, others []string) string {
 	if project == "devopsy" || door.Extends(project, "devopsy") {
 		return project + " is under devopsy's own names"
 	}
+	// useradd gives a user a group of its own name, which would be one of devopsy's: the
+	// project users' (sshd's Match, the firewall) or the door's (what the door runs under).
+	if u := "devopsy-" + project; u == remote.DoorGroup || u == remote.DoorRunGroup {
+		return "its user, " + u + ", would bear the name of a group of devopsy's"
+	}
 	for _, o := range others {
 		switch {
 		case o == project:
