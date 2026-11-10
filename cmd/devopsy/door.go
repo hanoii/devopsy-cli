@@ -1059,13 +1059,13 @@ func hostIDs(users []string) []int {
 
 // takeFile reads a rendered file by the caller's rights, and removes it.
 func takeFile(who, path string) (map[string]any, error) {
-	var out bytes.Buffer
+	out := capBuffer{max: maxRendered}
 	c := doorRead(who, "take", path)
 	c.Stdout = &out
 	if err := c.Run(); err != nil {
 		return nil, errors.New("refused: not a file this project's user can read")
 	}
-	d := json.NewDecoder(&out)
+	d := json.NewDecoder(bytes.NewReader(out.Bytes()))
 	// A large number stays as written: compose reads what this writes back.
 	d.UseNumber()
 	file := map[string]any{}
@@ -1074,6 +1074,31 @@ func takeFile(who, path string) (map[string]any, error) {
 	}
 	return file, nil
 }
+
+// capBuffer holds at most max bytes of what a read of a caller's file writes, and fails the
+// write past them, which fails the read: a file a project user names, however large, takes no
+// more of the host's memory than the door would ever use of it. Its buffer is a field, never
+// embedded: io.Copy would take the buffer's ReadFrom, past this Write.
+type capBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *capBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		return 0, errors.New("past what the door reads of a file")
+	}
+	return b.buf.Write(p)
+}
+
+func (b *capBuffer) Bytes() []byte { return b.buf.Bytes() }
+
+// maxRendered and maxLogins are what the door reads at most of a rendered compose file and
+// of a project's docker config.
+const (
+	maxRendered = 8 << 20
+	maxLogins   = 1 << 20
+)
 
 // closedDir makes a directory only the deploy user and this project user can reach.
 func (s *doorSide) closedDir(path, perms string) error {
@@ -1641,7 +1666,7 @@ func unlinkedFile(data []byte) (int, error) {
 // Never its own directory: Docker's CLI loads plugins and helpers from there, which
 // would run the project's own program as the deploy user.
 func (s *doorSide) logins(config string) (string, error) {
-	var out bytes.Buffer
+	out := capBuffer{max: maxLogins}
 	c := s.read("cat", config)
 	c.Stdout = &out
 	auths := map[string]map[string]string{}

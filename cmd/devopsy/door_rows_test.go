@@ -178,7 +178,8 @@ esac
 }
 
 // One read of the rendered file, gone after it: whatever a second document or a repeated key
-// says, what goes on is what was checked, and a large number stays as written.
+// says, what goes on is what was checked, and a large number stays as written. A file past
+// what the door reads of one (maxRendered) is refused, read no further.
 //
 // Not parallel: it sets PATH.
 func TestDoorTakesTheFileOnce(t *testing.T) {
@@ -207,7 +208,8 @@ func TestDoorTakesTheFileOnce(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the file stays: %v", err)
 	}
-	for name, body := range map[string]string{"not json": "services: {}\n", "a list": "[1]", "nothing": ""} {
+	huge := `{"name":"shop-prod","x":"` + strings.Repeat("a", maxRendered) + `"}`
+	for name, body := range map[string]string{"not json": "services: {}\n", "a list": "[1]", "nothing": "", "past the cap": huge} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

@@ -129,10 +129,11 @@ fi
 }
 
 // DoorDevopsyPath refuses a path of devopsy's that sudoers would read as more than a path: it
-// has no quoting, and a space, a comma, a colon, an equals sign or a backslash mean something.
+// has no quoting, and a space, a comma, a colon, an equals sign or a backslash mean something,
+// a glob's characters (* ? [ ]) match other paths, # starts a comment and ! negates.
 func DoorDevopsyPath(p string) error {
-	if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t,:=\\\n\"'") {
-		return fmt.Errorf("devopsy is at %s, which sudo's rules cannot name: put it at a path with none of space , : = \\ or quotes", p)
+	if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t,:=\\\n\"'*?[]#!") {
+		return fmt.Errorf("devopsy is at %s, which sudo's rules cannot name: put it at a path with none of space , : = \\ * ? [ ] # ! or quotes", p)
 	}
 	return nil
 }

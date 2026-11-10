@@ -148,7 +148,9 @@ func TestDoorSSHDTakes(t *testing.T) {
 // into scripts quoted.
 func TestDoorDevopsyPath(t *testing.T) {
 	t.Parallel()
-	for p, ok := range map[string]bool{"/home/devopsy/.local/bin/devopsy": true, "/opt/dev opsy/devopsy": false, "/opt/a,b/devopsy": false, "devopsy": false, "/opt/x=y/devopsy": false} {
+	for p, ok := range map[string]bool{"/home/devopsy/.local/bin/devopsy": true, "/opt/dev opsy/devopsy": false, "/opt/a,b/devopsy": false, "devopsy": false, "/opt/x=y/devopsy": false,
+		// A glob's characters match other paths, # starts a comment and ! negates.
+		"/opt/*/devopsy": false, "/opt/dev?psy": false, "/opt/[a]/devopsy": false, "/opt/#x/devopsy": false, "/opt/!x/devopsy": false} {
 		if (DoorDevopsyPath(p) == nil) != ok {
 			t.Errorf("%q: %v", p, !ok)
 		}

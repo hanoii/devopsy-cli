@@ -310,7 +310,7 @@ project user's keys, and the firewall. `add` refuses:
 - a Unix user `devopsy-<project>` that is there already and is no
   project user, someone's own account;
 - a devopsy at a path sudo's rules cannot name: one with a space, `,`,
-  `:`, `=`, `\` or a quote;
+  `:`, `=`, `\`, `*`, `?`, `[`, `]`, `#`, `!` or a quote;
 - a project's name that is another's followed by a dash, or the start
   of another's (`shop` and `shop-admin`): compose names are flat, so
   `shop`'s environment `admin-prod` would be `shop-admin`'s `prod`;
