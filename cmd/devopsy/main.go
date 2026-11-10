@@ -173,6 +173,10 @@ func run() int {
 			return runSay(args[1:])
 		case remote.UtilImageFlag:
 			return runUtilImage()
+		case remote.EndProjectUserFlag:
+			return runEndProjectUser(args[1:])
+		case remote.EndUIDFlag:
+			return runEndUID(args[1:])
 		}
 	}
 

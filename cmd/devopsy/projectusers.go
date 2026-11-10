@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -299,9 +298,6 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	if err := os.Remove(entry); err != nil {
 		return failErr(err)
 	}
-	if err := os.Remove(remote.DoorSyncKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return failErr(err)
-	}
 	if err := os.Remove(remote.DoorKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return failErr(err)
 	}
@@ -314,8 +310,8 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 			return failErr(err)
 		}
 	}
-	if err := end(who); err != nil {
-		return fail("removed " + who + "'s entry and keys, but its processes could not be ended: " + err.Error())
+	if err := endProjectUser(who, end); err != nil {
+		return fail("removed " + who + "'s entry and keys, but " + err.Error())
 	}
 	stays := "its Unix user, home and tree stay"
 	if _, err := user.Lookup(who); err != nil {
@@ -323,23 +319,4 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	}
 	report.Info("removed "+who+"'s entry and keys, and ended its processes: it logs in no more, and the door answers it no more", stays)
 	return 0
-}
-
-// endUser ends every process of the user who and its linger (remote.EndUserArgs), as root through
-// devopsy's util image. A user deleted already runs none: userdel refuses one with processes.
-func endUser(who string) error {
-	u, err := user.Lookup(who)
-	if errors.As(err, new(user.UnknownUserError)) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := ensureUtilImage(context.Background()); err != nil {
-		return err
-	}
-	if out, err := exec.Command("docker", remote.EndUserArgs(u.Uid, who)...).CombinedOutput(); err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }

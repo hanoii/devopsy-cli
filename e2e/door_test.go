@@ -371,9 +371,11 @@ func TestDoorBuildModeLife(t *testing.T) {
 // Removing any of a project user's keys ends every process it runs, as root, and its linger,
 // and the door answers it no more once none is left: a process a leaked key left running
 // (setsid, nohup), or a user manager lingering into the next boot, would outlive the key and
-// keep the door by its group. The process here fights its end, as
-// one may: it sends kill -9 -1 in a loop, which never signals its sender and would end any
-// kill running as the user.
+// keep the door by its group. The processes here fight their end, as one may: one sends kill
+// -9 -1 in a loop, which never signals its sender and would end any kill running as the user,
+// and a chain forks its next and exits at once, so a scan of /proc and a kill by pid finds
+// each one gone, its successor not read yet. A root subreaper stands in for a real init,
+// which the test server's never reaps.
 func TestDoorKeyRemovalEndsTheUsersProcesses(t *testing.T) {
 	user := doorUser(t, "doorkeyless")
 	flag := "/tmp/doorkeyless-loop"
@@ -412,6 +414,36 @@ func TestDoorKeyRemovalEndsTheUsersProcesses(t *testing.T) {
 	t.Cleanup(func() { doorRoot(t, "rm -f "+linger) })
 	keys("remove doorkeyless-ci")
 	eventually(t, 10*time.Second, "its process ended with a key left", func() bool { return !running() })
+	// A loop's kill -9 -1 would end the chain too, so the chain gets a removal of its own.
+	keys("add /tmp/doorkeyless.pub")
+	// The chain stops by itself once root's flag goes, two minutes at most.
+	chainFlag, beat := "/tmp/doorkeyless-chain", "/tmp/doorkeyless-beat"
+	t.Cleanup(func() { doorRoot(t, "rm -f "+chainFlag+" "+beat) })
+	chain := `my $n = 0; while (-e "` + chainFlag + `") { my $p = fork; exit 0 if $p; utime(undef, undef, "` + beat + `") if ++$n % 1000 == 0; }`
+	reaper := `syscall($ENV{NR}, 36, 1, 0, 0, 0) == 0 or die "prctl: $!"; ` +
+		`if (!fork) { exec "setpriv", "--reuid=` + user + `", "--regid=` + user + `", "--init-groups", "perl", "-e", $ENV{CHAIN}; die "exec: $!" } ` +
+		`while (-e "` + chainFlag + `") { 1 while waitpid(-1, 1) > 0; select(undef, undef, undef, 0.01); } 1 while waitpid(-1, 0) > 0;`
+	if out, code := doorRoot(t, `set -e
+touch `+chainFlag+` `+beat+` && chown `+user+` `+beat+`
+(setsid sh -c 'sleep 120; rm -f `+chainFlag+`' </dev/null >/dev/null 2>&1 &)
+nr=167; [ "$(uname -m)" = x86_64 ] && nr=157
+NR=$nr CHAIN='`+chain+`' setsid perl -e '`+reaper+`' </dev/null >/dev/null 2>&1 &`); code != 0 {
+		t.Fatalf("the chain (%d): %s", code, out)
+	}
+	mtime := func() string {
+		out, _ := doorRoot(t, "stat -c %y "+beat)
+		return strings.TrimSpace(out)
+	}
+	hopping := func() bool {
+		a := mtime()
+		time.Sleep(500 * time.Millisecond) // Not a wait for a state: a gap for the beat to move in.
+		return mtime() != a
+	}
+	eventually(t, startWaitE2E, "the chain's beat", hopping)
+	keys("remove doorkeyless-ci")
+	if hopping() && hopping() {
+		t.Error("a chain that forks and exits outlives its key's removal")
+	}
 	if _, code := doorRoot(t, "test -e "+linger); code == 0 {
 		t.Errorf("its linger stays after a key's removal: %s", linger)
 	}

@@ -176,9 +176,9 @@ printf '%s\n' "$f"
 // blob on stdin: none (exit 3). The deploy user's last key stays (exit 4: it would lock
 // everyone out); a project user's goes, which is how its logins stop, and its sync keys
 // with it (DoorSyncKeysFile). Any removal of a project user's key ends every process it runs
-// and its linger (EndUserArgs): a key removed is one no longer trusted, and what it may have
-// left running, or set to start at boot, would outlive its logins, and keep the door by its
-// group.
+// and its linger (EndProjectUserFlag): a key removed is one no longer trusted, and what it may
+// have left running, or set to start at boot, would outlive its logins, and keep the door by
+// its group.
 func KeysRemoveScript(user string) string {
 	last, end := "", ""
 	if user == "" {
@@ -189,22 +189,9 @@ func KeysRemoveScript(user string) string {
 fi
 `
 	} else {
-		end = `uid=$(id -u ` + Quote(user) + `)
-devopsy ` + UtilImageFlag + ` >/dev/null 2>&1 || :
-ended=1
-docker ` + endUserShell(`"$uid"`, user) + ` >/dev/null 2>&1 || ended=
-# Its sync keys go with any of its keys, a leaked one could have added them: once what it
-# left running is ended, under the lock the door adds them by (lockedKeys), which refuses
-# an add asked before this edit of its keys.
-mkdir -p "$(dirname "$sf")"
-exec 8>"$(dirname "$sf")/.$(basename "$sf").lock"
-flock -w 60 8 || { ` + echoLine(report.ErrorLevel, "another edit of $sf did not end in a minute") + `; exit 75; }
-rm -f "$sf"
-[ -n "$ended" ] || {
-  ` + echoLine(report.ErrorLevel, "the key is removed, but the processes of "+user+" could not be ended") + `
-  exit 1
-}
-` + echoLine(report.InfoLevel, "the processes of "+user+" are ended") + `
+		// What it left running, its linger and its sync keys, which a leaked key could have
+		// added, go as at --project-users remove, in one helper of devopsy's.
+		end = `devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || exit 1
 `
 	}
 	return keysPrelude(user) + keysLock + `blob=$(cat)
@@ -240,50 +227,24 @@ func keysLeft(file string) string {
 }
 
 // EndUserArgs are docker's arguments to end what the user of uid, named user, runs or would
-// run with no session: as root, which nothing of the user's can signal, in UtilImage, first
-// its linger (systemd's /var/lib/systemd/linger/<user>, which starts its user manager and
-// its units at every boot), then under the host's pids every process
-// whose real, effective or saved uid is the user's, read from its status (its credentials,
-// whatever the owner of its /proc directory shows), a zombie aside (no signal reaches one);
-// round after round until one finds none, so a process forked meanwhile goes too, failing
-// after 50. No container runs as a project user's uid (hostIDs), so it ends none.
-func EndUserArgs(uid, user string) []string {
-	return []string{"run", "--rm", "--pid", "host", "--network", "none", "-v", "/var/lib/systemd/linger:/linger", UtilImage, "sh", "-c", endUser, "sh", uid, user}
+// run with no session: devopsy itself (the binary at devopsy, static, mounted read-only) as
+// root in UtilImage under the host's pids, which clears its linger and then kills every
+// process of the user's at once (EndUIDFlag). No container runs as a project user's uid
+// (hostIDs), so it ends none.
+func EndUserArgs(uid, user, devopsy string) []string {
+	return []string{"run", "--rm", "--pid", "host", "--network", "none", "--read-only", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges",
+		"-v", "/var/lib/systemd/linger:/linger", "-v", devopsy + ":/devopsy:ro", UtilImage, "/devopsy", EndUIDFlag, uid, user}
 }
 
-// endUser is EndUserArgs' script, its uid $1 and user $2.
-const endUser = `rm -f "/linger/$2" || exit 1
-for i in $(seq 50); do
-  left=
-  for f in /proc/[0-9]*/status; do
-    state= hit=
-    while read -r k a b c _; do
-      case $k in
-        State:) state=$a ;;
-        Uid:) [ "$a" = "$1" ] || [ "$b" = "$1" ] || [ "$c" = "$1" ] && hit=1; break ;;
-      esac
-    done <"$f" 2>/dev/null
-    [ -n "$hit" ] && [ "$state" != Z ] || continue
-    p=${f#/proc/}
-    kill -9 "${p%/status}" 2>/dev/null && left=1
-  done
-  [ -n "$left" ] || exit 0
-done
-exit 1`
+// EndUIDFlag is the hidden flag EndUserArgs runs in its container, root under the host's
+// pids: `devopsy --end-uid <uid> <user>`.
+const EndUIDFlag = "--end-uid"
 
-// endUserShell is EndUserArgs quoted for a script, the uid given as the shell word uid (a
-// variable's expansion).
-func endUserShell(uid, user string) string {
-	words := EndUserArgs("\x00", user)
-	for i, w := range words {
-		if w == "\x00" {
-			words[i] = uid
-		} else {
-			words[i] = Quote(w)
-		}
-	}
-	return strings.Join(words, " ")
-}
+// EndProjectUserFlag is the hidden flag that ends a project user once a key of its is gone
+// (KeysRemoveScript), as --project-users remove does: its processes and linger
+// (EndUserArgs), then its sync keys, under their lock. `devopsy --end-project-user <user>`,
+// as the deploy user.
+const EndProjectUserFlag = "--end-project-user"
 
 // DoorGroup is the group every project user is in: sshd's Match, the door's sudo rules and
 // the firewall rule go by it.
