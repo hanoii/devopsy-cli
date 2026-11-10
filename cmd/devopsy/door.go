@@ -963,9 +963,9 @@ func (s *doorSide) syncKey(args []string) int {
 	if len(args) == 6 && args[0] == "add" && !s.policy.InTree(args[2]) {
 		return doorRefused(fmt.Errorf("refused: a sync key for %s, outside %s's tree", args[2], s.policy.User))
 	}
-	// A key removal ends what the user left running, then drops its sync keys under this
-	// lock (KeysRemoveScript); a request it found already past its sudo, from a key since
-	// removed, would add one after.
+	// A user's end drops its sync keys and makes its keys file anew under this lock
+	// (endProjectUser): a request begun before it, past its sudo, which no end reaches, finds
+	// that file changed and adds none.
 	still := func() error {
 		now, err := os.Stat(remote.DoorKeysFile(s.policy.User))
 		if err != nil || s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -173,6 +175,100 @@ func TestRemoveProjectUserDropsSyncKeysUnderTheirLock(t *testing.T) {
 	}
 	if data, err := os.ReadFile(syncKeys); err == nil {
 		t.Errorf("a sync key added by a request in flight outlives --project-users remove:\n%s", data)
+	}
+}
+
+// writeSyncKey writes a sync's key as the door writes it for who (remote.SyncKeyLine) into
+// its sync keys file.
+func writeSyncKey(t *testing.T, who string) {
+	t.Helper()
+	_, pub, err := remote.NewSyncKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := remote.SyncKeyLine("/usr/local/bin/devopsy", "1762600000.00000a", "/srv/shop/dev", "vm2:dev", false, strings.Fields(pub)[1], time.Now().Add(remote.SyncKeyLife))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, remote.DoorSyncKeysFile(who), line+"\n", 0o600)
+}
+
+// A project user's sync keys go before its processes are ended and stay gone through the end
+// (endProjectUser, under their lock): sshd, told them by --authorized-keys, would otherwise
+// take one a leaked key added for a login that lands after the end's last scan, its session
+// the user's and past the key's removal.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's sync keys are.
+func TestSyncKeysOpenNoLoginThroughTheEnd(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	who := "devopsy-shop"
+	writeSyncKey(t, who)
+	var told bytes.Buffer
+	err := endProjectUser(who, func(string) error {
+		// What sshd is told of the user's sync keys while its processes are ended.
+		if code := printAuthorizedKeys(&told, remote.DoorSyncKeysFile(who)); code != 0 {
+			t.Errorf("--authorized-keys' read of the sync keys: exit %d", code)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if told.Len() != 0 {
+		t.Errorf("while %s's processes are ended, sshd still takes its sync key for a login:\n%s", who, told.String())
+	}
+	if fileExists(remote.DoorSyncKeysFile(who)) {
+		t.Error("the sync keys stay after the end")
+	}
+}
+
+// A door request begun before a user's end, its keysAt the keys file a key's removal left, adds
+// no sync key after the end: the end makes that file anew (renewKeys), so the request's check
+// under the sync keys' lock finds it changed. Else a leaked key's process, past its sudo,
+// which no end reaches, would add one that outlives the removal for its life.
+//
+// Not parallel: it sets DEVOPSY_HOME (the door's directory).
+func TestNoSyncKeyAddedPastTheEnd(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	tree := filepath.Join(t.TempDir(), "shop")
+	_, pub, err := remote.NewSyncKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := strings.Fields(pub)[1]
+	_, kept, err := remote.NewSyncKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := remote.DoorKeysFile("devopsy-shop")
+	if err := os.MkdirAll(filepath.Dir(keys), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keys, []byte("ssh-ed25519 "+blob+" leaked@laptop\n"+strings.TrimSpace(kept)+" kept@laptop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The removal of the leaked key, a rename as KeysRemoveScript's mv.
+	if err := os.WriteFile(keys+".tmp", []byte(strings.TrimSpace(kept)+" kept@laptop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(keys+".tmp", keys); err != nil {
+		t.Fatal(err)
+	}
+	// A request the leaked key's process started meanwhile: runDoor finds a key left.
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Tree: tree, Space: t.TempDir()}}
+	if !remote.KeysLeft(keys) {
+		t.Fatal("no key left")
+	}
+	if side.keysAt, err = os.Stat(keys); err != nil {
+		t.Fatal(err)
+	}
+	// The end: the user's processes (not this request's, past its sudo), then its sync keys.
+	if err := endProjectUser("devopsy-shop", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.syncKey([]string{"add", "1762600000.000009", tree + "/prod", "vm2:prod", "-", blob}); code == 0 &&
+		strings.Contains(readString(remote.DoorSyncKeysFile("devopsy-shop")), "1762600000.000009") {
+		t.Errorf("a sync key added after the end of the user's processes: %q", readString(remote.DoorSyncKeysFile("devopsy-shop")))
 	}
 }
 

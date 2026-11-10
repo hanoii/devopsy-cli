@@ -19,21 +19,48 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// endProjectUser ends what the project user who runs or would run with no session (end: its
-// processes and its linger), then drops its sync keys under their lock (lockedKeys), whatever
-// the end did: a door request already past its sudo, which no end reaches, adds a sync key
-// under that lock only while the user's keys file is still the one it found (keysAt), so one
-// that got in first is dropped here. A key's removal (remote.EndProjectUserFlag) and
-// --project-users remove both end a user this way.
+// endProjectUser ends the project user who, under its sync keys' lock (lockedKeys), in one
+// stretch: its sync keys go first, so sshd takes none for a login while the end runs; then
+// what it runs or would run with no session (end: its processes and its linger); then its keys
+// file is made anew (renewKeys), so a door request begun any time before, whose check of
+// that file (keysAt) a sync key's add waits on this lock for, finds it changed and adds
+// none. A key's removal (remote.EndProjectUserFlag) and --project-users remove both end a
+// user this way.
 func endProjectUser(who string, end func(string) error) error {
-	ended := end(who)
-	if err := lockedKeys(remote.DoorSyncKeysFile(who), func([]string) ([]string, error) { return nil, nil }); err != nil {
+	file := remote.DoorSyncKeysFile(who)
+	var ended error
+	err := lockedKeys(file, func([]string) ([]string, error) {
+		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+		ended = end(who)
+		return nil, renewKeys(remote.DoorKeysFile(who))
+	})
+	if err != nil {
 		return err
 	}
 	if ended != nil {
 		return fmt.Errorf("its processes could not be ended: %w", ended)
 	}
 	return nil
+}
+
+// renewKeys writes file again, as it is, under a new inode, which a door request's keysAt is
+// then never the same file as; none when it is gone. Its caller holds what edits it (a key's
+// removal holds its lock), or it is gone (--project-users remove).
+func renewKeys(file string) error {
+	data, err := os.ReadFile(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	tmp := file + ".renew"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
 }
 
 // runEndProjectUser is the hidden remote.EndProjectUserFlag, as the deploy user once a key of
