@@ -337,24 +337,17 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 	if f.conf != (conf != "") {
 		return nil, refuse("docker run: settings, for %s", f.name)
 	}
-	// An entry goes to its service's user, whom userRefused holds to an id no container of
-	// the host's is: never root's or devopsy's own, though nothing reads an entry's owner as
-	// trust today. An rsync's --chown gives a copy its owner the same way, under the same rule.
+	// Every owner a util container gives what it writes (the owners form's, a snapshot tar's,
+	// an rsync's --chown) goes to a service's user, whom userRefused holds to an id no
+	// container of the host's is: never root's or devopsy's own, though nothing reads such an
+	// owner as trust today. One check for every form, so a form that takes one is never left out.
 	for _, a := range cmd {
-		if chownFlag.MatchString(a) {
-			if why := p.userRefused(strings.TrimPrefix(a, "--chown=")); why != "" {
-				return nil, refuse("docker run: rsync's owner: %s", why)
-			}
+		owner, chown := strings.CutPrefix(a, "--chown=")
+		if !chown && !ownerArg.MatchString(a) || chown && !ownerArg.MatchString(owner) {
+			continue
 		}
-	}
-	if f.name == "owners" {
-		for _, a := range cmd[min(3, len(cmd)):] {
-			if !ownerArg.MatchString(a) {
-				continue
-			}
-			if why := p.userRefused(a); why != "" {
-				return nil, refuse("docker run: owners: %s", why)
-			}
+		if why := p.userRefused(owner); why != "" {
+			return nil, refuse("docker run: %s: an owner: %s", f.name, why)
 		}
 	}
 	action := &Action{}
