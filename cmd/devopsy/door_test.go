@@ -1461,14 +1461,10 @@ func TestDoorGivesWhatItExecsItsStops(t *testing.T) {
 	}
 }
 
-// BUG: sudo's rule for a project user is `devopsy --door *`, and sudoers matches a command's
-// arguments as one string joined by spaces, a wildcard crossing words (sudoers(5)): a first
-// argument that is one word holding a space, "--door x", matches the rule as `--door x` does.
-// devopsy takes only the exact word for the door, so that one goes on as any devopsy command,
-// as the deploy user, in the directory its caller chose: it finds the project there and runs
-// its env capability, a program of the project user's, with the deploy user's rights and its
-// Docker socket. The same holds for a word that starts like --door-read. A first word under
-// the door's flags that is not one of them is refused before anything reads a directory.
+// sudo's rule for a project user is `devopsy --door *`, and sudoers matches a command's
+// arguments as one string, a wildcard crossing words: one argument "--door x" matches it.
+// devopsy refuses a first word that only starts like a door flag before it reads anything,
+// so the project's own programs (its env capability) never run as the deploy user.
 func TestDoorFlagsTakeNoWordThatOnlyStartsLikeThem(t *testing.T) {
 	t.Parallel()
 	for _, first := range []string{"--door x", "--door  ", "--door x up", "--door\tx", "--door-read x", "--doorway"} {

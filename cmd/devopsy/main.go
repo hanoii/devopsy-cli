@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -49,6 +50,20 @@ func run() int {
 		// Wherever the deploy user was is not this user's to read.
 		_ = os.Chdir("/")
 		return runDoorRead(args[1:])
+	}
+	// sudo matches a rule's arguments as one string, wildcards across words, so its
+	// `--door *` takes one word that only starts like a door flag ("--door x"): never the
+	// CLI under it, which would load the caller's project and run its programs as the deploy
+	// user. And a project user's call through sudo is the door's alone, whatever its words.
+	if len(args) > 0 && strings.HasPrefix(args[0], "--door") {
+		report.SetDefault(report.New(errOut, color, 0))
+		report.Error("refused: " + strconv.Quote(args[0]) + " is no flag of devopsy's")
+		return 2
+	}
+	if who := os.Getenv("SUDO_USER"); who != "" && inDoorGroup(who) {
+		report.SetDefault(report.New(errOut, color, 0))
+		report.Error("refused: " + who + " goes through sudo to the door alone")
+		return 2
 	}
 
 	// -v or -vv, and --ssh-option, go before everything else, in any
@@ -362,4 +377,19 @@ func dockerVersion() string {
 		return "docker " + client
 	}
 	return "docker " + client + " (server " + server + ")"
+}
+
+// inDoorGroup says whether the user who is in the project users' group (remote.DoorGroup):
+// one whose call through sudo is the door's alone. A user or group not found is none.
+func inDoorGroup(who string) bool {
+	u, err := user.Lookup(who)
+	if err != nil {
+		return false
+	}
+	g, err := user.LookupGroup(remote.DoorGroup)
+	if err != nil {
+		return false
+	}
+	ids, err := u.GroupIds()
+	return err == nil && slices.Contains(ids, g.Gid)
 }

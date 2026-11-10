@@ -637,7 +637,7 @@ func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
 func TestCheckFileRefusesAnothersHostnameOnASharedNetwork(t *testing.T) {
 	t.Parallel()
 	shared := `"networks":{"default":{"name":"shop-prod_default"},"tunnel":{"name":"traefik","external":true}}`
-	for _, extra := range []string{`,"hostname":"traefik"`, `,"hostname":"other-web"`, `,"hostname":"other-web","domainname":"example.com"`} {
+	for _, extra := range []string{`,"hostname":"traefik"`, `,"hostname":"other-web"`, `,"hostname":"other-web","domainname":"example.com"`, `,"hostname":"shop-EU-web"`, `,"hostname":7`} {
 		file := parse(t, `{"name":"shop-prod",`+shared+`,"services":{"shop-web":`+safe(extra+`,"networks":{"tunnel":null}`)+`}}`)
 		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) == 0 {
 			t.Errorf("%s on a shared network: not refused", extra)

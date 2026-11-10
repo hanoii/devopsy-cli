@@ -177,6 +177,8 @@ id -nG "$user" | tr ' ' '\n' | grep -qx "$group" || usermod -aG "$group" "$user"
 for f in /etc/cron.deny /etc/at.deny; do
   grep -qxF "$user" "$f" 2>/dev/null || printf '%s\n' "$user" >>"$f"
 done
+# Nor a user manager of its own lingering with no session, for the same reason.
+rm -f "/var/lib/systemd/linger/$user"
 home=$(getent passwd "$user" | cut -d: -f6)
 chmod 750 "$home"
 [ -z "$tree" ] || [ -e "$tree" ] || install -d -m 750 -o "$user" -g "$user" "$tree"

@@ -24,6 +24,7 @@ func TestDoorHostScript(t *testing.T) {
 		"--authorized-keys",
 		"sshd -T -C",
 		"for f in /etc/cron.deny /etc/at.deny; do",
+		`rm -f "/var/lib/systemd/linger/$user"`,
 		"Match Group devopsy-projects",
 		"AuthorizedKeysFile none",
 		"AuthorizedKeysCommandUser deploy",

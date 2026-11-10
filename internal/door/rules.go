@@ -547,8 +547,15 @@ func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, f
 		if truthy(top["external"]) && !p.OwnName(svc) {
 			fail("%s: on the shared network %s, a service is named %s-<name>: compose answers for its name there", svc, net, p.Project)
 		}
-		if h, _ := s["hostname"].(string); truthy(top["external"]) && h != "" && !p.OwnName(h) {
-			fail("%s: on the shared network %s, its hostname %s is no name of %s's: Docker answers for it there", svc, net, h, p.Project)
+		// Lowercase, as Docker's DNS reads any case alike and OwnName does not.
+		if h, ok := s["hostname"]; truthy(top["external"]) && h != nil {
+			name, _ := h.(string)
+			if !ok || name == "" || strings.ToLower(name) != name || !p.OwnName(name) {
+				fail("%s: on the shared network %s, its hostname %v is no name of %s's: Docker answers for it there", svc, net, h, p.Project)
+			}
+		}
+		if truthy(top["external"]) && strings.ToLower(svc) != svc {
+			fail("%s: on the shared network %s, a service's name in lowercase: Docker answers for it in any case", svc, net)
 		}
 		if truthy(top["external"]) && s["domainname"] != nil {
 			fail("%s: a domainname on the shared network %s", svc, net)

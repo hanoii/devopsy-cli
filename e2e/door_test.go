@@ -1988,3 +1988,27 @@ func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
 		t.Errorf("a release with an image as a build context (%d):\n%s", code, out)
 	}
 }
+
+// sudo matches its rule's arguments as one string, wildcards across words, so the rule for
+// `devopsy --door *` takes one argument "--door x" too: devopsy refuses such a word, and any
+// call of a project user's through sudo that is not the door, before it reads a project, so
+// its own env capability never runs as the deploy user.
+func TestDoorSudoRunsNothingButTheDoor(t *testing.T) {
+	user := doorUser(t, "doorword")
+	setup := `set -e
+mkdir -p ~/doorword/.devopsy/capabilities/env
+printf 'project: doorword\n' >~/doorword/.devopsy/config.yaml
+printf 'services: {}\n' >~/doorword/.devopsy/compose.yaml
+printf '#!/bin/sh\ntouch /tmp/doorword-ran\n' >~/doorword/.devopsy/capabilities/env/compute
+chmod 755 ~/doorword/.devopsy/capabilities/env/compute`
+	if out, code := doorAs(t, user, setup); code != 0 {
+		t.Fatalf("setup (%d): %s", code, out)
+	}
+	t.Cleanup(func() { doorRoot(t, "rm -f /tmp/doorword-ran") })
+	for _, word := range []string{"--door x", "--door-read x", "--door\tup"} {
+		out, code := doorAs(t, user, "cd ~/doorword && sudo -n -u devopsy /usr/local/bin/devopsy "+quote(word)+" --env 2>&1")
+		if ran, _ := doorRoot(t, "test -e /tmp/doorword-ran && echo ran"); strings.TrimSpace(ran) == "ran" || code == 0 {
+			t.Errorf("sudo took %q to devopsy (%d), the project's program ran: %s", word, code, out)
+		}
+	}
+}
