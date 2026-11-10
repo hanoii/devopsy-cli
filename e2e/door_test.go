@@ -1165,6 +1165,62 @@ docker run --rm `+reg+`/evil/b@`+digest+` cat /secret`); code != 0 || !strings.C
 	}
 }
 
+// Docker's daemon contacts no registry a project user names, over a whole life: a release in
+// image mode, compose's pull verb, a rollback pulling its image back, a login and an inspect
+// of an image not here yet. A registry the project names can send the daemon, root and on the
+// host's network, where the firewall cannot follow it (to another project's containers), so
+// the project's images come through the door's own client and its builder alone. Told apart
+// in the registry's access log by their User-Agent: the daemon's names `UpstreamClient`. The
+// control: a pull by the deploy user, the daemon's, shows in that log.
+func TestDoorDaemonContactsNoProjectsRegistry(t *testing.T) {
+	reg := doorRegistry(t, "doornodaemon-reg", "5016", false)
+	if out, code := doorRoot(t, `set -e
+docker pull -q busybox:1.37 >/dev/null
+for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+`/app:$v >/dev/null && docker image rm `+reg+`/app:$v >/dev/null; done`); code != 0 {
+		t.Fatalf("the images (%d): %s", code, out)
+	}
+	daemon := func() []string {
+		out, _ := doorRoot(t, "docker logs doornodaemon-reg 2>&1")
+		var lines []string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, "UpstreamClient") && strings.Contains(l, "/v2/app/") {
+				lines = append(lines, l)
+			}
+		}
+		return lines
+	}
+	dir := doorProject(t, "doornodaemon", `services:
+  web:
+    image: `+reg+`/app:1
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+`, nil)
+	release := func(what, args string) {
+		t.Helper()
+		if out, code := op(t, dir, "devopsy @prod "+args); code != 0 {
+			t.Fatalf("%s (%d):\n%s", what, code, out)
+		}
+	}
+	release("a first release", "--release")
+	op(t, dir, "sed -i 's/app:1/app:2/' .devopsy/compose.yaml")
+	commitAll(t, dir)
+	release("a second release", "--release")
+	release("compose's pull", "pull")
+	doorRoot(t, "docker image rm -f "+reg+"/app:1 >/dev/null 2>&1; true")
+	release("a rollback, pulling its image back", "--rollback --yes")
+	user := "devopsy-doornodaemon"
+	doorAs(t, user, "printf x | docker login -u u --password-stdin "+reg+" >/dev/null 2>&1; docker image inspect "+reg+"/app:2 >/dev/null 2>&1")
+	if got := daemon(); len(got) > 0 {
+		t.Errorf("Docker's daemon contacted the project's registry %d times, the first:\n%s", len(got), got[0])
+	}
+	// The control: the daemon's own pull shows in the log by its User-Agent.
+	doorRoot(t, "docker image rm -f "+reg+"/app:2 >/dev/null 2>&1; docker pull -q "+reg+"/app:2 >/dev/null")
+	if len(daemon()) == 0 {
+		t.Error("the control: the daemon's own pull shows nowhere in the registry's log, so this proves nothing")
+	}
+}
+
 // No registry client the door starts on the host reaches the server's loopback, nor another
 // project's container: a registry the project user names answers each as it likes, here with
 // a token's realm there, which the firewall keeps the project user and its containers from.
