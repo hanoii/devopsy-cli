@@ -1487,7 +1487,11 @@ func (s *doorSide) builder() ([]string, error) {
 	// build step is a member of it, and reaches another project's builder and what its build
 	// listens on.
 	network := name + "-build"
-	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name}
+	// No git of the deploy user's in a context a project user wrote: buildx's client asks git
+	// about the context it builds, and a sealed copy is the deploy user's own, so git trusts
+	// the repository config the project user put in it, which can name a program (a promisor
+	// remote's uploadpack) git then runs as the deploy user, Docker's socket in hand.
+	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
 	env := append(slices.Clone(s.env), b[0])
 	run := func(args ...string) ([]byte, error) {
 		c := s.docker(args...)

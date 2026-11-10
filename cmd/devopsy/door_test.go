@@ -1284,17 +1284,6 @@ func TestDoorBuildReadsNoDockerfileThroughALink(t *testing.T) {
 // No git of the deploy user's runs in a sealed build context: buildx's client asks git about
 // the context it builds (rev-parse, show HEAD, remote get-url, for its provenance, on by
 // default), as whoever runs it, and a repository's own config says what git executes.
-//
-// BUG: a sealed context is the project user's tar, its .git included, untarred by the deploy
-// user and so the deploy user's own, which is all git asks before it trusts a repository's
-// config. A .git made by hand in a release's code (a partial clone whose HEAD names an object
-// that is not there, extensions.partialClone and remote.origin.promisor, its
-// remote.origin.uploadpack a program) has `git show HEAD` fetch the object from its promisor
-// remote and run that program: as the deploy user, who holds the Docker socket, so as root on
-// the host. Seen on compose 5.5.0, buildx 0.37.2 and git 2.56.0 with such a context, outside
-// the door; devopsy-server installs git. BUILDX_GIT_INFO=false in the build's environment
-// stops buildx asking (seen too), and so does a sealed context with no .git; the test takes
-// either.
 func TestDoorBuildRunsNoGitInASealedContext(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
