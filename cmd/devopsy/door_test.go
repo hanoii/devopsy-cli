@@ -253,6 +253,27 @@ func TestDoorCopiesHoldNoLink(t *testing.T) {
 	check("a copy for a root container", copied, err)
 }
 
+// A sealed copy holds whatever the path is named, dir included: the copy lands in a directory
+// of the door's own, apart from the names the door then uses beside it.
+//
+// Not parallel: it sets PATH, for a sudo that answers with the tree's tar.
+func TestDoorSealsAPathOfAnyName(t *testing.T) {
+	bin, tree := t.TempDir(), t.TempDir()
+	if err := testfile.Write(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\nexec tar -C "+tree+" -cf - dir\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	write(t, filepath.Join(tree, "dir", "f"), "content\n", 0o644)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: t.TempDir()}}
+	sealed, err := side.Seal(filepath.Join(tree, "dir"))
+	if err != nil {
+		t.Fatalf("a path named dir: %v", err)
+	}
+	if got := readString(filepath.Join(sealed, "f")); got != "content\n" {
+		t.Errorf("the sealed copy holds %q", got)
+	}
+}
+
 // The door keeps `--profile *`, which devopsy asks for a release's pull
 // (remote.ProfilePull), its failure report and --destroy: it drops what composeProfile does
 // not match, without a word, and a service under a profile would then not be pulled, listed

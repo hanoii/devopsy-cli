@@ -261,10 +261,16 @@ func (s *doorSide) Seal(path string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(work)
-	if err := s.untar(path, work); err != nil {
+	// The copy lands in a directory of its own, so no name the caller's tar holds meets the
+	// door's beside it (dir, below).
+	in := filepath.Join(work, "in")
+	if err := os.Mkdir(in, 0o700); err != nil {
 		return "", err
 	}
-	copied := filepath.Join(work, filepath.Base(path))
+	if err := s.untar(path, in); err != nil {
+		return "", err
+	}
+	copied := filepath.Join(in, filepath.Base(path))
 	if err := noLink(copied); err != nil {
 		return "", err
 	}
