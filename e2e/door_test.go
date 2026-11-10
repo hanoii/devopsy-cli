@@ -1226,7 +1226,9 @@ for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+
 // a token's realm there, which the firewall keeps the project user and its containers from.
 // The clients are buildx's or compose's, a claim's read of a manifest and a build's FROM,
 // whose token BuildKit asks its client for; the door runs under its own group (devopsy-door),
-// which the firewall holds in a chain of its own.
+// which the firewall holds in a chain of its own. Nor does a pull or a start reach another
+// project's container, which Docker's daemon would, its cgroup holding docker-proxy and so the
+// bridges (the control): a project's images come through the door's client and its builder.
 func TestDoorClientsReachNothingPrivate(t *testing.T) {
 	user := doorUser(t, "doortoken")
 	t.Cleanup(func() { doorRoot(t, "docker rm -f doortoken-lo >/dev/null 2>&1; true") })
@@ -1299,9 +1301,22 @@ exit 1`)
 	reg2 := doorRegistry(t, "doortoken-reg2", "5031", false, "-e REGISTRY_AUTH=token",
 		"-e REGISTRY_AUTH_TOKEN_REALM=http://"+ip+":5032/token", "-e REGISTRY_AUTH_TOKEN_SERVICE=r",
 		"-e REGISTRY_AUTH_TOKEN_ISSUER=r", "-e REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE=/certs/c.pem")
+	reached := func(what, said string) {
+		t.Helper()
+		if logs, _ := doorRoot(t, "docker logs doortoken-int 2>&1"); strings.Contains(logs, "/token") {
+			t.Errorf("%s asked another project's container, on a network the project is not on, for a token:\n%s\nit said:\n%s", what, logs, said)
+		}
+	}
 	out, _ = doorAs(t, user, "docker image inspect "+reg2+"/x:1 2>&1")
-	if logs, _ := doorRoot(t, "docker logs doortoken-int 2>&1"); strings.Contains(logs, "/token") {
-		t.Errorf("a claim's read asked another project's container, on a network the project is not on, for a token:\n%s\nit said:\n%s", logs, out)
+	reached("a claim's read", out)
+	// Compose's pull and a start, Docker's daemon pulling for them before the claims came
+	// through the door's client alone.
+	out, _ = doorAs(t, user, `mkdir -p ~/doortoken/prod && cd ~/doortoken/prod && printf 'services:\n  web:\n    image: `+reg2+`/x:1\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n' >compose.yaml && COMPOSE_PROJECT_NAME=doortoken-prod docker compose pull 2>&1; COMPOSE_PROJECT_NAME=doortoken-prod docker compose up -d 2>&1`)
+	reached("a pull or a start", out)
+	// The control: the daemon's own pull follows the realm there.
+	doorRoot(t, "timeout 30 docker pull "+reg2+"/x:1 >/dev/null 2>&1; true")
+	if logs, _ := doorRoot(t, "docker logs doortoken-int 2>&1"); !strings.Contains(logs, "/token") {
+		t.Error("the control: the daemon's own pull did not reach the container, so this proves nothing")
 	}
 }
 
