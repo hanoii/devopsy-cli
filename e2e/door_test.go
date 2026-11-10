@@ -501,6 +501,23 @@ func TestDoorLoginRunsNothingOfTheHome(t *testing.T) {
 	}
 }
 
+// A project user's uid and gid come from the project users' range (50000 to 59999), which no
+// container of the door's runs as: one made later never takes the uid of a container already
+// running, whose environment, root and descriptors its processes would read through /proc.
+func TestDoorProjectUsersTakeTheirOwnIDs(t *testing.T) {
+	user := doorUser(t, "doorids")
+	out, code := doorRoot(t, "id -u "+user+"; id -g "+user)
+	ids := strings.Fields(out)
+	if code != 0 || len(ids) != 2 {
+		t.Fatalf("its ids (%d): %s", code, out)
+	}
+	for _, id := range ids {
+		if n, err := strconv.Atoi(id); err != nil || n < 50000 || n > 59999 {
+			t.Errorf("%s's ids %v, not from the project users' range", user, ids)
+		}
+	}
+}
+
 // The daemon resolves a bind at each start, so a path a project user can change would take
 // a restart anywhere: an entry, which only the door replaces, shared/mnt and a release's file.
 // A control shows it would: the same swaps on paths as compose writes them.

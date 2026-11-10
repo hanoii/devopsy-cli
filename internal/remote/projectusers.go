@@ -5,6 +5,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -78,6 +79,10 @@ var doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
   fi
 fi
 `
+
+// projectIDRange is useradd's options for a project user's uid and its group's gid, from
+// door.ProjectIDMin to door.ProjectIDMax.
+var projectIDRange = fmt.Sprintf("-K UID_MIN=%d -K UID_MAX=%d -K GID_MIN=%d -K GID_MAX=%d", door.ProjectIDMin, door.ProjectIDMax, door.ProjectIDMin, door.ProjectIDMax)
 
 // doorUserCheck refuses a Unix user that is there and no project user ($1 the user): one add
 // made is in the group, remove keeping it there, while any other is someone's account (the
@@ -174,7 +179,9 @@ if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
 fi
 made=
 if ! id -u "$user" >/dev/null 2>&1; then
-  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 --create-home --shell /bin/sh --groups "$group" "$user"
+  # Its ids from the project users' range, which no container of the door's runs as: a user
+  # made later never takes the uid of a container already running.
+  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 ` + projectIDRange + ` --create-home --shell /bin/sh --groups "$group" "$user"
   usermod -p '*' "$user"
   made=1
 fi

@@ -210,9 +210,10 @@ A project user's compose file is an ordinary one, within these rules.
 The door names what it refuses, and logs each refusal in
 `<space>/refused.log`.
 
-- Every service runs as `<uid>:<gid>` in numbers, neither of them 0 nor
-  an id of the host's own users and groups (the deploy user, the project
-  users, the socket's group): `user: "10001:10001"`. A user name is
+- Every service runs as `<uid>:<gid>` in numbers, neither of them 0, an
+  id of the host's own users and groups (the deploy user, the project
+  users, the socket's group), nor in 50000 to 59999, the range project
+  users take their ids from: `user: "10001:10001"`. A user name is
   refused, since the image's own `/etc/passwd` could map it to root.
 - Every service has `security_opt: [no-new-privileges]`, and nothing
   else there. `cap_add` takes only `NET_BIND_SERVICE`.
@@ -285,7 +286,10 @@ user, `devopsy@vm1`.
    its configuration at the next boot, and until then no project user
    logs in; `--project-users` says so.
 
-`add` makes `devopsy-shop` with no password and a home closed to others.
+`add` makes `devopsy-shop` with no password, a home closed to others,
+and ids from 50000 to 59999, which no container of the door's runs as,
+so a project user made later never shares a running container's uid.
+The deploy user's own containers stay out of that range too.
 When the release root (`releases: root`) is outside the deploy user's
 home, it also makes the project's tree under that root. The project
 user's entry goes in the deploy user's config directory ([Shared

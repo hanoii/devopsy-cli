@@ -499,19 +499,35 @@ func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...
 	}
 }
 
+// ProjectIDMin and ProjectIDMax bound the ids --project-users add gives a project user and
+// its group: no container runs as one (userRefused), so a project user made later never
+// takes the uid of a container already running, whose environment, root and descriptors its
+// processes would then read through /proc.
+const (
+	ProjectIDMin = 50000
+	ProjectIDMax = 59999
+)
+
 // userRefused says why a container may not run as user, or nothing: a user is numbers
-// only, since a name is the image's to map (to 0, say), and never root or an id of the
-// host's (ForbiddenIDs), whose processes it would reach through /proc. One check for a
-// service's user: and for exec's -u.
+// only, since a name is the image's to map (to 0, say), never root, an id of the host's
+// (ForbiddenIDs), whose processes it would reach through /proc, or one of the project users'
+// range, a user's to come, and no larger than a uid can be. One check for a service's user:
+// and for exec's -u.
 func (p Policy) userRefused(user string) string {
 	m := numericUser.FindStringSubmatch(user)
 	if m == nil {
 		return fmt.Sprintf(`%q: <uid>:<gid> in numbers, for example "10001:10001"`, user)
 	}
-	uid, _ := strconv.Atoi(m[1])
-	gid, _ := strconv.Atoi(m[2])
-	if uid == 0 || gid == 0 || slices.Contains(p.ForbiddenIDs, uid) || slices.Contains(p.ForbiddenIDs, gid) {
-		return user + ": a host id"
+	for _, s := range m[1:] {
+		id, err := strconv.Atoi(s)
+		switch {
+		case err != nil || id > 2147483647:
+			return user + ": an id past what a uid can be"
+		case id == 0 || slices.Contains(p.ForbiddenIDs, id):
+			return user + ": a host id"
+		case id >= ProjectIDMin && id <= ProjectIDMax:
+			return fmt.Sprintf("%s: in %d to %d, the project users' ids", user, ProjectIDMin, ProjectIDMax)
+		}
 	}
 	return ""
 }

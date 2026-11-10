@@ -32,7 +32,7 @@ func TestDoorHostScript(t *testing.T) {
 		"visudo -cqf",
 		"sshd -t",
 		// No subordinate ids, for a user made here or one that was there.
-		"useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0",
+		"useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -K UID_MIN=50000 -K UID_MAX=59999 -K GID_MIN=50000 -K GID_MAX=59999 ",
 		"for f in /etc/subuid /etc/subgid; do",
 		// The door's entrance for a project user, never over a real docker.
 		"ln -sfn '/opt/bin/devopsy' /usr/local/bin/docker",

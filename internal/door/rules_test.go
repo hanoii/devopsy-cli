@@ -220,6 +220,11 @@ func TestCheckFileIdentity(t *testing.T) {
 		{"no-new-privileges:true", `{"user":"10001:10001","security_opt":["no-new-privileges:true"]}`, false},
 		{"no user", `{"security_opt":["no-new-privileges"]}`, true},
 		{"root", `{"user":"0:0","security_opt":["no-new-privileges"]}`, true},
+		// A project user made later takes an id of that range, which no container holds.
+		{"a project user's range", `{"user":"50000:10001","security_opt":["no-new-privileges"]}`, true},
+		{"a project user's range, its group", `{"user":"10001:59999","security_opt":["no-new-privileges"]}`, true},
+		{"past a uid", `{"user":"99999999999999999999:1","security_opt":["no-new-privileges"]}`, true},
+		{"below the range", `{"user":"49999:60000","security_opt":["no-new-privileges"]}`, false},
 		{"root's group", `{"user":"10001:0","security_opt":["no-new-privileges"]}`, true},
 		{"a name, which an image's passwd can make root", `{"user":"app:app","security_opt":["no-new-privileges"]}`, true},
 		{"a uid alone, leaving the image's group", `{"user":"10001","security_opt":["no-new-privileges"]}`, true},
