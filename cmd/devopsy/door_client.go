@@ -179,8 +179,13 @@ func dockerConfig() string {
 	return filepath.Join(config, "config.json")
 }
 
-// composeGlobals are compose's own flags that take a value.
-var composeGlobals = []string{"-f", "--file", "--project-directory", "-p", "--project-name", "--env-file", "--ansi", "--progress", "--parallel"}
+// composeGlobals are compose's own flags that take a value, and composeLone those that take
+// none and change only what renders. Any other global flag (for example --dry-run) is
+// refused: the door gets the verb and what follows it, so it would run the command without.
+var (
+	composeGlobals = []string{"-f", "--file", "--project-directory", "-p", "--project-name", "--env-file", "--ansi", "--progress", "--parallel"}
+	composeLone    = []string{"--compatibility", "--all-resources"}
+)
 
 // dockerCompose renders what a compose command is about, with this user's rights,
 // and asks the door to run the verb on that.
@@ -206,7 +211,21 @@ loop:
 			global = append(global, a, args[i+1])
 			i += 2
 		case strings.HasPrefix(a, "-"):
-			global = append(global, a)
+			name, value, valued := strings.Cut(a, "=")
+			switch {
+			case valued && name == "--profile":
+				profiles = append(profiles, value)
+			case valued && slices.Contains(composeGlobals, name):
+				if name == "--project-directory" {
+					dir = value
+				}
+				global = append(global, a)
+			case !valued && slices.Contains(composeLone, a):
+				global = append(global, a)
+			default:
+				report.Error("docker compose " + a + ": not taken for a project user, whose door runs the command without it")
+				return 2
+			}
 			i++
 		default:
 			break loop
