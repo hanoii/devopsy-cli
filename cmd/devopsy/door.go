@@ -773,12 +773,13 @@ func runDoor(args []string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
+	// From here every refusal is recorded, the space's own included.
+	doorLog = filepath.Join(policy.Space, "refused.log")
 	if err := spaceGuarded(policy.Space); err != nil {
 		report.Fail(err, spaceFix(policy.Space))
 		doorRecord(err.Error())
 		return 2
 	}
-	doorLog = filepath.Join(policy.Space, "refused.log")
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
 	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
@@ -930,10 +931,7 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 	if tree == "" {
 		tree = filepath.Join(u.HomeDir, s.Project)
 	}
-	ids, err := hostIDs(s.Users)
-	if err != nil {
-		return door.Policy{}, err
-	}
+	ids := hostIDs(s.Users)
 	p := door.Policy{
 		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
 		ForbiddenIDs: ids, Others: otherProjects(s),
@@ -962,7 +960,7 @@ func otherProjects(s remote.DoorUser) []string {
 // hostIDs are ids no container may run as: the deploy user's, the door's users', and the
 // Docker socket's group. Other system accounts stay usable: images take low ids of their
 // own, and nobody logs in as those.
-func hostIDs(users []string) ([]int, error) {
+func hostIDs(users []string) []int {
 	ids := []int{os.Getuid(), os.Getgid()}
 	for _, name := range users {
 		u, err := user.Lookup(name)
@@ -981,7 +979,7 @@ func hostIDs(users []string) ([]int, error) {
 		}
 	}
 	sort.Ints(ids)
-	return slices.Compact(ids), nil
+	return slices.Compact(ids)
 }
 
 // takeFile reads a rendered file by the caller's rights, and removes it.

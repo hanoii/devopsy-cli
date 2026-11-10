@@ -389,10 +389,7 @@ func TestContentHashSeesWhatACopyHolds(t *testing.T) {
 // and a user that is gone is no error.
 func TestHostIDs(t *testing.T) {
 	t.Parallel()
-	ids, err := hostIDs([]string{"root", "no-such-user-here"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ids := hostIDs([]string{"root", "no-such-user-here"})
 	for _, want := range []int{os.Getuid(), os.Getgid(), 0} {
 		if !slices.Contains(ids, want) {
 			t.Errorf("%d is not in %v", want, ids)
