@@ -2353,7 +2353,8 @@ func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
 // A project user's sudo to the door keeps none of its variables, whatever the server's sudoers
 // keeps for everyone (here an admin's GODEBUG): Go's runtime reads GODEBUG before the door
 // clears its environment, and inittrace makes it print a line before main. Nor does sudo take
-// one on its command line. The control: root's sudo keeps it.
+// one on its command line, nor keep one for the door's read as the project user. The control:
+// root's sudo keeps it.
 func TestDoorSudoKeepsNoVariable(t *testing.T) {
 	user := doorUser(t, "doorenv")
 	t.Cleanup(func() { doorRoot(t, "rm -f /etc/sudoers.d/zz-doorenv") })
@@ -2370,6 +2371,11 @@ func TestDoorSudoKeepsNoVariable(t *testing.T) {
 		if out, _ := doorAs(t, user, call); strings.Contains(out, "init runtime") {
 			t.Errorf("the door's runtime read the caller's GODEBUG (%s):\n%s", call, out)
 		}
+	}
+	// Nor the deploy user's sudo to a read as the project user, whose process that user reads
+	// through /proc.
+	if out, _ := doorAs(t, "devopsy", "GODEBUG=inittrace=1 sudo -n -u "+user+" /usr/local/bin/devopsy --door-read isdir / 2>&1"); strings.Contains(out, "init runtime") {
+		t.Errorf("a read as the project user kept the deploy user's GODEBUG:\n%s", out)
 	}
 }
 

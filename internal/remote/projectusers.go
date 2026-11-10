@@ -72,16 +72,19 @@ exec /bin/sh -i
 `
 
 // doorSudoers is the door's two rules: a project user asks its deploy user, which reads a
-// project's tree as that project's user. A project user's sudo to the door keeps none of its
-// variables, whatever the server's sudoers keeps for others: Go's runtime reads some
-// (GODEBUG) before the door clears its environment. The Defaults are the command's, which
+// project's tree as that project's user. Neither sudo keeps a variable of its caller's,
+// whatever the server's sudoers keeps for others: Go's runtime reads some (GODEBUG) before the
+// door clears its environment, and a read runs as the project user, who reads its
+// environment through /proc. The Defaults are the command's, which
 // sudo applies after every user's, group's and run-as user's, wherever those are written.
 func doorSudoers(deploy, devopsy string) string {
 	return "# Written by devopsy (devopsy @<server> --project-users add): the door's rules.\n" +
 		"Cmnd_Alias DEVOPSY_DOOR = " + devopsy + " --door *\n" +
 		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, !setenv\n" +
 		"%" + DoorGroup + " ALL=(" + deploy + " : " + DoorRunGroup + ") NOPASSWD: DEVOPSY_DOOR\n" +
-		deploy + " ALL=(%" + DoorGroup + ") NOPASSWD: " + devopsy + " --door-read *\n"
+		"Cmnd_Alias DEVOPSY_DOOR_READ = " + devopsy + " --door-read *\n" +
+		"Defaults!DEVOPSY_DOOR_READ env_reset, !env_keep, !setenv\n" +
+		deploy + " ALL=(%" + DoorGroup + ") NOPASSWD: DEVOPSY_DOOR_READ\n"
 }
 
 // doorTreeCheck refuses a tree that is there and not the user's ($1 the user, $2 the tree): it

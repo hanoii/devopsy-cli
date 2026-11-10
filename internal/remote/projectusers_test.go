@@ -21,7 +21,9 @@ func TestDoorHostScript(t *testing.T) {
 	for _, want := range []string{
 		"Cmnd_Alias DEVOPSY_DOOR = /opt/bin/devopsy --door *",
 		"%devopsy-projects ALL=(deploy : devopsy-door) NOPASSWD: DEVOPSY_DOOR",
-		"deploy ALL=(%devopsy-projects) NOPASSWD: /opt/bin/devopsy --door-read *",
+		"Cmnd_Alias DEVOPSY_DOOR_READ = /opt/bin/devopsy --door-read *",
+		"Defaults!DEVOPSY_DOOR_READ env_reset, !env_keep, !setenv",
+		"deploy ALL=(%devopsy-projects) NOPASSWD: DEVOPSY_DOOR_READ",
 		"--authorized-keys",
 		"sshd -T -C",
 		"for f in /etc/cron.deny /etc/at.deny; do",

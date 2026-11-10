@@ -225,7 +225,7 @@ func carriesLabel(file map[string]any, prefix string) bool {
 
 // Real implements door.Paths.
 func (s *doorSide) Real(path string) (string, error) {
-	out, err := doorAnswer(s.read("real", path), maxPath, 0)
+	out, err := doorAnswer(s.read("real", path), maxPath, doorReadWait)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve %s", path)
 	}
@@ -1077,7 +1077,7 @@ func hostIDs(deploy *user.User, users []string) []int {
 
 // takeFile reads a rendered file by the caller's rights, and removes it.
 func takeFile(who, path string) (map[string]any, error) {
-	out, err := doorAnswer(doorRead(who, "take", path), maxRendered, 0)
+	out, err := doorAnswer(doorRead(who, "take", path), maxRendered, doorReadWait)
 	if err != nil {
 		return nil, errors.New("refused: not a file this project's user can read")
 	}
@@ -1108,6 +1108,12 @@ func (b *capBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *capBuffer) Bytes() []byte { return b.buf.Bytes() }
+
+// doorReadWait is how long a door request waits for a read as its project user (a path's
+// resolution, a rendered file, its docker config): one held open (a FIFO the user names)
+// would hold a process of the deploy user's for good, and many, the deploy user's process
+// limit, which sshd's look at every project user's keys runs under.
+const doorReadWait = time.Minute
 
 // maxRendered, maxLogins, maxPath and maxEnvironments are what the deploy user reads at most
 // of a project user's answer: a rendered compose file, a project's docker config, a path's
@@ -1685,7 +1691,7 @@ func unlinkedFile(data []byte) (int, error) {
 // Never its own directory: Docker's CLI loads plugins and helpers from there, which
 // would run the project's own program as the deploy user.
 func (s *doorSide) logins(config string) (string, error) {
-	out, err := doorAnswer(s.read("cat", config), maxLogins, 0)
+	out, err := doorAnswer(s.read("cat", config), maxLogins, doorReadWait)
 	auths := map[string]map[string]string{}
 	if err == nil {
 		var parsed struct {
