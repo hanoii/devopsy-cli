@@ -564,7 +564,8 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 	mnt, dev := space+"/mnt/shop-prod", space+"/mnt/shop-dev"
 	clone := space + "/clones/shop/abc/1"
 	tree := "/home/devopsy-shop/shop/prod"
-	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: "/home/devopsy-shop/shop"}
+	// The caller is this user, as devopsy runs as the project user: its tar gives it its own ids.
+	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop"}
 	c := newContainer("export", "shop-prod", "1", remote.TaskExport)
 	ctx := context.Background()
 	d := dataSet{mnt: mnt, entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
