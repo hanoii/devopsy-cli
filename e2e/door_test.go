@@ -1195,7 +1195,8 @@ func TestDoorClaimLandsAsAPull(t *testing.T) {
 	})
 	if out, code := doorRoot(t, `set -e
 docker pull -q busybox:1.37 >/dev/null
-docker tag busybox:1.37 `+plain+` && docker push -q `+plain+` >/dev/null && docker image rm `+plain+` >/dev/null
+printf 'FROM busybox:1.37\nRUN echo plain >/p\n' | docker build -q -t `+plain+` - >/dev/null
+docker push -q `+plain+` >/dev/null && docker image rm `+plain+` >/dev/null
 d=$(mktemp -d) && printf 'FROM busybox:1.37\nRUN echo zstd >/z\n' >"$d/Dockerfile"
 docker buildx build -q --output type=image,name=`+zstd+`,push=true,compression=zstd,force-compression=true "$d" >/dev/null
 docker image rm `+zstd+` >/dev/null 2>&1 || true
@@ -1228,7 +1229,8 @@ docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
 			t.Errorf("%s: a claim left\n%s\nwhere a pull by its digest leaves\n%s", ref, claimed, got)
 		}
 	}
-	// Two at once, the image gone and its id still recorded.
+	// Two at once, the image gone and its id still recorded. Its own image, so no container of
+	// another test's on the lane holds it.
 	id, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' "+plain+" && docker image rm -f $(docker image inspect -f '{{.Id}}' "+plain+") >/dev/null")
 	id = strings.TrimSpace(strings.Split(id, "\n")[0])
 	out, _ := doorAs(t, user, `a=0 b=0
