@@ -202,7 +202,12 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if err != nil {
 			return fail(err.Error())
 		}
+		// A word that names nothing would match every fingerprint, and an empty one every key
+		// with no comment.
 		want := strings.TrimPrefix(words[0], "SHA256:")
+		if strings.TrimSpace(want) == "" {
+			return fail(usage)
+		}
 		var matches []remote.AuthorizedKey
 		for _, k := range keys {
 			fp, _ := k.Fingerprint()

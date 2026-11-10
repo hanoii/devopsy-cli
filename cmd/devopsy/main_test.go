@@ -1597,6 +1597,13 @@ func TestRemoteSSHKeysForAProjectUser(t *testing.T) {
 	if out, code := run(true, "@devopsy-shop@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code == 0 || !strings.Contains(out, "devopsy-shop is a project user") || !strings.Contains(out, "--ssh-keys --for shop remove op@laptop") || !strings.Contains(readString(keys), "op@laptop") {
 		t.Errorf("asked as the project user (%d):\n%s", code, out)
 	}
+	// A word that names nothing (empty, a fingerprint's prefix alone) removes nothing, even
+	// its one key, which every fingerprint and an empty comment would match.
+	for _, word := range []string{"", "SHA256:"} {
+		if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "remove", word); code == 0 || !strings.Contains(readString(keys), "op@laptop") {
+			t.Errorf("remove %q (%d):\n%s", word, code, out)
+		}
+	}
 	// Removing any of its keys drops its sync keys too: a leaked key could have added them.
 	syncKeys := filepath.Join(home, "door", "sync-keys", "devopsy-shop")
 	write(t, syncKeys, "a sync's key\n", 0o600)
