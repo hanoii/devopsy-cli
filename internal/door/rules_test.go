@@ -517,3 +517,30 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 		}
 	}
 }
+
+// One rule says what of the door's mnts a path is, for a mount's kind, a bind's source, and
+// what a copy wrote to give back: this project's mnt, or one of its entries, a Word; never
+// deeper, another project's, or a name a Word is not.
+func TestMntPath(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{
+		"/space/mnt/shop-prod":                "shop-prod ",
+		"/space/mnt/shop-prod/db":             "shop-prod db",
+		"/space/mnt/shop-eu-prod/app.ini":     "shop-eu-prod app.ini",
+		"/space/mnt/shop-prod/db/sub":         "",
+		"/space/mnt/blog-prod/db":             "",
+		"/space/mnt/shop-prod/-x":             "",
+		"/space/mnt/shop-prod/..":             "",
+		"/space/mnt":                          "",
+		"/space/clones/shop/abc/1/mnt/db":     "",
+		"/home/devopsy-shop/shop/prod/mnt/db": "",
+	} {
+		got := ""
+		if name, entry, ok := testPolicy.MntPath(path); ok {
+			got = name + " " + entry
+		}
+		if got != want {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
+	}
+}

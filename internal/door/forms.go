@@ -295,17 +295,15 @@ func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 		}
 		return kindClone, real, nil
 	}
-	mntRoot := filepath.Join(p.Space, "mnt") + "/"
-	if rest, ok := strings.CutPrefix(real, mntRoot); ok {
-		name, entry, nested := strings.Cut(rest, "/")
+	if strings.HasPrefix(real, filepath.Join(p.Space, "mnt")+"/") {
+		_, entry, ok := p.MntPath(real)
 		switch {
-		case !p.OwnName(name) || strings.Contains(entry, "/"):
-		case !nested:
+		case !ok:
+			return 0, "", refuse("docker run: a host path: %s", m.source)
+		case entry == "":
 			return kindMnt, real, nil
-		case Word.MatchString(entry):
-			return kindEntry, real, nil
 		}
-		return 0, "", refuse("docker run: a host path: %s", m.source)
+		return kindEntry, real, nil
 	}
 	if p.InTree(real) {
 		if m.readOnly {
@@ -423,7 +421,7 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 	// user when it exits, or for one detached when it is removed (Removes).
 	if !slices.Contains(opts, "-d") {
 		for i, m := range mounts {
-			if !m.readOnly && strings.HasPrefix(placed[i], filepath.Join(p.Space, "mnt")+"/") && filepath.Dir(placed[i]) != filepath.Join(p.Space, "mnt") {
+			if _, entry, ok := p.MntPath(placed[i]); !m.readOnly && ok && entry != "" {
 				action.Regrant = append(action.Regrant, placed[i])
 			}
 		}

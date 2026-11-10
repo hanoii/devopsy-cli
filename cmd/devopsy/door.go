@@ -1408,7 +1408,6 @@ func (s *doorSide) regrant(entries []string) error {
 // writtenEntries are the entries of this project's that containers write, by their
 // mounts: a detached copy's, given back once it is removed.
 func (s *doorSide) writtenEntries(containers []string) []string {
-	mnt := filepath.Join(s.policy.Space, "mnt") + "/"
 	var entries []string
 	for _, c := range containers {
 		out, err := s.docker("inspect", "--type", "container", "-f", `{{range .Mounts}}{{if .RW}}{{println .Source}}{{end}}{{end}}`, c).Output()
@@ -1416,7 +1415,7 @@ func (s *doorSide) writtenEntries(containers []string) []string {
 			continue
 		}
 		for _, src := range strings.Fields(string(out)) {
-			if strings.HasPrefix(src, mnt) && filepath.Dir(src)+"/" != mnt {
+			if _, entry, ok := s.policy.MntPath(src); ok && entry != "" {
 				entries = append(entries, src)
 			}
 		}

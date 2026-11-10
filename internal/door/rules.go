@@ -96,6 +96,22 @@ func (p Policy) Mnt(name string) string {
 	return filepath.Join(p.Space, "mnt", name)
 }
 
+// MntPath reads a real path in the door's mnts, the one rule for what is one: a mnt of this
+// project's, <space>/mnt/<compose name> (entry ""), or one of its entries,
+// <space>/mnt/<compose name>/<entry>, the entry a Word. Anything else under the mnts (deeper,
+// another's, a name no Word) is none of them.
+func (p Policy) MntPath(real string) (name, entry string, ok bool) {
+	rest, in := strings.CutPrefix(real, filepath.Join(p.Space, "mnt")+"/")
+	if !in {
+		return "", "", false
+	}
+	name, entry, nested := strings.Cut(rest, "/")
+	if !p.OwnName(name) || nested && !Word.MatchString(entry) {
+		return "", "", false
+	}
+	return name, entry, true
+}
+
 // NameOf is the compose name of an environment at a real path in this user's
 // tree, from nothing else (Target.ComposeName): <tree>/<environment> is
 // <project>-<environment>, <tree>/<instance>/<environment> has its instance too.
@@ -540,7 +556,7 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 		fail("%s: a host path: %s", svc, src)
 		return
 	}
-	if filepath.Dir(real) == p.Mnt(name) {
+	if n, entry, ok := p.MntPath(real); ok && n == name && entry != "" {
 		v["source"] = real
 		return
 	}
