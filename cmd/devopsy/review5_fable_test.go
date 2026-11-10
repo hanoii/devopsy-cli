@@ -160,3 +160,49 @@ func TestReview5DoorClientGivesComposesOwnHelp(t *testing.T) {
 		}
 	}
 }
+
+// Review 5 (Fable), a failing test proving a hole: `entries`, which takes a file not yet
+// checked, believes its user's answer about where a bind's source ends when that answer is
+// not clean. The read runs as the project user, whose process it is to trace (doorRead says
+// so), so the answer is that user's word, and checkBind and classify believe one only when it
+// is clean; bindEntries asks only that its parent, as filepath.Dir cleans it, be the mnt. An
+// answer through a link the user made in an entry of its own (data/l -> .), then `..` twice,
+// reads to filepath.Dir as <space>/mnt/shop-prod/<name> and to the kernel as
+// <space>/mnt/<name>: the deploy user makes that directory and gives the project user rwX on
+// it, and on all made in it after (makeEntry's default ACL). With <name> another project's
+// environment to come (blog-staging), that project's entries are then this user's to read,
+// write and replace; with one of its own (shop-x), it replaces an entry under a root util
+// container's bind, which Docker resolves at the start (an import's tar then lands in
+// /etc/cron.d). The same answer ending in <space> itself makes <space>/clones or
+// <space>/sealed where no project made one yet.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestReview5EntriesBelieveOnlyACleanAnswer(t *testing.T) {
+	acl, _ := doorFakes(t)
+	root := t.TempDir()
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(root, "space")}}
+	mnt := side.policy.Mnt("shop-prod")
+	entry := filepath.Join(mnt, "data")
+	if err := os.MkdirAll(entry, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// In its entry, which it writes: a link to the entry itself.
+	if err := os.Symlink(".", filepath.Join(entry, "l")); err != nil {
+		t.Fatal(err)
+	}
+	binds := func(source string) map[string]any {
+		return map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"volumes": []any{
+			map[string]any{"type": "bind", "source": source, "target": "/x"},
+		}}}}
+	}
+	// The control: an entry of its own mnt is made (the fake's read answers the path asked).
+	if side.entries(binds(filepath.Join(mnt, "files"))); !fileExists(filepath.Join(mnt, "files")) {
+		t.Fatal("the control: an entry of its mnt was not made")
+	}
+	// The answer its user forged: another project's mnt, to the kernel.
+	theirs := filepath.Join(side.policy.Space, "mnt", "blog-staging")
+	side.entries(binds(entry + "/l/../../blog-staging"))
+	if fileExists(theirs) {
+		t.Errorf("the door made %s, another project's mnt, and gave it to devopsy-shop:\n%s", theirs, readString(acl))
+	}
+}
