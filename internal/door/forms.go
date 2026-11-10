@@ -337,13 +337,21 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 	if f.conf != (conf != "") {
 		return nil, refuse("docker run: settings, for %s", f.name)
 	}
-	// Every owner a util container gives what it writes (the owners form's, a snapshot tar's,
-	// an rsync's --chown) goes to a service's user, whom userRefused holds to an id no
-	// container of the host's is: never root's or devopsy's own, though nothing reads such an
-	// owner as trust today. One check for every form, so a form that takes one is never left out.
+	// Every owner a util container gives what it writes, one check for every form, so a form
+	// that takes one is never left out: the owners form's and an rsync's --chown go to a
+	// service's user, whom userRefused holds to an id no container of the host's is (never
+	// root's or devopsy's own); a snapshot tar's goes to the project user, who collects it,
+	// and is that user's uid alone. Nothing reads such an owner as trust today.
 	for _, a := range cmd {
 		owner, chown := strings.CutPrefix(a, "--chown=")
 		if !chown && !ownerArg.MatchString(a) || chown && !ownerArg.MatchString(owner) {
+			continue
+		}
+		if f.name == "snapshot tar" {
+			uid, gid, _ := strings.Cut(owner, ":")
+			if p.UID == "" || uid != p.UID || gid == "0" {
+				return nil, refuse("docker run: %s: an owner not %s's: %s", f.name, p.User, owner)
+			}
 			continue
 		}
 		if why := p.userRefused(owner); why != "" {

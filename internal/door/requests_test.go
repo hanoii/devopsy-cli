@@ -388,18 +388,22 @@ func TestDecideAllows(t *testing.T) {
 	}
 }
 
-// Every owner a util container gives what it writes, an rsync's --chown and a snapshot tar's as
-// the owners form's, is under one rule (userRefused): never root's, a host id or a project
-// user's.
+// Every owner a util container gives what it writes is held: an rsync's --chown as the owners
+// form's (userRefused: never root's, a host id or a project user's), and a snapshot tar's, the
+// project user's to collect, to that user's uid alone.
 func TestDecideRunChownHeldAsAnOwner(t *testing.T) {
 	t.Parallel()
-	tree := "/home/devopsy-shop/shop/prod/snapshots/1.tmp/data"
 	for owner, refused := range map[string]bool{"10001:10001": false, "0:0": true, "10001:0": true, "1000:1000": true, "50001:50001": true} {
 		_, err := decide(t, "run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown="+owner, "/src/data/", "/dst/data/")
 		if (err != nil) != refused {
 			t.Errorf("--chown=%s: %v, refused %v", owner, err, refused)
 		}
-		_, err = decide(t, "run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", tree+":/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "mnt.data.tar.zst", owner)
+	}
+	tree := "/home/devopsy-shop/shop/prod/snapshots/1.tmp/data"
+	p := testPolicy
+	p.UID = "50001"
+	for owner, refused := range map[string]bool{"50001:50001": false, "0:0": true, "50001:0": true, "10001:10001": true, "1000:1000": true} {
+		_, err := Decide([]string{"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", tree + ":/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "mnt.data.tar.zst", owner}, p, testDaemon, &fakeHost{}, testKnown)
 		if (err != nil) != refused {
 			t.Errorf("a snapshot tar's owner %s: %v, refused %v", owner, err, refused)
 		}

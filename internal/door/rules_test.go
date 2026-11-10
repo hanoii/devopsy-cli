@@ -9,7 +9,7 @@ import (
 )
 
 var testPolicy = Policy{
-	Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop",
+	Project: "shop", User: "devopsy-shop", UID: "1", Space: "/space", Tree: "/home/devopsy-shop/shop",
 	Joinable: []string{"traefik"}, ForbiddenIDs: []int{1000, 1001, 999},
 }
 
