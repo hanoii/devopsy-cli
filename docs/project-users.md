@@ -138,11 +138,11 @@ them, which leaves the image as a pull by digest would. While it runs,
 
 Docker skips layers it already holds. A registry could use that to
 serve a manifest naming another project's private layers without their
-content. So before the door fetches an image a project has not used
-yet, the project's own builder fetches it from the registry and unpacks
-it. The builder holds only what its project fetched or built, so every
-layer it lacks must come from the registry. That costs one more
-download of those layers.
+content, or an image whose config names another project's layers over
+layers of junk. So the door checks that the registry served every
+layer, and that each layer's content, unpacked, is the one the image's
+config names. A layer it cannot unpack as Docker would, or of a kind it
+does not take (a foreign or an encrypted layer), refuses the image.
 
 ### Keys and logins
 
@@ -505,8 +505,6 @@ delete and recreate the home too.
 - The door rewrites the file compose runs (images pinned, binds moved
   into `<space>`, builds renamed), so `devopsy -- config` and a plain
   `docker compose` on the server do not show exactly what runs.
-- The first use of each image costs one more download, by the project's
-  builder.
 - A registry or mirror on the server's loopback is out of reach of the
   deploy user's pulls too.
 - A project user's `docker compose pull` is the door's, its output and

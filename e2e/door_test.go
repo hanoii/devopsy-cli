@@ -1008,8 +1008,8 @@ func TestDoorLabelsFromAnImageAndTheVet(t *testing.T) {
 // A project's registry login reaches the door as its logins alone: a plugin and helpers
 // beside it never run as the deploy user, and another project does not pull by it. On a real
 // registry over TLS, since Docker's CLI is what loads them. Its logged-in release is the
-// claim's proof passing too: its builder fetched the private image with its login
-// (TestDoorClaimProvesTheContent the proof failing).
+// claim's copy passing too: the door's client fetched the private image with its login
+// (TestDoorClaimProvesTheContent its checks failing).
 func TestDoorRegistryLogins(t *testing.T) {
 	reg := doorRegistry(t, "doorreg-reg", "5003", true)
 	dir := doorProject(t, "doorreg", `services:
@@ -1096,8 +1096,8 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.dock
 }
 
 // A claim proves the project can fetch the image's content, not only that a registry answered:
-// the project's own builder, whose store holds only what the project fetched or built, fetches
-// every blob and unpacks every layer against the config's diff_ids. Two forgeries a registry of
+// the door copies every blob the manifest names, each its hash, and unpacks every layer against
+// the config's diff_ids itself, whatever BuildKit a server runs. Two forgeries a registry of
 // the claimant's can serve, knowing only another's digests (from a CI log), are refused:
 //   - a manifest naming another's blobs, serving none (here a real push whose blobs are then
 //     deleted): Docker fetches no blob it holds, so it would land on the other's image;
@@ -1105,7 +1105,8 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.dock
 //     a load maps those diff_ids onto the layers already in the store, and runs their files.
 //
 // The first's control is the registry keeping its manifests alone; the second's, the forgery
-// loaded by hand as the deploy user, as a claim with no proof would, running the victim's file.
+// loaded by hand as the deploy user, as a claim with no check of its layers would, running the
+// victim's file.
 func TestDoorClaimProvesTheContent(t *testing.T) {
 	user := doorUser(t, "doorclaim")
 	reg := doorRegistry(t, "doorclaim-reg", "5004", false)
@@ -1128,14 +1129,14 @@ docker exec doorclaim-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	}
 	id, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' doorclaimv-prod-web:1")
 	id = strings.TrimSpace(id)
-	refused := func(what, ref string) {
+	refused := func(what, ref, why string) {
 		t.Helper()
 		out, code := doorAs(t, user, "docker image inspect --format '{{json .Config.Env}}' "+ref+" 2>&1")
-		if code == 0 || strings.Contains(out, "s3cret") || !strings.Contains(out, "did not serve") {
+		if code == 0 || strings.Contains(out, "s3cret") || !strings.Contains(out, why) {
 			t.Errorf("%s made another's image this project's (%d):\n%s", what, code, out)
 		}
 	}
-	refused("a registry serving only a manifest", reg+"/evil/x:1")
+	refused("a registry serving only a manifest", reg+"/evil/x:1", "did not serve")
 	// The second forgery: the claimant's config naming the victim's diff_ids, over junk.
 	forged, code := doorRoot(t, `set -e
 r=https://`+reg+` n=evil/b
@@ -1162,11 +1163,11 @@ echo "sha256:$(sha256sum manifest | cut -d' ' -f1) $(stat -c%s manifest)"`)
 		t.Fatalf("the forged image (%d): %s", code, forged)
 	}
 	digest, size := f[len(f)-2], f[len(f)-1]
-	refused("a registry serving the victim's diff_ids over junk", reg+"/evil/b:1")
+	refused("a registry serving the victim's diff_ids over junk", reg+"/evil/b:1", "is not the content its config names")
 	if out, _ := doorRoot(t, "cat "+doorSpace+"/images/"+user+" 2>/dev/null"); strings.Contains(out, id) {
 		t.Errorf("the door recorded another's image %s as %s's", id, user)
 	}
-	// The control: loaded by hand, as a claim with no proof would load it, the forgery runs the
+	// The control: loaded by hand, as a claim with no check of its layers would load it, the forgery runs the
 	// victim's file.
 	if out, code := doorRoot(t, `set -e
 d=$(mktemp -d /tmp/doorclaim-XXXXXX)
@@ -2465,7 +2466,7 @@ volumes:
 	}
 	check("--destroy of the child", "devopsy @dev --destroy --yes")
 	check("--destroy with data", "devopsy @prod --destroy --yes")
-	// The project's builder (its builds', its claims' proofs) is the project's, never an
+	// The project's builder (its builds', its claims' settings) is the project's, never an
 	// environment's to remove.
 	if out, _ := doorRoot(t, "ls -A "+mnt+" 2>&1; docker volume ls -q | grep doorflow | grep -v '^buildx_buildkit_devopsy-'"); strings.TrimSpace(out) != "" {
 		t.Errorf("after --destroy: %s", out)
@@ -2548,13 +2549,13 @@ docker exec doorholdp-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	if out, code := doorAs(t, user, inspect); code == 0 {
 		t.Fatalf("the control: the hold is here before any pull: %s", out)
 	}
-	// The door's own pull: its claim proves, and refuses, but the name stays.
+	// The door's own pull: its claim checks, and refuses, but the name stays.
 	pulled, _ := doorAs(t, user, "docker pull -q "+hold+" 2>&1")
 	if out, code := doorAs(t, user, inspect); code == 0 || strings.Contains(out, "s3cret-image") {
 		t.Errorf("after the door's pull of a hold-shaped name (%s), another's image is this project's (%d):\n%s", strings.TrimSpace(pulled), code, out)
 	}
 	doorRoot(t, "docker image rm "+hold+" >/dev/null 2>&1; true")
-	// Compose's pull verb: no claim, no proof.
+	// Compose's pull verb: no claim.
 	compose := `cat >/tmp/doorholdp.json <<'J'
 {"name":"doorholdp-prod","services":{"web":{"image":"HOLD","user":"10001:10001","security_opt":["no-new-privileges"]}}}
 J

@@ -605,7 +605,7 @@ func (p Policy) OwnRef(ref string) bool {
 // (a rollback and a restart run it by name), or a build's name under images.DoorHost. A claim
 // lands where a registry's manifest points, and Docker loads no layer it holds: landing on
 // such a name, it would make another's image a project's with no claim and no proof. Every
-// other name is a registry's, and what a claim of it writes is proven first. A claim by digest
+// other name is a registry's, and what a claim of it writes is checked first. A claim by digest
 // writes no name, but its host is still one the door's clients and the project's builder
 // contact for the project, so the server's own and the metadata addresses are refused first,
 // by digest or not.

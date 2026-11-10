@@ -602,9 +602,9 @@ var errNoRead = errors.New("its registry logins do not read it")
 // platformManifest is the digest of the one image manifest ref comes to on this server, read
 // with the logins in the DOCKER_CONFIG dir logins: ref's own when it is a manifest, else the
 // entry of its index for the daemon's platform, itself a manifest, its bytes checked against
-// its digest. A claim proves, copies and pins that digest, never an index's: BuildKit's fetch
-// and imagetools' copy could each choose from an index by rules of their own, and one index
-// could send each to another image.
+// its digest. A claim copies and pins that digest, never an index's: imagetools' copy and
+// Docker's load could each choose from an index by rules of their own, and one index could
+// send each to another image.
 func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 	raw, err := s.registryRead(logins)
 	if err != nil {
@@ -707,38 +707,6 @@ func (s *doorSide) platform() (goos, arch, variant string, err error) {
 	goos, arch, _ = strings.Cut(read, " ")
 	variant = map[string]string{"arm64": "v8", "arm": "v7"}[arch]
 	return goos, arch, variant, nil
-}
-
-// prove fetches the image pinned names (<repo>@<digest>, the platform manifest a claim read) on
-// the project's own builder, with its logins (the DOCKER_CONFIG dir logins): the builder's
-// store holds only what the project fetched or built, so every blob it lacks comes from the
-// claimant's registry, checked by its digest, and the exporter needs every one, each layer
-// unpacked against the config's diff_ids. A copy alone proves only that a registry answered:
-// Docker loads no blob it holds, so a registry that names another project's layers, serving
-// none, or a config naming their diff_ids over junk, lands on them. Every first claim proves.
-//
-// Its context, an empty directory, is a work directory of the claim's (g), as is what it runs.
-func (s *doorSide) prove(g *claimCut, pinned, logins string) error {
-	b, err := s.builder()
-	if err != nil {
-		return errors.New(strings.TrimPrefix(err.Error(), "refused: "))
-	}
-	dir, err := g.workDir()
-	if err != nil {
-		return err
-	}
-	var said bytes.Buffer
-	// A tar of its files: each layer unpacked, so checked against the image's own config,
-	// with no shell of the image's needed (RUN would refuse a distroless one).
-	c := s.docker("buildx", "build", "--output", "type=tar,dest=/dev/null", "-f", "-", dir)
-	c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
-	c.Stdin = strings.NewReader("FROM " + pinned + "\n")
-	c.Stdout, c.Stderr = &said, &said
-	if g.run(c) != nil {
-		os.Stderr.Write(said.Bytes())
-		return errors.New("its registry did not serve the image to this project's logins")
-	}
-	return nil
 }
 
 // inspectImage is ref's image as Docker has it now, read once.

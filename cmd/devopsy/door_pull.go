@@ -43,7 +43,7 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 		}
 		_, _, err := s.claim(image, config)
 		s.onFetch = nil
-		// What its registry served refused (a proof that fails, a copy not its hash) is the
+		// What its registry served refused (a copy not its hash, a layer not its config's) is the
 		// door's refusal, logged, whatever the flags.
 		if failed := (registryFailure{}); err != nil && !errors.As(err, &failed) {
 			return doorRefused(err)

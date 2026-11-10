@@ -887,10 +887,9 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 // by spaces, a ref with no line not here, so a name and the digest it holds are separate
 // lines, which a test moves apart); its registry dir/registry, `<ref>|<digest>` a line,
 // what a pull of the ref gets, printed as docker pull prints it (`Digest: ...`), and what
-// buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails, and a
-// claim's proof (buildx build) of a <repo>@<digest> listed in dir/unserved. A claim's copy
-// (imagetools create) is the layout fakeManifest wrote for the ref, and its load puts the
-// image in the store (see the cases). It logs
+// buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails. A claim's copy
+// (imagetools create) is the layout fakeManifest wrote for the ref (spoilCopy spoils one), and
+// its load puts the image in the store (see the cases). It logs
 // every call in dir/calls, lists no containers, and answers compose with its arguments
 // and the file it was given, for a door that execs it (doorComposeHelper). Image
 // inspects answer the two formats the door uses today and `{{json .}}`, as
@@ -949,13 +948,7 @@ case "$all" in
   'compose version --short') echo "${FAKE_COMPOSE_VERSION:-2.40.0}" | grep -v '^$' || echo 2.40.0 ;;
   'tag '*|'image rm '*) ;;
   'buildx inspect '*) ;;
-  'buildx build '*)
-    # A claim's proof: what the project's builder fetches is on stdin, FROM <repo>@<digest>.
-    from=$(cat); echo "proof $from" >>`+in("calls")+`
-    grep -qxF -- "${from#FROM }" `+in("unserved")+` 2>/dev/null && exit 1
-    # With dir/slowproof, it says dir/proving and hangs as a copy does (slowcopy).
-    [ -f `+in("slowproof")+` ] && { sleep 30 & echo $! >`+in("child")+`; touch `+in("proving")+`; wait; }
-    true ;;
+  'buildx build '*) cat >/dev/null ;;
   'ps -a '*) ;;
   'compose '*' config --format json')
     # Compose's reading of profiles, of the file on stdin: a service with profiles is active
@@ -1008,6 +1001,16 @@ func fakeManifest(t *testing.T, dir, body string, refs ...string) string {
 		write(t, filepath.Join(layout, "oci-layout"), `{"imageLayoutVersion":"1.0.0"}`, 0o644)
 	}
 	return d
+}
+
+// spoilCopy spoils the copy fakeManifest wrote of ref (<repo>@<digest>): its config, config,
+// replaced by other bytes under the same name, as a registry serving other bytes than it names.
+// It gives what puts it back.
+func spoilCopy(t *testing.T, dir, ref, config string) func() {
+	t.Helper()
+	path := filepath.Join(dir, "layouts", strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(ref), "blobs", "sha256", strings.TrimPrefix(digestOf([]byte(config)), "sha256:"))
+	write(t, path, strings.Repeat("x", len(config)), 0o644)
+	return func() { write(t, path, config, 0o644) }
 }
 
 // plainManifest is an image manifest's body, its config named for name: a config blob of its
@@ -1085,32 +1088,35 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		t.Errorf("the record: %q", got)
 	}
 	// The claim proved the manifest's digest, never the name, on the project's builder (its
-	// files exported, each layer unpacked), copied it as the registry serves it, loaded it
-	// under its canonical name by that digest, Docker's daemon asking no registry (no pull),
-	// and named it as asked.
+	// copied it as the registry serves it, loaded it under its canonical name by that digest,
+	// Docker's daemon asking no registry (no pull) and no builder building anything, and named
+	// it as asked.
 	c := readString(calls)
 	if strings.Contains(c, "\npull ") {
 		t.Errorf("a claim had Docker's daemon pull:\n%s", c)
 	}
-	for _, want := range []string{"\nproof FROM " + private + "@" + p1 + "\n", "buildx build --output type=tar,dest=/dev/null", "imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
+	if strings.Contains(c, "buildx build ") {
+		t.Errorf("a claim built on the project's builder:\n%s", c)
+	}
+	for _, want := range []string{"imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("a claim with no %q:\n%s", want, c)
 		}
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
-	if got, err := start(private + ":1"); err != nil || pulled() || got != pin || strings.Contains(readString(calls), "proof ") {
-		t.Errorf("claimed already (%v), pulled or proven again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	if got, err := start(private + ":1"); err != nil || pulled() || got != pin {
+		t.Errorf("claimed already (%v), copied again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
 	}
-	// A registry that names content the server has but serves none of it: the proof fails,
-	// the claim is refused before anything is copied or loaded, nothing recorded.
-	write(t, filepath.Join(dir, "unserved"), labelled+"@"+l1+"\n", 0o644)
-	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "did not serve") || pulled() || strings.Contains(readString(calls), "\nload ") {
-		t.Errorf("an image its registry did not serve: %v\n%s", err, readString(calls))
+	// A copy its registry spoiled (a blob not its hash): refused before anything loads,
+	// nothing recorded.
+	restore := spoilCopy(t, dir, labelled+"@"+l1, `{"name":"labelled"}`)
+	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "is not its hash") || strings.Contains(readString(calls), "\nload ") {
+		t.Errorf("a copy not its hash: %v\n%s", err, readString(calls))
 	}
 	if got := readString(side.policy.ImagesFile()); strings.Contains(got, l1) {
-		t.Errorf("an unproven claim recorded: %q", got)
+		t.Errorf("a copy not its hash recorded: %q", got)
 	}
-	os.Remove(filepath.Join(dir, "unserved"))
+	restore()
 	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
 		t.Errorf("a claimed image labelled devopsy.role: %v", err)
 	}
@@ -1147,13 +1153,13 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		t.Errorf("an image with no digest in its repository goes to compose by its plain name")
 	}
 	// An index: the claim takes the entry for the daemon's platform (linux amd64 here),
-	// pulled, proven and pinned by that manifest's digest, never the index's, which Docker's
-	// pull and BuildKit's fetch could each resolve to another entry.
+	// copied, loaded and pinned by that manifest's digest, never the index's, which imagetools'
+	// copy and Docker's load could each resolve to another entry.
 	amd := fakeManifest(t, dir, plainManifest("multi-amd64"), "registry.example.com/multi:amd64")
 	arm := fakeManifest(t, dir, plainManifest("multi-arm64"), "registry.example.com/multi:arm64")
 	fakeManifest(t, dir, `{"schemaVersion":2,"manifests":[{"digest":"`+arm+`","platform":{"os":"linux","architecture":"arm64","variant":"v8"}},{"digest":"`+amd+`","platform":{"os":"linux","architecture":"amd64"}}]}`, "registry.example.com/multi:1")
 	store("registry.example.com/multi@" + amd + "|sha256:ma|registry.example.com/multi@" + amd + "||{}")
-	if got, err := start("registry.example.com/multi:1"); err != nil || got != "registry.example.com/multi:1@"+amd || !strings.Contains(readString(calls), "\nproof FROM registry.example.com/multi@"+amd+"\n") {
+	if got, err := start("registry.example.com/multi:1"); err != nil || got != "registry.example.com/multi:1@"+amd || !strings.Contains(readString(calls), " registry.example.com/multi@"+amd+"\n") {
 		t.Errorf("an index (%v) goes to compose as %q, want its amd64 entry:\n%s", err, got, readString(calls))
 	}
 	// One whose entry for the platform is itself an index, or that has none, is refused.

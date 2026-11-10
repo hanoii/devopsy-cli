@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,11 +19,31 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/klauspost/compress/zstd"
 )
 
 // testLayout writes an OCI layout at dir as imagetools writes one, an image manifest of a config
-// and layers (each a blob by its hash), and gives the manifest's digest.
+// and plain layers (each a blob by its hash, its content its diff_id), and gives the manifest's
+// digest.
 func testLayout(t *testing.T, dir string, layers ...string) string {
+	t.Helper()
+	plain := make([]testLayer, len(layers))
+	for i, l := range layers {
+		plain[i] = testLayer{"application/vnd.oci.image.layer.v1.tar", []byte(l), l}
+	}
+	return testLayoutOf(t, dir, plain...)
+}
+
+// testLayer is a layer of testLayoutOf: its media type, its blob, and the content its config
+// names (its diff_id's).
+type testLayer struct {
+	kind    string
+	blob    []byte
+	content string
+}
+
+// testLayoutOf is testLayout of layers as given.
+func testLayoutOf(t *testing.T, dir string, layers ...testLayer) string {
 	t.Helper()
 	blob := func(data string) map[string]any {
 		d := digestOf([]byte(data))
@@ -30,10 +51,18 @@ func testLayout(t *testing.T, dir string, layers ...string) string {
 		return map[string]any{"digest": d, "size": len(data)}
 	}
 	ls := []map[string]any{}
+	diffIDs := []string{}
 	for _, l := range layers {
-		ls = append(ls, blob(l))
+		b := blob(string(l.blob))
+		b["mediaType"] = l.kind
+		ls = append(ls, b)
+		diffIDs = append(diffIDs, digestOf([]byte(l.content)))
 	}
-	body, err := json.Marshal(map[string]any{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "config": blob(`{"os":"linux"}`), "layers": ls})
+	config, err := json.Marshal(map[string]any{"os": "linux", "rootfs": map[string]any{"type": "layers", "diff_ids": diffIDs}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "config": blob(string(config)), "layers": ls})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,13 +208,13 @@ func TestDoorClaimThatDoesNotLoadLeavesNothing(t *testing.T) {
 	}
 }
 
-// A door cut by a signal while it proves or copies an image (a release cancelled mid-fetch)
+// A door cut by a signal while it copies an image (a release cancelled mid-fetch)
 // stops what it runs and removes its work directories, which would otherwise hold the image
 // for a day, and ends with the signal's exit. In a helper process (doorComposeHelper), since
 // the door then exits.
 func TestDoorClaimCutBySignalLeavesNoWork(t *testing.T) {
 	t.Parallel()
-	for slow, mark := range map[string]string{"slowproof": "proving", "slowcopy": "copying"} {
+	for slow, mark := range map[string]string{"slowcopy": "copying"} {
 		dir := t.TempDir()
 		doorImageFake(t, dir)
 		private := "registry.example.com/blog/private"
@@ -304,14 +333,14 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 	if out, code := pull(file, "debug", "pull --ignore-pull-failures"); code != 0 || !strings.Contains(out, built) || !strings.Contains(readString(calls), "imagetools inspect --raw "+private) {
 		t.Errorf("a pull past its failures (exit %d):\n%s\n%s", code, out, readString(calls))
 	}
-	// A registry that does not serve what it names, the proof failing: the door's refusal,
-	// logged, past --ignore-pull-failures too.
-	write(t, filepath.Join(dir, "unserved"), images.RepoOf(other)+"@"+digestOf([]byte(plainManifest("other")))+"\n", 0o644)
+	// A registry whose copy is not what it names: the door's refusal, logged, past
+	// --ignore-pull-failures too.
+	restore := spoilCopy(t, dir, images.RepoOf(other)+"@"+digestOf([]byte(plainManifest("other"))), `{"name":"other"}`)
 	os.Remove(filepath.Join(dir, "space", "images", "devopsy-shop"))
 	if out, code := pull(file, "debug", "pull --ignore-buildable --ignore-pull-failures"); code != 2 || readString(log) == "" {
-		t.Errorf("a proof that fails under the pull (exit %d, logged %q):\n%s", code, readString(log), out)
+		t.Errorf("a copy not its hash under the pull (exit %d, logged %q):\n%s", code, readString(log), out)
 	}
-	os.Remove(filepath.Join(dir, "unserved"))
+	restore()
 	for name, c := range map[string]struct{ file, verb string }{
 		"an unknown service": {file, "pull web nosuch"},
 		"another's hold":     {`{"name":"shop-prod","services":{"web":` + svc(private, "") + `,"held":` + svc("busybox:devopsy-blog-prod-20240101000000", "") + `}}`, "pull"},
@@ -351,5 +380,67 @@ func TestDoorClaimTakesOnlyWhatItAsked(t *testing.T) {
 	}
 	if got := readString(side.policy.ImagesFile()); got != "" {
 		t.Errorf("recorded: %q", got)
+	}
+}
+
+// A layer's content, decompressed as containerd unpacks it, is the one its config names, by
+// position: a gzip, a zstd (behind a skippable frame too) and a plain layer are taken; a config
+// naming another layer's content over a layer of junk (whose blob is still its hash) is
+// refused, so a load never lands on the layers the server holds for another's diff_ids; and so
+// are a count of layers the config does not name, and a layer of a kind containerd would not
+// pair with a diff_id (a foreign one, an encrypted one).
+func TestCheckLayoutTakesOnlyTheContentItsConfigNames(t *testing.T) {
+	t.Parallel()
+	content := "a layer's tar"
+	var gz bytes.Buffer
+	w := gzip.NewWriter(&gz)
+	w.Write([]byte(content))
+	w.Close()
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zs := enc.EncodeAll([]byte(content), nil)
+	skippable := append([]byte{0x50, 0x2a, 0x4d, 0x18, 4, 0, 0, 0, 'n', 'o', 't', 'e'}, zs...)
+	const (
+		oci  = "application/vnd.oci.image.layer.v1.tar"
+		ogz  = oci + "+gzip"
+		ozst = oci + "+zstd"
+		dgz  = "application/vnd.docker.image.rootfs.diff.tar.gzip"
+	)
+	taken := []testLayer{{ogz, gz.Bytes(), content}, {dgz, gz.Bytes(), content}, {ozst, zs, content}, {ozst, skippable, content}, {oci, []byte(content), content}}
+	dir := t.TempDir()
+	if _, _, err := checkLayout(dir, testLayoutOf(t, dir, taken...)); err != nil {
+		t.Errorf("gzip, zstd and plain layers: %v", err)
+	}
+	for name, c := range map[string]struct {
+		layers []testLayer
+		want   string
+	}{
+		"another's content over junk": {[]testLayer{{ogz, gz.Bytes(), "another project's layer"}}, "is not the content its config names"},
+		"plain read as plain":         {[]testLayer{{oci, gz.Bytes(), content}}, "is not the content its config names"},
+		"a foreign layer":             {[]testLayer{{"application/vnd.docker.image.rootfs.foreign.diff.tar.gzip", gz.Bytes(), content}}, "of a kind the door does not take"},
+		"an encrypted layer":          {[]testLayer{{ogz + "+encrypted", gz.Bytes(), content}}, "of a kind the door does not take"},
+	} {
+		dir := t.TempDir()
+		if _, _, err := checkLayout(dir, testLayoutOf(t, dir, c.layers...)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	// A manifest naming more layers than its config.
+	dir = t.TempDir()
+	m := testLayoutOf(t, dir, testLayer{oci, []byte(content), content})
+	var manifest map[string]any
+	data, _ := os.ReadFile(filepath.Join(dir, "blobs", "sha256", strings.TrimPrefix(m, "sha256:")))
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["layers"] = append(manifest["layers"].([]any), manifest["layers"].([]any)[0])
+	more, _ := json.Marshal(manifest)
+	m = digestOf(more)
+	write(t, filepath.Join(dir, "blobs", "sha256", strings.TrimPrefix(m, "sha256:")), string(more), 0o644)
+	write(t, filepath.Join(dir, "index.json"), `{"schemaVersion":2,"manifests":[{"digest":"`+m+`"}]}`, 0o644)
+	if _, _, err := checkLayout(dir, m); err == nil || !strings.Contains(err.Error(), "names 2 layers and its config 1") {
+		t.Errorf("more layers than its config names: %v", err)
 	}
 }

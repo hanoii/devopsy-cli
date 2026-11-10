@@ -2,7 +2,9 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +22,7 @@ import (
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/klauspost/compress/zstd"
 )
 
 // claim makes ref this project's, with its registry logins (config, the caller's docker
@@ -28,8 +31,9 @@ import (
 // it goes through, a public one at the cost of one fetch. Docker's daemon contacts no
 // registry for it, which a registry the project names could send anywhere, another project's
 // containers included: the door's client reads the manifest for the daemon's platform
-// (platformManifest), the project's own builder proves the content (prove), the door's client
-// copies the registry's own bytes (copyImage), and the door loads them (loadImage), which
+// (platformManifest), the door's client copies the registry's own bytes (copyImage), the door
+// checks every blob and each layer's content against the config (checkLayout), and loads them
+// (loadImage), which
 // leaves Docker's containerd store as a pull by digest does. An image of that digest already
 // the project's, in the repository asked, is taken as it is (the skip). It gives the digest
 // and that image, read by that digest: the name is anyone's on the server to move right after,
@@ -62,9 +66,6 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	}
 	g := s.claimCut()
 	defer g.end()
-	if err := s.prove(g, pinned, d); err != nil {
-		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
-	}
 	if loaded, err := s.fetch(g, pinned, m, d); err != nil {
 		// A load that failed may have left the name: no later claim skips onto it. Nothing
 		// before the load touched the store, so a failed copy leaves the record as it was.
@@ -96,7 +97,7 @@ type registryFailure struct{ error }
 
 func (r registryFailure) Unwrap() error { return r.error }
 
-// nameAsAsked tags the name asked onto the image claimed, the registry's content proven under
+// nameAsAsked tags the name asked onto the image claimed, the registry's content checked under
 // it, so a start finds it here and asks the registry nothing.
 func (s *doorSide) nameAsAsked(ref, pinned string) {
 	if !images.Pinned(ref) {
@@ -130,7 +131,7 @@ func (s *doorSide) fetch(g *claimCut, pinned, m, logins string) (bool, error) {
 	return true, s.loadImage(g.run, pinned, m, manifest, layout, blobs)
 }
 
-// claimCut is what a claim has running and on disk while it proves, copies and loads: its work
+// claimCut is what a claim has running and on disk while it copies and loads: its work
 // directories, which go when it ends (claimCut.end), on a failure too, and the one child it
 // runs at a time. A SIGINT, SIGTERM or SIGHUP meanwhile stops that child's process group (the
 // docker CLI and the plugin it runs, buildx, which a signal to the door alone never reaches),
@@ -238,7 +239,7 @@ func (s *doorSide) copyImage(run func(*exec.Cmd) error, pinned, dir, logins stri
 var ociDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // layoutManifest is the part of an image manifest a load reads: its own media type, its config
-// and its layers, each a blob by digest and size. An index has no config.
+// and its layers, each a blob by digest and size, a layer's of its kind. An index has no config.
 type layoutManifest struct {
 	MediaType string `json:"mediaType"`
 	Config    *struct {
@@ -246,18 +247,84 @@ type layoutManifest struct {
 		Size   int64  `json:"size"`
 	} `json:"config"`
 	Layers []struct {
-		Digest string `json:"digest"`
-		Size   int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
 	} `json:"layers"`
 	Manifests []json.RawMessage `json:"manifests"`
 }
 
+// layerKinds are the layers a claim takes, by media type, and whether each is compressed: any
+// other (a foreign or nondistributable layer, an encrypted one, one containerd does not take
+// for a layer and would leave out of its pairing with the config's diff_ids) refuses it.
+var layerKinds = map[string]bool{
+	"application/vnd.oci.image.layer.v1.tar":            false,
+	"application/vnd.oci.image.layer.v1.tar+gzip":       true,
+	"application/vnd.oci.image.layer.v1.tar+zstd":       true,
+	"application/vnd.docker.image.rootfs.diff.tar.gzip": true,
+}
+
+// layerRead is how checkLayout reads a blob: no layer, a layer as it is, or a compressed one.
+type layerRead int
+
+const (
+	notALayer layerRead = iota
+	plainLayer
+	compressedLayer
+)
+
+// layerContent is the sha256 of a layer's content, read from r as containerd unpacks it: a
+// layer of a compressed kind decompressed by what its first bytes say (gzip, zstd, a zstd
+// skippable frame, or none), one of a plain kind as it is. Read otherwise than containerd
+// does, a layer would at worst be refused, never another's: its content is a function of the
+// bytes its registry served.
+func layerContent(r io.Reader, compressed bool) (string, error) {
+	content := r
+	if compressed {
+		b := bufio.NewReader(r)
+		head, _ := b.Peek(4)
+		content = b
+		switch {
+		case len(head) >= 3 && head[0] == 0x1f && head[1] == 0x8b && head[2] == 0x08:
+			z, err := gzip.NewReader(b)
+			if err != nil {
+				return "", err
+			}
+			defer z.Close()
+			content = z
+		case len(head) == 4 && (bytes.Equal(head, []byte{0x28, 0xb5, 0x2f, 0xfd}) || head[0]&0xf0 == 0x50 && bytes.Equal(head[1:], []byte{0x2a, 0x4d, 0x18})):
+			z, err := zstd.NewReader(b, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(zstdWindow))
+			if err != nil {
+				return "", err
+			}
+			defer z.Close()
+			content = z
+		}
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, content); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// maxConfig is what the door reads at most of an image's config, which it holds whole.
+const maxConfig = 16 << 20
+
+// zstdWindow bounds the memory a zstd layer's decoder takes: zstd's highest levels, --ultra and
+// --long, use windows up to 128 MiB.
+const zstdWindow = 128 << 20
+
 // checkLayout checks the layout imagetools wrote at dir for the manifest m, and gives the blobs
 // a load takes (m's own, its config's, each layer's once) and m's media type: imagetools'
-// index names m, m's bytes are m, it is an image manifest, and each blob it names is a regular
-// file whose sha256 is its name and whose size is the manifest's. Docker skips a blob its store
-// holds without a word, so a layout missing one would load an image of another's blobs: every
-// blob is there, or nothing loads.
+// index names m, m's bytes are m, it is an image manifest, each blob it names is a regular
+// file whose sha256 is its name and whose size is the manifest's, each layer of a kind the
+// door takes (layerKinds), and each layer's content, decompressed, the one its config names
+// (rootfs.diff_ids, by position). Docker skips a blob its store holds without a word, so a
+// layout missing one would load an image of another's blobs; and a load lands on the layers
+// the server holds for the config's diff_ids without unpacking them, so a config naming
+// another's over layers of junk would run another's files. With every layer's content its
+// diff_id, an image lands only on content its registry served whole.
 func checkLayout(dir, m string) ([]string, string, error) {
 	var index struct {
 		Manifests []struct {
@@ -273,37 +340,46 @@ func checkLayout(dir, m string) ([]string, string, error) {
 		return nil, "", fmt.Errorf("the copy of its registry's image names no manifest %s", m)
 	}
 	// blob checks one blob, hashed as it streams (a layer may be larger than the door's
-	// memory), and gives its bytes when keep, for the manifest alone. A size below 0 is no
-	// manifest's, and m's own size is the index's to say, so any.
-	blob := func(digest string, size int64, keep bool) ([]byte, error) {
+	// memory): its size the manifest's (any up to max when size is below 0), its bytes given
+	// when max is above 0 (the manifest's, the config's), and for a layer (unpack) the sha256
+	// of its content as containerd unpacks it (layerContent), in the same read.
+	blob := func(digest string, size, max int64, unpack layerRead) ([]byte, string, error) {
 		if !ociDigest.MatchString(digest) {
-			return nil, fmt.Errorf("a blob of no sha256: %q", digest)
+			return nil, "", fmt.Errorf("a blob of no sha256: %q", digest)
 		}
 		path := filepath.Join(dir, "blobs", "sha256", strings.TrimPrefix(digest, "sha256:"))
 		fi, err := os.Lstat(path)
-		if err != nil || !fi.Mode().IsRegular() || !keep && fi.Size() != size || keep && fi.Size() > maxManifest {
-			return nil, fmt.Errorf("the copy of its registry's image lacks the blob %s", digest)
+		if err != nil || !fi.Mode().IsRegular() || size >= 0 && fi.Size() != size || max > 0 && fi.Size() > max {
+			return nil, "", fmt.Errorf("the copy of its registry's image lacks the blob %s", digest)
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		defer f.Close()
 		h := sha256.New()
 		var kept bytes.Buffer
 		w := io.Writer(h)
-		if keep {
+		if max > 0 {
 			w = io.MultiWriter(h, &kept)
 		}
-		if _, err := io.Copy(w, f); err != nil {
-			return nil, err
+		r := io.TeeReader(f, w)
+		content := ""
+		if unpack != notALayer {
+			if content, err = layerContent(r, unpack == compressedLayer); err != nil {
+				return nil, "", fmt.Errorf("the layer %s of the copy does not unpack: %v", digest, err)
+			}
+		}
+		// What the decompressor left unread is the blob's too.
+		if _, err := io.Copy(io.Discard, r); err != nil {
+			return nil, "", err
 		}
 		if "sha256:"+hex.EncodeToString(h.Sum(nil)) != digest {
-			return nil, fmt.Errorf("the blob %s of the copy is not its hash", digest)
+			return nil, "", fmt.Errorf("the blob %s of the copy is not its hash", digest)
 		}
-		return kept.Bytes(), nil
+		return kept.Bytes(), content, nil
 	}
-	data, err = blob(m, 0, true)
+	data, _, err = blob(m, -1, maxManifest, notALayer)
 	if err != nil {
 		return nil, "", err
 	}
@@ -311,23 +387,44 @@ func checkLayout(dir, m string) ([]string, string, error) {
 	if json.Unmarshal(data, &manifest) != nil || len(manifest.Manifests) > 0 || manifest.Config == nil {
 		return nil, "", fmt.Errorf("%s is no image manifest", m)
 	}
-	blobs := []string{m}
-	add := func(digest string, size int64) error {
-		if slices.Contains(blobs, digest) {
-			return nil
-		}
-		if _, err := blob(digest, size, false); err != nil {
-			return err
-		}
-		blobs = append(blobs, digest)
-		return nil
-	}
-	if err := add(manifest.Config.Digest, manifest.Config.Size); err != nil {
+	config, _, err := blob(manifest.Config.Digest, manifest.Config.Size, maxConfig, notALayer)
+	if err != nil {
 		return nil, "", err
 	}
-	for _, l := range manifest.Layers {
-		if err := add(l.Digest, l.Size); err != nil {
-			return nil, "", err
+	// As containerd reads it (encoding/json, its own image config's shape).
+	var image struct {
+		RootFS struct {
+			DiffIDs []string `json:"diff_ids"`
+		} `json:"rootfs"`
+	}
+	if err := json.Unmarshal(config, &image); err != nil {
+		return nil, "", fmt.Errorf("%s's config is no image config", m)
+	}
+	if len(image.RootFS.DiffIDs) != len(manifest.Layers) {
+		return nil, "", fmt.Errorf("%s names %d layers and its config %d", m, len(manifest.Layers), len(image.RootFS.DiffIDs))
+	}
+	blobs := []string{m, manifest.Config.Digest}
+	contents := map[string]string{}
+	for i, l := range manifest.Layers {
+		compressed, ok := layerKinds[l.MediaType]
+		if !ok {
+			return nil, "", fmt.Errorf("the layer %s is of a kind the door does not take: %q", l.Digest, l.MediaType)
+		}
+		content, seen := contents[l.Digest]
+		if !seen {
+			read := plainLayer
+			if compressed {
+				read = compressedLayer
+			}
+			var err error
+			if _, content, err = blob(l.Digest, l.Size, 0, read); err != nil {
+				return nil, "", err
+			}
+			contents[l.Digest] = content
+			blobs = append(blobs, l.Digest)
+		}
+		if content != image.RootFS.DiffIDs[i] {
+			return nil, "", fmt.Errorf("the layer %s is not the content its config names (%s): it unpacks to %s", l.Digest, image.RootFS.DiffIDs[i], content)
 		}
 	}
 	mediaType := manifest.MediaType
