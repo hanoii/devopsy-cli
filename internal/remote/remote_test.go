@@ -1260,7 +1260,13 @@ case "$1 $2" in
     if [ "$3" != --format ]; then
       [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
     elif [ "$4" = '{{.Id}}' ]; then
-      [ -f "$(f "$5")" ] || { echo "Error response from daemon: No such image: $5" >&2; exit 1; }
+      # By a name, or by an image's id (the content of some name's file), as Docker answers.
+      if [ ! -f "$(f "$5")" ]; then
+        for t in "$FAKE_ROOT"/images/*; do
+          [ -f "$t" ] && [ "$(cat "$t")" = "$5" ] && { echo "$5"; exit 0; }
+        done
+        echo "Error response from daemon: No such image: $5" >&2; exit 1
+      fi
       cat "$(f "$5")"
     elif [ "$4" = '{{json .}}' ]; then
       # Every name's repository gets the image's id as its digest, as on
@@ -1489,7 +1495,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	rel1 := filepath.Join(base, "releases", "1")

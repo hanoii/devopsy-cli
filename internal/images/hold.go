@@ -367,8 +367,6 @@ func (s *Set) ownInstead(o entry, h hold, what string) (entry, composeHold, erro
 // hold on another reference (a digest) stays as it is. A service of no
 // entry sharing an own image (sharers: one under a profile) runs that
 // image's bookmark, its release's own build's while the entry is held.
-// A project behind the door names its builds through the door, which
-// refuses a tag of devopsy's: only its holds go by bookmark.
 func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeHold) {
 	names := bookmarks(es, s.Name, s.idOf(rel))
 	byRef := map[string]string{}
@@ -380,7 +378,7 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 		}
 		listed[e.Service] = true
 		ch, ok := holds[e.Service]
-		if ok && !ch.bookmark || !ok && (s.Door || e.Kind != KindOwn || e.ID == "") {
+		if ok && !ch.bookmark || !ok && (e.Kind != KindOwn || e.ID == "") {
 			continue
 		}
 		ch.Image, ch.bookmark = b, true
@@ -389,16 +387,13 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 			byRef[familiar(e.Ref)] = b
 		}
 	}
-	if s.Door {
-		return
-	}
 	// A held service's own build (withOwnBuilds), for what shares it.
 	for i, e := range es {
 		if _, ok := byRef[familiar(e.Ref)]; !ok && e.Service == "" && e.Kind == KindOwn {
 			byRef[familiar(e.Ref)] = names[i]
 		}
 	}
-	for svc, ref := range sharers(rel, es, names) {
+	for svc, ref := range s.sharers(rel, es) {
 		if b, ok := byRef[ref]; ok && !listed[svc] {
 			holds[svc] = composeHold{Image: b, bookmark: true}
 		}
@@ -406,15 +401,19 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 }
 
 // sharers are rel's services of no entry in es (one under a profile: the
-// listing is the default services') whose image is exactly an entry's, by
-// the entry's familiar ref: its fetch file's, which names every profile's
-// service sharing a build under that build's fetch tag, else its
-// ComposeFile's from the activation before, by the bookmark it names.
-func sharers(rel string, es []entry, names []string) map[string]string {
+// listing is the default services') whose image is exactly an own entry's,
+// by that entry's familiar ref: from its fetch file, which names every
+// profile's service sharing a build under that build's fetch tag, else
+// every profile's listing now (ListAll), never what an earlier file said.
+func (s *Set) sharers(rel string, es []entry) map[string]string {
 	out := map[string]string{}
 	listed := map[string]bool{}
+	own := map[string]bool{}
 	for _, e := range es {
 		listed[e.Service] = true
+		if e.Kind == KindOwn {
+			own[familiar(e.Ref)] = true
+		}
 	}
 	if tags := fetchTags(rel); tags != nil {
 		byTag := map[string]string{}
@@ -430,16 +429,17 @@ func sharers(rel string, es []entry, names []string) map[string]string {
 		}
 		return out
 	}
-	imgs, _, _ := composeFacts(rel)
-	for svc, img := range imgs {
-		if listed[svc] || !isBookmark(img) {
-			continue
-		}
-		for i, e := range es {
-			if e.Kind == KindOwn && (names[i] == img || repoOf(img) == repoOf(e.Ref)) {
-				out[svc] = familiar(e.Ref)
-				break
-			}
+	if s.ListAll == nil || len(own) == 0 {
+		return out
+	}
+	all, err := s.ListAll(rel)
+	if err != nil {
+		s.say(report.WarnLevel, "could not list every profile's services of %s (%v): one sharing a build's image runs what its name holds", s.idOf(rel), err)
+		return out
+	}
+	for _, svc := range all {
+		if ref := familiar(svc.Ref); own[ref] && !listed[svc.Name] {
+			out[svc.Name] = ref
 		}
 	}
 	return out

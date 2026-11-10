@@ -3236,20 +3236,25 @@ func TestCopyFromAnotherBuildIsSaid(t *testing.T) {
 	}
 }
 
-// A project behind the door runs its own builds by their project name, which the door builds
-// under and checks: its file names no bookmark for them (the door refuses a build tagged
-// devopsy-), only for a hold.
-func TestDoorProjectRunsItsBuildsByName(t *testing.T) {
+// A project behind the door fetches with no fetch file (the door names its builds and
+// refuses a tag of devopsy's), and runs each own build by its release's bookmark as any
+// project does: a rollback then runs the build it restores, never what the name holds.
+func TestDoorProjectFetchesWithoutAFetchFile(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	web := Service{Name: "web", Ref: "shop-web", Build: true}
 	m := newSim(t, d, "app-prod", &out)
 	m.e.set.Door = true
+	id := m.e.release(web)
+	if err := m.e.set.WriteFetch(m.e.rel(id)); err != nil || fetchTags(m.e.rel(id)) != nil {
+		t.Fatalf("a door project's fetch file: %v, %v", err, fetchTags(m.e.rel(id)))
+	}
+	m.cur = ""
 	if _, err := m.release(false, web); err != nil {
 		t.Fatal(err)
 	}
-	if imgs, _, _ := composeFacts(m.e.rel(m.cur)); imgs["web"] != "" {
+	if imgs, _, _ := composeFacts(m.e.rel(m.cur)); !isBookmark(imgs["web"]) || fileImage(d, m.e.rel(m.cur), "web", "") != m.runs("web") {
 		t.Errorf("a door project's file runs web by %q", imgs["web"])
 	}
 }
@@ -3268,10 +3273,6 @@ func forget(d *fakeDocker, id string) {
 // A service under a profile sharing one of two builds in one repository (shop:web and
 // shop:tools) keeps its own build's bookmark through a rollback, which writes the file
 // with no fetch file to read the sharing from.
-//
-// BUG: sharers' fallback on the release's ComposeFile takes the first own entry in the
-// bookmark's repository before it looks for the entry the bookmark is exactly, so the
-// tool goes over to the other service's image at the first rollback, restart or landing.
 func TestSharerKeepsItsBuildAmongOneRepositorys(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3306,10 +3307,6 @@ func TestSharerKeepsItsBuildAmongOneRepositorys(t *testing.T) {
 // A full restore's release names an image for a profile's service sharing a build, as the
 // release it restores did: its directory is new (no ComposeFile of an activation before)
 // and its images come back by their bookmarks (no fetch, so no fetch file).
-//
-// BUG: sharers reads the sharing from a fetch file or the file before alone, so the
-// restored release's file leaves the tool out, and it runs the project's name, which
-// devopsy's builds never write.
 func TestFullRestoreNamesAProfilesSharer(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3342,10 +3339,6 @@ func TestFullRestoreNamesAProfilesSharer(t *testing.T) {
 // The restart's last try (--as-built) goes on with an own image gone, as its listing has it,
 // said: it never fails on what it cannot have, and its holds are the ones a restore with
 // Docker and the image lock can write.
-//
-// BUG: keep now fails on any own image's bookmark it cannot put, a gone image's included,
-// so the last try fails where it warned, its listing written and its ComposeFile not, and
-// the restart is left to img hold.
 func TestAsBuiltGoesOnWithAnImageGone(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3376,10 +3369,6 @@ func TestAsBuiltGoesOnWithAnImageGone(t *testing.T) {
 // A snapshot of a release that lists an own image this server no longer has (a held
 // service's own build, which no container runs, pruned by hand) is taken all the same: the
 // snapshot lists it, and its restore builds it.
-//
-// BUG: BookmarkFrom goes through keep, which now fails on an own image's bookmark it cannot
-// put: every take fails ("bookmarking the release's images"), a release's own snapshot
-// included, so with release snapshots on the release that fixes forward cannot go live.
 func TestSnapshotOfAReleaseWithAnOwnImageGone(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3409,9 +3398,6 @@ func TestSnapshotOfAReleaseWithAnOwnImageGone(t *testing.T) {
 
 // A full restore of a snapshot whose built image is gone from the server makes its release
 // and builds the image again (img restore's exit 1, then its fetch), as a rollback does.
-//
-// BUG: make-release's BookmarkFrom fails on the bookmark it cannot put, before the restore
-// that would ask for the build.
 func TestFullRestoreBuildsAnImageGone(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3443,10 +3429,6 @@ func TestFullRestoreBuildsAnImageGone(t *testing.T) {
 // A door project's rollback runs the release it goes back to, or fails: its file names no
 // image for its builds (the door builds under the project's name), and nothing puts that
 // name back.
-//
-// BUG: with the name moving gone and Door leaving own images out of the file, the rollback
-// says "images restored", lists the target's build, and the run step runs what the name
-// holds: the build of the release it left.
 func TestDoorRollbackRunsItsOwnBuild(t *testing.T) {
 	t.Parallel()
 	d := newFake()

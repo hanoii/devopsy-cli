@@ -602,6 +602,12 @@ func (s *Set) keep(rel string, es []entry) error {
 		keep[familiar(names[i])] = true
 		// By id: another release's fetch may move the name meanwhile.
 		if e.ID != "" {
+			if _, err := s.Docker.ID(e.ID); errors.Is(err, ErrNoImage) {
+				// Gone (pruned by hand, a restart's last try as built): nothing to
+				// bookmark, and an up builds it again onto the bookmark.
+				s.say(report.WarnLevel, "%s's image of %s is gone: a rollback to %s builds or pulls it again", id, cmp.Or(e.Service, e.Ref), id)
+				continue
+			}
 			if err := s.Docker.Tag(e.ID, names[i]); err != nil && e.Kind == KindOwn {
 				s.say(report.ErrorLevel, "could not bookmark %s as %s, which %s runs it by: %v", e.Ref, names[i], id, err)
 				ownErr = cmp.Or(ownErr, err)
