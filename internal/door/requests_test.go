@@ -127,6 +127,8 @@ func TestDecideRefuses(t *testing.T) {
 		{"a name that only starts the same", []string{"network", "inspect", "shopx-prod_default"}},
 		{"image rm, forced", []string{"image", "rm", "-f", "shop-prod-app"}},
 		{"volume of another", []string{"volume", "inspect", "other-prod_data"}},
+		// Its own name's shape, but no volume compose names (<compose name>_<key>).
+		{"no volume of its own", []string{"volume", "inspect", "shop-prod"}},
 		{"volume rm", []string{"volume", "rm", "shop-prod_data"}},
 		{"tag over a name others use", []string{"tag", "x", "busybox:1.37"}},
 		{"tag a hold of another's", []string{"tag", "x", "busybox:devopsy-other-prod-1"}},

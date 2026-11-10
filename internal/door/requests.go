@@ -450,7 +450,8 @@ func decideVolume(args []string, p Policy) (*Action, error) {
 	if len(args) >= 6 && args[0] == "create" && len(args)%2 == 0 {
 		project, _ := strings.CutPrefix(args[2], projectLabel+"=")
 		key, keyed := strings.CutPrefix(args[4], "com.docker.compose.volume=")
-		ok := args[1] == "--label" && args[3] == "--label" && p.OwnName(project) && keyed && args[len(args)-1] == project+"_"+key && Word.MatchString(key)
+		name := args[len(args)-1]
+		ok := args[1] == "--label" && args[3] == "--label" && keyed && name == project+"_"+key && p.OwnVolume(name) && p.OwnName(project) && Word.MatchString(key)
 		for i := 5; ok && i+1 < len(args)-1; i += 2 {
 			k, _, _ := strings.Cut(args[i+1], "=")
 			ok = args[i] == "--label" && !reservedVolumeLabel(k)
@@ -464,8 +465,9 @@ func decideVolume(args []string, p Policy) (*Action, error) {
 		return nil, refuse("docker volume %s", strings.Join(args, " "))
 	}
 	_, targets := flagValues(args[1:], "--format", "-f")
+	// A volume by compose's shape for one of this project's (OwnVolume), as a run's mount is.
 	for _, t := range targets {
-		if strings.HasPrefix(t, "-") || !p.OwnName(t) {
+		if strings.HasPrefix(t, "-") || !p.OwnVolume(t) {
 			return nil, refuse("docker volume inspect %s", t)
 		}
 	}
