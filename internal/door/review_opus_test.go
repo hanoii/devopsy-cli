@@ -14,7 +14,7 @@ import (
 // remove), its own and every other project user's, fails before its first kill, so what the
 // leaked key left keeps running with the user's group, and the door with it while a key is
 // left. Refusing the uid here covers a service and exec -u only: a build's RUN step takes
-// any USER, so the end's own refusal is the cause (e2e: TestReviewOpusDoorIDsLeftOpen).
+// any USER, so the end's own refusal is the cause (e2e: TestReviewOpusEndFailsBesideItsOwnUID).
 func TestReviewOpusNoContainerTakesTheEndsUID(t *testing.T) {
 	t.Parallel()
 	for _, user := range []string{"2147483646:2147483646", "2147483646:10001"} {
