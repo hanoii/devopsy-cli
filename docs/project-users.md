@@ -400,8 +400,9 @@ config (`~/.docker/config.json`, or under `DOCKER_CONFIG`), unchecked:
 it warns `<registry>: saved, not checked: the first pull checks it` and
 prints no `Login Succeeded`. A wrong password shows at the next pull or
 release, in the registry's words: checking it at the login would have
-Docker's daemon contact the registry for the project. The deploy user
-keeps no password. The password comes from stdin (`--password-stdin`,
+Docker's daemon contact the registry for the project. The door keeps a
+copy of those logins' `auths` in `<space>`, for its own requests, until
+`--project-users remove`. The password comes from stdin (`--password-stdin`,
 with `--username`) or a prompt, never the command line, where every
 user of the server would see it.
 

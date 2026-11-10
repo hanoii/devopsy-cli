@@ -69,9 +69,29 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 
 // activeServices are the services of the checked file compose takes as active under profiles,
 // read with compose's own config: its reading of profiles is compose's. The file goes on
-// stdin, compose with the empty config directory, since it pulls nothing.
+// stdin, its build blocks left out, compose with the empty config directory, since it pulls
+// nothing.
 func (s *doorSide) activeServices(file map[string]any, profiles, dir string) ([]string, error) {
-	checked, err := json.Marshal(file)
+	// Without the services' build blocks, which the pull's checks do not read (CheckFile): it
+	// reads whether a service builds from the file itself (PlanPull), so compose gets none.
+	services, _ := file["services"].(map[string]any)
+	unbuilt := map[string]any{}
+	for name, svc := range services {
+		m, _ := svc.(map[string]any)
+		c := map[string]any{}
+		for k, v := range m {
+			if k != "build" {
+				c[k] = v
+			}
+		}
+		unbuilt[name] = c
+	}
+	shown := map[string]any{}
+	for k, v := range file {
+		shown[k] = v
+	}
+	shown["services"] = unbuilt
+	checked, err := json.Marshal(shown)
 	if err != nil {
 		return nil, err
 	}

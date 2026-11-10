@@ -451,7 +451,7 @@ func TestDecideAnswersWhatDevopsyAsks(t *testing.T) {
 	t.Parallel()
 	for _, argv := range [][]string{
 		{"volume", "create", "--label", "com.docker.compose.project=shop-prod", "--label", "com.docker.compose.volume=data", "shop-prod_data"},
-		{"pull", "-q", "busybox@sha256:abc"},
+		{"pull", "-q", "busybox@sha256:" + strings.Repeat("ab", 32)},
 	} {
 		if _, err := decide(t, argv...); err != nil {
 			t.Errorf("%q: %v", argv, err)

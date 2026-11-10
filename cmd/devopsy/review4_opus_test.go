@@ -1,9 +1,6 @@
 package main
 
 import (
-	"io"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,29 +24,4 @@ func TestReview4DoorClaimReadsNoLocalLayout(t *testing.T) {
 	if c := readString(filepath.Join(dir, "calls")); strings.Contains(c, "imagetools inspect --raw oci-layout://") {
 		t.Errorf("the deploy user's buildx was asked to read a local layout:\n%s", c)
 	}
-}
-
-// Review 4 (Opus): what the claim above does on a real server, past reading. buildx's
-// imagetools makes the directory an oci-layout:// reference names, as whoever runs it (here
-// the deploy user), before it finds no index there. So a project user's `docker pull -q
-// oci-layout://<DoorDir>/sync-keys/devopsy-blog:x` makes another project user's sync keys
-// file a directory, which --authorized-keys then fails on (printAuthorizedKeys, below), and
-// sshd takes no key of that user's: one project locks another out of the server, and any
-// path the deploy user may write that is not there yet (another's record of claimed images,
-// its logins' config.json, an entry) becomes a directory. Skipped without docker buildx.
-func TestReview4BuildxMakesTheLayoutItIsNamed(t *testing.T) {
-	t.Parallel()
-	if exec.Command("docker", "buildx", "version").Run() != nil {
-		t.Skip("no docker buildx")
-	}
-	dir := t.TempDir()
-	named := filepath.Join(dir, "door", "sync-keys", "devopsy-blog")
-	_ = exec.Command("docker", "buildx", "imagetools", "inspect", "--raw", "oci-layout://"+named+":x").Run()
-	if fi, err := os.Stat(named); err != nil || !fi.IsDir() {
-		t.Skipf("this buildx made no directory there (%v): the read alone is the bug", err)
-	}
-	if code := printAuthorizedKeys(io.Discard, named); code == 0 {
-		t.Errorf("--authorized-keys took a directory for a user's sync keys")
-	}
-	t.Errorf("buildx made %s, as the deploy user would on a server, and --authorized-keys now fails for that user", named)
 }

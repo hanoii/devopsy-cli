@@ -326,6 +326,10 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 	if n := strings.Count(readString(filepath.Join(dir, "reads")), "cat\n"); n != 1 {
 		t.Errorf("the logins read %d times for two claims", n)
 	}
+	// Compose's reading of the profiles gets no build block, which the pull's checks do not read.
+	if got := readString(filepath.Join(dir, "configread")); got == "" || strings.Contains(got, `"build"`) {
+		t.Errorf("compose's config read of the pull's file: %s", got)
+	}
 	// The built service's tag is not in its registry: first by name, it ends the pull.
 	out, code = pull(file, "debug", "pull")
 	if code != 1 || copies() != 0 || !strings.Contains(out, "devopsy: error: ") || readString(log) != "" {
@@ -686,5 +690,42 @@ func TestDoorPullPastFailuresWarns(t *testing.T) {
 	}
 	if c.ProcessState.ExitCode() != 0 || strings.Contains(string(out), "devopsy: error: ") || !strings.Contains(string(out), "devopsy: warning: ") {
 		t.Errorf("a pull past its failures (exit %d) says:\n%s", c.ProcessState.ExitCode(), out)
+	}
+}
+
+// What the door keeps for its user (its logins, its record of claimed images) is written only
+// while the user has a key, under the record's lock: --project-users remove empties its keys
+// and then takes that lock to remove both, so a request past its sudo before the removal
+// brings neither back.
+func TestDoorKeepsNothingOfAUserWithNoKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	keys := filepath.Join(dir, "keys")
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, keysFile: keys}
+	config := filepath.Join(dir, "none.json")
+	for name, body := range map[string]string{"no keys file": "", "keys emptied": "# none\n"} {
+		if body != "" {
+			write(t, keys, body, 0o600)
+		}
+		if err := side.record("sha256:" + strings.Repeat("ab", 32)); err == nil || !strings.Contains(err.Error(), "no key left") {
+			t.Errorf("%s: the record written (%v)", name, err)
+		}
+		if _, err := (&doorSide{policy: side.policy, keysFile: keys}).writeLogins(config); err == nil {
+			t.Errorf("%s: the logins written", name)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "space", "logins", "shop", "config.json")); err == nil {
+			t.Errorf("%s: a logins' config is there", name)
+		}
+		if got := readString(side.policy.ImagesFile()); got != "" {
+			t.Errorf("%s: a record is there: %q", name, got)
+		}
+	}
+	// The control: with a key, both are written.
+	write(t, keys, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o600)
+	if err := side.record("sha256:" + strings.Repeat("ab", 32)); err != nil {
+		t.Errorf("the control: the record (%v)", err)
+	}
+	if _, err := (&doorSide{policy: side.policy, keysFile: keys}).writeLogins(config); err != nil {
+		t.Errorf("the control: the logins (%v)", err)
 	}
 }

@@ -83,9 +83,9 @@ func doorRules(f firewallFamily, chain string) []string {
 			r = append(r, "-d "+m+" -j REJECT --reject-with "+f.reject)
 		}
 	case DoorDaemonChain, DoorRunChain:
-		// Docker's daemon contacts registries as root, a project user's pull and login
-		// included, and what the door starts on the host (a claim's read, compose's and
-		// buildx's registry clients) answers a registry the project names too: either can be
+		// Docker's daemon contacts registries as root (the deploy user's pulls, devopsy's own
+		// images), and what the door starts on the host (a claim's read and copy, compose's and
+		// buildx's registry clients) answers a registry the project names: either can be
 		// sent (a redirect, a token's realm, a name) to the host's loopback or a metadata
 		// service. The host's other addresses stay theirs to reach (a registry on this server,
 		// by its name or Docker's bridge address, goes out on loopback), and so does DNS on

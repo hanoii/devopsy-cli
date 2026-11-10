@@ -1,6 +1,9 @@
 package images
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // SplitDomain is ref's registry host (domain) and the rest, as Docker reads a name: its first
 // part is a host when it holds a dot or a colon, is localhost, or has a capital (a repository's
@@ -41,4 +44,29 @@ func Canonical(ref string) string {
 		rest = "library/" + rest
 	}
 	return "docker.io/" + rest
+}
+
+// reference is Docker's grammar of an image's name (distribution/reference): an optional
+// registry host and port, a lowercase path of components, an optional tag, an optional digest.
+var reference = func() *regexp.Regexp {
+	const (
+		alnum     = `[a-z0-9]+`
+		separator = `(?:[._]|__|[-]+)`
+		component = alnum + `(?:` + separator + alnum + `)*`
+		domainC   = `(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])`
+		host      = `(?:` + domainC + `(?:\.` + domainC + `)*|\[[a-fA-F0-9:]+\])`
+		domain    = host + `(?::[0-9]+)?`
+		name      = `(?:` + domain + `/)?` + component + `(?:/` + component + `)*`
+		tag       = `[\w][\w.-]{0,127}`
+		digest    = `[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,}`
+	)
+	return regexp.MustCompile(`^` + name + `(?::` + tag + `)?(?:@` + digest + `)?$`)
+}()
+
+// IsReference says whether ref is an image's name as Docker reads one, and nothing else a tool
+// takes for a source: buildx's imagetools also reads `oci-layout://<path>:<tag>` (a local
+// layout, which it makes when it is not there) and `docker-image://`, so a name a project
+// gives reaches buildx only as one of Docker's.
+func IsReference(ref string) bool {
+	return len(ref) <= 4096 && reference.MatchString(ref)
 }

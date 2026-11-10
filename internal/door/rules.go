@@ -446,6 +446,16 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		switch t, _ := v["type"].(string); t {
 		case "bind":
 			checkBind(svc, name, v, p, paths, fail)
+			// Docker never makes a bind's source: the door makes what it binds (an entry, a
+			// sealed copy) before compose runs, so a source gone in the meantime (a sealed copy
+			// pruned as another environment chose it) fails the start, never binds an empty
+			// directory of root's in its place.
+			opts, _ := v["bind"].(map[string]any)
+			if opts == nil {
+				opts = map[string]any{}
+			}
+			opts["create_host_path"] = false
+			v["bind"] = opts
 		case "volume", "tmpfs":
 		default:
 			fail("%s: a mount of type %s", svc, t)

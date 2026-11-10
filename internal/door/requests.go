@@ -536,8 +536,6 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 	return &Action{Docker: append([]string{"build"}, args...), Stdin: known.Dockerfile}, nil
 }
 
-// ownHold says whether a tag is a hold of this project's,
-// <repo>:devopsy-<compose name>-<id>: nothing moves a tag anyone else reads.
 // OwnsImage says whether ref is this project's image: devopsy's util image (known), a
 // name only this project writes (its build's or a hold of its own, OwnRef), an image
 // another of whose names is so, or one whose id the project claimed (Images). Any other is
@@ -610,6 +608,9 @@ func (p Policy) OwnRef(ref string) bool {
 // contact for the project, so the server's own and the metadata addresses are refused first,
 // by digest or not.
 func (p Policy) Claimable(ref string) error {
+	if !images.IsReference(ref) {
+		return refuse("%s: no image's name as Docker reads one", ref)
+	}
 	if ownHost(registryHost(ref)) {
 		return refuse("%s: a registry on the server's own or a metadata address, which the door would contact for this project", ref)
 	}
@@ -626,6 +627,8 @@ func (p Policy) Claimable(ref string) error {
 	return nil
 }
 
+// ownHold says whether a tag is a hold of this project's,
+// <repo>:devopsy-<compose name>-<id>: nothing moves a tag anyone else reads.
 func (p Policy) ownHold(ref string) bool {
 	rest, ok := images.HoldOf(ref)
 	return ok && p.OwnName(rest) && holdName.MatchString(rest)

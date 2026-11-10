@@ -191,6 +191,9 @@ type doorSide struct {
 	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
 	made   []string
 	madeMu sync.Mutex
+	// keysFile is the project user's keys file (remote.DoorKeysFile): what the door keeps for it
+	// is written only while it holds a key (whileAUser).
+	keysFile string
 	// keysAt is the project user's keys file as the request found it: a sync key is added
 	// only while it is still that file (syncKey).
 	keysAt os.FileInfo
@@ -514,7 +517,7 @@ func (s *doorSide) WorkDir() (string, error) {
 }
 
 // workDir makes a directory in the deploy user's nosuid space, for this user alone with
-// perms (none with "": the deploy user's own, a login's), swept a day on (sweepWork) when
+// perms (none with "": the deploy user's own, a claim's copy), swept a day on (sweepWork) when
 // a killed door leaves it.
 func (s *doorSide) workDir(perms string) (string, error) {
 	root := filepath.Join(s.policy.Space, "work")
@@ -808,7 +811,12 @@ func runDoor(args []string) int {
 	if !remote.KeysLeft(remote.DoorKeysFile(doorWho)) {
 		return doorRefused(errors.New("refused: " + doorWho + " has no key left"))
 	}
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt}
+	// A key's removal whose end of the user's processes did not complete: what that key left
+	// running gets nothing from the door until it does (remote.DoorEndingFile).
+	if _, err := os.Lstat(remote.DoorEndingFile(doorWho)); err == nil {
+		return doorRefused(errors.New("refused: a key of " + doorWho + "'s was removed and the end of its processes did not complete: its keys' next edit or listing completes it"))
+	}
+	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho)}
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))
 	}
@@ -1389,6 +1397,11 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
+	// From /, which holds no compose file of anyone's: compose looks for one in its directory
+	// and every parent, and a down by name runs with none.
+	if err := os.Chdir("/"); err != nil {
+		return doorRefused(err)
+	}
 	err = execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), env)
 	return doorRefused(err)
 }
@@ -1457,9 +1470,6 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 		digest = images.DigestIn(img, image)
 	}
 	if !owned || !pinned && digest == "" {
-		if err := s.policy.Claimable(image); err != nil {
-			return "", nil, err
-		}
 		if digest, img, err = s.claim(image, config); err != nil {
 			return "", nil, fmt.Errorf("%s: %w", svc, err)
 		}
@@ -1624,21 +1634,26 @@ func (s *doorSide) writeLogins(config string) (string, error) {
 		}
 	}
 	dir := filepath.Join(s.policy.Space, "logins", s.policy.Project)
+	return dir, s.whileAUser(func() error { return writeAuths(dir, auths) })
+}
+
+// writeAuths writes a project's logins' directory, dir, holding auths alone.
+func writeAuths(dir string, auths map[string]map[string]string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return err
 	}
 	data, err := json.Marshal(map[string]any{"auths": auths})
 	if err != nil {
-		return "", err
+		return err
 	}
 	tmp := filepath.Join(dir, ".config.json."+strconv.Itoa(os.Getpid()))
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return "", err
+		return err
 	}
-	return dir, os.Rename(tmp, filepath.Join(dir, "config.json"))
+	return os.Rename(tmp, filepath.Join(dir, "config.json"))
 }
 
 // profileArgs are compose's --profile flags for profiles, a comma-separated list: a profile

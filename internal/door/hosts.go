@@ -43,8 +43,8 @@ func hostOf(registry string) string {
 // address, localhost, a name under .localhost), link-local, unspecified, a metadata address,
 // or a name a C resolver reads as an address (127.1, 0x7f.1, 0x7f000001: its last label a
 // number, hexadecimal included), in any case.
-// Docker's daemon contacts a registry as root, outside the project users' firewall, so a
-// project user's pull or login of one would reach for it what the firewall closes.
+// A claim's clients contact a registry for the project, its builder among them, which no chain
+// of the door's group holds, so a pull or a login naming one is refused before any does.
 func ownHost(host string) bool {
 	if host == "" {
 		return false

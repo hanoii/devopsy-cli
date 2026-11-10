@@ -44,7 +44,10 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binary = filepath.Join(dir, "devopsy")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+	// Static, as a release builds it (.goreleaser.yaml): a project user's login shell is it.
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
 		panic(string(out))
 	}
 	code := m.Run()

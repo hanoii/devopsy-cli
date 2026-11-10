@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -40,6 +41,11 @@ import (
 // and that image, read by that digest: the name is anyone's on the server to move right after,
 // so nothing reads it again.
 func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
+	// Every claim's name is one the door may claim, whoever asked: a request and the pull verb
+	// refuse before anything runs, and this holds for every caller.
+	if err := s.policy.Claimable(ref); err != nil {
+		return "", images.Image{}, err
+	}
 	d, err := s.logins(config)
 	if err != nil {
 		return "", images.Image{}, err
@@ -196,17 +202,14 @@ func (g *claimCut) runWithin(c *exec.Cmd, within time.Duration) error {
 		g.mu.Unlock()
 		return errors.New("cut by a signal")
 	}
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	ownGroup(c)
 	if err := c.Start(); err != nil {
 		g.mu.Unlock()
 		return err
 	}
 	g.child = c
 	g.mu.Unlock()
-	if within > 0 {
-		t := time.AfterFunc(within, func() { _ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL) })
-		defer t.Stop()
-	}
+	defer killGroupAfter(c, within)()
 	err := c.Wait()
 	g.mu.Lock()
 	g.child = nil
@@ -568,6 +571,15 @@ func (s *doorSide) unrecord(id string) error {
 // a file beside it and renamed over it, so a concurrent claim's id is never lost.
 func (s *doorSide) lockedRecord(edit func([]string) []string) error {
 	file := s.policy.ImagesFile()
+	return s.whileAUser(func() error { return writeRecord(file, edit) })
+}
+
+// whileAUser runs write, what the door keeps for its user (its logins, its record), under the
+// record's lock and only while the user has a key (keysFile): --project-users remove empties
+// its keys, then takes that lock to remove what was kept, so a request past its sudo before
+// the removal writes none of it back after.
+func (s *doorSide) whileAUser(write func() error) error {
+	file := s.policy.ImagesFile()
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 		return err
 	}
@@ -579,6 +591,14 @@ func (s *doorSide) lockedRecord(edit func([]string) []string) error {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
+	if s.keysFile != "" && !remote.KeysLeft(s.keysFile) {
+		return errors.New("refused: " + s.policy.User + " has no key left")
+	}
+	return write()
+}
+
+// writeRecord writes file, a record of claimed images, as edit makes it, by rename.
+func writeRecord(file string, edit func([]string) []string) error {
 	ids := edit(claimedImages(file))
 	tmp := file + ".tmp"
 	data := ""

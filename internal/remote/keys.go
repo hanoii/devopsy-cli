@@ -150,16 +150,36 @@ exec 9>"$d/.$(basename "$f").lock"
 flock -w 60 9 || { ` + echoLine(report.ErrorLevel, "another edit of $f did not end in a minute") + `; exit 75; }
 `
 
+// keysSettle, under keysLock, finishes the end a project user's key's removal began and did
+// not see through (DoorEndingFile, "$f.ending"), before anything else of that user's keys: it
+// runs again until it completes.
+func keysSettle(user string) string {
+	if user == "" {
+		return ""
+	}
+	return `if [ -e "$f.ending" ]; then
+  devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || { ` + echoLine(report.ErrorLevel, "the end of "+user+"'s processes a key's removal began did not complete: ask again") + `; exit 1; }
+  rm -f "$f.ending"
+fi
+`
+}
+
 // KeysReadScript prints the keys of user ("" the deploy user), if any.
 func KeysReadScript(user string) string {
-	return keysPrelude(user) + `[ ! -f "$f" ] || cat "$f"
+	settle := ""
+	if user != "" {
+		settle = `if [ -e "$f.ending" ]; then
+` + keysLock + keysSettle(user) + `fi
+`
+	}
+	return keysPrelude(user) + settle + `[ ! -f "$f" ] || cat "$f"
 `
 }
 
 // KeysAddScript appends the authorized_keys line on stdin to user's keys ("" the deploy
 // user's), unless its key is there already (exit 3). It prints the file's path.
 func KeysAddScript(user string) string {
-	return keysPrelude(user) + keysLock + `line=$(cat)
+	return keysPrelude(user) + keysLock + keysSettle(user) + `line=$(cat)
 blob=$(printf '%s\n' "$line" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) { print $(i + 1); exit } }')
 [ -n "$blob" ] || { ` + echoLine(report.ErrorLevel, "not a public key") + `; exit 1; }
 if [ -f "$f" ] && grep -qF -- " $blob" "$f"; then
@@ -191,14 +211,20 @@ fi
 	} else {
 		// What it left running, its linger and its sync keys, which a leaked key could have
 		// added, go as at --project-users remove, in one helper of devopsy's.
-		end = `devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || exit 1
+		end = `devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || { ` + echoLine(report.ErrorLevel, "the key is gone, and the end of "+user+"'s processes did not complete: ask again, as any edit or listing of its keys does") + `; exit 1; }
+rm -f "$f.ending"
 `
 	}
-	return keysPrelude(user) + keysLock + `blob=$(cat)
+	mark := ""
+	if user != "" {
+		mark = `: >"$f.ending"
+`
+	}
+	return keysPrelude(user) + keysLock + keysSettle(user) + `blob=$(cat)
 [ -f "$f" ] || { ` + echoLine(report.ErrorLevel, "no authorized keys on this server") + `; exit 3; }
 grep -qF -- " $blob" "$f" || { ` + echoLine(report.ErrorLevel, "that key is not authorized") + `; exit 3; }
 grep -vF -- " $blob" "$f" > "$f.tmp" || true
-` + last + `mv -f "$f.tmp" "$f"
+` + last + mark + `mv -f "$f.tmp" "$f"
 ` + end + `printf '%s\n' "$f"
 `
 }
@@ -263,6 +289,15 @@ const DoorRunGroup = "devopsy-door"
 // never the login's. keysPrelude finds the same file in a script.
 func DoorKeysFile(user string) string {
 	return filepath.Join(DoorDir(), "keys", user)
+}
+
+// DoorEndingFile marks a project user whose key's removal began the end of its processes
+// (EndProjectUserFlag) and did not see it through (a failure, a cut session): written under the
+// keys' lock before the key goes, removed once the end completes, and settled by the next
+// edit or listing of that user's keys (keysSettle). The door answers no request of the user's
+// while it is there: what the removed key left running would otherwise keep the door.
+func DoorEndingFile(user string) string {
+	return DoorKeysFile(user) + ".ending"
 }
 
 // DoorSyncKeysFile is a project user's sync keys (SyncKeyLine), apart from its keys: the

@@ -38,8 +38,6 @@ type form struct {
 	// matches says whether a command is this form, its arguments included.
 	matches func(cmd []string) bool
 	mounts  []mountRule
-	// network is what it gets: none unless it says so.
-	network string
 	// conf says it takes a sync daemon's settings.
 	conf bool
 	// narrow, for an rsync, is the one entry it writes, out of the mnt it asked for.
@@ -423,7 +421,7 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 		}
 	}
 	out := slices.Clone(opts)
-	if network == "" && f.network == "" {
+	if network == "" {
 		out = append(out, "--network", "none")
 	}
 	for i, m := range mounts {

@@ -34,6 +34,10 @@ func run() int {
 	args := os.Args[1:]
 	// Before anything reads a project or the environment: every word here is a
 	// project user's, on the deploy user's rights (door.go).
+	// A project user's login shell, sshd's (a login's argv[0] starts with a dash).
+	if strings.TrimPrefix(filepath.Base(os.Args[0]), "-") == filepath.Base(remote.DoorShell) {
+		return runDoorShell(args)
+	}
 	if filepath.Base(os.Args[0]) == "docker" {
 		report.SetDefault(report.New(errOut, color, 0))
 		return runDocker(args)

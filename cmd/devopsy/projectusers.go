@@ -175,6 +175,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Fail(err, spaceFix(d.Space))
 		return 1
 	}
+	if err := staticSelf(); err != nil {
+		report.Fail(err, report.Fix("install a release of devopsy, which is static (install.sh)"))
+		return 1
+	}
 	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
 		report.Fail(err, report.Fix("move Docker to its containerd image store and a current buildx first (docs/project-users.md)"))
 		return 1
@@ -293,6 +297,33 @@ func closeDeployProjects(root, space string, uid int) ([]string, error) {
 	return closed, nil
 }
 
+// removeKept removes what the door kept for who, project's user, in space: its logins, its
+// record of claimed images, and the record's lock last, under that lock.
+func removeKept(space, project, who string) error {
+	images := filepath.Join(space, "images")
+	lock, err := os.OpenFile(filepath.Join(images, who+".lock"), os.O_CREATE|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrNotExist) {
+		// No record was ever written, so no lock: only its logins, if any.
+		return os.RemoveAll(filepath.Join(space, "logins", project))
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Join(space, "logins", project)); err != nil {
+		return err
+	}
+	for _, f := range []string{who, who + ".lock"} {
+		if err := os.Remove(filepath.Join(images, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 // removeProjectUser takes who's entry and keys, then ends its processes (end): the door
 // answers it no more first, so nothing it runs meanwhile gets a new call through.
 func removeProjectUser(d *remote.Door, project, who, entry string, end func(who string) error) int {
@@ -317,16 +348,12 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	if err := endProjectUser(who, end); err != nil {
 		return fail("removed " + who + "'s entry and keys, but " + err.Error())
 	}
-	// What the door kept for it: its registry logins and the record of the images it claimed.
+	// What the door kept for it: its registry logins and the record of the images it claimed,
+	// under the record's lock (doorSide.whileAUser), so a door request past its sudo before
+	// the removal, which writes them only while the user has a key, brings neither back.
 	if d != nil && d.Space != "" {
-		if err := os.RemoveAll(filepath.Join(d.Space, "logins", project)); err != nil {
+		if err := removeKept(d.Space, project, who); err != nil {
 			return failErr(err)
-		}
-		// The record and its lock (lockedRecord).
-		for _, f := range []string{who, who + ".lock"} {
-			if err := os.Remove(filepath.Join(d.Space, "images", f)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return failErr(err)
-			}
 		}
 	}
 	stays := "its Unix user, home and tree stay"

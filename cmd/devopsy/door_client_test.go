@@ -207,3 +207,19 @@ func TestSweepRenders(t *testing.T) {
 		}
 	}
 }
+
+// A project user's compose asks for compose's own help only by -h or --help among compose's
+// flags: past exec's or run's service they are the service's command's (`exec web df -h`),
+// which goes to the door like any command.
+func TestComposeHelpIsComposesOwn(t *testing.T) {
+	t.Parallel()
+	for args, want := range map[string]bool{
+		"up --help": true, "up -d web -h": true, "exec --help": true, "exec -T -h web sh": true,
+		"exec -T web df -h": false, "run --rm web drush --help": false, "exec -u 10001 web ls --help": false,
+		"exec -e A=-h web true": false, "logs -f": false, "": false,
+	} {
+		if got := composeHelp(strings.Fields(args)); got != want {
+			t.Errorf("%q: %v, want %v", args, got, want)
+		}
+	}
+}

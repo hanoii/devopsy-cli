@@ -955,16 +955,18 @@ case "$all" in
   'buildx build '*) cat >/dev/null ;;
   'ps -a '*) ;;
   'compose '*' config --format json')
-    # Compose's reading of profiles, of the file on stdin: a service with profiles is active
-    # only under one of those asked.
+    # Compose's reading of profiles, of the file on stdin (kept in dir/configread): a service
+    # with profiles is active only under one of those asked.
+    cat >`+in("configread")+`
     perl -MJSON::PP -e 'my @p; for (my $i = 0; $i < @ARGV; $i++) { push @p, $ARGV[$i+1] if $ARGV[$i] eq "--profile" }
       local $/; my $f = decode_json(<STDIN>); my %asked = map { $_ => 1 } @p;
       for my $s (keys %{$f->{services}}) { my $pr = $f->{services}{$s}{profiles} or next; delete $f->{services}{$s} if @$pr && !grep { $asked{$_} } @$pr }
-      print encode_json($f)' -- "$@" ;;
+      print encode_json($f)' -- "$@" <`+in("configread")+` ;;
   'compose '*)
     f=; while [ $# -gt 0 ]; do [ "$1" = -f ] && f=$2; shift; done
     echo "ARGS: $all"
     echo "CONFIG: $DOCKER_CONFIG"
+    echo "DIR: $(pwd)"
     # The file's descriptor was written and then handed over at its end: from its start.
     perl -e 'open(F, "<&=", $ARGV[0]) or die; seek(F, 0, 0); print while <F>;' "${f#/dev/fd/}" ;;
   'image inspect '*)
@@ -1091,8 +1093,8 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if got := readString(side.policy.ImagesFile()); got != p1+"\n" {
 		t.Errorf("the record: %q", got)
 	}
-	// The claim proved the manifest's digest, never the name, on the project's builder (its
-	// copied it as the registry serves it, loaded it under its canonical name by that digest,
+	// The claim copied the manifest's digest, never the name, as the registry serves it, loaded
+	// it under its canonical name by that digest,
 	// Docker's daemon asking no registry (no pull) and no builder building anything, and named
 	// it as asked.
 	c := readString(calls)
@@ -1253,8 +1255,8 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	// A down by name, a request of its own, too.
 	c := exec.Command(os.Args[0], "-test.run", "^$")
 	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_DOWN=-v", "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if out, _ := c.CombinedOutput(); !strings.Contains(string(out), "ARGS: compose -p shop-prod down -v\nCONFIG: "+empty+"\n") {
-		t.Errorf("a down by name: compose's DOCKER_CONFIG is not %s:\n%s", empty, out)
+	if out, _ := c.CombinedOutput(); !strings.Contains(string(out), "ARGS: compose -p shop-prod down -v\nCONFIG: "+empty+"\nDIR: /\n") {
+		t.Errorf("a down by name: compose's DOCKER_CONFIG is not %s, or it runs elsewhere than /, where no compose file is anyone's:\n%s", empty, out)
 	}
 	if fi, err := os.Stat(empty); err != nil || fi.Mode().Perm() != 0o555 {
 		t.Errorf("the empty config: %v %v", fi, err)

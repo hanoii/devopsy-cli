@@ -2621,21 +2621,6 @@ func daemonListing(ctx context.Context, id string) (*exec.Cmd, error) {
 // secrets and compose project must not reach the child's commands.
 var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
-// syncExecEnv are the sync's variables the child's devopsy gets across
-// servers, as cleanEnvKeys lets them through on the same one.
-func syncExecEnv() map[string]string {
-	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
-		if v, ok := os.LookupEnv(k); ok {
-			env[k] = v
-		}
-	}
-	if k, v := childInheritEnv(); k != "" {
-		env[k] = v
-	}
-	return env
-}
-
 // childInheritEnv is the child's pending inherited variables' file
 // (remote.InheritPendingEnv), from the child's directory the push knows:
 // what the holder sets for everything it runs on the child, set for
@@ -3040,15 +3025,6 @@ func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []s
 func fileExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
-}
-
-// wipeScript is the receive script's wipe of the child for a reset
-// (remote.SyncResetEnv), "" for a sync.
-func wipeScript() string {
-	if os.Getenv(remote.SyncResetEnv) == "" {
-		return ""
-	}
-	return remote.SyncExecScript(os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv), syncExecEnv(), []string{cli.SyncServicesFlag, "wipe"})
 }
 
 // wipeChild runs the child's --sync-services wipe on this server

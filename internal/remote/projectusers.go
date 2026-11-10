@@ -57,20 +57,6 @@ func doorKeysCommand(devopsy string) string {
 		"# AuthorizedKeysCommand for project users.\nexec " + Quote(devopsy) + " --authorized-keys \"$1\"\n"
 }
 
-// doorShell is a project user's login shell, root's file: it runs a command as sh -c does and
-// an interactive shell (sshd's login, --shell-host's -l) as one that is no login shell, with
-// no ENV, so nothing of the home runs at a login (~/.profile, a file ENV names): the home is
-// the user's to write, and a leaked key's hook would run at a kept key's next login.
-const doorShell = `#!/bin/sh
-# Written by devopsy (devopsy @<server> --project-users add): a project user's login shell,
-# which reads nothing of its home.
-unset ENV BASH_ENV
-if [ "${1:-}" = -c ]; then
-  exec /bin/sh -c "$2"
-fi
-exec /bin/sh -i
-`
-
 // doorSudoers is the door's two rules: a project user asks its deploy user, which reads a
 // project's tree as that project's user. Neither sudo keeps a variable of its caller's,
 // whatever the server's sudoers keeps for others: Go's runtime reads some (GODEBUG) before the
@@ -193,7 +179,10 @@ fi
 mkdir -p ` + path.Dir(DoorKeysCommand) + ` ` + path.Dir(DoorSSHDropIn) + `
 put ` + DoorSudoers + ` 440 'visudo -cqf "$1"' ` + Quote(doorSudoers(deploy, devopsy)) + ` || :
 put ` + DoorKeysCommand + ` 755 'sh -n "$1"' ` + Quote(doorKeysCommand(devopsy)) + ` || :
-put ` + DoorShell + ` 755 'sh -n "$1"' ` + Quote(doorShell) + ` || :
+# A project user's login shell is devopsy too (its runDoorShell): static, nothing a login's
+# environment names (LD_PRELOAD from a home's ~/.pam_environment) loads into it, and it hands
+# /bin/sh an environment of its own.
+[ "$(readlink ` + DoorShell + ` 2>/dev/null || :)" = ` + Quote(devopsy) + ` ] || ln -sfn ` + Quote(devopsy) + ` ` + DoorShell + `
 old=$(cat ` + DoorSSHDropIn + ` 2>/dev/null || :)
 if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
   if ! sshd -t; then
@@ -230,7 +219,7 @@ done
 rm -f "/var/lib/systemd/linger/$user"
 mkdir -p /etc/systemd/system
 ln -sfn /dev/null "/etc/systemd/system/user@$uid.service"
-# Its login shell reads nothing of the home (doorShell), a user made before included.
+# Its login shell reads nothing of the home (DoorShell, devopsy's), a user made before included.
 [ "$(getent passwd "$user" | cut -d: -f7)" = ` + DoorShell + ` ] || usermod -s ` + DoorShell + ` "$user"
 home=$(getent passwd "$user" | cut -d: -f6)
 chmod 750 "$home"

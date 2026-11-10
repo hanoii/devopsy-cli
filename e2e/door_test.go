@@ -469,6 +469,22 @@ NR=$nr CHAIN='`+chain+`' setsid perl -e '`+reaper+`' </dev/null >/dev/null 2>&1 
 	if out, _ := doorAs(t, user, "docker ps -q 2>&1"); strings.Contains(out, "no key left") {
 		t.Fatalf("the door refuses it with a key left: %s", out)
 	}
+	// A removal whose end did not complete (here its mark, as a cut session leaves it): the
+	// door answers the user nothing until the next listing of its keys completes the end.
+	ending := "/home/devopsy/.config/devopsy/door/keys/" + user + ".ending"
+	if out, code := doorRoot(t, "install -o devopsy -m 600 /dev/null "+ending); code != 0 {
+		t.Fatalf("the mark (%d): %s", code, out)
+	}
+	if out, _ := doorAs(t, user, "docker ps -q 2>&1"); !strings.Contains(out, "did not complete") {
+		t.Errorf("the door answers a user whose end is pending: %s", out)
+	}
+	keys("list")
+	if _, code := doorRoot(t, "test -e "+ending); code == 0 {
+		t.Error("a listing of its keys left the end pending")
+	}
+	if out, _ := doorAs(t, user, "docker ps -q 2>&1"); strings.Contains(out, "did not complete") {
+		t.Errorf("the door still refuses once the end completed: %s", out)
+	}
 	start()
 	fp, code := op(t, "/", "ssh-keygen -lf /root/.ssh/id_ed25519.pub | awk '{print $2}'")
 	if code != 0 {

@@ -68,8 +68,8 @@ func loginKey(registry string) string {
 }
 
 // doorLogin is docker login for a project user: its devopsy writes the login into its own
-// config, as docker login does, unchecked, and says so. The deploy user keeps no password of
-// the project's, and the door's claims read it from there (door.go's logins); the first claim
+// config, as docker login does, unchecked, and says so. The door's claims read it from there,
+// a copy of its auths kept in <space> until the user is removed (door.go's logins); the first claim
 // is what checks it, in the registry's words. A check here would reach no registry on its
 // server (the project users' firewall keeps it off), and one by Docker's daemon would have it
 // contact a registry the project names.

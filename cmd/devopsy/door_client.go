@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -100,23 +101,59 @@ func doorAnswer(c *exec.Cmd, max int, within time.Duration) ([]byte, error) {
 	c.Stdout = &out
 	// A child of the read's that keeps its output open ends Wait a second after the read.
 	c.WaitDelay = time.Second
-	// The time's kill goes to a process group, the read's own: a read with no session of its
-	// own (doorRead's sudo has one) gets a group of its own, as a registry's read through the
-	// docker CLI and its buildx plugin, which would otherwise be the door's, and no kill's.
-	if c.SysProcAttr == nil {
-		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	ownGroup(c)
 	if err := c.Start(); err != nil {
 		return nil, err
 	}
-	if within > 0 {
-		t := time.AfterFunc(within, func() { _ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL) })
-		defer t.Stop()
-	}
+	defer killGroupAfter(c, within)()
 	if err := c.Wait(); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// composeHelp says whether a compose command (its verb first) asks for compose's help: -h or
+// --help among compose's own flags, which for exec and run stop at the service, what follows
+// it being the service's command (`exec web df -h`, `run web drush --help`), as door.CheckVerb
+// reads it.
+func composeHelp(rest []string) bool {
+	if len(rest) == 0 {
+		return false
+	}
+	verb, flags := rest[0], door.Verbs[rest[0]]
+	for i := 1; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case a == "-h" || a == "--help":
+			return true
+		case !strings.HasPrefix(a, "-") || a == "-":
+			if verb == "exec" || verb == "run" {
+				return false
+			}
+		case !strings.Contains(a, "=") && flags[a] == 1:
+			i++
+		}
+	}
+	return false
+}
+
+// ownGroup gives c a process group of its own, unless it has a session of its own already
+// (doorRead's sudo): a kill of its group (killGroupAfter, claimCut) then reaches what it runs
+// (the docker CLI's buildx plugin among them), and never the door's.
+func ownGroup(c *exec.Cmd) {
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+}
+
+// killGroupAfter kills the process group of c, started in its own (ownGroup), once within has
+// passed (never when within is 0); what it gives stops the clock.
+func killGroupAfter(c *exec.Cmd, within time.Duration) func() {
+	if within <= 0 {
+		return func() {}
+	}
+	t := time.AfterFunc(within, func() { _ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL) })
+	return func() { t.Stop() }
 }
 
 // realDocker is the docker on PATH that is not this binary.
@@ -269,7 +306,7 @@ loop:
 	}
 	rest := args[i:]
 	// No daemon behind these.
-	if (len(rest) > 0 && rest[0] == "version") || slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
+	if (len(rest) > 0 && rest[0] == "version") || composeHelp(rest) {
 		return doorExec(real, append([]string{"compose"}, args...))
 	}
 	// A whole project by its name (composeDownProject): no file to render.

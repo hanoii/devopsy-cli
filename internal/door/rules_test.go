@@ -662,3 +662,20 @@ func TestCheckFileRefusesAnothersHostnameOnASharedNetwork(t *testing.T) {
 		}
 	}
 }
+
+// Every bind the door passes holds create_host_path false, whatever the file said: the door
+// makes what it binds before compose runs, so a source gone since (a sealed copy pruned as
+// another environment chose it) fails the start, never binds an empty directory Docker made.
+func TestCheckFileBindsNoSourceDockerMakes(t *testing.T) {
+	t.Parallel()
+	for _, bind := range []string{``, `,"bind":{"create_host_path":true}`} {
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/data","target":"/d"`+bind+`}]`)+`}}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		v := list(file["services"].(map[string]any)["web"].(map[string]any)["volumes"])[0].(map[string]any)
+		if opts, _ := v["bind"].(map[string]any); opts["create_host_path"] != false {
+			t.Errorf("%q: the bind passes as %v", bind, v)
+		}
+	}
+}
