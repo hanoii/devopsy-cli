@@ -2,6 +2,7 @@ package images
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -2990,5 +2991,46 @@ func TestRecordNeedsItsFetch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(m.e.rel(id), FetchFile)); err == nil {
 		t.Error("the fetch file outlived the record")
+	}
+}
+
+// A build FROM another service's image by its name is said before the fetch, with the fix:
+// builds land under their release's own names, so the name holds another environment's
+// build or none. One given as a build context, an ${ARG}, a stage's own name, an image no
+// service builds and an inline Dockerfile say nothing.
+func TestFromAnotherBuildIsSaid(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	spec := func(dockerfile string, more string) json.RawMessage {
+		return json.RawMessage(`{"context":` + strconv.Quote(dir) + `,"dockerfile":` + strconv.Quote(dockerfile) + more + `}`)
+	}
+	base := Service{Name: "base", Ref: "shop-base", Build: true, BuildSpec: spec(write("base.Dockerfile", "FROM busybox:1.37\n"), "")}
+	for name, c := range map[string]struct {
+		dockerfile, more string
+		said             bool
+	}{
+		"by name":          {"FROM shop-base\nRUN true\n", "", true},
+		"with a flag":      {"FROM --platform=linux/amd64 \\\n  shop-base AS app\n", "", true},
+		"as a context":     {"FROM shop-base\n", `,"additional_contexts":{"shop-base":"service:base"}`, false},
+		"an arg":           {"ARG BASE=shop-base\nFROM ${BASE}\n", "", false},
+		"a stage":          {"FROM busybox:1.37 AS shop-base\nFROM shop-base\n", "", false},
+		"a registry image": {"FROM busybox:1.37\n", "", false},
+	} {
+		app := Service{Name: "app", Ref: "shop-app", Build: true, BuildSpec: spec(write(strings.ReplaceAll(name, " ", "-")+".Dockerfile", c.dockerfile), c.more)}
+		got := fromOtherBuilds([]Service{base, app})
+		if said := len(got) == 1 && strings.Contains(got[0], `additional_contexts: shop-base: "service:base"`); said != c.said || !c.said && len(got) != 0 {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	inline := Service{Name: "app", Ref: "shop-app", Build: true, BuildSpec: json.RawMessage(`{"context":` + strconv.Quote(dir) + `,"dockerfile_inline":"FROM shop-base"}`)}
+	if got := fromOtherBuilds([]Service{base, inline}); len(got) != 0 {
+		t.Errorf("an inline Dockerfile: %q", got)
 	}
 }

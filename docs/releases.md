@@ -134,6 +134,9 @@ app:
       shop-base: "service:base"   # FROM shop-base in app's Dockerfile
 ```
 
+A release warns before it builds when a Dockerfile's `FROM` names
+another service's image this way.
+
 A failure here leaves the current release's images untouched. What the
 failed release got is tagged as that release's and removed with it.
 The same applies when a Ctrl-C or a lost connection (Dropped
