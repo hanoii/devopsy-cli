@@ -96,6 +96,12 @@ const doorBuildkitBase = "/etc/devopsy-e2e-buildkitd.toml"
 // options (for example its token auth's -e lines), its certificate at /certs/c.pem.
 func doorRegistry(t *testing.T, name, port string, auth bool, more ...string) string {
 	t.Helper()
+	return doorRegistryTrusted(t, name, port, auth, true, more...)
+}
+
+// doorRegistryTrusted is doorRegistry, its CA in Docker's certs.d only when daemon.
+func doorRegistryTrusted(t *testing.T, name, port string, auth, daemon bool, more ...string) string {
+	t.Helper()
 	gw, code := doorRoot(t, "docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'")
 	if code != 0 {
 		t.Fatalf("the bridge's gateway (%d): %s", code, gw)
@@ -103,6 +109,13 @@ func doorRegistry(t *testing.T, name, port string, auth bool, more ...string) st
 	ip := strings.TrimSpace(gw)
 	addr := ip + ":" + port
 	r := "/reg/" + name
+	trust := `cp ` + r + `/certs/c.pem /usr/local/share/ca-certificates/` + name + `.crt
+update-ca-certificates >/dev/null
+`
+	if daemon {
+		trust = `cp ` + r + `/certs/c.pem /etc/docker/certs.d/` + addr + `/ca.crt
+` + trust
+	}
 	login := ""
 	if auth {
 		login = `docker run --rm httpd:2.4-alpine htpasswd -Bbn alice s3cret >` + r + `/auth/htpasswd
@@ -119,13 +132,10 @@ func doorRegistry(t *testing.T, name, port string, auth bool, more ...string) st
 	if out, code := doorRoot(t, `set -e
 mkdir -p `+r+`/auth `+r+`/certs /etc/docker/certs.d/`+addr+`
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout `+r+`/certs/k.pem -out `+r+`/certs/c.pem -subj /CN=`+ip+` -addext subjectAltName=IP:`+ip+` 2>/dev/null
-cp `+r+`/certs/c.pem /etc/docker/certs.d/`+addr+`/ca.crt
-cp `+r+`/certs/c.pem /usr/local/share/ca-certificates/`+name+`.crt
-update-ca-certificates >/dev/null
-install -o devopsy -m 644 `+r+`/certs/c.pem `+doorSpace+`/buildx/`+name+`.pem
+`+trust+`install -o devopsy -m 644 `+r+`/certs/c.pem `+doorSpace+`/buildx/`+name+`.pem
 { cat `+doorBuildkitBase+`; printf '[registry."%s"]\n  ca = ["%s"]\n' `+addr+` `+doorSpace+`/buildx/`+name+`.pem; } >`+doorSpace+`/buildx/buildkitd.default.toml
 `+login+`docker run -d --name `+name+` -p `+addr+`:5000 `+opts+` registry:3 >/dev/null
-for i in $(seq 150); do curl -s -o /dev/null https://`+addr+`/v2/ && exit 0; sleep 0.2; done
+for i in $(seq 150); do curl -s --cacert `+r+`/certs/c.pem -o /dev/null https://`+addr+`/v2/ && exit 0; sleep 0.2; done
 exit 1`); code != 0 {
 		t.Fatalf("the registry %s (%d): %s", name, code, out)
 	}
@@ -1023,22 +1033,25 @@ docker image rm `+reg+`/private/app:1 >/dev/null
 	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 {
 		t.Errorf("with no login, a private image ran:\n%s", out)
 	}
-	// The project user's docker login, through the door: its own would reach no registry on
-	// its server, which the project users' firewall keeps it off. Never a password on the
-	// command line, and a wrong one is no login.
+	// The project user's docker login, saved by its own devopsy and checked by nothing: never a
+	// password on the command line, and a wrong one fails the next release, in the registry's
+	// words.
 	user := "devopsy-doorreg"
 	if out, code := doorAs(t, user, "docker login -u alice -p s3cret "+reg+" 2>&1"); code == 0 || !strings.Contains(out, "shows to every user of the server") {
 		t.Errorf("a password on the command line (%d): %s", code, out)
 	}
-	if out, code := doorAs(t, user, "printf wrong | docker login -u alice --password-stdin "+reg+" 2>&1"); code == 0 || !strings.Contains(out, "docker login "+reg+" failed") {
-		t.Errorf("a wrong password (%d): %s", code, out)
+	login := func(password string) {
+		t.Helper()
+		out, code := doorAs(t, user, "printf "+password+" | docker login -u alice --password-stdin "+reg+" 2>&1")
+		if code != 0 || !strings.Contains(out, reg+": saved, not checked: the first pull checks it") || strings.Contains(out, "Login Succeeded") {
+			t.Fatalf("a login with no socket (%d): %s", code, out)
+		}
 	}
-	if out, _ := doorAs(t, user, "cat ~/.docker/config.json 2>/dev/null"); strings.Contains(out, reg) {
-		t.Errorf("a wrong password kept: %s", out)
+	login("wrong")
+	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 || !strings.Contains(out, "nauthorized") {
+		t.Errorf("a wrong password (%d), not in the registry's words:\n%s", code, out)
 	}
-	if out, code := doorAs(t, user, "printf s3cret | docker login -u alice --password-stdin "+reg+" 2>&1"); code != 0 || !strings.Contains(out, "Login Succeeded") {
-		t.Fatalf("a login with no socket (%d): %s", code, out)
-	}
+	login("s3cret")
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("logged in, a private image (%d):\n%s", code, out)
 	}
@@ -1090,6 +1103,7 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.dock
 //     deleted): Docker fetches no blob it holds, so it would land on the other's image;
 //   - a config of the claimant's naming the other's layers by their diff_ids, over junk blobs:
 //     a load maps those diff_ids onto the layers already in the store, and runs their files.
+//
 // The first's control is the registry keeping its manifests alone; the second's, the forgery
 // loaded by hand as the deploy user, as a claim with no proof would, running the victim's file.
 func TestDoorClaimProvesTheContent(t *testing.T) {
@@ -1165,6 +1179,91 @@ docker run --rm `+reg+`/evil/b@`+digest+` cat /secret`); code != 0 || !strings.C
 	}
 }
 
+// A claim leaves Docker's store as a pull by that digest does, the id, the registry's digests
+// and the name asked alike: for a Docker Hub short name (an index of several platforms with
+// attestation manifests), for a registry with a port, and for an image of zstd layers, each
+// then running with --pull never. Two claims of one image at once both hold, and record it
+// once. The control is root's own pull by the digest, once the claimed image is removed.
+func TestDoorClaimLandsAsAPull(t *testing.T) {
+	user := doorUser(t, "doorland")
+	reg := doorRegistry(t, "doorland-reg", "5041", false)
+	hub, plain, zstd := "busybox:1.36.1", reg+"/plain:1", reg+"/zstd:1"
+	t.Cleanup(func() {
+		for _, ref := range []string{hub, plain, zstd} {
+			doorRoot(t, "docker image rm -f $(docker image inspect -f '{{.Id}}' "+ref+" 2>/dev/null) >/dev/null 2>&1; true")
+		}
+	})
+	if out, code := doorRoot(t, `set -e
+docker pull -q busybox:1.37 >/dev/null
+docker tag busybox:1.37 `+plain+` && docker push -q `+plain+` >/dev/null && docker image rm `+plain+` >/dev/null
+d=$(mktemp -d) && printf 'FROM busybox:1.37\nRUN echo zstd >/z\n' >"$d/Dockerfile"
+docker buildx build -q --output type=image,name=`+zstd+`,push=true,compression=zstd,force-compression=true "$d" >/dev/null
+docker image rm `+zstd+` >/dev/null 2>&1 || true
+docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
+		t.Fatalf("the images (%d): %s", code, out)
+	}
+	state := func(ref string) string {
+		t.Helper()
+		out, _ := doorRoot(t, "docker image inspect -f '{{.Id}} {{json .RepoDigests}} {{json .RepoTags}}' "+ref+" 2>&1")
+		return strings.TrimSpace(out)
+	}
+	for _, ref := range []string{hub, plain, zstd} {
+		id, code := doorAs(t, user, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1")
+		id = strings.TrimSpace(id)
+		if code != 0 || !strings.HasPrefix(id, "sha256:") {
+			t.Errorf("%s: the claim (%d): %s", ref, code, id)
+			continue
+		}
+		claimed := state(ref)
+		if out, code := doorRoot(t, "docker run --rm --pull never "+ref+" sh -c 'cat /z 2>/dev/null || true'"); code != 0 || ref == zstd && !strings.Contains(out, "zstd") {
+			t.Errorf("%s: the claimed image does not run (%d): %s", ref, code, out)
+		}
+		repo := ref[:strings.LastIndex(ref, ":")]
+		pulled, code := doorRoot(t, "set -e\ndocker image rm -f "+id+" >/dev/null\ndocker pull -q "+repo+"@"+id+" >/dev/null\ndocker tag "+repo+"@"+id+" "+ref)
+		if code != 0 {
+			t.Errorf("%s: the control's pull by digest (%d): %s", ref, code, pulled)
+			continue
+		}
+		if got := state(ref); got != claimed {
+			t.Errorf("%s: a claim left\n%s\nwhere a pull by its digest leaves\n%s", ref, claimed, got)
+		}
+	}
+	// Two at once, the image gone and its id still recorded.
+	id, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' "+plain+" && docker image rm -f $(docker image inspect -f '{{.Id}}' "+plain+") >/dev/null")
+	id = strings.TrimSpace(strings.Split(id, "\n")[0])
+	out, _ := doorAs(t, user, `a=0 b=0
+docker image inspect -f '{{.Id}}' `+plain+` >/tmp/doorland-a 2>&1 & p=$!
+docker image inspect -f '{{.Id}}' `+plain+` >/tmp/doorland-b 2>&1 & q=$!
+wait $p || a=$?
+wait $q || b=$?
+echo "$a $b"; cat /tmp/doorland-a /tmp/doorland-b; rm -f /tmp/doorland-a /tmp/doorland-b`)
+	if !strings.HasPrefix(out, "0 0\n") {
+		t.Errorf("two claims at once:\n%s", out)
+	}
+	if got, _ := doorRoot(t, "grep -c '^"+id+"$' "+doorSpace+"/images/"+user); strings.TrimSpace(got) != "1" {
+		t.Errorf("the record holds %s %s times", id, strings.TrimSpace(got))
+	}
+}
+
+// A registry with a CA of its own needs nothing of Docker's daemon (no certs.d) for a project
+// user's images: the door's client, which trusts the host's CA store, and the project's
+// builder, which its config's CA, are what reach it.
+func TestDoorClaimNeedsNoDaemonCerts(t *testing.T) {
+	user := doorUser(t, "doortrust")
+	reg := doorRegistryTrusted(t, "doortrust-reg", "5043", false, false)
+	ref := reg + "/app:1"
+	t.Cleanup(func() {
+		doorRoot(t, "docker image rm -f $(docker image inspect -f '{{.Id}}' "+ref+" 2>/dev/null) >/dev/null 2>&1; true")
+	})
+	// Pushed by buildx's client, which trusts the host's store.
+	if out, code := doorRoot(t, "docker buildx imagetools create --tag "+ref+" busybox:1.37 >/dev/null 2>&1"); code != 0 {
+		t.Fatalf("the image (%d): %s", code, out)
+	}
+	if out, code := doorAs(t, user, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1"); code != 0 {
+		t.Errorf("a claim from a registry Docker's daemon has no certs.d for (%d):\n%s", code, out)
+	}
+}
+
 // Docker's daemon contacts no registry a project user names, over a whole life: a release in
 // image mode, compose's pull verb, a rollback pulling its image back, a login and an inspect
 // of an image not here yet. A registry the project names can send the daemon, root and on the
@@ -1183,7 +1282,8 @@ for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+
 		out, _ := doorRoot(t, "docker logs doornodaemon-reg 2>&1")
 		var lines []string
 		for _, l := range strings.Split(out, "\n") {
-			if strings.Contains(l, "UpstreamClient") && strings.Contains(l, "/v2/app/") {
+			// Every pull GETs its manifest, and a push (root's, here) GETs nothing.
+			if strings.Contains(l, "UpstreamClient") && strings.Contains(l, "GET /v2/app/") {
 				lines = append(lines, l)
 			}
 		}
@@ -1211,6 +1311,18 @@ for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+
 	release("a rollback, pulling its image back", "--rollback --yes")
 	user := "devopsy-doornodaemon"
 	doorAs(t, user, "printf x | docker login -u u --password-stdin "+reg+" >/dev/null 2>&1; docker image inspect "+reg+"/app:2 >/dev/null 2>&1")
+	// The registry moves app:2, root's push: the next release, the door's claims, takes it
+	// forward.
+	if out, code := doorRoot(t, `set -e
+printf 'FROM busybox:1.37\nRUN echo v2 >/v\n' | docker build -q -t `+reg+`/moved:2 - >/dev/null
+docker tag `+reg+`/moved:2 `+reg+`/app:2 && docker push -q `+reg+`/app:2 >/dev/null
+docker image rm `+reg+`/moved:2 >/dev/null`); code != 0 {
+		t.Fatalf("app:2 moved (%d): %s", code, out)
+	}
+	release("a release of the moved tag", "--release")
+	if out, _ := doorRoot(t, "docker exec doornodaemon-prod-web-1 cat /v 2>&1"); strings.TrimSpace(out) != "v2" {
+		t.Errorf("a release did not take the moved tag forward: %s", out)
+	}
 	if got := daemon(); len(got) > 0 {
 		t.Errorf("Docker's daemon contacted the project's registry %d times, the first:\n%s", len(got), got[0])
 	}
@@ -1431,12 +1543,14 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 	}
 }
 
-// Docker's daemon, root and outside the project users' firewall, contacts a registry for a
-// project user's pull or login: the firewall keeps it off the host's loopback and the metadata
-// services too, by its cgroup, wherever a name sends it (a name the door cannot tell, here one
+// Docker's daemon, root and outside the project users' firewall, still pulls for the deploy
+// user and devopsy's own images, though for no project user: the firewall keeps it off the
+// host's loopback and the metadata services too, by its cgroup, whoever asks it (here root),
+// wherever a name sends it (a name the door cannot tell, here one
 // in /etc/hosts). The control: root reaches the same registry on loopback.
 func TestDoorDaemonFirewall(t *testing.T) {
-	user := doorUser(t, "doordaemon")
+	// A project user's add loads the firewall.
+	doorUser(t, "doordaemon")
 	t.Cleanup(func() {
 		doorRoot(t, "docker rm -f doordaemon-reg >/dev/null 2>&1; grep -v doordaemon-reg /etc/hosts >/tmp/doordaemon-hosts && cat /tmp/doordaemon-hosts >/etc/hosts")
 	})
@@ -1447,10 +1561,10 @@ for i in $(seq 150); do curl -s -o /dev/null http://doordaemon-reg.test:5007/v2/
 exit 1`); code != 0 {
 		t.Fatalf("the registry on loopback (%d): %s", code, out)
 	}
-	out, code := doorAs(t, user, "printf x | docker login -u u --password-stdin doordaemon-reg.test:5007 2>&1")
-	if code == 0 || strings.Contains(out, "Login Succeeded") {
+	// A dial error is the daemon held; any other answer is the registry's.
+	if out, _ := doorRoot(t, "docker pull doordaemon-reg.test:5007/probe:1 2>&1"); !strings.Contains(out, "dial tcp") {
 		jumps, _ := doorRoot(t, "iptables -S OUTPUT")
-		t.Errorf("the daemon logged in to a registry on the host's loopback for a project user (%d):\n%s\n%s", code, out, jumps)
+		t.Errorf("the daemon reached a registry on the host's loopback:\n%s\n%s", out, jumps)
 	}
 }
 
@@ -1460,7 +1574,7 @@ exit 1`); code != 0 {
 // start of Docker runs (DoorFirewallDockerDropIn, systemd's, which this server has not), holds
 // it again. The e2e server has no systemd, so the test makes the cgroup again itself.
 func TestDoorDaemonFirewallHoldsOnceDockersCgroupIsMadeAgain(t *testing.T) {
-	user := doorUser(t, "doorcg")
+	doorUser(t, "doorcg")
 	const reg, host, port = "doorcg-reg", "doorcg-reg.test", "5017"
 	t.Cleanup(func() {
 		doorRoot(t, "docker rm -f "+reg+" >/dev/null 2>&1; grep -v "+reg+" /etc/hosts >/tmp/doorcg-hosts && cat /tmp/doorcg-hosts >/etc/hosts; rm -f /tmp/doorcg-hosts; rmdir /sys/fs/cgroup/doorcg-away 2>/dev/null; /usr/local/libexec/devopsy-firewall")
@@ -1472,10 +1586,11 @@ for i in $(seq 150); do curl -s -o /dev/null http://`+host+`:`+port+`/v2/ && exi
 exit 1`); code != 0 {
 		t.Fatalf("the registry on loopback (%d): %s", code, out)
 	}
-	// reached says whether the daemon logged in to the registry on loopback for the project user.
+	// reached says whether the daemon reached the registry on loopback: a dial error is the
+	// daemon held, any other answer the registry's.
 	reached := func() (string, bool) {
-		out, code := doorAs(t, user, "printf x | docker login -u u --password-stdin "+host+":"+port+" 2>&1")
-		return out, code == 0 && strings.Contains(out, "Login Succeeded")
+		out, _ := doorRoot(t, "docker pull "+host+":"+port+"/probe:1 2>&1")
+		return out, !strings.Contains(out, "dial tcp")
 	}
 	// The control: the daemon is held as the firewall was loaded.
 	if out, ok := reached(); ok {
@@ -1509,7 +1624,7 @@ grep -q "$(pidof -s dockerd)" $cg/dockerd/cgroup.procs`); code != 0 {
 	out, ok := reached()
 	info, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
 	if ok && !strings.Contains(info, "firewall") {
-		t.Errorf("its cgroup made again under the same path, the daemon logged in to a registry on the host's loopback for a project user, and --server-info says nothing of the firewall:\n%s\nthe jump, unchanged:\n%s\n--server-info:\n%s", out, after, info)
+		t.Errorf("its cgroup made again under the same path, the daemon reached a registry on the host's loopback, and --server-info says nothing of the firewall:\n%s\nthe jump, unchanged:\n%s\n--server-info:\n%s", out, after, info)
 	}
 	// The loader, run again, holds it: the jump goes in for the cgroup there now.
 	if out, code := doorRoot(t, "/usr/local/libexec/devopsy-firewall"); code != 0 {
@@ -2013,6 +2128,12 @@ func TestDoorRefusesBeforeTheSwitch(t *testing.T) {
 		if strings.Contains(out, word) {
 			t.Errorf("the refusal came past the switch (%q):\n%s", word, out)
 		}
+	}
+	// A tag its registry does not have fails the fetch's pull, the door's own claim, before the
+	// switch too.
+	op(t, dir, `printf 'services:\n  web:\n    image: busybox:0.0.0-nosuch\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n    command: [sleep, infinity]\n' >.devopsy/compose.yaml`)
+	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 || started() != before || strings.Contains(out, "restart") {
+		t.Errorf("a missing tag (%d), the live container started at %s:\n%s", code, started(), out)
 	}
 	// A rollback whose hold is gone pulls its image again.
 	if out, code := doorRoot(t, "docker image ls --format '{{.Repository}}:{{.Tag}}' | grep devopsy-doorrefuse-prod | xargs -r docker image rm"); code != 0 {
