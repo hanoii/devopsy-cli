@@ -397,6 +397,31 @@ func (s *doorSide) pruneSealed() {
 	}
 }
 
+// Within implements door.Paths: rel under a sealed copy, the deploy user's own, walked part by
+// part with no link followed (a copy keeps the links it holds), nothing there being no
+// refusal.
+func (s *doorSide) Within(root, rel string) error {
+	parts := strings.Split(filepath.Clean(rel), "/")
+	cur := root
+	for _, part := range parts {
+		if part == ".." || part == "" {
+			return errors.New("a path out of it")
+		}
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return errors.New("a link on its way")
+		}
+	}
+	return nil
+}
+
 // IsDir implements door.Host.
 func (s *doorSide) IsDir(path string) bool {
 	return s.read("isdir", path).Run() == nil
@@ -1217,11 +1242,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
 		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
-	if argv[0] == "build" && door.HasContexts(file) {
-		if err := s.composeKnowsServiceContexts(); err != nil {
-			return doorRefused(err)
-		}
-	}
 	name, _ := file["name"].(string)
 	s.policy.Label(file)
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
@@ -1279,6 +1299,13 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			return doorRefused(err)
 		}
 		env = append(slices.Clone(env), b...)
+		// Read under the build's own environment: Docker finds compose in
+		// $DOCKER_CONFIG/cli-plugins first, so another DOCKER_CONFIG may be another compose.
+		if door.HasContexts(file) {
+			if err := s.composeKnowsServiceContexts(env); err != nil {
+				return doorRefused(err)
+			}
+		}
 	}
 	cmd := []string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}
 	for _, p := range strings.Split(profiles, ",") {
@@ -1296,9 +1323,12 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 var serviceContexts = [3]int{2, 33, 0}
 
 // composeKnowsServiceContexts refuses a build with contexts (all service:<name>, CheckFile)
-// on a compose before serviceContexts, or one whose version cannot be read.
-func (s *doorSide) composeKnowsServiceContexts() error {
-	out, err := s.docker("compose", "version", "--short").Output()
+// on a compose before serviceContexts, or one whose version cannot be read, the compose the
+// build's environment env runs.
+func (s *doorSide) composeKnowsServiceContexts(env []string) error {
+	c := s.docker("compose", "version", "--short")
+	c.Env = env
+	out, err := c.Output()
 	v := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
 	var got [3]int
 	if _, serr := fmt.Sscanf(v, "%d.%d.%d", &got[0], &got[1], &got[2]); err != nil || serr != nil || slices.Compare(got[:], serviceContexts[:]) < 0 {

@@ -160,6 +160,9 @@ type Paths interface {
 	// Seal copies a path of the project's, by content, into the deploy user's
 	// space, and returns the copy's path.
 	Seal(path string) (string, error)
+	// Within refuses a path rel under a sealed copy root that crosses a link on its
+	// way, or is one: a copy keeps the links it holds, as a bind needs.
+	Within(root, rel string) error
 }
 
 // Refusal is a request the door turns down.
@@ -617,8 +620,19 @@ func checkBuild(svc string, b map[string]any, services map[string]any, p Policy,
 		fail("%s: sealing %s: %v", svc, ctx, err)
 		return
 	}
+	// What compose's client opens in the sealed copy as the deploy user, the Dockerfile and
+	// its ignore files: a directory on the way that became a link after the check above (the
+	// copy is a tar the project user makes later) would read any file that user reads, its
+	// lines coming back in BuildKit's parse error.
+	rel := strings.TrimPrefix(df, real+"/")
+	for _, f := range []string{rel, ".dockerignore", rel + ".dockerignore"} {
+		if err := paths.Within(sealed, f); err != nil {
+			fail("%s: build: %s in its sealed context: %v", svc, f, err)
+			return
+		}
+	}
 	b["context"] = sealed
-	b["dockerfile"] = strings.TrimPrefix(df, real+"/")
+	b["dockerfile"] = rel
 }
 
 // checkContexts takes a build's additional_contexts only as another service of the same file

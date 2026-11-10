@@ -185,6 +185,7 @@ type doorTestHost struct{}
 
 func (doorTestHost) Real(p string) (string, error)           { return filepath.Clean(p), nil }
 func (doorTestHost) Seal(p string) (string, error)           { return p, nil }
+func (doorTestHost) Within(root, rel string) error           { return nil }
 func (doorTestHost) IsDir(string) bool                       { return false }
 func (doorTestHost) CopyIn(p string, _ bool) (string, error) { return p, nil }
 func (doorTestHost) WorkDir() (string, error)                { return "/space/work/x", nil }
@@ -1197,14 +1198,6 @@ esac
 // finds its plugins in $DOCKER_CONFIG/cli-plugins first (~/.docker/cli-plugins without the
 // variable), then in the system's directories, so the two are one only when both run under
 // the same DOCKER_CONFIG.
-//
-// BUG: the version is read in the door's plain environment (the deploy user's
-// ~/.docker/cli-plugins first), and the build runs with DOCKER_CONFIG set to the project's
-// logins directory, which holds no plugin: the system's compose. A deploy user with a newer
-// compose of its own under ~/.docker/cli-plugins, the usual way to get one beside a
-// distribution's older package, answers the check with it, and the older one then reads
-// service:<name> as a path of the project user's making. Here the fake answers 2.40.0
-// without DOCKER_CONFIG and 2.26.1 with it, as such a server does.
 func TestDoorReadsTheVersionOfTheComposeThatBuilds(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1253,18 +1246,6 @@ esac
 // link on the way to it: the client opens <context>/<dockerfile> as the deploy user (its
 // directory is the local source it sends the builder, the file the only one sent), and what
 // BuildKit cannot parse comes back in the build's error, the line and those around it.
-//
-// BUG: the door resolves the Dockerfile in the project's tree (Real), then seals the context
-// by a tar the project user makes afterwards, and checks only that the copy's root is no
-// link (noLink): links inside a sealed copy are kept, as a bind needs. A directory on the
-// Dockerfile's path that becomes a link between the two (made while tar is busy with a large
-// file earlier in the context: realpath -m takes a path not there yet, so nothing has to be
-// swapped) leaves <sealed>/x/sub a link to anywhere, and the build reads, with the deploy
-// user's rights, a file of the door's or the deploy user's as its Dockerfile: another
-// project's registry logins (<space>/logins/<project>/config.json, one line, printed whole
-// in "unknown instruction"), the deploy user's own ~/.docker/config.json, lines of a key.
-// The fake's real answers what realpath said before the link was there; its tar reads the
-// tree with it.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorBuildReadsNoDockerfileThroughALink(t *testing.T) {

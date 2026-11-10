@@ -27,6 +27,8 @@ func (f *fakePaths) Real(path string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
+func (f *fakePaths) Within(root, rel string) error { return nil }
+
 func (f *fakePaths) Seal(path string) (string, error) {
 	f.sealed = append(f.sealed, path)
 	return "/space/sealed/shop/abc/x", nil
