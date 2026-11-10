@@ -3022,3 +3022,241 @@ func TestFromAnotherBuildIsSaid(t *testing.T) {
 		t.Errorf("an inline Dockerfile: %q", got)
 	}
 }
+
+// fetchTagsLeft are the fetch tags Docker still has (fetchTag's -f<cksum>).
+func fetchTagsLeft(d *fakeDocker) []string {
+	var left []string
+	for n := range d.names {
+		if strings.Contains(n, ":devopsy-") && regexp.MustCompile(`-f[0-9a-z]+$`).MatchString(n) {
+			left = append(left, n)
+		}
+	}
+	sort.Strings(left)
+	return left
+}
+
+// A release's removal takes what a fetch of it left: a rollback's fetch killed outright (the
+// server rebooted, the build out of memory) writes no FetchingFile, so no img recover finds
+// its fetch file, and once the release is pruned nothing reads it again.
+//
+// BUG: Remove reads the listing alone, so the fetch tags of a rollback's cut fetch outlive
+// their release: no listing names them, they read as bookmarks (isBookmark) to every later
+// removal, which leaves their images "held by another release" for good.
+func TestRemoveTakesAFetchLeftBehind(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	r1, err := m.release(false, web)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	// r1's build is gone (pruned by hand): a rollback to it builds again.
+	imgs, _, _ := composeFacts(m.e.rel(r1))
+	if err := d.Remove(imgs["web"]); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.e.set.Restore(m.e.rel(r1), m.prev(), false); !errors.Is(err, ErrGone) {
+		t.Fatalf("the control: the rollback's restore asks for no build: %v", err)
+	}
+	// Its fetch builds, and is killed before its restore --fetched or an undo.
+	m.fetchID(r1)
+	if len(fetchTagsLeft(d)) != 1 {
+		t.Fatalf("the control: the fetch's tags: %q", fetchTagsLeft(d))
+	}
+	if err := m.e.set.Remove(m.e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if left := fetchTagsLeft(d); len(left) != 0 {
+		t.Errorf("r1 is removed, and its fetch's tags stay, which no listing names: %q", left)
+	}
+}
+
+// noTag is a Docker whose tag fails (a full disk, the daemon restarting).
+type noTag struct{ *fakeDocker }
+
+func (noTag) Tag(src, dst string) error { return errors.New("no space left on device") }
+
+// A record whose bookmark could not be put fails, before the switch: the release's file runs
+// each own image by that bookmark, so without it the run step has nothing to start.
+//
+// BUG: keep only warns ("a rollback to it builds or pulls it again", true while a service ran
+// by its project's name), Record goes on, writes image: <a bookmark nothing holds>, drops the
+// fetch tag, the build's last name, and the release goes live to fail in its run step.
+func TestRecordFailsWithoutItsBookmark(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	id := m.e.release(web)
+	m.fetchID(id)
+	built, _ := d.ID(fetchTags(m.e.rel(id))["web"])
+	m.e.set.Docker = noTag{d}
+	err := m.e.set.Record(m.e.rel(id), "")
+	if got := fileImage(d, m.e.rel(id), "web", "shop-web"); err == nil && got != built {
+		imgs, _, _ := composeFacts(m.e.rel(id))
+		t.Errorf("the record went through, and its file runs web by %q, which holds %q, not its build %s (still there: %v):\n%s", imgs["web"], got, built, d.images[built], out.String())
+	}
+}
+
+// An undo after the record (the server's log could not be made, a fetch marker left between
+// the record and its removal: undoLocked, img recover) keeps the listing the record wrote:
+// the fetch's tags are gone by then, and the project's name is never the release's.
+//
+// BUG: Undo's Bookmark lists again, and without a fetch file reads each built service by its
+// project's name: the release's listing and its bookmark take whatever is there (another
+// environment's plain compose build), or lose their image.
+func TestUndoAfterRecordKeepsItsListing(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	id := m.e.release(web)
+	rel := m.e.rel(id)
+	m.fetchID(id)
+	if err := m.e.set.Record(rel, ""); err != nil {
+		t.Fatal(err)
+	}
+	built := fileImage(d, rel, "web", "")
+	// What a plain docker compose elsewhere left under the project's name.
+	d.pull("shop-web", "theirs")
+	m.e.set.Undo(rel, false)
+	if e, _ := match(readList(rel), entry{Service: "web"}); e.ID != built {
+		t.Errorf("after the undo the listing has web on %q, not %s, what the release built", e.ID, built)
+	}
+	if got := fileImage(d, rel, "web", ""); got != built {
+		t.Errorf("after the undo the release's bookmark holds %q, not its build %s", got, built)
+	}
+}
+
+// The restart's last try (--as-built) gives a service its listing has no image of (a
+// variable turned it on since) none: never what the project's name holds, which is no
+// release's.
+//
+// BUG: asIs falls back on entryOf by the project's name, so the release's bookmark goes
+// onto whatever another environment left there, and its file runs that.
+func TestAsBuiltNeverReadsTheProjectsName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	worker := Service{Name: "worker", Ref: "shop-worker", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	r1, err := m.release(false, web)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := m.e.release(web, worker)
+	m.fetchID(failed)
+	if err := m.e.set.Record(m.e.rel(failed), m.prev()); err != nil {
+		t.Fatal(err)
+	}
+	// r1's compose gives the worker too now, and its build failed again.
+	m.e.svcs[r1] = []Service{web, worker}
+	d.pull("shop-worker", "theirs")
+	m.e.set.Restart, m.e.set.AsBuilt = true, true
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(failed), false); err != nil {
+		m.fail("restore --as-built: %v", err)
+	}
+	if got := fileImage(d, m.e.rel(r1), "worker", ""); got == "theirs" {
+		imgs, _, _ := composeFacts(m.e.rel(r1))
+		t.Errorf("r1 runs the worker by %q on %q, what the project's name held, which no release of prod built", imgs["worker"], got)
+	}
+}
+
+// A service under a profile with the same image: and build: as a default one (one YAML
+// anchor for both, a tool run with --profile) runs its release's bookmark of that build, as
+// one with pull_policy: never does.
+//
+// BUG: resolveBookmarks leaves out a profile's service that has a build: section, while
+// WriteFetch names it: the file gives it no image, so its first run builds under the
+// project's name, which no listing removes, or runs what another environment left there.
+func TestProfileServiceBuildingTheSameImage(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-app", Build: true}
+	tool := Service{Name: "tool", Ref: "shop-app", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(m.e.svcs[filepath.Base(rel)]), tool), nil
+	}
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	own := m.runs("web")
+	// Another environment's plain build under the name.
+	d.pull("shop-app", "theirs")
+	if got := fileImage(d, m.e.rel(m.cur), "tool", "shop-app"); got != own {
+		imgs, _, _ := composeFacts(m.e.rel(m.cur))
+		t.Errorf("the tool runs %q (image: %q), not its release's build %s", got, imgs["tool"], own)
+	}
+}
+
+// A service under a profile sharing a built data service's image keeps an image its
+// release has while that service is held: the file named the build's bookmark for it before
+// the hold.
+//
+// BUG: resolveBookmarks maps a profile's service only to an entry not held, so the restart
+// that holds the database drops the tool's image: and it runs the project's name, which
+// devopsy's builds never write.
+func TestProfileServiceSharingAHeldBuild(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	tool := Service{Name: "dbtool", Ref: "shop-database", NeverPull: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(m.e.svcs[filepath.Base(rel)]), tool), nil
+	}
+	r1, err := m.release(false, builtDB("shop", "11.8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fileImage(d, m.e.rel(r1), "dbtool", "shop-database"); got == "" || got != m.runs("database") {
+		t.Fatalf("the control: the tool runs %q, the database %q", got, m.runs("database"))
+	}
+	if _, err := m.failRun(false, builtDB("shop", "12.1")); err != nil {
+		t.Fatal(err)
+	}
+	if heldIn(m.e.rel(r1))["database"] == "" {
+		m.fail("the control: the database is not held")
+	}
+	if got := fileImage(d, m.e.rel(r1), "dbtool", "shop-database"); got == "" {
+		imgs, _, _ := composeFacts(m.e.rel(r1))
+		t.Errorf("with the database held, the tool has no image (image: %q, and nothing writes shop-database)", imgs["dbtool"])
+	}
+}
+
+// A COPY --from of another service's image by its name reads that name as a FROM does, and
+// is said with it.
+//
+// BUG: fromOtherBuilds reads FROM lines alone, so a Dockerfile that only copies from the
+// other build (COPY --from=shop-base) fails its fetch, or copies another environment's
+// files, with no warning.
+func TestCopyFromAnotherBuildIsSaid(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, text := range map[string]string{
+		"base.Dockerfile": "FROM busybox:1.37\n",
+		"app.Dockerfile":  "FROM busybox:1.37\nCOPY --from=shop-base /bin/tool /bin/tool\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec := func(dockerfile string) json.RawMessage {
+		return json.RawMessage(`{"context":` + strconv.Quote(dir) + `,"dockerfile":` + strconv.Quote(dockerfile) + `}`)
+	}
+	base := Service{Name: "base", Ref: "shop-base", Build: true, BuildSpec: spec("base.Dockerfile")}
+	app := Service{Name: "app", Ref: "shop-app", Build: true, BuildSpec: spec("app.Dockerfile")}
+	if got := fromOtherBuilds([]Service{base, app}); len(got) != 1 {
+		t.Errorf("a COPY --from=shop-base, which base builds: %q", got)
+	}
+}
