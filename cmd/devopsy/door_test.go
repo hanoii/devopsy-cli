@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1144,6 +1145,66 @@ func TestDoorClaimActsByDigest(t *testing.T) {
 	}
 }
 
+// A word the door leaves in a build's file is no path in the project user's tree, however
+// the compose it runs reads it: compose's client reads a build's contexts with the deploy
+// user's rights, which is why the door seals the context and refuses a path as another.
+//
+// BUG: `service:<name>` is a service only to a compose that knows the form (v2.33.0 on,
+// compose-go's absContextPath); an older one (Debian's and Ubuntu's own packages are)
+// reads it as a path relative to the project directory, and the door hands compose the
+// project user's own directory for that (--project-directory, checked to be in its tree,
+// then given as typed). There `service:base` is the project user's to make, a link to
+// anything the deploy user reads (its ~/.ssh, its config and the door's keys, another
+// project's entries under <space>/mnt), which that compose sends to the project's builder
+// as the named context, for a Dockerfile to COPY out. Nothing checks compose's version.
+// The test asks for the path to lead nowhere of the project's (a project directory of the
+// door's own for a build); a refusal of the form on a compose that does not know it is the
+// other way, and would need this test rewritten.
+func TestDoorBuildContextIsNoPathOfTheProjects(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	doorImageFake(t, dir)
+	// The door reads the project's tree as its user, through sudo: a path is itself, and a
+	// tar of it is that user's.
+	write(t, filepath.Join(dir, "sudo"), `#!/bin/sh
+shift 5
+case "$1" in
+  real) printf '%s\n' "$2" ;;
+  tar) exec tar -C "$(dirname "$2")" -cf - -- "$(basename "$2")" ;;
+  *) exit 1 ;;
+esac
+`, 0o755)
+	code := filepath.Join(dir, "prod", "releases", "1", "code")
+	write(t, filepath.Join(code, "base", "Dockerfile"), "FROM busybox:1.37\n", 0o644)
+	write(t, filepath.Join(code, "app", "Dockerfile"), "FROM shop-base\n", 0o644)
+	svc := func(build string) string {
+		return `{"build":` + build + `,"user":"10001:10001","security_opt":["no-new-privileges"]}`
+	}
+	file := `{"name":"shop-prod","services":{` +
+		`"base":` + svc(`{"context":"`+code+`/base"}`) + `,` +
+		`"app":` + svc(`{"context":"`+code+`/app","additional_contexts":{"shop-base":"service:base"}}`) + `}}`
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=build", "DEVOPSY_TEST_DOOR_FILE="+file,
+		"DEVOPSY_TEST_DOOR_DIR="+code, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the door did not exec compose (%v):\n%s", err, out)
+	}
+	args, _, _ := strings.Cut(string(out), "\n")
+	_, rest, ok := strings.Cut(args, " --project-directory ")
+	if !ok || !strings.Contains(string(out), `"shop-base":"service:base"`) {
+		t.Fatalf("compose got no project directory, or no context:\n%s", out)
+	}
+	project, _, _ := strings.Cut(rest, " ")
+	// As a compose before v2.33.0 resolves it.
+	if read := filepath.Join(project, "service:base"); strings.HasPrefix(read, dir+"/") {
+		t.Errorf("an older compose reads the context service:base as %s, a path the project user makes, with the deploy user's rights", read)
+	}
+}
+
 // doorComposeHelper runs the door's compose on a file naming a pulled image, with the
 // fakes in dir and the verb in DEVOPSY_TEST_DOOR_VERB (TestDoorComposeHandsThePinnedFile),
 // or the request in DEVOPSY_TEST_DOOR_REQUEST (TestDoorClaimActsByDigest), and exits as it
@@ -1160,7 +1221,14 @@ func doorComposeHelper(dir string) {
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
 		"image": "registry.example.com/blog/private:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
 	}}}
-	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, "", dir, strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
+	// A test's own file (TestDoorBuildContextIsNoPathOfTheProjects).
+	if given := os.Getenv("DEVOPSY_TEST_DOOR_FILE"); given != "" {
+		file = map[string]any{}
+		if err := json.Unmarshal([]byte(given), &file); err != nil {
+			panic(err)
+		}
+	}
+	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, "", cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), dir), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
 }
 
 // The door's clone and mark take only a clone's directory or a take's in it (door.CloneDir):
