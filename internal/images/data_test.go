@@ -740,8 +740,8 @@ func TestDataReleaseSyncAcceptedRestart(t *testing.T) {
 
 // The restart after a failed run step cannot refuse: every data service
 // the rule refuses, once the failed release's image ran on its data,
-// stays on that image, a pulled one by digest, a built one by its id, its
-// own name retagged from the failed release's bookmark, whatever
+// stays on that image, a pulled one by digest, a built one by its own
+// name retagged from the failed release's bookmark, whatever
 // --accept-image said; the hold's own version and tag are what ran
 // records, so a later rollback finds the data's version; --status names
 // both holds, and a reload is not refused for them.
@@ -767,7 +767,7 @@ func TestDataRestartHolds(t *testing.T) {
 		m.fail("the restart of %s: database %s (want J1), search %s (want %s's build, not %s)", r1, m.runs("database"), m.runs("search"), r2, searchWas)
 	}
 	imgs, _, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != "mariadb@J1" || imgs["search"] != m.runs("search") || held["database"] != r2 || held["search"] != r2 {
+	if imgs["database"] != "mariadb@J1" || imgs["search"] != "" || held["database"] != r2 || held["search"] != r2 {
 		t.Errorf("devopsy's compose file: images %v, held %v", imgs, held)
 	}
 	if d.names["mariadb:11.8"] != "I1" {
@@ -987,7 +987,7 @@ func TestDataRestartHoldSurvivesFetch(t *testing.T) {
 }
 
 // The classic image store: a built image has no registry digest, so its
-// hold goes by its id, its own name put back on it, never a digest; and a failed release
+// hold goes by its own name and id, never a digest; and a failed release
 // that built the service over a previous one that pulls it holds by
 // image: its own name in the previous release's compose file, the pulled
 // name never retagged, the listing recording that image so the
@@ -1004,7 +1004,7 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	m.cur = r2
 	m.restart(r1, r2)
 	imgs, labels, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != failed.ID || labels["database"] != failed.ID || held["database"] != r2 || m.runs("database") != failed.ID {
+	if imgs["database"] != "" || labels["database"] != failed.ID || held["database"] != r2 || m.runs("database") != failed.ID {
 		t.Errorf("classic store: image %q, label %q, held %q, runs %s, want %s", imgs["database"], labels["database"], held["database"], m.runs("database"), failed.ID)
 	}
 

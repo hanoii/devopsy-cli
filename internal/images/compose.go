@@ -11,9 +11,7 @@ import (
 // ComposeFile is devopsy's own compose file, in a release's directory
 // beside its code: the facts of its activation a project could not write
 // in advance, and nothing the project chooses. Every service the
-// activation fetched gets DigestLabel, the image it gave it, and a built
-// one image: that image's id (environments building under one name, a
-// branch's or a pull request's, move it for each other); a data
+// activation fetched gets DigestLabel, the image it gave it; a data
 // service held on another image than its release's own (holdsFor: the
 // rule refuses its own against its data's history) gets HeldLabel, and
 // image: the reference that holds it (its digest, another release's own
@@ -65,16 +63,9 @@ func composeText(es []entry, holds map[string]composeHold) string {
 		if label == "" {
 			label = hold.Image
 		}
-		image := hold.Image
-		if image == "" && e.Kind == KindOwn && e.ID != "" {
-			// Pinned: the run step, a plain up, a sync's start resolve the name again
-			// otherwise, and every environment building under it moves it (a branch's,
-			// a pull request's).
-			image = e.ID
-		}
 		svcs.WriteString("  " + strconv.Quote(e.Service) + ":\n")
-		if image != "" {
-			svcs.WriteString("    image: " + strconv.Quote(image) + "\n")
+		if hold.Image != "" {
+			svcs.WriteString("    image: " + strconv.Quote(hold.Image) + "\n")
 		}
 		svcs.WriteString("    labels:\n      " + strconv.Quote(DigestLabel) + ": " + strconv.Quote(label) + "\n")
 		if hold.From != "" {
@@ -136,7 +127,7 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // another image than the release's own (HeldLabel), own names included.
 // A hold is said, the rest warned.
 func StatusLines(d Docker, project, rel string) []StatusLine {
-	pins, labels, held := composeFacts(rel)
+	_, labels, held := composeFacts(rel)
 	cs, err := d.Containers(project)
 	if err != nil {
 		return []StatusLine{{Text: "could not list the containers: " + err.Error(), Warn: true}}
@@ -161,10 +152,7 @@ func StatusLines(d Docker, project, rel string) []StatusLine {
 		case err != nil || gave == "":
 		case !sameImage(img, gave):
 			l := fmt.Sprintf("%s runs %s, not %s its activation gave it", c.Service, shownImage(refs[c.Service], img), shortName(gave))
-			if pins[c.Service] != "" {
-				// The file names its image (a build's id, a hold): no name moved under it.
-				l += ": something outside devopsy's compose file made it"
-			} else if r := refs[c.Service]; r != "" {
+			if r := refs[c.Service]; r != "" {
 				l += ": " + r + " moved since (a plain up follows names)"
 			}
 			lines = append(lines, StatusLine{Text: l, Warn: true})

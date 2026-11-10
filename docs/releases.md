@@ -320,10 +320,7 @@ release alone.
 
 `devopsy-compose.yaml` is the one compose file devopsy writes. It holds
 only facts of the release's last activation: the image each service was
-given (a `devopsy.digest` label), each built image by its id (`image:`),
-so that environments building under one name (a branch's, a pull
-request's, with the `image:` the compose file gives its build) each run
-their own build, whichever built last, and the data services held on another
+given (a `devopsy.digest` label), and the data services held on another
 image (a `devopsy.held` label, naming the image that holds them:
 [Holds](images.md#holds)). devopsy runs compose with it between the
 project's `compose.yaml` and your `compose.override.yaml`, so your
