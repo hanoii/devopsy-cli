@@ -118,13 +118,15 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 case "$1 $2" in
   "ps "*) ;;
-  "buildx imagetools") printf '%s' '`+manifest+`' ;;
+  "run --rm") printf '%s' '`+manifest+`' ;;
+  "info --format") echo /usr/libexec/docker/cli-plugins/docker-buildx ;;
   "version --format") echo "linux amd64" ;;
   "pull busybox@`+b1+`") echo "Digest: `+b1+`" ;;
   "tag "*) ;;
   "buildx inspect") echo 'Driver Options: network="devopsy-shop-build"' ;;
   "buildx "*) cat >/dev/null ;;
-  "image inspect") echo '{"Id":"sha256:b1","RepoDigests":["busybox@`+b1+`"],"Config":{"Labels":{}}}' ;;
+  "image inspect") [ "$3 $4" = "-f {{.Id}} {{.Created}}" ] && { echo "sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit; }
+    echo '{"Id":"sha256:b1","RepoDigests":["busybox@`+b1+`"],"Config":{"Labels":{}}}' ;;
   *) exit 1 ;;
 esac
 `), 0o755); err != nil {

@@ -382,7 +382,10 @@ registry settings, in `<space>/buildx/buildkitd.default.toml`, read
 when a project's builder is made: a registry the server's Docker
 trusts through `certs.d` or `insecure-registries`, or a mirror of
 Docker Hub it pulls through, goes there too, or no project user can
-use that registry's images.
+use that registry's images. The image's manifest is read before that
+in a container on the builder's network, which trusts the server's own
+CAs (`/etc/ssl/certs/ca-certificates.crt` on Debian and Ubuntu): a
+registry's own CA goes there as well.
 
 On a server with project users, the deploy user's own projects name
 their builds as compose does by default, under their compose name,

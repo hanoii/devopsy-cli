@@ -854,7 +854,8 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 // by spaces, a ref with no line not here, so a name and the digest it holds are separate
 // lines, which a test moves apart); its registry dir/registry, `<ref>|<digest>` a line,
 // what a pull of the ref gets, printed as docker pull prints it (`Digest: ...`), and what
-// buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails, and a
+// buildx imagetools inspect answers in a container (dir/raw, fakeManifest, a ref listed in
+// dir/noread a read that could not run); a pull of a ref listed in dir/fails fails, and a
 // claim's proof (buildx build) of a <repo>@<digest> listed in dir/unserved. It logs
 // every call in dir/calls, lists no containers, and answers compose with its arguments
 // and the file it was given, for a door that execs it (doorComposeHelper). Image
@@ -879,8 +880,12 @@ case "$all" in
       'pull -q '*) echo "$ref" ;;
       *) echo "$ref: Pulling from a registry"; d=$(registry "$ref"); case $ref in *@*) d=${ref#*@} ;; esac; [ -n "$d" ] && echo "Digest: $d"; echo "Status: Downloaded newer image for $ref" ;;
     esac ;;
-  'buildx imagetools inspect --raw '*)
-    # What a registry serves for a ref (fakeManifest), nothing for one it does not know.
+  'info --format '*) echo /usr/libexec/docker/cli-plugins/docker-buildx ;;
+  'image inspect -f {{.Id}} {{.Created}} '*) echo "sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)" ;;
+  'run '*' buildx imagetools inspect --raw '*)
+    # What a registry serves for a ref (fakeManifest), read in a container, nothing for one
+    # it does not know.
+    grep -qxF -- "$ref" `+in("noread")+` 2>/dev/null && { echo "exec /usr/local/bin/buildx: no such file or directory" >&2; exit 127; }
     f=`+in("raw")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -f "$f" ] || exit 1; cat "$f" ;;
   'version --format '*) echo "linux amd64" ;;
   'compose version --short') echo "${FAKE_COMPOSE_VERSION:-2.40.0}" | grep -v '^$' || echo 2.40.0 ;;
@@ -1483,18 +1488,12 @@ func TestDoorFlagsTakeNoWordThatOnlyStartsLikeThem(t *testing.T) {
 	}
 }
 
-// BUG: a claim reads a ref's manifest with `docker buildx imagetools inspect`, and that
-// registry client is the buildx CLI itself, a process of the deploy user's on the host: not
-// the daemon (which the firewall's DEVOPSY-DOCKERD chain holds by its cgroup), not the
-// project's builder (a container, which reaches no loopback of the host's and no metadata
-// service), and not in the project users' group. A registry the project user names and runs
-// answers that client as it likes (a redirect, a token's realm), so the deploy user's process
-// asks the host's loopback or a metadata service what the project user chose, which the
-// firewall keeps the project user, its containers and the daemon from: the same deputy the
-// daemon was, one client over. Whether the answer parsed as a manifest shows in the refusal's
-// words. The read goes where the firewall holds it (on the project's builder, or a client the
-// rules cover): no registry client of the door's runs on the host as the deploy user.
-func TestDoorClaimReadsNoRegistryFromTheHostAsTheDeployUser(t *testing.T) {
+// A claim reads a registry in a container (registryRead; TestDoorClaimReadsOnTheBuildNetwork
+// the loopback it then misses) that holds nothing else of the deploy user's: its buildx, the
+// project's logins, its builder's instance file and the host's CAs, read-only, as that user with no
+// capability, on the project's build network. A read that could not run is said as such, never
+// taken for the project's logins reading nothing.
+func TestDoorClaimReadsInAContainerOfItsOwn(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fake := doorImageFake(t, dir)
@@ -1504,9 +1503,40 @@ func TestDoorClaimReadsNoRegistryFromTheHostAsTheDeployUser(t *testing.T) {
 	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir}, real: fake}
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": private + ":1"}}}
 	_ = side.checkImageLabels(file, filepath.Join(dir, "none.json"))
+	var reads []string
 	for _, line := range strings.Split(readString(filepath.Join(dir, "calls")), "\n") {
 		if strings.HasPrefix(line, "buildx imagetools ") {
-			t.Errorf("a registry read by the deploy user's own client, on the host, outside every chain of the firewall: docker %s", line)
+			t.Errorf("a registry read by the deploy user's own client, on the host: docker %s", line)
 		}
+		if strings.HasPrefix(line, "run ") && strings.Contains(line, " buildx imagetools ") {
+			reads = append(reads, line)
+		}
+	}
+	if len(reads) == 0 {
+		t.Fatal("no read in a container")
+	}
+	instance := filepath.Join(dir, "buildx", "instances", "devopsy-shop")
+	logins := filepath.Join(dir, "logins", "shop")
+	for _, want := range []string{"--network devopsy-shop-build ", "--read-only ", "--cap-drop ALL ", "--security-opt no-new-privileges ",
+		"--user " + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()) + " ", "-v /usr/libexec/docker/cli-plugins/docker-buildx:/usr/local/bin/buildx:ro ",
+		"-v " + logins + ":/cfg:ro ", "-v " + instance + ":/bx/instances/devopsy-shop:ro "} {
+		if !strings.Contains(reads[0], want) {
+			t.Errorf("the read's container without %q: %s", want, reads[0])
+		}
+	}
+	mounts := 3
+	if ca := hostCABundle(nil); ca != "" {
+		mounts++
+		if !strings.Contains(reads[0], "-v "+ca+":/etc/ssl/certs/ca-certificates.crt:ro ") {
+			t.Errorf("the read's container without the host's CAs, %s: %s", ca, reads[0])
+		}
+	}
+	if n := strings.Count(reads[0], " -v "); n != mounts {
+		t.Errorf("the read's container mounts %d things: %s", n, reads[0])
+	}
+	write(t, filepath.Join(dir, "noread"), private+":1\n", 0o644)
+	_, _, err := side.claim(private+":1", filepath.Join(dir, "none.json"))
+	if err == nil || strings.Contains(err.Error(), "do not pull it") || !strings.Contains(err.Error(), "could not be read") {
+		t.Errorf("a read that could not run: %v", err)
 	}
 }

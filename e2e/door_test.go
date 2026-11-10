@@ -92,8 +92,9 @@ const doorBuildkitBase = "/etc/devopsy-e2e-buildkitd.toml"
 // returns its address. A project's builder is a container, so a registry on the host's
 // loopback would be its own: the admin's way is this address, its CA in Docker's certs.d and
 // in the builders' config (buildkitd.default.toml, read when a builder is made, so before the
-// test's projects claim). Its cleanup undoes all of it.
-func doorRegistry(t *testing.T, name, port string, auth bool) string {
+// test's projects claim). Its cleanup undoes all of it. more are the registry container's own
+// options (for example its token auth's -e lines), its certificate at /certs/c.pem.
+func doorRegistry(t *testing.T, name, port string, auth bool, more ...string) string {
 	t.Helper()
 	gw, code := doorRoot(t, "docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'")
 	if code != 0 {
@@ -111,6 +112,7 @@ func doorRegistry(t *testing.T, name, port string, auth bool) string {
 	if auth {
 		opts += " -v " + r + "/auth:/auth -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=r -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd"
 	}
+	opts += " " + strings.Join(more, " ")
 	t.Cleanup(func() {
 		doorRoot(t, "docker rm -f "+name+" >/dev/null 2>&1; rm -rf "+r+" /etc/docker/certs.d/"+addr+" /usr/local/share/ca-certificates/"+name+".crt "+doorSpace+"/buildx/"+name+".pem; update-ca-certificates >/dev/null; install -o devopsy -m 644 "+doorBuildkitBase+" "+doorSpace+"/buildx/buildkitd.default.toml")
 	})
@@ -897,6 +899,37 @@ docker exec doorclaim-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	}
 	if out, _ := doorRoot(t, "cat "+doorSpace+"/images/"+user+" 2>/dev/null"); strings.Contains(out, id) {
 		t.Errorf("the door recorded another's image %s as %s's", id, user)
+	}
+}
+
+// A claim's registry client is held where the project's builder is: a registry the project
+// user names answers it as it likes, here with a token's realm on the server's loopback, which
+// the firewall keeps the project user, its containers and the daemon from. The read runs on
+// the project's build network, where loopback is its own; the deploy user's process on the
+// host asked the server's loopback what the registry chose.
+func TestDoorClaimReadsOnTheBuildNetwork(t *testing.T) {
+	user := doorUser(t, "doortoken")
+	t.Cleanup(func() { doorRoot(t, "docker rm -f doortoken-lo >/dev/null 2>&1; true") })
+	// The admin's own, on the server's loopback: it logs every request.
+	if out, code := doorRoot(t, `set -e
+docker run -d --name doortoken-lo --network host busybox:1.37 sh -c 'mkdir -p /w && exec httpd -f -vv -p 127.0.0.1:5015 -h /w' >/dev/null
+for i in $(seq 150); do curl -s -o /dev/null http://127.0.0.1:5015/ready && exit 0; sleep 0.2; done
+exit 1`); code != 0 {
+		t.Fatalf("the loopback listener (%d): %s", code, out)
+	}
+	reg := doorRegistry(t, "doortoken-reg", "5014", false, "-e REGISTRY_AUTH=token",
+		"-e REGISTRY_AUTH_TOKEN_REALM=http://127.0.0.1:5015/token", "-e REGISTRY_AUTH_TOKEN_SERVICE=r",
+		"-e REGISTRY_AUTH_TOKEN_ISSUER=r", "-e REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE=/certs/c.pem")
+	// The control: the registry sends a client to the loopback for its token.
+	if out, _ := doorRoot(t, "curl -s -D - -o /dev/null https://"+reg+"/v2/x/manifests/1"); !strings.Contains(out, "127.0.0.1:5015/token") {
+		t.Fatalf("the registry's answer names no realm on loopback:\n%s", out)
+	}
+	out, code := doorAs(t, user, "docker image inspect "+reg+"/x:1 2>&1")
+	if code == 0 {
+		t.Errorf("a claim of an image no registry served passed:\n%s", out)
+	}
+	if logs, _ := doorRoot(t, "docker logs doortoken-lo 2>&1"); strings.Contains(logs, "/token") {
+		t.Errorf("a claim's read asked the server's loopback for a token:\n%s", logs)
 	}
 }
 
