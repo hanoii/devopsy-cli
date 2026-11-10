@@ -308,15 +308,21 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	if err := end(who); err != nil {
 		return fail("removed " + who + "'s entry and keys, but its processes could not be ended: " + err.Error())
 	}
-	report.Info("removed "+who+"'s entry and keys, and ended its processes: it logs in no more, and the door answers it no more",
-		"its Unix user, home and tree stay")
+	stays := "its Unix user, home and tree stay"
+	if _, err := user.Lookup(who); err != nil {
+		stays = "its Unix user was gone already"
+	}
+	report.Info("removed "+who+"'s entry and keys, and ended its processes: it logs in no more, and the door answers it no more", stays)
 	return 0
 }
 
 // endProcesses ends every process of the user who (remote.EndProcessesArgs), as root through
-// devopsy's util image.
+// devopsy's util image. A user deleted already runs none: userdel refuses one with processes.
 func endProcesses(who string) error {
 	u, err := user.Lookup(who)
+	if errors.As(err, new(user.UnknownUserError)) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

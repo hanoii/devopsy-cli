@@ -142,3 +142,12 @@ func TestCloseDeployProjects(t *testing.T) {
 		t.Errorf("a file changed: %v", fi.Mode())
 	}
 }
+
+// A project user whose Unix user is gone already runs nothing to end: its removal goes on to
+// its entry and keys rather than failing on the lookup.
+func TestEndProcessesOfAUserGone(t *testing.T) {
+	t.Parallel()
+	if err := endProcesses("devopsy-nosuchuser-zz9"); err != nil {
+		t.Errorf("a user gone: %v", err)
+	}
+}

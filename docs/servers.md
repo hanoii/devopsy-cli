@@ -400,5 +400,8 @@ A child on another server needs its own project user there
 
 `--project-users remove shop` drops its entry and keys, so it logs in no
 more and the door answers it no more, then ends every process it runs;
-its Unix user, home and tree stay. Neither clears what a leaked key left
-in that user's home: reset the home too.
+its Unix user, home and tree stay. So do its environments' containers
+and volumes, which `--destroy` takes first, and its BuildKit builder
+(`devopsy-shop`) and that builder's network (`devopsy-shop-build`),
+which the deploy user removes by hand. Neither clears what a leaked key left in that user's home: reset
+the home too.
