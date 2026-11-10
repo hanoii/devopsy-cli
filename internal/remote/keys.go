@@ -176,8 +176,9 @@ printf '%s\n' "$f"
 // blob on stdin: none (exit 3). The deploy user's last key stays (exit 4: it would lock
 // everyone out); a project user's goes, which is how its logins stop, and its sync keys
 // with it (DoorSyncKeysFile). Any removal of a project user's key ends every process it runs
-// (EndProcessesArgs): a key removed is one no longer trusted, and what it may have left
-// running would outlive its logins, and keep the door by its group.
+// and its linger (EndUserArgs): a key removed is one no longer trusted, and what it may have
+// left running, or set to start at boot, would outlive its logins, and keep the door by its
+// group.
 func KeysRemoveScript(user string) string {
 	last, end := "", ""
 	if user == "" {
@@ -191,7 +192,7 @@ fi
 		end = `uid=$(id -u ` + Quote(user) + `)
 devopsy ` + UtilImageFlag + ` >/dev/null 2>&1 || :
 ended=1
-docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || ended=
+docker ` + endUserShell(`"$uid"`, user) + ` >/dev/null 2>&1 || ended=
 # Its sync keys go with any of its keys, a leaked one could have added them: once what it
 # left running is ended, under the lock the door adds them by (lockedKeys), which refuses
 # an add asked before this edit of its keys.
@@ -238,18 +239,21 @@ func keysLeft(file string) string {
 	return `grep -Ev '^[[:space:]]*(#|$)' ` + file + ` | grep -Ev ' ` + syncKeyPrefix + strings.Trim(SyncIDPattern.String(), "^$") + `$' | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)[^[:space:]]+[[:space:]]+[A-Za-z0-9+/]{16,}={0,3}([[:space:]]|$)'`
 }
 
-// EndProcessesArgs are docker's arguments to end every process of the user of uid: as root,
-// which nothing of the user's can signal, in UtilImage under the host's pids, every process
+// EndUserArgs are docker's arguments to end what the user of uid, named user, runs or would
+// run with no session: as root, which nothing of the user's can signal, in UtilImage, first
+// its linger (systemd's /var/lib/systemd/linger/<user>, which starts its user manager and
+// its units at every boot), then under the host's pids every process
 // whose real, effective or saved uid is the user's, read from its status (its credentials,
 // whatever the owner of its /proc directory shows), a zombie aside (no signal reaches one);
 // round after round until one finds none, so a process forked meanwhile goes too, failing
 // after 50. No container runs as a project user's uid (hostIDs), so it ends none.
-func EndProcessesArgs(uid string) []string {
-	return []string{"run", "--rm", "--pid", "host", "--network", "none", UtilImage, "sh", "-c", endProcesses, "sh", uid}
+func EndUserArgs(uid, user string) []string {
+	return []string{"run", "--rm", "--pid", "host", "--network", "none", "-v", "/var/lib/systemd/linger:/linger", UtilImage, "sh", "-c", endUser, "sh", uid, user}
 }
 
-// endProcesses is EndProcessesArgs' script, its uid $1.
-const endProcesses = `for i in $(seq 50); do
+// endUser is EndUserArgs' script, its uid $1 and user $2.
+const endUser = `rm -f "/linger/$2" || exit 1
+for i in $(seq 50); do
   left=
   for f in /proc/[0-9]*/status; do
     state= hit=
@@ -267,10 +271,10 @@ const endProcesses = `for i in $(seq 50); do
 done
 exit 1`
 
-// endProcessesShell is EndProcessesArgs quoted for a script, the uid given as the shell word
-// uid (a variable's expansion).
-func endProcessesShell(uid string) string {
-	words := EndProcessesArgs("\x00")
+// endUserShell is EndUserArgs quoted for a script, the uid given as the shell word uid (a
+// variable's expansion).
+func endUserShell(uid, user string) string {
+	words := EndUserArgs("\x00", user)
 	for i, w := range words {
 		if w == "\x00" {
 			words[i] = uid

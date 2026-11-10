@@ -368,9 +368,10 @@ func TestDoorBuildModeLife(t *testing.T) {
 	}
 }
 
-// Removing any of a project user's keys ends every process it runs, as root, and the door
-// answers it no more once none is left: a process a leaked key left running (setsid, nohup)
-// would outlive the key and keep the door by its group. The process here fights its end, as
+// Removing any of a project user's keys ends every process it runs, as root, and its linger,
+// and the door answers it no more once none is left: a process a leaked key left running
+// (setsid, nohup), or a user manager lingering into the next boot, would outlive the key and
+// keep the door by its group. The process here fights its end, as
 // one may: it sends kill -9 -1 in a loop, which never signals its sender and would end any
 // kill running as the user.
 func TestDoorKeyRemovalEndsTheUsersProcesses(t *testing.T) {
@@ -403,8 +404,17 @@ func TestDoorKeyRemovalEndsTheUsersProcesses(t *testing.T) {
 	}
 	keys("add /tmp/doorkeyless.pub")
 	start()
+	// Its linger, set after add cleared it (by an admin, or by the user where polkit lets it).
+	linger := "/var/lib/systemd/linger/" + user
+	if out, code := doorRoot(t, "mkdir -p /var/lib/systemd/linger && touch "+linger); code != 0 {
+		t.Fatalf("its linger (%d): %s", code, out)
+	}
+	t.Cleanup(func() { doorRoot(t, "rm -f "+linger) })
 	keys("remove doorkeyless-ci")
 	eventually(t, 10*time.Second, "its process ended with a key left", func() bool { return !running() })
+	if _, code := doorRoot(t, "test -e "+linger); code == 0 {
+		t.Errorf("its linger stays after a key's removal: %s", linger)
+	}
 	if out, _ := doorAs(t, user, "docker ps -q 2>&1"); strings.Contains(out, "no key left") {
 		t.Fatalf("the door refuses it with a key left: %s", out)
 	}

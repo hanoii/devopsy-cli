@@ -111,9 +111,9 @@ func TestKeysRemoveEndsTheUsersProcesses(t *testing.T) {
 		return cmd.ProcessState.ExitCode(), string(out) + string(got)
 	}
 	// As root (no --user), the uid an argument the kill matches each process's credentials by.
-	kill := "docker run --rm --pid host --network none " + UtilImage + " sh -c "
+	kill := "docker run --rm --pid host --network none -v /var/lib/systemd/linger:/linger " + UtilImage + " sh -c "
 	ended := func(out string) bool {
-		return strings.Contains(out, kill) && strings.Contains(out, " sh 10002\n") && !strings.Contains(out, "--user")
+		return strings.Contains(out, kill) && strings.Contains(out, " sh 10002 devopsy-shop\n") && !strings.Contains(out, "--user")
 	}
 	write(t, keys, "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAtwo ci\n")
 	if code, out := remove("devopsy-shop", "AAAAone"); code != 0 || !ended(out) {

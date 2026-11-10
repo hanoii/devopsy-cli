@@ -72,7 +72,7 @@ func runProjectUsersStep(args []string) int {
 	who := remote.DoorUserOf(project)
 	entry := filepath.Join(remote.DoorDir(), "users", who+".yaml")
 	if args[0] == "remove" {
-		return removeProjectUser(d, project, who, entry, endProcesses)
+		return removeProjectUser(d, project, who, entry, endUser)
 	}
 	return addProjectUser(d, project, who, entry)
 }
@@ -325,9 +325,9 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	return 0
 }
 
-// endProcesses ends every process of the user who (remote.EndProcessesArgs), as root through
+// endUser ends every process of the user who and its linger (remote.EndUserArgs), as root through
 // devopsy's util image. A user deleted already runs none: userdel refuses one with processes.
-func endProcesses(who string) error {
+func endUser(who string) error {
 	u, err := user.Lookup(who)
 	if errors.As(err, new(user.UnknownUserError)) {
 		return nil
@@ -338,7 +338,7 @@ func endProcesses(who string) error {
 	if err := ensureUtilImage(context.Background()); err != nil {
 		return err
 	}
-	if out, err := exec.Command("docker", remote.EndProcessesArgs(u.Uid)...).CombinedOutput(); err != nil {
+	if out, err := exec.Command("docker", remote.EndUserArgs(u.Uid, who)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
