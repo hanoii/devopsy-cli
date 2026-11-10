@@ -223,3 +223,74 @@ func TestDoorClaimCutBySignalLeavesNoWork(t *testing.T) {
 		t.Errorf("the cut copy left work: %v", work)
 	}
 }
+
+// Compose's pull verb, for a project user, is the door's own claim of each image it selects
+// (door.PlanPull), compose's own reading of the profiles deciding what is active: compose's
+// pull never runs, so Docker's daemon contacts no registry the project names. Each claim that
+// fetches says so on stderr, and its time once through, none with -q; the builder is read once
+// for all. A claim that fails (a tag its registry does not have) says so and ends the pull
+// with 1, unlogged, the claims after it not made, or with --ignore-pull-failures each failure
+// said and 0. A refusal (an image no pull may write, a service the file does not have) comes
+// before any claim, exit 2, logged. In a helper process (doorComposeHelper), with the fake
+// docker.
+func TestDoorPullIsTheDoorsClaims(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
+	private, other, built := "registry.example.com/blog/private:1", "registry.example.com/other:1", "registry.example.com/built:1"
+	fakeManifest(t, dir, plainManifest("private"), private)
+	fakeManifest(t, dir, plainManifest("other"), other)
+	svc := func(image, extra string) string {
+		return `{"image":"` + image + `","user":"10001:10001","security_opt":["no-new-privileges"]` + extra + `}`
+	}
+	file := `{"name":"shop-prod","services":{"web":` + svc(private, "") + `,"extra":` + svc(other, `,"profiles":["debug"]`) +
+		`,"built":` + svc(built, `,"build":{"context":"."}`) + `,"own":` + svc("devopsy.internal/shop-prod/own", "") + `}}`
+	log := filepath.Join(dir, "refused.log")
+	calls := filepath.Join(dir, "calls")
+	pull := func(file, profiles, verb string) (string, int) {
+		t.Helper()
+		os.Remove(calls)
+		os.Remove(log)
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_PROFILES="+profiles, "DEVOPSY_TEST_DOOR_LOG="+log, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		var exit *exec.ExitError
+		if err != nil && !errors.As(err, &exit) {
+			t.Fatal(err)
+		}
+		if strings.Contains(readString(calls), "compose ") && strings.Contains(readString(calls), " pull") {
+			t.Errorf("%s: compose's pull ran:\n%s", verb, readString(calls))
+		}
+		return string(out), c.ProcessState.ExitCode()
+	}
+	copies := func() int { return strings.Count(readString(calls), "imagetools create ") }
+	if out, code := pull(file, "", "pull -q --ignore-buildable"); code != 0 || copies() != 1 || strings.Contains(out, "pull") {
+		t.Errorf("a quiet pull (exit %d, %d copies):\n%s", code, copies(), out)
+	}
+	// Under the profile, extra is active too: web, claimed already, is no fetch.
+	out, code := pull(file, "debug", "pull --ignore-buildable")
+	if code != 0 || copies() != 1 || !strings.Contains(out, "devopsy: pulling "+other+"\n") || !strings.Contains(out, "devopsy: pulled "+other+" (") || strings.Contains(out, private) {
+		t.Errorf("a pull under a profile (exit %d, %d copies):\n%s\n%s", code, copies(), out, readString(calls))
+	}
+	if n := strings.Count(readString(calls), "buildx create "); n != 1 {
+		t.Errorf("the builder read %d times for two claims:\n%s", n, readString(calls))
+	}
+	// The built service's tag is not in its registry: first by name, it ends the pull.
+	out, code = pull(file, "debug", "pull")
+	if code != 1 || copies() != 0 || !strings.Contains(out, "devopsy: error: ") || readString(log) != "" {
+		t.Errorf("a pull whose first claim fails (exit %d, %d copies, logged %q):\n%s", code, copies(), readString(log), out)
+	}
+	if out, code := pull(file, "debug", "pull --ignore-pull-failures"); code != 0 || !strings.Contains(out, built) || !strings.Contains(readString(calls), "imagetools inspect --raw "+private) {
+		t.Errorf("a pull past its failures (exit %d):\n%s\n%s", code, out, readString(calls))
+	}
+	for name, c := range map[string]struct{ file, verb string }{
+		"an unknown service": {file, "pull web nosuch"},
+		"another's hold":     {`{"name":"shop-prod","services":{"web":` + svc(private, "") + `,"held":` + svc("busybox:devopsy-blog-prod-20240101000000", "") + `}}`, "pull"},
+	} {
+		if out, code := pull(c.file, "", c.verb); code != 2 || strings.Contains(readString(calls), "imagetools") || readString(log) == "" {
+			t.Errorf("%s (exit %d, logged %q):\n%s\n%s", name, code, readString(log), out, readString(calls))
+		}
+	}
+}

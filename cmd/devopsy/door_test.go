@@ -953,6 +953,13 @@ case "$all" in
     grep -qxF -- "${from#FROM }" `+in("unserved")+` 2>/dev/null && exit 1
     true ;;
   'ps -a '*) ;;
+  'compose '*' config --format json')
+    # Compose's reading of profiles, of the file on stdin: a service with profiles is active
+    # only under one of those asked.
+    perl -MJSON::PP -e 'my @p; for (my $i = 0; $i < @ARGV; $i++) { push @p, $ARGV[$i+1] if $ARGV[$i] eq "--profile" }
+      local $/; my $f = decode_json(<STDIN>); my %asked = map { $_ => 1 } @p;
+      for my $s (keys %{$f->{services}}) { my $pr = $f->{services}{$s}{profiles} or next; delete $f->{services}{$s} if @$pr && !grep { $asked{$_} } @$pr }
+      print encode_json($f)' -- "$@" ;;
   'compose '*)
     f=; while [ $# -gt 0 ]; do [ "$1" = -f ] && f=$2; shift; done
     echo "ARGS: $all"
@@ -1174,8 +1181,8 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 // What compose receives for a verb that creates a container (up, create, run) is the
 // checked file with its pins and pull_policy never on every service, marshalled after the
 // image check: marshalled before it, the file carries the plain names the check pinned in its
-// map alone, and an image gone after the claim would be Docker's daemon's to pull. A pull keeps
-// the names: it is what moves them. Its DOCKER_CONFIG is an empty directory of the door's,
+// map alone, and an image gone after the claim would be Docker's daemon's to pull. Its
+// DOCKER_CONFIG is an empty directory of the door's,
 // closed to writes, for any verb that needs no logins: unset, compose reads the deploy user's
 // own, its logins, helpers and plugins. A day-old work directory goes, as with every other
 // request. In a helper process (doorComposeHelper), since the door
@@ -1196,7 +1203,7 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	if err := os.Chtimes(left, time.Now().Add(-25*time.Hour), time.Now().Add(-25*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	for _, verb := range []string{"up -d", "create", "run --rm web true", "down", "pull"} {
+	for _, verb := range []string{"up -d", "create", "run --rm web true", "down"} {
 		c := exec.Command(os.Args[0], "-test.run", "^$")
 		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 		out, err := c.CombinedOutput()
@@ -1216,11 +1223,8 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 			continue
 		}
 		want, policy, config := private+":1@"+p1, "never", empty
-		if verb == "pull" || verb == "down" {
+		if verb == "down" {
 			want, policy = private+":1", ""
-		}
-		if verb == "pull" {
-			config = filepath.Join(dir, "space", "logins", "shop")
 		}
 		if got := file.Services["web"]; got.Image != want || got.PullPolicy != policy {
 			t.Errorf("%s: compose got web's image as %q, pull_policy %q, want %q and %q:\n%s", verb, got.Image, got.PullPolicy, want, policy, out)
@@ -1454,6 +1458,7 @@ esac
 // or the request in DEVOPSY_TEST_DOOR_REQUEST (TestDoorClaimActsByDigest), and exits as it
 // does: compose or Docker is exec'd, so what it prints is the fake docker's.
 func doorComposeHelper(dir string) {
+	doorLog = os.Getenv("DEVOPSY_TEST_DOOR_LOG")
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
 		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
@@ -1472,7 +1477,7 @@ func doorComposeHelper(dir string) {
 			panic(err)
 		}
 	}
-	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, "", cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), dir), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
+	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, os.Getenv("DEVOPSY_TEST_DOOR_PROFILES"), cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), dir), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
 }
 
 // The door's clone and mark take only a clone's directory or a take's in it (door.CloneDir):

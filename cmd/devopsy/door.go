@@ -198,6 +198,9 @@ type doorSide struct {
 	hostChecked    memo[struct{}]
 	loginsDir      memo[string]
 	builderEnv     memo[[]string]
+	// onFetch, when set, is said when a claim goes past its skip to fetch (the pull verb's
+	// progress).
+	onFetch func()
 }
 
 // memo is a value a door process reads once, its answer (an error included) kept for the
@@ -1299,6 +1302,9 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
 	name, _ := file["name"].(string)
+	if argv[0] == "pull" {
+		return s.pull(config, file, profiles, dir, argv)
+	}
 	s.policy.Label(file)
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
 	// The image check pins what it checked into the file (startImage), so the file compose
@@ -1352,7 +1358,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	// Compose reads its logins, helpers and plugins from DOCKER_CONFIG, the deploy user's own
 	// ~/.docker when unset: a build has the project's logins, anything else an empty one.
 	logins, err := s.emptyConfig()
-	if slices.Contains([]string{"pull", "build"}, argv[0]) {
+	if argv[0] == "build" {
 		logins, err = s.logins(config)
 	}
 	if err != nil {
@@ -1373,12 +1379,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			}
 		}
 	}
-	cmd := []string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}
-	for _, p := range strings.Split(profiles, ",") {
-		if composeProfile.MatchString(p) {
-			cmd = append(cmd, "--profile", p)
-		}
-	}
+	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
 	err = execDecided(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
 }
@@ -1700,11 +1701,26 @@ func (s *doorSide) writeLogins(config string) (string, error) {
 	return dir, os.Rename(tmp, filepath.Join(dir, "config.json"))
 }
 
+// profileArgs are compose's --profile flags for profiles, a comma-separated list: a profile
+// that is not one of compose's names is left out.
+func profileArgs(profiles string) []string {
+	var args []string
+	for _, p := range strings.Split(profiles, ",") {
+		if composeProfile.MatchString(p) {
+			args = append(args, "--profile", p)
+		}
+	}
+	return args
+}
+
 // emptyConfig is a Docker config directory with nothing in it, the deploy user's and closed to
 // writes (<space>/docker-empty), for a compose that needs no logins.
 func (s *doorSide) emptyConfig() (string, error) {
 	dir := filepath.Join(s.policy.Space, "docker-empty")
-	if err := os.MkdirAll(dir, 0o555); err != nil {
+	if err := os.MkdirAll(s.policy.Space, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o555); err != nil && !errors.Is(err, os.ErrExist) {
 		return "", err
 	}
 	return dir, os.Chmod(dir, 0o555)

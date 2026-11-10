@@ -54,6 +54,9 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if err := s.hostReady(); err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
+	if s.onFetch != nil {
+		s.onFetch()
+	}
 	if err := s.prove(pinned, d); err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
