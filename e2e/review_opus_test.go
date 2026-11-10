@@ -131,3 +131,45 @@ func TestReviewOpusAContainersUIDBecomesAProjectUsers(t *testing.T) {
 		t.Errorf("BUG: %s reads another project's container through /proc, its uid now %s's:\n%s", other, other, out)
 	}
 }
+
+// BUG: a claim's manifest read moved into a container (registryRead), since a registry the
+// project user names chooses where its client goes next; but a build's client is one too.
+// BuildKit asks its client, through the build's session, to fetch a registry's token
+// (FetchToken), and the client, compose or buildx as the deploy user on the host, fetches the
+// realm the registry named, outside every chain of the firewall: here a project's own
+// FROM sends it to the server's loopback, as a claim's proof (doorSide.prove, buildx build
+// on the host) would. What the realm answers on an error comes back in the build's output.
+func TestReviewOpusBuildFetchesATokenOnTheHost(t *testing.T) {
+	t.Cleanup(func() { doorRoot(t, "docker rm -f opustoken-lo >/dev/null 2>&1; true") })
+	// The admin's own, on the server's loopback: it logs every request.
+	if out, code := doorRoot(t, `set -e
+docker run -d --name opustoken-lo --network host busybox:1.37 sh -c 'mkdir -p /w && exec httpd -f -vv -p 127.0.0.1:5035 -h /w' >/dev/null
+for i in $(seq 150); do curl -s -o /dev/null http://127.0.0.1:5035/ready && exit 0; sleep 0.2; done
+exit 1`); code != 0 {
+		t.Fatalf("the loopback listener (%d): %s", code, out)
+	}
+	reg := doorRegistry(t, "opustoken-reg", "5034", false, "-e REGISTRY_AUTH=token",
+		"-e REGISTRY_AUTH_TOKEN_REALM=http://127.0.0.1:5035/token", "-e REGISTRY_AUTH_TOKEN_SERVICE=r",
+		"-e REGISTRY_AUTH_TOKEN_ISSUER=r", "-e REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE=/certs/c.pem")
+	if out, _ := doorRoot(t, "curl -s -D - -o /dev/null https://"+reg+"/v2/x/manifests/1"); !strings.Contains(out, "127.0.0.1:5035/token") {
+		t.Fatalf("the control: the registry's answer names no realm on loopback:\n%s", out)
+	}
+	dir := doorProject(t, "opustoken", `services:
+  web:
+    build: .
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+`, map[string]string{
+		".devopsy/config.yaml": "project: opustoken\ndefaults:\n  mode: build\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+		".devopsy/Dockerfile":  "FROM " + reg + "/x:1\n",
+	})
+	commitAll(t, dir)
+	out, code := op(t, dir, "devopsy @prod --release 2>&1")
+	if code == 0 {
+		t.Fatalf("a build from an image no registry served passed:\n%s", out)
+	}
+	if logs, _ := doorRoot(t, "docker logs opustoken-lo 2>&1"); strings.Contains(logs, "/token") {
+		t.Errorf("BUG: a door project's build asked the server's loopback for a token, from the host:\n%s\nthe release said:\n%s", logs, out)
+	}
+}
