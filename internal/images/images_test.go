@@ -999,3 +999,18 @@ func fileImage(d *fakeDocker, rel, svc, ref string) string {
 	}
 	return id
 }
+
+// A pin is a name nothing moves: a digest, which Docker takes only whole, or an id whole,
+// since Docker takes a short one as a prefix of any image's id.
+func TestPinned(t *testing.T) {
+	t.Parallel()
+	id := "sha256:" + strings.Repeat("ab", 32)
+	for ref, want := range map[string]bool{
+		"nginx:1@" + id: true, "nginx@" + id: true, id: true,
+		"nginx:1": false, "sha256:abc": false, "sha256:" + strings.Repeat("AB", 32): false, "devopsy.internal/shop-prod/web": false,
+	} {
+		if Pinned(ref) != want {
+			t.Errorf("%s: %v", ref, !want)
+		}
+	}
+}

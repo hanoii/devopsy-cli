@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -356,10 +357,13 @@ func HoldOf(ref string) (rest string, ok bool) {
 }
 
 // Pinned says whether ref names an image by its content (a digest, or an id), which nothing
-// moves: any other name is anyone's on the server to move.
+// moves: any other name is anyone's on the server to move. An id only whole: Docker takes a
+// short one as a prefix of any image's (a digest it takes only whole).
 func Pinned(ref string) bool {
-	return strings.Contains(ref, "@") || strings.HasPrefix(ref, "sha256:")
+	return strings.Contains(ref, "@") || wholeID.MatchString(ref)
 }
+
+var wholeID = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
