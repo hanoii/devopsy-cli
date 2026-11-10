@@ -230,9 +230,11 @@ func keysLeft(file string) string {
 // run with no session: devopsy itself (the binary at devopsy, static, mounted read-only) as
 // root in UtilImage under the host's pids, which clears its linger and then kills every
 // process of the user's at once (EndUIDFlag). No container runs as a project user's uid
-// (hostIDs), so it ends none.
+// (hostIDs), so it ends none. It runs outside Docker's AppArmor profile: docker-default lets
+// a container signal only its own peers, never a host process, so on a host with AppArmor
+// on, its kills would reach none of the user's.
 func EndUserArgs(uid, user, devopsy string) []string {
-	return []string{"run", "--rm", "--pid", "host", "--network", "none", "--read-only", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges",
+	return []string{"run", "--rm", "--pid", "host", "--network", "none", "--read-only", "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "--security-opt", "apparmor=unconfined",
 		"-v", "/var/lib/systemd/linger:/linger", "-v", devopsy + ":/devopsy:ro", UtilImage, "/devopsy", EndUIDFlag, uid, user}
 }
 

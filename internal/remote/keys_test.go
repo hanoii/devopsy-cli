@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -88,7 +89,7 @@ func TestKeysRemoveEndsTheUsersProcesses(t *testing.T) {
 	for name, body := range map[string]string{
 		"flock":   "exit 0",
 		"id":      `case "$1" in -nG) echo devopsy ;; -u) [ "$2" = devopsy-shop ] && echo 10002 || /usr/bin/id -u ;; *) exit 1 ;; esac`,
-		"devopsy":`echo "devopsy $*" >>` + calls + `; [ ! -e ` + filepath.Join(bin, "fails") + ` ]`,
+		"devopsy": `echo "devopsy $*" >>` + calls + `; [ ! -e ` + filepath.Join(bin, "fails") + ` ]`,
 	} {
 		if err := testfile.Write(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
 			t.Fatal(err)
@@ -178,5 +179,27 @@ func TestDoorKeysFileOneRule(t *testing.T) {
 		if want := DoorKeysFile("devopsy-shop"); string(out) != want {
 			t.Errorf("%s: the script's %s, --authorized-keys's %s", env[0], out, want)
 		}
+	}
+}
+
+// The end of a project user's processes (EndUserArgs) runs outside Docker's AppArmor profile:
+// docker-default lets a container signal only its own peers ("signal (send,receive)
+// peer=docker-default"), never the host's unconfined processes, so on a host with AppArmor on,
+// as Debian and Ubuntu ship it, its kills would reach none of the user's. The end-to-end
+// servers run Docker with no AppArmor, so only this test keeps it.
+func TestEndUserSignalsPastAppArmor(t *testing.T) {
+	t.Parallel()
+	args := EndUserArgs("50001", "devopsy-shop", "/usr/local/bin/devopsy")
+	unconfined := slices.Contains(args, "--privileged")
+	for i, a := range args {
+		if a == "--security-opt" && i+1 < len(args) && strings.HasPrefix(args[i+1], "apparmor=unconfined") {
+			unconfined = true
+		}
+		if strings.HasPrefix(a, "--security-opt=apparmor=unconfined") {
+			unconfined = true
+		}
+	}
+	if !unconfined {
+		t.Errorf("the end's container runs under docker-default's AppArmor, which signals no host process: %q", args)
 	}
 }
