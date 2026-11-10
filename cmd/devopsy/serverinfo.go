@@ -61,7 +61,7 @@ func doorFacts() *remote.DoorFacts {
 	if err := spaceGuarded(d.Space); err != nil {
 		f.Unguarded = err.Error()
 	}
-	if err := doorHostReady("docker", os.Environ()); err != nil {
+	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
 		f.Docker = err.Error()
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {

@@ -101,8 +101,6 @@ type Action struct {
 	// with its registry logins and loaded, its id then recorded as the project's
 	// (Policy.Images). One that does not load refuses the request.
 	Claims []string
-	// Logins says Docker should use the project's registry logins.
-	Logins bool
 	// Regrant are entries a root container writes, given back to the project user
 	// once it exits: a copy's modes narrow its ACL there (the door's regrant).
 	Regrant []string
@@ -258,7 +256,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 			if err := p.Claimable(args[0]); err != nil {
 				return nil, err
 			}
-			a.Claims, a.Logins = []string{args[0]}, true
+			a.Claims = []string{args[0]}
 		}
 		return a, nil
 	case "rm":
@@ -272,7 +270,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if err := p.Claimable(args[1]); err != nil {
 			return nil, err
 		}
-		return &Action{Claims: []string{args[1]}, Logins: true}, nil
+		return &Action{Claims: []string{args[1]}}, nil
 	case "exec":
 		// A sync's own daemon serving one connection over the pipe, and nothing else: the
 		// daemon has no network, and the push relays to it from a socket of its own.
@@ -436,7 +434,7 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 				if err := p.Claimable(t); err != nil {
 					return nil, err
 				}
-				a.Claims, a.Logins = append(a.Claims, t), true
+				a.Claims = append(a.Claims, t)
 			}
 			a.Docker = append(a.Docker, t)
 		}

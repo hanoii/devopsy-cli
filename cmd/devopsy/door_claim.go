@@ -3,6 +3,8 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
@@ -40,7 +43,7 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	m, err := s.platformManifest(ref, d)
 	if err != nil {
 		if err == errNoRead {
-			return "", images.Image{}, refused
+			return "", images.Image{}, registryFailure{refused}
 		}
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
@@ -51,23 +54,33 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 		s.nameAsAsked(ref, pinned)
 		return m, img, nil
 	}
-	if err := s.hostReady(); err != nil {
+	if err := s.hostReady(d); err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
 	if s.onFetch != nil {
 		s.onFetch()
 	}
-	if err := s.prove(pinned, d); err != nil {
+	g := s.claimCut()
+	defer g.end()
+	if err := s.prove(g, pinned, d); err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
-	if err := s.fetch(pinned, m, d); err != nil {
-		// A load that failed may have left the name: no later claim skips onto it.
-		_ = s.unrecord(m)
+	if loaded, err := s.fetch(g, pinned, m, d); err != nil {
+		// A load that failed may have left the name: no later claim skips onto it. Nothing
+		// before the load touched the store, so a failed copy leaves the record as it was.
+		if loaded {
+			_ = s.unrecord(m)
+		}
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
 	img, err := s.inspectImage(pinned)
 	if err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %v", ref, err)
+	}
+	// On the containerd store an image's id is its manifest's digest: any other is not what
+	// the door loaded.
+	if img.ID != m {
+		return "", images.Image{}, fmt.Errorf("refused: %s: %s goes by %s, not the %s loaded", ref, pinned, img.ID, m)
 	}
 	if err := s.record(img.ID); err != nil {
 		return "", images.Image{}, err
@@ -75,6 +88,13 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	s.nameAsAsked(ref, pinned)
 	return m, img, nil
 }
+
+// registryFailure is a claim's failure that is its registry's (a tag or a platform it does not
+// have, logins it refuses, an image it does not serve to the copy), never the door's refusal of
+// what it served: a release's event, which the pull verb says and does not log (doorSide.pull).
+type registryFailure struct{ error }
+
+func (r registryFailure) Unwrap() error { return r.error }
 
 // nameAsAsked tags the name asked onto the image claimed, the registry's content proven under
 // it, so a start finds it here and asks the registry nothing.
@@ -84,63 +104,113 @@ func (s *doorSide) nameAsAsked(ref, pinned string) {
 	}
 }
 
-// hostReady is doorHostReady for this door process, read once.
-func (s *doorSide) hostReady() error {
-	_, err := s.hostChecked.get(func() (struct{}, error) { return struct{}{}, doorHostReady(s.real, s.env) })
+// hostReady is doorHostReady for this door process, read once, its buildx the one that copies,
+// under the logins' directory.
+func (s *doorSide) hostReady(logins string) error {
+	_, err := s.hostChecked.get(func() (struct{}, error) { return struct{}{}, doorHostReady(s.real, s.env, logins) })
 	return err
 }
 
 // fetch copies the image pinned names (<repo>@m) from its registry as it is, with the logins
-// in the DOCKER_CONFIG dir logins, and loads it, in a work directory of the door's that goes
-// after, on a failure and on a signal too (a release cancelled mid-fetch would otherwise leave
-// the whole image there for a day).
-func (s *doorSide) fetch(pinned, m, logins string) error {
-	work, err := s.workDir("")
+// in the DOCKER_CONFIG dir logins, and loads it, in a work directory of the claim's (g). It says
+// whether the load ran.
+func (s *doorSide) fetch(g *claimCut, pinned, m, logins string) (bool, error) {
+	work, err := g.workDir()
 	if err != nil {
-		return err
-	}
-	defer s.removeWork(work)
-	var child *exec.Cmd
-	stop := s.onSignal(work, func() *exec.Cmd { return child })
-	defer stop()
-	run := func(c *exec.Cmd) error {
-		child = c
-		defer func() { child = nil }()
-		return c.Run()
+		return false, err
 	}
 	layout := filepath.Join(work, "layout")
-	if err := s.copyImage(run, pinned, layout, logins); err != nil {
-		return err
+	if err := s.copyImage(g.run, pinned, layout, logins); err != nil {
+		return false, err
 	}
 	blobs, manifest, err := checkLayout(layout, m)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return s.loadImage(run, pinned, m, manifest, layout, blobs)
+	return true, s.loadImage(g.run, pinned, m, manifest, layout, blobs)
 }
 
-// onSignal removes work and ends the door when a SIGINT, SIGTERM or SIGHUP comes while it is
-// there, stopping its child first (the imagetools or the load running, which a signal to the
-// door alone never reaches), with the signal's own exit; the stop it gives ends that.
-func (s *doorSide) onSignal(work string, child func() *exec.Cmd) func() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	done := make(chan struct{})
+// claimCut is what a claim has running and on disk while it proves, copies and loads: its work
+// directories, which go when it ends (claimCut.end), on a failure too, and the one child it
+// runs at a time. A SIGINT, SIGTERM or SIGHUP meanwhile stops that child's process group (the
+// docker CLI and the plugin it runs, buildx, which a signal to the door alone never reaches),
+// starts no other, removes the work directories and ends the door with the signal's exit: a
+// release cancelled mid-fetch would otherwise leave the whole image in <space>/work for a day.
+type claimCut struct {
+	s     *doorSide
+	mu    sync.Mutex
+	child *exec.Cmd
+	work  []string
+	cut   bool
+	ch    chan os.Signal
+	done  chan struct{}
+}
+
+// claimCut starts a claim's watch for the signals.
+func (s *doorSide) claimCut() *claimCut {
+	g := &claimCut{s: s, ch: make(chan os.Signal, 1), done: make(chan struct{})}
+	signal.Notify(g.ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		select {
-		case sig := <-ch:
-			if c := child(); c != nil && c.Process != nil {
-				_ = c.Process.Kill()
+		case sig := <-g.ch:
+			g.mu.Lock()
+			g.cut = true
+			if g.child != nil && g.child.Process != nil {
+				_ = syscall.Kill(-g.child.Process.Pid, syscall.SIGKILL)
 			}
-			s.removeWork(work)
+			for _, d := range g.work {
+				s.removeWork(d)
+			}
 			os.Exit(128 + int(sig.(syscall.Signal)))
-		case <-done:
+		case <-g.done:
 		}
 	}()
-	return func() {
-		signal.Stop(ch)
-		close(done)
+	return g
+}
+
+// workDir is a work directory of the door's (workDir) that goes with the claim.
+func (g *claimCut) workDir() (string, error) {
+	d, err := g.s.workDir("")
+	if err == nil {
+		g.mu.Lock()
+		g.work = append(g.work, d)
+		g.mu.Unlock()
 	}
+	return d, err
+}
+
+// run runs c in a process group of its own, which a signal stops whole, or not at all once a
+// signal came.
+func (g *claimCut) run(c *exec.Cmd) error {
+	g.mu.Lock()
+	if g.cut {
+		g.mu.Unlock()
+		return errors.New("cut by a signal")
+	}
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		g.mu.Unlock()
+		return err
+	}
+	g.child = c
+	g.mu.Unlock()
+	err := c.Wait()
+	g.mu.Lock()
+	g.child = nil
+	g.mu.Unlock()
+	return err
+}
+
+// end stops the watch and removes the claim's work directories.
+func (g *claimCut) end() {
+	signal.Stop(g.ch)
+	close(g.done)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, d := range g.work {
+		g.s.removeWork(d)
+	}
+	g.work = nil
 }
 
 // copyImage writes the registry's own bytes of pinned into an OCI layout at dir, with the door's
@@ -159,7 +229,7 @@ func (s *doorSide) copyImage(run func(*exec.Cmd) error, pinned, dir, logins stri
 	c.Stdout, c.Stderr = &said, &said
 	if run(c) != nil {
 		os.Stderr.Write(said.Bytes())
-		return errors.New("its registry did not serve the image to this project's logins")
+		return registryFailure{errors.New("its registry did not serve the image to this project's logins")}
 	}
 	return nil
 }
@@ -202,25 +272,38 @@ func checkLayout(dir, m string) ([]string, string, error) {
 	}) {
 		return nil, "", fmt.Errorf("the copy of its registry's image names no manifest %s", m)
 	}
-	blob := func(digest string, size int64) ([]byte, error) {
+	// blob checks one blob, hashed as it streams (a layer may be larger than the door's
+	// memory), and gives its bytes when keep, for the manifest alone. A size below 0 is no
+	// manifest's, and m's own size is the index's to say, so any.
+	blob := func(digest string, size int64, keep bool) ([]byte, error) {
 		if !ociDigest.MatchString(digest) {
 			return nil, fmt.Errorf("a blob of no sha256: %q", digest)
 		}
 		path := filepath.Join(dir, "blobs", "sha256", strings.TrimPrefix(digest, "sha256:"))
 		fi, err := os.Lstat(path)
-		if err != nil || !fi.Mode().IsRegular() || size >= 0 && fi.Size() != size {
+		if err != nil || !fi.Mode().IsRegular() || !keep && fi.Size() != size || keep && fi.Size() > maxManifest {
 			return nil, fmt.Errorf("the copy of its registry's image lacks the blob %s", digest)
 		}
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		if digestOf(data) != digest {
+		defer f.Close()
+		h := sha256.New()
+		var kept bytes.Buffer
+		w := io.Writer(h)
+		if keep {
+			w = io.MultiWriter(h, &kept)
+		}
+		if _, err := io.Copy(w, f); err != nil {
+			return nil, err
+		}
+		if "sha256:"+hex.EncodeToString(h.Sum(nil)) != digest {
 			return nil, fmt.Errorf("the blob %s of the copy is not its hash", digest)
 		}
-		return data, nil
+		return kept.Bytes(), nil
 	}
-	data, err = blob(m, -1)
+	data, err = blob(m, 0, true)
 	if err != nil {
 		return nil, "", err
 	}
@@ -233,7 +316,7 @@ func checkLayout(dir, m string) ([]string, string, error) {
 		if slices.Contains(blobs, digest) {
 			return nil
 		}
-		if _, err := blob(digest, size); err != nil {
+		if _, err := blob(digest, size, false); err != nil {
 			return err
 		}
 		blobs = append(blobs, digest)
@@ -296,30 +379,38 @@ func (s *doorSide) loadImage(run func(*exec.Cmd) error, pinned, m, mediaType, di
 	return nil
 }
 
-// writeLayout writes a tar of an OCI layout to w: oci-layout, index and the blobs, read from
-// dir, each once.
+// writeLayout writes a tar of an OCI layout to w: oci-layout, index and the blobs, streamed
+// from dir, each once.
 func writeLayout(w io.Writer, dir string, index []byte, blobs []string) error {
 	t := tar.NewWriter(w)
-	file := func(name string, data []byte) error {
-		if err := t.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+	file := func(name string, size int64, r io.Reader) error {
+		if err := t.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: size, Typeflag: tar.TypeReg}); err != nil {
 			return err
 		}
-		_, err := t.Write(data)
+		_, err := io.Copy(t, r)
 		return err
 	}
-	if err := file("oci-layout", []byte(`{"imageLayoutVersion":"1.0.0"}`)); err != nil {
+	layout := []byte(`{"imageLayoutVersion":"1.0.0"}`)
+	if err := file("oci-layout", int64(len(layout)), bytes.NewReader(layout)); err != nil {
 		return err
 	}
-	if err := file("index.json", index); err != nil {
+	if err := file("index.json", int64(len(index)), bytes.NewReader(index)); err != nil {
 		return err
 	}
 	for _, d := range blobs {
 		name := "blobs/sha256/" + strings.TrimPrefix(d, "sha256:")
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return err
-		}
-		if err := file(name, data); err != nil {
+		if err := func() error {
+			f, err := os.Open(filepath.Join(dir, name))
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			fi, err := f.Stat()
+			if err != nil {
+				return err
+			}
+			return file(name, fi.Size(), f)
+		}(); err != nil {
 			return err
 		}
 	}

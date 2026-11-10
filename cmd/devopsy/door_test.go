@@ -923,19 +923,20 @@ case "$all" in
   'buildx imagetools create '*)
     # A copy of what the registry serves for the ref (fakeManifest's layout), none for one it
     # does not, or one listed in dir/uncopied; with dir/slowcopy, it says dir/copying once
-    # the copy is there and then hangs, for a signal to cut it.
+    # the copy is there and then hangs on a child of its own (as the docker CLI runs its
+    # buildx plugin), its pid in dir/child, for a signal to cut it.
     dest=; while [ $# -gt 0 ]; do [ "$1" = --tag ] && dest=${2#oci-layout://} && dest=${dest%:claim}; shift; done
     grep -qxF -- "$ref" `+in("uncopied")+` 2>/dev/null && exit 1
     l=`+in("layouts")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -d "$l" ] || exit 1
     mkdir -p "$dest" && cp -R "$l/." "$dest" || exit 1
-    [ -f `+in("slowcopy")+` ] && { touch `+in("copying")+`; exec sleep 30; }
+    [ -f `+in("slowcopy")+` ] && { sleep 30 & echo $! >`+in("child")+`; touch `+in("copying")+`; wait; }
     true ;;
   'load')
     # Docker's load: the name its index gives, said as Docker says it (familiar), and the image
     # put first in the store under it, its id the manifest's digest, its labels those of an
     # image of that digest the store has (the same config, by content); one listed in
     # dir/unpacked says Docker's unpacking error after, and exits 0, as Docker does; with
-    # dir/loadsays, it says that file instead.
+    # dir/loadsays, it says that file instead, and with dir/loadid the image goes by that id.
     d=$(mktemp -d) && tar -xf - -C "$d"
     name=$(sed -n 's/.*"io.containerd.image.name":"\([^"]*\)".*/\1/p' "$d/index.json")
     fam=${name#docker.io/library/}; fam=${fam#docker.io/}
@@ -943,7 +944,8 @@ case "$all" in
     if [ -f `+in("loadsays")+` ]; then cat `+in("loadsays")+`; else echo "Loaded image: $fam"; fi
     if grep -qxF -- "$fam" `+in("unpacked")+` 2>/dev/null; then echo "Error unpacking image $fam: content digest not found"; exit 0; fi
     ls=$(field "$(entry "$fam")" 5); [ -n "$ls" ] || ls='{}'
-    { echo "$fam|${fam#*@}|$fam||$ls"; cat `+in("store")+` 2>/dev/null || true; } >"$d/store" && cat "$d/store" >`+in("store")+` ;;
+    id=${fam#*@}; [ -f `+in("loadid")+` ] && id=$(cat `+in("loadid")+`)
+    { echo "$fam|$id|$fam||$ls"; cat `+in("store")+` 2>/dev/null || true; } >"$d/store" && cat "$d/store" >`+in("store")+` ;;
   'compose version --short') echo "${FAKE_COMPOSE_VERSION:-2.40.0}" | grep -v '^$' || echo 2.40.0 ;;
   'tag '*|'image rm '*) ;;
   'buildx inspect '*) ;;
@@ -951,6 +953,8 @@ case "$all" in
     # A claim's proof: what the project's builder fetches is on stdin, FROM <repo>@<digest>.
     from=$(cat); echo "proof $from" >>`+in("calls")+`
     grep -qxF -- "${from#FROM }" `+in("unserved")+` 2>/dev/null && exit 1
+    # With dir/slowproof, it says dir/proving and hangs as a copy does (slowcopy).
+    [ -f `+in("slowproof")+` ] && { sleep 30 & echo $! >`+in("child")+`; touch `+in("proving")+`; wait; }
     true ;;
   'ps -a '*) ;;
   'compose '*' config --format json')
@@ -1236,6 +1240,12 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	if _, err := os.Stat(left); err == nil {
 		t.Errorf("a compose request left a day-old work directory: %s", left)
 	}
+	// A down by name, a request of its own, too.
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_DOWN=-v", "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, _ := c.CombinedOutput(); !strings.Contains(string(out), "ARGS: compose -p shop-prod down -v\nCONFIG: "+empty+"\n") {
+		t.Errorf("a down by name: compose's DOCKER_CONFIG is not %s:\n%s", empty, out)
+	}
 	if fi, err := os.Stat(empty); err != nil || fi.Mode().Perm() != 0o555 {
 		t.Errorf("the empty config: %v %v", fi, err)
 	} else if entries, _ := os.ReadDir(empty); len(entries) > 0 {
@@ -1466,6 +1476,9 @@ func doorComposeHelper(dir string) {
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
 	if req := os.Getenv("DEVOPSY_TEST_DOOR_REQUEST"); req != "" {
 		os.Exit(side.request(filepath.Join(dir, "none.json"), strings.Fields(req)))
+	}
+	if flags, ok := os.LookupEnv("DEVOPSY_TEST_DOOR_DOWN"); ok {
+		os.Exit(side.downProject("shop-prod", strings.Fields(flags)))
 	}
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
 		"image": "registry.example.com/blog/private:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},

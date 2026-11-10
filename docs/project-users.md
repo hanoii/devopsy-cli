@@ -385,8 +385,9 @@ An image with no registry host is a name on Docker Hub, so the door
 fetches it like any other at a start, even with `pull_policy: never`.
 
 A project user's `docker compose pull` is the door's own: it fetches
-each service's image as above, skipping the project's own builds and
-services with `pull_policy: never`, and says `pulling <image>` and then
+each service's image as above, skipping the project's own builds,
+services with `pull_policy: never`, and those with `missing` or
+`if_not_present` whose image the project has already, and says `pulling <image>` and then
 its time on stderr, nothing with `-q`. It takes compose's `-q`,
 `--ignore-buildable`, `--ignore-pull-failures` and `--include-deps`,
 and stops at the first image that fails, where compose pulls the others

@@ -175,7 +175,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Fail(err, spaceFix(d.Space))
 		return 1
 	}
-	if err := doorHostReady("docker", os.Environ()); err != nil {
+	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
 		report.Fail(err, report.Fix("move Docker to its containerd image store and a current buildx first (docs/project-users.md)"))
 		return 1
 	}
@@ -322,8 +322,11 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 		if err := os.RemoveAll(filepath.Join(d.Space, "logins", project)); err != nil {
 			return failErr(err)
 		}
-		if err := os.Remove(filepath.Join(d.Space, "images", who)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return failErr(err)
+		// The record and its lock (lockedRecord).
+		for _, f := range []string{who, who + ".lock"} {
+			if err := os.Remove(filepath.Join(d.Space, "images", f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return failErr(err)
+			}
 		}
 	}
 	stays := "its Unix user, home and tree stay"

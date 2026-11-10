@@ -369,7 +369,7 @@ var wholeID = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
 func repoKey(ref string) string {
 	domain, rest, _ := SplitDomain(RepoOf(ref))
-	if !HubDomain(domain) {
+	if !hubName(domain) {
 		return domain + "/" + rest
 	}
 	return strings.TrimPrefix(rest, "library/")

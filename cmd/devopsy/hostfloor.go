@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -45,8 +46,20 @@ const containerdStore = "io.containerd.snapshotter.v1"
 // doorHostReady is what a server with project users needs of its Docker, beyond a current one:
 // the containerd image store and buildx's OCI layout, read with docker (the real client) in
 // env, nil when both are there. --project-users add refuses without them, the door's claims
-// do, and --server-info warns.
-func doorHostReady(docker string, env []string) error {
+// do, and --server-info warns. buildx is read under config, a DOCKER_CONFIG with no plugins of
+// its own (an empty one of its own when ""), as the door's copy runs: Docker finds a plugin in
+// $DOCKER_CONFIG/cli-plugins first, so the deploy user's ~/.docker could hold another buildx
+// than the one that copies.
+func doorHostReady(docker string, env []string, config string) error {
+	if config == "" {
+		dir, err := os.MkdirTemp("", "devopsy-docker-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(dir)
+		config = dir
+	}
+	env = append(slices.Clone(env), "DOCKER_CONFIG="+config)
 	run := func(args ...string) (string, error) {
 		c := exec.Command(docker, args...)
 		c.Env = env

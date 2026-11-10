@@ -48,7 +48,7 @@ func TestDoorHostReady(t *testing.T) {
 		dir := t.TempDir()
 		docker := filepath.Join(dir, "docker")
 		write(t, docker, "#!/bin/sh\ncase \"$1\" in\n  info) echo '"+c.info+"' ;;\n  buildx) [ -n '"+c.buildx+"' ] && echo '"+c.buildx+"' || exit 1 ;;\nesac\n", 0o755)
-		err := doorHostReady(docker, nil)
+		err := doorHostReady(docker, nil, "")
 		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}

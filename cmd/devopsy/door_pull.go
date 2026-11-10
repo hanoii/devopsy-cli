@@ -14,10 +14,11 @@ import (
 
 // pull is compose's pull verb for a project user: the door's own claim of each image the verb
 // selects (door.PlanPull), never compose's pull, which would have Docker's daemon contact the
-// registries the project names. Every refusal comes before the first claim (CheckFile's,
-// PlanPull's); a claim that fails is a release's event, not a refusal, said with the
-// registry's words and unlogged: the pull stops there with 1, or with --ignore-pull-failures
-// says each and ends with 0, as compose does. What it says goes to stderr, as compose's
+// registries the project names. Every refusal of the file comes before the first claim
+// (CheckFile's, PlanPull's); a claim its registry fails (registryFailure) is a release's event,
+// said with the registry's words and unlogged: the pull stops there with 1, or with
+// --ignore-pull-failures says each and ends with 0, as compose does. A claim the door refuses
+// for what its registry served ends the pull as any refusal does, logged. What it says goes to stderr, as compose's
 // progress does.
 func (s *doorSide) pull(config string, file map[string]any, profiles, dir string, argv []string) int {
 	active, err := s.activeServices(file, profiles, dir)
@@ -29,6 +30,11 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 		return doorRefused(err)
 	}
 	for _, image := range plan.Images {
+		// Compose's pull skips an image it has under pull_policy missing, asking no registry:
+		// the door, one the project has.
+		if plan.IfMissing[image] && s.policy.OwnsImage(s, image, doorKnown()) {
+			continue
+		}
 		var timer *report.Timer
 		s.onFetch = func() {
 			if !plan.Quiet {
@@ -37,6 +43,11 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 		}
 		_, _, err := s.claim(image, config)
 		s.onFetch = nil
+		// What its registry served refused (a proof that fails, a copy not its hash) is the
+		// door's refusal, logged, whatever the flags.
+		if failed := (registryFailure{}); err != nil && !errors.As(err, &failed) {
+			return doorRefused(err)
+		}
 		if err != nil {
 			report.Fail(err)
 			if !plan.IgnoreFailures {
@@ -59,14 +70,14 @@ func (s *doorSide) activeServices(file map[string]any, profiles, dir string) ([]
 	if err != nil {
 		return nil, err
 	}
-	config, err := s.emptyConfig()
+	env, err := s.composeEnv("", false)
 	if err != nil {
 		return nil, err
 	}
 	name, _ := file["name"].(string)
 	args := slices.Concat([]string{"compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", "-"}, profileArgs(profiles), []string{"config", "--format", "json"})
 	c := s.docker(args...)
-	c.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+config)
+	c.Env = env
 	var said bytes.Buffer
 	c.Stdin, c.Stderr = bytes.NewReader(checked), &said
 	out, err := c.Output()

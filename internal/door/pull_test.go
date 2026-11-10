@@ -42,6 +42,16 @@ func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 			t.Errorf("%q: %q (%v), want %q", c.argv, pull.Images, err, c.want)
 		}
 	}
+	// pull_policy missing or if_not_present: pulled only when missing, unless another service
+	// pulls the same image always.
+	missing := parse(t, `{"name":"shop-prod","services":{
+		"a": {"image":"postgres:16","pull_policy":"missing"},
+		"b": {"image":"valkey:8","pull_policy":"if_not_present"},
+		"c": {"image":"valkey:8"}
+	}}`)
+	if pull, err := PlanPull(missing, []string{"a", "b", "c"}, []string{"pull"}, testPolicy); err != nil || !pull.IfMissing["postgres:16"] || pull.IfMissing["valkey:8"] {
+		t.Errorf("pulled only when missing: %+v (%v)", pull, err)
+	}
 	pull, err := PlanPull(file, active, []string{"pull", "--quiet", "--ignore-pull-failures"}, testPolicy)
 	if err != nil || !pull.Quiet || !pull.IgnoreFailures {
 		t.Errorf("the flags: %+v (%v)", pull, err)

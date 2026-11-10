@@ -10,12 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 // testLayout writes an OCI layout at dir as imagetools writes one, an image manifest of a config
@@ -177,50 +179,62 @@ func TestDoorClaimThatDoesNotLoadLeavesNothing(t *testing.T) {
 	}
 }
 
-// A door cut by a signal while it copies an image (a release cancelled mid-fetch) stops the
-// copy and removes its work directory, which would otherwise hold the image for a day, and ends
-// with the signal's exit. In a helper process (doorComposeHelper), since the door then exits.
+// A door cut by a signal while it proves or copies an image (a release cancelled mid-fetch)
+// stops what it runs and removes its work directories, which would otherwise hold the image
+// for a day, and ends with the signal's exit. In a helper process (doorComposeHelper), since
+// the door then exits.
 func TestDoorClaimCutBySignalLeavesNoWork(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	doorImageFake(t, dir)
-	private := "registry.example.com/blog/private"
-	fakeManifest(t, dir, plainManifest("private"), private+":1")
-	write(t, filepath.Join(dir, "slowcopy"), "", 0o644)
-	c := exec.Command(os.Args[0], "-test.run", "^$")
-	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_REQUEST=tag "+private+":1 busybox:devopsy-shop-prod-20260101000000")
-	if err := c.Start(); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(startWait); ; time.Sleep(20 * time.Millisecond) {
-		if _, err := os.Stat(filepath.Join(dir, "copying")); err == nil {
-			break
+	for slow, mark := range map[string]string{"slowproof": "proving", "slowcopy": "copying"} {
+		dir := t.TempDir()
+		doorImageFake(t, dir)
+		private := "registry.example.com/blog/private"
+		fakeManifest(t, dir, plainManifest("private"), private+":1")
+		write(t, filepath.Join(dir, slow), "", 0o644)
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_REQUEST=tag "+private+":1 busybox:devopsy-shop-prod-20260101000000")
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
+		for deadline := time.Now().Add(startWait); ; time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(filepath.Join(dir, mark)); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				_ = c.Process.Kill()
+				t.Fatalf("%s: never started:\n%s", slow, readString(filepath.Join(dir, "calls")))
+			}
+		}
+		if work, _ := os.ReadDir(filepath.Join(dir, "space", "work")); len(work) == 0 {
+			t.Fatalf("%s: no work directory to remove", slow)
+		}
+		if err := c.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- c.Wait() }()
+		select {
+		case err := <-done:
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 128+int(syscall.SIGTERM) {
+				t.Errorf("%s: the door's exit on SIGTERM: %v", slow, err)
+			}
+		case <-time.After(10 * time.Second):
 			_ = c.Process.Kill()
-			t.Fatalf("the copy never started:\n%s", readString(filepath.Join(dir, "calls")))
+			t.Fatalf("%s: the door did not end on SIGTERM", slow)
 		}
-	}
-	if work, _ := os.ReadDir(filepath.Join(dir, "space", "work")); len(work) == 0 {
-		t.Fatal("the copy has no work directory to remove")
-	}
-	if err := c.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- c.Wait() }()
-	select {
-	case err := <-done:
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 128+int(syscall.SIGTERM) {
-			t.Errorf("the door's exit on SIGTERM: %v", err)
+		if work, _ := os.ReadDir(filepath.Join(dir, "space", "work")); len(work) > 0 {
+			t.Errorf("%s: the cut claim left work: %v", slow, work)
 		}
-	case <-time.After(10 * time.Second):
-		_ = c.Process.Kill()
-		t.Fatal("the door did not end on SIGTERM")
-	}
-	if work, _ := os.ReadDir(filepath.Join(dir, "space", "work")); len(work) > 0 {
-		t.Errorf("the cut copy left work: %v", work)
+		// What it ran went with it, the docker CLI's whole process group.
+		pid, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(dir, "child"))))
+		for deadline := time.Now().Add(10 * time.Second); pid > 0 && syscall.Kill(pid, 0) == nil; time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Errorf("%s: what the claim ran (%d) outlived the door", slow, pid)
+				break
+			}
+		}
 	}
 }
 
@@ -237,7 +251,8 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	doorImageFake(t, dir)
-	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
+	// Every read as the project user (its docker config's among them) is logged.
+	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\necho \"$1\" >>"+filepath.Join(dir, "reads")+"\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
 	private, other, built := "registry.example.com/blog/private:1", "registry.example.com/other:1", "registry.example.com/built:1"
 	fakeManifest(t, dir, plainManifest("private"), private)
 	fakeManifest(t, dir, plainManifest("other"), other)
@@ -252,6 +267,7 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 		t.Helper()
 		os.Remove(calls)
 		os.Remove(log)
+		os.Remove(filepath.Join(dir, "reads"))
 		c := exec.Command(os.Args[0], "-test.run", "^$")
 		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "DEVOPSY_TEST_DOOR_FILE="+file,
 			"DEVOPSY_TEST_DOOR_PROFILES="+profiles, "DEVOPSY_TEST_DOOR_LOG="+log, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -277,6 +293,9 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 	if n := strings.Count(readString(calls), "buildx create "); n != 1 {
 		t.Errorf("the builder read %d times for two claims:\n%s", n, readString(calls))
 	}
+	if n := strings.Count(readString(filepath.Join(dir, "reads")), "cat\n"); n != 1 {
+		t.Errorf("the logins read %d times for two claims", n)
+	}
 	// The built service's tag is not in its registry: first by name, it ends the pull.
 	out, code = pull(file, "debug", "pull")
 	if code != 1 || copies() != 0 || !strings.Contains(out, "devopsy: error: ") || readString(log) != "" {
@@ -285,6 +304,14 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 	if out, code := pull(file, "debug", "pull --ignore-pull-failures"); code != 0 || !strings.Contains(out, built) || !strings.Contains(readString(calls), "imagetools inspect --raw "+private) {
 		t.Errorf("a pull past its failures (exit %d):\n%s\n%s", code, out, readString(calls))
 	}
+	// A registry that does not serve what it names, the proof failing: the door's refusal,
+	// logged, past --ignore-pull-failures too.
+	write(t, filepath.Join(dir, "unserved"), images.RepoOf(other)+"@"+digestOf([]byte(plainManifest("other")))+"\n", 0o644)
+	os.Remove(filepath.Join(dir, "space", "images", "devopsy-shop"))
+	if out, code := pull(file, "debug", "pull --ignore-buildable --ignore-pull-failures"); code != 2 || readString(log) == "" {
+		t.Errorf("a proof that fails under the pull (exit %d, logged %q):\n%s", code, readString(log), out)
+	}
+	os.Remove(filepath.Join(dir, "unserved"))
 	for name, c := range map[string]struct{ file, verb string }{
 		"an unknown service": {file, "pull web nosuch"},
 		"another's hold":     {`{"name":"shop-prod","services":{"web":` + svc(private, "") + `,"held":` + svc("busybox:devopsy-blog-prod-20240101000000", "") + `}}`, "pull"},
@@ -292,5 +319,37 @@ func TestDoorPullIsTheDoorsClaims(t *testing.T) {
 		if out, code := pull(c.file, "", c.verb); code != 2 || strings.Contains(readString(calls), "imagetools") || readString(log) == "" {
 			t.Errorf("%s (exit %d, logged %q):\n%s\n%s", name, code, readString(log), out, readString(calls))
 		}
+	}
+}
+
+// A claim takes only the bytes and the image it asked for: a ref by digest whose registry
+// serves other bytes, a manifest larger than a registry's own limit (which the door would hold
+// whole), and a load whose image goes by another id than the manifest's digest are refused,
+// nothing recorded.
+func TestDoorClaimTakesOnlyWhatItAsked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	private := "registry.example.com/blog/private"
+	d := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	key := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace
+	other := digestOf([]byte("other"))
+	write(t, filepath.Join(dir, "raw", key(private+"@"+other)), plainManifest("private"), 0o644)
+	write(t, filepath.Join(dir, "raw", key(private+":big")), `{"config":{},"x":"`+strings.Repeat("x", maxManifest)+`"}`, 0o644)
+	for name, c := range map[string]struct{ ref, want string }{
+		"other bytes by digest": {private + "@" + other, "served other bytes"},
+		"a manifest too large":  {private + ":big", "do not pull it"},
+	} {
+		if _, _, err := side.claim(c.ref, filepath.Join(dir, "none.json")); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	write(t, filepath.Join(dir, "loadid"), "sha256:another", 0o644)
+	if _, _, err := side.claim(private+":1", filepath.Join(dir, "none.json")); err == nil || !strings.Contains(err.Error(), "not the "+d+" loaded") {
+		t.Errorf("a load under another id: %v", err)
+	}
+	if got := readString(side.policy.ImagesFile()); got != "" {
+		t.Errorf("recorded: %q", got)
 	}
 }
