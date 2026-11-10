@@ -2708,3 +2708,159 @@ func TestBuiltImagesPinnedByID(t *testing.T) {
 		t.Errorf("status lines, another image by hand: %q", got)
 	}
 }
+
+// BUG: a rollback, and the restart after a failed run step, of a service with no data whose
+// shared name another environment built last and runs take that environment's build, and now
+// pin it by its id: Restore's putName leaves the name where it is and lists what it holds
+// ("stays on its newer image, which other environments use"), so prod's rollback runs the
+// stage's code. Its own build's bookmark is there, and by id it runs it without moving any
+// name, as a data service's does (by its bookmark): the id pin made the name's place
+// irrelevant, and this branch still follows it.
+func TestBuiltPinRollbackRunsOwnBuildUnderSharedName(t *testing.T) {
+	t.Parallel()
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	for _, how := range []string{"rollback", "restart"} {
+		d := newFake()
+		var out bytes.Buffer
+		prod := newSim(t, d, "app-prod", &out)
+		stage := newSim(t, d, "app-stage", &out)
+		r1, err := prod.release(false, web)
+		if err != nil {
+			t.Fatal(err)
+		}
+		own := prod.runs("web")
+		if how == "rollback" {
+			if _, err := prod.release(false, web); err != nil {
+				t.Fatal(err)
+			}
+		}
+		failed := ""
+		if how == "restart" {
+			// Prod's next release goes live, and its run step fails after the stage's
+			// release built: restarted on r1.
+			failed = prod.e.release(web)
+			prod.fetch([]Service{web})
+			if err := prod.e.set.Record(prod.e.rel(failed), prod.prev()); err != nil {
+				t.Fatal(err)
+			}
+			prod.cur = failed
+			prod.up()
+		}
+		if _, err := stage.release(false, web); err != nil {
+			t.Fatal(err)
+		}
+		theirs := stage.runs("web")
+		if how == "rollback" {
+			if err := prod.rollback(r1, false); err != nil {
+				prod.fail("rollback: %v", err)
+			}
+		} else {
+			prod.strict = true
+			prod.restart(r1, failed)
+		}
+		if got := prod.runs("web"); got != own {
+			t.Errorf("%s to %s: prod's web runs %s (the stage's build is %s), not its own %s, which its bookmark still holds:\n%s", how, r1, got, theirs, own, out.String())
+		}
+		if imgs, _, _ := composeFacts(prod.e.rel(r1)); imgs["web"] != own {
+			t.Errorf("%s to %s: its compose file pins web to %q, not its own build %s", how, r1, imgs["web"], own)
+		}
+	}
+}
+
+// BUG: a release pins what its name holds when it records, not what it built: fetches of two
+// environments run side by side under the shared image lock, so the other environment's
+// build under the same name, finishing between this one's build and its record, is the id
+// this release pins and runs from then on, the release after it too if nothing builds again.
+// The name is still how the release learns its build's id (entries, Restore after a fetch),
+// so the cause the pin names (a name others write) is still there at the record.
+func TestBuiltPinRecordsOwnBuildBesideAnotherFetch(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	prod := newSim(t, d, "app-prod", &out)
+	stage := newSim(t, d, "app-stage", &out)
+	id := prod.e.release(web)
+	prod.fetch([]Service{web})
+	built, _ := d.ID("shop-web")
+	// The stage's fetch builds under the same name before prod's record.
+	stage.fetch([]Service{web})
+	if err := prod.e.set.Record(prod.e.rel(id), ""); err != nil {
+		t.Fatal(err)
+	}
+	prod.cur = id
+	prod.up()
+	if got := prod.runs("web"); got != built {
+		t.Errorf("prod runs %s, the stage's build, not %s, what its own fetch built:\n%s", got, built, out.String())
+	}
+}
+
+// BUG: a copy that lands (a sync, an import, a --no-code restore) rewrites the pins: derive
+// takes any image: without a held mark for "its own image by its bookmark" (what it meant
+// before the id pin), so every built service's image: goes from its id to the release's
+// bookmark, a name, though nothing about it changed. Compose recreates a container whose
+// image: reference changed (internals/gotchas.md), so the next plain up or reload restarts
+// every built service, the ones the copy never touched included, and derive is no longer
+// quiet when nothing changes.
+func TestBuiltPinSurvivesLanding(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	d.publish("mariadb:11.8", "I1")
+	m := newSim(t, d, "app-prod", &out)
+	if _, err := m.release(false, web, db118); err != nil {
+		t.Fatal(err)
+	}
+	rel := m.e.rel(m.cur)
+	was, _ := os.ReadFile(filepath.Join(rel, ComposeFile))
+	built := m.runs("web")
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	snap := m.snapshot("1")
+	if err := m.noCode(snap); err != nil {
+		m.fail("the restore: %v", err)
+	}
+	now, _ := os.ReadFile(filepath.Join(rel, ComposeFile))
+	if imgs, _, _ := composeFacts(rel); imgs["web"] != built {
+		t.Errorf("after a --no-code restore, web's image: is %q, not its build's id %s", imgs["web"], built)
+	}
+	if string(now) != string(was) {
+		t.Errorf("the landing changed nothing, and rewrote the compose file (compose recreates on another image: reference):\n%s\nwas:\n%s", now, was)
+	}
+}
+
+// BUG: a hold under another name than the service's own (a failed release that built the
+// database over a previous one that pulls it: holdOn's image: that release's name) is still
+// by that name, never the id: another environment building under it (the stage's, a
+// branch's) moves it, and prod's next plain up runs that build, a newer version, on prod's
+// data, the case the id pin is for. composeText pins an id only where a hold gives no image:.
+func TestBuiltPinHoldUnderAnotherName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	d.publish("mariadb:11.8", "I1")
+	built := func(version string) Service {
+		return Service{Name: "database", Ref: "shop-db", Build: true, Data: true, Method: CopyVolumes, DataVersion: version}
+	}
+	prod := newSim(t, d, "app-prod", &out)
+	r1, err := prod.release(false, db118)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prod.failRun(false, built("12.1")); err != nil {
+		t.Fatal(err)
+	}
+	held := prod.runs("database")
+	if heldIn(prod.e.rel(r1))["database"] == "" || held == "I1" {
+		prod.fail("setup: %s is not held on the failed release's build: runs %s", r1, held)
+	}
+	stage := newSim(t, d, "app-stage", &out)
+	if _, err := stage.release(false, built("12.4")); err != nil {
+		t.Fatal(err)
+	}
+	prod.up()
+	if got := prod.runs("database"); got != held {
+		imgs, _, _ := composeFacts(prod.e.rel(r1))
+		t.Errorf("a plain up of prod runs its 12.1 data on %s, the stage's 12.4 build, not %s it is held on: its compose file holds it by image: %q", got, held, imgs["database"])
+	}
+}
