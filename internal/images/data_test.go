@@ -3253,3 +3253,221 @@ func TestDoorProjectRunsItsBuildsByName(t *testing.T) {
 		t.Errorf("a door project's file runs web by %q", imgs["web"])
 	}
 }
+
+// forget takes an image and every name of it away, as a docker image prune -a by hand does
+// to one no container runs.
+func forget(d *fakeDocker, id string) {
+	for n, i := range d.names {
+		if i == id {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, id)
+}
+
+// A service under a profile sharing one of two builds in one repository (shop:web and
+// shop:tools) keeps its own build's bookmark through a rollback, which writes the file
+// with no fetch file to read the sharing from.
+//
+// BUG: sharers' fallback on the release's ComposeFile takes the first own entry in the
+// bookmark's repository before it looks for the entry the bookmark is exactly, so the
+// tool goes over to the other service's image at the first rollback, restart or landing.
+func TestSharerKeepsItsBuildAmongOneRepositorys(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	app := Service{Name: "app", Ref: "shop:web", Build: true}
+	worker := Service{Name: "worker", Ref: "shop:tools", Build: true}
+	tool := Service{Name: "tool", Ref: "shop:tools", NeverPull: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(m.e.svcs[filepath.Base(rel)]), tool), nil
+	}
+	r1, err := m.release(false, app, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := m.runs("worker")
+	if got := fileImage(d, m.e.rel(r1), "tool", ""); got != tools {
+		t.Fatalf("the control: the tool runs %q, not the worker's build %s", got, tools)
+	}
+	if _, err := m.release(false, app, worker); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.rollback(r1, false); err != nil {
+		m.fail("rollback: %v", err)
+	}
+	if got := fileImage(d, m.e.rel(r1), "tool", ""); got != tools {
+		imgs, _, _ := composeFacts(m.e.rel(r1))
+		t.Errorf("after the rollback the tool runs %q (image: %q, the app's is %q), not the worker's build %s", got, imgs["tool"], imgs["app"], tools)
+	}
+}
+
+// A full restore's release names an image for a profile's service sharing a build, as the
+// release it restores did: its directory is new (no ComposeFile of an activation before)
+// and its images come back by their bookmarks (no fetch, so no fetch file).
+//
+// BUG: sharers reads the sharing from a fetch file or the file before alone, so the
+// restored release's file leaves the tool out, and it runs the project's name, which
+// devopsy's builds never write.
+func TestFullRestoreNamesAProfilesSharer(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-app", Build: true}
+	tool := Service{Name: "tool", Ref: "shop-app", NeverPull: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	m.e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(m.e.svcs[filepath.Base(rel)]), tool), nil
+	}
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	own := m.runs("web")
+	snap := m.snapshot("20261102000000")
+	id, err := m.fullRestore(snap, []Service{web})
+	if err != nil {
+		m.fail("the restore: %v", err)
+	}
+	if m.runs("web") != own {
+		t.Fatalf("the control: web runs %s, not the snapshot's %s", m.runs("web"), own)
+	}
+	if got := fileImage(d, m.e.rel(id), "tool", "shop-app"); got != own {
+		imgs, _, _ := composeFacts(m.e.rel(id))
+		t.Errorf("the restored release runs the tool on %q (image: %q), not its build %s", got, imgs["tool"], own)
+	}
+}
+
+// The restart's last try (--as-built) goes on with an own image gone, as its listing has it,
+// said: it never fails on what it cannot have, and its holds are the ones a restore with
+// Docker and the image lock can write.
+//
+// BUG: keep now fails on any own image's bookmark it cannot put, a gone image's included,
+// so the last try fails where it warned, its listing written and its ComposeFile not, and
+// the restart is left to img hold.
+func TestAsBuiltGoesOnWithAnImageGone(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, web, db118)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := m.runs("web")
+	failed := m.e.release(web, db118)
+	m.fetchID(failed)
+	if err := m.e.set.Record(m.e.rel(failed), m.prev()); err != nil {
+		t.Fatal(err)
+	}
+	m.cur = failed
+	m.up()
+	// r1's build is gone, and building it again failed.
+	forget(d, own)
+	m.e.set.Restart, m.e.set.AsBuilt = true, true
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(failed), false); err != nil {
+		t.Errorf("restore --as-built with web's image gone: %v\n%s", err, out.String())
+	}
+}
+
+// A snapshot of a release that lists an own image this server no longer has (a held
+// service's own build, which no container runs, pruned by hand) is taken all the same: the
+// snapshot lists it, and its restore builds it.
+//
+// BUG: BookmarkFrom goes through keep, which now fails on an own image's bookmark it cannot
+// put: every take fails ("bookmarking the release's images"), a release's own snapshot
+// included, so with release snapshots on the release that fixes forward cannot go live.
+func TestSnapshotOfAReleaseWithAnOwnImageGone(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	r1, err := m.release(false, builtDB("shop", "11.8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := m.runs("database")
+	if _, err := m.failRun(false, builtDB("shop", "12.1")); err != nil {
+		t.Fatal(err)
+	}
+	if heldIn(m.e.rel(r1))["database"] == "" || m.runs("database") == own {
+		m.fail("the control: the database is not held")
+	}
+	forget(d, own)
+	dir := filepath.Join(m.e.set.Snapshots, "20261102000000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.e.set.BookmarkFrom(dir, m.e.rel(r1)); err != nil {
+		t.Errorf("the take's bookmarks, the held database's own build gone: %v\n%s", err, out.String())
+	}
+}
+
+// A full restore of a snapshot whose built image is gone from the server makes its release
+// and builds the image again (img restore's exit 1, then its fetch), as a rollback does.
+//
+// BUG: make-release's BookmarkFrom fails on the bookmark it cannot put, before the restore
+// that would ask for the build.
+func TestFullRestoreBuildsAnImageGone(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	own := m.runs("web")
+	snap := m.snapshot("20261102000000")
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	forget(d, own)
+	id := m.e.release(web)
+	rel := m.e.rel(id)
+	os.WriteFile(filepath.Join(rel, RecordFile), []byte(`{"mode":"build","restore":"20261102000000"}`), 0o644)
+	if err := m.e.set.BookmarkFrom(rel, snap); err != nil {
+		t.Fatalf("make-release, the snapshot's build gone: %v\n%s", err, out.String())
+	}
+	m.e.set.NoCheck = true
+	if err := m.e.set.Restore(rel, m.prev(), false); !errors.Is(err, ErrGone) {
+		t.Errorf("the restore asks for no build: %v", err)
+	}
+}
+
+// A door project's rollback runs the release it goes back to, or fails: its file names no
+// image for its builds (the door builds under the project's name), and nothing puts that
+// name back.
+//
+// BUG: with the name moving gone and Door leaving own images out of the file, the rollback
+// says "images restored", lists the target's build, and the run step runs what the name
+// holds: the build of the release it left.
+func TestDoorRollbackRunsItsOwnBuild(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Door = true
+	r1, err := m.release(false, web)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := m.runs("web")
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	left := m.runs("web")
+	if err := m.rollback(r1, false); err != nil {
+		return
+	}
+	if got := m.runs("web"); got != own {
+		e, _ := match(readList(m.e.rel(r1)), entry{Service: "web"})
+		t.Errorf("the rollback to %s went through, lists web on %s, and web runs %s (the release it left ran %s)", r1, e.ID, got, left)
+	}
+}
