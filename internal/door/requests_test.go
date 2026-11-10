@@ -557,7 +557,8 @@ func TestDecideRunRemovals(t *testing.T) {
 }
 
 // What of the image store is the server's is the admin's: for a project user there is
-// nothing to do, nothing was refused for it, and a release says nothing about it.
+// nothing to do, nothing was refused for it, and a release says nothing about it, the
+// project's own names asked with them removed.
 func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	t.Parallel()
 	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}} {
@@ -573,6 +574,11 @@ func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 		if a, err := decide(t, argv...); err == nil && len(a.Docker) != 0 {
 			t.Errorf("%q removes another project's hold: %+v", argv, a)
 		}
+	}
+	// Its own names among the server's: its own go, the others stay.
+	a, err := decide(t, "image", "rm", "busybox:1.37", "busybox:devopsy-shop-prod-1", "other-prod-app", "devopsy.internal/shop-prod/app")
+	if err != nil || !slices.Equal(a.Docker, []string{"image", "rm", "busybox:devopsy-shop-prod-1", "devopsy.internal/shop-prod/app"}) {
+		t.Errorf("its own names among the server's: %+v, %v", a, err)
 	}
 }
 

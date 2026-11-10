@@ -413,18 +413,22 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 		return a, nil
 	case "rm":
 		// A hold, or a name it built. `image prune` is server-wide: the admin's.
+		own := []string{"image", "rm"}
 		for _, t := range args[1:] {
 			if strings.HasPrefix(t, "-") {
 				return nil, refuse("docker image rm %s", t)
 			}
 			// Any other name is the server's (a registry's, or another project's hold, its
 			// reference count on the image it runs): its pruning asks, and the name may be
-			// others'. Nothing to do, and nothing a release should hear as a failure.
-			if !p.OwnRef(t) {
-				return &Action{}, nil
+			// others'. Left as it is, and nothing a release should hear as a failure.
+			if p.OwnRef(t) {
+				own = append(own, t)
 			}
 		}
-		return &Action{Docker: append([]string{"image"}, args...)}, nil
+		if len(own) == 2 {
+			return &Action{}, nil
+		}
+		return &Action{Docker: own}, nil
 	case "prune":
 		// devopsy's tidying up, server-wide, so the admin's: for this user nothing to do.
 		return &Action{}, nil
