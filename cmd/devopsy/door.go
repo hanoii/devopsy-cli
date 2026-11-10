@@ -523,7 +523,8 @@ func (s *doorSide) Image(ref string) (string, []string, error) {
 // an image another project pulled with its own logins is this one's only once its own
 // pull of it goes through, a public one at the cost of one pull. It gives the digest the
 // pull got and that image, read by that digest: the name is anyone's on the server to move
-// right after the pull (a project user's build of a registry's name), so nothing reads it
+// right after the pull (another project's pull of a tag its registry moved, the deploy
+// user's build of a registry's name), so nothing reads it
 // again. What the pull says goes to stderr on a failure, stdout being the request's answer.
 func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	d, err := s.logins(config)

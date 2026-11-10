@@ -587,8 +587,8 @@ func (s *Set) unhold(rel string, e, o entry, svc Service, mode string) (entry, e
 // write them: a pulled image held by its registry digest, which the run
 // step's up pulls when gone, the image it replaces in the listing
 // recorded (LeftFile) for the next pruning; a pulled own image back as
-// every derivation writes an unheld one (its own digest's DigestLabel and
-// no image, so compose runs its name). A built one, held or given back, by
+// every derivation writes an unheld one (composeText: its own digest's
+// DigestLabel, its name pinned to that digest). A built one, held or given back, by
 // a bookmark that already names it, as image: (no name moved, which only
 // Docker does); with none, said, naming the service and the way on, a
 // release that fixes forward. Why (review): the restart went on with

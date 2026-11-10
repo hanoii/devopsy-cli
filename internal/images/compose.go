@@ -72,7 +72,8 @@ func composeText(es []entry, holds map[string]composeHold) string {
 		if image == "" && e.Kind == KindPulled && e.Digest != "" {
 			// Pinned: the run step, a plain up, a reload resolve the name again
 			// otherwise, and a name is anyone's on the server to move after the
-			// fetch (a project user's build of a registry's name).
+			// fetch (another project's pull of a tag its registry moved, the deploy
+			// user's build of a registry's name).
 			image = Pin(e.Ref, e.Digest)
 		}
 		svcs.WriteString("  " + strconv.Quote(e.Service) + ":\n")

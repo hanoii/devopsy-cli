@@ -90,8 +90,9 @@ func TestRecordListing(t *testing.T) {
 	// image:, in the service's own spelling with the digest after it (the tag kept, so
 	// docker ps shows it; Docker takes repo:tag@digest and resolves the digest): the run
 	// step, a plain up or a reload resolves the name again otherwise, and a name is
-	// anyone's on the server to have moved since the fetch (a project user's build of a
-	// Docker Hub name). An own image goes by its name, which only this project writes.
+	// anyone's on the server to have moved since the fetch (another project's pull of a tag
+	// its registry moved, the deploy user's build of a Docker Hub name). An own image goes by
+	// its name.
 	// The label stays the digest alone, as Docker spells it.
 	imgs, labels, _ := composeFacts(e.rel(id))
 	for svc, want := range map[string]string{"app": "", "database": "mariadb:11.8@sha256:m1", "alwaysup": "caddy:2-alpine@sha256:c1"} {

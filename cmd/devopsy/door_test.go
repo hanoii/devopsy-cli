@@ -934,8 +934,8 @@ func plainManifest(name string) string {
 // A claimed image goes to compose pinned, `<image as given>@<digest>`, the digest the
 // image has in the service's repository (as the devopsy.digest label chooses it, the tag
 // kept so docker ps shows it, a reference by digest kept as given): the name is anyone's
-// on the server to move between this check and compose's create (a project user's build of
-// a Docker Hub name, mongo's mongo-express:1, under mongo's lock alone), and Docker
+// on the server to move between this check and compose's create (another project's pull of
+// a tag its registry moved, the deploy user's build of a Docker Hub name), and Docker
 // resolves repo:tag@digest by the digest. The digest, the labels read and the id recorded
 // are the image the project's pull got, read by digest or id, never by the name again
 // after the pull; an image with no digest in its repository never goes by its plain name.
