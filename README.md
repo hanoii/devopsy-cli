@@ -218,6 +218,8 @@ ask devopsy at every Tab, so they follow the installed version.
   importing them, release snapshots.
 - [Servers](docs/servers.md): server commands, `--server-info`, CI, SSH
   and keys.
+- [Project users](docs/project-users.md): a project with a Unix user of
+  its own and no Docker socket, why and how.
 - [Roles, exports and imports](docs/roles.md): facts shared between
   projects on a server, and `--probe`.
 - [Capabilities](docs/capabilities.md): `status`, `env`, `shell` and `data`.

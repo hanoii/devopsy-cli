@@ -228,7 +228,7 @@ A sync across servers needs:
   servers here.
 - The child's sshd reading `expiry-time` in a key's options (OpenSSH
   7.7 or later).
-- Both sides project users ([Servers](servers.md)), or neither: a
+- Both sides project users ([Project users](project-users.md)), or neither: a
   project user would otherwise drive a copy the deploy user runs, or
   the other way round. devopsy refuses before anything stops, and
   `--export` piped into `--import` moves a service's data across through
@@ -433,8 +433,8 @@ chain.
 A preview (for example one environment for each pull request) runs
 code nobody has reviewed yet. Keep previews on a server of their own,
 away from production, and release the project as a project user on
-both servers ([project
-users](servers.md#project-users-with-no-docker-socket)), since a sync
+both servers ([Project
+users](project-users.md)), since a sync
 goes between two project users or two deploy users. `--project-users
 add shop` makes `devopsy-shop` on each server, with its own keys there,
 and each address names it ([Targets](config.md#targets)).
