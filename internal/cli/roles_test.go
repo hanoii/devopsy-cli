@@ -299,3 +299,36 @@ func TestImportStates(t *testing.T) {
 		t.Errorf("not a release: %+v", s)
 	}
 }
+
+// ImportStates (--debug imports, over every compose project running on the host) reads no
+// project user's release: on a container the door made (devopsy.door), the working_dir label
+// is the project user's word and the files are in its tree, through whatever links it put
+// there, which the deploy user's read would follow to any file it can read itself, showing its
+// lines as that project's values. It says the release is a project user's instead.
+//
+// Not parallel: it sets Running (fakeHost).
+func TestImportStatesReadNoProjectUsersTree(t *testing.T) {
+	// The project user's tree, and a file of the deploy user's it links to.
+	tree := filepath.Join(t.TempDir(), "shop", "prod", "releases", "1")
+	dir := filepath.Join(tree, remote.CodeDir, ProjectDirName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(t.TempDir(), "devopsy-target.env")
+	write(t, own, "TOKEN='deploys'\n")
+	if err := os.Symlink(own, releaseTargetEnv(filepath.Join(tree, remote.CodeDir))); err != nil {
+		t.Fatal(err)
+	}
+	fakeHost(t,
+		container("traefik", "devopsy.role=proxy", "devopsy.export.HOST=smtp"),
+		container("shop-prod", "devopsy.door=devopsy-shop", "com.docker.compose.project.working_dir="+dir, "devopsy.import.TOKEN=proxy/HOST"),
+	)
+	host, _ := Running()
+	states := host.ImportStates()
+	if len(states) != 1 {
+		t.Fatalf("%+v", states)
+	}
+	if s := states[0]; s.Released || s.Set || s.Release != "" || !s.Door {
+		t.Errorf("a project user's tree is read by whoever lists imports, through its links: %+v", s)
+	}
+}
