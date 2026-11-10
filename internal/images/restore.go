@@ -211,14 +211,8 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		switch {
 		case st.asIs:
 			// As its listing had it, never what a name holds now: no name but
-			// its bookmark is target's, and one it has no image of has none
-			// (behind the door, whose builds are named by the project's name,
-			// that name).
-			ref := ""
-			if s.Door {
-				ref = digestRef(svc.Ref)
-			}
-			e := s.entryOf(svc, ref, mode)
+			// its bookmark is target's, and one it has no image of has none.
+			e := s.entryOf(svc, "", mode)
 			if haveOld && o.ID != "" {
 				e = ownOf(o)
 				e.Service, e.DataVersion, e.Tag = svc.Name, svc.DataVersion, svc.tag()
