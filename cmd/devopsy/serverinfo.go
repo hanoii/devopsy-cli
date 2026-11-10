@@ -175,7 +175,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	info.Containers = hostContainers()
 	info.Environments = environments(info.Root, doorTrees(info.Root), func(who, tree string) []remote.Environment {
 		return treeEnvironments(who, tree, doorTreeWait)
-	})
+	}, ownedByMe)
 	return info, nil
 }
 
@@ -529,11 +529,13 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 // while removing it left (<base>.rm.<pid>, removeBase). A project user's
 // tree there (trees, by its path) is read as that user (readTree): the
 // deploy user never reads a project's tree, where a link would show it
-// its own files.
-func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment) []remote.Environment {
+// its own files. Nor any project directory there it does not own (owned):
+// a project user's whose entry is gone (--project-users remove keeps its
+// Unix user and tree), or one the door's list names by another spelling.
+func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment, owned func(path string) bool) []remote.Environment {
 	var envs []remote.Environment
 	for _, p := range envDirs(root) {
-		if _, ok := trees[p]; !ok {
+		if _, ok := trees[p]; !ok && owned(p) {
 			envs = append(envs, projectEnvironments(root, p)...)
 		}
 	}
@@ -546,6 +548,16 @@ func environments(root string, trees map[string]string, readTree func(user, tree
 		envs = append(envs, got...)
 	}
 	return envs
+}
+
+// ownedByMe says whether path, links resolved, is this user's own.
+func ownedByMe(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Getuid()
 }
 
 // envDirs are dir's directories, a link to one included: a project or an

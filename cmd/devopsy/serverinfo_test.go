@@ -487,7 +487,7 @@ func TestServerInfoEnvironments(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	for _, e := range environments(root, nil, nil) {
+	for _, e := range environments(root, nil, nil, ownedByMe) {
 		got = append(got, e.Path)
 	}
 	if !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
@@ -508,7 +508,7 @@ func TestServerInfoEnvironments(t *testing.T) {
 	for _, e := range environments(root, map[string]string{filepath.Join(root, "app"): "devopsy-app"}, func(user, tree string) []remote.Environment {
 		asked = user + " " + tree
 		return []remote.Environment{{Path: "app/prod", Status: "as its user\n"}}
-	}) {
+	}, ownedByMe) {
 		got = append(got, e.Path+"="+e.Status)
 	}
 	if asked != "devopsy-app "+filepath.Join(root, "app") || !slices.Contains(got, "app/prod=as its user\n") || slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, "app/stolen") }) {
@@ -519,7 +519,7 @@ func TestServerInfoEnvironments(t *testing.T) {
 	got = nil
 	for _, e := range environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
 		return []remote.Environment{{Path: "shop/prod", Status: "as " + user + "\n"}}
-	}) {
+	}, ownedByMe) {
 		got = append(got, e.Path)
 	}
 	if !slices.Contains(got, "app/prod") || !slices.Contains(got, "shop/prod") {
@@ -612,7 +612,7 @@ func TestServerInfoOffersNoStatusInAProjectUsersTree(t *testing.T) {
 	// that failed, which --server-info warns of.
 	info.Environments = environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
 		return []remote.Environment{{Path: "shop/prod", Status: "none\t20261027110000\n", User: ""}}
-	})
+	}, ownedByMe)
 	_, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
 	warned := false
 	for _, w := range warnings {
@@ -681,5 +681,51 @@ func TestServerInfoWaitsForNoProjectUsersRead(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Error("--server-info still waits for a project user's read that never answers")
+	}
+}
+
+// Once --project-users remove took a project user's entry, the deploy user still never walks
+// that user's tree in the release root, which remove keeps: whose a directory is comes from
+// its owner (owned), never from the door's list alone. Else remote.EnvStatus would read its
+// files with no bound (a FIFO where a release's record goes), follow its links, and statusHint
+// offer `cd <tree>/<environment>/current && devopsy --status`, devopsy running what that user
+// wrote. The tree here is the test's own user's, so owned names it another's.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the door's entries are.
+func TestServerInfoReadsNoTreeOfARemovedProjectUser(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	root := t.TempDir()
+	tree := filepath.Join(root, "shop")
+	if err := os.MkdirAll(filepath.Join(tree, "prod", "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(home, "config.yaml"), "door:\n  space: "+t.TempDir()+"\n", 0o600)
+	entry := filepath.Join(remote.DoorDir(), "users", "devopsy-shop.yaml")
+	write(t, entry, "project: shop\ntree: "+tree+"\n", 0o600)
+	// walk is --server-info's list: how many trees it asked their user for, and the
+	// environments the deploy user read itself.
+	walk := func() (asked int, own []string) {
+		owned := func(p string) bool { return p != tree }
+		for _, e := range environments(root, doorTrees(root), func(string, string) []remote.Environment { asked++; return nil }, owned) {
+			if e.User == "" {
+				own = append(own, e.Path)
+			}
+		}
+		return asked, own
+	}
+	// The control: with its entry, the tree is read as its user alone.
+	if asked, own := walk(); asked != 1 || len(own) != 0 {
+		t.Fatalf("with its entry: %d trees asked of their user, the deploy user read %v", asked, own)
+	}
+	d, err := remote.ServerDoor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := removeProjectUser(d, "shop", "devopsy-shop", entry, func(string) error { return nil }); code != 0 {
+		t.Fatalf("remove: exit %d", code)
+	}
+	if _, own := walk(); len(own) != 0 {
+		t.Errorf("after --project-users remove, the deploy user reads the tree its Unix user still owns: %v", own)
 	}
 }
