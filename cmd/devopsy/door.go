@@ -1278,6 +1278,8 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 // an unlinked file, so nothing of a project's environment stays on disk, with no .env,
 // in the release it says it is from, since devopsy reads compose's working_dir.
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
+	// A claim's copy is a work directory too, which a door killed mid-start leaves.
+	s.sweepWork()
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}

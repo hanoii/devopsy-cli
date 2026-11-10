@@ -1177,7 +1177,8 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 // map alone, and an image gone after the claim would be Docker's daemon's to pull. A pull keeps
 // the names: it is what moves them. Its DOCKER_CONFIG is an empty directory of the door's,
 // closed to writes, for any verb that needs no logins: unset, compose reads the deploy user's
-// own, its logins, helpers and plugins. In a helper process (doorComposeHelper), since the door
+// own, its logins, helpers and plugins. A day-old work directory goes, as with every other
+// request. In a helper process (doorComposeHelper), since the door
 // execs compose, here the fake docker, which prints the file it was given.
 func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	t.Parallel()
@@ -1189,6 +1190,12 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
 	write(t, filepath.Join(dir, "store"), private+"@"+p1+"|sha256:p1|"+private+"@"+p1+"||{}\n", 0o644)
 	empty := filepath.Join(dir, "space", "docker-empty")
+	// What a door killed mid-claim left a day ago goes with the next compose request.
+	left := filepath.Join(dir, "space", "work", "shop-1")
+	write(t, filepath.Join(left, "layout", "index.json"), "{}", 0o644)
+	if err := os.Chtimes(left, time.Now().Add(-25*time.Hour), time.Now().Add(-25*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	for _, verb := range []string{"up -d", "create", "run --rm web true", "down", "pull"} {
 		c := exec.Command(os.Args[0], "-test.run", "^$")
 		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -1221,6 +1228,9 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 		if !strings.Contains(string(out), "\nCONFIG: "+config+"\n") {
 			t.Errorf("%s: compose's DOCKER_CONFIG is not %s:\n%s", verb, config, out)
 		}
+	}
+	if _, err := os.Stat(left); err == nil {
+		t.Errorf("a compose request left a day-old work directory: %s", left)
 	}
 	if fi, err := os.Stat(empty); err != nil || fi.Mode().Perm() != 0o555 {
 		t.Errorf("the empty config: %v %v", fi, err)
