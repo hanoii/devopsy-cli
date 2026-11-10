@@ -198,17 +198,20 @@ The rules are in four chains devopsy owns, `DEVOPSY-PROJECTS`,
 `DEVOPSY-DOCKERD` and `DEVOPSY-DOOR` in iptables' filter table and
 `DEVOPSY-CONTAINERS` in
 its raw table, and the server's other rules stay as they are.
-`devopsy-firewall.service` loads them at every boot, and from the next
-boot on `devopsy-firewall.timer` loads them every five minutes too, so
-a reload of the server's own firewall that drops them is undone within
-five minutes. Syncs between servers work with the firewall loaded.
+`devopsy-firewall.service` loads them at every boot, a drop-in for
+`docker.service` loads them at every start of Docker, whose daemon's
+rule holds only the cgroup it was loaded for, and from the next boot on
+`devopsy-firewall.timer` loads them every five minutes too, so a reload
+of the server's own firewall that drops them is undone within five
+minutes. Syncs between servers work with the firewall loaded.
 
 `--server-info` checks the firewall and warns when:
 
 - a chain is not devopsy's, nothing jumps to it, or a rule ahead of
   devopsy's jump lets packets through, which `--project-users add`
   fixes by loading the chains again;
-- Docker's daemon is in no cgroup of its own, so nothing covers it;
+- Docker's daemon is in no cgroup of its own, so nothing covers it, or
+  in one made since the firewall loaded, which its rule does not hold;
 - a TCP listener is open beyond loopback, other than sshd's and the
   ports Docker publishes, since containers reach it.
 

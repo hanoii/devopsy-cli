@@ -108,6 +108,14 @@ func TestDoorFirewallWrong(t *testing.T) {
 	if got := DoorFirewallWrong(strings.Replace(all, "-A OUTPUT -m cgroup --path \""+testDaemonCgroup+"\" -j "+DoorDaemonChain+"\n", "", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], DoorDaemonChain) {
 		t.Errorf("the daemon's jump gone: %q", got)
 	}
+	// Docker started again since the loader ran: its cgroup another (another inode under the
+	// same path), which the daemon's jump, binding the one it was loaded for, does not hold.
+	if got := DoorFirewallWrong(strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+testDaemonCgroup+"\n# dockerd-cgroup 4242 4141\n", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], "made since the firewall loaded") {
+		t.Errorf("a cgroup made again: %q", got)
+	}
+	if got := DoorFirewallWrong(strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+testDaemonCgroup+"\n# dockerd-cgroup 4242 4242\n", 1), "1001", "1003"); len(got) != 0 {
+		t.Errorf("the cgroup the jump was loaded for: %q", got)
+	}
 	// A kernel with no IPv6 has nothing to filter there.
 	v4 := all[:strings.Index(all, "# ip6tables")] + "# ip6tables off\n"
 	if got := DoorFirewallWrong(v4, "1001", "1003"); len(got) != 0 {
@@ -291,5 +299,58 @@ func TestDoorListeners(t *testing.T) {
 	// sshd's ports unread (its config), port 22 is sshd's.
 	if got := DoorListeners("# listeners\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"); len(got) != 0 {
 		t.Errorf("sshd's default port: %q", got)
+	}
+}
+
+// At boot the firewall's loader runs before docker.service, whose cgroup is not there yet: it
+// loads every chain and jump, IPv6's included, and leaves the daemon's jump for Docker's own
+// start (DoorFirewallDockerDropIn), never stopping at it. The kernel takes a cgroup's rule only
+// for a cgroup that is there ("RULE_INSERT failed (Invalid argument)", exit 4, on Debian 13's
+// iptables 1.8.11), and the loader runs under set -e.
+//
+// The fake iptables refuses what the kernel refuses: a rule on a cgroup's path, none being
+// there. Everything else it takes, and logs.
+func TestFirewallLoaderLoadsIPv6BeforeDockersCgroupIsThere(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/net/if_inet6"); err != nil {
+		t.Skip("no IPv6 here (macOS has no /proc): the loader loads none")
+	}
+	bin := t.TempDir()
+	log := filepath.Join(bin, "log")
+	tables := `#!/bin/sh
+echo "$(basename "$0") $*" >>` + log + `
+case " $* " in *" -I "*" -m cgroup --path "*) echo "$(basename "$0"): RULE_INSERT failed (Invalid argument)" >&2; exit 4 ;; esac
+`
+	restore := "#!/bin/sh\ncat >/dev/null\necho \"$(basename \"$0\") $*\" >>" + log + "\n"
+	for name, body := range map[string]string{
+		"getent": `#!/bin/sh
+case "$2" in ` + DoorGroup + `) echo "` + DoorGroup + `:x:1001:" ;; ` + DoorRunGroup + `) echo "` + DoorRunGroup + `:x:1003:" ;; *) exit 2 ;; esac
+`,
+		// docker.service not started yet, as at boot: its unit there, no cgroup.
+		"systemctl": `#!/bin/sh
+case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo system.slice ;; "cat docker.service") ;; *) exit 1 ;; esac
+`,
+		"pidof":             "#!/bin/sh\nexit 1\n",
+		"iptables":          tables,
+		"ip6tables":         tables,
+		"iptables-restore":  restore,
+		"ip6tables-restore": restore,
+	} {
+		write(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("sh", "-c", DoorFirewallLoader())
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	data, _ := os.ReadFile(log)
+	ran := string(data)
+	// The control: IPv4's chains and the project users' jump went in before the daemon's.
+	if !strings.Contains(ran, "iptables-restore --noflush\n") || !strings.Contains(ran, "iptables -t filter -I OUTPUT 1 -m owner --gid-owner 1001 --suppl-groups -j "+DoorChain+"\n") {
+		t.Fatalf("the loader did not load IPv4's chains and jump (%v): %s\n%s", err, out, ran)
+	}
+	if !strings.Contains(ran, "ip6tables-restore --noflush\n") || !strings.Contains(ran, "ip6tables -t filter -I OUTPUT 1 -m owner --gid-owner 1001 --suppl-groups -j "+DoorChain+"\n") {
+		t.Errorf("with docker.service's cgroup not there yet, the loader loaded no IPv6 chain or jump (%v): %s\nwhat it ran:\n%s", err, out, ran)
 	}
 }

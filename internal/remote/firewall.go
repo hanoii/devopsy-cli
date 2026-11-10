@@ -22,6 +22,12 @@ const (
 	DoorFirewallScript = "/usr/local/libexec/devopsy-firewall"
 	DoorFirewallUnit   = "/etc/systemd/system/devopsy-firewall.service"
 	DoorFirewallTimer  = "/etc/systemd/system/devopsy-firewall.timer"
+	// DoorFirewallDockerDropIn runs the loader whenever Docker starts, in docker.service's
+	// own cgroup: a cgroup's rule binds the cgroup there when it goes in, never its path, and
+	// systemd makes docker.service's anew at every start.
+	DoorFirewallDockerDropIn = "/etc/systemd/system/docker.service.d/devopsy-firewall.conf"
+	// DoorFirewallDaemonMark is the inode of the cgroup the daemon's jump was loaded for.
+	DoorFirewallDaemonMark = "/run/devopsy-firewall.dockerd"
 )
 
 // firewallFamily is one of iptables' families: its command, how it rejects, and the cloud
@@ -206,15 +212,28 @@ stale() {
 		for _, j := range doorJumps("$gid", "$doorgid", "") {
 			load += "first " + f.cmd + " " + j.table + " " + j.from + ` "` + strings.ReplaceAll(j.rule, `"`, `\"`) + `"` + "\n"
 		}
-		load += `[ -z "$cg" ] || [ "$cg" = / ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
+		// The daemon's jump only for a cgroup that is there: at boot this runs before Docker,
+		// and Docker's own start runs it again (DoorFirewallDockerDropIn).
+		load += `[ -z "$cg" ] || [ "$cg" = / ] || [ ! -d "/sys/fs/cgroup$cg" ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
 		load += "stale " + f.cmd + "\n"
 		if f.cmd == "ip6tables" {
 			load = "if [ -e /proc/net/if_inet6 ]; then\n" + load + "fi\n"
 		}
 		s += load
 	}
+	// The cgroup the daemon's jump holds, for DoorFirewallRead to tell one made again since.
+	s += `if [ -n "$cg" ] && [ "$cg" != / ] && [ -d "/sys/fs/cgroup$cg" ]; then stat -c %i "/sys/fs/cgroup$cg" >` + DoorFirewallDaemonMark + `; else rm -f ` + DoorFirewallDaemonMark + `; fi
+`
 	return s
 }
+
+// doorFirewallDockerText is DoorFirewallDockerDropIn: the loader before Docker's daemon starts,
+// its failure never Docker's.
+const doorFirewallDockerText = `# Written by devopsy (devopsy @<server> --project-users add): devopsy's firewall loaded at
+# every start of Docker, whose cgroup systemd makes anew, which the daemon's jump binds.
+[Service]
+ExecStartPre=-` + DoorFirewallScript + `
+`
 
 // doorFirewallUnitText loads the firewall at boot: after what loads a whole ruleset
 // (netfilter-persistent, ufw, firewalld, all before network-pre.target), before the
@@ -254,6 +273,7 @@ WantedBy=timers.target
 // "# <iptables> <table>" line before each, or "# ip6tables off" where the kernel has no IPv6;
 // then the host's TCP listeners and sshd's ports, for DoorListeners.
 const DoorFirewallRead = daemonCgroup + `echo "# dockerd $cg"
+echo "# dockerd-cgroup $(stat -c %i "/sys/fs/cgroup$cg" 2>/dev/null || :) $(cat ` + DoorFirewallDaemonMark + ` 2>/dev/null || :)"
 for c in iptables ip6tables; do
   if [ "$c" = ip6tables ] && [ ! -e /proc/net/if_inet6 ]; then echo "# $c off"; continue; fi
   for t in filter raw; do echo "# $c $t"; "$c" -t "$t" -S; done
@@ -272,6 +292,8 @@ func DoorFirewallInstall() string {
 		"put " + DoorFirewallScript + " 755 'sh -n \"$1\"' " + Quote(DoorFirewallLoader()) + " || :\n" +
 		"put " + DoorFirewallUnit + " 644 true " + Quote(doorFirewallUnitText) + " || :\n" +
 		"put " + DoorFirewallTimer + " 644 true " + Quote(doorFirewallTimerText) + " || :\n" +
+		"mkdir -p " + path.Dir(DoorFirewallDockerDropIn) + "\n" +
+		"put " + DoorFirewallDockerDropIn + " 644 true " + Quote(doorFirewallDockerText) + " || :\n" +
 		"ln -sfn " + DoorFirewallUnit + " /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service\n" +
 		"mkdir -p /etc/systemd/system/timers.target.wants\n" +
 		"ln -sfn " + DoorFirewallTimer + " /etc/systemd/system/timers.target.wants/devopsy-firewall.timer\n" +
@@ -285,7 +307,12 @@ func DoorFirewallInstall() string {
 func DoorFirewallWrong(read, gid, doorGid string) []string {
 	tables := map[string][]string{}
 	var key, cgroup string
+	var made []string
 	for line := range strings.SplitSeq(read, "\n") {
+		if c, ok := strings.CutPrefix(line, "# dockerd-cgroup "); ok {
+			made = strings.Fields(c)
+			continue
+		}
 		if c, ok := strings.CutPrefix(line, "# dockerd "); ok {
 			cgroup = strings.TrimSpace(c)
 			continue
@@ -302,6 +329,11 @@ func DoorFirewallWrong(read, gid, doorGid string) []string {
 	var wrong []string
 	if cgroup == "" || cgroup == "/" {
 		wrong = append(wrong, "Docker's daemon has no cgroup of its own, so its pulls and logins for project users reach the host's loopback and metadata addresses")
+	}
+	// A cgroup there that is not the one the jump was loaded for: Docker restarted since, and
+	// the jump, binding the cgroup and printed by its path, holds nothing.
+	if len(made) == 2 && made[0] != made[1] || len(made) == 1 {
+		wrong = append(wrong, "Docker's daemon runs in a cgroup made since the firewall loaded (a restart of Docker), which its jump does not hold")
 	}
 	for _, f := range firewallFamilies {
 		if _, off := tables[f.cmd+" off"]; off {

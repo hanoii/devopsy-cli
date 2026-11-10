@@ -1318,6 +1318,72 @@ exit 1`); code != 0 {
 	}
 }
 
+// Docker's daemon in a cgroup made again under the same path, as systemd makes docker.service's
+// at every start of Docker, is no longer held by the jump loaded for the old one, which iptables
+// prints the same: --server-info says so (DoorFirewallDaemonMark), and the loader, which a
+// start of Docker runs (DoorFirewallDockerDropIn, systemd's, which this server has not), holds
+// it again. The e2e server has no systemd, so the test makes the cgroup again itself.
+func TestDoorDaemonFirewallHoldsOnceDockersCgroupIsMadeAgain(t *testing.T) {
+	user := doorUser(t, "doorcg")
+	const reg, host, port = "doorcg-reg", "doorcg-reg.test", "5017"
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f "+reg+" >/dev/null 2>&1; grep -v "+reg+" /etc/hosts >/tmp/doorcg-hosts && cat /tmp/doorcg-hosts >/etc/hosts; rm -f /tmp/doorcg-hosts; rmdir /sys/fs/cgroup/doorcg-away 2>/dev/null; /usr/local/libexec/devopsy-firewall")
+	})
+	if out, code := doorRoot(t, `set -e
+echo '127.0.0.1 `+host+`' >>/etc/hosts
+docker run -d --name `+reg+` --network host -e REGISTRY_HTTP_ADDR=127.0.0.1:`+port+` registry:3 >/dev/null
+for i in $(seq 150); do curl -s -o /dev/null http://`+host+`:`+port+`/v2/ && exit 0; sleep 0.2; done
+exit 1`); code != 0 {
+		t.Fatalf("the registry on loopback (%d): %s", code, out)
+	}
+	// reached says whether the daemon logged in to the registry on loopback for the project user.
+	reached := func() (string, bool) {
+		out, code := doorAs(t, user, "printf x | docker login -u u --password-stdin "+host+":"+port+" 2>&1")
+		return out, code == 0 && strings.Contains(out, "Login Succeeded")
+	}
+	// The control: the daemon is held as the firewall was loaded.
+	if out, ok := reached(); ok {
+		t.Fatalf("the control: the daemon reached the host's loopback with its jump just loaded:\n%s", out)
+	}
+	before, _ := doorRoot(t, "iptables -S OUTPUT | grep DEVOPSY-DOCKERD")
+	if out, code := doorRoot(t, `set -e
+cg=/sys/fs/cgroup
+mkdir $cg/doorcg-away
+# move <from> <to>: every process of one cgroup into the other, a child started meanwhile too.
+move() {
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    procs=$(cat $cg/$1/cgroup.procs)
+    [ -n "$procs" ] || return 0
+    for p in $procs; do echo "$p" >$cg/$2/cgroup.procs 2>/dev/null || :; done
+  done
+  return 1
+}
+move dockerd doorcg-away
+rmdir $cg/dockerd
+mkdir $cg/dockerd
+move doorcg-away dockerd
+rmdir $cg/doorcg-away
+grep -q "$(pidof -s dockerd)" $cg/dockerd/cgroup.procs`); code != 0 {
+		t.Fatalf("the daemon's cgroup made again (%d): %s", code, out)
+	}
+	after, _ := doorRoot(t, "iptables -S OUTPUT | grep DEVOPSY-DOCKERD")
+	if before != after || strings.TrimSpace(after) == "" {
+		t.Fatalf("the daemon's jump as iptables prints it changed: before\n%s\nafter\n%s", before, after)
+	}
+	out, ok := reached()
+	info, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
+	if ok && !strings.Contains(info, "firewall") {
+		t.Errorf("its cgroup made again under the same path, the daemon logged in to a registry on the host's loopback for a project user, and --server-info says nothing of the firewall:\n%s\nthe jump, unchanged:\n%s\n--server-info:\n%s", out, after, info)
+	}
+	// The loader, run again, holds it: the jump goes in for the cgroup there now.
+	if out, code := doorRoot(t, "/usr/local/libexec/devopsy-firewall"); code != 0 {
+		t.Fatalf("the loader (%d): %s", code, out)
+	}
+	if out, ok := reached(); ok {
+		t.Errorf("the loader run again, the daemon still reached the host's loopback:\n%s", out)
+	}
+}
+
 // The firewall holds over IPv6 too: a container on a network with IPv6 (the deploy user's: a
 // door project's network has none) is no more a project user's to reach from the host than
 // its IPv4 address. The control: the deploy user reaches both.
