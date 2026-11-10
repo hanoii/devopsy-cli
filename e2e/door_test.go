@@ -1392,7 +1392,8 @@ runuser -u devopsy -- sh -c 'umask 002 && mkdir -p "$1" && echo s3cret >"$1/read
 // user: a sshd_config with no Include of sshd_config.d (older Debian and Ubuntu, an admin's
 // own), or with it below a Match, parses (sshd -t) and leaves the user on its own
 // ~/.ssh/authorized_keys, where a leaked key adds a second one that outlives its rotation and
-// --project-users remove. With the Include back, add goes through, and leaves the user with
+// --project-users remove; and a drop-in read before it that sets the user's login settings
+// (its ~/.ssh/rc, forwarding) another way. With the Include back, add goes through, and leaves the user with
 // no cron or at job and no subordinate ids, which remove and a second add keep so.
 func TestDoorAddRefusesAnUnincludedDropIn(t *testing.T) {
 	const project = "doorinc"
@@ -1421,6 +1422,16 @@ sshd -t`); code != 0 {
 		t.Errorf("an entry written: %s", out)
 	}
 	root("cp /tmp/sshd_config.doorinc /etc/ssh/sshd_config")
+	// sshd takes each setting's first value: a drop-in read before devopsy's, with a Match of
+	// its own for the group, would leave the user's ~/.ssh/rc running at its logins.
+	t.Cleanup(func() { root("rm -f /etc/ssh/sshd_config.d/00-doorinc.conf") })
+	if out, code := root(`printf 'Match Group devopsy-projects\n\tPermitUserRC yes\n' >/etc/ssh/sshd_config.d/00-doorinc.conf && sshd -t`); code != 0 {
+		t.Fatalf("an earlier drop-in (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code == 0 || !strings.Contains(out, "permituserrc no for "+user) {
+		t.Errorf("add beside an earlier drop-in that runs ~/.ssh/rc (%d): %s", code, out)
+	}
+	root("rm -f /etc/ssh/sshd_config.d/00-doorinc.conf")
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 {
 		t.Errorf("the control: add with the Include back (%d): %s", code, out)
 	}

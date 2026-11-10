@@ -125,6 +125,14 @@ if ! { printf '%s\n' "$eff" | grep -qx 'authorizedkeysfile none' &&
   ` + echoLine(report.ErrorLevel, "sshd does not take "+DoorSSHDropIn+" for $user, which would log in by its own ~/.ssh/authorized_keys", report.Fix("include it in /etc/ssh/sshd_config, at its top, before any Match:", "Include /etc/ssh/sshd_config.d/*.conf")) + `
   exit 4
 fi
+# sshd takes each setting's first value: a Match ahead of devopsy's could leave the user's
+# ~/.ssh/rc running at a login, or forward it an agent.
+for want in 'permituserrc no' 'allowagentforwarding no' 'x11forwarding no' 'permittunnel no'; do
+  printf '%s\n' "$eff" | grep -qx "$want" || {
+    ` + echoLine(report.ErrorLevel, "sshd does not take "+DoorSSHDropIn+"'s $want for $user: another value comes first", report.Fix("drop that setting from the Match or the file sshd reads before it, for the "+DoorGroup+" group")) + `
+    exit 4
+  }
+done
 `
 }
 
