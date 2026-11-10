@@ -222,7 +222,11 @@ func run() int {
 		// The deploy user's release under a project user's names: the door would refuse
 		// that user's every compose command while it runs.
 		if !behindDoor() {
-			d, _ := remote.ServerDoor()
+			// A door that does not read stops the release: its names are then no one's to tell.
+			d, err := remote.ServerDoor()
+			if err != nil {
+				return failErr(err)
+			}
 			r, _ := remote.ReleaseSettings()
 			name := composeName(cwd)
 			if who := doorNameOwner(d, r.Root, name); who != "" {

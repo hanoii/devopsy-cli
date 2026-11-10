@@ -45,7 +45,8 @@ func TestDoorNameOwner(t *testing.T) {
 	}
 }
 
-// --check-names, the activation's check before its switch, refuses it as the deploy user.
+// --check-names, the activation's check before its switch, refuses it as the deploy user, and
+// refuses too when the server's door does not read.
 func TestCheckNamesRefusesAProjectUsersNames(t *testing.T) {
 	t.Parallel()
 	home, rel := t.TempDir(), t.TempDir()
@@ -58,6 +59,11 @@ func TestCheckNamesRefusesAProjectUsersNames(t *testing.T) {
 		if (code != 0) != refused || refused != strings.Contains(out, "is under the names of project user devopsy-shop here") {
 			t.Errorf("%s (%d):\n%s", name, code, out)
 		}
+	}
+	// A project user's entry that does not read stops the check rather than passing it.
+	write(t, filepath.Join(home, "door", "users", "devopsy-shop.yaml"), "project: [not, a, name\n", 0o644)
+	if out, code := runDevopsy(t, rel, []string{"DEVOPSY_HOME=" + home, "COMPOSE_PROJECT_NAME=blog-prod"}, "--check-names", filepath.Dir(rel)); code == 0 {
+		t.Errorf("a door that does not read passes:\n%s", out)
 	}
 }
 
