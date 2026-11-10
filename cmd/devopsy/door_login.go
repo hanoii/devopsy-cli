@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -60,8 +61,7 @@ func parseLogin(args []string) (loginArgs, error) {
 func loginKey(registry string) string {
 	r := strings.TrimPrefix(strings.TrimPrefix(registry, "https://"), "http://")
 	r, _, _ = strings.Cut(r, "/")
-	switch r {
-	case "", "docker.io", "index.docker.io", "registry-1.docker.io":
+	if r == "" || images.HubDomain(r) {
 		return door.HubLogin
 	}
 	return r
