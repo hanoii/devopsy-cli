@@ -30,7 +30,8 @@ func TestDoorShellTakesNothingOfALogin(t *testing.T) {
 	hook := filepath.Join(dir, "env")
 	write(t, hook, "echo hooked >>"+ran+"\n", 0o644)
 	planted := filepath.Join(dir, "planted.so")
-	login := []string{"HOME=" + dir, "PATH=" + dir + ":/usr/bin:/bin", "LD_PRELOAD=" + planted, "ENV=" + hook, "BASH_ENV=" + hook, "TERM=xterm", "LANG=C.UTF-8", "LC_ALL=$(evil)"}
+	login := []string{"HOME=" + dir, "PATH=" + dir + ":/usr/bin:/bin", "LD_PRELOAD=" + planted, "ENV=" + hook, "BASH_ENV=" + hook, "TERM=xterm", "LANG=C.UTF-8", "LC_ALL=$(evil)",
+		`SSH_ORIGINAL_COMMAND={"exec":["--sync-services","list"]}`}
 	c := exec.Command(shell, "-c", "env")
 	c.Env = login
 	out, err := c.CombinedOutput()
@@ -38,7 +39,8 @@ func TestDoorShellTakesNothingOfALogin(t *testing.T) {
 		t.Fatalf("a command (%v):\n%s", err, out)
 	}
 	got := string(out)
-	for _, want := range []string{"HOME=" + u.HomeDir + "\n", "USER=" + u.Username + "\n", "PATH=" + doorShellPath + "\n", "TERM=xterm\n", "LANG=C.UTF-8\n"} {
+	// A sync key's request reaches its forced command as the client sent it.
+	for _, want := range []string{"HOME=" + u.HomeDir + "\n", "USER=" + u.Username + "\n", "PATH=" + doorShellPath + "\n", "TERM=xterm\n", "LANG=C.UTF-8\n", `SSH_ORIGINAL_COMMAND={"exec":["--sync-services","list"]}` + "\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("a command's environment has no %q:\n%s", want, got)
 		}

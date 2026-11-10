@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -73,8 +74,11 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 // nothing.
 func (s *doorSide) activeServices(file map[string]any, profiles, dir string) ([]string, error) {
 	// Without the services' build blocks, which the pull's checks do not read (CheckFile): it
-	// reads whether a service builds from the file itself (PlanPull), so compose gets none.
+	// reads whether a service builds from the file itself (PlanPull), so compose gets none. A
+	// service with a build and no image goes by devopsy's name for its build, as compose needs
+	// one or the other.
 	services, _ := file["services"].(map[string]any)
+	project, _ := file["name"].(string)
 	unbuilt := map[string]any{}
 	for name, svc := range services {
 		m, _ := svc.(map[string]any)
@@ -83,6 +87,9 @@ func (s *doorSide) activeServices(file map[string]any, profiles, dir string) ([]
 			if k != "build" {
 				c[k] = v
 			}
+		}
+		if _, builds := m["build"]; builds && c["image"] == nil {
+			c["image"] = images.DoorBuild(project, name)
 		}
 		unbuilt[name] = c
 	}

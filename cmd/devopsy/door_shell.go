@@ -46,7 +46,8 @@ func runDoorShell(args []string) int {
 
 // doorShellEnv is a login's environment for u: its home, names and shell from the password
 // database, a fixed PATH, and of what the login handed (env) only a terminal's and a locale's
-// names and sshd's own connection words, each a plain word.
+// names and sshd's own connection words, each a plain word, and the client's command under a
+// forced one (SSH_ORIGINAL_COMMAND, a sync key's request, which its command checks), as it is.
 func doorShellEnv(u *user.User, env []string) []string {
 	out := []string{"HOME=" + u.HomeDir, "USER=" + u.Username, "LOGNAME=" + u.Username, "SHELL=" + remote.DoorShell, "PATH=" + doorShellPath}
 	for _, kv := range env {
@@ -56,6 +57,8 @@ func doorShellEnv(u *user.User, env []string) []string {
 			if doorShellWord.MatchString(v) {
 				out = append(out, kv)
 			}
+		case k == "SSH_ORIGINAL_COMMAND":
+			out = append(out, kv)
 		case k == "SSH_CLIENT" || k == "SSH_CONNECTION" || k == "SSH_TTY":
 			if doorShellSSH.MatchString(v) {
 				out = append(out, kv)
