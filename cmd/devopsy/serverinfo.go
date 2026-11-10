@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/user"
@@ -525,11 +526,13 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment) []remote.Environment {
 	var envs []remote.Environment
 	for _, p := range envDirs(root) {
-		if user, ok := trees[p]; ok {
-			envs = append(envs, readTree(user, p)...)
-			continue
+		if _, ok := trees[p]; !ok {
+			envs = append(envs, projectEnvironments(root, p)...)
 		}
-		envs = append(envs, projectEnvironments(root, p)...)
+	}
+	// A project user's tree, in the release root or elsewhere (by default its own home).
+	for _, tree := range slices.Sorted(maps.Keys(trees)) {
+		envs = append(envs, readTree(trees[tree], tree)...)
 	}
 	return envs
 }
@@ -595,15 +598,15 @@ func doorTrees(root string) map[string]string {
 			}
 			tree = filepath.Join(pu.HomeDir, u.Project)
 		}
-		if filepath.Dir(filepath.Clean(tree)) == filepath.Clean(root) {
-			trees[filepath.Clean(tree)] = who
-		}
+		trees[filepath.Clean(tree)] = who
 	}
 	return trees
 }
 
 // treeEnvironments are a project user's environments as that user reads them (--door-read
-// environments), none when it cannot.
+// environments), none when it cannot: only those whose path is the tree's project and names
+// devopsy gives (envPathIn), since that user writes what the read answers, and an admin's
+// --server-info offers commands with them.
 func treeEnvironments(who, tree string) []remote.Environment {
 	out, err := doorRead(who, "environments", tree).Output()
 	if err != nil {
@@ -613,7 +616,20 @@ func treeEnvironments(who, tree string) []remote.Environment {
 	if json.Unmarshal(out, &envs) != nil {
 		return nil
 	}
-	return envs
+	return slices.DeleteFunc(envs, func(e remote.Environment) bool { return !envPathIn(filepath.Base(tree), e.Path) })
+}
+
+// envPathIn says whether path is an environment's of project: <project>/[<instance>/]<env>,
+// each name one devopsy gives.
+func envPathIn(project, path string) bool {
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] != project {
+		return false
+	}
+	if len(parts) == 3 && !remote.ValidName(parts[1]) {
+		return false
+	}
+	return remote.ValidEnvName(parts[len(parts)-1])
 }
 
 // runServerInfo implements devopsy [@<server>] --server-info [--json]:
@@ -1194,7 +1210,7 @@ func statusHint(host, root, path string) report.Remedy {
 		return report.Hint("", "cd "+remote.QuoteWord(filepath.Join(root, path, "current"))+" && devopsy --status")
 	}
 	project, rest, _ := strings.Cut(path, "/")
-	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
+	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+remote.QuoteWord(rest)+" --status")
 }
 
 // removing is a directory a --destroy cut off while removing it left

@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,31 +118,5 @@ func TestRestoreMakesAVolumeWithTheRestoredCompose(t *testing.T) {
 	}
 	if !made {
 		t.Errorf("the volume not made by compose:\n%s", docker)
-	}
-}
-
-// BUG: --server-info's hint for an environment on a server pastes its path unquoted into the
-// command it offers, as the local one did before it was quoted (QuoteWord): the path of a
-// project user's environment is that user's word (a directory it names in its tree, read as
-// that user), so an admin who copies the offered --status for an environment named
-// prod$(...) runs what the name holds, locally. The same rule written twice, fixed in one.
-func TestStatusHintOnAServerQuotesTheEnvironment(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "ran")
-	// Names a directory can have.
-	for _, env := range []string{"prod$(touch ran)", "prod;touch ran", "it's"} {
-		cmds := statusHint("vm1", "/srv", "shop/"+env).Cmds
-		if len(cmds) != 1 {
-			t.Fatalf("%q: commands %q", env, cmds)
-		}
-		// The command as a shell reads it, devopsy printing its arguments.
-		sh := exec.Command("sh", "-c", `devopsy() { printf '%s\n' "$@"; }`+"\n"+cmds[0])
-		sh.Dir = dir
-		out, err := sh.CombinedOutput()
-		if want := "@vm1:" + env + "\n--status\n"; err != nil || string(out) != want || fileExists(marker) {
-			t.Errorf("%q: the offered command %q gives a shell %q (%v, ran what the name holds: %v), want %q", env, cmds[0], out, err, fileExists(marker), want)
-		}
-		os.Remove(marker)
 	}
 }

@@ -511,6 +511,33 @@ func TestServerInfoEnvironments(t *testing.T) {
 	if asked != "devopsy-app "+filepath.Join(root, "app") || !slices.Contains(got, "app/prod=as its user\n") || slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, "app/stolen") }) {
 		t.Errorf("a project user's tree (asked %q): %v", asked, got)
 	}
+	// A project user's tree outside the release root, in its own home by default, is read too.
+	tree := filepath.Join(t.TempDir(), "devopsy-shop", "shop")
+	got = nil
+	for _, e := range environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
+		return []remote.Environment{{Path: "shop/prod", Status: "as " + user + "\n"}}
+	}) {
+		got = append(got, e.Path)
+	}
+	if !slices.Contains(got, "app/prod") || !slices.Contains(got, "shop/prod") {
+		t.Errorf("a project user's tree in its own home: %v", got)
+	}
+}
+
+// What a project user's read answers for its tree is that user's to write: only an
+// environment of its project, under names devopsy gives, is listed, since an admin's
+// --server-info offers a command with it.
+func TestEnvPathIn(t *testing.T) {
+	t.Parallel()
+	for path, ok := range map[string]bool{
+		"shop/prod": true, "shop/eu/prod": true, "shop/Stage.2": true,
+		"blog/prod": false, "shop": false, "shop/a/b/c": false, "shop/prod$(touch x)": false,
+		"shop/prod;id": false, "shop/it's": false, "shop/../blog": false, "shop/EU/prod": false, "shop/-x": false,
+	} {
+		if envPathIn("shop", path) != ok {
+			t.Errorf("%q: %v", path, !ok)
+		}
+	}
 }
 
 // --server-info's help and docs/servers.md name every container trouble
@@ -547,5 +574,22 @@ func TestStatusHintQuotesItsPath(t *testing.T) {
 		if got := statusHint("", "/srv", path).Cmds; len(got) != 1 || got[0] != want {
 			t.Errorf("%s: %q, want %q", path, got, want)
 		}
+	}
+	// On a server, the address it offers quotes the environment the same way.
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	for _, env := range []string{"prod$(touch ran)", "prod;touch ran", "it's"} {
+		cmds := statusHint("vm1", "/srv", "shop/"+env).Cmds
+		if len(cmds) != 1 {
+			t.Fatalf("%q: commands %q", env, cmds)
+		}
+		// The command as a shell reads it, devopsy printing its arguments.
+		sh := exec.Command("sh", "-c", `devopsy() { printf '%s\n' "$@"; }`+"\n"+cmds[0])
+		sh.Dir = dir
+		out, err := sh.CombinedOutput()
+		if want := "@vm1:" + env + "\n--status\n"; err != nil || string(out) != want || fileExists(marker) {
+			t.Errorf("%q: the offered command %q gives a shell %q (%v, ran what the name holds: %v), want %q", env, cmds[0], out, err, fileExists(marker), want)
+		}
+		os.Remove(marker)
 	}
 }

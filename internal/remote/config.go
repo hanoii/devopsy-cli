@@ -1075,6 +1075,9 @@ func validateParents(envs map[string]*Target) error {
 // ValidName reports whether s can be a project's or an instance's name.
 func ValidName(s string) bool { return nameRe.MatchString(s) }
 
+// ValidEnvName reports whether s can be an environment's name.
+func ValidEnvName(s string) bool { return envName.MatchString(s) }
+
 // LoadProject reads only what a project's config says about the project.
 func LoadProject(projectDir string) (*Project, error) {
 	var p *Project
