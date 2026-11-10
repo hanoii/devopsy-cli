@@ -78,7 +78,7 @@ func TestDoorFirewallWrong(t *testing.T) {
 	if got := DoorFirewallWrong(firewallRead(""), "1002", "1003"); len(got) != 2 || !strings.Contains(got[0], "OUTPUT") || !strings.Contains(got[1], "ip6tables") {
 		t.Errorf("another group's: %q", got)
 	}
-	if got := DoorFirewallWrong(firewallRead(""), "1001", "1004"); len(got) != 2 || !strings.Contains(got[0], "jump to "+DoorDaemonChain) {
+	if got := DoorFirewallWrong(firewallRead(""), "1001", "1004"); len(got) != 2 || !strings.Contains(got[0], "jump to "+DoorRunChain) {
 		t.Errorf("another group's for the door: %q", got)
 	}
 	// A rule of the chain gone, changed or added, IPv6's included.

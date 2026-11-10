@@ -18,6 +18,7 @@ const (
 	DoorChain          = "DEVOPSY-PROJECTS"
 	DoorContainerChain = "DEVOPSY-CONTAINERS"
 	DoorDaemonChain    = "DEVOPSY-DOCKERD"
+	DoorRunChain       = "DEVOPSY-DOOR"
 	DoorFirewallScript = "/usr/local/libexec/devopsy-firewall"
 	DoorFirewallUnit   = "/etc/systemd/system/devopsy-firewall.service"
 	DoorFirewallTimer  = "/etc/systemd/system/devopsy-firewall.timer"
@@ -88,6 +89,23 @@ func doorRules(f firewallFamily, chain string) []string {
 		for _, d := range append([]string{f.loopback}, f.metadata...) {
 			r = append(r, "-d "+d+" -j REJECT --reject-with "+f.reject)
 		}
+	case DoorRunChain:
+		// What the door starts on the host (a claim's read, compose's and buildx's registry
+		// clients) answers a registry the project names, which can send it anywhere: none of
+		// the host's loopback, a metadata service or a container on Docker's bridges, any
+		// project's. The host's other addresses stay its to reach, as the daemon's (a registry
+		// on this server, by its name or Docker's bridge address, goes out on loopback), and
+		// so does DNS.
+		r = append(r, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN")
+		for _, d := range append([]string{f.loopback}, f.metadata...) {
+			dns("-m conntrack --ctorigdstport 53", "-d "+d)
+		}
+		for _, d := range append([]string{f.loopback}, f.metadata...) {
+			r = append(r, "-d "+d+" -j REJECT --reject-with "+f.reject)
+		}
+		for _, out := range bridges {
+			r = append(r, "-o "+out+" -j REJECT --reject-with "+f.reject)
+		}
 	case DoorContainerChain:
 		for _, m := range f.metadata {
 			for _, in := range bridges {
@@ -108,15 +126,15 @@ func doorRules(f firewallFamily, chain string) []string {
 type doorJump struct{ table, from, chain, rule string }
 
 // doorJumps are the chains' jumps, the project users' group by its id (gid), the door's
-// own processes by theirs (doorGid, DoorRunGroup's, their effective group) to the daemon's
-// chain, as what the door starts on the host (compose's and buildx's registry clients, a
+// own processes by theirs (doorGid, DoorRunGroup's, their effective group) to a chain of their
+// own, as what the door starts on the host (compose's and buildx's registry clients, a
 // claim's read) is a registry's to send where it likes too, and Docker's daemon by its cgroup
 // (daemonCgroup), none when it has none of its own: its cgroup the root, every process's, it
 // would firewall the whole host. A jump is as iptables -S prints it, a path quoted.
 func doorJumps(gid, doorGid, cgroup string) []doorJump {
 	j := []doorJump{
 		{"filter", "OUTPUT", DoorChain, "-m owner --gid-owner " + gid + " --suppl-groups -j " + DoorChain},
-		{"filter", "OUTPUT", DoorDaemonChain, "-m owner --gid-owner " + doorGid + " -j " + DoorDaemonChain},
+		{"filter", "OUTPUT", DoorRunChain, "-m owner --gid-owner " + doorGid + " -j " + DoorRunChain},
 		{"raw", "PREROUTING", DoorContainerChain, "-j " + DoorContainerChain},
 	}
 	if cgroup != "" && cgroup != "/" {
@@ -140,7 +158,7 @@ fi
 // it, so each loads whole, at once, and nothing else changes.
 func doorRestore(f firewallFamily) string {
 	var b strings.Builder
-	for _, t := range [][]string{{"filter", DoorChain, DoorDaemonChain}, {"raw", DoorContainerChain}} {
+	for _, t := range [][]string{{"filter", DoorChain, DoorDaemonChain, DoorRunChain}, {"raw", DoorContainerChain}} {
 		b.WriteString("*" + t[0] + "\n")
 		for _, c := range t[1:] {
 			b.WriteString(":" + c + " - [0:0]\n")
@@ -176,10 +194,9 @@ first() {
     "$1" -t "$2" -D "$3" "$n"
   done
 }
-# stale <iptables>: the jumps to the daemon's chain that are neither the current cgroup's nor
-# the door's group's go.
+# stale <iptables>: the jumps to the daemon's chain that are not the current cgroup's go.
 stale() {
-  "$1" -t filter -S OUTPUT | awk -v r="-A OUTPUT -m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `" -v d="-A OUTPUT -m owner --gid-owner $doorgid -j ` + DoorDaemonChain + `" '/^-A /{n++; if ($0 ~ / -j ` + DoorDaemonChain + `$/ && $0 != r && $0 != d) print n}' | sort -rn | while read -r n; do
+  "$1" -t filter -S OUTPUT | awk -v r="-A OUTPUT -m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `" '/^-A /{n++; if ($0 ~ / -j ` + DoorDaemonChain + `$/ && $0 != r) print n}' | sort -rn | while read -r n; do
     "$1" -t filter -D OUTPUT "$n"
   done
 }
@@ -332,7 +349,7 @@ func jumpedFirst(table []string, j doorJump) string {
 		}
 		// A jump to a chain of devopsy's returns what it does not reject.
 		f := strings.Fields(r)
-		if i := slices.Index(f, "-j"); i < 0 || i+1 >= len(f) || !slices.Contains([]string{"DROP", "REJECT", DoorChain, DoorDaemonChain, DoorContainerChain}, f[i+1]) {
+		if i := slices.Index(f, "-j"); i < 0 || i+1 >= len(f) || !slices.Contains([]string{"DROP", "REJECT", DoorChain, DoorDaemonChain, DoorRunChain, DoorContainerChain}, f[i+1]) {
 			return j.from + " lets packets through before its jump to " + j.chain + ": " + r
 		}
 	}

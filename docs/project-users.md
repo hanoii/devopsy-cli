@@ -150,9 +150,10 @@ tunnel, so `--ssh-option ForwardAgent=yes` does nothing there.
 
 A leaked key could still change what the project user owns: its home
 and its tree, the steps of an older release among them, which a
-rollback runs. After a leak, treat both as changed: release the
-project again, remove the older releases (`--releases remove`), and
-reset the home.
+rollback runs, and it could start environments of its own under the
+project's names. After a leak, treat all of it as changed: release the
+project again, remove the older releases (`--releases remove`),
+`--destroy` any environment you did not release, and reset the home.
 
 ### The firewall
 
@@ -178,17 +179,20 @@ the metadata services too, DNS aside, by its cgroup (`docker.service`'s,
 or the running `dockerd`'s): a registry a project runs could otherwise
 redirect the daemon there. That also holds for the deploy user's own
 pulls ([Registries](#registries)). The door's own registry clients (a
-build's, the read of an image's manifest) are held the same way: the
-door runs under a group of its own, `devopsy-door`, which no user is in,
-and refuses to run under any other.
+build's, the read of an image's manifest) are held too, and kept off
+Docker's bridges as well: the door runs under a group of its own,
+`devopsy-door`, which no user is in, and refuses to run under any other.
+Docker's daemon still reaches the bridges, where its proxy connects to
+containers, so a pull can still make it contact a container on one.
 
 A project user's containers still reach what the host listens on at its
 other addresses, its bridges' included, as on any Docker host: a site's
 call to another site on the same server goes that way. A service on the
 host that containers must not reach listens on `127.0.0.1` only.
 
-The rules are in three chains devopsy owns, `DEVOPSY-PROJECTS` and
-`DEVOPSY-DOCKERD` in iptables' filter table and `DEVOPSY-CONTAINERS` in
+The rules are in four chains devopsy owns, `DEVOPSY-PROJECTS`,
+`DEVOPSY-DOCKERD` and `DEVOPSY-DOOR` in iptables' filter table and
+`DEVOPSY-CONTAINERS` in
 its raw table, and the server's other rules stay as they are.
 `devopsy-firewall.service` loads them at every boot, and from the next
 boot on `devopsy-firewall.timer` loads them every five minutes too, so
@@ -416,7 +420,10 @@ under a vet's prefix, the door runs its program with the file as the
 door checked and rewrote it, as JSON, on stdin, `DEVOPSY_DOOR_PROJECT`
 set to the project, and `DEVOPSY_DOOR_JOINABLE` to its joinable
 networks, separated by commas. Exit 0 allows the file. Anything else
-refuses it, with what the program printed on stderr.
+refuses it, with what the program printed on stderr. The program runs
+under the door's group, so the firewall keeps it off the host's
+loopback and Docker's bridges: an API it asks (Traefik's, for example)
+is reached at another of the host's addresses.
 
 ## Moving a project to its own user
 

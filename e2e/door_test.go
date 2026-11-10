@@ -1035,13 +1035,13 @@ docker exec doorclaim-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	}
 }
 
-// No registry client the door starts on the host reaches the server's loopback: a registry the
-// project user names answers each as it likes, here with a token's realm there, which the
-// firewall keeps the project user, its containers and the daemon from. Both clients are
-// buildx's or compose's, a claim's read of a manifest and a build's FROM, whose token BuildKit
-// asks its client for; the door runs under its own group (devopsy-door), which the firewall
-// holds as it holds the daemon.
-func TestDoorClientsReachNoLoopback(t *testing.T) {
+// No registry client the door starts on the host reaches the server's loopback, nor another
+// project's container: a registry the project user names answers each as it likes, here with
+// a token's realm there, which the firewall keeps the project user and its containers from.
+// The clients are buildx's or compose's, a claim's read of a manifest and a build's FROM,
+// whose token BuildKit asks its client for; the door runs under its own group (devopsy-door),
+// which the firewall holds in a chain of its own.
+func TestDoorClientsReachNothingPrivate(t *testing.T) {
 	user := doorUser(t, "doortoken")
 	t.Cleanup(func() { doorRoot(t, "docker rm -f doortoken-lo >/dev/null 2>&1; true") })
 	// The admin's own, on the server's loopback: it logs every request.
@@ -1088,6 +1088,35 @@ exit 1`); code != 0 {
 		t.Fatalf("a build from an image no registry served passed:\n%s", out)
 	}
 	asked("a build", out)
+
+	// Another project's container, on a network of its own, which no project user is on: it
+	// logs every request.
+	t.Cleanup(func() {
+		doorRoot(t, "docker rm -f doortoken-int >/dev/null 2>&1; docker network rm doortoken-net >/dev/null 2>&1; true")
+	})
+	ip, code := doorRoot(t, `set -e
+docker network create doortoken-net >/dev/null
+docker run -d --name doortoken-int --network doortoken-net busybox:1.37 sh -c 'mkdir -p /w && exec httpd -f -vv -p 5032 -h /w' >/dev/null
+ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' doortoken-int)
+for i in $(seq 150); do curl -s -o /dev/null "http://$ip:5032/ready" && { echo "$ip"; exit 0; }; sleep 0.2; done
+exit 1`)
+	if lines := strings.Fields(ip); len(lines) > 0 {
+		ip = lines[len(lines)-1] // What the daemon may say first aside.
+	}
+	if code != 0 || ip == "" {
+		t.Fatalf("the other project's container (%d): %s", code, ip)
+	}
+	// The control: the project user's own process reaches it not.
+	if out, code := doorAs(t, user, "curl -s -m 5 -o /dev/null -w '%{http_code}' http://"+ip+":5032/direct"); code == 0 {
+		t.Fatalf("the control, the project user's own curl reached %s: %s", ip, out)
+	}
+	reg2 := doorRegistry(t, "doortoken-reg2", "5031", false, "-e REGISTRY_AUTH=token",
+		"-e REGISTRY_AUTH_TOKEN_REALM=http://"+ip+":5032/token", "-e REGISTRY_AUTH_TOKEN_SERVICE=r",
+		"-e REGISTRY_AUTH_TOKEN_ISSUER=r", "-e REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE=/certs/c.pem")
+	out, _ = doorAs(t, user, "docker image inspect "+reg2+"/x:1 2>&1")
+	if logs, _ := doorRoot(t, "docker logs doortoken-int 2>&1"); strings.Contains(logs, "/token") {
+		t.Errorf("a claim's read asked another project's container, on a network the project is not on, for a token:\n%s\nit said:\n%s", logs, out)
+	}
 }
 
 // The project users' firewall, devopsy's own (--project-users add): a project user's process
