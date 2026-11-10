@@ -76,7 +76,9 @@ docker run -d --name opusrealm-int --network opusrealm-net busybox:1.37 sh -c 'm
 ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' opusrealm-int)
 for i in $(seq 150); do curl -s -o /dev/null "http://$ip:5032/ready" && { echo "$ip"; exit 0; }; sleep 0.2; done
 exit 1`)
-	ip = strings.TrimSpace(ip)
+	if lines := strings.Fields(ip); len(lines) > 0 {
+		ip = lines[len(lines)-1] // What the daemon may say first aside.
+	}
 	if code != 0 || ip == "" {
 		t.Fatalf("the other project's container (%d): %s", code, ip)
 	}
