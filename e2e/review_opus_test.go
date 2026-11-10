@@ -58,3 +58,40 @@ NR=$nr CHAIN='`+chain+`' setsid perl -e '`+reaper+`' </dev/null >/dev/null 2>&1 
 		t.Errorf("BUG: a process of %s outlives its key's removal (the removal said, exit %d: %s)", user, code, strings.TrimSpace(out))
 	}
 }
+
+// BUG: a project user's keys are the deploy user's, so a key a leaked one adds to its home is
+// never read; but sshd still runs that home's ~/.ssh/rc at every login of the user's, before
+// its command (the drop-in says nothing of PermitUserRC, and no key line has no-user-rc). A
+// leaked key writes one, its removal leaves it, and the next login of a key the admin kept or
+// rotated in runs the attacker's program as that user, with whatever it starts (a process
+// calling back out, which the firewall lets through) outliving the key. PermitUserRC no in
+// the drop-in's Match closes it; no-user-rc on every line --authorized-keys prints would too.
+func TestReviewOpusUserRCOutlivesAKeysRemoval(t *testing.T) {
+	user := doorUser(t, "opusrc")
+	ran := "/tmp/opusrc-ran"
+	t.Cleanup(func() { doorRoot(t, "rm -f "+ran+" /home/"+user+"/.ssh/rc") })
+	if out, code := op(t, "/", "rm -f /tmp/opusrc /tmp/opusrc.pub && ssh-keygen -q -t ed25519 -N '' -C opusrc-ci -f /tmp/opusrc"); code != 0 {
+		t.Fatalf("a second key (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for opusrc add /tmp/opusrc.pub 2>&1"); code != 0 {
+		t.Fatalf("--ssh-keys --for opusrc add (%d): %s", code, out)
+	}
+	// The leaked key's login leaves its program in the home, which is the user's to write.
+	if out, code := op(t, "/", `ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /tmp/opusrc `+user+`@doorsrv 'mkdir -p "$HOME/.ssh" && printf "%s\n" "id -un >>`+ran+`" >"$HOME/.ssh/rc"' 2>&1`); code != 0 {
+		t.Fatalf("the leaked key's login (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for opusrc remove opusrc-ci 2>&1"); code != 0 {
+		t.Fatalf("--ssh-keys --for opusrc remove (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /tmp/opusrc "+user+"@doorsrv true 2>&1"); code == 0 {
+		t.Fatalf("the removed key still logs in: %s", out)
+	}
+	doorRoot(t, "rm -f "+ran)
+	// The key kept, the admin's own: a release, a shell.
+	if out, code := op(t, "/", "ssh -o BatchMode=yes "+user+"@doorsrv true 2>&1"); code != 0 {
+		t.Fatalf("the kept key's login (%d): %s", code, out)
+	}
+	if out, code := doorRoot(t, "cat "+ran); code == 0 {
+		t.Errorf("BUG: the removed key's ~/.ssh/rc ran at the kept key's login, as %s", strings.TrimSpace(out))
+	}
+}
