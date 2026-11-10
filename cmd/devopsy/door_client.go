@@ -67,7 +67,7 @@ func sudoArgs(as, flag string, args ...string) []string {
 }
 
 // doorCommand is the door asked as the deploy user through sudo (--door), the one way every
-// call of a project user's starts it: a hand-over, a question, a login.
+// call of a project user's starts it: a hand-over, a question.
 func doorCommand(args ...string) (*exec.Cmd, error) {
 	deploy, err := deployUser()
 	if err != nil {

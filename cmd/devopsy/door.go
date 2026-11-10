@@ -873,50 +873,8 @@ func runDoor(args []string) int {
 		}
 	case "sync-key":
 		return side.syncKey(args[1:])
-	case "login":
-		if len(args) == 3 {
-			return side.login(args[1], args[2])
-		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
-}
-
-// login has Docker check a project user's registry login, its password on stdin (doorLogin):
-// the deploy user's docker login asks the daemon, which reaches the registry as its pulls
-// do, where the project users' firewall keeps the project user off. Its config is a
-// directory of its own, gone after, so nothing of the login stays here.
-func (s *doorSide) login(registry, user string) int {
-	if err := door.LoginRegistry(registry); err != nil {
-		return doorRefused(fmt.Errorf("refused: a login to %q: %v", registry, err))
-	}
-	if !door.LoginUser(user) {
-		return doorRefused(fmt.Errorf("refused: a login to %q as %q", registry, user))
-	}
-	password, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<16))
-	if err != nil {
-		return doorRefused(err)
-	}
-	// The deploy user's own: docker login writes the password there.
-	config, err := s.workDir("")
-	if err != nil {
-		return doorRefused(err)
-	}
-	defer s.removeWork(config)
-	// In a pipe filled before it starts, never written after: a docker login that ended
-	// first would raise SIGPIPE.
-	in, err := filledPipe(string(bytes.TrimSuffix(password, []byte("\n"))))
-	if err != nil {
-		return doorRefused(err)
-	}
-	defer in.Close()
-	var out bytes.Buffer
-	c := s.docker("--config", config, "login", "--username", user, "--password-stdin", registry)
-	c.Stdin, c.Stdout, c.Stderr = in, &out, &out
-	if err := c.Run(); err != nil {
-		report.Error("docker login "+registry+" failed", strings.Split(strings.TrimSpace(out.String()), "\n")...)
-		return 1
-	}
-	return 0
 }
 
 // syncKey is --sync-key for the caller: its sync keys (remote.DoorSyncKeysFile), never its
