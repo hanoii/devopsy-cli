@@ -1137,7 +1137,7 @@ func TestAllowedHereSkipsAFailedFetch(t *testing.T) {
 	own := dev.runs("database")
 	// A release whose build fails: nothing moved, undone.
 	r2 := dev.e.release(builtDB("app-dev", "12.1"))
-	dev.e.set.Undo(dev.e.rel(r2), dev.prev(), false)
+	dev.e.set.Undo(dev.e.rel(r2), false)
 	os.WriteFile(filepath.Join(dev.e.rel(r2), failedFile), nil, 0o644)
 	// A release that syncs, its data service's version now any.
 	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
@@ -1756,7 +1756,7 @@ func TestBookmarkHoldFailedFetchRetagsPulledName(t *testing.T) {
 	d.publish("mariadb:13", "M3")
 	id := dev.e.release(dbAt("mariadb:13", "13"))
 	dev.fetch(dev.e.svcs[id])
-	dev.e.set.Undo(dev.e.rel(id), dev.prev(), false)
+	dev.e.set.Undo(dev.e.rel(id), false)
 	os.WriteFile(filepath.Join(dev.e.rel(id), failedFile), nil, 0o644)
 	if got := d.names[familiar("mariadb:11.8")]; got != "M1" {
 		t.Errorf("a failed fetch retagged the pulled mariadb:11.8 to %s (the parent's build is %s), not M1", got, parents)
@@ -1900,11 +1900,11 @@ func TestLandingSharedNameRunsOthersBuildOnData(t *testing.T) {
 	}
 }
 
-// A pulled release held under the failed release's own build name counts on
-// that name: a later fetch that fails moved it, and its undo puts it back (a
-// pulled name of its own it never retags). Else its next up runs what the
-// failed fetch built on the data. Found by TestDataRandom's seed 5283.
-func TestDataUndoRestoresTheNameAHoldIsOn(t *testing.T) {
+// A pulled release held on the failed release's build holds it by its own
+// bookmark of it, never the build's name: a later fetch that fails moves that
+// name, and its next up would run what the failed fetch built on the data.
+// Found by TestDataRandom's seed 5283.
+func TestDataHoldOutlivesAFailedFetch(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
@@ -1913,7 +1913,7 @@ func TestDataUndoRestoresTheNameAHoldIsOn(t *testing.T) {
 	r1, _ := m.release(false, dbSvc("mariadb:11"))
 	m.failRun(false, builtDB("app-prod", "11.8"))
 	held := m.runs("database")
-	if imgs, _, marks := composeFacts(m.e.rel(r1)); imgs["database"] != "app-prod-database" || marks["database"] == "" {
+	if imgs, _, marks := composeFacts(m.e.rel(r1)); repoOf(imgs["database"]) != "app-prod-database" || !isBookmark(imgs["database"]) || marks["database"] == "" {
 		m.fail("setup: the hold is %v, %v", imgs, marks)
 	}
 	r3 := m.e.release(builtDB("app-prod", "11.8"))
@@ -1921,9 +1921,9 @@ func TestDataUndoRestoresTheNameAHoldIsOn(t *testing.T) {
 	if got, _ := d.ID("app-prod-database"); got == held {
 		m.fail("setup: the fetch built nothing new")
 	}
-	m.e.set.Undo(m.e.rel(r3), m.e.rel(r1), false)
-	if got, _ := d.ID("app-prod-database"); got != held {
-		t.Errorf("the name the hold is on is %s after the undo, not %s", got, held)
+	m.e.set.Undo(m.e.rel(r3), false)
+	if got := fileImage(d, m.e.rel(r1), "database", ""); got != held {
+		t.Errorf("the hold runs %s after the failed fetch, not %s", got, held)
 	}
 }
 

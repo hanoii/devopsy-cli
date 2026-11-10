@@ -1360,6 +1360,22 @@ func writeRecord(t *testing.T, base, id, mode string) {
 
 // fakeImage is the id a tag holds in fakeImageTools' store, "" without
 // the tag.
+// releaseRuns is the fake image a release's devopsy-compose.yaml runs svc on, by the
+// image: it names (the release's bookmark, a hold), else ref: what an up there runs.
+func releaseRuns(root, rel, svc, ref string) string {
+	data, _ := os.ReadFile(filepath.Join(rel, images.ComposeFile))
+	in := false
+	for _, line := range strings.Split(string(data), "\n") {
+		switch {
+		case strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(line, ":"):
+			in = strings.TrimSpace(line) == strconv.Quote(svc)+":"
+		case in && strings.HasPrefix(line, "    image: "):
+			ref, _ = strconv.Unquote(strings.TrimPrefix(line, "    image: "))
+		}
+	}
+	return fakeImage(root, ref)
+}
+
 func fakeImage(root, tag string) string {
 	data, _ := os.ReadFile(filepath.Join(root, "images", strings.ReplaceAll(tag, "/", "_")))
 	return strings.TrimSpace(string(data))
@@ -1471,8 +1487,9 @@ exit 0
 	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
-	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "3" {
-		t.Errorf("after a failed run the images are not release 1's: %q %q", image(root, "app-prod-app"), image(root, "mariadb:11"))
+	rel1 := filepath.Join(base, "releases", "1")
+	if releaseRuns(root, rel1, "app", "app-prod-app") != "1" || image(root, "mariadb:11") != "3" {
+		t.Errorf("after a failed run the images are not release 1's: %q %q", releaseRuns(root, rel1, "app", "app-prod-app"), image(root, "mariadb:11"))
 	}
 
 	// Giving mnt's entries to their owners fails: a failed run step,
@@ -1497,8 +1514,8 @@ exit 0
 	if out, err := release("35", "FAIL_RUN=4", "PULLED=m"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "mariadb-11 runs what mariadb:11 holds now") {
 		t.Fatalf("failed run with mariadb:11 shared (%v):\n%s", err, out)
 	}
-	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "35m" {
-		t.Errorf("after a failed run with a shared name: app-prod-app %q, mariadb:11 %q", image(root, "app-prod-app"), image(root, "mariadb:11"))
+	if releaseRuns(root, rel1, "app", "app-prod-app") != "1" || image(root, "mariadb:11") != "35m" {
+		t.Errorf("after a failed run with a shared name: app %q, mariadb:11 %q", releaseRuns(root, rel1, "app", "app-prod-app"), image(root, "mariadb:11"))
 	}
 
 	// A rollback from 4 to 1 (2, 3 and 35 failed) restores 1's images.
@@ -1506,8 +1523,8 @@ exit 0
 		t.Fatalf("release 4 (%v):\n%s", err, out)
 	}
 	calls(root)
-	if out, err := run(root, script(build, "", true)); err != nil || current() != "releases/1/code" || image(root, "app-prod-app") != "1" {
-		t.Fatalf("rollback (%v), current %q, app %q:\n%s", err, current(), image(root, "app-prod-app"), out)
+	if out, err := run(root, script(build, "", true)); err != nil || current() != "releases/1/code" || releaseRuns(root, rel1, "app", "app-prod-app") != "1" {
+		t.Fatalf("rollback (%v), current %q, app %q:\n%s", err, current(), releaseRuns(root, rel1, "app", "app-prod-app"), out)
 	}
 	// Its owners from its own labels, as a restored release: labels it
 	// cannot read only warn (cmd/devopsy's TestMntOwnersRelease).
@@ -1551,7 +1568,7 @@ exit 0
 	// goes: the undo ran before (the fetch's pull bookmarked, no marker
 	// left), and the directory stays, failed, for a later removal.
 	r, out, err = first("LOCK_AFTER=1")
-	rel1 := filepath.Join(r, build.Path, "releases", "1")
+	rel1 = filepath.Join(r, build.Path, "releases", "1")
 	if err == nil || !fileExists(filepath.Join(rel1, FailedFile)) || fileExists(filepath.Join(rel1, FetchingFile)) || image(r, "mariadb:devopsy-app-prod-1") != "1" {
 		t.Errorf("failed first release, lock taken after the fetch (%v):\n%s", err, out)
 	}
@@ -2094,9 +2111,11 @@ exit 0
 	if !exists("releases/4/"+FailedFile) || exists("releases/4/"+FetchingFile) {
 		t.Errorf("release 4 not marked failed, or kept its marker")
 	}
-	// Its pull stays on the name: devopsy never moves a pulled name back.
-	if fakeImage(root, "mariadb:devopsy-app-prod-4") != "4" || fakeImage(root, "mariadb:11") != "4" || fakeImage(root, "app-prod-app") != "3" {
-		t.Errorf("release 4's pull not bookmarked, or its names not as it left them, or app-prod-app not 3's again: %q %q", fakeImage(root, "mariadb:11"), fakeImage(root, "app-prod-app"))
+	// Its pull stays on the name: devopsy never moves a pulled name back. The live release
+	// runs its own by its bookmark, which the fetch never moved.
+	rel3 := filepath.Join(base, "releases", "3")
+	if fakeImage(root, "mariadb:devopsy-app-prod-4") != "4" || fakeImage(root, "mariadb:11") != "4" || releaseRuns(root, rel3, "app", "app-prod-app") != "3" {
+		t.Errorf("release 4's pull not bookmarked, or its names not as it left them, or 3 not on its own app: %q %q", fakeImage(root, "mariadb:11"), releaseRuns(root, rel3, "app", "app-prod-app"))
 	}
 
 	// A rollback to 1 (2 and 4 failed) whose bookmarks are gone fetches
@@ -2123,8 +2142,8 @@ exit 0
 		t.Errorf("release 1 marked failed or fetching by an interrupted rollback")
 	}
 	// Its own image back; the name its fetch pulled stays pulled.
-	if fakeImage(root, "mariadb:11") != "1" || fakeImage(root, "app-prod-app") != "3" {
-		t.Errorf("3's images not back after the rollback: mariadb:11 %q, app-prod-app %q", fakeImage(root, "mariadb:11"), fakeImage(root, "app-prod-app"))
+	if fakeImage(root, "mariadb:11") != "1" || releaseRuns(root, rel3, "app", "app-prod-app") != "3" {
+		t.Errorf("3's images not back after the rollback: mariadb:11 %q, app %q", fakeImage(root, "mariadb:11"), releaseRuns(root, rel3, "app", "app-prod-app"))
 	}
 	// 1 keeps the bookmarks it had: what the names held when interrupted
 	// (3's app, not built again yet) is not what 1 ran.
@@ -3043,7 +3062,8 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	if err != nil || current() != "releases/1/code" {
 		t.Fatalf("rollback (%v), current %q: its fetch pulled release 1's old hold of the database:\n%s", err, current(), out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "image:") {
+	// No hold: the database by its name, the app it built again by its bookmark.
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "mariadb@I1") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
 		t.Errorf("release 1's compose file after the rollback holds what nothing asked for:\n%s", got)
 	}
 }
@@ -3398,8 +3418,8 @@ exit 0
 	if out, err := run(root, image, "", true); err != nil {
 		t.Fatalf("rollback to a build-mode release from an image-mode checkout (%v):\n%s", err, out)
 	}
-	if got := fakeImage(root, "registry/app:prod"); got != "built-1" || kind(root, "1") != images.KindOwn {
-		t.Errorf("after it registry/app:prod is %q, release 1's app %q: want its bookmark back on the name", got, kind(root, "1"))
+	if got := releaseRuns(root, filepath.Join(root, "app", "prod", "releases", "1"), "app", "registry/app:prod"); got != "built-1" || kind(root, "1") != images.KindOwn {
+		t.Errorf("after it release 1 runs app on %q, its app %q: want its bookmark's", got, kind(root, "1"))
 	}
 	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") {
 		t.Errorf("the rollback fetched:\n%s", got)

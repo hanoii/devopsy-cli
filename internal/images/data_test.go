@@ -84,7 +84,7 @@ func (m *sim) release(yes bool, svcs ...Service) (string, error) {
 	}
 	m.fetch(svcs)
 	if err := m.e.set.Record(rel, m.prev()); err != nil {
-		m.e.set.Undo(rel, m.prev(), false)
+		m.e.set.Undo(rel, false)
 		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 		return id, err
 	}
@@ -740,8 +740,8 @@ func TestDataReleaseSyncAcceptedRestart(t *testing.T) {
 
 // The restart after a failed run step cannot refuse: every data service
 // the rule refuses, once the failed release's image ran on its data,
-// stays on that image, a pulled one by digest, a built one by its own
-// name retagged from the failed release's bookmark, whatever
+// stays on that image, a pulled one by digest, a built one by the
+// release's own bookmark of it, whatever
 // --accept-image said; the hold's own version and tag are what ran
 // records, so a later rollback finds the data's version; --status names
 // both holds, and a reload is not refused for them.
@@ -767,7 +767,7 @@ func TestDataRestartHolds(t *testing.T) {
 		m.fail("the restart of %s: database %s (want J1), search %s (want %s's build, not %s)", r1, m.runs("database"), m.runs("search"), r2, searchWas)
 	}
 	imgs, _, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != "mariadb@J1" || imgs["search"] != "" || held["database"] != r2 || held["search"] != r2 {
+	if imgs["database"] != "mariadb@J1" || !isBookmark(imgs["search"]) || fileImage(d, m.e.rel(r1), "search", "") != m.runs("search") || held["database"] != r2 || held["search"] != r2 {
 		t.Errorf("devopsy's compose file: images %v, held %v", imgs, held)
 	}
 	if d.names["mariadb:11.8"] != "I1" {
@@ -960,8 +960,8 @@ func TestDataLastResortUnholds(t *testing.T) {
 
 // The hold survives a fetch: the restart whose own image is gone builds
 // again (ErrGone, then --fetched), which moves a built database's name to
-// the previous release's build, and the hold puts it back on the image
-// its data ran.
+// the previous release's build, and the hold runs the image its data ran
+// by the release's bookmark of it.
 func TestDataRestartHoldSurvivesFetch(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -981,15 +981,15 @@ func TestDataRestartHoldSurvivesFetch(t *testing.T) {
 	if e, ok := match(readList(m.e.rel(r2)), entry{Service: "database"}); ok {
 		want = e.ID
 	}
-	if m.runs("database") != want || want == "" || d.names["app-prod-database:latest"] != want {
-		m.fail("database runs %s, its name holds %s, want %s's %s", m.runs("database"), d.names["app-prod-database:latest"], r2, want)
+	if m.runs("database") != want || want == "" || fileImage(d, m.e.rel(r1), "database", "app-prod-database") != want {
+		m.fail("database runs %s, its file %s, want %s's %s", m.runs("database"), fileImage(d, m.e.rel(r1), "database", "app-prod-database"), r2, want)
 	}
 }
 
 // The classic image store: a built image has no registry digest, so its
-// hold goes by its own name and id, never a digest; and a failed release
-// that built the service over a previous one that pulls it holds by
-// image: its own name in the previous release's compose file, the pulled
+// hold goes by the release's bookmark of it, never a digest; and a failed
+// release that built the service over a previous one that pulls it holds
+// by the previous release's bookmark in the build's repository, the pulled
 // name never retagged, the listing recording that image so the
 // previous release's bookmark keeps it once the failed one goes.
 func TestDataRestartHoldBuilt(t *testing.T) {
@@ -1004,7 +1004,7 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	m.cur = r2
 	m.restart(r1, r2)
 	imgs, labels, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != "" || labels["database"] != failed.ID || held["database"] != r2 || m.runs("database") != failed.ID {
+	if !isBookmark(imgs["database"]) || fileImage(d, m.e.rel(r1), "database", "") != failed.ID || labels["database"] != failed.ID || held["database"] != r2 || m.runs("database") != failed.ID {
 		t.Errorf("classic store: image %q, label %q, held %q, runs %s, want %s", imgs["database"], labels["database"], held["database"], m.runs("database"), failed.ID)
 	}
 
@@ -1014,7 +1014,7 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	s2, _ := p.failRun(false, builtDB("app-stage", "12.1"))
 	built, _ := match(readList(p.e.rel(s2)), entry{Service: "database"})
 	imgs, _, _ = composeFacts(p.e.rel(s1))
-	if imgs["database"] != "app-stage-database" || d.names["mariadb:11.8"] != "I1" || p.runs("database") != built.ID {
+	if repoOf(imgs["database"]) != "app-stage-database" || !isBookmark(imgs["database"]) || d.names["mariadb:11.8"] != "I1" || p.runs("database") != built.ID {
 		p.fail("built over pulled: image %q, mariadb:11.8 %s, runs %s (want %s)", imgs["database"], d.names["mariadb:11.8"], p.runs("database"), built.ID)
 	}
 	if e, _ := match(readList(p.e.rel(s1)), entry{Service: "database"}); e.ID != built.ID || e.Ref != "app-stage-database" {
@@ -1097,8 +1097,8 @@ func TestDataRestartHoldSurvivesFailures(t *testing.T) {
 	if _, _, err := p.failEarly(false, false, builtDB("app-stage", "12.1")); err != nil {
 		p.fail("a failed release: %v", err)
 	}
-	if p.runs("database") != built.ID || heldIn(p.e.rel(s1))["database"] != s2 || d.names["app-stage-database:latest"] != built.ID {
-		p.fail("built: database runs %s, its name holds %s, held %v, want %s's %s", p.runs("database"), d.names["app-stage-database:latest"], heldIn(p.e.rel(s1)), s2, built.ID)
+	if p.runs("database") != built.ID || heldIn(p.e.rel(s1))["database"] != s2 || fileImage(d, p.e.rel(s1), "database", "") != built.ID {
+		p.fail("built: database runs %s, its file %s, held %v, want %s's %s", p.runs("database"), fileImage(d, p.e.rel(s1), "database", ""), heldIn(p.e.rel(s1)), s2, built.ID)
 	}
 }
 
@@ -2294,7 +2294,7 @@ func dataRandomMode(t *testing.T, seed int64, mode string) {
 			if m.e.set.Check(m.e.rel(id)) == nil {
 				m.fetch(m.e.svcs[id])
 			}
-			m.e.set.Undo(m.e.rel(id), m.prev(), false)
+			m.e.set.Undo(m.e.rel(id), false)
 			os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
 			if m.cur != "" {
 				m.up()
@@ -2761,8 +2761,9 @@ func TestBuiltPinRollbackRunsOwnBuildUnderSharedName(t *testing.T) {
 		if got := prod.runs("web"); got != own {
 			t.Errorf("%s to %s: prod's web runs %s (the stage's build is %s), not its own %s, which its bookmark still holds:\n%s", how, r1, got, theirs, own, out.String())
 		}
-		if imgs, _, _ := composeFacts(prod.e.rel(r1)); imgs["web"] != own {
-			t.Errorf("%s to %s: its compose file pins web to %q, not its own build %s", how, r1, imgs["web"], own)
+		if got := fileImage(d, prod.e.rel(r1), "web", "shop-web"); got != own {
+			imgs, _, _ := composeFacts(prod.e.rel(r1))
+			t.Errorf("%s to %s: its compose file runs web on %s (%q), not its own build %s", how, r1, got, imgs["web"], own)
 		}
 	}
 }
@@ -2821,8 +2822,9 @@ func TestBuiltPinSurvivesLanding(t *testing.T) {
 		m.fail("the restore: %v", err)
 	}
 	now, _ := os.ReadFile(filepath.Join(rel, ComposeFile))
-	if imgs, _, _ := composeFacts(rel); imgs["web"] != built {
-		t.Errorf("after a --no-code restore, web's image: is %q, not its build's id %s", imgs["web"], built)
+	if got := fileImage(d, rel, "web", "shop-web"); got != built {
+		imgs, _, _ := composeFacts(rel)
+		t.Errorf("after a --no-code restore, web runs %s (%q), not its build %s", got, imgs["web"], built)
 	}
 	if string(now) != string(was) {
 		t.Errorf("the landing changed nothing, and rewrote the compose file (compose recreates on another image: reference):\n%s\nwas:\n%s", now, was)

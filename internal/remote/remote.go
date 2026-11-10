@@ -970,17 +970,14 @@ func partialGuard(t *Target, projectName, refuse string) string {
 }
 
 // recoverFetch finishes what a release's fetch killed outright left (img
-// recover: the release marked failed, current's own names back, cur the
-// current release's directory), under the release lock, before anything
-// runs current's images: every script that runs or restores them.
-// releaseImages defines img and image_lock.
-func recoverFetch(cur string) string {
-	return `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
-  img recover "$base" ` + cur + `
+// recover: the release marked failed, what it got bookmarked), under the
+// release lock, before anything runs current's images: every script that
+// runs or restores them. releaseImages defines img and image_lock.
+const recoverFetch = `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
+  img recover "$base"
   image_unlock
 fi
 `
-}
 
 // releaseSnapshotSetup is a release's part before its fetch when its
 // environment takes release snapshots and something is current: the
@@ -1563,7 +1560,7 @@ fi
 ` + releaseLock(false, false) + releaseImages(projectName, t) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
-` + lockedGate(true, "image_unlock; ") + `img recover "$base" ${prev:+"$base/$prev"}
+` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 # Every id checked first (gone, current: nothing removed), then each with
 # its images (images.RemoveReleases).
 rr=0

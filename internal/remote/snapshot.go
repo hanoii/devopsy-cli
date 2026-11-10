@@ -239,7 +239,7 @@ export ` + RestoreByEnv + `=` + Quote(r.By)
 ` + watchSession(false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + settleSync(projectName) + snapshotLock(false) + `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
-` + releaseImages(projectName, t) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
+` + releaseImages(projectName, t) + recoverFetch + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
 ` + timerStart("restore_t") + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 `

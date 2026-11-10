@@ -41,8 +41,8 @@ func TestSnapshotBookmarks(t *testing.T) {
 	if err := prod.rollback(r1, false); err != nil {
 		t.Fatal(err)
 	}
-	if img, _ := d.Inspect("app-prod-app"); img.ID != old || prod.runs("app") != old {
-		t.Errorf("the rollback left app-prod-app on %s, runs %s, want %s:\n%s", img.ID, prod.runs("app"), old, out.String())
+	if id := fileImage(d, prod.e.rel(r1), "app", "app-prod-app"); id != old || prod.runs("app") != old {
+		t.Errorf("the rollback's file runs app on %s, runs %s, want %s:\n%s", id, prod.runs("app"), old, out.String())
 	}
 	// Removing the snapshot untags only its own bookmark: r2 still
 	// holds the image.

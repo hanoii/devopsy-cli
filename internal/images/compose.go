@@ -11,11 +11,12 @@ import (
 // ComposeFile is devopsy's own compose file, in a release's directory
 // beside its code: the facts of its activation a project could not write
 // in advance, and nothing the project chooses. Every service the
-// activation fetched gets DigestLabel, the image it gave it; a data
-// service held on another image than its release's own (holdsFor: the
-// rule refuses its own against its data's history) gets HeldLabel, and
-// image: the reference that holds it (its digest, another release's own
-// name, a bookmark) unless its own name was put on it. devopsy runs compose with
+// activation fetched gets DigestLabel, the image it gave it, and each own
+// image image: its release's bookmark (resolveBookmarks), which only that
+// release writes; a data service held on another image than its release's
+// own (holdsFor: the rule refuses its own against its data's history) gets
+// HeldLabel, and image: the reference that holds it (its digest, the
+// release's own bookmark of it). devopsy runs compose with
 // it between the project's compose.yaml and the operator's
 // compose.override.yaml, on the server only.
 const ComposeFile = "devopsy-compose.yaml"
@@ -127,7 +128,7 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // another image than the release's own (HeldLabel), own names included.
 // A hold is said, the rest warned.
 func StatusLines(d Docker, project, rel string) []StatusLine {
-	_, labels, held := composeFacts(rel)
+	pins, labels, held := composeFacts(rel)
 	cs, err := d.Containers(project)
 	if err != nil {
 		return []StatusLine{{Text: "could not list the containers: " + err.Error(), Warn: true}}
@@ -152,7 +153,11 @@ func StatusLines(d Docker, project, rel string) []StatusLine {
 		case err != nil || gave == "":
 		case !sameImage(img, gave):
 			l := fmt.Sprintf("%s runs %s, not %s its activation gave it", c.Service, shownImage(refs[c.Service], img), shortName(gave))
-			if r := refs[c.Service]; r != "" {
+			if pins[c.Service] != "" {
+				// The file names its image (its release's bookmark, a hold): no
+				// name moved under it.
+				l += ": something outside devopsy's compose file made it"
+			} else if r := refs[c.Service]; r != "" {
 				l += ": " + r + " moved since (a plain up follows names)"
 			}
 			lines = append(lines, StatusLine{Text: l, Warn: true})

@@ -336,15 +336,15 @@ func runImages(args []string, color bool) int {
 			return 1
 		}
 	case "undo":
-		if len(rest) < 1 || len(rest) > 2 {
+		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		s.Undo(rest[0], arg(1), rollback)
+		s.Undo(rest[0], rollback)
 	case "recover":
-		if len(rest) < 1 || len(rest) > 2 {
+		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		s.Recover(rest[0], arg(1))
+		s.Recover(rest[0])
 	case "remove":
 		// Docker failing midway: the release stays (exit 1), so the next
 		// removal finds its listing again.

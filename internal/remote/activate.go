@@ -107,12 +107,12 @@ func (a *activation) releaseSnap() bool {
 	return a.newRelease() && a.t.SnapshotsRelease.Enabled
 }
 
-// undo puts the live release's image names back after a failed fetch of rel.
+// undo settles a failed fetch of rel (img undo).
 func (a *activation) undo(rel string) string {
 	if a.rollback {
-		return `img undo --rollback ` + rel + ` ${prev:+"$base/$prev"}`
+		return `img undo --rollback ` + rel
 	}
-	return `img undo ` + rel + ` ${prev:+"$base/$prev"}`
+	return `img undo ` + rel
 }
 
 // undoLocked is undo past the fetch, whose image lock is gone: under the
@@ -187,7 +187,7 @@ func (a *activation) head() string {
 	// records it itself (ranOnData).
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}; rb_from=$prev
-` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
+` + recoverFetch + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
 `
 	// A rollback cut off past its switch (ActivatingFile: this script
 	// holds the lock, so none runs), current its target: cut_from is the

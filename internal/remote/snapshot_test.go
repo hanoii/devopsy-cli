@@ -76,15 +76,14 @@ func TestSnapshotLockHolders(t *testing.T) {
 	}
 }
 
-// A full restore is a rollback's activation: its fetch restores the
+// A full restore is a rollback's activation: its fetch builds the
 // restored release's own images, moving the environment's build names
 // (app-prod-app) to them before the switch. Its data step can still
 // refuse or fail after that (a tar no service of the restored code has,
 // a stop that fails, an extraction cut), and the release does not go
-// live: the live release's own names must come back, as they do for
-// every activation that fails after its fetch (img undo), or the next
-// plain up, restart or --no-code restore runs the snapshot's build
-// under the current release's code.
+// live: the live release runs its own images by its bookmarks, which no
+// fetch moves, so the next plain up, restart or --no-code restore runs
+// its own build, never the snapshot's under its code.
 func TestRestoreDataFailureUndoesImages(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
@@ -97,8 +96,8 @@ case "$1 ${2:-}" in
   "--snapshot-step make-release")
     cp -a "$FAKE_SNAP_REL" "$4" && rm -f "$4/`+FailedFile+`" && : >"$4/`+PendingFile+`"; exit ;;
   "--snapshot-step restore-data") exit "${FAIL_RESTORE_DATA:-0}" ;;
-  # What the build name holds when a settle starts what is recorded.
-  "--sync-services settle") cp "$FAKE_ROOT/images/app-prod-app" "$FAKE_ROOT/settled-on"; exit 0 ;;
+  # What the live release's file runs app on when a settle starts what is recorded.
+  "--sync-services settle") cp "$FAKE_ROOT/images/app-prod-app:devopsy-app-prod-2" "$FAKE_ROOT/settled-on"; exit 0 ;;
 esac
 case "$*" in
   "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
@@ -124,8 +123,9 @@ exit 0
 			t.Fatalf("release %s (%v):\n%s", id, err, out)
 		}
 	}
-	if got := fakeImage(root, "app-prod-app"); got != "2" {
-		t.Fatalf("app-prod-app after release 2: %q", got)
+	rel2 := filepath.Join(base, "releases", "2")
+	if got := releaseRuns(root, rel2, "app", "app-prod-app"); got != "2" {
+		t.Fatalf("app after release 2: %q", got)
 	}
 	// The snapshot, taken in release 1.
 	write(t, filepath.Join(base, "snapshots", "20261025000000", SnapshotManifest), "format\t1\nkind\tmanual\nrelease\t1\n")
@@ -133,14 +133,13 @@ exit 0
 	if l, _ := os.Readlink(filepath.Join(base, "current")); err == nil || l != "releases/2/code" {
 		t.Fatalf("a restore whose data step fails (%v), current %q:\n%s", err, l, out)
 	}
-	if got := fakeImage(root, "app-prod-app"); got != "2" {
-		t.Errorf("after a restore that did not go live, app-prod-app holds %q's image, not the live release 2's:\n%s", got, out)
+	if got := releaseRuns(root, rel2, "app", "app-prod-app"); got != "2" {
+		t.Errorf("after a restore that did not go live, the live release runs app on %q's image, not its own:\n%s", got, out)
 	}
 
 	// Its data step killed outright before its first write, with what it
 	// stopped recorded: the settle that starts it again (killedSays) runs
-	// once the names are back, or what it makes again (images.Recreate)
-	// runs the snapshot's build under the live release's code.
+	// the live release's own build, which its bookmark still holds.
 	write(t, filepath.Join(base, SyncStateFile), "stop db\n")
 	out, err = run(RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025000000"}), "FAIL_RESTORE_DATA=137")
 	if got := readFile(filepath.Join(root, "settled-on")); err == nil || strings.TrimSpace(got) != "2" {

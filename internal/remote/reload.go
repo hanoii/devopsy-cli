@@ -43,7 +43,7 @@ rm -f "$rl_pending"
 ` + watchSession(false) + `# Until the point of no return a signal (the watcher's: the session
 # gone) ends it, nothing changed.
 trap 'rm -f "$rl_pending"; devopsy --say error "interrupted: nothing reloaded" || true; exit 130' INT TERM HUP
-` + releaseImages(projectName, t) + recoverFetch(`"$rel"`) + settleSync(projectName) +
+` + releaseImages(projectName, t) + recoverFetch + settleSync(projectName) +
 		markRefusal(t, "nothing reloaded", syncFixes(t), "exit 1") + cutRefusal(t) + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
 cd "$base/current"
 ` + call("--prepare-release", "reload") + ` || ` + refuse + `

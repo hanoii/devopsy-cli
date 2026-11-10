@@ -286,15 +286,10 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 // every later derivation judges) and how ComposeFile holds it:
 //
 //   - pulled (a registry digest): by digest, pulled when gone;
-//   - built, under o's name: that name put on the image (its id), through
-//     others (a shared pull_policy: never name never moves another
-//     environment's: held by the release's own bookmark instead), nothing
-//     in the compose file but the mark;
-//   - built under another name (o pulls it, or names it otherwise):
-//     image: that name, put on the image, never a retag of o's pulled
-//     one, the listing recording that image so the release's bookmark
-//     keeps it; a name only the history gives (a parent's), which moves
-//     with its releases: by the release's own bookmark.
+//   - built: by the release's own bookmark of the held entry, which only
+//     the release writes (resolveBookmarks), never a name another
+//     environment's build or pull moves, nor another release's bookmark,
+//     which goes with that release.
 //
 // An image gone that cannot be had: ErrRefused, said; AsBuilt (the
 // restart's last try): a pulled one held all the same, for the run step to
@@ -317,7 +312,7 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 			case perr != nil && h.line.Tag == "":
 				// A build: service's line, in image mode: the digest may be a
 				// parent's local build, which no registry serves.
-				return s.ownInstead(o, h, what, own)
+				return s.ownInstead(o, h, what)
 			case perr != nil:
 				s.say(report.WarnLevel, "%s: %s is gone from this server and could not be pulled by its digest (%v): held on it anyway, for the run step to pull", svc, d, perr)
 			default:
@@ -330,38 +325,22 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 		e = entry{Ref: o.Ref, ID: cmp.Or(img.ID, src.ID, h.line.ID), Service: svc, Kind: KindPulled, Digest: d, Version: cmp.Or(sanitize(img.Version), src.Version)}
 		ch.Image = d
 	} else {
-		name := o.Ref
-		if src.Ref != "" && familiar(src.Ref) != familiar(o.Ref) {
-			name, ch.Image = src.Ref, src.Ref
-		}
 		id := cmp.Or(src.ID, h.line.ID)
-		if (ch.Image != "" && from == historyHeld || ch.Image == "" && o.Kind != KindOwn) && s.imagePresent(id) {
-			// A name only its history gives, a parent's on this server: its
-			// next release moves it, so never by it (review: the child's next
-			// up ran the parent's newer build on its data); or a pulled name of
-			// its own, never retagged (review: deriving the hold again moved
-			// mariadb:11.8 to the parent's build). By the release's own
-			// bookmark.
-			name, ch.Image, ch.bookmark = o.Ref, "", true
-		} else if cur, err := s.Docker.ID(name); (err != nil || cur != id) && !s.imagePresent(id) {
+		if !s.imagePresent(id) {
 			if !s.AsBuilt {
 				s.say(report.ErrorLevel, "%s: %s, built by the project, is gone from this server", svc, what)
 				return entry{}, ch, ErrRefused
 			}
-			return s.ownInstead(o, h, what, own)
-		} else if who, err := s.putName(name, id, own); err != nil {
-			s.say(report.ErrorLevel, "could not put %s on the image its data ran: %v", name, err)
-			return entry{}, ch, err
-		} else if len(who) > 0 {
-			// Held by the release's own bookmark of the image instead
-			// (writeHeld names it).
-			s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s is held on the image by its bookmark", name, strings.Join(who, ", "), svc)
-			ch.Image, ch.bookmark = "", true
+			return s.ownInstead(o, h, what)
 		}
+		// By the release's own bookmark of it (writeHeld names it), in the
+		// repository it was built under (o pulls it, or names it otherwise).
+		name := o.Ref
+		if src.Ref != "" && familiar(src.Ref) != familiar(o.Ref) {
+			name = src.Ref
+		}
+		ch.bookmark = true
 		e = entry{Ref: name, ID: id, Service: svc, Kind: KindOwn, Version: src.Version}
-		if ch.bookmark {
-			e.Ref = o.Ref
-		}
 	}
 	e.DataVersion, e.Tag = h.line.Version, h.line.Tag
 	setOwn(&e, o)
@@ -370,62 +349,32 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]boo
 
 // ownInstead is holdOn's last try (AsBuilt) when the image cannot be had
 // (built on the parent's server, pruned): nothing here is held, its
-// release's own image runs, its name put back on it unless another
-// environment runs what the name holds, said, with the release that fixes
-// forward. Never the hold's own name in its compose file, which nothing
-// here holds (review: the run step's up could not start it, and the
-// release's own bookmark went).
-func (s *Set) ownInstead(o entry, h hold, what string, own map[string]bool) (entry, composeHold, error) {
-	ch := composeHold{bookmark: s.ownNameBack(o, own)}
+// release's own image runs, by its bookmark as any own image's, said, with
+// the release that fixes forward. Never the hold's own name in its compose
+// file, which nothing here holds (review: the run step's up could not start
+// it, and the release's own bookmark went).
+func (s *Set) ownInstead(o entry, h hold, what string) (entry, composeHold, error) {
+	var ch composeHold
 	s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s, built by the project, is gone from this server: its release's own image runs on data it does not allow (%s)", o.Service, what, h.why),
 		nil, report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
 	return o, ch, nil
 }
 
-// putName puts name on the image id, the one way devopsy moves a name of
-// an environment's: unless another environment runs what the name holds
-// now, those environments returned, the name left where it is, for the
-// caller to run its service by a bookmark (or say so). Why one place: each
-// caller had its own copy, and each finding on a shared name was one
-// differing (review).
-func (s *Set) putName(name, id string, own map[string]bool) ([]string, error) {
-	cur, err := s.Docker.ID(name)
-	if err == nil && cur == id {
-		return nil, nil
-	}
-	if err == nil {
-		if who := s.others(cur, own); len(who) > 0 {
-			return who, nil
-		}
-	}
-	return nil, s.Docker.Tag(id, name)
-}
-
-// ownNameBack puts a built own image's name back on it, true when another
-// environment runs what the name holds, so it runs by its bookmark
-// instead. Never a pulled name (nothing to do: compose runs what it holds).
-func (s *Set) ownNameBack(o entry, own map[string]bool) bool {
-	if o.Kind != KindOwn || !s.imagePresent(o.ID) {
-		return false
-	}
-	who, err := s.putName(o.Ref, o.ID, own)
-	if err != nil {
-		s.say(report.WarnLevel, "could not put %s back on its own image: %v", o.Ref, err)
-	} else if len(who) > 0 {
-		s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", o.Ref, strings.Join(who, ", "), o.Service)
-		return true
-	}
-	return false
-}
-
-// resolveBookmarks names, in holds, the bookmark each hold by bookmark
-// (and each own image by bookmark) is, as rel's listing es gives it.
+// resolveBookmarks names, in holds, the bookmark each own image runs by,
+// held or not, as rel's listing es gives it: the release's own name for
+// its image, which only it writes, never the project's, which every
+// environment building or pulling under it moves for the others (stage, a
+// branch's, a pull request's), nor the id, which a build cannot tag. A
+// hold on another reference (a digest) stays as it is.
 func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeHold) {
 	for i, b := range bookmarks(es, s.Name, s.idOf(rel)) {
-		if ch, ok := holds[es[i].Service]; ok && ch.bookmark {
-			ch.Image = b
-			holds[es[i].Service] = ch
+		e := es[i]
+		ch, ok := holds[e.Service]
+		if e.Service == "" || ok && !ch.bookmark || !ok && (e.Kind != KindOwn || e.ID == "") {
+			continue
 		}
+		ch.Image, ch.bookmark = b, true
+		holds[e.Service] = ch
 	}
 }
 
@@ -465,7 +414,6 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 	imgs, _, wasHeld := composeFacts(rel)
 	before := append([]entry{}, es...)
 	mode := ModeOf(rel)
-	ownNames := s.own(rel)
 	var lines []string
 	kept := map[string]composeHold{}
 	for i, e := range es {
@@ -474,12 +422,7 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 			continue
 		}
 		if !e.held() {
-			// Its own image by bookmark, another environment running its name:
-			// on landed data, too, its own build, which the rule judged, never
-			// another's under a shared name (review: a sync's run step ran it).
-			if img := imgs[e.Service]; img != "" && wasHeld[e.Service] == "" || own[i].DataVersion != "" && s.ownNameBack(own[i], ownNames) {
-				kept[e.Service] = composeHold{bookmark: true}
-			}
+			// Its own image by its bookmark, as every own image (resolveBookmarks).
 			continue
 		}
 		svc, ok := svcs[e.Service]
@@ -497,9 +440,6 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 				continue
 			}
 			es[i] = o
-			if s.ownNameBack(o, ownNames) {
-				kept[e.Service] = composeHold{bookmark: true}
-			}
 			lines = append(lines, fmt.Sprintf("%s goes back to %s's own image (%s, %s), not %s: its compose no longer gives it", e.Service, tid, shownEntry(o), shownData(o), heldWhat(wasHeld[e.Service])))
 			continue
 		}
@@ -512,14 +452,11 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
 			continue
 		}
-		ne, ch, err := s.unhold(rel, e, own[i], svc, mode, ownNames)
+		ne, err := s.unhold(rel, e, own[i], svc, mode)
 		if err != nil {
 			return err
 		}
 		es[i] = ne
-		if ch.bookmark {
-			kept[e.Service] = ch
-		}
 		lines = append(lines, fmt.Sprintf("%s runs %s's own image again (%s, %s), not %s (%s): its data's version allows it", e.Service, tid, shownEntry(ne), shownData(ne), heldWhat(wasHeld[e.Service]), shownData(e)))
 	}
 	var pulled []string
@@ -551,38 +488,28 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 
 // unhold is the entry of a service held on another image (e) that runs
 // its release's own (o, svc as compose gives it now) again: a pulled name
-// as it holds now, pulled when gone; a built one its own build put back
-// on its name (o's id), by its bookmark when another environment runs
-// the name's image (a composeHold by bookmark, not a hold); gone:
-// ErrRefused, said.
-func (s *Set) unhold(rel string, e, o entry, svc Service, mode string, own map[string]bool) (entry, composeHold, error) {
+// as it holds now, pulled when gone; a built one its own build (o's id),
+// by its bookmark as every own image; gone: ErrRefused, said.
+func (s *Set) unhold(rel string, e, o entry, svc Service, mode string) (entry, error) {
 	tid := s.idOf(rel)
-	var ch composeHold
 	if !svc.own(mode) {
 		if _, err := s.Docker.ID(svc.Ref); errors.Is(err, ErrNoImage) {
 			s.say(report.InfoLevel, "%s: %s is gone from this server: pulling it", svc.Name, svc.Ref)
 			if err := s.Docker.Pull(svc.Ref); err != nil {
 				s.say(report.ErrorLevel, "%s: could not pull %s: %v", svc.Name, svc.Ref, err)
-				return entry{}, ch, err
+				return entry{}, err
 			}
 		}
 		ne := s.entryOf(svc, svc.Ref, mode)
 		ne.DataVersion, ne.Tag = o.DataVersion, o.Tag
-		return ne, ch, nil
+		return ne, nil
 	}
 	if _, err := s.Docker.ID(o.ID); o.ID == "" || err != nil {
 		s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s's own image of it, built by the project, is gone from this server, and the image it is held on (%s) would upgrade its data again", svc.Name, tid, shownData(e)),
 			nil, report.Fix("a release builds it:", s.cmd("--release")))
-		return entry{}, ch, ErrRefused
+		return entry{}, ErrRefused
 	}
-	if who, err := s.putName(svc.Ref, o.ID, own); err != nil {
-		s.say(report.ErrorLevel, "could not put %s back on %s's own image: %v", svc.Ref, tid, err)
-		return entry{}, ch, err
-	} else if len(who) > 0 {
-		s.say(report.InfoLevel, "%s stays where it is, which other environments use (%s): %s runs its own image by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
-		ch.bookmark = true
-	}
-	return entry{Ref: svc.Ref, ID: o.ID, Service: svc.Name, Kind: KindOwn, Build: o.Build, DataVersion: o.DataVersion, Tag: o.Tag}, ch, nil
+	return entry{Ref: svc.Ref, ID: o.ID, Service: svc.Name, Kind: KindOwn, Build: o.Build, DataVersion: o.DataVersion, Tag: o.Tag}, nil
 }
 
 // LastHold is the restart's last resort, once get_images failed (the
