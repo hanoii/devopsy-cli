@@ -50,9 +50,11 @@ func behindDoor() bool {
 	return errA == nil && errB == nil && a == b
 }
 
-// devopsyPath is what sudo's rules name, wherever this was found as.
+// devopsyPath is what sudo's rules name and what a project user asks sudo to run: this
+// binary's own path, links resolved, which add's devopsy and a project user's are, being one
+// file, whatever either's PATH finds first (devopsy upgrades in place, at the same path).
 func devopsyPath() string {
-	if p, err := exec.LookPath("devopsy"); err == nil {
+	if p := selfPath(); p != "" {
 		return p
 	}
 	return "/usr/local/bin/devopsy"
