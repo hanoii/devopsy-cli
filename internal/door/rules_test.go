@@ -580,3 +580,55 @@ func TestMntPath(t *testing.T) {
 		}
 	}
 }
+
+// A release in build mode runs each of its builds by its bookmark, which devopsy's own
+// compose file names (images.ComposeFile, <build's name>:devopsy-<compose name>-<id>), so
+// every render of a live release carries one per built service. A compose pull there (a
+// run step's `devopsy pull <service>`, a restart command's, an operator's by hand) is about
+// the services that pull: the built one is skipped (its build: kept for that), and the
+// project's own bookmark is no name a pull writes.
+//
+// BUG: the pull verb asks Claimable of every service's image, the built ones' too, and a
+// bookmark is a hold, "which devopsy alone writes, never a pull": since own images run by
+// bookmarks (the build pins), every compose pull in a door project's live build-mode
+// release is refused whole, whatever service it names. Before the pins a door project's
+// file named no image for its builds, so the check only ever saw the project's image:.
+func TestCheckFilePullInAReleaseRunningByBookmarks(t *testing.T) {
+	t.Parallel()
+	bookmark := "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000"
+	if !testPolicy.OwnRef(bookmark) {
+		t.Fatalf("the control: %s is no name of this project's own", bookmark)
+	}
+	file := parse(t, `{"name":"shop-prod","services":{`+
+		`"web":{"image":"`+bookmark+`","build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]},`+
+		`"proxy":`+safe(``)+`}}`)
+	if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) != 0 {
+		t.Errorf("a pull in a release whose build runs by its bookmark: %v", errs)
+	}
+}
+
+// What a build writes for a service is what the next start of it reads: for the deploy
+// user's project compose tags the image: of the rendered file, the release's bookmark
+// (images.ComposeFile), and the `up` after it runs that build.
+//
+// BUG: behind the door the build verb names the build images.DoorBuild whatever image: the
+// rendered file holds, while a start keeps a name of the project's own (the bookmark): a
+// project user's `devopsy @t build web` then `devopsy @t up -d web` builds one name and
+// starts the other, the release's image as it was, with no word said. Either side may be
+// the one to change (the build landing on the bookmark, or said to be a release's alone).
+func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
+	t.Parallel()
+	bookmark := "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000"
+	image := func(verb string) string {
+		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+bookmark+`",`+
+			`"build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+		if errs := CheckFile(file, testPolicy, verb, &fakePaths{}); len(errs) != 0 {
+			t.Fatalf("%s: %v", verb, errs)
+		}
+		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
+		return got
+	}
+	if built, started := image("build"), image("up"); built != started {
+		t.Errorf("a build lands on %s, and the start after it runs %s", built, started)
+	}
+}
