@@ -281,20 +281,10 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 	}
 }
 
-// BUG: a run step that builds (`up --build`: what --init writes as release: and rollback:,
-// and what a missing step's message offers in build mode) builds each service again and tags
-// it as its image:, which devopsy's compose file now gives as the image's id.
-//
-// On Docker's classic store the tag is refused ("refusing to create an ambiguous tag using
-// digest algorithm as name": checked by hand on Docker 29.8 with overlay2, compose 5.5), so
-// every release fails past its switch, the first included, and its restart, the same step,
-// too. On the containerd store, which the suite's servers run, the build is tagged
-// sha256:<the pinned id>, a name in a repository called sha256 that no listing has, no
-// removal takes and `docker rmi sha256:<id>` cannot name (it reads as an id): one image left
-// per release, while the container goes on running the image the fetch built. A plain
-// `devopsy @server:prod build` or `up --build` by hand does the same, where it built under
-// the service's name before the pin, and so does any up once the pinned image is gone (it
-// builds, tags the same way, then fails on "No such image").
+// A run step that builds (`up --build`, which older configs keep) builds onto its release's
+// own name, the image: devopsy's compose file gives each built service, a tag only that
+// release writes: the release goes live on what it built, and no name is left that no
+// listing has (never one named by an id, which a build cannot tag).
 func TestBuildModeRunStepThatBuilds(t *testing.T) {
 	dir := project(t, "upbuild", map[string]string{
 		// As devopsy --init writes it.

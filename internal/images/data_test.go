@@ -2772,14 +2772,10 @@ func TestBuiltImagesPinnedByID(t *testing.T) {
 	}
 }
 
-// BUG: a rollback, and the restart after a failed run step, of a service with no data whose
-// shared name another environment built last and runs take that environment's build, and now
-// pin it by its id: Restore's putName leaves the name where it is and lists what it holds
-// ("stays on its newer image, which other environments use"), so prod's rollback runs the
-// stage's code. Its own build's bookmark is there, and by id it runs it without moving any
-// name, as a data service's does (by its bookmark): the id pin made the name's place
-// irrelevant, and this branch still follows it.
-func TestBuiltPinRollbackRunsOwnBuildUnderSharedName(t *testing.T) {
+// A rollback, and the restart after a failed run step, of a service with no data runs its
+// release's own build by that release's bookmark, whatever the shared name holds: another
+// environment building under it last (and running it) changes neither.
+func TestRollbackRunsItsOwnBuildUnderASharedName(t *testing.T) {
 	t.Parallel()
 	web := Service{Name: "web", Ref: "shop-web", Build: true}
 	for _, how := range []string{"rollback", "restart"} {
@@ -2831,13 +2827,10 @@ func TestBuiltPinRollbackRunsOwnBuildUnderSharedName(t *testing.T) {
 	}
 }
 
-// BUG: a release pins what its name holds when it records, not what it built: fetches of two
-// environments run side by side under the shared image lock, so the other environment's
-// build under the same name, finishing between this one's build and its record, is the id
-// this release pins and runs from then on, the release after it too if nothing builds again.
-// The name is still how the release learns its build's id (entries, Restore after a fetch),
-// so the cause the pin names (a name others write) is still there at the record.
-func TestBuiltPinRecordsOwnBuildBesideAnotherFetch(t *testing.T) {
+// A release records what its own fetch built, by the fetch's tag, never what the shared
+// name holds: fetches of two environments run side by side, and the other's build under
+// that name may finish between this one's build and its record.
+func TestRecordTakesItsOwnFetchBesideAnother(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
@@ -2859,14 +2852,10 @@ func TestBuiltPinRecordsOwnBuildBesideAnotherFetch(t *testing.T) {
 	}
 }
 
-// BUG: a copy that lands (a sync, an import, a --no-code restore) rewrites the pins: derive
-// takes any image: without a held mark for "its own image by its bookmark" (what it meant
-// before the id pin), so every built service's image: goes from its id to the release's
-// bookmark, a name, though nothing about it changed. Compose recreates a container whose
-// image: reference changed (internals/gotchas.md), so the next plain up or reload restarts
-// every built service, the ones the copy never touched included, and derive is no longer
-// quiet when nothing changes.
-func TestBuiltPinSurvivesLanding(t *testing.T) {
+// A copy that lands (a sync, an import, a --no-code restore) that changes nothing of what
+// runs leaves devopsy's file as it is: every built service by its release's bookmark, so
+// compose, which recreates on another image: reference, restarts nothing it did not touch.
+func TestLandingKeepsTheFileAsItIs(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
@@ -2894,12 +2883,11 @@ func TestBuiltPinSurvivesLanding(t *testing.T) {
 	}
 }
 
-// BUG: a hold under another name than the service's own (a failed release that built the
-// database over a previous one that pulls it: holdOn's image: that release's name) is still
-// by that name, never the id: another environment building under it (the stage's, a
-// branch's) moves it, and prod's next plain up runs that build, a newer version, on prod's
-// data, the case the id pin is for. composeText pins an id only where a hold gives no image:.
-func TestBuiltPinHoldUnderAnotherName(t *testing.T) {
+// A hold under another name than the service's own (a failed release that built the
+// database over a previous one that pulls it) goes by the holding release's bookmark of the
+// image, never that name: another environment building under it (the stage's, a branch's)
+// would move it, and prod's next plain up run that build on prod's data.
+func TestHoldUnderAnotherNameByItsBookmark(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
