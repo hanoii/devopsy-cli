@@ -225,7 +225,7 @@ func carriesLabel(file map[string]any, prefix string) bool {
 
 // Real implements door.Paths.
 func (s *doorSide) Real(path string) (string, error) {
-	out, err := s.read("real", path).Output()
+	out, err := doorAnswer(s.read("real", path), maxPath, 0)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve %s", path)
 	}
@@ -1071,13 +1071,11 @@ func hostIDs(deploy *user.User, users []string) []int {
 
 // takeFile reads a rendered file by the caller's rights, and removes it.
 func takeFile(who, path string) (map[string]any, error) {
-	out := capBuffer{max: maxRendered}
-	c := doorRead(who, "take", path)
-	c.Stdout = &out
-	if err := c.Run(); err != nil {
+	out, err := doorAnswer(doorRead(who, "take", path), maxRendered, 0)
+	if err != nil {
 		return nil, errors.New("refused: not a file this project's user can read")
 	}
-	d := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	d := json.NewDecoder(bytes.NewReader(out))
 	// A large number stays as written: compose reads what this writes back.
 	d.UseNumber()
 	file := map[string]any{}
@@ -1105,11 +1103,14 @@ func (b *capBuffer) Write(p []byte) (int, error) {
 
 func (b *capBuffer) Bytes() []byte { return b.buf.Bytes() }
 
-// maxRendered and maxLogins are what the door reads at most of a rendered compose file and
-// of a project's docker config.
+// maxRendered, maxLogins, maxPath and maxEnvironments are what the deploy user reads at most
+// of a project user's answer: a rendered compose file, a project's docker config, a path's
+// resolution, and its environments for --server-info.
 const (
-	maxRendered = 8 << 20
-	maxLogins   = 1 << 20
+	maxRendered     = 8 << 20
+	maxLogins       = 1 << 20
+	maxPath         = 64 << 10
+	maxEnvironments = 4 << 20
 )
 
 // closedDir makes a directory only the deploy user and this project user can reach.
@@ -1678,17 +1679,15 @@ func unlinkedFile(data []byte) (int, error) {
 // Never its own directory: Docker's CLI loads plugins and helpers from there, which
 // would run the project's own program as the deploy user.
 func (s *doorSide) logins(config string) (string, error) {
-	out := capBuffer{max: maxLogins}
-	c := s.read("cat", config)
-	c.Stdout = &out
+	out, err := doorAnswer(s.read("cat", config), maxLogins, 0)
 	auths := map[string]map[string]string{}
-	if c.Run() == nil {
+	if err == nil {
 		var parsed struct {
 			Auths map[string]struct {
 				Auth string `json:"auth"`
 			} `json:"auths"`
 		}
-		if json.Unmarshal(out.Bytes(), &parsed) == nil {
+		if json.Unmarshal(out, &parsed) == nil {
 			for k, v := range parsed.Auths {
 				auths[k] = map[string]string{"auth": v.Auth}
 			}

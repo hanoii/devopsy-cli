@@ -15,6 +15,9 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"strconv"
+	"syscall"
 )
 
 // The facts read on a server: os-release, /proc/meminfo, docker info,
@@ -640,5 +643,43 @@ func TestStatusHintNamesTheProjectUser(t *testing.T) {
 		if got := statusHint(host, "/srv", remote.Environment{Path: "shop/prod", User: "devopsy-shop"}).Cmds; len(got) != 1 || got[0] != want {
 			t.Errorf("%s: %q, want %q", host, got, want)
 		}
+	}
+}
+
+// --server-info gives up on a project user's read of its tree that does not answer in time
+// (treeEnvironments, doorAnswer), its environments left out and the rest of the server's facts
+// still coming: that read runs as the project user, on files it writes, and a FIFO where an
+// environment's state file goes blocks it on its open. The read's own bound is a second
+// here; the test's, the behavior's, ten.
+//
+// Not parallel: it sets PATH, for a sudo that never answers.
+func TestServerInfoWaitsForNoProjectUsersRead(t *testing.T) {
+	bin := t.TempDir()
+	pid := filepath.Join(bin, "pid")
+	if err := testfile.Write(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\necho $$ >"+pid+"\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	tree := filepath.Join(t.TempDir(), "shop")
+	done, ended := make(chan []remote.Environment, 1), make(chan struct{})
+	go func() { done <- treeEnvironments("devopsy-shop", tree, time.Second); close(ended) }()
+	// The read that never answers goes with the test, whatever came of it.
+	t.Cleanup(func() {
+		data, _ := os.ReadFile(pid)
+		if p, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			_ = syscall.Kill(p, syscall.SIGKILL)
+		}
+		select {
+		case <-ended:
+		case <-time.After(startWait):
+		}
+	})
+	select {
+	case envs := <-done:
+		if len(envs) != 0 {
+			t.Errorf("a read that never answered gave environments: %v", envs)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("--server-info still waits for a project user's read that never answers")
 	}
 }

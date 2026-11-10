@@ -94,6 +94,29 @@ func doorRead(who string, args ...string) *exec.Cmd {
 	return c
 }
 
+// doorAnswer runs c, a read as a project user (doorRead), for what it prints: at most max bytes,
+// past which it fails, and, when within is not zero, nothing after within, its session killed
+// then. The read runs on files that user writes, which make it as long, and last as long, as
+// that user chooses (a FIFO where a state file goes, say): every answer the deploy user waits
+// on from such a read comes through here.
+func doorAnswer(c *exec.Cmd, max int, within time.Duration) ([]byte, error) {
+	out := capBuffer{max: max}
+	c.Stdout = &out
+	// A child of the read's that keeps its output open ends Wait a second after the read.
+	c.WaitDelay = time.Second
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	if within > 0 {
+		t := time.AfterFunc(within, func() { _ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL) })
+		defer t.Stop()
+	}
+	if err := c.Wait(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
 // realDocker is the docker on PATH that is not this binary.
 func realDocker() string {
 	self, _ := os.Executable()

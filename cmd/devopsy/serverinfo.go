@@ -173,7 +173,9 @@ func serverFacts() (remote.ServerInfo, error) {
 		}
 	}
 	info.Containers = hostContainers()
-	info.Environments = environments(info.Root, doorTrees(info.Root), treeEnvironments)
+	info.Environments = environments(info.Root, doorTrees(info.Root), func(who, tree string) []remote.Environment {
+		return treeEnvironments(who, tree, doorTreeWait)
+	})
 	return info, nil
 }
 
@@ -612,12 +614,15 @@ func doorTrees(root string) map[string]string {
 	return trees
 }
 
+// doorTreeWait is how long --server-info waits for a project user's read of its tree.
+const doorTreeWait = 30 * time.Second
+
 // treeEnvironments are a project user's environments as that user reads them (--door-read
-// environments), none when it cannot: only those whose path is the tree's project and names
-// devopsy gives (envPathIn), since that user writes what the read answers, and an admin's
-// --server-info offers commands with them.
-func treeEnvironments(who, tree string) []remote.Environment {
-	out, err := doorRead(who, "environments", tree).Output()
+// environments), none when it cannot, or does not answer within (doorAnswer): only those
+// whose path is the tree's project and names devopsy gives (envPathIn), since that user
+// writes what the read answers, and an admin's --server-info offers commands with them.
+func treeEnvironments(who, tree string, within time.Duration) []remote.Environment {
+	out, err := doorAnswer(doorRead(who, "environments", tree), maxEnvironments, within)
 	if err != nil {
 		return nil
 	}

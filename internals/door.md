@@ -19,6 +19,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A read as a project user (`--door-read`) starts through `doorRead` alone, in a session of its own: its process is that user's to trace, and in the caller's session it would hold the caller's terminal (an admin's, under `--server-info`) to read and type into.
 - The deploy user never reads a project's tree: what it needs comes from `--door-read`, run as that project's user, so no link or swap there can show it anything of the deploy user's.
 - A project user's answer about a path is believed only for a path whose every part is the deploy user's (`Paths.Real`).
+- Every answer the deploy user takes from a read as a project user goes through `doorAnswer`: a cap on its size, and where the deploy user waits outside that user's own request (`--server-info`'s read of its tree, `doorTreeWait`) a deadline, the read's session killed then: that user's files make the read as large and as slow as it likes (a FIFO where a state file goes).
 - Compose runs on a file the project user rendered, never on the project's own: compose reads `env_file` and `extends` and runs `provider` as whoever runs it.
 - A whole project's `down` (`--destroy`, `--reset`) runs by its name alone, which `OwnName` checks, with no file: compose finds what it holds by its own label, an older release's included.
 - A rendered file and each verb's flags are checked deny by default (`CheckFile`, `CheckVerb`), so a key compose adds later fails closed.
