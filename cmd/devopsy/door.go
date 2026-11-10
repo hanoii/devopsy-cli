@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -186,8 +187,10 @@ type doorSide struct {
 	real   string
 	env    []string
 	vets   []remote.DoorVet
-	// made are this request's work directories, so that a refusal leaves none behind.
-	made []string
+	// made are this request's work directories, so that a refusal, or a claim cut by a
+	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
+	made   []string
+	madeMu sync.Mutex
 	// keysAt is the project user's keys file as the request found it: a sync key is added
 	// only while it is still that file (syncKey).
 	keysAt os.FileInfo
@@ -522,7 +525,9 @@ func (s *doorSide) workDir(perms string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.madeMu.Lock()
 	s.made = append(s.made, d)
+	s.madeMu.Unlock()
 	if perms == "" {
 		return d, nil
 	}
@@ -605,8 +610,8 @@ var errNoRead = errors.New("its registry logins do not read it")
 // its digest. A claim copies and pins that digest, never an index's: imagetools' copy and
 // Docker's load could each choose from an index by rules of their own, and one index could
 // send each to another image.
-func (s *doorSide) platformManifest(ref, logins string) (string, error) {
-	raw, err := s.registryRead(logins)
+func (s *doorSide) platformManifest(g *claimCut, ref, logins string) (string, error) {
+	raw, err := s.registryRead(g, logins)
 	if err != nil {
 		return "", err
 	}
@@ -622,6 +627,11 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A ref by digest, an index's as a manifest's, is those bytes or nothing: an index not
+	// checked would name any entry its registry chose.
+	if _, digest, ok := strings.Cut(ref, "@"); ok && digestOf(data) != digest {
+		return "", fmt.Errorf("its registry served other bytes than %s", digest)
+	}
 	var m manifest
 	if json.Unmarshal(data, &m) != nil {
 		return "", errNoRead
@@ -629,9 +639,6 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 	if len(m.Manifests) == 0 {
 		if m.Config == nil {
 			return "", errors.New("its registry serves no image manifest for it")
-		}
-		if _, digest, ok := strings.Cut(ref, "@"); ok && digestOf(data) != digest {
-			return "", fmt.Errorf("its registry served other bytes than %s", digest)
 		}
 		return digestOf(data), nil
 	}
@@ -665,8 +672,10 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 // them to the builders; a CA from the host's store), under the door's group, which the
 // firewall keeps off the host's loopback and the metadata services (remote.DoorRunGroup), as a
 // registry the project user names answers as it likes (a redirect, a token's realm). A
-// registry's refusal is errNoRead, what it said on stderr, as a refused pull's.
-func (s *doorSide) registryRead(logins string) (func(ref string) ([]byte, error), error) {
+// registry's refusal is errNoRead, what it said on stderr, as a refused pull's. Each read is
+// the claim's child (g), bounded in size and time: a registry that answers and then says
+// nothing would hold the door.
+func (s *doorSide) registryRead(g *claimCut, logins string) (func(ref string) ([]byte, error), error) {
 	b, err := s.builder()
 	if err != nil {
 		return nil, errors.New(strings.TrimPrefix(err.Error(), "refused: "))
@@ -675,13 +684,14 @@ func (s *doorSide) registryRead(logins string) (func(ref string) ([]byte, error)
 		var said bytes.Buffer
 		c := s.docker("buildx", "imagetools", "inspect", "--raw", ref)
 		c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
-		c.Stderr = &said
-		data, err := doorAnswer(c, maxManifest, doorReadWait)
-		if err != nil {
+		out := capBuffer{max: maxManifest}
+		c.Stdout, c.Stderr = &out, &said
+		c.WaitDelay = time.Second
+		if err := g.runWithin(c, doorReadWait); err != nil {
 			os.Stderr.Write(said.Bytes())
 			return nil, errNoRead
 		}
-		return data, nil
+		return out.Bytes(), nil
 	}, nil
 }
 
@@ -1426,8 +1436,8 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 // deploy user's build of a registry's name), so it goes pinned, <image>@<digest>
 // (images.Pin): an image of this project's (claimed by its id, or named by a hold of its
 // own) by its digest in the image's repository, as the devopsy.digest label chooses it,
-// read in one inspect; else claimed first, by the digest its pull got. A reference by
-// digest, or an id, is a pin already. An image not here yet is claimed too, with this
+// read in one inspect; else claimed first, by the digest its claim loaded, a reference by an
+// index's digest included. A reference by digest the project has, or an id, is a pin already. An image not here yet is claimed too, with this
 // project's logins, and one still missing refuses the start: compose would pull or build it
 // after this check.
 func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
@@ -1453,6 +1463,9 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 		if digest, img, err = s.claim(image, config); err != nil {
 			return "", nil, fmt.Errorf("%s: %w", svc, err)
 		}
+		// A pin by an index's digest goes by the entry the claim checked and loaded for the
+		// daemon's platform: no image here goes by the index's.
+		image, _, _ = strings.Cut(image, "@")
 	}
 	return images.Pin(image, digest), img.Labels, nil
 }

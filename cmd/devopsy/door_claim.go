@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/klauspost/compress/zstd"
@@ -44,7 +45,9 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 		return "", images.Image{}, err
 	}
 	refused := fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
-	m, err := s.platformManifest(ref, d)
+	g := s.claimCut()
+	defer g.end()
+	m, err := s.platformManifest(g, ref, d)
 	if err != nil {
 		if err == errNoRead {
 			return "", images.Image{}, registryFailure{refused}
@@ -64,8 +67,6 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if s.onFetch != nil {
 		s.onFetch()
 	}
-	g := s.claimCut()
-	defer g.end()
 	if loaded, err := s.fetch(g, pinned, m, d); err != nil {
 		// A load that failed may have left the name: no later claim skips onto it. Nothing
 		// before the load touched the store, so a failed copy leaves the record as it was.
@@ -131,11 +132,12 @@ func (s *doorSide) fetch(g *claimCut, pinned, m, logins string) (bool, error) {
 	return true, s.loadImage(g.run, pinned, m, manifest, layout, blobs)
 }
 
-// claimCut is what a claim has running and on disk while it copies and loads: its work
+// claimCut is what a claim has running and on disk while it reads, copies and loads: its work
 // directories, which go when it ends (claimCut.end), on a failure too, and the one child it
 // runs at a time. A SIGINT, SIGTERM or SIGHUP meanwhile stops that child's process group (the
 // docker CLI and the plugin it runs, buildx, which a signal to the door alone never reaches),
-// starts no other, removes the work directories and ends the door with the signal's exit: a
+// starts no other, removes the request's work directories, the claim's among them, and ends
+// the door with the signal's exit: a
 // release cancelled mid-fetch would otherwise leave the whole image in <space>/work for a day.
 type claimCut struct {
 	s     *doorSide
@@ -159,7 +161,9 @@ func (s *doorSide) claimCut() *claimCut {
 			if g.child != nil && g.child.Process != nil {
 				_ = syscall.Kill(-g.child.Process.Pid, syscall.SIGKILL)
 			}
-			for _, d := range g.work {
+			// The claim's work directories and the rest of the request's.
+			s.madeMu.Lock()
+			for _, d := range s.made {
 				s.removeWork(d)
 			}
 			os.Exit(128 + int(sig.(syscall.Signal)))
@@ -169,20 +173,24 @@ func (s *doorSide) claimCut() *claimCut {
 	return g
 }
 
-// workDir is a work directory of the door's (workDir) that goes with the claim.
+// workDir is a work directory of the door's (workDir) that goes with the claim, made under the
+// claim's lock, so a signal finds it recorded once it is there.
 func (g *claimCut) workDir() (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	d, err := g.s.workDir("")
 	if err == nil {
-		g.mu.Lock()
 		g.work = append(g.work, d)
-		g.mu.Unlock()
 	}
 	return d, err
 }
 
 // run runs c in a process group of its own, which a signal stops whole, or not at all once a
 // signal came.
-func (g *claimCut) run(c *exec.Cmd) error {
+func (g *claimCut) run(c *exec.Cmd) error { return g.runWithin(c, 0) }
+
+// runWithin is run, its process group killed once within passed (none when 0).
+func (g *claimCut) runWithin(c *exec.Cmd, within time.Duration) error {
 	g.mu.Lock()
 	if g.cut {
 		g.mu.Unlock()
@@ -195,6 +203,10 @@ func (g *claimCut) run(c *exec.Cmd) error {
 	}
 	g.child = c
 	g.mu.Unlock()
+	if within > 0 {
+		t := time.AfterFunc(within, func() { _ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL) })
+		defer t.Stop()
+	}
 	err := c.Wait()
 	g.mu.Lock()
 	g.child = nil
@@ -308,6 +320,9 @@ func layerContent(r io.Reader, compressed bool) (string, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// anySize is the size checkLayout takes for a blob whose size no descriptor of the layout says.
+const anySize = -1 << 62
+
 // maxConfig is what the door reads at most of an image's config, which it holds whole.
 const maxConfig = 16 << 20
 
@@ -340,16 +355,20 @@ func checkLayout(dir, m string) ([]string, string, error) {
 		return nil, "", fmt.Errorf("the copy of its registry's image names no manifest %s", m)
 	}
 	// blob checks one blob, hashed as it streams (a layer may be larger than the door's
-	// memory): its size the manifest's (any up to max when size is below 0), its bytes given
-	// when max is above 0 (the manifest's, the config's), and for a layer (unpack) the sha256
-	// of its content as containerd unpacks it (layerContent), in the same read.
+	// memory): its size the manifest's (any up to max for the manifest's own, whose size is
+	// the index's to say, anySize), its bytes given when max is above 0 (the manifest's, the
+	// config's), and for a layer (unpack) the sha256 of its content as containerd unpacks it
+	// (layerContent), in the same read. A size below 0 is no descriptor's.
 	blob := func(digest string, size, max int64, unpack layerRead) ([]byte, string, error) {
 		if !ociDigest.MatchString(digest) {
 			return nil, "", fmt.Errorf("a blob of no sha256: %q", digest)
 		}
+		if size < 0 && size != anySize {
+			return nil, "", fmt.Errorf("the blob %s has a size below 0", digest)
+		}
 		path := filepath.Join(dir, "blobs", "sha256", strings.TrimPrefix(digest, "sha256:"))
 		fi, err := os.Lstat(path)
-		if err != nil || !fi.Mode().IsRegular() || size >= 0 && fi.Size() != size || max > 0 && fi.Size() > max {
+		if err != nil || !fi.Mode().IsRegular() || size != anySize && fi.Size() != size || max > 0 && fi.Size() > max {
 			return nil, "", fmt.Errorf("the copy of its registry's image lacks the blob %s", digest)
 		}
 		f, err := os.Open(path)
@@ -379,7 +398,7 @@ func checkLayout(dir, m string) ([]string, string, error) {
 		}
 		return kept.Bytes(), content, nil
 	}
-	data, _, err = blob(m, -1, maxManifest, notALayer)
+	data, _, err = blob(m, anySize, maxManifest, notALayer)
 	if err != nil {
 		return nil, "", err
 	}
@@ -404,24 +423,32 @@ func checkLayout(dir, m string) ([]string, string, error) {
 		return nil, "", fmt.Errorf("%s names %d layers and its config %d", m, len(manifest.Layers), len(image.RootFS.DiffIDs))
 	}
 	blobs := []string{m, manifest.Config.Digest}
-	contents := map[string]string{}
+	// A blob named twice is read as each kind it is named (containerd reads each position by
+	// its own media type), once each.
+	type read struct {
+		digest string
+		as     layerRead
+	}
+	contents := map[read]string{}
 	for i, l := range manifest.Layers {
 		compressed, ok := layerKinds[l.MediaType]
 		if !ok {
 			return nil, "", fmt.Errorf("the layer %s is of a kind the door does not take: %q", l.Digest, l.MediaType)
 		}
-		content, seen := contents[l.Digest]
+		key := read{l.Digest, plainLayer}
+		if compressed {
+			key.as = compressedLayer
+		}
+		content, seen := contents[key]
 		if !seen {
-			read := plainLayer
-			if compressed {
-				read = compressedLayer
-			}
 			var err error
-			if _, content, err = blob(l.Digest, l.Size, 0, read); err != nil {
+			if _, content, err = blob(l.Digest, l.Size, 0, key.as); err != nil {
 				return nil, "", err
 			}
-			contents[l.Digest] = content
-			blobs = append(blobs, l.Digest)
+			contents[key] = content
+			if !slices.Contains(blobs, l.Digest) {
+				blobs = append(blobs, l.Digest)
+			}
 		}
 		if content != image.RootFS.DiffIDs[i] {
 			return nil, "", fmt.Errorf("the layer %s is not the content its config names (%s): it unpacks to %s", l.Digest, image.RootFS.DiffIDs[i], content)

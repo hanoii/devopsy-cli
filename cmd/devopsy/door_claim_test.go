@@ -209,8 +209,8 @@ func TestDoorClaimThatDoesNotLoadLeavesNothing(t *testing.T) {
 }
 
 // A door cut by a signal while it copies an image (a release cancelled mid-fetch)
-// stops what it runs and removes its work directories, which would otherwise hold the image
-// for a day, and ends with the signal's exit. In a helper process (doorComposeHelper), since
+// stops what it runs and removes its work directories, the request's others too, which would
+// otherwise hold the image for a day, and ends with the signal's exit. In a helper process (doorComposeHelper), since
 // the door then exits.
 func TestDoorClaimCutBySignalLeavesNoWork(t *testing.T) {
 	t.Parallel()
@@ -221,7 +221,7 @@ func TestDoorClaimCutBySignalLeavesNoWork(t *testing.T) {
 		fakeManifest(t, dir, plainManifest("private"), private+":1")
 		write(t, filepath.Join(dir, slow), "", 0o644)
 		c := exec.Command(os.Args[0], "-test.run", "^$")
-		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_REQUEST=tag "+private+":1 busybox:devopsy-shop-prod-20260101000000")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_WORK=1", "DEVOPSY_TEST_DOOR_REQUEST=tag "+private+":1 busybox:devopsy-shop-prod-20260101000000")
 		if err := c.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -234,8 +234,8 @@ func TestDoorClaimCutBySignalLeavesNoWork(t *testing.T) {
 				t.Fatalf("%s: never started:\n%s", slow, readString(filepath.Join(dir, "calls")))
 			}
 		}
-		if work, _ := os.ReadDir(filepath.Join(dir, "space", "work")); len(work) == 0 {
-			t.Fatalf("%s: no work directory to remove", slow)
+		if work, _ := os.ReadDir(filepath.Join(dir, "space", "work")); len(work) < 2 {
+			t.Fatalf("%s: not the request's work directory and the claim's to remove: %v", slow, work)
 		}
 		if err := c.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatal(err)
@@ -442,5 +442,29 @@ func TestCheckLayoutTakesOnlyTheContentItsConfigNames(t *testing.T) {
 	write(t, filepath.Join(dir, "index.json"), `{"schemaVersion":2,"manifests":[{"digest":"`+m+`"}]}`, 0o644)
 	if _, _, err := checkLayout(dir, m); err == nil || !strings.Contains(err.Error(), "names 2 layers and its config 1") {
 		t.Errorf("more layers than its config names: %v", err)
+	}
+}
+
+// A claim's read of a registry ends at its time, what it ran (the docker CLI and the plugin it
+// runs) killed whole: a registry that answers and then says nothing would hold the door, and
+// the release, for good.
+func TestDoorClaimReadEndsAtItsTime(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}}
+	g := side.claimCut()
+	defer g.end()
+	c := exec.Command("sh", "-c", "sleep 30 & echo $! >"+filepath.Join(dir, "child")+"; wait")
+	start := time.Now()
+	if err := g.runWithin(c, 200*time.Millisecond); err == nil || time.Since(start) > 5*time.Second {
+		t.Errorf("a read bounded to 200ms ended after %s (%v)", time.Since(start).Round(100*time.Millisecond), err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(dir, "child"))))
+	for deadline := time.Now().Add(10 * time.Second); pid > 0 && syscall.Kill(pid, 0) == nil; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("the read's child (%d) outlived its time", pid)
+			break
+		}
 	}
 }

@@ -100,6 +100,12 @@ func doorAnswer(c *exec.Cmd, max int, within time.Duration) ([]byte, error) {
 	c.Stdout = &out
 	// A child of the read's that keeps its output open ends Wait a second after the read.
 	c.WaitDelay = time.Second
+	// The time's kill goes to a process group, the read's own: a read with no session of its
+	// own (doorRead's sudo has one) gets a group of its own, as a registry's read through the
+	// docker CLI and its buildx plugin, which would otherwise be the door's, and no kill's.
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := c.Start(); err != nil {
 		return nil, err
 	}

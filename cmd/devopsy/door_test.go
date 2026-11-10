@@ -902,7 +902,11 @@ func doorImageFake(t *testing.T, dir string) string {
 all="$*"
 echo "$all" >>`+in("calls")+`
 for a; do ref=$a; done
-entry() { awk -F'|' -v r="$1" '$1==r' `+in("store")+` 2>/dev/null | head -1; }
+# Docker resolves repo:tag@digest by the digest alone, as repo@digest.
+entry() {
+  r=$1; case $r in *@*) n=${r%@*}; case ${n##*/} in *:*) r=${n%:*}@${r#*@} ;; esac ;; esac
+  awk -F'|' -v r="$1" -v s="$r" '$1==r || $1==s' `+in("store")+` 2>/dev/null | head -1
+}
 field() { printf '%s\n' "$1" | cut -d'|' -f"$2"; }
 tojson() { printf '['; first=1; for x in $1; do [ $first = 1 ] || printf ','; printf '"%s"' "$x"; first=0; done; printf ']'; }
 registry() { awk -F'|' -v r="$1" '$1==r{print $2}' `+in("registry")+` 2>/dev/null; }
@@ -1480,6 +1484,12 @@ func doorComposeHelper(dir string) {
 		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	// A work directory the request made before (TestDoorClaimCutBySignalLeavesNoWork).
+	if os.Getenv("DEVOPSY_TEST_DOOR_WORK") != "" {
+		if _, err := side.workDir(""); err != nil {
+			panic(err)
+		}
+	}
 	if req := os.Getenv("DEVOPSY_TEST_DOOR_REQUEST"); req != "" {
 		os.Exit(side.request(filepath.Join(dir, "none.json"), strings.Fields(req)))
 	}
