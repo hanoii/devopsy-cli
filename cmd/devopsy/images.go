@@ -335,6 +335,14 @@ func runImages(args []string, color bool) int {
 		if ran(rest[0], rest[1]) != nil {
 			return 1
 		}
+	case "fetch-file":
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		if err := s.WriteFetch(rest[0]); err != nil {
+			report.Error("could not write the fetch's compose file: " + err.Error())
+			return 1
+		}
 	case "undo":
 		if len(rest) != 1 {
 			return imagesUsage(color)
@@ -392,6 +400,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|check|record|restore|hold|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|check|fetch-file|record|restore|hold|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

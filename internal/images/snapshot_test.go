@@ -34,7 +34,9 @@ func TestSnapshotBookmarks(t *testing.T) {
 	if err := os.MkdirAll(snap, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	prod.e.set.Bookmark(snap)
+	if err := prod.e.set.BookmarkFrom(snap, prod.e.rel(r2)); err != nil {
+		t.Fatal(err)
+	}
 	if img, err := d.Inspect("app-prod-app:devopsy-app-prod-s" + r2); err != nil || img.ID != newer {
 		t.Fatalf("the snapshot's bookmark: %+v %v\n%s", img, err, out.String())
 	}

@@ -367,14 +367,35 @@ func (s *Set) ownInstead(o entry, h hold, what string) (entry, composeHold, erro
 // branch's, a pull request's), nor the id, which a build cannot tag. A
 // hold on another reference (a digest) stays as it is.
 func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeHold) {
+	byRef := map[string]string{}
+	listed := map[string]bool{}
 	for i, b := range bookmarks(es, s.Name, s.idOf(rel)) {
 		e := es[i]
+		listed[e.Service] = true
 		ch, ok := holds[e.Service]
 		if e.Service == "" || ok && !ch.bookmark || !ok && (e.Kind != KindOwn || e.ID == "") {
 			continue
 		}
 		ch.Image, ch.bookmark = b, true
 		holds[e.Service] = ch
+		if !e.held() {
+			byRef[familiar(e.Ref)] = b
+		}
+	}
+	// A service under a profile (no entry: the listing is the default
+	// services') whose image: is exactly an own image's runs by its bookmark
+	// too: devopsy's builds write no project name it could run by.
+	if s.ListAll == nil || len(byRef) == 0 {
+		return
+	}
+	all, err := s.ListAll(rel)
+	if err != nil {
+		return
+	}
+	for _, svc := range all {
+		if b, ok := byRef[familiar(svc.Ref)]; ok && !listed[svc.Name] && !svc.Build {
+			holds[svc.Name] = composeHold{Image: b, bookmark: true}
+		}
 	}
 }
 

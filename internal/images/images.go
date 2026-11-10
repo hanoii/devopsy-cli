@@ -464,7 +464,7 @@ func writeFile(path, content string) error {
 // still found.
 func (s *Set) Bookmark(rel string) {
 	id := filepath.Base(rel)
-	es, err := s.entries(rel)
+	es, err := s.entries(rel, false)
 	if err != nil {
 		s.say(report.WarnLevel, "could not list the images of %s: a rollback to it builds or pulls them again", id)
 		return
@@ -476,18 +476,29 @@ func (s *Set) Bookmark(rel string) {
 
 // entries are the images a release runs now, one per service (List),
 // each as Docker has it under its name, own or pulled by the release's
-// own mode.
-func (s *Set) entries(rel string) ([]entry, error) {
+// own mode; one its fetch built (FetchFile) by its fetch tag, never the
+// project's name, which another environment's fetch may move meanwhile.
+// strict: a fetch tag missing fails (a record), else that entry has no
+// image (a failed fetch's bookmarks).
+func (s *Set) entries(rel string, strict bool) ([]entry, error) {
 	svcs, err := s.List(rel)
 	if err != nil {
 		return nil, err
 	}
 	mode := ModeOf(rel)
+	tags := fetchTags(rel)
 	es := make([]entry, 0, len(svcs))
 	s.built = map[string]bool{}
 	for _, svc := range svcs {
 		s.built[svc.Name] = svc.Build
-		es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
+		ref := digestRef(svc.Ref)
+		if t, ok := tags[svc.Name]; ok {
+			if _, err := s.Docker.ID(t); err != nil && strict {
+				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, t)
+			}
+			ref = t
+		}
+		es = append(es, s.entryOf(svc, ref, mode))
 	}
 	return es, nil
 }

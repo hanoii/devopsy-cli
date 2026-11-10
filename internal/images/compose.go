@@ -2,8 +2,10 @@ package images
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -68,9 +70,23 @@ func composeText(es []entry, holds map[string]composeHold) string {
 		if hold.Image != "" {
 			svcs.WriteString("    image: " + strconv.Quote(hold.Image) + "\n")
 		}
+		if hold.From != "" {
+			// Held: no build of the project's code lands on the image it is held
+			// on (an up --build, a build, pull_policy: build), nor a build tagged
+			// by a digest.
+			svcs.WriteString("    build: !reset null\n")
+		}
 		svcs.WriteString("    labels:\n      " + strconv.Quote(DigestLabel) + ": " + strconv.Quote(label) + "\n")
 		if hold.From != "" {
 			svcs.WriteString("      " + strconv.Quote(HeldLabel) + ": " + strconv.Quote(hold.From) + "\n")
+		}
+	}
+	// A service of no entry the file still names an image for: one under a
+	// profile sharing a build's (resolveBookmarks), by that build's bookmark.
+	for _, svc := range slices.Sorted(maps.Keys(holds)) {
+		if h := holds[svc]; !seen[svc] && h.Image != "" {
+			seen[svc] = true
+			svcs.WriteString("  " + strconv.Quote(svc) + ":\n    image: " + strconv.Quote(h.Image) + "\n")
 		}
 	}
 	if svcs.Len() == 0 {

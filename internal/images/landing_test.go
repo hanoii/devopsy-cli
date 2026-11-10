@@ -106,7 +106,7 @@ func TestRestartAsBuiltHoldOnParentsBuiltImage(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("the release that syncs at the parent's version: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r2])
+	dev.fetchID(r2)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -120,8 +120,8 @@ func TestRestartAsBuiltHoldOnParentsBuiltImage(t *testing.T) {
 	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 	dev.e.set.SyncData = ""
 	failed := dev.runs("database")
-	if id, err := d.ID("app-dev-database"); err == nil {
-		failed = id
+	if e, ok := match(readList(rel), entry{Service: "database"}); ok && e.ID != "" {
+		failed = e.ID // its own build, as its record has it
 	}
 	// The restart, as get_images runs it: --restart refuses the hold (the
 	// parent's image is not here), then --as-built holds all the same.
@@ -251,7 +251,7 @@ func TestRestartImageModeHoldsByDigest(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("the release that syncs: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r2])
+	dev.fetchID(r2)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestRestartLastTryOwnByBookmark(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("the release that syncs: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r2])
+	dev.fetchID(r2)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -553,7 +553,7 @@ func TestRestartImageModeHoldOnParentsLocalBuild(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("the release that syncs: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r2])
+	dev.fetchID(r2)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -981,7 +981,7 @@ func TestDataLastResortIgnoresStaleForced(t *testing.T) {
 	}
 	d.publish("mariadb:12.1", "J1")
 	r2 := m.e.release(dbSvc("mariadb:12.1"))
-	m.fetch(m.e.svcs[r2])
+	m.fetchID(r2)
 	if err := m.e.set.Record(m.e.rel(r2), m.e.rel(r1)); err != nil {
 		m.fail("record: %v", err)
 	}
@@ -1147,7 +1147,7 @@ func TestAllowedHereSkipsAFailedFetch(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r3])
+	dev.fetchID(r3)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1204,7 +1204,7 @@ func TestAsBuiltHoldOverRunsItsOwnBuild(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r3])
+	dev.fetchID(r3)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1308,7 +1308,7 @@ func syncedAndFailed(t *testing.T, out *bytes.Buffer) (dev *sim, d *fakeDocker, 
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[failed])
+	dev.fetchID(failed)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1352,7 +1352,8 @@ func TestAsBuiltDigestInBuiltRepository(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	dev, d, r1, failed := syncedAndFailed(t, &out)
-	gone, _ := d.ID("app-dev-database")
+	e, _ := match(readList(dev.e.rel(failed)), entry{Service: "database"})
+	gone := e.ID // the failed release's own build
 	for n, id := range d.names {
 		if id == gone {
 			delete(d.names, n)
@@ -1448,7 +1449,7 @@ func heldThenOver(t *testing.T, out *bytes.Buffer) (dev *sim, r1, r3, own string
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r3])
+	dev.fetchID(r3)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1514,6 +1515,7 @@ func TestAsBuiltHoldOverSameImage(t *testing.T) {
 	if err := dev.e.set.Check(dev.e.rel(r2)); err != nil {
 		dev.fail("check: %v", err)
 	}
+	dev.fetchCached(r2, map[string]string{"database": own})
 	if err := dev.e.set.Record(dev.e.rel(r2), dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1532,7 +1534,7 @@ func TestAsBuiltHoldOverSameImage(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r3])
+	dev.fetchID(r3)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1581,7 +1583,7 @@ func TestHoldOnParentsNameFollowsItsNextBuild(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[failed])
+	dev.fetchID(failed)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1714,7 +1716,7 @@ func heldByBookmark(t *testing.T, out *bytes.Buffer) (dev *sim, d *fakeDocker, r
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("check: %v", err)
 	}
-	dev.fetch(dev.e.svcs[failed])
+	dev.fetchID(failed)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -1755,7 +1757,7 @@ func TestBookmarkHoldFailedFetchRetagsPulledName(t *testing.T) {
 	}
 	d.publish("mariadb:13", "M3")
 	id := dev.e.release(dbAt("mariadb:13", "13"))
-	dev.fetch(dev.e.svcs[id])
+	dev.fetchID(id)
 	dev.e.set.Undo(dev.e.rel(id), false)
 	os.WriteFile(filepath.Join(dev.e.rel(id), failedFile), nil, 0o644)
 	if got := d.names[familiar("mariadb:11.8")]; got != "M1" {
@@ -1917,7 +1919,7 @@ func TestDataHoldOutlivesAFailedFetch(t *testing.T) {
 		m.fail("setup: the hold is %v, %v", imgs, marks)
 	}
 	r3 := m.e.release(builtDB("app-prod", "11.8"))
-	m.fetch(m.e.svcs[r3])
+	m.fetchID(r3)
 	if got, _ := d.ID("app-prod-database"); got == held {
 		m.fail("setup: the fetch built nothing new")
 	}
@@ -1938,7 +1940,7 @@ func TestDataLastResortHoldsABuiltImage(t *testing.T) {
 	m := newSim(t, d, "app-prod", &out)
 	r1, _ := m.release(false, builtDB("app-prod", "11.8"))
 	r2 := m.e.release(builtDB("app-prod", "12.1"))
-	m.fetch(m.e.svcs[r2])
+	m.fetchID(r2)
 	if err := m.e.set.Record(m.e.rel(r2), m.e.rel(r1)); err != nil {
 		m.fail("record: %v", err)
 	}
@@ -1964,7 +1966,7 @@ func TestDataLastResortHoldsABuiltImage(t *testing.T) {
 	stage := newSim(t, d, "app-stage", &out)
 	s1, _ := stage.release(false, builtDB("app-stage", "11.8"))
 	s2 := stage.e.release(builtDB("app-stage", "12.1"))
-	stage.fetch(stage.e.svcs[s2])
+	stage.fetchID(s2)
 	if err := stage.e.set.Record(stage.e.rel(s2), stage.e.rel(s1)); err != nil {
 		stage.fail("record: %v", err)
 	}

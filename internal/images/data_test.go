@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +70,62 @@ func (m *sim) fetch(svcs []Service) {
 	}
 }
 
+// fetchID is release id's fetch as an activation runs it: its fetch file
+// written first (WriteFetch), each build landing under the fetch tag it
+// names, a service sharing a build's image given that build's, then
+// what is pulled pulled.
+func (m *sim) fetchID(id string) {
+	rel := m.e.rel(id)
+	if err := m.e.set.WriteFetch(rel); err != nil {
+		m.t.Fatalf("fetch file %s: %v", id, err)
+	}
+	tags := fetchTags(rel)
+	svcs := m.e.svcs[id]
+	for _, svc := range svcs {
+		if t := tags[svc.Name]; t != "" && svc.Build {
+			m.n++
+			m.d.pull(t, fmt.Sprintf("%s-build-%d", m.e.set.Name, m.n))
+		}
+	}
+	for _, svc := range svcs {
+		switch t := tags[svc.Name]; {
+		case t != "" && svc.Build:
+		case t != "":
+		case svc.own(m.e.mode):
+			m.n++
+			m.d.pull(svc.Ref, fmt.Sprintf("%s-build-%d", m.e.set.Name, m.n))
+		default:
+			if err := m.d.Pull(svc.Ref); err != nil {
+				m.t.Fatalf("fetch %s: %v", svc.Ref, err)
+			}
+		}
+		if m.fetched != nil {
+			ref := svc.Ref
+			if t := tags[svc.Name]; t != "" {
+				ref = t
+			}
+			m.fetched(svc, m.d.names[familiar(ref)])
+		}
+	}
+}
+
+// fetchCached is release id's fetch of a build the cache gave back
+// unchanged: each fetch tag on the image the service had (ids), nothing
+// built anew.
+func (m *sim) fetchCached(id string, ids map[string]string) {
+	rel := m.e.rel(id)
+	if err := m.e.set.WriteFetch(rel); err != nil {
+		m.t.Fatalf("fetch file %s: %v", id, err)
+	}
+	for svc, t := range fetchTags(rel) {
+		if img := ids[svc]; img != "" {
+			if err := m.d.Tag(img, t); err != nil {
+				m.t.Fatal(err)
+			}
+		}
+	}
+}
+
 // release checks, fetches, records and, unless refused, goes live and
 // runs: what an activation does.
 func (m *sim) release(yes bool, svcs ...Service) (string, error) {
@@ -82,7 +140,7 @@ func (m *sim) release(yes bool, svcs ...Service) (string, error) {
 		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 		return id, err
 	}
-	m.fetch(svcs)
+	m.fetchID(id)
 	if err := m.e.set.Record(rel, m.prev()); err != nil {
 		m.e.set.Undo(rel, false)
 		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
@@ -137,7 +195,7 @@ func (m *sim) rollback(target string, yes bool) error {
 	defer func() { m.e.set.Accept = nil }()
 	err := m.e.set.Restore(m.e.rel(target), m.prev(), false)
 	if errors.Is(err, ErrGone) {
-		m.fetch(m.e.svcs[target])
+		m.fetchID(target)
 		err = m.e.set.Restore(m.e.rel(target), m.prev(), true)
 	}
 	if err != nil {
@@ -166,7 +224,7 @@ func (m *sim) failRun(accept bool, svcs ...Service) (string, error) {
 		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 		return id, err
 	}
-	m.fetch(svcs)
+	m.fetchID(id)
 	if err := m.e.set.Record(rel, m.prev()); err != nil {
 		m.t.Fatal(err)
 	}
@@ -195,7 +253,7 @@ func (m *sim) failEarly(accept, gone bool, svcs ...Service) (string, bool, error
 		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 		return id, false, err
 	}
-	m.fetch(svcs)
+	m.fetchID(id)
 	if err := m.e.set.Record(rel, m.prev()); err != nil {
 		m.t.Fatal(err)
 	}
@@ -231,7 +289,7 @@ func (m *sim) restart(prev, failed string) {
 	defer func() { m.e.set.Restart, m.e.set.AsBuilt = false, false }()
 	err := m.e.set.Restore(m.e.rel(prev), m.e.rel(failed), false)
 	if errors.Is(err, ErrGone) {
-		m.fetch(m.e.svcs[prev])
+		m.fetchID(prev)
 		err = m.e.set.Restore(m.e.rel(prev), m.e.rel(failed), true)
 	}
 	if err != nil {
@@ -279,7 +337,7 @@ func (m *sim) fullRestore(dir string, svcs []Service) (string, error) {
 	defer func() { m.e.set.NoCheck = false }()
 	err := m.e.set.Restore(rel, m.prev(), false)
 	if errors.Is(err, ErrGone) {
-		m.fetch(svcs)
+		m.fetchID(id)
 		err = m.e.set.Restore(rel, m.prev(), true)
 	}
 	if err != nil {
@@ -716,7 +774,7 @@ func TestDataReleaseSyncAcceptedRestart(t *testing.T) {
 	if err := dev.e.set.Check(rel); err != nil {
 		dev.fail("the accepted release that syncs: %v", err)
 	}
-	dev.fetch(dev.e.svcs[r2])
+	dev.fetchID(r2)
 	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
 		dev.fail("record: %v", err)
 	}
@@ -834,7 +892,7 @@ func TestDataRestartLastResort(t *testing.T) {
 	if err := m.e.set.Check(m.e.rel(r2)); err != nil {
 		m.fail("r2: %v", err)
 	}
-	m.fetch(m.e.svcs[r2])
+	m.fetchID(r2)
 	m.e.set.Record(m.e.rel(r2), m.prev())
 	m.cur = r2
 	m.up()
@@ -904,7 +962,7 @@ func TestDataLastResortKeepsMarks(t *testing.T) {
 	d.publish("mariadb:12.1", "J1")
 	r3 := m.e.release(dbSvc("mariadb:12.1"), search("9"))
 	m.e.set.Check(m.e.rel(r3))
-	m.fetch(m.e.svcs[r3])
+	m.fetchID(r3)
 	m.e.set.Record(m.e.rel(r3), m.prev())
 	m.cur = r3
 	m.up()
@@ -938,7 +996,7 @@ func TestDataLastResortUnholds(t *testing.T) {
 	if err := m.e.set.Check(m.e.rel(r3)); err != nil {
 		m.fail("r3: %v", err)
 	}
-	m.fetch(m.e.svcs[r3])
+	m.fetchID(r3)
 	m.e.set.Record(m.e.rel(r3), m.prev())
 	m.e.set.Accept = nil
 	m.cur = r3
@@ -1004,6 +1062,10 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	m.cur = r2
 	m.restart(r1, r2)
 	imgs, labels, held := composeFacts(m.e.rel(r1))
+	if text, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile)); !strings.Contains(string(text), "\"database\":\n    image: \""+imgs["database"]+"\"\n    build: !reset null\n") {
+		// Held: no build of the project's code lands on the image it is held on.
+		t.Errorf("the held database's build is not reset:\n%s", text)
+	}
 	if !isBookmark(imgs["database"]) || fileImage(d, m.e.rel(r1), "database", "") != failed.ID || labels["database"] != failed.ID || held["database"] != r2 || m.runs("database") != failed.ID {
 		t.Errorf("classic store: image %q, label %q, held %q, runs %s, want %s", imgs["database"], labels["database"], held["database"], m.runs("database"), failed.ID)
 	}
@@ -1040,7 +1102,7 @@ func TestDataRestartHoldsOnlyWhatRan(t *testing.T) {
 	d.publish("mariadb:12.1", "J1")
 	r2 := m.e.release(dbSvc("mariadb:12.1"))
 	m.e.set.Check(m.e.rel(r2))
-	m.fetch(m.e.svcs[r2])
+	m.fetchID(r2)
 	m.e.set.Record(m.e.rel(r2), m.prev())
 	m.cur = r2
 	m.e.set.Ran(m.base(), m.e.rel(r2)) // the old container: another label
@@ -1156,7 +1218,7 @@ func TestDataRan(t *testing.T) {
 	d.publish("mariadb:11.8", "I2")
 	id := m.e.release(dbAt("mariadb:11.8", "12"))
 	m.e.set.Check(m.e.rel(id))
-	m.fetch(m.e.svcs[id])
+	m.fetchID(id)
 	m.e.set.Record(m.e.rel(id), m.prev())
 	m.e.set.Ran(m.base(), m.e.rel(id))
 	if got := strings.Join(m.history("database"), " "); got != "ran:I1:11.8 ran:I1:11.9" {
@@ -1187,7 +1249,7 @@ func TestDataForcedKeptUntilItRuns(t *testing.T) {
 	if err := m.e.set.Check(rel); err != nil {
 		m.fail("--accept-image: %v", err)
 	}
-	m.fetch([]Service{db118})
+	m.fetchID(id)
 	if err := m.e.set.Record(rel, m.prev()); err != nil {
 		m.fail("--accept-image: %v", err)
 	}
@@ -1849,7 +1911,7 @@ func TestDataHoldNamesWhatRan(t *testing.T) {
 	r2, _ := m.release(false, dbSvc("mariadb:12.1"))
 	// A later release fetched the same image, and failed.
 	r3 := m.e.release(dbSvc("mariadb:12.1"))
-	m.fetch(m.e.svcs[r3])
+	m.fetchID(r3)
 	if err := m.e.set.Record(m.e.rel(r3), m.prev()); err != nil {
 		m.fail("record: %v", err)
 	}
@@ -2292,7 +2354,7 @@ func dataRandomMode(t *testing.T, seed int64, mode string) {
 		case 4: // a fetch failing: undone
 			id := m.e.release(svcs()...)
 			if m.e.set.Check(m.e.rel(id)) == nil {
-				m.fetch(m.e.svcs[id])
+				m.fetchID(id)
 			}
 			m.e.set.Undo(m.e.rel(id), false)
 			os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
@@ -2404,7 +2466,7 @@ func dataRandomMode(t *testing.T, seed int64, mode string) {
 				check(m.e.set.Name + " refused release that syncs " + id)
 				continue
 			}
-			m.fetch(ss)
+			m.fetchID(id)
 			if err := m.e.set.Record(rel, m.prev()); err != nil {
 				t.Fatalf("after %v: record %s: %v\n%s", log, id, err, out.String())
 			}
@@ -2698,7 +2760,7 @@ func TestBuiltImagesPinnedByID(t *testing.T) {
 	}
 	// What runs another image now came from outside the file (an override's image:, a
 	// container made by hand): no name moved under a service the file pins.
-	stageBuild, _ := d.ID("shop-web")
+	stageBuild := stage.runs("web")
 	for i, c := range d.containers {
 		if c.project == "app-prod" && c.service == "web" {
 			d.containers[i].image = stageBuild
@@ -2739,7 +2801,7 @@ func TestBuiltPinRollbackRunsOwnBuildUnderSharedName(t *testing.T) {
 			// Prod's next release goes live, and its run step fails after the stage's
 			// release built: restarted on r1.
 			failed = prod.e.release(web)
-			prod.fetch([]Service{web})
+			prod.fetchID(failed)
 			if err := prod.e.set.Record(prod.e.rel(failed), prod.prev()); err != nil {
 				t.Fatal(err)
 			}
@@ -2782,8 +2844,8 @@ func TestBuiltPinRecordsOwnBuildBesideAnotherFetch(t *testing.T) {
 	prod := newSim(t, d, "app-prod", &out)
 	stage := newSim(t, d, "app-stage", &out)
 	id := prod.e.release(web)
-	prod.fetch([]Service{web})
-	built, _ := d.ID("shop-web")
+	prod.fetchID(id)
+	built, _ := d.ID(fetchTags(prod.e.rel(id))["web"])
 	// The stage's fetch builds under the same name before prod's record.
 	stage.fetch([]Service{web})
 	if err := prod.e.set.Record(prod.e.rel(id), ""); err != nil {
@@ -2864,5 +2926,69 @@ func TestBuiltPinHoldUnderAnotherName(t *testing.T) {
 	if got := prod.runs("database"); got != held {
 		imgs, _, _ := composeFacts(prod.e.rel(r1))
 		t.Errorf("a plain up of prod runs its 12.1 data on %s, the stage's 12.4 build, not %s it is held on: its compose file holds it by image: %q", got, held, imgs["database"])
+	}
+}
+
+// Services sharing one build (web builds shop-app, worker runs the same image: with
+// pull_policy: never) run their release's bookmark of it, every profile's included, and
+// another environment building under the name changes neither: devopsy's builds write no
+// project name either could follow.
+func TestBuiltImageSharedByServices(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-app", Build: true}
+	worker := Service{Name: "worker", Ref: "shop-app", NeverPull: true}
+	tool := Service{Name: "tool", Ref: "shop-app", NeverPull: true}
+	prod := newSim(t, d, "app-prod", &out)
+	// tool is under a profile: every profile's list has it, the release's has not.
+	prod.e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(prod.e.svcs[filepath.Base(rel)]), tool), nil
+	}
+	stage := newSim(t, d, "app-stage", &out)
+	if _, err := prod.release(false, web, worker); err != nil {
+		t.Fatal(err)
+	}
+	own := prod.runs("web")
+	if prod.runs("worker") != own {
+		t.Fatalf("the worker runs %s, not web's build %s", prod.runs("worker"), own)
+	}
+	if _, err := stage.release(false, web, worker); err != nil {
+		t.Fatal(err)
+	}
+	prod.up()
+	rel := prod.e.rel(prod.cur)
+	for _, svc := range []string{"web", "worker", "tool"} {
+		if got := fileImage(d, rel, svc, "shop-app"); got != own {
+			imgs, _, _ := composeFacts(rel)
+			t.Errorf("%s runs %s (%q), not prod's build %s", svc, got, imgs[svc], own)
+		}
+	}
+	// What the fetch named goes once adopted: only bookmarks hold the build.
+	for n := range d.names {
+		if strings.Contains(n, ":devopsy-") && regexp.MustCompile(`-f[0-9a-z]+$`).MatchString(n) {
+			t.Errorf("a fetch tag outlived its fetch: %s", n)
+		}
+	}
+}
+
+// A record reads what its fetch built by the fetch's own tag alone: missing, it fails,
+// never reading the project's name, which another environment's fetch may hold.
+func TestRecordNeedsItsFetch(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-app", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	d.pull("shop-app", "theirs")
+	id := m.e.release(web)
+	if err := m.e.set.WriteFetch(m.e.rel(id)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.e.set.Record(m.e.rel(id), ""); err == nil || !errors.Is(err, errFetchedNone) {
+		t.Errorf("a record whose fetch built nothing: %v, %+v", err, readList(m.e.rel(id)))
+	}
+	if _, err := os.Stat(filepath.Join(m.e.rel(id), FetchFile)); err == nil {
+		t.Error("the fetch file outlived the record")
 	}
 }

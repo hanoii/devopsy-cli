@@ -100,9 +100,9 @@ case "$1 ${2:-}" in
   "--sync-services settle") cp "$FAKE_ROOT/images/app-prod-app:devopsy-app-prod-2" "$FAKE_ROOT/settled-on"; exit 0 ;;
 esac
 case "$*" in
-  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" > "$FAKE_ROOT/images/mariadb:11" ;;
-  "-- build --pull") echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
+  "-- build --pull") t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)

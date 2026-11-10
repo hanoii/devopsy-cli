@@ -209,7 +209,8 @@ func (s *Set) judgeRelease(rel string) ([]judged, error) {
 // starts its data's history over once it runs (ForcedFile, Ran), but for
 // a service a release that syncs copies, whose landing does that (Land).
 func (s *Set) Record(rel, prev string) error {
-	es, err := s.entries(rel)
+	defer s.dropFetch(rel)
+	es, err := s.entries(rel, true)
 	if err != nil {
 		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
 		return err

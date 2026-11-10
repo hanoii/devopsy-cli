@@ -884,7 +884,7 @@ exit 0
 	// inherited variables and its copy of the parent's server's levels
 	// are read, when they exist), to the run step; the record of what
 	// ran on the data after it (img ran) reads the listing, not compose.
-	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
+	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1321,7 +1321,7 @@ esac
 	// A fake that lists nothing (it prints no compose config) runs no
 	// services.
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$1\" in --images|"+WatchSessionFlag+") HOME=\"${FAKE_ROOT:-${HOME:-}}\" exec "+Quote(realDevopsy)+" \"$@\" ;; esac\n"+
-		`if [ "$*" = '-- config --format json' ]; then out=$("$(dirname "$0")/devopsy.fake" "$@") || exit; [ -n "$out" ] || out='{"services":{}}'; printf '%s\n' "$out"; exit; fi`+"\n"+
+		`if [ "$*" = '-- config --format json' ] || [ "$*" = '-- --profile * config --format json' ]; then out=$("$(dirname "$0")/devopsy.fake" "$@") || exit; [ -n "$out" ] || out='{"services":{}}'; printf '%s\n' "$out"; exit; fi`+"\n"+
 		"exec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
 	for _, f := range []string{"devopsy", "devopsy.fake", "docker", "flock", "mv"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
@@ -1398,7 +1398,7 @@ case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '%s' '` + cfgJSON("app-prod-app", "mariadb:11", "x@sha256:abc") + `' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '%s' '` + cfgJSON("app-prod-app", "mariadb:11", "x@sha256:abc") + `' ;;
   "-- --profile * pull --ignore-buildable" | "-- pull")
     [ "$*" = "-- pull" ] || [ -z "${FAIL_PROFILE_PULL:-}" ] || exit 1
     echo "$id${PULLED:-}" > "$FAKE_ROOT/images/mariadb:11"; echo x > "$FAKE_ROOT/images/x@sha256:abc" ;;
@@ -1408,7 +1408,7 @@ case "$*" in
       [ -z "${LOCK_AFTER:-}" ] || : >"$FAKE_ROOT/locked"
       exit "$FAIL_BUILD"
     fi
-    echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
+    t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
   --mnt-owners*) [ "$id" != "${FAIL_OWNERS:-}" ] || exit 5 ;;
   "--check-mounts restored restart") exit ${FAIL_RESTART_CHECK:-0} ;;
@@ -1453,7 +1453,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1484,7 +1484,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\n3: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	rel1 := filepath.Join(base, "releases", "1")
@@ -1519,7 +1519,7 @@ exit 0
 	}
 
 	// A rollback from 4 to 1 (2, 3 and 35 failed) restores 1's images.
-	if out, err := release("4"); err != nil || image(root, "app-prod-app") != "4" {
+	if out, err := release("4"); err != nil || releaseRuns(root, filepath.Join(base, "releases", "4"), "app", "app-prod-app") != "4" {
 		t.Fatalf("release 4 (%v):\n%s", err, out)
 	}
 	calls(root)
@@ -1613,7 +1613,7 @@ echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "--stdin-guard") exec cat ;;
-  "-- config --format json") printf '{"name":"app","services":{"app":{"image":"registry/app:%s"},"db":{"image":"mariadb:11"}}}' "$TAG" ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app","services":{"app":{"image":"registry/app:%s"},"db":{"image":"mariadb:11"}}}' "$TAG" ;;
   "-- pull") echo "$IMG" >"$FAKE_ROOT/images/registry_app:$TAG"; echo "$IMG" >"$FAKE_ROOT/images/mariadb:11" ;;
 esac
 exit 0
@@ -1836,7 +1836,7 @@ func TestActivateDataImages(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true","devopsy.data.version":"%s"}}}}' "$DB" "${DB#*:}" ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true","devopsy.data.version":"%s"}}}}' "$DB" "${DB#*:}" ;;
   "-- --profile * pull --ignore-buildable") echo "$IMG" >"$FAKE_ROOT/images/$DB" ;;
 esac
 exit 0
@@ -1914,7 +1914,7 @@ func TestSyncImagesNotInRunStep(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' ;;
   "-- --profile * pull --ignore-buildable") echo P1 >"$FAKE_ROOT/images/mariadb:11.8" ;;
   deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-} reset=${`+SyncResetEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
 esac
@@ -1955,7 +1955,7 @@ func TestBookmarksPerRef(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '%s' '`+cfgJSON("postgres:15", "postgres:16", "x@sha256:abc")+`' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("postgres:15", "postgres:16", "x@sha256:abc")+`' ;;
   "-- pull") echo "A$IMG" >"$FAKE_ROOT/images/postgres:15"; echo "B$IMG" >"$FAKE_ROOT/images/postgres:16"; echo "D$IMG" >"$FAKE_ROOT/images/x@sha256:abc" ;;
 esac
 exit 0
@@ -2008,7 +2008,7 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull")
     if [ -n "${FAKE_HANG:-}" ]; then touch "$FAKE_ROOT/building"; sleep 30; exit 1; fi
@@ -2016,7 +2016,7 @@ case "$*" in
       touch "$FAKE_ROOT/building"
       while [ ! -e "$FAKE_ROOT/dropped" ]; do sleep 0.05; done
     fi
-    echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
+    t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)
@@ -2196,7 +2196,7 @@ exit 0
 	if code := watched.ProcessState.ExitCode(); code != 130 || time.Since(start) > 10*time.Second || !exists("releases/5/"+FailedFile) || exists("releases/5/"+FetchingFile) {
 		t.Errorf("release 5 after its session ended: exit %d in %v, failed %v, fetching %v:\n%s", code, time.Since(start), exists("releases/5/"+FailedFile), exists("releases/5/"+FetchingFile), buf5.String())
 	}
-	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/4b/code" || fakeImage(root, "mariadb:11") != "5" || fakeImage(root, "app-prod-app") != "4b" {
+	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/4b/code" || fakeImage(root, "mariadb:11") != "5" || releaseRuns(root, filepath.Join(base, "releases", "4b"), "app", "app-prod-app") != "4b" {
 		t.Errorf("after release 5's cancel: current %q, mariadb:11 %q", l, fakeImage(root, "mariadb:11"))
 	}
 	// Nobody reads the session: the undo wrote to the release's server
@@ -2290,7 +2290,7 @@ func TestLeftoverImagesRecord(t *testing.T) {
 func TestRebookmark(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n[ \"$*\" = \"-- config --format json\" ] && printf '%s' \"$LISTING\"\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$*\" in \"-- config --format json\"|\"-- --profile * config --format json\") printf '%s' \"$LISTING\" ;; esac\nexit 0\n")
 	fakeImageTools(t, bin)
 	root := t.TempDir()
 	rel := filepath.Join(root, "app", "prod", "releases", "1")
@@ -2467,8 +2467,8 @@ func TestAfterSwitchSurvives(t *testing.T) {
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
-  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
-  "-- build --pull") id=$(pwd -P); id=${id%/code}; echo "${id##*/}" >"$FAKE_ROOT/images/app-prod-app" ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
+  "-- build --pull") id=$(pwd -P); id=${id%/code}; t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "${id##*/}" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   deploy)
     if [ -n "${FAKE_WAIT:-}" ]; then
       touch "$FAKE_ROOT/running"
@@ -2603,7 +2603,7 @@ func TestActivateGoneAndNeighbours(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   fail) exit 3 ;;
-  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
 esac
 exit 0
 `)
@@ -2998,18 +2998,18 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json")
+  "-- config --format json"|"-- --profile * config --format json")
     # Release 1's database at 11.8, the others' at 12.1.
     v=12.1; [ "$id" != 1 ] || v=11.8
     printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"%s"}}}}' "$v" ;;
   "-- --profile * pull --ignore-buildable")
     # devopsy merges the release's own compose file, unless told not to.
-    if [ -z "${DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE:-}" ] && [ -n "${GONE:-}" ] && grep -q "image: \"mariadb@$GONE\"" ../devopsy-compose.yaml 2>/dev/null; then
+    if [ -z "${DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE:-}" ] && [ -z "${DEVOPSY_INTERNAL_FETCH_COMPOSE:-}" ] && [ -n "${GONE:-}" ] && grep -q "image: \"mariadb@$GONE\"" ../devopsy-compose.yaml 2>/dev/null; then
       echo "pulling mariadb@$GONE: manifest unknown" >&2
       exit 1
     fi
     echo "$IMG" >"$FAKE_ROOT/images/mariadb:11.8" ;;
-  "-- build --pull") echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
+  "-- build --pull") t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   # LOCK_ON_FAIL: a failing run step leaves the image lock held by
   # another (the restart's get_images waits for it in vain).
   deploy) [ -z "${FAIL_RUN:-}" ] || [ -z "${LOCK_ON_FAIL:-}" ] || : >"$FAKE_ROOT/locked"; exit ${FAIL_RUN:-0} ;;
@@ -3198,11 +3198,11 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json")
+  "-- config --format json"|"-- --profile * config --format json")
     if [ -n "${FAKE_SLOW_LIST:-}" ] && [ "$id" = 2 ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
     printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
-  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
+  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)
@@ -3349,9 +3349,9 @@ id=$(pwd -P); id=${id%/code}; id=${id##*/}
 echo "$id: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."},"image":"registry/app:prod"}}}' ;;
+  "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."},"image":"registry/app:prod"}}}' ;;
   "-- pull") echo "pulled-$id" >"$FAKE_ROOT/images/registry_app:prod" ;;
-  "-- build --pull") echo "built-$id" >"$FAKE_ROOT/images/registry_app:prod" ;;
+  "-- build --pull") t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "built-$id" >"$FAKE_ROOT/images/${t:-registry_app:prod}" ;;
 esac
 exit 0
 `)
@@ -3411,8 +3411,8 @@ exit 0
 	root = t.TempDir()
 	release(root, build, "1", ModeBuild)
 	release(root, build, "2", ModeBuild)
-	if fakeImage(root, "registry/app:prod") != "built-2" || kind(root, "1") != images.KindOwn {
-		t.Fatalf("build-mode releases: registry/app:prod %q, release 1's app %q", fakeImage(root, "registry/app:prod"), kind(root, "1"))
+	if got := releaseRuns(root, filepath.Join(root, "app", "prod", "releases", "2"), "app", "registry/app:prod"); got != "built-2" || kind(root, "1") != images.KindOwn {
+		t.Fatalf("build-mode releases: release 2 runs app on %q, release 1's app %q", got, kind(root, "1"))
 	}
 	calls(root)
 	if out, err := run(root, image, "", true); err != nil {
@@ -3438,8 +3438,8 @@ exit 0
 	if got := calls(root); !strings.Contains(got, "1: -- build --pull\n") || strings.Contains(got, "1: -- pull\n") {
 		t.Errorf("the gone image's fetch, want build mode's:\n%s", got)
 	}
-	if got := fakeImage(root, "registry/app:prod"); got != "built-1" {
-		t.Errorf("after it registry/app:prod is %q, want built-1", got)
+	if got := releaseRuns(root, filepath.Join(root, "app", "prod", "releases", "1"), "app", "registry/app:prod"); got != "built-1" {
+		t.Errorf("after it release 1 runs app on %q, want built-1", got)
 	}
 }
 

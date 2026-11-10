@@ -58,6 +58,9 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // a build and never fails on a pull: an own image gone stays as its
 // listing has it, a hold that cannot be had is held all the same.
 func (s *Set) Restore(target, against string, fetched bool) (err error) {
+	// What a fetch left goes too, adopted or given up: a restore without
+	// fetched comes before any fetch writes its file.
+	defer s.dropFetch(target)
 	// What it pulled by digest goes when it fails: a name by digest alone
 	// that no listing names would never be removed.
 	var pulled []string
@@ -181,6 +184,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	// the record.
 	es := make([]entry, 0, len(steps))
 	var lines []string
+	tags := fetchTags(target)
 	for _, st := range steps {
 		svc := st.svc
 		o, haveOld := match(old, entry{Service: svc.Name, Ref: svc.Ref})
@@ -217,6 +221,16 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if b := ownOf(o).Build; b != "" && e.Build != "" {
 				e.Build = b
 			}
+			es = append(es, e)
+		case st.kind == KindOwn && fetched && tags[svc.Name] != "":
+			// What its fetch built, by its fetch tag alone.
+			t := tags[svc.Name]
+			if _, err := s.Docker.ID(t); err != nil {
+				s.say(report.ErrorLevel, "%s: %v (%s)", svc.Name, errFetchedNone, t)
+				return err
+			}
+			e := s.entryOf(svc, t, mode)
+			e.Ref = svc.Ref
 			es = append(es, e)
 		default:
 			if _, err := s.Docker.ID(svc.Ref); errors.Is(err, ErrNoImage) {
@@ -415,6 +429,7 @@ func (s *Set) Undo(rel string, rollback bool) {
 			f.Close()
 		}
 	}
+	s.dropFetch(rel)
 }
 
 // Recover finishes what a release cut off mid-fetch without a signal
