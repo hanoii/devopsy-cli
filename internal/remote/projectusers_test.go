@@ -123,10 +123,12 @@ func TestHostPut(t *testing.T) {
 // add refuses a host whose sshd would not take its drop-in for the project user: a sshd_config
 // with no Include of sshd_config.d, or with it below a Match, parses (sshd -t) and leaves the
 // user on its own ~/.ssh/authorized_keys, where a leaked key adds a second one that outlives
-// its rotation and remove. What sshd resolves for that user says (sshd -T).
+// its rotation and remove, and one whose login settings (no ~/.ssh/rc, no forwarding) another
+// value read first overrides. What sshd resolves for that user says (sshd -T).
 func TestDoorSSHDTakes(t *testing.T) {
 	t.Parallel()
-	taken := "authorizedkeyscommand " + DoorKeysCommand + " %u\nauthorizedkeyscommanduser deploy\nauthorizedkeysfile none\n"
+	taken := "authorizedkeyscommand " + DoorKeysCommand + " %u\nauthorizedkeyscommanduser deploy\nauthorizedkeysfile none\n" +
+		"permituserrc no\nallowagentforwarding no\nx11forwarding no\npermittunnel no\n"
 	for name, c := range map[string]struct {
 		effective string
 		ok        bool
@@ -135,6 +137,9 @@ func TestDoorSSHDTakes(t *testing.T) {
 		"no include":       {"authorizedkeyscommand none\nauthorizedkeyscommanduser none\nauthorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\n", false},
 		"another's user":   {strings.Replace(taken, "user deploy", "user nobody", 1), false},
 		"its own keys too": {strings.Replace(taken, "authorizedkeysfile none", "authorizedkeysfile none .ssh/authorized_keys", 1), false},
+		// A value sshd took first from elsewhere: the user's ~/.ssh/rc, an agent forwarded.
+		"its rc":   {strings.Replace(taken, "permituserrc no", "permituserrc yes", 1), false},
+		"an agent": {strings.Replace(taken, "allowagentforwarding no", "allowagentforwarding yes", 1), false},
 	} {
 		script := "sshd() { [ \"$1 $2\" = \"-T -C\" ] && [ \"$3\" = user=devopsy-shop,host=devopsy,addr=127.0.0.1 ] && printf '" + strings.ReplaceAll(c.effective, "%", "%%") + "'; }\nuser=devopsy-shop\n" + doorSSHDTakes("deploy")
 		out, err := exec.Command("sh", "-c", script).CombinedOutput()
