@@ -1464,10 +1464,8 @@ func (s *doorSide) composeKnowsServiceContexts(env []string) error {
 	c := s.docker("compose", "version", "--short")
 	c.Env = env
 	out, err := c.Output()
-	v := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
-	var got [3]int
-	if _, serr := fmt.Sscanf(v, "%d.%d.%d", &got[0], &got[1], &got[2]); err != nil || serr != nil || slices.Compare(got[:], serviceContexts[:]) < 0 {
-		return fmt.Errorf("refused: a build context needs compose %d.%d.%d or later, which reads service:<name> as another service's build (this server's: %q)", serviceContexts[0], serviceContexts[1], serviceContexts[2], v)
+	if v, ok := versionAtLeast(string(out), serviceContexts); err != nil || !ok {
+		return fmt.Errorf("refused: a build context needs compose %s or later, which reads service:<name> as another service's build (this server's: %q)", floorWords(serviceContexts), v)
 	}
 	return nil
 }

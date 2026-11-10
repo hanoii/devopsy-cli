@@ -106,6 +106,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - Every lock wait is announced and bounded (`lockWait`): a silent wait reads as a hang, and an endless one keeps whatever waits from ever running.
 - An operator frozen past the quiet time (for example a laptop asleep, Ctrl-Z) is taken for gone and cancels cleanly; that is accepted.
 - Before 1.0.0 anything may change when the change is better in the long run, the basics included (for example project discovery, `.env` loading, `commands/`, passing the rest to compose): one person uses devopsy and runs every server, and 1.0.0 is when compatibility is promised.
+- A feature that needs a current Docker (for example the door's containerd image store and buildx 0.33.0) refuses an older one with words before anything changes, through one helper (`versionAtLeast`, `doorHostReady`), never working around it: a server runs Docker as devopsy-server installs it.
 - No migration code: older files and syntax just stop working, a breaking change is marked (`feat!`, `fix!`), and a protocol bump or a new feature means upgrading the servers.
 
 ## Conventions

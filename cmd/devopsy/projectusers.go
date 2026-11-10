@@ -175,6 +175,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Fail(err, spaceFix(d.Space))
 		return 1
 	}
+	if err := doorHostReady("docker", os.Environ()); err != nil {
+		report.Fail(err, report.Fix("move Docker to its containerd image store and a current buildx first (docs/project-users.md)"))
+		return 1
+	}
 	if u, ok := d.Users[who]; ok && u.Project != project {
 		return fail(who + " is " + u.Project + "'s already")
 	}

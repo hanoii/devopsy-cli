@@ -131,6 +131,10 @@ func TestServerInfoReport(t *testing.T) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
 		}, "", "the door refuses every request|/space /space none bind,nosuid,nodev 0 0"},
 		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
+		// A Docker the door cannot claim with: the classic image store, an old buildx.
+		{"door docker", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Docker: "Docker runs the classic image store, and project users need its containerd image store (io.containerd.snapshotter.v1)"}
+		}, "", "the door refuses every image a project user does not build|move Docker to its containerd image store"},
 		{"door firewall", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Project: "blog", FirewallWrong: []string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}}
 		}, "",

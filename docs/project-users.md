@@ -265,9 +265,19 @@ The door names what it refuses, and logs each refusal in
 
 ## Setting up a server
 
-A server needs `sudo` and `acl` installed, and the door's directory on a
-mount of its own. The commands below address the server by its deploy
-user, `devopsy@vm1`.
+A server needs `sudo` and `acl` installed, the door's directory on a
+mount of its own, and a current Docker: its containerd image store, which
+Docker 29 uses by default on a fresh install, and buildx 0.33.0 or
+later. `add` refuses a server without them. The commands below address
+the server by its deploy user, `devopsy@vm1`.
+
+A server set up earlier on Docker's classic image store can be moved to
+the containerd one, at a cost: no image and no container shows on the
+containerd store (volumes and networks stay), so every environment needs
+a release or a restart to make its containers again, a build-mode hold
+on an older image cannot come back, and the classic store keeps its disk
+until it is removed. A data root holding classic images stays on the
+classic store until its daemon is told otherwise.
 
 1. Make the door's directory, as root, and mount it on itself with
    `nosuid` and `nodev`, in `/etc/fstab`:
@@ -337,8 +347,8 @@ in that root, and says which.
 
 `--project-users` lists the project users, whether each Unix user is
 there, and how many keys each has. `--server-info` also checks that
-`<space>` is mounted `nosuid,nodev`, and whether sshd waits for a
-reboot.
+`<space>` is mounted `nosuid,nodev`, that Docker has the containerd
+image store and buildx 0.33.0, and whether sshd waits for a reboot.
 
 ## Releasing as a project user
 
