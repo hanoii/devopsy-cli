@@ -631,12 +631,9 @@ func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
 	}
 }
 
-// BUG: a service on a shared network may name its hostname anything. Docker (Engine 25 on)
-// registers a container's hostname as a DNS name on each of its networks, beside its name and
-// aliases, so a project user's service with `hostname: traefik` on the joinable network answers
-// there for another project's service name, the very thing the alias rule and the
-// <project>-<name> rule keep shut: visitors' requests meant for the other service reach it.
-// A hostname there is the project's own (OwnName), as the service's name is, or refused.
+// A hostname on a shared network is one of the project's names (OwnName), as its service's is:
+// Docker (Engine 25 on) answers for a container's hostname on each of its networks, so one of
+// another's (traefik, another project's service) would draw visitors' requests meant for it.
 func TestCheckFileRefusesAnothersHostnameOnASharedNetwork(t *testing.T) {
 	t.Parallel()
 	shared := `"networks":{"default":{"name":"shop-prod_default"},"tunnel":{"name":"traefik","external":true}}`

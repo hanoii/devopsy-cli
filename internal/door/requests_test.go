@@ -894,14 +894,10 @@ func (d idDaemon) Inspect(target string) (string, map[string]string, error) {
 	return mineID, labels, nil
 }
 
-// BUG: a container request (inspect, rm, the sync daemon's exec) is checked by one reading of
-// the caller's word and run by another: the door reads whose the container is, then hands
-// Docker the same word to resolve again. A word is a name or a prefix of an id, and Docker
-// reads it anew at each call, so one that named this project's container at the check can name
-// another project's by the time Docker acts (the first gone, a new container's id under the
-// same prefix): an inspect then shows that container's environment, a rm -f removes it. The id
-// the door's own inspect read is what goes to Docker (internals/door.md: a name is pinned from
-// its check to its use).
+// A container request (inspect, rm, the sync daemon's exec) goes to Docker by the full id the
+// door's check read, never the caller's word: a name or an id's prefix Docker would read anew,
+// another project's container by then (the first gone, a new id under the same prefix), whose
+// environment an inspect would show and a rm -f remove.
 func TestDecideActsOnTheContainerItRead(t *testing.T) {
 	t.Parallel()
 	d := idDaemon{testDaemon}
