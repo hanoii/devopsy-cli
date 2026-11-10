@@ -1249,6 +1249,57 @@ esac
 	}
 }
 
+// The Dockerfile compose's client reads for a build is a file of the sealed context, with no
+// link on the way to it: the client opens <context>/<dockerfile> as the deploy user (its
+// directory is the local source it sends the builder, the file the only one sent), and what
+// BuildKit cannot parse comes back in the build's error, the line and those around it.
+//
+// BUG: the door resolves the Dockerfile in the project's tree (Real), then seals the context
+// by a tar the project user makes afterwards, and checks only that the copy's root is no
+// link (noLink): links inside a sealed copy are kept, as a bind needs. A directory on the
+// Dockerfile's path that becomes a link between the two (made while tar is busy with a large
+// file earlier in the context: realpath -m takes a path not there yet, so nothing has to be
+// swapped) leaves <sealed>/x/sub a link to anywhere, and the build reads, with the deploy
+// user's rights, a file of the door's or the deploy user's as its Dockerfile: another
+// project's registry logins (<space>/logins/<project>/config.json, one line, printed whole
+// in "unknown instruction"), the deploy user's own ~/.docker/config.json, lines of a key.
+// The fake's real answers what realpath said before the link was there; its tar reads the
+// tree with it.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorBuildReadsNoDockerfileThroughALink(t *testing.T) {
+	doorFakes(t)
+	tree, space, other := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, d := range []*string{&tree, &space, &other} {
+		if r, err := filepath.EvalSymlinks(*d); err == nil {
+			*d = r
+		}
+	}
+	// Another project's logins, the deploy user's alone to read.
+	write(t, filepath.Join(other, "config.json"), `{"auths":{"registry.example.com":{"auth":"c2VjcmV0"}}}`+"\n", 0o600)
+	code := filepath.Join(tree, "prod", "releases", "1", "code")
+	write(t, filepath.Join(code, "big"), "what keeps tar busy\n", 0o644)
+	if err := os.Symlink(other, filepath.Join(code, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: tree}}
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
+		"build": map[string]any{"context": code, "dockerfile": "sub/config.json"},
+		"user":  "10001:10001", "security_opt": []any{"no-new-privileges"},
+	}}}
+	if errs := door.CheckFile(file, side.policy, "build", side); len(errs) != 0 {
+		return // refused: nothing is built
+	}
+	b := file["services"].(map[string]any)["web"].(map[string]any)["build"].(map[string]any)
+	context, _ := b["context"].(string)
+	dockerfile, _ := b["dockerfile"].(string)
+	read, err := filepath.EvalSymlinks(filepath.Join(context, dockerfile))
+	if err == nil && !strings.HasPrefix(read, context+"/") {
+		got, _ := os.ReadFile(filepath.Join(context, dockerfile))
+		t.Errorf("the build's Dockerfile %s in the sealed context is %s, outside it, and the client reads: %s", dockerfile, read, got)
+	}
+}
+
 // doorComposeHelper runs the door's compose on a file naming a pulled image, with the
 // fakes in dir and the verb in DEVOPSY_TEST_DOOR_VERB (TestDoorComposeHandsThePinnedFile),
 // or the request in DEVOPSY_TEST_DOOR_REQUEST (TestDoorClaimActsByDigest), and exits as it
