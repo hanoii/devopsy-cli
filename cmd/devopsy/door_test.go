@@ -1486,3 +1486,31 @@ func TestDoorFlagsTakeNoWordThatOnlyStartsLikeThem(t *testing.T) {
 		}
 	}
 }
+
+// BUG: a claim reads a ref's manifest with `docker buildx imagetools inspect`, and that
+// registry client is the buildx CLI itself, a process of the deploy user's on the host: not
+// the daemon (which the firewall's DEVOPSY-DOCKERD chain holds by its cgroup), not the
+// project's builder (a container, which reaches no loopback of the host's and no metadata
+// service), and not in the project users' group. A registry the project user names and runs
+// answers that client as it likes (a redirect, a token's realm), so the deploy user's process
+// asks the host's loopback or a metadata service what the project user chose, which the
+// firewall keeps the project user, its containers and the daemon from: the same deputy the
+// daemon was, one client over. Whether the answer parsed as a manifest shows in the refusal's
+// words. The read goes where the firewall holds it (on the project's builder, or a client the
+// rules cover): no registry client of the door's runs on the host as the deploy user.
+func TestDoorClaimReadsNoRegistryFromTheHostAsTheDeployUser(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	private := "registry.example.com/blog/private"
+	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	write(t, filepath.Join(dir, "store"), private+"@"+p1+"|sha256:p1|"+private+"@"+p1+"||{}\n", 0o644)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir}, real: fake}
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": private + ":1"}}}
+	_ = side.checkImageLabels(file, filepath.Join(dir, "none.json"))
+	for _, line := range strings.Split(readString(filepath.Join(dir, "calls")), "\n") {
+		if strings.HasPrefix(line, "buildx imagetools ") {
+			t.Errorf("a registry read by the deploy user's own client, on the host, outside every chain of the firewall: docker %s", line)
+		}
+	}
+}
