@@ -383,7 +383,7 @@ func TestCheckVerb(t *testing.T) {
 		{"up -d --wait --remove-orphans", true},
 		// A start runs the image the door read: compose pulling one then would run another.
 		{"up --pull never web", true},
-		{"up --pull missing web", true},
+		{"up --pull missing web", false},
 		{"create --pull=never", true},
 		{"up --pull always web", false},
 		{"up -d --pull=always", false},

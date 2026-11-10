@@ -146,8 +146,9 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 			t.Errorf("%s: the vet was not asked: %v", label, err)
 			continue
 		}
-		// The build goes by the id of devopsy's name for it, the pulled image pinned.
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"web":{"image":"sha256:b1"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) {
+		// The build goes by the id of devopsy's name for it, the claimed image pinned, and
+		// neither is pulled at the start.
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"web":{"image":"sha256:b1"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) || strings.Count(string(got), `"pull_policy":"never"`) != 2 {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
 		}
 		// Whose file it is, for a vet that judges by project.
@@ -563,9 +564,10 @@ func TestDoorLoginsAreTheirAuthsAlone(t *testing.T) {
 	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("the directory's mode: %v (%v)", fi.Mode(), err)
 	}
-	// A config that is not there, or is no JSON, is no login: never the last one's.
+	// A config that is not there, or is no JSON, is no login: never the last one's. Each is
+	// another request (one is read once per request).
 	for _, c := range []string{filepath.Join(t.TempDir(), "none"), bin + "/sudo"} {
-		if _, err := side.logins(c); err != nil {
+		if _, err := (&doorSide{policy: side.policy}).logins(c); err != nil {
 			t.Fatal(err)
 		}
 		if got := readString(filepath.Join(dir, "config.json")); got != `{"auths":{}}` {

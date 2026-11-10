@@ -551,7 +551,7 @@ func TestDoorTakesDuOfANamedVolume(t *testing.T) {
 
 // TestDoorTakesWhatDevopsyRuns runs devopsy's own util containers against a fake docker and
 // asks the door about each: a form that drifts from its command fails here, not in a
-// project user's release.
+// project user's release. Each run the door decides holds --pull never.
 //
 // Not parallel: it sets PATH (doorFakes).
 func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
@@ -595,8 +595,14 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 		argv := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 		// One script's lines come out of the fake as lines: put them back, by its shape.
 		argv = doorJoinScript(argv)
-		if _, err := door.Decide(argv, p, nil, doorTestHost{}, doorKnown()); err != nil {
+		a, err := door.Decide(argv, p, nil, doorTestHost{}, doorKnown())
+		if err != nil {
 			t.Errorf("%s: %v\n%q", name, err, argv)
+			continue
+		}
+		// What the door runs for it never has Docker's daemon pull the util image.
+		if run := strings.Join(a.Docker, " "); strings.HasPrefix(run, "run ") && !strings.Contains(run, " --pull never ") {
+			t.Errorf("%s: the door's run may pull: %s", name, run)
 		}
 	}
 }
@@ -702,11 +708,12 @@ esac
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}, real: docker}
 	space := filepath.Join(dir, "space", "buildx")
+	// build is a request's build, its own door process.
 	build := func() string {
 		t.Helper()
 		os.Remove(log)
+		side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}, real: docker}
 		env, err := side.builder()
 		if err != nil {
 			t.Fatal(err)
@@ -714,7 +721,11 @@ esac
 		if !slices.Contains(env, "BUILDX_BUILDER=devopsy-shop") || !slices.Contains(env, "BUILDX_CONFIG="+space) {
 			t.Errorf("a build's environment: %q", env)
 		}
+		// One request reads it once, for every claim and build it makes.
 		got, _ := os.ReadFile(log)
+		if again, err := side.builder(); err != nil || !slices.Equal(again, env) || readString(log) != string(got) {
+			t.Errorf("the builder read again in one request (%v):\n%s", err, readString(log))
+		}
 		return string(got)
 	}
 	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build\n"
@@ -755,7 +766,7 @@ func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(log)
-	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m -v " + data + ":/e/0 -v " + ini + ":/e/1 " + remote.UtilImage +
+	want := "run --rm --network none --pull never --cap-drop MKNOD --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m -v " + data + ":/e/0 -v " + ini + ":/e/1 " + remote.UtilImage +
 		" find /e/0 /e/1 -xdev ( -type d -o -type f ) ! -perm -g=w -exec setfacl -m u:10002:rwX {} +\n"
 	if string(got) != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
@@ -945,6 +956,7 @@ case "$all" in
   'compose '*)
     f=; while [ $# -gt 0 ]; do [ "$1" = -f ] && f=$2; shift; done
     echo "ARGS: $all"
+    echo "CONFIG: $DOCKER_CONFIG"
     # The file's descriptor was written and then handed over at its end: from its start.
     perl -e 'open(F, "<&=", $ARGV[0]) or die; seek(F, 0, 0); print while <F>;' "${f#/dev/fd/}" ;;
   'image inspect '*)
@@ -1160,10 +1172,13 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 }
 
 // What compose receives for a verb that creates a container (up, create, run) is the
-// checked file with its pins, marshalled after the image check: marshalled before it, the
-// file carries the plain names the check pinned in its map alone. A pull keeps the names:
-// it is what moves them. In a helper process (doorComposeHelper), since the door execs
-// compose, here the fake docker, which prints the file it was given.
+// checked file with its pins and pull_policy never on every service, marshalled after the
+// image check: marshalled before it, the file carries the plain names the check pinned in its
+// map alone, and an image gone after the claim would be Docker's daemon's to pull. A pull keeps
+// the names: it is what moves them. Its DOCKER_CONFIG is an empty directory of the door's,
+// closed to writes, for any verb that needs no logins: unset, compose reads the deploy user's
+// own, its logins, helpers and plugins. In a helper process (doorComposeHelper), since the door
+// execs compose, here the fake docker, which prints the file it was given.
 func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1173,7 +1188,8 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 	private := "registry.example.com/blog/private"
 	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
 	write(t, filepath.Join(dir, "store"), private+"@"+p1+"|sha256:p1|"+private+"@"+p1+"||{}\n", 0o644)
-	for _, verb := range []string{"up -d", "create", "run --rm web true", "pull"} {
+	empty := filepath.Join(dir, "space", "docker-empty")
+	for _, verb := range []string{"up -d", "create", "run --rm web true", "down", "pull"} {
 		c := exec.Command(os.Args[0], "-test.run", "^$")
 		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 		out, err := c.CombinedOutput()
@@ -1182,20 +1198,34 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 			continue
 		}
 		var file struct {
-			Services map[string]struct{ Image string }
+			Services map[string]struct {
+				Image      string
+				PullPolicy string `json:"pull_policy"`
+			}
 		}
 		_, body, ok := strings.Cut(string(out), "\n{")
 		if !ok || json.Unmarshal([]byte("{"+body), &file) != nil {
 			t.Errorf("%s: compose got no file:\n%s", verb, out)
 			continue
 		}
-		want := private + ":1@" + p1
+		want, policy, config := private+":1@"+p1, "never", empty
+		if verb == "pull" || verb == "down" {
+			want, policy = private+":1", ""
+		}
 		if verb == "pull" {
-			want = private + ":1"
+			config = filepath.Join(dir, "space", "logins", "shop")
 		}
-		if got := file.Services["web"].Image; got != want {
-			t.Errorf("%s: compose got web's image as %q, want %q:\n%s", verb, got, want, out)
+		if got := file.Services["web"]; got.Image != want || got.PullPolicy != policy {
+			t.Errorf("%s: compose got web's image as %q, pull_policy %q, want %q and %q:\n%s", verb, got.Image, got.PullPolicy, want, policy, out)
 		}
+		if !strings.Contains(string(out), "\nCONFIG: "+config+"\n") {
+			t.Errorf("%s: compose's DOCKER_CONFIG is not %s:\n%s", verb, config, out)
+		}
+	}
+	if fi, err := os.Stat(empty); err != nil || fi.Mode().Perm() != 0o555 {
+		t.Errorf("the empty config: %v %v", fi, err)
+	} else if entries, _ := os.ReadDir(empty); len(entries) > 0 {
+		t.Errorf("the empty config holds %v", entries)
 	}
 }
 

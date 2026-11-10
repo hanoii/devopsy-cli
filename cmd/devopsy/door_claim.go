@@ -83,10 +83,8 @@ func (s *doorSide) nameAsAsked(ref, pinned string) {
 
 // hostReady is doorHostReady for this door process, read once.
 func (s *doorSide) hostReady() error {
-	if !s.hostChecked {
-		s.hostErr, s.hostChecked = doorHostReady(s.real, s.env), true
-	}
-	return s.hostErr
+	_, err := s.hostChecked.get(func() (struct{}, error) { return struct{}{}, doorHostReady(s.real, s.env) })
+	return err
 }
 
 // fetch copies the image pinned names (<repo>@m) from its registry as it is, with the logins

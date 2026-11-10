@@ -191,11 +191,31 @@ type doorSide struct {
 	// keysAt is the project user's keys file as the request found it: a sync key is added
 	// only while it is still that file (syncKey).
 	keysAt os.FileInfo
-	// daemonPlatform is the daemon's "<os> <architecture>", once read (platform).
-	daemonPlatform string
-	// hostChecked and hostErr are doorHostReady's answer, once read (hostReady).
-	hostChecked bool
-	hostErr     error
+	// What a request reads once, for every claim and run it makes: the daemon's
+	// "<os> <architecture>" (platform), doorHostReady's answer (hostReady), the directory of
+	// its logins (logins) and its builder's environment (builder).
+	daemonPlatform memo[string]
+	hostChecked    memo[struct{}]
+	loginsDir      memo[string]
+	builderEnv     memo[[]string]
+}
+
+// memo is a value a door process reads once, its answer (an error included) kept for the
+// request's later uses: one request is one process, and what it reads does not change under it
+// in the time it runs.
+type memo[T any] struct {
+	done bool
+	v    T
+	err  error
+}
+
+// get is the value, read by read the first time.
+func (m *memo[T]) get(read func() (T, error)) (T, error) {
+	if !m.done {
+		m.v, m.err = read()
+		m.done = true
+	}
+	return m.v, m.err
 }
 
 // read runs a read of the project's tree, as its user.
@@ -671,14 +691,17 @@ func digestOf(data []byte) string {
 // platform is the daemon's os, architecture and the variant an index's entry for it may name
 // (arm64's v8, arm's v7), read once.
 func (s *doorSide) platform() (goos, arch, variant string, err error) {
-	if s.daemonPlatform == "" {
+	read, err := s.daemonPlatform.get(func() (string, error) {
 		out, err := s.docker("version", "--format", "{{.Server.Os}} {{.Server.Arch}}").Output()
 		if err != nil {
-			return "", "", "", fmt.Errorf("the daemon's platform: %v", err)
+			return "", fmt.Errorf("the daemon's platform: %v", err)
 		}
-		s.daemonPlatform = strings.TrimSpace(string(out))
+		return strings.TrimSpace(string(out)), nil
+	})
+	if err != nil {
+		return "", "", "", err
 	}
-	goos, arch, _ = strings.Cut(s.daemonPlatform, " ")
+	goos, arch, _ = strings.Cut(read, " ")
 	variant = map[string]string{"arm64": "v8", "arm": "v7"}[arch]
 	return goos, arch, variant, nil
 }
@@ -1282,6 +1305,14 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		if err := s.checkImageLabels(file, config); err != nil {
 			return doorRefused(err)
 		}
+		// What starts is the image claimed: one gone in the moment since fails the start, never
+		// pulled by Docker's daemon, which contacts no registry a project names.
+		services, _ := file["services"].(map[string]any)
+		for _, svc := range services {
+			if m, ok := svc.(map[string]any); ok {
+				m["pull_policy"] = "never"
+			}
+		}
 	}
 	checked, err := json.Marshal(file)
 	if err != nil {
@@ -1316,14 +1347,16 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err != nil {
 		return doorRefused(err)
 	}
-	env := s.env
-	if slices.Contains([]string{"up", "pull", "create", "run", "build"}, argv[0]) {
-		d, err := s.logins(config)
-		if err != nil {
-			return doorRefused(err)
-		}
-		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
+	// Compose reads its logins, helpers and plugins from DOCKER_CONFIG, the deploy user's own
+	// ~/.docker when unset: a build has the project's logins, anything else an empty one.
+	logins, err := s.emptyConfig()
+	if slices.Contains([]string{"pull", "build"}, argv[0]) {
+		logins, err = s.logins(config)
 	}
+	if err != nil {
+		return doorRefused(err)
+	}
+	env := append(slices.Clone(s.env), "DOCKER_CONFIG="+logins)
 	if argv[0] == "build" {
 		b, err := s.builder()
 		if err != nil {
@@ -1546,8 +1579,14 @@ func (s *doorSide) writtenEntries(containers []string) []string {
 // builder is what a build's environment needs to run on this project's own BuildKit,
 // made at its first build: on one builder, cache mounts are shared across projects by
 // their id, so one project's build would fill a cache another's trusts. Its settings are
-// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets.
+// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets. Read once
+// per request.
 func (s *doorSide) builder() ([]string, error) {
+	return s.builderEnv.get(s.ensureBuilder)
+}
+
+// ensureBuilder makes the project's builder when it is not there as it should be (builder).
+func (s *doorSide) ensureBuilder() ([]string, error) {
 	name := "devopsy-" + s.policy.Project
 	// Its network is its own: on Docker's default bridge, which every container shares, a
 	// build step is a member of it, and reaches another project's builder and what its build
@@ -1618,10 +1657,15 @@ func unlinkedFile(data []byte) (int, error) {
 	return fd, nil
 }
 
-// logins leaves a project's registry logins alone in a directory of the door's.
-// Never its own directory: Docker's CLI loads plugins and helpers from there, which
-// would run the project's own program as the deploy user.
+// logins leaves a project's registry logins alone in a directory of the door's, read once
+// per request. Never its own directory: Docker's CLI loads plugins and helpers from there,
+// which would run the project's own program as the deploy user.
 func (s *doorSide) logins(config string) (string, error) {
+	return s.loginsDir.get(func() (string, error) { return s.writeLogins(config) })
+}
+
+// writeLogins writes the logins' directory (logins).
+func (s *doorSide) writeLogins(config string) (string, error) {
 	out, err := doorAnswer(s.read("cat", config), maxLogins, doorReadWait)
 	auths := map[string]map[string]string{}
 	if err == nil {
@@ -1652,6 +1696,16 @@ func (s *doorSide) logins(config string) (string, error) {
 		return "", err
 	}
 	return dir, os.Rename(tmp, filepath.Join(dir, "config.json"))
+}
+
+// emptyConfig is a Docker config directory with nothing in it, the deploy user's and closed to
+// writes (<space>/docker-empty), for a compose that needs no logins.
+func (s *doorSide) emptyConfig() (string, error) {
+	dir := filepath.Join(s.policy.Space, "docker-empty")
+	if err := os.MkdirAll(dir, 0o555); err != nil {
+		return "", err
+	}
+	return dir, os.Chmod(dir, 0o555)
 }
 
 // request answers a Docker command other than compose.

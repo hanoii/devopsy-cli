@@ -865,6 +865,6 @@ func decideRestore(cmd []string, mounts []mount, out []string, p Policy, h Host,
 			i++
 		}
 	}
-	docker := append(append([]string{"run", "-i"}, keep...), "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", known.Image, "zstd", "-dcq")
+	docker := slices.Concat([]string{"run", "-i"}, keep, UtilNoPull, []string{"--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", known.Image, "zstd", "-dcq"})
 	return &Action{Stream: &Stream{From: from, To: to, Docker: docker}}, nil
 }

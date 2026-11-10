@@ -66,13 +66,17 @@ var (
 // daemon as over a remote shell: the push relays each connection on its own socket to it.
 var DaemonServe = []string{"rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."}
 
+// UtilNoPull keeps a util run from having Docker's daemon pull its image when it is gone: the
+// deploy user builds it, under a name the network's DNS may answer.
+var UtilNoPull = []string{"--pull", "never"}
+
 // RootUtil is what every util container the door runs as root holds back, root not
 // being needed for it: nothing there makes a device or gains privileges, and nothing
 // writes its own files (a link a project user swaps mid-copy would lead a write there, and
 // a later step of the same container runs what it finds), only its mounts and a small /tmp
-// that runs nothing.
+// that runs nothing. Its image is never pulled (UtilNoPull).
 func RootUtil() []string {
-	return []string{"--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1m"}
+	return append(slices.Clone(UtilNoPull), "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1m")
 }
 
 // cloneShape is a path in a project's clones: its directory, a take's in it, and from

@@ -514,7 +514,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	if a.Stream.From != tree+"/s/data/f.zst" || a.Stream.To != tree+"/s/fifo/tar" {
 		t.Errorf("its ends: %+v", a.Stream)
 	}
-	if strings.Contains(strings.Join(a.Stream.Docker, " "), tree) || !slices.Contains(a.Stream.Docker, "ALL") {
+	if strings.Contains(strings.Join(a.Stream.Docker, " "), tree) || !slices.Contains(a.Stream.Docker, "ALL") || !strings.Contains(strings.Join(a.Stream.Docker, " "), " --pull never ") {
 		t.Errorf("its container: %q", a.Stream.Docker)
 	}
 }
