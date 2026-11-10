@@ -418,8 +418,7 @@ set up, or no project user can use its images. Docker's daemon needs
 none of it for them:
 
 - the builders: `<space>/buildx/buildkitd.default.toml`, read when a
-  project's builder is made, and by the door when it reads and copies
-  an image;
+  project's builder is made;
 - the server's CA store (`/etc/ssl/certs/ca-certificates.crt` on Debian
   and Ubuntu), which the door trusts when it reads and copies an image.
 
