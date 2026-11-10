@@ -876,3 +876,49 @@ func TestNoRegistryOfTheServersOwn(t *testing.T) {
 		}
 	}
 }
+
+// idDaemon is a daemon that, as Docker does, takes a container by a name or a prefix of its id
+// and answers with its full id.
+type idDaemon struct{ fakeDaemon }
+
+const mineID = "4f1c9e0a7b2d4f1c9e0a7b2d4f1c9e0a7b2d4f1c9e0a7b2d4f1c9e0a7b2d4f1c"
+
+func (d idDaemon) Inspect(target string) (string, map[string]string, error) {
+	if target == "4f1" || target == mineID {
+		target = "mine"
+	}
+	_, labels, err := d.fakeDaemon.Inspect(target)
+	if err != nil {
+		return "", nil, err
+	}
+	return mineID, labels, nil
+}
+
+// BUG: a container request (inspect, rm, the sync daemon's exec) is checked by one reading of
+// the caller's word and run by another: the door reads whose the container is, then hands
+// Docker the same word to resolve again. A word is a name or a prefix of an id, and Docker
+// reads it anew at each call, so one that named this project's container at the check can name
+// another project's by the time Docker acts (the first gone, a new container's id under the
+// same prefix): an inspect then shows that container's environment, a rm -f removes it. The id
+// the door's own inspect read is what goes to Docker (internals/door.md: a name is pinned from
+// its check to its use).
+func TestDecideActsOnTheContainerItRead(t *testing.T) {
+	t.Parallel()
+	d := idDaemon{testDaemon}
+	for _, argv := range [][]string{
+		{"inspect", "--format", "{{json .Config.Env}}", "4f1"},
+		{"inspect", "mine"},
+		{"rm", "-f", "4f1"},
+		{"rm", "mine"},
+		slices.Concat([]string{"exec", "-i", "4f1"}, DaemonServe),
+	} {
+		a, err := Decide(argv, testPolicy, d, &fakeHost{}, testKnown)
+		if err != nil {
+			t.Errorf("%q: %v", argv, err)
+			continue
+		}
+		if !slices.Contains(a.Docker, mineID) || slices.Contains(a.Docker, "4f1") || slices.Contains(a.Docker, "mine") {
+			t.Errorf("%q: Docker resolves the caller's word again: %q", argv, a.Docker)
+		}
+	}
+}
