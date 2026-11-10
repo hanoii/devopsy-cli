@@ -47,8 +47,8 @@ func runInit(cwd string, args []string, color bool) int {
 	content := fmt.Sprintf(`# devopsy config. devopsy --debug schema documents every key.
 project: %s
 defaults:
-  release: up -d --wait --remove-orphans --build
-  rollback: up -d --wait --remove-orphans --build
+  release: up -d --wait --remove-orphans
+  rollback: up -d --wait --remove-orphans
 environments:
   prod: {}
 `, name)

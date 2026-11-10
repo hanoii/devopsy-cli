@@ -293,7 +293,7 @@ func TestModeFromRecord(t *testing.T) {
 	if err := i.set.Restore(i.rel(b1), i.rel(b2), false); err != nil {
 		t.Fatalf("rollback to a build-mode release from an image-mode checkout: %v\n%s", err, out.String())
 	}
-	if id, _ := d.ID("registry/app:prod"); id != "sha256:b1" {
-		t.Errorf("after the rollback registry/app:prod is %s, want sha256:b1, the bookmark put back\n%s", id, out.String())
+	if id := fileImage(d, i.rel(b1), "app", "registry/app:prod"); id != "sha256:b1" {
+		t.Errorf("after the rollback app runs %s, want sha256:b1, by its bookmark\n%s", id, out.String())
 	}
 }

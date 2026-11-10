@@ -191,6 +191,9 @@ type Set struct {
 	Out io.Writer
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
+	// Door: the project's user goes through the door, which names its builds
+	// itself: its own images by bookmark only when held (resolveBookmarks).
+	Door bool
 	// ListAll lists every profile's (ListComposeAll), for the labels of what
 	// a copy writes. List without it.
 	ListAll func(rel string) ([]Service, error)
@@ -216,7 +219,7 @@ type Set struct {
 	// fix repeats (--release-sync, --reset, --sync --from <address>), in
 	// place of the check's own (--release, --sync): img's --again.
 	Again string
-	// AsBuilt has Restore put own images' bookmarks back even when their
+	// AsBuilt has Restore run own images by their bookmarks even when their
 	// build changed since (changed): the restart after a failed run step
 	// whose build again failed runs what the release built, never the
 	// failed release's image under the name.
@@ -464,7 +467,7 @@ func writeFile(path, content string) error {
 // still found.
 func (s *Set) Bookmark(rel string) {
 	id := filepath.Base(rel)
-	es, err := s.entries(rel)
+	es, err := s.entries(rel, false)
 	if err != nil {
 		s.say(report.WarnLevel, "could not list the images of %s: a rollback to it builds or pulls them again", id)
 		return
@@ -476,18 +479,29 @@ func (s *Set) Bookmark(rel string) {
 
 // entries are the images a release runs now, one per service (List),
 // each as Docker has it under its name, own or pulled by the release's
-// own mode.
-func (s *Set) entries(rel string) ([]entry, error) {
+// own mode; one its fetch built (FetchFile) by its fetch tag, never the
+// project's name, which another environment's fetch may move meanwhile.
+// strict: a fetch tag missing fails (a record), else that entry has no
+// image (a failed fetch's bookmarks).
+func (s *Set) entries(rel string, strict bool) ([]entry, error) {
 	svcs, err := s.List(rel)
 	if err != nil {
 		return nil, err
 	}
 	mode := ModeOf(rel)
+	tags := fetchTags(rel)
 	es := make([]entry, 0, len(svcs))
 	s.built = map[string]bool{}
 	for _, svc := range svcs {
 		s.built[svc.Name] = svc.Build
-		es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
+		ref := digestRef(svc.Ref)
+		if t, ok := tags[svc.Name]; ok {
+			if _, err := s.Docker.ID(t); err != nil && strict {
+				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, t)
+			}
+			ref = t
+		}
+		es = append(es, s.entryOf(svc, ref, mode))
 	}
 	return es, nil
 }
@@ -580,12 +594,25 @@ func (s *Set) keep(rel string, es []entry) error {
 	}
 	names := bookmarks(es, s.Name, id)
 	keep := map[string]bool{}
+	// An own image's bookmark is what its release runs it by (resolveBookmarks):
+	// one that cannot be put fails the record, before the switch, once the rest
+	// are done; a pulled one's only costs a rollback a pull.
+	var ownErr error
 	for i, e := range es {
 		keep[familiar(names[i])] = true
 		// By id: another release's fetch may move the name meanwhile.
 		if e.ID != "" {
-			if err := s.Docker.Tag(e.ID, names[i]); err != nil {
-				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s builds or pulls it again", e.Ref, names[i], err, id)
+			if _, err := s.Docker.ID(e.ID); errors.Is(err, ErrNoImage) {
+				// Gone (pruned by hand, a restart's last try as built): nothing to
+				// bookmark, and an up builds it again onto the bookmark.
+				s.say(report.WarnLevel, "%s's image of %s is gone: a rollback to %s builds or pulls it again", id, cmp.Or(e.Service, e.Ref), id)
+				continue
+			}
+			if err := s.Docker.Tag(e.ID, names[i]); err != nil && e.Kind == KindOwn {
+				s.say(report.ErrorLevel, "could not bookmark %s as %s, which %s runs it by: %v", e.Ref, names[i], id, err)
+				ownErr = cmp.Or(ownErr, err)
+			} else if err != nil {
+				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s pulls it again", e.Ref, names[i], err, id)
 			}
 		}
 	}
@@ -614,7 +641,7 @@ func (s *Set) keep(rel string, es []entry) error {
 			}
 		}
 	}
-	return nil
+	return ownErr
 }
 
 // withOwnBuilds is es with one entry of no service for the own build of
@@ -637,31 +664,6 @@ func withOwnBuilds(es []entry) []entry {
 		}
 	}
 	return append(out, builds...)
-}
-
-// own is every bookmark the environment's releases and snapshots make,
-// rel's siblings and rel, as Docker shows them: what a restore may move
-// without changing another environment. Without a snapshot's own, every
-// rollback of a built image after a snapshot would take its bookmark for
-// another environment's, and leave the name on the newer image (third
-// review of the snapshots plan).
-func (s *Set) own(rel string) map[string]bool {
-	own := map[string]bool{}
-	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(rel), "*"))
-	if b := s.base(); b != "" {
-		more, _ := filepath.Glob(filepath.Join(b, "releases", "*"))
-		dirs = append(dirs, more...)
-	}
-	if sn := s.snapshots(); sn != "" {
-		more, _ := filepath.Glob(filepath.Join(sn, "*"))
-		dirs = append(dirs, more...)
-	}
-	for _, d := range dirs {
-		for _, b := range bookmarks(readList(d), s.Name, s.idOf(d)) {
-			own[familiar(b)] = true
-		}
-	}
-	return own
 }
 
 // SnapshotsEnv and BaseEnv are where an environment's snapshots go and
@@ -697,28 +699,6 @@ func (s *Set) BookmarkFrom(dir, rel string) error {
 	return s.keep(dir, es)
 }
 
-// others are who besides this environment uses an image: other compose
-// projects' containers, and bookmarks none of its releases made. When
-// Docker cannot tell, that is said as a user, so the name stays.
-func (s *Set) others(img string, own map[string]bool) []string {
-	users, err := s.Docker.Users(img)
-	if err != nil {
-		return []string{"Docker could not tell: " + err.Error()}
-	}
-	var others []string
-	for _, u := range users {
-		if u != s.Name {
-			others = append(others, u)
-		}
-	}
-	who := describe(others)
-	tags, err := s.Docker.Tags(img)
-	if err != nil {
-		return append(who, "Docker could not tell: "+err.Error())
-	}
-	return append(who, holding(tags, own, s.leftBookmarks()[img])...)
-}
-
 // Remove takes a going release's images: its bookmarks are untagged, and
 // each image it ran that no other bookmark holds (any release,
 // environment or project) and no container uses loses the names in the
@@ -730,6 +710,9 @@ func (s *Set) others(img string, own map[string]bool) []string {
 // Docker other than a missing image stops it: the release must stay, so
 // the next removal finds its listing again.
 func (s *Set) Remove(rel string) error {
+	// What a fetch of it left (a rollback's fetch killed outright, which no
+	// img recover finds): its tags are names no listing has.
+	s.dropFetch(rel)
 	id := s.idOf(rel)
 	es := readList(rel)
 	if len(es) == 0 {

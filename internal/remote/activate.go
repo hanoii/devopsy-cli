@@ -107,12 +107,12 @@ func (a *activation) releaseSnap() bool {
 	return a.newRelease() && a.t.SnapshotsRelease.Enabled
 }
 
-// undo puts the live release's image names back after a failed fetch of rel.
+// undo settles a failed fetch of rel (img undo).
 func (a *activation) undo(rel string) string {
 	if a.rollback {
-		return `img undo --rollback ` + rel + ` ${prev:+"$base/$prev"}`
+		return `img undo --rollback ` + rel
 	}
-	return `img undo ` + rel + ` ${prev:+"$base/$prev"}`
+	return `img undo ` + rel
 }
 
 // undoLocked is undo past the fetch, whose image lock is gone: under the
@@ -165,8 +165,7 @@ func (a *activation) head() string {
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
 	// is gone or was built with other build arguments; that build failing,
-	// its bookmarks as they are (--as-built), never the failed release's
-	// image under the name. --restart: nothing refused, a data service the
+	// its bookmarks as they are (--as-built), never what a name holds. --restart: nothing refused, a data service the
 	// rule would refuse held on the failed release's image its data ran,
 	// in every one of the three (a fetch keeps the hold).
 	s += `get_images() {
@@ -187,7 +186,7 @@ func (a *activation) head() string {
 	// records it itself (ranOnData).
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}; rb_from=$prev
-` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
+` + recoverFetch + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
 `
 	// A rollback cut off past its switch (ActivatingFile: this script
 	// holds the lock, so none runs), current its target: cut_from is the
@@ -412,8 +411,8 @@ func (a *activation) fetch() string {
 	// fetch_release: the release's images under the shared lock,
 	// undone before the lock goes on a failure or a signal, so no
 	// removal comes in between: a new release's own images are
-	// bookmarked, so they go with it, and the live release's names come
-	// back (img undo; a rollback's target keeps its bookmarks). A
+	// bookmarked, so they go with it, and its fetch tags go (img undo; a
+	// rollback's target keeps its bookmarks). A
 	// signal only sets fetch_sig: the fetch's child gets it too and
 	// fails, and the same path undoes it, with signals and SIGPIPE
 	// ignored from there on, so neither a second Ctrl-C nor a write to
@@ -535,7 +534,7 @@ func (a *activation) restoreData() string {
 		// again; from it the set stays down under a restore mark. Nothing
 		// interrupts it, so its output goes to the server's log from here
 		// (followOutput's marker tells the operator's devopsy it goes on),
-		// and a failure puts the images' names back as the log check does.
+		// and a failure settles the fetch as the log check does.
 		s += "trap '' PIPE\n" + followOutput + `ln -sfn "` + toBase + `shared/.env" "$code/.devopsy/.env"
 ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
 [ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
@@ -543,9 +542,9 @@ rd_status=0
 ` + a.snapStep("restore-data", `"$snap"`, `"$rel"`) + ` || rd_status=$?
 if [ "$rd_status" != 0 ]; then
   set +e
-  # The images' names back first: what the settle below starts again, or
-  # makes again (images.Recreate), must run the current release's images,
-  # never the ones the restore's fetch gave the names.
+  # The fetch settled first (img undo): what the settle below starts again,
+  # or makes again (images.Recreate), runs the current release's images by
+  # its bookmarks, which the restore's fetch never moved.
 ` + a.undoLocked() + `` + killedSays(a.t, a.project, "rd_status", "nothing restored") + `  not_live 1
 fi
 ` + sayTook("restore_t", `"snapshot `+a.restore.Snapshot+`'s data restored"`)
@@ -593,9 +592,9 @@ func (a *activation) restartPrevious() string {
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
 	// release: (ReleaseStepsFlag).
-	// The new release's images took the names the previous one runs
-	// (build mode's are the compose project's, a floating tag's the
-	// registry's): its own back.
+	// The previous release runs its own images by its bookmarks, which the
+	// new release's fetch never moved; a floating tag the new one pulled
+	// stays the registry's.
 	// Not on a partial copy (a sync's that went wrong): the previous
 	// release's code would run on it.
 	s := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then

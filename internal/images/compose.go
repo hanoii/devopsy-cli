@@ -2,8 +2,10 @@ package images
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -11,11 +13,12 @@ import (
 // ComposeFile is devopsy's own compose file, in a release's directory
 // beside its code: the facts of its activation a project could not write
 // in advance, and nothing the project chooses. Every service the
-// activation fetched gets DigestLabel, the image it gave it; a data
-// service held on another image than its release's own (holdsFor: the
-// rule refuses its own against its data's history) gets HeldLabel, and
-// image: the reference that holds it (its digest, another release's own
-// name, a bookmark) unless its own name was put on it. devopsy runs compose with
+// activation fetched gets DigestLabel, the image it gave it, and each own
+// image image: its release's bookmark (resolveBookmarks), which only that
+// release writes; a data service held on another image than its release's
+// own (holdsFor: the rule refuses its own against its data's history) gets
+// HeldLabel, and image: the reference that holds it (its digest, the
+// release's own bookmark of it). devopsy runs compose with
 // it between the project's compose.yaml and the operator's
 // compose.override.yaml, on the server only.
 const ComposeFile = "devopsy-compose.yaml"
@@ -25,10 +28,11 @@ const ComposeFile = "devopsy-compose.yaml"
 // "snapshot <id>", or historyHeld: --status says so (heldWhat).
 const HeldLabel = "devopsy.held"
 
-// composeHold is how ComposeFile holds a service: Image its image: (""
-// when its own name holds it), From HeldLabel's value ("" for an own image
-// by its bookmark, no hold). bookmark: by the release's own bookmark,
-// named once its listing is known (resolveBookmarks).
+// composeHold is how ComposeFile names a service's image: Image its image:
+// ("" for none: a pulled name, a door project's build), From HeldLabel's
+// value ("" for an own image by its bookmark, no hold). bookmark: by the
+// release's own bookmark, named once its listing is known
+// (resolveBookmarks).
 type composeHold struct {
 	Image, From string
 	bookmark    bool
@@ -67,9 +71,23 @@ func composeText(es []entry, holds map[string]composeHold) string {
 		if hold.Image != "" {
 			svcs.WriteString("    image: " + strconv.Quote(hold.Image) + "\n")
 		}
+		if hold.From != "" {
+			// Held: no build of the project's code lands on the image it is held
+			// on (an up --build, a build, pull_policy: build), nor a build tagged
+			// by a digest.
+			svcs.WriteString("    build: !reset null\n")
+		}
 		svcs.WriteString("    labels:\n      " + strconv.Quote(DigestLabel) + ": " + strconv.Quote(label) + "\n")
 		if hold.From != "" {
 			svcs.WriteString("      " + strconv.Quote(HeldLabel) + ": " + strconv.Quote(hold.From) + "\n")
+		}
+	}
+	// A service of no entry the file still names an image for: one under a
+	// profile sharing a build's (resolveBookmarks), by that build's bookmark.
+	for _, svc := range slices.Sorted(maps.Keys(holds)) {
+		if h := holds[svc]; !seen[svc] && h.Image != "" {
+			seen[svc] = true
+			svcs.WriteString("  " + strconv.Quote(svc) + ":\n    image: " + strconv.Quote(h.Image) + "\n")
 		}
 	}
 	if svcs.Len() == 0 {
@@ -122,12 +140,13 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // worth a word: running another image than rel gives it (its container
 // another activation's: one cut off past its switch, a rollback's whose
 // newer containers run on; OrbStack cuts, round 8), another image than
-// its activation gave it (DigestLabel: a plain up followed a name another
-// environment's pull moved, or something outside devopsy), or held on
-// another image than the release's own (HeldLabel), own names included.
+// its activation gave it (DigestLabel: something outside devopsy's file for
+// a service it names an image for, else a plain up that followed a pulled
+// name another environment moved), or held on another image than the
+// release's own (HeldLabel).
 // A hold is said, the rest warned.
 func StatusLines(d Docker, project, rel string) []StatusLine {
-	_, labels, held := composeFacts(rel)
+	pins, labels, held := composeFacts(rel)
 	cs, err := d.Containers(project)
 	if err != nil {
 		return []StatusLine{{Text: "could not list the containers: " + err.Error(), Warn: true}}
@@ -152,7 +171,11 @@ func StatusLines(d Docker, project, rel string) []StatusLine {
 		case err != nil || gave == "":
 		case !sameImage(img, gave):
 			l := fmt.Sprintf("%s runs %s, not %s its activation gave it", c.Service, shownImage(refs[c.Service], img), shortName(gave))
-			if r := refs[c.Service]; r != "" {
+			if pins[c.Service] != "" {
+				// The file names its image (its release's bookmark, a hold): no
+				// name moved under it.
+				l += ": something outside devopsy's compose file made it"
+			} else if r := refs[c.Service]; r != "" {
 				l += ": " + r + " moved since (a plain up follows names)"
 			}
 			lines = append(lines, StatusLine{Text: l, Warn: true})

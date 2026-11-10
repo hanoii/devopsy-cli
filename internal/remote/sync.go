@@ -880,7 +880,7 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", append([]string{"--sync"}, o.againFlags()...)...) + o.imagesExport() + `# Before anything stops, still armed: the child's data services'
+` + o.sameServerCopy() + recoverFetch + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", append([]string{"--sync"}, o.againFlags()...)...) + o.imagesExport() + `# Before anything stops, still armed: the child's data services'
 # versions and tags must allow the parent's data (img sync-check), as
 # their labels read with the pending inherited variables: an abort or a
 # session gone meanwhile ends this, nothing stopped.

@@ -970,17 +970,14 @@ func partialGuard(t *Target, projectName, refuse string) string {
 }
 
 // recoverFetch finishes what a release's fetch killed outright left (img
-// recover: the release marked failed, current's own names back, cur the
-// current release's directory), under the release lock, before anything
-// runs current's images: every script that runs or restores them.
-// releaseImages defines img and image_lock.
-func recoverFetch(cur string) string {
-	return `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
-  img recover "$base" ` + cur + `
+// recover: the release marked failed, what it got bookmarked), under the
+// release lock, before anything runs current's images: every script that
+// runs or restores them. releaseImages defines img and image_lock.
+const recoverFetch = `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
+  img recover "$base"
   image_unlock
 fi
 `
-}
 
 // releaseSnapshotSetup is a release's part before its fetch when its
 // environment takes release snapshots and something is current: the
@@ -1256,20 +1253,24 @@ func fetchImages(projectName string) string {
 		" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
 	image := devopsyCall(projectName, []string{"--", "pull"}, false) +
 		" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
-	// Without devopsy's own compose file (images.NoReleaseComposeEnv): a
-	// rollback's or a restart's fetch is of the project's images, never of
-	// the holds the release's last activation wrote, which may name an
-	// image nothing runs any more (the restore decides the holds after).
+	// Never with devopsy's own compose file: a rollback's or a restart's
+	// fetch is of the project's images, never of the holds the release's
+	// last activation wrote, which may name an image nothing runs any more
+	// (the restore decides the holds after). Image mode with none
+	// (images.NoReleaseComposeEnv); build mode with the fetch's own
+	// (img fetch-file, images.FetchComposeEnv), so each build lands under a
+	// name only this fetch writes, which its record or restore adopts.
 	return `fetch_images() {
   fi_mode=$(img mode "$1") || return
   ` + timerStart("fi_t") + `  if [ "$fi_mode" = ` + ModeImage + ` ]; then
     devopsy --say info "pulling images (image mode)"
-    fi_cmd=` + Quote(image) + `
+    fi_cmd=` + Quote(image) + ` fi_env=` + images.NoReleaseComposeEnv + `
   else
     devopsy --say info "pulling and building images (build mode)"
-    fi_cmd=` + Quote(build) + `
+    img fetch-file "$1" || return
+    fi_cmd=` + Quote(build) + ` fi_env=` + images.FetchComposeEnv + `
   fi
-  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty "$fi_cmd") || return
+  (cd "$1/` + CodeDir + `" && export "$fi_env=1" && with_tty "$fi_cmd") || return
   ` + sayTook("fi_t", `"images fetched"`) + `}
 `
 }
@@ -1563,7 +1564,7 @@ fi
 ` + releaseLock(false, false) + releaseImages(projectName, t) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
-` + lockedGate(true, "image_unlock; ") + `img recover "$base" ${prev:+"$base/$prev"}
+` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 # Every id checked first (gone, current: nothing removed), then each with
 # its images (images.RemoveReleases).
 rr=0

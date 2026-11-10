@@ -1636,12 +1636,17 @@ func (p *loadedProject) compose(args []string) *Plan {
 // project runs in (images.ComposeFile, beside its code/), between the
 // project's compose.yaml and the operator's override: "" outside a
 // release, without one, or while a listing asks for the project's files
-// alone (images.NoReleaseComposeEnv).
+// alone (images.NoReleaseComposeEnv); a fetch's own (images.FetchFile)
+// while a fetch runs (images.FetchComposeEnv), never ComposeFile then.
 func (p *loadedProject) releaseCompose() string {
 	if v, _ := p.env.Lookup(images.NoReleaseComposeEnv); v != "" {
 		return ""
 	}
-	f := remote.ReleaseFile(p.dir, images.ComposeFile)
+	name := images.ComposeFile
+	if v, _ := p.env.Lookup(images.FetchComposeEnv); v != "" {
+		name = images.FetchFile
+	}
+	f := remote.ReleaseFile(p.dir, name)
 	if f == "" {
 		return ""
 	}

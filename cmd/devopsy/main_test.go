@@ -1298,6 +1298,11 @@ func TestInitAndSchema(t *testing.T) {
 	if !strings.Contains(string(data), "project: shop\n") {
 		t.Fatalf("config:\n%s", data)
 	}
+	// Its run steps build nothing: the release's fetch builds before the switch, and a
+	// build after it is one more failure past it.
+	if !strings.Contains(string(data), "release: up -d --wait --remove-orphans\n") || strings.Contains(string(data), "--build") {
+		t.Errorf("the run steps --init writes:\n%s", data)
+	}
 	write(t, filepath.Join(dir, ".devopsy", "config.yaml"), "project: mine\n", 0o644)
 	if out, code := runDevopsy(t, dir, nil, "--init", "other"); code != 0 || !strings.Contains(out, "nothing to do") {
 		t.Fatalf("existing (%d):\n%s", code, out)

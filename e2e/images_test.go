@@ -280,3 +280,32 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 		t.Fatalf("a sync onto a child below the parent (%d), stamp %q:\n%s", code, stamp, out)
 	}
 }
+
+// A run step that builds (`up --build`, which older configs keep) builds onto its release's
+// own name, the image: devopsy's compose file gives each built service, a tag only that
+// release writes: the release goes live on what it built, and no name is left that no
+// listing has (never one named by an id, which a build cannot tag).
+func TestBuildModeRunStepThatBuilds(t *testing.T) {
+	dir := project(t, "upbuild", map[string]string{
+		// As devopsy --init writes it.
+		".devopsy/config.yaml":  "project: upbuild\ndefaults:\n  release: up -d --wait --remove-orphans --build\n  rollback: up -d --wait --remove-orphans --build\nenvironments:\n  prod: {}\n",
+		".devopsy/compose.yaml": "services:\n  app:\n    build: .\n    command: [sleep, infinity]\n    stop_grace_period: 0s\n",
+		".devopsy/Dockerfile":   "FROM busybox:1.37\n",
+	})
+	commitAll(t, dir)
+	t.Cleanup(func() {
+		srv(t, "docker images --format '{{.Repository}}:{{.Tag}}' | grep '^sha256:' | sed 's|^|docker.io/library/|' | xargs -r docker rmi >/dev/null 2>&1 || true")
+	})
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("the release, its run step up --build (%d):\n%s", code, out)
+	}
+	if out, _ := srv(t, "docker ps --filter label=com.docker.compose.project=upbuild-prod --format '{{.State}}'"); strings.TrimSpace(out) != "running" {
+		t.Errorf("not running: %q", out)
+	}
+	if out, code := op(t, dir, "devopsy @server:prod build"); code != 0 {
+		t.Errorf("a build by hand in the release (%d):\n%s", code, out)
+	}
+	if out, _ := srv(t, "docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep '^sha256:' || true"); strings.TrimSpace(out) != "" {
+		t.Errorf("the run step's build left an image named like the id devopsy's compose file pins, which nothing lists or removes:\n%s", out)
+	}
+}

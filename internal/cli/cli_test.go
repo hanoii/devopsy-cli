@@ -790,7 +790,8 @@ func TestDotenvLineRoundTrip(t *testing.T) {
 
 // In a release, devopsy's own compose file comes between the project's
 // compose.yaml and the operator's override, so the operator's hand still
-// wins; a listing asks for the project's files alone.
+// wins; a listing asks for the project's files alone, and a fetch for its
+// own file instead.
 func TestReleaseComposeFile(t *testing.T) {
 	t.Parallel()
 	rel := filepath.Join(t.TempDir(), "releases", "1")
@@ -818,5 +819,21 @@ func TestReleaseComposeFile(t *testing.T) {
 	}
 	if got := strings.Join(files(images.NoReleaseComposeEnv+"=1"), " "); got != "compose.yaml compose.override.yaml" {
 		t.Errorf("files for a listing: %s", got)
+	}
+	// A fetch runs with its own file, never devopsy's other, whose holds name images
+	// nothing builds; with none, with no file of devopsy's at all.
+	if got := strings.Join(files(images.FetchComposeEnv+"=1"), " "); got != "compose.yaml compose.override.yaml" {
+		t.Errorf("files for a fetch with no fetch file: %s", got)
+	}
+	write(t, filepath.Join(rel, images.FetchFile), "services: {}\n")
+	if got := strings.Join(files(images.FetchComposeEnv+"=1"), " "); got != "compose.yaml "+images.FetchFile+" compose.override.yaml" {
+		t.Errorf("files for a fetch: %s", got)
+	}
+	// A fetch file left behind (a fetch killed outright) is no other command's.
+	if got := strings.Join(files(), " "); got != "compose.yaml "+images.ComposeFile+" compose.override.yaml" {
+		t.Errorf("files beside a fetch file left: %s", got)
+	}
+	if got := strings.Join(files(images.NoReleaseComposeEnv+"=1"), " "); got != "compose.yaml compose.override.yaml" {
+		t.Errorf("files for a listing beside a fetch file left: %s", got)
 	}
 }

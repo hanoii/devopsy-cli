@@ -48,8 +48,9 @@ import (
 // one cannot be), ran <environment> <release> [cut] (the history of what
 // ran on the data; cut: of an activation cut off past its switch),
 // remove <release>... (exit 1 when Docker failed: keep the
-// release), undo [--rollback] <release> [<current release>], recover
-// <environment> [<current release>], prune; for an environment's
+// release), fetch-file <release> (the fetch's own compose file, before a
+// build-mode fetch), undo [--rollback] <release>, recover <environment>,
+// prune; for an environment's
 // releases (images.ToPrune, RollbackTarget, RemoveReleases): to-prune
 // <environment> <keep> (the ids, one per line), rollback-target
 // <environment> (exit 1 without one; 3 when the rule refuses it,
@@ -82,7 +83,7 @@ func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll, Copied: copiedServices,
+	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll, Door: behindDoor(), Copied: copiedServices,
 		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
 }
 
@@ -335,16 +336,24 @@ func runImages(args []string, color bool) int {
 		if ran(rest[0], rest[1]) != nil {
 			return 1
 		}
+	case "fetch-file":
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		if err := s.WriteFetch(rest[0]); err != nil {
+			report.Error("could not write the fetch's compose file: " + err.Error())
+			return 1
+		}
 	case "undo":
-		if len(rest) < 1 || len(rest) > 2 {
+		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		s.Undo(rest[0], arg(1), rollback)
+		s.Undo(rest[0], rollback)
 	case "recover":
-		if len(rest) < 1 || len(rest) > 2 {
+		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		s.Recover(rest[0], arg(1))
+		s.Recover(rest[0])
 	case "remove":
 		// Docker failing midway: the release stays (exit 1), so the next
 		// removal finds its listing again.
@@ -392,6 +401,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|check|record|restore|hold|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|check|fetch-file|record|restore|hold|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

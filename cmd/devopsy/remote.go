@@ -866,11 +866,12 @@ func runLocalStep(t *remote.Target, projectDir string, args []string, commit str
 }
 
 // missingSteps explains how to define an environment's release or rollback steps,
-// with a starting point for its mode.
+// with a starting point for its mode: in build mode no --build, since the fetch
+// builds before the switch, and a build after it is one more late failure.
 func missingSteps(t *remote.Target, which string) string {
 	remoteCmd := "up -d --wait --remove-orphans --pull always"
 	if t.Mode == remote.ModeBuild {
-		remoteCmd = "up -d --wait --remove-orphans --build"
+		remoteCmd = "up -d --wait --remove-orphans"
 	}
 	return fmt.Sprintf(`environment %s has no %s steps: define them in %s, for example:
 

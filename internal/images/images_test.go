@@ -544,12 +544,8 @@ func randomHistory(t *testing.T, seed int64) {
 		case 2: // a release whose fetch fails halfway: undone
 			id := e.newRelease(own, shared)
 			d.pull(shared, newImage())
-			prev := ""
-			if e.current != "" {
-				prev = e.rel(e.current)
-			}
 			before := usedNames(d, other)
-			e.set.Undo(e.rel(id), prev, false)
+			e.set.Undo(e.rel(id), false)
 			if err := os.WriteFile(filepath.Join(e.rel(id), failedFile), nil, 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -567,7 +563,6 @@ func randomHistory(t *testing.T, seed int64) {
 				continue
 			}
 			before := usedNames(d, other)
-			shared := sharedNames(d, other)
 			pulled := map[string]string{}
 			for n, i := range d.names {
 				if !isBookmark(n) && !strings.HasSuffix(n, "-app:latest") {
@@ -590,15 +585,15 @@ func randomHistory(t *testing.T, seed int64) {
 					delete(gone, b)
 				}
 			} else if err == nil {
-				// An own image exactly, but for a name another environment uses.
+				// An own image exactly, run by its bookmark whatever the name holds.
 				es := readList(e.rel(target))
 				for i, b := range bookmarks(es, e.set.Name, target) {
-					if es[i].Kind != KindOwn {
+					if es[i].Kind != KindOwn || es[i].Service == "" {
 						continue
 					}
 					want, _ := d.ID(b)
-					if got := d.names[familiar(es[i].Ref)]; got != want && shared[familiar(es[i].Ref)] == "" {
-						t.Fatalf("after %v: rolling back to %s left %s on %s, want %s\n%s", log, target, es[i].Ref, got, want, out.String())
+					if got := fileImage(d, e.rel(target), es[i].Service, es[i].Ref); got != want {
+						t.Fatalf("after %v: rolling back to %s runs %s on %s, want %s\n%s", log, target, es[i].Service, got, want, out.String())
 					}
 				}
 			}
@@ -796,8 +791,8 @@ func TestRestoreFamiliarNames(t *testing.T) {
 	d.pull(web.Ref, "sha256:2")
 	second := e.release(web)
 	e.set.Record(e.rel(second), e.rel(first))
-	if err := e.set.Restore(e.rel(first), e.rel(second), false); err != nil || d.names["nginx:1.27"] != "sha256:1" {
-		t.Errorf("nginx:1.27 is %s after the rollback (%v), want sha256:1\n%s", d.names["nginx:1.27"], err, out.String())
+	if err := e.set.Restore(e.rel(first), e.rel(second), false); err != nil || fileImage(d, e.rel(first), "web", web.Ref) != "sha256:1" {
+		t.Errorf("web runs %s after the rollback (%v), want sha256:1\n%s", fileImage(d, e.rel(first), "web", web.Ref), err, out.String())
 	}
 }
 
@@ -987,4 +982,20 @@ func TestRemoveAfterLeftBookmark(t *testing.T) {
 	if id, ok := d.names["mirror.example/mariadb:11.8"]; ok {
 		t.Errorf("mirror.example/mariadb:11.8 (%s) outlived every release: %v\n%s", id, d.names, out.String())
 	}
+}
+
+// fileImage is the image rel's ComposeFile runs svc on, by the reference it names (its
+// release's bookmark, a hold), else ref, as compose resolves it: what an up there runs.
+func fileImage(d *fakeDocker, rel, svc, ref string) string {
+	imgs, _, _ := composeFacts(rel)
+	if i := imgs[svc]; i != "" {
+		ref = i
+	}
+	id, err := d.ID(ref)
+	if err != nil {
+		if i, ok := d.byDigest(ref); ok {
+			return i
+		}
+	}
+	return id
 }

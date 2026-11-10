@@ -208,8 +208,14 @@ func (s *Set) judgeRelease(rel string) ([]judged, error) {
 // Check came before the fetch; what it let through by --accept-image
 // starts its data's history over once it runs (ForcedFile, Ran), but for
 // a service a release that syncs copies, whose landing does that (Land).
-func (s *Set) Record(rel, prev string) error {
-	es, err := s.entries(rel)
+func (s *Set) Record(rel, prev string) (err error) {
+	// Adopted, the fetch's tags go; failed, the undo bookmarks by them first.
+	defer func() {
+		if err == nil {
+			s.dropFetch(rel)
+		}
+	}()
+	es, err := s.entries(rel, true)
 	if err != nil {
 		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
 		return err

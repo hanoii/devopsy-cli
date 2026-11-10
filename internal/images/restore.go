@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -34,8 +33,9 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 //   - a pulled image runs what target's name holds now, pulled when gone,
 //     held by nothing: a pin or a commit tag is target's image anyway, a
 //     floating tag its current (patched) one;
-//   - an own image is target's, its bookmark put back on its name (no
-//     bookmark: ErrGone; with fetched, the name's just-built image).
+//   - an own image is target's, by its bookmark, which only target writes
+//     (no bookmark: ErrGone; with fetched, what its fetch built, by the
+//     fetch's tag).
 //
 // A data service's image is chosen as any service's, then its hold
 // derived (holdsFor) against the window its data has when target runs:
@@ -56,9 +56,17 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // now.
 //
 // AsBuilt (the restart's last try, after a build failed) never asks for
-// a build and never fails on a pull: an own image gone stays as its name
-// is, a hold that cannot be had is held all the same.
+// a build and never fails on a pull: an own image gone stays as its
+// listing has it, a hold that cannot be had is held all the same.
 func (s *Set) Restore(target, against string, fetched bool) (err error) {
+	// What a fetch left goes too once adopted or given up (AsBuilt); failed,
+	// the undo takes it: a restore without fetched comes before any fetch
+	// writes its file.
+	defer func() {
+		if err == nil || s.AsBuilt {
+			s.dropFetch(target)
+		}
+	}()
 	// What it pulled by digest goes when it fails: a name by digest alone
 	// that no listing names would never be removed.
 	var pulled []string
@@ -108,10 +116,10 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	type step struct {
 		svc  Service
 		kind string
-		// retag is an own image's bookmark to put back on its name.
+		// retag is an own image's bookmark, which it runs by.
 		retag string
-		// asIs: as its listing has it, nothing moved (AsBuilt: its
-		// bookmark gone, and nothing to build).
+		// asIs: as its listing has it (AsBuilt: its bookmark gone, and
+		// nothing to build).
 		asIs bool
 	}
 	var steps []step
@@ -178,11 +186,11 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		steps = append(steps, st)
 	}
 
-	// The changes: pulls, an own image's name put back, the holds, then
+	// The changes: pulls, an own image by its bookmark, the holds, then
 	// the record.
 	es := make([]entry, 0, len(steps))
-	var lines, byBookmark []string
-	own := s.own(target)
+	var lines []string
+	tags := fetchTags(target)
 	for _, st := range steps {
 		svc := st.svc
 		o, haveOld := match(old, entry{Service: svc.Name, Ref: svc.Ref})
@@ -202,39 +210,33 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		}
 		switch {
 		case st.asIs:
-			es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
+			// As its listing had it, never what a name holds now: no name but
+			// its bookmark is target's, and one it has no image of has none.
+			e := s.entryOf(svc, "", mode)
+			if haveOld && o.ID != "" {
+				e = ownOf(o)
+				e.Service, e.DataVersion, e.Tag = svc.Name, svc.DataVersion, svc.tag()
+			}
+			es = append(es, e)
 		case st.kind == KindOwn && st.retag != "":
-			bid, _ := s.Docker.ID(st.retag)
-			who, err := s.putName(svc.Ref, bid, own)
-			if err != nil {
-				s.say(report.ErrorLevel, "could not put %s back on %s's image: %v", svc.Ref, tid, err)
-				return err
-			}
-			if len(who) > 0 {
-				if !svc.Data {
-					s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
-					es = append(es, s.entryOf(svc, svc.Ref, mode))
-					continue
-				}
-				// On data its rule judged by its own label, never another
-				// environment's build: by its bookmark (review: it upgraded
-				// the data).
-				s.say(report.InfoLevel, "%s stays on its newer image, which other environments use (%s): %s runs its own by its bookmark", svc.Ref, strings.Join(who, ", "), svc.Name)
-				e := s.entryOf(svc, st.retag, mode)
-				e.Ref = svc.Ref
-				if b := ownOf(o).Build; b != "" && e.Build != "" {
-					e.Build = b
-				}
-				es = append(es, e)
-				byBookmark = append(byBookmark, svc.Name)
-				continue
-			}
-			// Its bookmark, put back: built with what its listing said then,
-			// whatever the variables say now.
-			e := s.entryOf(svc, svc.Ref, mode)
+			// Its bookmark: built with what its listing said then, whatever
+			// the variables say now, and run by it, never by a name another
+			// environment's build moves (stage, a branch's, a pull request's).
+			e := s.entryOf(svc, st.retag, mode)
+			e.Ref = svc.Ref
 			if b := ownOf(o).Build; b != "" && e.Build != "" {
 				e.Build = b
 			}
+			es = append(es, e)
+		case st.kind == KindOwn && fetched && tags[svc.Name] != "":
+			// What its fetch built, by its fetch tag alone.
+			t := tags[svc.Name]
+			if _, err := s.Docker.ID(t); err != nil {
+				s.say(report.ErrorLevel, "%s: %v (%s)", svc.Name, errFetchedNone, t)
+				return err
+			}
+			e := s.entryOf(svc, t, mode)
+			e.Ref = svc.Ref
 			es = append(es, e)
 		default:
 			if _, err := s.Docker.ID(svc.Ref); errors.Is(err, ErrNoImage) {
@@ -256,9 +258,6 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		return err
 	}
 	lines = append(heldLines, lines...)
-	for _, svc := range byBookmark {
-		holds[svc] = composeHold{bookmark: true}
-	}
 	// What --accept-image let through: its data's history starts over from
 	// the image it runs, once it runs (Ran).
 	var forced []string
@@ -419,70 +418,38 @@ func shownEntry(e entry) string {
 	return s
 }
 
-// RestoreOwn puts a release's own images back on their names, after a
-// release's fetch failed or was cut off (Undo, Recover): a build moved
-// them, and a plain up in the live release would run what the failed
-// one built. Pulled names stay where the fetch left them: devopsy never
-// moves a pulled name back (another environment may run it), and the
-// live release's ComposeFile holds what must not move.
-func (s *Set) RestoreOwn(rel string) {
-	id := s.idOf(rel)
-	es := readList(rel)
-	if len(es) == 0 {
-		return
-	}
-	names := bookmarks(es, s.Name, id)
-	own := s.own(rel)
-	for i, e := range es {
-		// (A held service's own build, of no service: withOwnBuilds, holds.
-		// A service held by its bookmark under its own pulled name: that name
-		// is never retagged. One held under another name counts on that one.)
-		if e.Service == "" || e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") || e.held() && e.OwnDigest != "" && familiar(e.Ref) == familiar(e.OwnRef) {
-			continue
-		}
-		bid, err := s.Docker.ID(names[i])
-		if err != nil {
-			continue
-		}
-		who, err := s.putName(e.Ref, bid, own)
-		if err != nil {
-			s.say(report.WarnLevel, "could not put %s back on %s's image: %v", e.Ref, id, err)
-		} else if len(who) > 0 {
-			s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
-		}
-	}
-}
-
 // FetchFailedFile, in a release's directory, says its fetch never finished
 // (Undo): its listing bookmarks what its names held then, under its labels,
 // so no hold takes an image from it (allowedHere).
 const FetchFailedFile = "devopsy-fetch-failed"
 
-// Undo puts the live release's own names back after a release's fetch
-// failed or was interrupted: a new release's own images are bookmarked
-// first, so they go with it; a rollback's are not (the names may hold the
-// live release's images, which would become the target's).
-func (s *Set) Undo(rel, prev string, rollback bool) {
+// Undo settles a release's fetch that failed or was interrupted: a new
+// release's own images are bookmarked, so they go with it; a rollback's
+// are not (the names may hold the live release's images, which would
+// become the target's). The live release runs its own by its bookmarks,
+// which no fetch moves.
+func (s *Set) Undo(rel string, rollback bool) {
+	// A listing its record wrote stays: its fetch's tags are gone by then,
+	// and the project's name is never the release's.
 	if !rollback {
-		s.Bookmark(rel)
+		if fetchTags(rel) != nil || len(readList(rel)) == 0 {
+			s.Bookmark(rel)
+		}
 		if f, err := os.Create(filepath.Join(rel, FetchFailedFile)); err == nil {
 			f.Close()
 		}
 	}
-	if prev != "" {
-		s.RestoreOwn(prev)
-	}
+	s.dropFetch(rel)
 }
 
 // Recover finishes what a release cut off mid-fetch without a signal
-// left (FetchingFile): marked failed, what it got bookmarked, and the
-// current release's own names (prev, when there is one) back.
-func (s *Set) Recover(base, prev string) {
+// left (FetchingFile): marked failed, what it got bookmarked.
+func (s *Set) Recover(base string) {
 	marks, _ := filepath.Glob(filepath.Join(base, "releases", "*", FetchingFile))
 	for _, m := range marks {
 		rel := filepath.Dir(m)
 		s.say(report.WarnLevel, "the images' fetch of release %s was interrupted: marking it failed, its images bookmarked", filepath.Base(rel))
-		s.Undo(rel, prev, false)
+		s.Undo(rel, false)
 		if f, err := os.Create(filepath.Join(rel, failedFile)); err == nil {
 			f.Close()
 		}

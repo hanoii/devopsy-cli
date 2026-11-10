@@ -114,7 +114,28 @@ release keeps its images](images.md#each-release-keeps-its-images)). A
 profile's buildable services are built when they are used.
 
 The run step's `up` then finds every image there, and a `deploy` needs
-no `build` or `pull`.
+no `build` or `pull`: `up -d --wait --remove-orphans`, with no
+`--build`, which would build again after the switch.
+
+In build mode each build lands under a name of the release's own (Each
+release keeps its images, in [Images](images.md#each-release-keeps-its-images)),
+never the name its `image:` gives, which every environment of the
+project building on the server shares (stage, a branch's, a pull
+request's). So a service built on another service's image names it as a
+build context, never by its image's name:
+
+```yaml
+base:
+  build: ./base
+app:
+  build:
+    context: .
+    additional_contexts:
+      shop-base: "service:base"   # FROM shop-base in app's Dockerfile
+```
+
+A release warns before it builds when a Dockerfile's `FROM` names
+another service's image this way.
 
 A failure here leaves the current release's images untouched. What the
 failed release got is tagged as that release's and removed with it.
@@ -302,6 +323,8 @@ only the project:
 - `devopsy-target.env`: its environment;
 - `devopsy-images`: its images, with each one's digest and version;
 - `devopsy-compose.yaml` (below);
+- `devopsy-fetch.yaml` while a build-mode fetch runs: the name each build
+  lands under, removed once the fetch is done;
 - `devopsy-log-session` and `devopsy-log-server`;
 - `devopsy-pending` until it goes live, `devopsy-fetching` while it gets
   its images, `devopsy-failed` when it never went live or its run
@@ -320,13 +343,16 @@ release alone.
 
 `devopsy-compose.yaml` is the one compose file devopsy writes. It holds
 only facts of the release's last activation: the image each service was
-given (a `devopsy.digest` label), and the data services held on another
+given (a `devopsy.digest` label), each image the release built or never
+pulls by the release's own name for it (`image:`), and the data services held on another
 image (a `devopsy.held` label, naming the image that holds them:
 [Holds](images.md#holds)). devopsy runs compose with it between the
 project's `compose.yaml` and your `compose.override.yaml`, so your
 override still wins; `devopsy -- config` shows the result. Run compose
 on a server through devopsy. A plain `docker compose up` lacks the file,
-so it recreates every container once and goes by the images' names.
+so it recreates every container once, goes by the images' names, and
+builds what devopsy built, since devopsy's builds never write those
+names.
 
 ## Removing releases by hand
 

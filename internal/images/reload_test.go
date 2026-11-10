@@ -141,8 +141,8 @@ func TestRestoreRebuildsChangedBuild(t *testing.T) {
 	out.Reset()
 	e.svcs[first] = []Service{built}
 	err := e.set.Restore(e.rel(first), e.rel(second), false)
-	if id, _ := d.ID("app-prod-app"); err != nil || id != "sha256:a1" {
-		t.Errorf("a restore whose build did not change: %v, app-prod-app is %s, want sha256:a1\n%s", err, id, out.String())
+	if id := fileImage(d, e.rel(first), "app", "app-prod-app"); err != nil || id != "sha256:a1" {
+		t.Errorf("a restore whose build did not change: %v, app runs %s, want sha256:a1\n%s", err, id, out.String())
 	}
 }
 
@@ -173,8 +173,8 @@ func TestRestoreAsBuilt(t *testing.T) {
 	e.svcs[first] = []Service{changed}
 	e.set.AsBuilt = true
 	err := e.set.Restore(e.rel(first), e.rel(second), false)
-	if id, _ := d.ID("app-prod-app"); err != nil || id != "sha256:a1" {
-		t.Errorf("as built: %v, app-prod-app is %s, want sha256:a1\n%s", err, id, out.String())
+	if id := fileImage(d, e.rel(first), "app", "app-prod-app"); err != nil || id != "sha256:a1" {
+		t.Errorf("as built: %v, app runs %s, want sha256:a1\n%s", err, id, out.String())
 	}
 	if !strings.Contains(out.String(), "warning: ") || !strings.Contains(out.String(), "APP_UID") {
 		t.Errorf("as built, nothing says app runs with the old APP_UID:\n%s", out.String())
@@ -265,8 +265,8 @@ func TestRestoreImageModeNeverPull(t *testing.T) {
 		// which builds nothing), then the restore with fetched.
 		err = e.set.Restore(e.rel(first), e.rel(second), true)
 	}
-	if id, _ := d.ID("app-prod-tool"); err != nil || id != "sha256:t1" {
-		t.Errorf("an image-mode rollback of a never-pulled build: %v, app-prod-tool is %s, want its bookmark's sha256:t1\n%s", err, id, out.String())
+	if id := fileImage(d, e.rel(first), "tool", "app-prod-tool"); err != nil || id != "sha256:t1" {
+		t.Errorf("an image-mode rollback of a never-pulled build: %v, tool runs %s, want its bookmark's sha256:t1\n%s", err, id, out.String())
 	}
 }
 
