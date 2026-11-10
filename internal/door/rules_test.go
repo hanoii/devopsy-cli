@@ -225,6 +225,8 @@ func TestCheckFileIdentity(t *testing.T) {
 		{"a project user's range, its group", `{"user":"10001:59999","security_opt":["no-new-privileges"]}`, true},
 		{"past a uid", `{"user":"99999999999999999999:1","security_opt":["no-new-privileges"]}`, true},
 		{"below the range", `{"user":"49999:60000","security_opt":["no-new-privileges"]}`, false},
+		// The end's own uid (EndUID), whose kill(-1) reaches what runs as it.
+		{"the end's uid", `{"user":"2147483646:10001","security_opt":["no-new-privileges"]}`, true},
 		{"root's group", `{"user":"10001:0","security_opt":["no-new-privileges"]}`, true},
 		{"a name, which an image's passwd can make root", `{"user":"app:app","security_opt":["no-new-privileges"]}`, true},
 		{"a uid alone, leaving the image's group", `{"user":"10001","security_opt":["no-new-privileges"]}`, true},

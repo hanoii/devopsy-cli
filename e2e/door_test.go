@@ -410,6 +410,11 @@ func TestDoorKeyRemovalEndsTheUsersProcesses(t *testing.T) {
 	}
 	keys("add /tmp/doorkeyless.pub")
 	start()
+	// A process at the end's own uid (a build's step may run as any USER) holds up no end.
+	t.Cleanup(func() { doorRoot(t, "docker rm -f doorkeyless-enduid >/dev/null 2>&1; true") })
+	if out, code := doorRoot(t, "docker run -d --name doorkeyless-enduid --user 2147483646:2147483646 busybox:1.37 sleep 300"); code != 0 {
+		t.Fatalf("a container at the end's uid (%d): %s", code, out)
+	}
 	// Its linger, set after add cleared it (by an admin, or by the user where polkit lets it).
 	linger := "/var/lib/systemd/linger/" + user
 	if out, code := doorRoot(t, "mkdir -p /var/lib/systemd/linger && touch "+linger); code != 0 {

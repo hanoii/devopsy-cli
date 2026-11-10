@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -69,10 +70,11 @@ func endUser(who string) error {
 	return nil
 }
 
-// noProcessUID is the real and saved uid endUIDKill takes: one no process has (runEndUID
-// checks), so that none of the user's processes, whose uids are the user's, may signal it,
-// while its effective uid, the user's, signals all of theirs.
-const noProcessUID = 2147483646
+// noProcessUID is the real and saved uid endUIDKill takes (door.EndUID), none of the user's,
+// so that none of the user's processes may signal it, while its effective uid, the user's,
+// signals all of theirs. No container of the door's runs as it; one a build's step runs as it
+// (a USER the door never reads) is the project's own and goes with the user's processes.
+const noProcessUID = door.EndUID
 
 // runEndUID is the hidden remote.EndUIDFlag, as root in remote.EndUserArgs' container under the
 // host's pids: it clears the user's linger (/linger/<user>), then, round after round, has a
@@ -93,9 +95,6 @@ func runEndUID(args []string) int {
 	}
 	if err := os.Remove(filepath.Join("/linger", args[1])); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return failErr(err)
-	}
-	if len(processesOf(noProcessUID)) > 0 {
-		return fail(fmt.Sprintf("a process runs as uid %d, which the end of a user's processes takes for none", noProcessUID))
 	}
 	for range 50 {
 		kill := exec.Command("/proc/self/exe", remote.EndUIDFlag, "--kill", args[0])

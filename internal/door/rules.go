@@ -508,6 +508,12 @@ const (
 	ProjectIDMax = 59999
 )
 
+// EndUID is the real and saved uid the end of a project user's processes takes (cmd/devopsy's
+// endUIDKill), so that none of the user's processes may signal it: no container of the door's
+// runs as it, so the end's kill(-1), which reaches whatever runs as that uid too, takes nothing
+// of another project's.
+const EndUID = 2147483646
+
 // userRefused says why a container may not run as user, or nothing: a user is numbers
 // only, since a name is the image's to map (to 0, say), never root, an id of the host's
 // (ForbiddenIDs), whose processes it would reach through /proc, or one of the project users'
@@ -523,7 +529,7 @@ func (p Policy) userRefused(user string) string {
 		switch {
 		case err != nil || id > 2147483647:
 			return user + ": an id past what a uid can be"
-		case id == 0 || slices.Contains(p.ForbiddenIDs, id):
+		case id == 0 || id == EndUID || slices.Contains(p.ForbiddenIDs, id):
 			return user + ": a host id"
 		case id >= ProjectIDMin && id <= ProjectIDMax:
 			return fmt.Sprintf("%s: in %d to %d, the project users' ids", user, ProjectIDMin, ProjectIDMax)
