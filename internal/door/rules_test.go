@@ -630,3 +630,30 @@ func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
 		t.Errorf("a build lands on %s, and the start after it runs %s", built, started)
 	}
 }
+
+// BUG: a service on a shared network may name its hostname anything. Docker (Engine 25 on)
+// registers a container's hostname as a DNS name on each of its networks, beside its name and
+// aliases, so a project user's service with `hostname: traefik` on the joinable network answers
+// there for another project's service name, the very thing the alias rule and the
+// <project>-<name> rule keep shut: visitors' requests meant for the other service reach it.
+// A hostname there is the project's own (OwnName), as the service's name is, or refused.
+func TestCheckFileRefusesAnothersHostnameOnASharedNetwork(t *testing.T) {
+	t.Parallel()
+	shared := `"networks":{"default":{"name":"shop-prod_default"},"tunnel":{"name":"traefik","external":true}}`
+	for _, extra := range []string{`,"hostname":"traefik"`, `,"hostname":"other-web"`, `,"hostname":"other-web","domainname":"example.com"`} {
+		file := parse(t, `{"name":"shop-prod",`+shared+`,"services":{"shop-web":`+safe(extra+`,"networks":{"tunnel":null}`)+`}}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) == 0 {
+			t.Errorf("%s on a shared network: not refused", extra)
+		}
+	}
+	// On its own networks a hostname answers to nobody else, and one of its own names is its own.
+	for _, s := range []string{
+		`"services":{"web":` + safe(`,"hostname":"db","networks":{"default":null}`) + `}`,
+		`"services":{"shop-web":` + safe(`,"hostname":"shop-web","networks":{"tunnel":null}`) + `}`,
+	} {
+		file := parse(t, `{"name":"shop-prod",`+shared+`,`+s+`}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Errorf("%s: refused: %v", s, errs)
+		}
+	}
+}
