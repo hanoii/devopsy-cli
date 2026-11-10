@@ -368,7 +368,7 @@ func TestContentHashSeesWhatACopyHolds(t *testing.T) {
 		"a file's mode":  func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o755) },
 		// A release that closes a directory to others, or opens one.
 		"a directory's mode":   func(r string) { _ = os.Chmod(filepath.Join(r, "d"), 0o700) },
-		"a file's special bit": func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o644|os.ModeSetgid) },
+		"a file's special bit": func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o644|os.ModeSetuid) },
 		"a link's end": func(r string) {
 			_ = os.Remove(filepath.Join(r, "l"))
 			_ = os.Symlink("u", filepath.Join(r, "l"))
