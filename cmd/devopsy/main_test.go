@@ -28,9 +28,6 @@ var binary string
 const startWait = time.Minute
 
 func TestMain(m *testing.M) {
-	if space := os.Getenv("DEVOPSY_TEST_LOCK_EXEC"); space != "" {
-		lockExecHelper(space) // TestDoorImageLockOutlivesItsExec
-	}
 	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
 		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
 	}

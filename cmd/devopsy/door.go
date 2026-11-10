@@ -23,8 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -174,8 +172,6 @@ type doorSide struct {
 	vets   []remote.DoorVet
 	// made are this request's work directories, so that a refusal leaves none behind.
 	made []string
-	// lock is the project's image lock, when this request holds it (imageLock).
-	lock *os.File
 	// daemonPlatform is the daemon's "<os> <architecture>", once read (platform).
 	daemonPlatform string
 }
@@ -521,8 +517,7 @@ func (s *doorSide) Image(ref string) (string, []string, error) {
 // pull of it goes through, a public one at the cost of one pull. It gives the digest the
 // pull got and that image, read by that digest: the name is anyone's on the server to move
 // right after the pull (a project user's build of a registry's name), so nothing reads it
-// again. Under the project's image lock; what the pull says goes to stderr on a failure,
-// stdout being the request's answer.
+// again. What the pull says goes to stderr on a failure, stdout being the request's answer.
 func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	d, err := s.logins(config)
 	if err != nil {
@@ -1203,13 +1198,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	name, _ := file["name"].(string)
 	s.policy.Label(file)
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
-	if starts || argv[0] == "build" || argv[0] == "pull" {
-		unlock, err := s.imageLock()
-		if err != nil {
-			return doorRefused(err)
-		}
-		defer unlock()
-	}
 	// The image check pins what it checked into the file (startImage), so the file compose
 	// gets, and the vets judge, is marshalled after it.
 	if starts {
@@ -1271,7 +1259,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			cmd = append(cmd, "--profile", p)
 		}
 	}
-	err = s.execKeeping(append(cmd, argv...), env)
+	err = syscall.Exec(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
 }
 
@@ -1328,25 +1316,25 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 }
 
 // startImage is the image svc's start runs, as compose is to name it, and that image's
-// labels. A name only this project writes (a build's, a hold of its own, OwnRef) or
-// devopsy's util image goes by its name: nothing else moves it, and the project's image
-// lock (imageLock) keeps its own builds off it until compose has created its containers.
-// Any other name is anyone's on the server to move between this check and compose's create
-// (another project's pull of a tag its registry moved, the deploy user's build of a
-// registry's name), so it goes pinned, <image>@<digest> (images.Pin): an image of this
-// project's (claimed by its id, or named by a hold of its own) by its digest in the image's
-// repository, as the devopsy.digest label chooses it, read in one inspect; else claimed
-// first, by the digest its pull got. A reference by digest, or an id, is a pin already.
-// An image not here yet is claimed too, with this project's logins, and one still missing
-// refuses the start: compose would pull or build it after this check.
+// labels. Every name moves between this check and compose's create: a name only this
+// project writes (a build's, a hold of its own, OwnRef) or devopsy's util image by the
+// project's own build or tag in another environment, so it goes by the id read here; any
+// other is anyone's on the server (another project's pull of a tag its registry moved, the
+// deploy user's build of a registry's name), so it goes pinned, <image>@<digest>
+// (images.Pin): an image of this project's (claimed by its id, or named by a hold of its
+// own) by its digest in the image's repository, as the devopsy.digest label chooses it,
+// read in one inspect; else claimed first, by the digest its pull got. A reference by
+// digest, or an id, is a pin already. An image not here yet is claimed too, with this
+// project's logins, and one still missing refuses the start: compose would pull or build it
+// after this check.
 func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
 	missing := fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
 	if image == doorKnown().Image || s.policy.OwnRef(image) {
 		img, err := s.inspectImage(image)
-		if err != nil {
+		if err != nil || img.ID == "" {
 			return "", nil, missing
 		}
-		return image, img.Labels, nil
+		return img.ID, img.Labels, nil
 	}
 	img, err := s.inspectImage(image)
 	owned := err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
@@ -1364,40 +1352,6 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 		}
 	}
 	return images.Pin(image, digest), img.Labels, nil
-}
-
-// imageLock holds this project's image lock until the door's process ends, compose's
-// after an exec included (execKeeping): a build, pull or tag of the project's waits while
-// a start runs, which otherwise could change an image between its label check and
-// compose's create. A wait is said, and ends in 10 minutes. unlock lets it go for a door
-// that returns rather than execs.
-func (s *doorSide) imageLock() (unlock func(), err error) {
-	dir := filepath.Join(s.policy.Space, "locks")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, s.policy.Project), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	unlock = func() { s.lock = nil; f.Close() }
-	fd := int(f.Fd())
-	took := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
-	if !took {
-		what := s.policy.Project + "'s images"
-		timer := report.Start("waiting for " + what + ", up to 10 minutes")
-		for end := time.Now().Add(10 * time.Minute); time.Now().Before(end) && !took; {
-			time.Sleep(250 * time.Millisecond)
-			took = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
-		}
-		if !took {
-			f.Close()
-			return nil, fmt.Errorf("refused: %s did not end in 10 minutes", what)
-		}
-		timer.Stop("done waiting for " + what)
-	}
-	s.lock = f
-	return unlock, nil
 }
 
 // regrant gives this project user back rwX in entries a root container wrote, where
@@ -1483,21 +1437,13 @@ func (s *doorSide) builder() ([]string, error) {
 		}
 	}
 	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network); err != nil {
+		// Another environment's build may have made it meanwhile.
+		if out, ierr := run("buildx", "inspect", name); ierr == nil && strings.Contains(string(out), `network="`+network+`"`) {
+			return b, nil
+		}
 		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
 	}
 	return b, nil
-}
-
-// execKeeping execs docker keeping the image lock, if the door holds it, open in what
-// it becomes: Go's descriptors close at an exec, and any process it starts before
-// would otherwise hold the lock too.
-func (s *doorSide) execKeeping(argv, env []string) error {
-	if s.lock != nil {
-		if _, err := unix.FcntlInt(s.lock.Fd(), unix.F_SETFD, 0); err != nil {
-			return err
-		}
-	}
-	return syscall.Exec(s.real, argv, env)
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)
@@ -1583,13 +1529,6 @@ func (s *doorSide) request(config string, argv []string) int {
 			report.Warn("could not remove " + path)
 		}
 	}
-	if a.Images {
-		unlock, err := s.imageLock()
-		if err != nil {
-			return doorRefused(err)
-		}
-		defer unlock()
-	}
 	for _, ref := range a.Claims {
 		digest, _, err := s.claim(ref, config)
 		if err != nil {
@@ -1625,7 +1564,7 @@ func (s *doorSide) request(config string, argv []string) int {
 	}
 	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
 	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
-		err := s.execKeeping(append([]string{"docker"}, a.Docker...), env)
+		err := syscall.Exec(s.real, append([]string{"docker"}, a.Docker...), env)
 		return doorRefused(err)
 	}
 	c := exec.Command(s.real, a.Docker...)

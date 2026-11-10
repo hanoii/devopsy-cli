@@ -357,8 +357,9 @@ server already. So a private image another project pulled is never
 this project's without its own login, and a public image is pulled once
 more for it. The door records what each project pulled this way, so
 later starts do not contact the registry. Compose then runs such an
-image by its digest (`nginx:1.27@sha256:...`), so nothing that moves
-its name afterwards changes what a start runs. An image with
+image by its digest (`nginx:1.27@sha256:...`), and the project's own
+builds by their image id, so nothing that moves a name afterwards
+changes what a start runs. An image with
 `pull_policy: never` and no registry host is pulled like any other: its
 name is a registry's. A project can't be named `devopsy` or anything
 starting with `devopsy-`, which are devopsy's own names.

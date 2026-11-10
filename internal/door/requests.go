@@ -103,9 +103,6 @@ type Action struct {
 	Claims []string
 	// Logins says Docker should use the project's registry logins.
 	Logins bool
-	// Images says Docker changes what a name in the image store is, under the
-	// project's image lock.
-	Images bool
 	// Regrant are entries a root container writes, given back to the project user
 	// once it exits: a copy's modes narrow its ACL there (the door's regrant).
 	Regrant []string
@@ -231,7 +228,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		// Its source is an image this project names too: its own, or claimed. An own one
 		// by the id that made it so, a claimed one by the digest its claim got (Claims):
 		// a name another writes may move before Docker tags.
-		a := &Action{Docker: argv, Images: true}
+		a := &Action{Docker: argv}
 		id, owned := p.ownedImage(d, args[0], known)
 		if owned && id != "" {
 			a.Docker = []string{"tag", id, args[1]}
@@ -254,7 +251,7 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if err := p.Claimable(args[1]); err != nil {
 			return nil, err
 		}
-		return &Action{Claims: []string{args[1]}, Logins: true, Images: true}, nil
+		return &Action{Claims: []string{args[1]}, Logins: true}, nil
 	case "exec":
 		// A sync's own daemon serving one connection over the pipe, and nothing else: the
 		// daemon has no network, and the push relays to it from a socket of its own.

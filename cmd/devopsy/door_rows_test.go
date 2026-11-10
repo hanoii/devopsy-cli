@@ -160,8 +160,8 @@ esac
 			t.Errorf("%s: the vet was not asked: %v", label, err)
 			continue
 		}
-		// The build goes by devopsy's name for it, the pulled image pinned.
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"devopsy.internal/shop-prod/web"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) {
+		// The build goes by the id of devopsy's name for it, the pulled image pinned.
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"web":{"image":"sha256:b1"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
 		}
 		// Whose file it is, for a vet that judges by project.
