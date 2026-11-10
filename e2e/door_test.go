@@ -1943,3 +1943,46 @@ sudo -n -u devopsy /usr/local/bin/devopsy --door compose ~/.docker/config.json /
 		t.Errorf("after compose's pull of a hold-shaped name (%s), another's image is this project's (%d):\n%s", strings.TrimSpace(pulled), code, out)
 	}
 }
+
+// A door project builds one service on another's build through compose's own way, the other
+// service as a build context (additional_contexts: service:<name>): it runs on the project's
+// own builder from its release, and app gets base's file. A context of another kind (an
+// image the project's builder would fetch past a claim) is refused, nothing built.
+func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
+	compose := func(context string) string {
+		return `services:
+  base:
+    build: {context: ., dockerfile: base.Dockerfile}
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+  app:
+    build:
+      context: .
+      dockerfile: app.Dockerfile
+      additional_contexts:
+        shop-base: "` + context + `"
+    user: "10001:10001"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+`
+	}
+	files := map[string]string{
+		".devopsy/config.yaml":     "project: doorctx\ndefaults:\n  mode: build\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+		".devopsy/base.Dockerfile": "FROM busybox:1.37\nRUN echo from-base >/b\n",
+		".devopsy/app.Dockerfile":  "FROM shop-base\nRUN cp /b /a\n",
+	}
+	dir := doorProject(t, "doorctx", compose("service:base"), files)
+	commitAll(t, dir)
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("a release building app on base (%d):\n%s", code, out)
+	}
+	if out, _ := doorRoot(t, "docker exec doorctx-prod-app-1 cat /a"); strings.TrimSpace(out) != "from-base" {
+		t.Errorf("app holds %q, not base's file", out)
+	}
+	op(t, dir, "printf '%s' "+quote(compose("docker-image://busybox:1.37"))+" >.devopsy/compose.yaml")
+	commitAll(t, dir)
+	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 || !strings.Contains(out, "only another service's build") {
+		t.Errorf("a release with an image as a build context (%d):\n%s", code, out)
+	}
+}

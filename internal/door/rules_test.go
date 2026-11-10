@@ -307,7 +307,7 @@ func TestCheckFileBuild(t *testing.T) {
 		{"a Dockerfile outside", `{"context":"` + ctx + `","dockerfile":"../../../../../../home/devopsy/.ssh/id"}`, "a Dockerfile outside"},
 		{"ssh, the deploy user's agent", `{"context":"` + ctx + `","ssh":["default"]}`, "build: ssh"},
 		{"secrets", `{"context":"` + ctx + `","secrets":["k"]}`, "build: secrets"},
-		{"another context", `{"context":"` + ctx + `","additional_contexts":{"a":"/etc"}}`, "build: additional_contexts"},
+		{"another context, a path", `{"context":"` + ctx + `","additional_contexts":{"a":"/etc"}}`, "only another service's build"},
 		{"the host's network", `{"context":"` + ctx + `","network":"host"}`, "build: network"},
 		{"privileged", `{"context":"` + ctx + `","privileged":true}`, "build: privileged"},
 		{"an entitlement", `{"context":"` + ctx + `","entitlements":["network.host"]}`, "build: entitlements"},
@@ -483,6 +483,42 @@ func TestNameOfLeavesLongerProjects(t *testing.T) {
 // inspect` shows them in .Config.Labels), which is what imports read for a role and what a
 // proxy reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
 // needs a check at the daemon's side, which this test does not ask.
+// A build takes another service's build of the same file as a context (compose's
+// additional_contexts: service:<name>), its way to build one service on another: that build
+// runs on the project's own builder from its own release, under the project's own name. Any
+// other context is refused: a path the client would read with the deploy user's rights, an
+// image (docker-image://) the project's builder would fetch past a claim, a URL, the service
+// itself, a service with no build or none of the file, a name not one word.
+func TestCheckFileBuildOnAnotherServicesBuild(t *testing.T) {
+	t.Parallel()
+	ctx := "/home/devopsy-shop/shop/prod/releases/1/code"
+	file := func(contexts string) map[string]any {
+		return parse(t, `{"name":"shop-prod","services":{`+
+			`"base":`+safe(`,"build":{"context":"`+ctx+`/base"}`)+`,`+
+			`"db":`+safe(``)+`,`+
+			`"app":`+safe(`,"build":{"context":"`+ctx+`","additional_contexts":`+contexts+`}`)+`}}`)
+	}
+	if errs := CheckFile(file(`{"shop-base":"service:base"}`), testPolicy, "build", &fakePaths{}); len(errs) != 0 {
+		t.Errorf("another service's build as a context: %v", errs)
+	}
+	for contexts, want := range map[string]string{
+		`{"shop-base":"/etc"}`:                       "only another service's build",
+		`{"shop-base":"../base"}`:                    "only another service's build",
+		`{"shop-base":"docker-image://alpine:3.22"}`: "only another service's build",
+		`{"shop-base":"https://example.com/x.git"}`:  "only another service's build",
+		`{"shop-base":"target:base"}`:                "only another service's build",
+		`{"shop-base":"service:app"}`:                "no other service of this file that builds",
+		`{"shop-base":"service:db"}`:                 "no other service of this file that builds",
+		`{"shop-base":"service:blog"}`:               "no other service of this file that builds",
+		`{"shop base":"service:base"}`:               "a name not one word",
+		`["shop-base=service:base"]`:                 "additional_contexts must be a map",
+	} {
+		if errs := CheckFile(file(contexts), testPolicy, "build", &fakePaths{}); !anyHolds(errs, want) {
+			t.Errorf("%s: %v, want %q", contexts, errs, want)
+		}
+	}
+}
+
 func TestCheckFileBuildLabels(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"build":{"context":"/home/devopsy-shop/shop/prod/code","labels":{"devopsy.role":"proxy"}}`)+`}}`)

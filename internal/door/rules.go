@@ -187,7 +187,8 @@ var serviceKeys = []string{
 // buildKeys are what a build may hold: its client reads the context with the
 // deploy user's rights. A secret or an ssh agent would be that user's.
 // Labels go on the image and from it on every container, past what reads a service's.
-var buildKeys = []string{"args", "context", "dockerfile", "no_cache", "pull", "target"}
+// additional_contexts only as another service's build of the same file (checkBuild).
+var buildKeys = []string{"additional_contexts", "args", "context", "dockerfile", "no_cache", "pull", "target"}
 
 var numericUser = regexp.MustCompile(`^(\d+):(\d+)$`)
 
@@ -333,7 +334,8 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	case b == nil:
 	case verb == "build":
 		block, _ := b.(map[string]any)
-		checkBuild(svc, block, p, paths, fail)
+		services, _ := file["services"].(map[string]any)
+		checkBuild(svc, block, services, p, paths, fail)
 		// A build writes devopsy's name for it in the server's one image store, whatever
 		// image: says: under a host no registry serves, so no name a project writes is one
 		// a registry's pull writes too, or another project reads.
@@ -572,12 +574,13 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 	fail("%s: a host path: %s: a bind is an entry of mnt (./mnt/<name>), or read-only in the release", svc, src)
 }
 
-func checkBuild(svc string, b map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
+func checkBuild(svc string, b map[string]any, services map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
 	for _, k := range sortedKeys(b) {
 		if !slices.Contains(buildKeys, k) {
 			fail("%s: build: %s", svc, k)
 		}
 	}
+	checkContexts(svc, b["additional_contexts"], services, fail)
 	ctx, _ := b["context"].(string)
 	real, err := paths.Real(ctx)
 	if err != nil {
@@ -608,6 +611,36 @@ func checkBuild(svc string, b map[string]any, p Policy, paths Paths, fail func(s
 	}
 	b["context"] = sealed
 	b["dockerfile"] = strings.TrimPrefix(df, real+"/")
+}
+
+// checkContexts takes a build's additional_contexts only as another service of the same file
+// that builds (service:<name>), compose's way to build on that build, which runs on the
+// project's own builder from its own release, under the project's own name for it: never a
+// path (the client reads it with the deploy user's rights, outside the sealed context), an
+// image (docker-image://, which a project's builder fetches from a registry with its logins,
+// past a claim), a URL or another form compose adds later.
+func checkContexts(svc string, v any, services map[string]any, fail func(string, ...any)) {
+	if v == nil {
+		return
+	}
+	contexts, ok := v.(map[string]any)
+	if !ok {
+		fail("%s: build: additional_contexts must be a map", svc)
+		return
+	}
+	for _, name := range sortedKeys(contexts) {
+		value, _ := contexts[name].(string)
+		other, isService := strings.CutPrefix(value, "service:")
+		target, _ := services[other].(map[string]any)
+		switch {
+		case !Word.MatchString(name):
+			fail("%s: build: additional_contexts: a name not one word: %q", svc, name)
+		case !isService:
+			fail("%s: build: additional_contexts: %s: only another service's build (service:<name>): %q", svc, name, value)
+		case other == svc || target == nil || target["build"] == nil:
+			fail("%s: build: additional_contexts: %s: no other service of this file that builds: %q", svc, name, value)
+		}
+	}
 }
 
 func sortedKeys(m map[string]any) []string {

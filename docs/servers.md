@@ -366,7 +366,11 @@ starting with `devopsy-`, which are devopsy's own names.
 
 Each project builds on a BuildKit builder of its own, on a Docker
 network of its own (`devopsy-<project>-build`), so no project's build
-shares another's cache or reaches its builder. The first time a project
+shares another's cache or reaches its builder. A project user's build
+takes another build context only as another service of its file that
+builds (`additional_contexts: {shop-base: "service:base"}`, the way to
+build one service on another, [Releases](releases.md)); a path, an image
+(`docker-image://`) or a URL is refused. The first time a project
 uses an image this way, its own builder fetches the image again from
 the project's registry, the image for the server's platform, to prove
 the registry serves its content and not only its name: Docker skips
