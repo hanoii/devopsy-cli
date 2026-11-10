@@ -63,6 +63,20 @@ func sudoArgs(as, flag string, args ...string) []string {
 	return append([]string{"-n", "-u", as, devopsyPath(), flag}, args...)
 }
 
+// doorCommand is the door asked as the deploy user through sudo (--door), the one way every
+// call of a project user's starts it: a hand-over, a question, a login.
+func doorCommand(args ...string) (*exec.Cmd, error) {
+	deploy, err := deployUser()
+	if err != nil {
+		return nil, fmt.Errorf("who is the deploy user: %w", err)
+	}
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		return nil, fmt.Errorf("a project user's docker goes through sudo: %w", err)
+	}
+	return exec.Command(sudo, sudoArgs(deploy.Username, doorFlag, args...)...), nil
+}
+
 // doorRead is a read as the project user who (--door-read), the one way any caller starts
 // it: in a session of its own, with no controlling terminal, since its process is that
 // user's to trace, and in the caller's session it would hold the caller's terminal (an
@@ -139,17 +153,12 @@ func doorExec(path string, args []string) int {
 // doorHandOver asks the door, as the deploy user, and becomes that: sudo relays
 // signals and exits with the code of what it runs.
 func doorHandOver(args []string) int {
-	deploy, err := deployUser()
+	c, err := doorCommand(args...)
 	if err != nil {
-		report.Error("who is the deploy user: " + err.Error())
+		report.Error(err.Error())
 		return 1
 	}
-	sudo, err := exec.LookPath("sudo")
-	if err != nil {
-		report.Error("a project user's docker goes through sudo: " + err.Error())
-		return 1
-	}
-	err = syscall.Exec(sudo, append([]string{"sudo"}, sudoArgs(deploy.Username, doorFlag, args...)...), os.Environ())
+	err = syscall.Exec(c.Path, append([]string{"sudo"}, c.Args[1:]...), os.Environ())
 	report.Error("running sudo: " + err.Error())
 	return 1
 }
@@ -371,11 +380,10 @@ func doorRefusedIt(err error) bool {
 // doorAsk asks the door something it answers on stdout. A question whose failure
 // has a plain way on says nothing of it: it is every server with no door.
 func doorAsk(say bool, args ...string) (string, error) {
-	deploy, err := deployUser()
+	c, err := doorCommand(args...)
 	if err != nil {
 		return "", err
 	}
-	c := exec.Command("sudo", sudoArgs(deploy.Username, doorFlag, args...)...)
 	var said bytes.Buffer
 	c.Stderr = &said
 	if say {

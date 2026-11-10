@@ -109,19 +109,14 @@ func doorLogin(args []string) int {
 	if password == "" {
 		return fail("docker login: no password")
 	}
-	deploy, err := deployUser()
+	c, err := doorCommand("login", key, l.user)
 	if err != nil {
-		return fail("who is the deploy user: " + err.Error())
-	}
-	sudo, err := exec.LookPath("sudo")
-	if err != nil {
-		return fail("a project user's docker goes through sudo: " + err.Error())
+		return failErr(err)
 	}
 	in, err := filledPipe(password + "\n")
 	if err != nil {
 		return failErr(err)
 	}
-	c := exec.Command(sudo, sudoArgs(deploy.Username, doorFlag, "login", key, l.user)...)
 	c.Stdin, c.Stdout, c.Stderr = in, os.Stdout, os.Stderr
 	err = c.Run()
 	in.Close()
