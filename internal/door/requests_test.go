@@ -388,6 +388,18 @@ func TestDecideAllows(t *testing.T) {
 	}
 }
 
+// An rsync's --chown gives a copy an owner as the owners form does, under the same rule
+// (userRefused): never root's, a host id or a project user's.
+func TestDecideRunChownHeldAsAnOwner(t *testing.T) {
+	t.Parallel()
+	for owner, refused := range map[string]bool{"10001:10001": false, "0:0": true, "10001:0": true, "1000:1000": true, "50001:50001": true} {
+		_, err := decide(t, "run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown="+owner, "/src/data/", "/dst/data/")
+		if (err != nil) != refused {
+			t.Errorf("--chown=%s: %v, refused %v", owner, err, refused)
+		}
+	}
+}
+
 // A --mount's source stays one path once place's answer is put back into it: a link in
 // the tree to a path holding `,source=/etc` passes as a clone or an entry of this
 // project's, and Docker takes the last source, so a root util container would hold any

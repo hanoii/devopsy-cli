@@ -339,7 +339,14 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 	}
 	// An entry goes to its service's user, whom userRefused holds to an id no container of
 	// the host's is: never root's or devopsy's own, though nothing reads an entry's owner as
-	// trust today.
+	// trust today. An rsync's --chown gives a copy its owner the same way, under the same rule.
+	for _, a := range cmd {
+		if chownFlag.MatchString(a) {
+			if why := p.userRefused(strings.TrimPrefix(a, "--chown=")); why != "" {
+				return nil, refuse("docker run: rsync's owner: %s", why)
+			}
+		}
+	}
 	if f.name == "owners" {
 		for _, a := range cmd[min(3, len(cmd)):] {
 			if !ownerArg.MatchString(a) {
