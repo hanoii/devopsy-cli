@@ -1193,6 +1193,62 @@ esac
 	}
 }
 
+// The compose whose version the door reads is the compose that then builds: Docker's client
+// finds its plugins in $DOCKER_CONFIG/cli-plugins first (~/.docker/cli-plugins without the
+// variable), then in the system's directories, so the two are one only when both run under
+// the same DOCKER_CONFIG.
+//
+// BUG: the version is read in the door's plain environment (the deploy user's
+// ~/.docker/cli-plugins first), and the build runs with DOCKER_CONFIG set to the project's
+// logins directory, which holds no plugin: the system's compose. A deploy user with a newer
+// compose of its own under ~/.docker/cli-plugins, the usual way to get one beside a
+// distribution's older package, answers the check with it, and the older one then reads
+// service:<name> as a path of the project user's making. Here the fake answers 2.40.0
+// without DOCKER_CONFIG and 2.26.1 with it, as such a server does.
+func TestDoorReadsTheVersionOfTheComposeThatBuilds(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	fake := doorImageFake(t, dir)
+	if err := os.Rename(fake, fake+".all"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, fake, `#!/bin/sh
+if [ "$*" = "compose version --short" ]; then
+  if [ -n "$DOCKER_CONFIG" ]; then echo 2.26.1; else echo 2.40.0; fi
+  exit 0
+fi
+case "$1 $DOCKER_CONFIG" in "compose "?*) echo "BUILT BY: 2.26.1" ;; esac
+exec `+fake+`.all "$@"
+`, 0o755)
+	write(t, filepath.Join(dir, "sudo"), `#!/bin/sh
+shift 5
+case "$1" in
+  real) printf '%s\n' "$2" ;;
+  tar) exec tar -C "$(dirname "$2")" -cf - -- "$(basename "$2")" ;;
+  *) exit 1 ;;
+esac
+`, 0o755)
+	code := filepath.Join(dir, "prod", "releases", "1", "code")
+	write(t, filepath.Join(code, "base", "Dockerfile"), "FROM busybox:1.37\n", 0o644)
+	write(t, filepath.Join(code, "app", "Dockerfile"), "FROM shop-base\n", 0o644)
+	svc := func(build string) string {
+		return `{"build":` + build + `,"user":"10001:10001","security_opt":["no-new-privileges"]}`
+	}
+	file := `{"name":"shop-prod","services":{` +
+		`"base":` + svc(`{"context":"`+code+`/base"}`) + `,` +
+		`"app":` + svc(`{"context":"`+code+`/app","additional_contexts":{"shop-base":"service:base"}}`) + `}}`
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=build", "DEVOPSY_TEST_DOOR_FILE="+file,
+		"DEVOPSY_TEST_DOOR_DIR="+code, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, _ := c.CombinedOutput()
+	if strings.Contains(string(out), "BUILT BY: 2.26.1") && strings.Contains(string(out), `"shop-base":"service:base"`) {
+		t.Errorf("the door read another compose's version, and compose 2.26.1 got a build with a context:\n%s", out)
+	}
+}
+
 // doorComposeHelper runs the door's compose on a file naming a pulled image, with the
 // fakes in dir and the verb in DEVOPSY_TEST_DOOR_VERB (TestDoorComposeHandsThePinnedFile),
 // or the request in DEVOPSY_TEST_DOOR_REQUEST (TestDoorClaimActsByDigest), and exits as it
