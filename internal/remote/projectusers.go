@@ -49,10 +49,15 @@ func doorKeysCommand(devopsy string) string {
 }
 
 // doorSudoers is the door's two rules: a project user asks its deploy user, which reads a
-// project's tree as that project's user.
+// project's tree as that project's user. A project user's sudo to the door keeps none of its
+// variables, whatever the server's sudoers keeps for others: Go's runtime reads some
+// (GODEBUG) before the door clears its environment. The Defaults are the command's, which
+// sudo applies after every user's, group's and run-as user's, wherever those are written.
 func doorSudoers(deploy, devopsy string) string {
 	return "# Written by devopsy (devopsy @<server> --project-users add): the door's rules.\n" +
-		"%" + DoorGroup + " ALL=(" + deploy + ") NOPASSWD: " + devopsy + " --door *\n" +
+		"Cmnd_Alias DEVOPSY_DOOR = " + devopsy + " --door *\n" +
+		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, !setenv\n" +
+		"%" + DoorGroup + " ALL=(" + deploy + ") NOPASSWD: DEVOPSY_DOOR\n" +
 		deploy + " ALL=(%" + DoorGroup + ") NOPASSWD: " + devopsy + " --door-read *\n"
 }
 

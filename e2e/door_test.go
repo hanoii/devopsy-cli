@@ -2022,6 +2022,29 @@ func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
 	}
 }
 
+// A project user's sudo to the door keeps none of its variables, whatever the server's sudoers
+// keeps for everyone (here an admin's GODEBUG): Go's runtime reads GODEBUG before the door
+// clears its environment, and inittrace makes it print a line before main. Nor does sudo take
+// one on its command line. The control: root's sudo keeps it.
+func TestDoorSudoKeepsNoVariable(t *testing.T) {
+	user := doorUser(t, "doorenv")
+	t.Cleanup(func() { doorRoot(t, "rm -f /etc/sudoers.d/zz-doorenv") })
+	if out, code := doorRoot(t, `printf 'Defaults env_keep += "GODEBUG"\n' >/etc/sudoers.d/zz-doorenv && chmod 440 /etc/sudoers.d/zz-doorenv && visudo -cq`); code != 0 {
+		t.Fatalf("the admin's sudoers (%d): %s", code, out)
+	}
+	if out, _ := doorRoot(t, "GODEBUG=inittrace=1 sudo -u devopsy /usr/local/bin/devopsy --version 2>&1"); !strings.Contains(out, "init runtime") {
+		t.Fatalf("the control: root's sudo did not keep GODEBUG:\n%s", out)
+	}
+	for _, call := range []string{
+		"GODEBUG=inittrace=1 sudo -n -u devopsy /usr/local/bin/devopsy --door version 2>&1",
+		"sudo -n -u devopsy GODEBUG=inittrace=1 /usr/local/bin/devopsy --door version 2>&1",
+	} {
+		if out, _ := doorAs(t, user, call); strings.Contains(out, "init runtime") {
+			t.Errorf("the door's runtime read the caller's GODEBUG (%s):\n%s", call, out)
+		}
+	}
+}
+
 // sudo matches its rule's arguments as one string, wildcards across words, so the rule for
 // `devopsy --door *` takes one argument "--door x" too: devopsy refuses such a word, and any
 // call of a project user's through sudo that is not the door, before it reads a project, so

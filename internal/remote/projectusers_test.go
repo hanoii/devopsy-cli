@@ -19,7 +19,8 @@ func TestDoorHostScript(t *testing.T) {
 		t.Fatalf("sh -n: %v\n%s", err, out)
 	}
 	for _, want := range []string{
-		"%devopsy-projects ALL=(deploy) NOPASSWD: /opt/bin/devopsy --door *",
+		"Cmnd_Alias DEVOPSY_DOOR = /opt/bin/devopsy --door *",
+		"%devopsy-projects ALL=(deploy) NOPASSWD: DEVOPSY_DOOR",
 		"deploy ALL=(%devopsy-projects) NOPASSWD: /opt/bin/devopsy --door-read *",
 		"--authorized-keys",
 		"sshd -T -C",
