@@ -33,7 +33,7 @@ const FetchComposeEnv = "DEVOPSY_INTERNAL_FETCH_COMPOSE"
 // within Docker's 128 characters (bookmarkPrefix's cut), the same for every service naming
 // that ref.
 func fetchTag(name, id, ref string) string {
-	return repoOf(ref) + ":" + bookmarkPrefix(name) + id + "-f" + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
+	return RepoOf(ref) + ":" + bookmarkPrefix(name) + id + "-f" + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
 }
 
 // WriteFetch writes rel's FetchFile before its fetch (img fetch-file): in build mode, each

@@ -92,10 +92,10 @@ func TestRecordListing(t *testing.T) {
 	// step, a plain up or a reload resolves the name again otherwise, and a name is
 	// anyone's on the server to have moved since the fetch (another project's pull of a tag
 	// its registry moved, the deploy user's build of a Docker Hub name). An own image goes by
-	// its name.
+	// its release's bookmark, a name only that release writes.
 	// The label stays the digest alone, as Docker spells it.
 	imgs, labels, _ := composeFacts(e.rel(id))
-	for svc, want := range map[string]string{"app": "", "database": "mariadb:11.8@sha256:m1", "alwaysup": "caddy:2-alpine@sha256:c1"} {
+	for svc, want := range map[string]string{"app": "app-prod-app:devopsy-app-prod-" + id, "database": "mariadb:11.8@sha256:m1", "alwaysup": "caddy:2-alpine@sha256:c1"} {
 		if imgs[svc] != want {
 			t.Errorf("%s's image: in %s is %q, want %q", svc, ComposeFile, imgs[svc], want)
 		}

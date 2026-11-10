@@ -1137,7 +1137,7 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	s2, _ := p.failRun(false, builtDB("app-stage", "12.1"))
 	built, _ := match(readList(p.e.rel(s2)), entry{Service: "database"})
 	imgs, _, _ = composeFacts(p.e.rel(s1))
-	if repoOf(imgs["database"]) != "app-stage-database" || !isBookmark(imgs["database"]) || d.names["mariadb:11.8"] != "I1" || p.runs("database") != built.ID {
+	if RepoOf(imgs["database"]) != "app-stage-database" || !isBookmark(imgs["database"]) || d.names["mariadb:11.8"] != "I1" || p.runs("database") != built.ID {
 		p.fail("built over pulled: image %q, mariadb:11.8 %s, runs %s (want %s)", imgs["database"], d.names["mariadb:11.8"], p.runs("database"), built.ID)
 	}
 	if e, _ := match(readList(p.e.rel(s1)), entry{Service: "database"}); e.ID != built.ID || e.Ref != "app-stage-database" {

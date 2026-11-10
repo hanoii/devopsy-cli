@@ -1915,7 +1915,7 @@ func TestDataHoldOutlivesAFailedFetch(t *testing.T) {
 	r1, _ := m.release(false, dbSvc("mariadb:11"))
 	m.failRun(false, builtDB("app-prod", "11.8"))
 	held := m.runs("database")
-	if imgs, _, marks := composeFacts(m.e.rel(r1)); repoOf(imgs["database"]) != "app-prod-database" || !isBookmark(imgs["database"]) || marks["database"] == "" {
+	if imgs, _, marks := composeFacts(m.e.rel(r1)); RepoOf(imgs["database"]) != "app-prod-database" || !isBookmark(imgs["database"]) || marks["database"] == "" {
 		m.fail("setup: the hold is %v, %v", imgs, marks)
 	}
 	r3 := m.e.release(builtDB("app-prod", "11.8"))

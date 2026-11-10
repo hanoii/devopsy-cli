@@ -3100,8 +3100,9 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	if err != nil || current() != "releases/1/code" {
 		t.Fatalf("rollback (%v), current %q: its fetch pulled release 1's old hold of the database:\n%s", err, current(), out)
 	}
-	// No hold: the database by its pin, the app it built again by its bookmark.
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); heldIn(got, "mariadb:11.8") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
+	// No hold: the database by its pin to what the rollback pulled, the app it built
+	// again by its bookmark.
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "@I1") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
 		t.Errorf("release 1's compose file after the rollback holds what nothing asked for:\n%s", got)
 	}
 }
