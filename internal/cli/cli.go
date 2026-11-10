@@ -1159,8 +1159,8 @@ with no Docker socket. What it finds as docker is devopsy, which asks the
 deploy user's devopsy through sudo, and that one checks every request, so
 a project user's leaked key reaches its project and not the server or
 the others. Asked as the deploy user, the server named with its user
-(@devopsy@vm1:). The server needs a door: space: first (devopsy-server's
-door step).
+(@devopsy@vm1:). The server needs a door: space: first, a directory on a
+mount of its own with nosuid and nodev (docs/project-users.md).
 
   --project-users           list them: project, whether the Unix user is
                             there, how many keys
