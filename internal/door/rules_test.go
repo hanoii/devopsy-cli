@@ -162,6 +162,10 @@ func TestCheckFileRefuses(t *testing.T) {
 		// Compose makes a service's name an alias on each of its networks.
 		{"another's name on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{"t":null}`) + `}}`, "a service is named shop-<name>"},
 		{"another's name on a shared default", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(``) + `}}`, "a service is named shop-<name>"},
+		// No networks of its own, said as an empty map or none: compose puts it on default all
+		// the same, as with no key.
+		{"another's name on a shared default, networks empty", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{}`) + `}}`, "a service is named shop-<name>"},
+		{"another's name on a shared default, networks null", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":null`) + `}}`, "a service is named shop-<name>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

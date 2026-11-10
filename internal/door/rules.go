@@ -557,8 +557,10 @@ func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...an
 func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	networks, _ := file["networks"].(map[string]any)
 	nets, _ := s["networks"].(map[string]any)
-	if _, ok := s["networks"]; !ok && s["network_mode"] == nil {
-		nets = map[string]any{"default": nil} // compose's own, unless the file makes it shared
+	// No networks of its own, the key absent, empty or null: compose puts it on its default,
+	// unless the file makes that one shared. The key's content counts, never its presence.
+	if len(nets) == 0 && s["network_mode"] == nil {
+		nets = map[string]any{"default": nil}
 	}
 	for _, net := range sortedKeys(nets) {
 		top, _ := networks[net].(map[string]any)
