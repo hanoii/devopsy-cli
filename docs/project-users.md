@@ -144,7 +144,15 @@ the project user's own `~/.ssh/authorized_keys`, so a leaked key cannot
 add another that survives its removal. Removing any of a project user's
 keys ends every process the user runs, so nothing a leaked key started
 outlives it. A project user also has no cron or at jobs and no linger,
-which would run its programs with no session.
+which would run its programs with no session, and sshd runs nothing of
+its home at a login (`~/.ssh/rc`) and forwards it no agent, X11 or
+tunnel, so `--ssh-option ForwardAgent=yes` does nothing there.
+
+A leaked key could still change what the project user owns: its home
+and its tree, the steps of an older release among them, which a
+rollback runs. After a leak, treat both as changed: release the
+project again, remove the older releases (`--releases remove`), and
+reset the home.
 
 ### The firewall
 

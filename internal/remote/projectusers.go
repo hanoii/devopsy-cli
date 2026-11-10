@@ -31,14 +31,21 @@ const (
 )
 
 // doorDropIn is sshd's part: a project user's keys are its deploy user's, asked of devopsy,
-// never its own ~/.ssh/authorized_keys. A Match ends with its included file.
+// never its own ~/.ssh/authorized_keys, and nothing of its home runs at a login (~/.ssh/rc),
+// which a leaked key would leave for the next login of a key kept. No agent, X11 or tunnel is
+// forwarded to it: devopsy forwards none, and a process a leaked key left could use an
+// operator's forwarded agent. A Match ends with its included file.
 func doorDropIn(deploy string) string {
 	return "# Written by devopsy (devopsy @<server> --project-users add): a project user's keys are\n" +
 		"# its deploy user's, asked of devopsy, never its own ~/.ssh/authorized_keys.\n" +
 		"Match Group " + DoorGroup + "\n" +
 		"\tAuthorizedKeysFile none\n" +
 		"\tAuthorizedKeysCommand " + DoorKeysCommand + " %u\n" +
-		"\tAuthorizedKeysCommandUser " + deploy + "\n"
+		"\tAuthorizedKeysCommandUser " + deploy + "\n" +
+		"\tPermitUserRC no\n" +
+		"\tAllowAgentForwarding no\n" +
+		"\tX11Forwarding no\n" +
+		"\tPermitTunnel no\n"
 }
 
 // doorKeysCommand is the root-owned script sshd runs, since it refuses a command root does

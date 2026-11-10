@@ -462,6 +462,45 @@ NR=$nr CHAIN='`+chain+`' setsid perl -e '`+reaper+`' </dev/null >/dev/null 2>&1 
 	}
 }
 
+// Nothing of a project user's home runs at its login (sshd's PermitUserRC no, in devopsy's
+// drop-in): a leaked key writes ~/.ssh/rc, its removal leaves it, and the next login of a key
+// kept or rotated in would run it as that user, whatever it starts outliving the key. Nor does
+// an operator's forwarded agent reach the user's session, where a process a leaked key left
+// could use it.
+func TestDoorLoginRunsNothingOfTheHome(t *testing.T) {
+	user := doorUser(t, "opusrc")
+	ran := "/tmp/opusrc-ran"
+	t.Cleanup(func() { doorRoot(t, "rm -f "+ran+" /home/"+user+"/.ssh/rc") })
+	if out, code := op(t, "/", "rm -f /tmp/opusrc /tmp/opusrc.pub && ssh-keygen -q -t ed25519 -N '' -C opusrc-ci -f /tmp/opusrc"); code != 0 {
+		t.Fatalf("a second key (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for opusrc add /tmp/opusrc.pub 2>&1"); code != 0 {
+		t.Fatalf("--ssh-keys --for opusrc add (%d): %s", code, out)
+	}
+	// The leaked key's login leaves its program in the home, which is the user's to write.
+	if out, code := op(t, "/", `ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /tmp/opusrc `+user+`@doorsrv 'mkdir -p "$HOME/.ssh" && printf "%s\n" "id -un >>`+ran+`" >"$HOME/.ssh/rc"' 2>&1`); code != 0 {
+		t.Fatalf("the leaked key's login (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for opusrc remove opusrc-ci 2>&1"); code != 0 {
+		t.Fatalf("--ssh-keys --for opusrc remove (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /tmp/opusrc "+user+"@doorsrv true 2>&1"); code == 0 {
+		t.Fatalf("the removed key still logs in: %s", out)
+	}
+	doorRoot(t, "rm -f "+ran)
+	// The key kept, the admin's own: a release, a shell.
+	if out, code := op(t, "/", "ssh -o BatchMode=yes "+user+"@doorsrv true 2>&1"); code != 0 {
+		t.Fatalf("the kept key's login (%d): %s", code, out)
+	}
+	if out, code := doorRoot(t, "cat "+ran); code == 0 {
+		t.Errorf("the removed key's ~/.ssh/rc ran at the kept key's login, as %s", strings.TrimSpace(out))
+	}
+	out, code := op(t, "/", `eval "$(ssh-agent -s)" >/dev/null && ssh -A -o BatchMode=yes `+user+`@doorsrv 'echo "agent:${SSH_AUTH_SOCK:-none}"' 2>&1; kill "$SSH_AGENT_PID"`)
+	if code != 0 || !strings.Contains(out, "agent:none") {
+		t.Errorf("an operator's agent reached the project user's session (%d): %s", code, out)
+	}
+}
+
 // The daemon resolves a bind at each start, so a path a project user can change would take
 // a restart anywhere: an entry, which only the door replaces, shared/mnt and a release's file.
 // A control shows it would: the same swaps on paths as compose writes them.
