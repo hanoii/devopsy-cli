@@ -143,7 +143,9 @@ A project user's keys are the deploy user's to edit
 the project user's own `~/.ssh/authorized_keys`, so a leaked key cannot
 add another that survives its removal. Removing any of a project user's
 keys ends every process the user runs, so nothing a leaked key started
-outlives it. A project user also has no cron or at jobs and no linger,
+outlives it, and removes the project's builder with its caches, which a
+leaked key's build could have filled and the next build would trust.
+A project user also has no cron or at jobs and no linger,
 which would run its programs with no session, and sshd runs nothing of
 its home at a login (`~/.ssh/rc`) and forwards it no agent, X11 or
 tunnel, so `--ssh-option ForwardAgent=yes` does nothing there.
@@ -449,20 +451,15 @@ names is refused before it goes live.
 ## Removing a project user
 
 `--project-users remove shop` drops its entry and keys, so it can no
-longer log in or use the door, then ends every process it runs:
+longer log in or use the door, then ends every process it runs and
+removes its builder and the builder's network:
 
 ```sh
 devopsy @devopsy@vm1: --project-users remove shop
 ```
 
 Its Unix user, home and tree stay. So do its environments' containers
-and volumes, which `--destroy` takes first, and its builder and the
-builder's network, which the deploy user removes by hand:
-
-```sh
-BUILDX_CONFIG=/var/lib/devopsy-door/buildx docker buildx rm devopsy-shop
-docker network rm devopsy-shop-build
-```
+and volumes, which `--destroy` takes first.
 
 Removing a project user clears nothing a leaked key left in its home:
 delete and recreate the home too.

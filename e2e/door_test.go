@@ -471,6 +471,53 @@ NR=$nr CHAIN='`+chain+`' setsid perl -e '`+reaper+`' </dev/null >/dev/null 2>&1 
 	}
 }
 
+// A key's removal takes the project's builder with its caches (cache mounts, layers), which the
+// door makes anew at the next build: a leaked key's build writes into them, and the owner's
+// next build, the one the doc says to run after a leak, would read what it put there.
+func TestDoorKeyRemovalTakesTheBuildCache(t *testing.T) {
+	user := doorUser(t, "doorcache")
+	keys := func(args string) {
+		t.Helper()
+		if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --ssh-keys --for doorcache "+args+" 2>&1"); code != 0 {
+			t.Fatalf("--ssh-keys --for doorcache %s (%d): %s", args, code, out)
+		}
+	}
+	if out, code := op(t, "/", "rm -f /tmp/doorcache /tmp/doorcache.pub && ssh-keygen -q -t ed25519 -N '' -C doorcache-leaked -f /tmp/doorcache"); code != 0 {
+		t.Fatalf("a second key (%d): %s", code, out)
+	}
+	t.Cleanup(func() {
+		doorRoot(t, "docker image rm -f devopsy.internal/doorcache-prod/app >/dev/null 2>&1; "+
+			"su -s /bin/sh devopsy -c 'BUILDX_CONFIG="+doorSpace+"/buildx docker buildx rm devopsy-doorcache' >/dev/null 2>&1; "+
+			"docker network rm devopsy-doorcache-build >/dev/null 2>&1; true")
+	})
+	keys("add /tmp/doorcache.pub")
+	build := func(dockerfile string) {
+		t.Helper()
+		script := `set -e
+mkdir -p ~/doorcache/prod/b && cd ~/doorcache/prod/b
+cat >Dockerfile <<'D'
+` + dockerfile + `D
+printf 'services:\n  app:\n    build: .\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n' >compose.yaml
+COMPOSE_PROJECT_NAME=doorcache-prod docker compose build -q`
+		if out, code := doorAs(t, user, script); code != 0 {
+			t.Fatalf("a build (%d):\n%s", code, out)
+		}
+	}
+	// The leaked key's build: what the project's Dockerfile mounts as its cache (a package
+	// manager's, say) now holds the attacker's file.
+	build("FROM busybox:1.37\nRUN --mount=type=cache,target=/cache/tool sh -c 'echo poisoned >/cache/tool/bin'\n")
+	keys("remove doorcache-leaked")
+	// The owner's build after the removal, the project's own Dockerfile.
+	build("FROM busybox:1.37\nRUN --mount=type=cache,target=/cache/tool sh -c 'cat /cache/tool/bin 2>/dev/null || echo clean' >/seen\n")
+	out, code := doorRoot(t, "docker run --rm devopsy.internal/doorcache-prod/app cat /seen")
+	if code != 0 {
+		t.Fatalf("the owner's image (%d): %s", code, out)
+	}
+	if got := strings.TrimSpace(out); got == "poisoned" {
+		t.Errorf("the owner's build after a key's removal ran on what the leaked key put in the project's cache: %q", got)
+	}
+}
+
 // Nothing of a project user's home runs at its login (sshd's PermitUserRC no, in devopsy's
 // drop-in): a leaked key writes ~/.ssh/rc, its removal leaves it, and the next login of a key
 // kept or rotated in would run it as that user, whatever it starts outliving the key. Nor does

@@ -78,21 +78,47 @@ func runEndProjectUser(args []string) int {
 }
 
 // endUser ends every process of the user who and its linger (remote.EndUserArgs), as root
-// through devopsy's util image. A user deleted already runs none: userdel refuses one with
-// processes.
+// through devopsy's util image, then its project's builder (endBuilder). A user deleted
+// already runs none: userdel refuses one with processes.
 func endUser(who string) error {
 	u, err := user.Lookup(who)
-	if errors.As(err, new(user.UnknownUserError)) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !errors.As(err, new(user.UnknownUserError)) {
 		return err
 	}
-	if err := ensureUtilImage(context.Background()); err != nil {
+	if err == nil {
+		if err := ensureUtilImage(context.Background()); err != nil {
+			return err
+		}
+		if out, err := exec.Command("docker", remote.EndUserArgs(u.Uid, who, devopsyPath())...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	return endBuilder(who)
+}
+
+// endBuilder removes the project user who's builder and its network, which the door makes anew
+// at the next build (doorSide.builder, both named after the user): what a removed key built is
+// in its caches (cache mounts, layers), which a later build of the owner's would trust.
+func endBuilder(who string) error {
+	d, err := remote.ServerDoor()
+	if err != nil || d == nil || d.Space == "" {
 		return err
 	}
-	if out, err := exec.Command("docker", remote.EndUserArgs(u.Uid, who, devopsyPath())...).CombinedOutput(); err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	env := append(os.Environ(), "BUILDX_CONFIG="+filepath.Join(d.Space, "buildx"))
+	docker := func(args ...string) *exec.Cmd {
+		c := exec.Command("docker", args...)
+		c.Env = env
+		return c
+	}
+	if docker("buildx", "inspect", who).Run() == nil {
+		if out, err := docker("buildx", "rm", who).CombinedOutput(); err != nil {
+			return fmt.Errorf("its builder %s: %w: %s", who, err, strings.TrimSpace(string(out)))
+		}
+	}
+	if docker("network", "inspect", who+"-build").Run() == nil {
+		if out, err := docker("network", "rm", who+"-build").CombinedOutput(); err != nil {
+			return fmt.Errorf("its builder's network: %w: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
 }
