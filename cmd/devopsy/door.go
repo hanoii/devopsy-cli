@@ -319,7 +319,10 @@ func pipeline(cmds ...*exec.Cmd) []error {
 	return errs
 }
 
-// contentHash hashes what a sealed copy holds: names, links and bytes.
+// contentHash hashes what a sealed copy holds: names, kinds, modes (a directory's too, its
+// special bits included), links and bytes, each file's by its length first, so no two trees
+// read as one stream. A copy is named by it and taken again by that name (Seal): what it
+// leaves out, a release changing it seals to the copy that does not have it.
 func contentHash(root string) (string, error) {
 	h := sha256.New()
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -327,26 +330,27 @@ func contentHash(root string) (string, error) {
 			return err
 		}
 		rel, _ := filepath.Rel(root, p)
-		fmt.Fprintf(h, "%s\x00%o\x00", rel, d.Type())
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := fi.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
+		fmt.Fprintf(h, "%q %o %o\x00", rel, d.Type(), mode)
 		switch {
 		case d.Type()&fs.ModeSymlink != 0:
 			target, err := os.Readlink(p)
 			if err != nil {
 				return err
 			}
-			h.Write([]byte(target))
+			fmt.Fprintf(h, "%q\x00", target)
 		case d.Type().IsRegular():
-			fi, err := d.Info()
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(h, "%o\x00", fi.Mode().Perm())
+			fmt.Fprintf(h, "%d\x00", fi.Size())
 			f, err := os.Open(p)
 			if err != nil {
 				return err
 			}
 			defer f.Close()
-			if _, err := io.Copy(h, f); err != nil {
+			if _, err := io.CopyN(h, f, fi.Size()); err != nil {
 				return err
 			}
 		}

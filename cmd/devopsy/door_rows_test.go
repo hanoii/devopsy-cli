@@ -366,7 +366,9 @@ func TestContentHashSeesWhatACopyHolds(t *testing.T) {
 	for what, change := range map[string]func(string){
 		"a file's bytes": func(r string) { _ = os.WriteFile(filepath.Join(r, "d", "f"), []byte("b"), 0o644) },
 		"a file's mode":  func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o755) },
-		"a file's name":  func(r string) { _ = os.Rename(filepath.Join(r, "d", "f"), filepath.Join(r, "d", "g")) },
+		// A release that closes a directory to others, or opens one.
+		"a directory's mode":   func(r string) { _ = os.Chmod(filepath.Join(r, "d"), 0o700) },
+		"a file's special bit": func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o644|os.ModeSetgid) },
 		"a link's end": func(r string) {
 			_ = os.Remove(filepath.Join(r, "l"))
 			_ = os.Symlink("u", filepath.Join(r, "l"))
