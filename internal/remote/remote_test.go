@@ -3522,3 +3522,29 @@ func heldIn(c, ref string) bool {
 	}
 	return strings.Contains(c, images.HeldLabel)
 }
+
+// A release keeps its project's directory closed to other users, and fails with a word of its
+// own when it cannot (another user owns it), never chmod's line alone.
+func TestCloseProject(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "shop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(project string) (string, error) {
+		c := exec.Command("sh", "-c", "set -eu\ndevopsy() { printf '%s\\n' \"$*\"; }\n"+closeProject(project), "sh")
+		c.Env = append(os.Environ(), "root="+root)
+		c.Dir = root
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run("shop"); err != nil || out != "" {
+		t.Fatalf("closing its own (%v): %s", err, out)
+	}
+	if fi, err := os.Stat(filepath.Join(root, "shop")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("its directory: %v (%v)", fi.Mode(), err)
+	}
+	if out, err := run("gone"); err == nil || !strings.Contains(out, "--say error "+root+"/gone cannot be closed to other users") {
+		t.Errorf("one it cannot close (%v): %s", err, out)
+	}
+}

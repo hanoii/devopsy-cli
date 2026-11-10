@@ -670,6 +670,18 @@ func HintAddress(t *Target) string {
 // Only the upload creates $base: an activation whose release went while
 // it waited (--destroy, a failed first release, --releases remove)
 // fails instead of making it again.
+// closeProject keeps the project's directory in $root its user's alone, failing with a word
+// when it cannot: under a root another user enters (a project user's, reaching its tree),
+// what its releases and their containers write would be theirs to read.
+func closeProject(project string) string {
+	dir := `"$root"/` + Quote(project)
+	return `chmod 700 ` + dir + ` 2>/dev/null || {
+  devopsy --say error "$root/` + project + ` cannot be closed to other users, its owner another: its releases would be theirs to read"
+  exit 1
+}
+`
+}
+
 func prelude(t *Target, create bool) string {
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: release and rollback do not apply"
@@ -679,10 +691,7 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + sayRemedies(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
   exit 1
 fi
-` + releaseLock(false, create) + `# The project's directory is its user's alone: under a root another user enters (a project
-# user's, reaching its tree), what its releases and their containers write would be theirs to read.
-chmod 700 "$root"/` + Quote(strings.SplitN(t.Path, "/", 2)[0]) + `
-mkdir -p "$base/releases" "$base/shared"
+` + releaseLock(false, create) + closeProject(strings.SplitN(t.Path, "/", 2)[0]) + `mkdir -p "$base/releases" "$base/shared"
 devopsy ` + MntReadyFlag + ` "$base"
 # An upload cut off leaves its .tmp, none running while the lock is held.
 # A watcher's file goes with its script: a sync's holder arms its own
