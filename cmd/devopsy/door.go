@@ -841,7 +841,10 @@ func runDoor(args []string) int {
 // do, where the project users' firewall keeps the project user off. Its config is a
 // directory of its own, gone after, so nothing of the login stays here.
 func (s *doorSide) login(registry, user string) int {
-	if !door.LoginRegistry(registry) || !door.LoginUser(user) {
+	if err := door.LoginRegistry(registry); err != nil {
+		return doorRefused(fmt.Errorf("refused: a login to %q: %v", registry, err))
+	}
+	if !door.LoginUser(user) {
 		return doorRefused(fmt.Errorf("refused: a login to %q as %q", registry, user))
 	}
 	password, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<16))

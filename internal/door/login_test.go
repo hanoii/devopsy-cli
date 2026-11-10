@@ -1,6 +1,9 @@
 package door
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A project user's login names a registry as Docker keeps its logins, and a user as one word:
 // the door hands both to docker login as values, so a flag, a path or a scheme of the
@@ -14,9 +17,16 @@ func TestLoginNames(t *testing.T) {
 		"a b": false, "..": false, "registry.example.com:": false, "[::1]:5000": false,
 		"LOCALHOST:5000": false, "Reg.Localhost": false, "127.0.0.0x1:5000": false, "0x7f000001": false, "0xa9fea9fe:5000": false,
 	} {
-		if LoginRegistry(r) != ok {
+		if (LoginRegistry(r) == nil) != ok {
 			t.Errorf("registry %q: %v", r, !ok)
 		}
+	}
+	// Each refusal says why: a host of the server's own is a registry's name all the same.
+	if err := LoginRegistry("localhost:5000"); err == nil || !strings.Contains(err.Error(), "the server's own") {
+		t.Errorf("a login to the server's own host: %v", err)
+	}
+	if err := LoginRegistry("https://registry.example.com"); err == nil || !strings.Contains(err.Error(), "not a registry's name") {
+		t.Errorf("a login to a URL: %v", err)
 	}
 	for u, ok := range map[string]bool{"alice": true, "robot$ci": true, "a@example.com": true, "": false, "-u": false, "a b": false, "a\nb": false} {
 		if LoginUser(u) != ok {

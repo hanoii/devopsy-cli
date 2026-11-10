@@ -79,8 +79,8 @@ func doorLogin(args []string) int {
 	}
 	key := loginKey(l.registry)
 	stdinFix := report.Fix("give the password on stdin:", "docker login --username <user> --password-stdin "+l.registry)
-	if !door.LoginRegistry(key) {
-		return fail("docker login: " + l.registry + " is not a registry's name")
+	if err := door.LoginRegistry(key); err != nil {
+		return fail("docker login: " + l.registry + ": " + err.Error())
 	}
 	if l.stdin && l.user == "" {
 		return failErr(&report.Failure{Msg: "docker login: --password-stdin needs --username", Remedies: []report.Remedy{stdinFix}})
