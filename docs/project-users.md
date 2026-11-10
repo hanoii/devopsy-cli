@@ -120,21 +120,29 @@ so a build never lands on a name a registry serves, which another
 project could pull and run. `--releases` shows that name, and
 `devopsy -- config` the `image:` the project wrote.
 
-Any other image belongs to a project only once it has pulled the image
-with its own registry logins (the `auths` of its
+Any other image belongs to a project only once it has fetched the
+image with its own registry logins (the `auths` of its
 `~/.docker/config.json`), before it runs, inspects or tags it. A
 private image another project pulled stays out of its reach without a
-login, and a public one is pulled again for it. The door records what
-each project pulled, so later starts do not contact the registry, and
+login, and a public one is fetched again for it. The door records what
+each project fetched, so later starts do not contact the registry, and
 compose runs the image by its digest (`nginx:1.27@sha256:...`).
+
+Docker's daemon never contacts a registry a project user names: the
+registry could send it, by a redirect or the address of a token, to
+another project's container. The door fetches the image itself, the
+registry's own bytes of the image for the server's platform, checks
+that every layer is there and matches its digest, and has Docker load
+them, which leaves the image as a pull by digest would. While it runs,
+`<space>` needs room for the image's compressed layers.
 
 Docker skips layers it already holds. A registry could use that to
 serve a manifest naming another project's private layers without their
-content, and the pull would get those layers. So the first time a
-project uses an image, its own builder fetches it again from the
-registry, the image for the server's platform. The builder holds only
-what its project fetched or built, so every layer it lacks must come
-from the registry. That costs one more download of those layers.
+content, or an image whose config names another project's layers over
+layers of junk. So the door checks that the registry served every
+layer, and that each layer's content, unpacked, is the one the image's
+config names. A layer it cannot unpack as Docker would, or of a kind it
+does not take (a foreign or an encrypted layer), refuses the image.
 
 ### Keys and logins
 
@@ -177,17 +185,16 @@ included, cannot reach them either: an app that takes the instance's
 credentials from them needs credentials of its own. DNS at those
 addresses still answers, since some clouds run their resolver there.
 
-Docker's daemon contacts registries for a project user's pulls and
-logins, as root, so the firewall keeps it off the host's loopback and
-the metadata services too, DNS aside, by its cgroup (`docker.service`'s,
-or the running `dockerd`'s): a registry a project runs could otherwise
-redirect the daemon there. That also holds for the deploy user's own
-pulls ([Registries](#registries)). The door's own registry clients (a
-build's, the read of an image's manifest) are held too, and kept off
+Docker's daemon contacts no registry a project user names, but it still
+pulls for the deploy user, so the firewall keeps it off the host's
+loopback and the metadata services too, DNS aside, by its cgroup
+(`docker.service`'s, or the running `dockerd`'s)
+([Registries](#registries)). The door's own registry clients (a
+build's, the read and the copy of an image) are held too, and kept off
 Docker's bridges as well: the door runs under a group of its own,
 `devopsy-door`, which no user is in, and refuses to run under any other.
 Docker's daemon still reaches the bridges, where its proxy connects to
-containers, so a pull can still make it contact a container on one.
+containers, which is why it never fetches a project's images.
 
 A project user's containers still reach what the host listens on at its
 other addresses, its bridges' included, as on any Docker host: a site's
@@ -243,8 +250,10 @@ The door names what it refuses, and logs each refusal in
   [Releases](releases.md)). A path is refused, since the deploy user's
   rights would read it, and so are an image and a URL, which the
   builder would fetch without the door recording them as the project's.
-- A start never pulls or builds: `pull_policy` is `missing`, `never` or
-  `if_not_present`. devopsy's releases build and pull before they start.
+- A start never pulls or builds: every service starts with
+  `pull_policy: never`, a project's own `pull_policy` is `missing`,
+  `never` or `if_not_present`, and `--pull` takes only `never`. devopsy's
+  releases build and pull before they start.
 - A service is on its project's own networks, a shared network the
   deploy user let it join ([Shared networks, roles and
   vets](#shared-networks-roles-and-vets)), or none, never Docker's
@@ -265,9 +274,19 @@ The door names what it refuses, and logs each refusal in
 
 ## Setting up a server
 
-A server needs `sudo` and `acl` installed, and the door's directory on a
-mount of its own. The commands below address the server by its deploy
-user, `devopsy@vm1`.
+A server needs `sudo` and `acl` installed, the door's directory on a
+mount of its own, and a current Docker: its containerd image store, which
+Docker 29 uses by default on a fresh install, and buildx 0.33.0 or
+later. `add` refuses a server without them. The commands below address
+the server by its deploy user, `devopsy@vm1`.
+
+A server set up earlier on Docker's classic image store can be moved to
+the containerd one, at a cost: no image and no container shows on the
+containerd store (volumes and networks stay), so every environment needs
+a release or a restart to make its containers again, a build-mode hold
+on an older image cannot come back, and the classic store keeps its disk
+until it is removed. A data root holding classic images stays on the
+classic store until its daemon is told otherwise.
 
 1. Make the door's directory, as root, and mount it on itself with
    `nosuid` and `nodev`, in `/etc/fstab`:
@@ -337,8 +356,8 @@ in that root, and says which.
 
 `--project-users` lists the project users, whether each Unix user is
 there, and how many keys each has. `--server-info` also checks that
-`<space>` is mounted `nosuid,nodev`, and whether sshd waits for a
-reboot.
+`<space>` is mounted `nosuid,nodev`, that Docker has the containerd
+image store and buildx 0.33.0, and whether sshd waits for a reboot.
 
 ## Releasing as a project user
 
@@ -363,36 +382,46 @@ under the name compose gives them by default, from their compose
 project, rather than an `image:` a registry serves: a project user's
 pull of that name would replace the build with the registry's image.
 An image with no registry host is a name on Docker Hub, so the door
-pulls it like any other, even with `pull_policy: never`.
+fetches it like any other at a start, even with `pull_policy: never`.
+
+A project user's `docker compose pull` is the door's own: it fetches
+each service's image as above, skipping the project's own builds,
+services with `pull_policy: never`, and those with `missing` or
+`if_not_present` whose image the project has already, and says `pulling <image>` and then
+its time on stderr, nothing with `-q`. It takes compose's `-q`,
+`--ignore-buildable`, `--ignore-pull-failures` and `--include-deps`,
+and stops at the first image that fails, where compose pulls the others
+first.
 
 ## Registries
 
-A project user's `docker login` goes through the door: Docker's daemon
-checks the login against the registry as it does for a pull, and the
-project user's own devopsy then keeps it in its own docker config
-(`~/.docker/config.json`, or under `DOCKER_CONFIG`). The deploy user
+A project user's `docker login` keeps the login in its own docker
+config (`~/.docker/config.json`, or under `DOCKER_CONFIG`), unchecked:
+it warns `<registry>: saved, not checked: the first pull checks it` and
+prints no `Login Succeeded`. A wrong password shows at the next pull or
+release, in the registry's words: checking it at the login would have
+Docker's daemon contact the registry for the project. The deploy user
 keeps no password. The password comes from stdin (`--password-stdin`,
 with `--username`) or a prompt, never the command line, where every
 user of the server would see it.
 
-The door pulls with those logins alone. A registry at the server's
+The door fetches with those logins alone. A registry at the server's
 loopback, link-local or a metadata address is refused, for a login and
-a pull alike, since Docker's daemon would contact it as root. A registry
+a pull alike. A registry
 on the same server is reached by its name or the address of Docker's
 bridge. Since the firewall keeps Docker's daemon off loopback, the
 deploy user's own pulls and logins reach no registry there either, a
 mirror included: put one on a build server, or reach it by its name or
 Docker's bridge address.
 
-A registry with a CA of its own, or a mirror, needs each client that
-reaches it set up, or no project user can use its images:
+A registry with a CA of its own, or a mirror, needs the door's clients
+set up, or no project user can use its images. Docker's daemon needs
+none of it for them:
 
-- Docker's daemon: `certs.d`, `insecure-registries` or a mirror, as for
-  any pull;
 - the builders: `<space>/buildx/buildkitd.default.toml`, read when a
   project's builder is made;
 - the server's CA store (`/etc/ssl/certs/ca-certificates.crt` on Debian
-  and Ubuntu), which the door trusts when it reads an image's manifest.
+  and Ubuntu), which the door trusts when it reads and copies an image.
 
 ## Shared networks, roles and vets
 
@@ -476,9 +505,10 @@ delete and recreate the home too.
 - The door rewrites the file compose runs (images pinned, binds moved
   into `<space>`, builds renamed), so `devopsy -- config` and a plain
   `docker compose` on the server do not show exactly what runs.
-- The first use of each image costs one more download, by the project's
-  builder.
 - A registry or mirror on the server's loopback is out of reach of the
   deploy user's pulls too.
+- A project user's `docker compose pull` is the door's, its output and
+  its stop at the first failure unlike compose's, and its `docker login`
+  is checked only by the next pull.
 - Every Docker call or compose key devopsy adds needs a rule in the
   door before project users can use it.

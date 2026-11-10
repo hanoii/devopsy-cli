@@ -99,14 +99,14 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	space := t.TempDir()
 	logins, record := filepath.Join(space, "logins", "shop", "config.json"), filepath.Join(space, "images", "devopsy-shop")
 	theirs := filepath.Join(space, "logins", "blog", "config.json")
-	for _, f := range []string{logins, record, theirs} {
+	for _, f := range []string{logins, record, record + ".lock", theirs} {
 		write(t, f, "{}\n", 0o600)
 	}
 	if code := removeProjectUser(&remote.Door{Space: space}, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" {
 		t.Errorf("remove (exit %d) ended %q", code, ended)
 	}
-	if fileExists(logins) || fileExists(record) || !fileExists(theirs) {
-		t.Errorf("after remove: its logins %v, its images' record %v, another's logins %v", fileExists(logins), fileExists(record), fileExists(theirs))
+	if fileExists(logins) || fileExists(record) || fileExists(record+".lock") || !fileExists(theirs) {
+		t.Errorf("after remove: its logins %v, its images' record %v and its lock %v, another's logins %v", fileExists(logins), fileExists(record), fileExists(record+".lock"), fileExists(theirs))
 	}
 	if fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
 		t.Errorf("after remove: its entry %v, its keys %v, its sync keys %v, another's keys %v", fileExists(entry), fileExists(keys), fileExists(syncKeys), fileExists(other))

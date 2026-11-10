@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,5 +73,34 @@ func TestWriteLogin(t *testing.T) {
 	}
 	if fi, err := os.Stat(config); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("its mode: %v %v", fi.Mode(), err)
+	}
+}
+
+// A project user's login is saved in its own config and checked by nothing: the door is not
+// asked (Docker's daemon would contact the registry the project names), and it says so, with
+// no "Login Succeeded", which would claim a check that did not happen. In a helper process,
+// since the login reads its password from stdin.
+func TestDoorLoginIsSavedUnchecked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Any door asked would go through sudo.
+	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\ntouch "+filepath.Join(dir, "asked")+"\nexit 1\n", 0o755)
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_LOGIN=-u alice --password-stdin registry.example.com", "DOCKER_CONFIG="+filepath.Join(dir, ".docker"),
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	c.Stdin = strings.NewReader("s3cret\n")
+	var stdout, stderr bytes.Buffer
+	c.Stdout, c.Stderr = &stdout, &stderr
+	if err := c.Run(); err != nil {
+		t.Fatalf("the login (%v):\n%s", err, stderr.String())
+	}
+	if stdout.Len() > 0 || !strings.Contains(stderr.String(), "devopsy: warning: registry.example.com: saved, not checked: the first pull checks it") {
+		t.Errorf("what the login said:\nstdout: %s\nstderr: %s", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "asked")); err == nil {
+		t.Error("the login asked the door")
+	}
+	if got := readString(filepath.Join(dir, ".docker", "config.json")); !strings.Contains(got, base64.StdEncoding.EncodeToString([]byte("alice:s3cret"))) {
+		t.Errorf("the login was not saved:\n%s", got)
 	}
 }

@@ -13,8 +13,8 @@ var loginRegistry = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?
 
 // LoginRegistry refuses a project user's login that names no registry as Docker keeps its
 // logins (HubLogin, else a host and an optional port): a flag, a path or a scheme of the
-// caller's, which docker login would read as more than a registry, or a host of the server's
-// own or a metadata service's (ownHost), which Docker would contact for it.
+// caller's, a key no claim looks up, or a host of the server's
+// own or a metadata service's (ownHost), which the door's claims would contact for it.
 func LoginRegistry(r string) error {
 	switch {
 	case r == HubLogin:
@@ -22,7 +22,7 @@ func LoginRegistry(r string) error {
 	case !loginRegistry.MatchString(r):
 		return errors.New("not a registry's name")
 	case ownHost(hostOf(r)):
-		return errors.New("a registry on the server's own or a metadata address, which Docker would contact for this project")
+		return errors.New("a registry on the server's own or a metadata address, which the door would contact for this project")
 	}
 	return nil
 }

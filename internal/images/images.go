@@ -368,11 +368,16 @@ var wholeID = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
 func repoKey(ref string) string {
-	r := RepoOf(ref)
-	r = strings.TrimPrefix(r, "index.docker.io/")
-	r = strings.TrimPrefix(r, "docker.io/")
-	return strings.TrimPrefix(r, "library/")
+	domain, rest, _ := SplitDomain(RepoOf(ref))
+	if !hubName(domain) {
+		return domain + "/" + rest
+	}
+	return strings.TrimPrefix(rest, "library/")
 }
+
+// Familiar is a name as Docker shows it (familiar), what `docker load` prints of an image it
+// loaded under ref.
+func Familiar(ref string) string { return familiar(ref) }
 
 // familiar is a name as Docker shows it, so a name devopsy computed and
 // one Docker reports compare equal: nginx is nginx:latest, and

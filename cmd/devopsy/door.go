@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -186,13 +187,41 @@ type doorSide struct {
 	real   string
 	env    []string
 	vets   []remote.DoorVet
-	// made are this request's work directories, so that a refusal leaves none behind.
-	made []string
+	// made are this request's work directories, so that a refusal, or a claim cut by a
+	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
+	made   []string
+	madeMu sync.Mutex
 	// keysAt is the project user's keys file as the request found it: a sync key is added
 	// only while it is still that file (syncKey).
 	keysAt os.FileInfo
-	// daemonPlatform is the daemon's "<os> <architecture>", once read (platform).
-	daemonPlatform string
+	// What a request reads once, for every claim and run it makes: the daemon's
+	// "<os> <architecture>" (platform), doorHostReady's answer (hostReady), the directory of
+	// its logins (logins) and its builder's environment (builder).
+	daemonPlatform memo[string]
+	hostChecked    memo[struct{}]
+	loginsDir      memo[string]
+	builderEnv     memo[[]string]
+	// onFetch, when set, is said when a claim goes past its skip to fetch (the pull verb's
+	// progress).
+	onFetch func()
+}
+
+// memo is a value a door process reads once, its answer (an error included) kept for the
+// request's later uses: one request is one process, and what it reads does not change under it
+// in the time it runs.
+type memo[T any] struct {
+	done bool
+	v    T
+	err  error
+}
+
+// get is the value, read by read the first time.
+func (m *memo[T]) get(read func() (T, error)) (T, error) {
+	if !m.done {
+		m.v, m.err = read()
+		m.done = true
+	}
+	return m.v, m.err
 }
 
 // read runs a read of the project's tree, as its user.
@@ -496,7 +525,9 @@ func (s *doorSide) workDir(perms string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.madeMu.Lock()
 	s.made = append(s.made, d)
+	s.madeMu.Unlock()
 	if perms == "" {
 		return d, nil
 	}
@@ -570,88 +601,17 @@ func (s *doorSide) Image(ref string) (string, []string, error) {
 	return f[0], f[1:], nil
 }
 
-// claim pulls ref with the project's registry logins (config, the caller's docker config)
-// and records the image the pull got as the project's (door.Policy.Images, ImagesFile):
-// an image another project pulled with its own logins is this one's only once its own
-// pull of it goes through, a public one at the cost of one pull. It gives the digest the
-// pull got and that image, read by that digest: the name is anyone's on the server to move
-// right after the pull (another project's pull of a tag its registry moved, the deploy
-// user's build of a registry's name), so nothing reads it
-// again. What the pull says goes to stderr on a failure, stdout being the request's answer.
-func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
-	d, err := s.logins(config)
-	if err != nil {
-		return "", images.Image{}, err
-	}
-	refused := fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
-	m, err := s.platformManifest(ref, d)
-	if err != nil {
-		if err == errNoRead {
-			return "", images.Image{}, refused
-		}
-		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
-	}
-	pinned := images.ByDigest(ref, m)
-	var said bytes.Buffer
-	pull := s.docker("pull", pinned)
-	pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
-	pull.Stdout, pull.Stderr = &said, &said
-	if pull.Run() != nil {
-		os.Stderr.Write(said.Bytes())
-		return "", images.Image{}, refused
-	}
-	img, err := s.inspectImage(pinned)
-	if err != nil {
-		return "", images.Image{}, fmt.Errorf("refused: %s: %v", ref, err)
-	}
-	if !slices.Contains(s.policy.Images, img.ID) {
-		if err := s.prove(pinned, d); err != nil {
-			// The reference the pull made goes, and the image with it unless another name
-			// holds it: a later claim landing there would pull nothing.
-			_ = s.docker("image", "rm", pinned).Run()
-			return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
-		}
-		if err := s.record(img.ID); err != nil {
-			return "", images.Image{}, err
-		}
-	}
-	// The name asked, the registry's content proven under it, so a start finds it here and
-	// asks the registry nothing.
-	if !images.Pinned(ref) {
-		_ = s.docker("tag", pinned, ref).Run()
-	}
-	return m, img, nil
-}
-
-// record adds id to this project's claimed images (Policy.ImagesFile).
-func (s *doorSide) record(id string) error {
-	file := s.policy.ImagesFile()
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = f.WriteString(id + "\n")
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	s.policy.Images = append(s.policy.Images, id)
-	return err
-}
-
 // errNoRead is a registry that gives a project's logins nothing for a ref.
 var errNoRead = errors.New("its registry logins do not read it")
 
 // platformManifest is the digest of the one image manifest ref comes to on this server, read
 // with the logins in the DOCKER_CONFIG dir logins: ref's own when it is a manifest, else the
 // entry of its index for the daemon's platform, itself a manifest, its bytes checked against
-// its digest. A claim pulls, proves and pins that digest, never an index's: Docker's pull and
-// BuildKit's fetch choose from an index by rules of their own, and one index could send each
-// to another image.
-func (s *doorSide) platformManifest(ref, logins string) (string, error) {
-	raw, err := s.registryRead(logins)
+// its digest. A claim copies and pins that digest, never an index's: imagetools' copy and
+// Docker's load could each choose from an index by rules of their own, and one index could
+// send each to another image.
+func (s *doorSide) platformManifest(g *claimCut, ref, logins string) (string, error) {
+	raw, err := s.registryRead(g, logins)
 	if err != nil {
 		return "", err
 	}
@@ -667,6 +627,11 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A ref by digest, an index's as a manifest's, is those bytes or nothing: an index not
+	// checked would name any entry its registry chose.
+	if _, digest, ok := strings.Cut(ref, "@"); ok && digestOf(data) != digest {
+		return "", fmt.Errorf("its registry served other bytes than %s", digest)
+	}
 	var m manifest
 	if json.Unmarshal(data, &m) != nil {
 		return "", errNoRead
@@ -674,9 +639,6 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 	if len(m.Manifests) == 0 {
 		if m.Config == nil {
 			return "", errors.New("its registry serves no image manifest for it")
-		}
-		if _, digest, ok := strings.Cut(ref, "@"); ok {
-			return digest, nil
 		}
 		return digestOf(data), nil
 	}
@@ -692,7 +654,7 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 		}
 	}
 	if entry == "" {
-		return "", fmt.Errorf("no image for %s/%s in its index", goos, arch)
+		return "", registryFailure{fmt.Errorf("no image for %s/%s in its index", goos, arch)}
 	}
 	data, err = raw(images.ByDigest(ref, entry))
 	if err != nil && err != errNoRead {
@@ -710,8 +672,10 @@ func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 // them to the builders; a CA from the host's store), under the door's group, which the
 // firewall keeps off the host's loopback and the metadata services (remote.DoorRunGroup), as a
 // registry the project user names answers as it likes (a redirect, a token's realm). A
-// registry's refusal is errNoRead, what it said on stderr, as a refused pull's.
-func (s *doorSide) registryRead(logins string) (func(ref string) ([]byte, error), error) {
+// registry's refusal is errNoRead, what it said on stderr, as a refused pull's. Each read is
+// the claim's child (g), bounded in size and time: a registry that answers and then says
+// nothing would hold the door.
+func (s *doorSide) registryRead(g *claimCut, logins string) (func(ref string) ([]byte, error), error) {
 	b, err := s.builder()
 	if err != nil {
 		return nil, errors.New(strings.TrimPrefix(err.Error(), "refused: "))
@@ -720,13 +684,14 @@ func (s *doorSide) registryRead(logins string) (func(ref string) ([]byte, error)
 		var said bytes.Buffer
 		c := s.docker("buildx", "imagetools", "inspect", "--raw", ref)
 		c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
-		c.Stderr = &said
-		data, err := c.Output()
-		if err != nil {
+		out := capBuffer{max: maxManifest}
+		c.Stdout, c.Stderr = &out, &said
+		c.WaitDelay = time.Second
+		if err := g.runWithin(c, doorReadWait); err != nil {
 			os.Stderr.Write(said.Bytes())
 			return nil, errNoRead
 		}
-		return data, nil
+		return out.Bytes(), nil
 	}, nil
 }
 
@@ -739,46 +704,19 @@ func digestOf(data []byte) string {
 // platform is the daemon's os, architecture and the variant an index's entry for it may name
 // (arm64's v8, arm's v7), read once.
 func (s *doorSide) platform() (goos, arch, variant string, err error) {
-	if s.daemonPlatform == "" {
+	read, err := s.daemonPlatform.get(func() (string, error) {
 		out, err := s.docker("version", "--format", "{{.Server.Os}} {{.Server.Arch}}").Output()
 		if err != nil {
-			return "", "", "", fmt.Errorf("the daemon's platform: %v", err)
+			return "", fmt.Errorf("the daemon's platform: %v", err)
 		}
-		s.daemonPlatform = strings.TrimSpace(string(out))
+		return strings.TrimSpace(string(out)), nil
+	})
+	if err != nil {
+		return "", "", "", err
 	}
-	goos, arch, _ = strings.Cut(s.daemonPlatform, " ")
+	goos, arch, _ = strings.Cut(read, " ")
 	variant = map[string]string{"arm64": "v8", "arm": "v7"}[arch]
 	return goos, arch, variant, nil
-}
-
-// prove fetches the image pinned names (<repo>@<digest>, what a claim's pull got) on the
-// project's own builder, with its logins (the DOCKER_CONFIG dir logins): the builder's store
-// holds only what the project fetched or built, so every blob it lacks comes from the
-// claimant's registry, checked by its digest, and the exporter needs every one. A pull alone
-// proves only that a registry answered: Docker fetches no layer it holds, so a registry that
-// names another project's layers, serving none, lands on them. Every first claim proves.
-func (s *doorSide) prove(pinned, logins string) error {
-	b, err := s.builder()
-	if err != nil {
-		return errors.New(strings.TrimPrefix(err.Error(), "refused: "))
-	}
-	dir, err := os.MkdirTemp("", "devopsy-door-proof-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	var said bytes.Buffer
-	// A tar of its files: each layer unpacked, so checked against the image's own config,
-	// with no shell of the image's needed (RUN would refuse a distroless one).
-	c := s.docker("buildx", "build", "--output", "type=tar,dest=/dev/null", "-f", "-", dir)
-	c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
-	c.Stdin = strings.NewReader("FROM " + pinned + "\n")
-	c.Stdout, c.Stderr = &said, &said
-	if c.Run() != nil {
-		os.Stderr.Write(said.Bytes())
-		return errors.New("its registry did not serve the image to this project's logins")
-	}
-	return nil
 }
 
 // inspectImage is ref's image as Docker has it now, read once.
@@ -914,50 +852,8 @@ func runDoor(args []string) int {
 		}
 	case "sync-key":
 		return side.syncKey(args[1:])
-	case "login":
-		if len(args) == 3 {
-			return side.login(args[1], args[2])
-		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
-}
-
-// login has Docker check a project user's registry login, its password on stdin (doorLogin):
-// the deploy user's docker login asks the daemon, which reaches the registry as its pulls
-// do, where the project users' firewall keeps the project user off. Its config is a
-// directory of its own, gone after, so nothing of the login stays here.
-func (s *doorSide) login(registry, user string) int {
-	if err := door.LoginRegistry(registry); err != nil {
-		return doorRefused(fmt.Errorf("refused: a login to %q: %v", registry, err))
-	}
-	if !door.LoginUser(user) {
-		return doorRefused(fmt.Errorf("refused: a login to %q as %q", registry, user))
-	}
-	password, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<16))
-	if err != nil {
-		return doorRefused(err)
-	}
-	// The deploy user's own: docker login writes the password there.
-	config, err := s.workDir("")
-	if err != nil {
-		return doorRefused(err)
-	}
-	defer s.removeWork(config)
-	// In a pipe filled before it starts, never written after: a docker login that ended
-	// first would raise SIGPIPE.
-	in, err := filledPipe(string(bytes.TrimSuffix(password, []byte("\n"))))
-	if err != nil {
-		return doorRefused(err)
-	}
-	defer in.Close()
-	var out bytes.Buffer
-	c := s.docker("--config", config, "login", "--username", user, "--password-stdin", registry)
-	c.Stdin, c.Stdout, c.Stderr = in, &out, &out
-	if err := c.Run(); err != nil {
-		report.Error("docker login "+registry+" failed", strings.Split(strings.TrimSpace(out.String()), "\n")...)
-		return 1
-	}
-	return 0
 }
 
 // syncKey is --sync-key for the caller: its sync keys (remote.DoorSyncKeysFile), never its
@@ -1117,12 +1013,14 @@ const doorReadWait = time.Minute
 
 // maxRendered, maxLogins, maxPath and maxEnvironments are what the deploy user reads at most
 // of a project user's answer: a rendered compose file, a project's docker config, a path's
-// resolution, and its environments for --server-info.
+// resolution, and its environments for --server-info; maxManifest of a registry's manifest or
+// index, which the door holds whole (a registry's own limit is 4 MiB).
 const (
 	maxRendered     = 8 << 20
 	maxLogins       = 1 << 20
 	maxPath         = 64 << 10
 	maxEnvironments = 4 << 20
+	maxManifest     = 4 << 20
 )
 
 // closedDir makes a directory only the deploy user and this project user can reach.
@@ -1322,6 +1220,8 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 // an unlinked file, so nothing of a project's environment stays on disk, with no .env,
 // in the release it says it is from, since devopsy reads compose's working_dir.
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
+	// A claim's copy is a work directory too, which a door killed mid-start leaves.
+	s.sweepWork()
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
@@ -1341,6 +1241,9 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
 	name, _ := file["name"].(string)
+	if argv[0] == "pull" {
+		return s.pull(config, file, profiles, dir, argv)
+	}
 	s.policy.Label(file)
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
 	// The image check pins what it checked into the file (startImage), so the file compose
@@ -1348,6 +1251,14 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if starts {
 		if err := s.checkImageLabels(file, config); err != nil {
 			return doorRefused(err)
+		}
+		// What starts is the image claimed: one gone in the moment since fails the start, never
+		// pulled by Docker's daemon, which contacts no registry a project names.
+		services, _ := file["services"].(map[string]any)
+		for _, svc := range services {
+			if m, ok := svc.(map[string]any); ok {
+				m["pull_policy"] = "never"
+			}
 		}
 	}
 	checked, err := json.Marshal(file)
@@ -1383,13 +1294,9 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err != nil {
 		return doorRefused(err)
 	}
-	env := s.env
-	if slices.Contains([]string{"up", "pull", "create", "run", "build"}, argv[0]) {
-		d, err := s.logins(config)
-		if err != nil {
-			return doorRefused(err)
-		}
-		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
+	env, err := s.composeEnv(config, argv[0] == "build")
+	if err != nil {
+		return doorRefused(err)
 	}
 	if argv[0] == "build" {
 		b, err := s.builder()
@@ -1405,12 +1312,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			}
 		}
 	}
-	cmd := []string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}
-	for _, p := range strings.Split(profiles, ",") {
-		if composeProfile.MatchString(p) {
-			cmd = append(cmd, "--profile", p)
-		}
-	}
+	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
 	err = execDecided(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
 }
@@ -1464,10 +1366,8 @@ func (s *doorSide) composeKnowsServiceContexts(env []string) error {
 	c := s.docker("compose", "version", "--short")
 	c.Env = env
 	out, err := c.Output()
-	v := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
-	var got [3]int
-	if _, serr := fmt.Sscanf(v, "%d.%d.%d", &got[0], &got[1], &got[2]); err != nil || serr != nil || slices.Compare(got[:], serviceContexts[:]) < 0 {
-		return fmt.Errorf("refused: a build context needs compose %d.%d.%d or later, which reads service:<name> as another service's build (this server's: %q)", serviceContexts[0], serviceContexts[1], serviceContexts[2], v)
+	if v, ok := versionAtLeast(string(out), serviceContexts); err != nil || !ok {
+		return fmt.Errorf("refused: a build context needs compose %s or later, which reads service:<name> as another service's build (this server's: %q)", floorWords(serviceContexts), v)
 	}
 	return nil
 }
@@ -1485,7 +1385,11 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	if err := s.foreign(); err != nil {
 		return doorRefused(err)
 	}
-	err := execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)
+	env, err := s.composeEnv("", false)
+	if err != nil {
+		return doorRefused(err)
+	}
+	err = execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), env)
 	return doorRefused(err)
 }
 
@@ -1532,8 +1436,8 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 // deploy user's build of a registry's name), so it goes pinned, <image>@<digest>
 // (images.Pin): an image of this project's (claimed by its id, or named by a hold of its
 // own) by its digest in the image's repository, as the devopsy.digest label chooses it,
-// read in one inspect; else claimed first, by the digest its pull got. A reference by
-// digest, or an id, is a pin already. An image not here yet is claimed too, with this
+// read in one inspect; else claimed first, by the digest its claim loaded, a reference by an
+// index's digest included. A reference by digest the project has, or an id, is a pin already. An image not here yet is claimed too, with this
 // project's logins, and one still missing refuses the start: compose would pull or build it
 // after this check.
 func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
@@ -1559,6 +1463,9 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 		if digest, img, err = s.claim(image, config); err != nil {
 			return "", nil, fmt.Errorf("%s: %w", svc, err)
 		}
+		// A pin by an index's digest goes by the entry the claim checked and loaded for the
+		// daemon's platform: no image here goes by the index's.
+		image, _, _ = strings.Cut(image, "@")
 	}
 	return images.Pin(image, digest), img.Labels, nil
 }
@@ -1615,8 +1522,14 @@ func (s *doorSide) writtenEntries(containers []string) []string {
 // builder is what a build's environment needs to run on this project's own BuildKit,
 // made at its first build: on one builder, cache mounts are shared across projects by
 // their id, so one project's build would fill a cache another's trusts. Its settings are
-// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets.
+// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets. Read once
+// per request.
 func (s *doorSide) builder() ([]string, error) {
+	return s.builderEnv.get(s.ensureBuilder)
+}
+
+// ensureBuilder makes the project's builder when it is not there as it should be (builder).
+func (s *doorSide) ensureBuilder() ([]string, error) {
 	name := "devopsy-" + s.policy.Project
 	// Its network is its own: on Docker's default bridge, which every container shares, a
 	// build step is a member of it, and reaches another project's builder and what its build
@@ -1687,10 +1600,15 @@ func unlinkedFile(data []byte) (int, error) {
 	return fd, nil
 }
 
-// logins leaves a project's registry logins alone in a directory of the door's.
-// Never its own directory: Docker's CLI loads plugins and helpers from there, which
-// would run the project's own program as the deploy user.
+// logins leaves a project's registry logins alone in a directory of the door's, read once
+// per request. Never its own directory: Docker's CLI loads plugins and helpers from there,
+// which would run the project's own program as the deploy user.
 func (s *doorSide) logins(config string) (string, error) {
+	return s.loginsDir.get(func() (string, error) { return s.writeLogins(config) })
+}
+
+// writeLogins writes the logins' directory (logins).
+func (s *doorSide) writeLogins(config string) (string, error) {
 	out, err := doorAnswer(s.read("cat", config), maxLogins, doorReadWait)
 	auths := map[string]map[string]string{}
 	if err == nil {
@@ -1721,6 +1639,46 @@ func (s *doorSide) logins(config string) (string, error) {
 		return "", err
 	}
 	return dir, os.Rename(tmp, filepath.Join(dir, "config.json"))
+}
+
+// profileArgs are compose's --profile flags for profiles, a comma-separated list: a profile
+// that is not one of compose's names is left out.
+func profileArgs(profiles string) []string {
+	var args []string
+	for _, p := range strings.Split(profiles, ",") {
+		if composeProfile.MatchString(p) {
+			args = append(args, "--profile", p)
+		}
+	}
+	return args
+}
+
+// composeEnv is the environment every compose the door runs gets: compose reads its logins,
+// helpers and plugins from DOCKER_CONFIG, the deploy user's own ~/.docker when unset, so a
+// build gets the project's logins (from its docker config, config) and anything else an empty
+// one.
+func (s *doorSide) composeEnv(config string, build bool) ([]string, error) {
+	dir, err := s.emptyConfig()
+	if build {
+		dir, err = s.logins(config)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return append(slices.Clone(s.env), "DOCKER_CONFIG="+dir), nil
+}
+
+// emptyConfig is a Docker config directory with nothing in it, the deploy user's and closed to
+// writes (<space>/docker-empty), for a compose that needs no logins.
+func (s *doorSide) emptyConfig() (string, error) {
+	dir := filepath.Join(s.policy.Space, "docker-empty")
+	if err := os.MkdirAll(s.policy.Space, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o555); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	return dir, os.Chmod(dir, 0o555)
 }
 
 // request answers a Docker command other than compose.
@@ -1780,13 +1738,6 @@ func (s *doorSide) request(config string, argv []string) int {
 	}
 	env := s.env
 	stdin := io.Reader(os.Stdin)
-	if a.Logins {
-		d, err := s.logins(config)
-		if err != nil {
-			return refused(err)
-		}
-		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
-	}
 	if a.Stdin != "" {
 		stdin = strings.NewReader(a.Stdin)
 	}

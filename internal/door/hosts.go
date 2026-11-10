@@ -4,6 +4,8 @@ import (
 	"net/netip"
 	"regexp"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 // Metadata4 and Metadata6 are the cloud metadata services' addresses, which hand out an
@@ -20,11 +22,11 @@ var (
 // dot, a colon or a capital, or is localhost, else Docker Hub's (""), its port and brackets
 // dropped.
 func registryHost(ref string) string {
-	first, _, ok := strings.Cut(ref, "/")
-	if !ok || (!strings.ContainsAny(first, ".:") && first != "localhost" && strings.ToLower(first) == first) {
+	domain, _, explicit := images.SplitDomain(ref)
+	if !explicit {
 		return ""
 	}
-	return hostOf(first)
+	return hostOf(domain)
 }
 
 // hostOf is a registry's host, its port and an IPv6 address's brackets dropped.

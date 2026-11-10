@@ -8,7 +8,7 @@ import (
 // A project user's login names a registry as Docker keeps its logins, and a user as one word:
 // the door hands both to docker login as values, so a flag, a path or a scheme of the
 // caller's never reaches it. Nor a registry of the server's own or a metadata service's,
-// which Docker would contact for that user (TestNoRegistryOfTheServersOwn).
+// which the door would contact for that user (TestNoRegistryOfTheServersOwn).
 func TestLoginNames(t *testing.T) {
 	t.Parallel()
 	for r, ok := range map[string]bool{

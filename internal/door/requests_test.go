@@ -514,7 +514,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	if a.Stream.From != tree+"/s/data/f.zst" || a.Stream.To != tree+"/s/fifo/tar" {
 		t.Errorf("its ends: %+v", a.Stream)
 	}
-	if strings.Contains(strings.Join(a.Stream.Docker, " "), tree) || !slices.Contains(a.Stream.Docker, "ALL") {
+	if strings.Contains(strings.Join(a.Stream.Docker, " "), tree) || !slices.Contains(a.Stream.Docker, "ALL") || !strings.Contains(strings.Join(a.Stream.Docker, " "), " --pull never ") {
 		t.Errorf("its container: %q", a.Stream.Docker)
 	}
 }
@@ -847,12 +847,15 @@ func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
 				t.Errorf("%q: taken, a pull writing a name taken as a project's own: %+v", argv, a)
 			}
 		}
-		// Compose's pull verb: another's refused, one of its own left out (pull_policy:
-		// never, which compose's pull skips): it writes neither.
+		// Compose's pull verb: another's refused, one of its own left out (PlanPull): it
+		// writes neither.
 		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
 		web := file["services"].(map[string]any)["web"].(map[string]any)
 		web["image"] = ref
-		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 && web["pull_policy"] != "never" {
+		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
+			if pull, err := PlanPull(file, []string{"web"}, []string{"pull"}, p); err != nil || len(pull.Images) == 0 {
+				continue
+			}
 			t.Errorf("compose's pull of %s is taken", ref)
 		}
 	}

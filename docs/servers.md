@@ -91,6 +91,9 @@ fix:
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
 - a tool the server needs, missing;
+- on a server with project users, a Docker without its containerd image
+  store or buildx 0.33.0, on which the door refuses every image a project
+  user does not build ([project users](project-users.md));
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
   its switch, a sync, an import or a restore that did not complete, an

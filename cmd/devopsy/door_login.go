@@ -1,17 +1,18 @@
 package main
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -60,18 +61,18 @@ func parseLogin(args []string) (loginArgs, error) {
 func loginKey(registry string) string {
 	r := strings.TrimPrefix(strings.TrimPrefix(registry, "https://"), "http://")
 	r, _, _ = strings.Cut(r, "/")
-	switch r {
-	case "", "docker.io", "index.docker.io", "registry-1.docker.io":
+	if r == "" || images.HubDomain(r) {
 		return door.HubLogin
 	}
 	return r
 }
 
-// doorLogin is docker login for a project user. Its own would reach no registry on its server,
-// which the project users' firewall keeps it off, so the door has Docker check it, reaching
-// the registry as its pulls do. Then this user's devopsy writes the login into its own config,
-// as docker login does: the deploy user keeps no password of the project's, and the door's
-// pulls read it from there (door.go's logins).
+// doorLogin is docker login for a project user: its devopsy writes the login into its own
+// config, as docker login does, unchecked, and says so. The deploy user keeps no password of
+// the project's, and the door's claims read it from there (door.go's logins); the first claim
+// is what checks it, in the registry's words. A check here would reach no registry on its
+// server (the project users' firewall keeps it off), and one by Docker's daemon would have it
+// contact a registry the project names.
 func doorLogin(args []string) int {
 	l, err := parseLogin(args)
 	if err != nil {
@@ -109,28 +110,11 @@ func doorLogin(args []string) int {
 	if password == "" {
 		return fail("docker login: no password")
 	}
-	c, err := doorCommand("login", key, l.user)
-	if err != nil {
-		return failErr(err)
-	}
-	in, err := filledPipe(password + "\n")
-	if err != nil {
-		return failErr(err)
-	}
-	c.Stdin, c.Stdout, c.Stderr = in, os.Stdout, os.Stderr
-	err = c.Run()
-	in.Close()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return ee.ExitCode()
-		}
-		return failErr(err)
-	}
 	if err := writeLogin(dockerConfig(), key, l.user, password); err != nil {
 		return failErr(fmt.Errorf("docker login: keeping it in %s: %w", dockerConfig(), err))
 	}
-	fmt.Println("Login Succeeded")
+	// No "Login Succeeded": nothing checked it.
+	report.Warn(cmp.Or(l.registry, "docker.io") + ": saved, not checked: the first pull checks it")
 	return 0
 }
 

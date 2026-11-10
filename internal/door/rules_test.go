@@ -308,12 +308,10 @@ func TestCheckFileBuild(t *testing.T) {
 	if s := service(file); s["build"] != nil {
 		t.Errorf("an up keeps the build: %v", s["build"])
 	}
+	// Nor a pull, which runs no compose: the door reads only that the service builds.
 	file = parse(t, build(`{"context":"/etc"}`))
 	if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) != 0 {
 		t.Fatal(errs)
-	}
-	if ctx := service(file)["build"].(map[string]any)["context"]; ctx != "." {
-		t.Errorf("a pull keeps the context %v", ctx)
 	}
 	tests := []struct{ name, block, want string }{
 		{"a context outside", `{"context":"/home/devopsy"}`, "a context outside"},
@@ -383,7 +381,7 @@ func TestCheckVerb(t *testing.T) {
 		{"up -d --wait --remove-orphans", true},
 		// A start runs the image the door read: compose pulling one then would run another.
 		{"up --pull never web", true},
-		{"up --pull missing web", true},
+		{"up --pull missing web", false},
 		{"create --pull=never", true},
 		{"up --pull always web", false},
 		{"up -d --pull=always", false},
@@ -556,9 +554,8 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 		t.Errorf("compose's pull of another project's hold %s is taken", hold)
 	}
 	// A build's name is the door's to write, never a pull's: another project's is refused,
-	// this project's own left out of the pull (pull_policy: never, which compose's pull
-	// skips); a registry's name is anyone's to pull, a project's name at its start included
-	// (no build is named so).
+	// this project's own left out of the pull (PlanPull); a registry's name is anyone's to
+	// pull, a project's name at its start included (no build is named so).
 	p.Others = []string{"mongo"}
 	for image, want := range map[string]string{"devopsy.internal/blog-prod/web": "refused", "devopsy.internal/blog-prod/web:1": "refused", "devopsy.internal/shop-prod/web": "skipped", "mongo-express:1": "pulled"} {
 		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
@@ -566,7 +563,7 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 		got := "pulled"
 		if len(errs) > 0 {
 			got = "refused"
-		} else if file["services"].(map[string]any)["web"].(map[string]any)["pull_policy"] == "never" {
+		} else if pull, err := PlanPull(file, []string{"web"}, []string{"pull"}, p); err != nil || len(pull.Images) == 0 {
 			got = "skipped"
 		}
 		if got != want {

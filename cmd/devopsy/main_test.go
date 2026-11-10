@@ -31,6 +31,9 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
 		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
 	}
+	if args := os.Getenv("DEVOPSY_TEST_DOOR_LOGIN"); args != "" {
+		os.Exit(doorLogin(strings.Fields(args))) // TestDoorLoginIsSavedUnchecked
+	}
 	if os.Getenv("DEVOPSY_TEST_EXEC_DECIDED") != "" {
 		// TestDoorGivesWhatItExecsItsStops: as runDoor, then the exec.
 		holdStops()

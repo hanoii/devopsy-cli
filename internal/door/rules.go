@@ -352,8 +352,8 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 			s["image"] = images.DoorBuild(name, svc)
 		}
 	case verb == "pull":
-		// A pull has only to skip what is built: nothing of the block is read.
-		s["build"] = map[string]any{"context": "."}
+		// The door's pull reads only whether a service builds (PlanPull): nothing of the
+		// block is read, and no compose runs it.
 	default:
 		// A build is its own request. Its image is the build's name, unless devopsy's own
 		// file holds the service on a pin (image mode's pull, a pulled image held) or on a
@@ -374,13 +374,11 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		fail("%s: an image named like a flag: %s", svc, image)
 	}
 	// A pull writes each name in the server's one image store, as a claim does: never one a
-	// project alone writes (Claimable). One of its own (a release's bookmark, a hold, its
-	// build's name: what devopsy's own file names for what it built) is no registry's to pull,
-	// and is left out of it.
-	if image, _ := s["image"].(string); verb == "pull" && image != "" {
-		if p.OwnRef(image) {
-			s["pull_policy"] = "never"
-		} else if err := p.Claimable(image); err != nil {
+	// project alone writes (Claimable), checked for every service before the first claim. One
+	// of its own (a release's bookmark, a hold, its build's name: what devopsy's own file names
+	// for what it built) is no registry's to pull, and PlanPull leaves it out.
+	if image, _ := s["image"].(string); verb == "pull" && image != "" && !p.OwnRef(image) {
+		if err := p.Claimable(image); err != nil {
 			fail("%s: %s", svc, strings.TrimPrefix(err.Error(), "refused: "))
 		}
 	}

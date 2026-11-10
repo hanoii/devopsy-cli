@@ -97,12 +97,10 @@ type Action struct {
 	Output string
 	// Exit is the exit code when Docker is empty.
 	Exit int
-	// Claims are images the project must claim before Docker runs: each pulled with
-	// its registry logins and, pulled, its id recorded as the project's (Policy.Images).
-	// One that does not pull refuses the request.
+	// Claims are images the project must claim before Docker runs: each fetched by the door
+	// with its registry logins and loaded, its id then recorded as the project's
+	// (Policy.Images). One that does not load refuses the request.
 	Claims []string
-	// Logins says Docker should use the project's registry logins.
-	Logins bool
 	// Regrant are entries a root container writes, given back to the project user
 	// once it exits: a copy's modes narrow its ACL there (the door's regrant).
 	Regrant []string
@@ -258,21 +256,21 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 			if err := p.Claimable(args[0]); err != nil {
 				return nil, err
 			}
-			a.Claims, a.Logins = []string{args[0]}, true
+			a.Claims = []string{args[0]}
 		}
 		return a, nil
 	case "rm":
 		return decideRM(args, p, d)
 	case "pull":
 		// An image a rollback or restart needs again: it could name it in a compose file.
-		// The door's claim pulls it, with the project's logins, and records it.
+		// The door's claim fetches it, with the project's logins, and records it.
 		if len(args) != 2 || args[0] != "-q" || strings.HasPrefix(args[1], "-") {
 			return nil, noDocker(argv)
 		}
 		if err := p.Claimable(args[1]); err != nil {
 			return nil, err
 		}
-		return &Action{Claims: []string{args[1]}, Logins: true}, nil
+		return &Action{Claims: []string{args[1]}}, nil
 	case "exec":
 		// A sync's own daemon serving one connection over the pipe, and nothing else: the
 		// daemon has no network, and the push relays to it from a socket of its own.
@@ -436,7 +434,7 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 				if err := p.Claimable(t); err != nil {
 					return nil, err
 				}
-				a.Claims, a.Logins = append(a.Claims, t), true
+				a.Claims = append(a.Claims, t)
 			}
 			a.Docker = append(a.Docker, t)
 		}
@@ -543,7 +541,7 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 // OwnsImage says whether ref is this project's image: devopsy's util image (known), a
 // name only this project writes (its build's or a hold of its own, OwnRef), an image
 // another of whose names is so, or one whose id the project claimed (Images). Any other is
-// claimed first (Action.Claims): pulled with this project's own registry logins, so an
+// claimed first (Action.Claims): fetched with this project's own registry logins, so an
 // image another project pulled with its own is never this one's by being on disk.
 func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
 	_, owned := p.ownedImage(d, ref, known)
@@ -604,15 +602,16 @@ func (p Policy) OwnRef(ref string) bool {
 
 // Claimable refuses a claim, or any pull of a project's, that would write a name the door
 // takes for one a project alone writes (OwnRef): a hold, any project's, this one's included
-// (a rollback and a restart run it by name), or a build's name under images.DoorHost. A pull
-// lands where a registry's manifest points, and Docker fetches no layer it holds: landing on
+// (a rollback and a restart run it by name), or a build's name under images.DoorHost. A claim
+// lands where a registry's manifest points, and Docker loads no layer it holds: landing on
 // such a name, it would make another's image a project's with no claim and no proof. Every
-// other name is a registry's, and what a pull of it writes is claimed, then proven. A pull by
-// digest writes no name, but its host is still one Docker's daemon contacts for the project,
-// so the server's own and the metadata addresses are refused first, by digest or not.
+// other name is a registry's, and what a claim of it writes is checked first. A claim by digest
+// writes no name, but its host is still one the door's clients and the project's builder
+// contact for the project, so the server's own and the metadata addresses are refused first,
+// by digest or not.
 func (p Policy) Claimable(ref string) error {
 	if ownHost(registryHost(ref)) {
-		return refuse("%s: a registry on the server's own or a metadata address, which Docker would contact for this project", ref)
+		return refuse("%s: a registry on the server's own or a metadata address, which the door would contact for this project", ref)
 	}
 	if strings.Contains(ref, "@") {
 		return nil
@@ -865,6 +864,6 @@ func decideRestore(cmd []string, mounts []mount, out []string, p Policy, h Host,
 			i++
 		}
 	}
-	docker := append(append([]string{"run", "-i"}, keep...), "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", known.Image, "zstd", "-dcq")
+	docker := slices.Concat([]string{"run", "-i"}, keep, UtilNoPull, []string{"--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", known.Image, "zstd", "-dcq"})
 	return &Action{Stream: &Stream{From: from, To: to, Docker: docker}}, nil
 }

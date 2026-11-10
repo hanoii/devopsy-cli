@@ -87,7 +87,10 @@ type DoorFacts struct {
 	// Unguarded is why the space's mount takes setuid files or devices, the door then
 	// refusing every request; empty when it has nosuid and nodev.
 	Unguarded string `json:"unguarded,omitempty"`
-	Users     int    `json:"users"`
+	// Docker is what of Docker the door lacks (the containerd image store, buildx's OCI
+	// layout), the door then refusing every claim; empty when it has both.
+	Docker string `json:"docker,omitempty"`
+	Users  int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
 	// FirewallWrong is what of the project users' firewall the host lacks (DoorFirewallWrong);

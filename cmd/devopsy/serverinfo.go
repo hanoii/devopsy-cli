@@ -61,6 +61,9 @@ func doorFacts() *remote.DoorFacts {
 	if err := spaceGuarded(d.Space); err != nil {
 		f.Unguarded = err.Error()
 	}
+	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
+		f.Docker = err.Error()
+	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		f.Reboot = true
 	}
@@ -890,6 +893,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if dr.Unguarded != "" {
 			warn(dr.Unguarded+": the door refuses every request",
 				spaceFix(dr.Space))
+		}
+		if dr.Docker != "" {
+			warn(dr.Docker+": the door refuses every image a project user does not build",
+				report.Fix("move Docker to its containerd image store and a current buildx (docs/project-users.md)"))
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
