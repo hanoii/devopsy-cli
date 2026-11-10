@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1432,5 +1433,30 @@ func TestDoorLiftsTheFileSizeLimit(t *testing.T) {
 	var now unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &now); err != nil || now.Cur != unix.RLIM_INFINITY {
 		t.Errorf("the door's file size limit: %+v (%v)", now, err)
+	}
+}
+
+// The door ignores its caller's terminal stop signals (SIGTSTP, SIGTTIN, SIGTTOU), so it is
+// never held between a check and its use, and gives them back to what it execs: an ignored
+// signal stays ignored across an exec, and compose's Ctrl-Z is compose's.
+func TestDoorGivesWhatItExecsItsStops(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/status"); err != nil {
+		t.Skip("no /proc here to read a process's ignored signals from")
+	}
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_EXEC_DECIDED=1")
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("the exec (%v): %s", err, out)
+	}
+	mask, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(string(out), "SigIgn:")), 16, 64)
+	if err != nil {
+		t.Fatalf("SigIgn: %q", out)
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU} {
+		if mask&(1<<(uint(sig)-1)) != 0 {
+			t.Errorf("what the door execs ignores %v", sig)
+		}
 	}
 }

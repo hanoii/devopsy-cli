@@ -334,6 +334,19 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 	if f.conf != (conf != "") {
 		return nil, refuse("docker run: settings, for %s", f.name)
 	}
+	// An entry goes to its service's user, whom userRefused holds to an id no container of
+	// the host's is: never root's or devopsy's own, though nothing reads an entry's owner as
+	// trust today.
+	if f.name == "owners" {
+		for _, a := range cmd[min(3, len(cmd)):] {
+			if !ownerArg.MatchString(a) {
+				continue
+			}
+			if why := p.userRefused(a); why != "" {
+				return nil, refuse("docker run: owners: %s", why)
+			}
+		}
+	}
 	action := &Action{}
 	entry, file := "", false
 	if f.narrow != nil {

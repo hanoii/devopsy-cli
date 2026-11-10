@@ -29,8 +29,11 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"the whole mnt":     {entry + ":/mnt/data", mnt + ":/mnt/data"},
 			"a path of its own": {entry + ":/mnt/data", tree + "/x:/mnt/data"},
 			"a name as owner":   {"1:2", "root"},
-			"a walking word":    {"sh\x00data", "sh\x00../x"},
-			"deeper than one":   {entry + ":/mnt/data", entry + ":/mnt/data/x"},
+			// An entry's owner is a container's user: never root's or one of the host's own.
+			"root as owner":      {"1:2", "0:0"},
+			"a host id as owner": {"1:2", "1000:2"},
+			"a walking word":     {"sh\x00data", "sh\x00../x"},
+			"deeper than one":    {entry + ":/mnt/data", entry + ":/mnt/data/x"},
 		}},
 		{"export", []string{"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "data"}, map[string][2]string{
 			"written":           {entry + ":/x/data:ro", entry + ":/x/data"},

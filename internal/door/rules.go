@@ -299,6 +299,10 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 			fail("network %s: %s must be true or false", key, k)
 			continue
 		}
+		// Compose's and devopsy's labels are theirs to set, as on a volume.
+		if labels, _ := n["labels"].(map[string]any); slices.ContainsFunc(sortedKeys(labels), reservedVolumeLabel) {
+			fail("network %s: a label of compose's or devopsy's", key)
+		}
 		if truthy(n["external"]) {
 			if !slices.Contains(p.Joinable, nm) {
 				fail("network %s: another's: %s", key, nm)
@@ -537,8 +541,17 @@ func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, f
 	for _, net := range sortedKeys(nets) {
 		top, _ := networks[net].(map[string]any)
 		opts, _ := nets[net].(map[string]any)
+		// Every name a container answers for on a shared network is one of the project's: its
+		// service's (compose's alias), no alias, and its hostname, which Docker's DNS answers
+		// for there too (with its domainname, a name of no one's rule).
 		if truthy(top["external"]) && !p.OwnName(svc) {
 			fail("%s: on the shared network %s, a service is named %s-<name>: compose answers for its name there", svc, net, p.Project)
+		}
+		if h, _ := s["hostname"].(string); truthy(top["external"]) && h != "" && !p.OwnName(h) {
+			fail("%s: on the shared network %s, its hostname %s is no name of %s's: Docker answers for it there", svc, net, h, p.Project)
+		}
+		if truthy(top["external"]) && s["domainname"] != nil {
+			fail("%s: a domainname on the shared network %s", svc, net)
 		}
 		if k := unknownKey(opts, netKeys); k != "" {
 			fail("%s: network %s: %s", svc, net, k)

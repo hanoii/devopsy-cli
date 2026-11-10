@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -776,6 +777,9 @@ func doorKnown() door.Known {
 func runDoor(args []string) int {
 	// A caller's umask comes through sudo, and the door's modes are its own.
 	syscall.Umask(0o022)
+	// Its caller's terminal cannot stop it between a check and its use: a door held there
+	// would stretch every window between them. What it execs gets them back (execDecided).
+	signal.Ignore(doorStops...)
 	if err := doorLimits(); err != nil {
 		report.Error(err.Error())
 		return 2
@@ -1318,8 +1322,19 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			cmd = append(cmd, "--profile", p)
 		}
 	}
-	err = syscall.Exec(s.real, append(cmd, argv...), env)
+	err = execDecided(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
+}
+
+// doorStops are the terminal's stop signals, which the door ignores until it execs.
+var doorStops = []os.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU}
+
+// execDecided execs what the door decided, with the terminal's stop signals back to their
+// default: an ignored signal stays ignored across an exec, and compose's own, Ctrl-Z
+// included, is its to have (devopsy replaces itself).
+func execDecided(path string, argv, env []string) error {
+	signal.Reset(doorStops...)
+	return syscall.Exec(path, argv, env)
 }
 
 // doorLimits lifts the file size limit the door's caller hands it through sudo, or refuses
@@ -1376,7 +1391,7 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	if err := s.foreign(); err != nil {
 		return doorRefused(err)
 	}
-	err := syscall.Exec(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)
+	err := execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)
 	return doorRefused(err)
 }
 
@@ -1678,7 +1693,7 @@ func (s *doorSide) request(config string, argv []string) int {
 	}
 	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
 	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
-		err := syscall.Exec(s.real, append([]string{"docker"}, a.Docker...), env)
+		err := execDecided(s.real, append([]string{"docker"}, a.Docker...), env)
 		return refused(err)
 	}
 	c := exec.Command(s.real, a.Docker...)

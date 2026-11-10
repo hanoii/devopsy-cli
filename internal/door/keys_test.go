@@ -52,6 +52,8 @@ func TestCheckFileRefusesWhatIsNotListed(t *testing.T) {
 		{"a volume with no name", `{"name":"shop-prod","volumes":{"v":null}}`, "volume v"},
 		{"a network with no name", `{"name":"shop-prod","networks":{"n":null}}`, "plain network"},
 		{"a network of the host's driver", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","driver":"host"}}}`, "plain network"},
+		// Compose's and devopsy's labels are theirs to set, as on a volume.
+		{"compose's label on a network", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","labels":{"com.docker.compose.project":"other-prod"}}}}`, "a label of compose's or devopsy's"},
 		{"a shared network's name, not external", `{"name":"shop-prod","networks":{"n":{"name":"traefik"}}}`, "plain network"},
 		{"an external network by a word, not its own", `{"name":"shop-prod","networks":{"n":{"name":"other-prod_default","external":"true"}}}`, "external must be true or false"},
 		{"IPv6 of its own", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":true}}}`, "plain network"},

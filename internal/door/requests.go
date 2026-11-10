@@ -175,8 +175,29 @@ func (p Policy) Label(file map[string]any) {
 }
 
 func (p Policy) ownContainer(d Daemon, target string) bool {
-	_, labels, err := d.Inspect(target)
-	return err == nil && p.ownLabels(labels)
+	_, ok := p.ownContainerID(d, target)
+	return ok
+}
+
+// ownContainerID is the full id of the container target names when it is this project's:
+// what Docker is then given, never the caller's word, a name or an id's prefix Docker would
+// resolve again, to another container by then.
+func (p Policy) ownContainerID(d Daemon, target string) (string, bool) {
+	id, labels, err := d.Inspect(target)
+	return id, err == nil && id != "" && p.ownLabels(labels)
+}
+
+// ownContainerIDs are targets' full ids when every one is this project's container.
+func (p Policy) ownContainerIDs(d Daemon, targets []string) ([]string, string, bool) {
+	var ids []string
+	for _, t := range targets {
+		id, ok := p.ownContainerID(d, t)
+		if !ok {
+			return nil, t, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, "", true
 }
 
 // flagValue pulls a flag taking a value out of argv, in both spellings.
@@ -255,10 +276,14 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 	case "exec":
 		// A sync's own daemon serving one connection over the pipe, and nothing else: the
 		// daemon has no network, and the push relays to it from a socket of its own.
-		if len(args) != 2+len(DaemonServe) || args[0] != "-i" || !slices.Equal(args[2:], DaemonServe) || !p.ownContainer(d, args[1]) {
+		if len(args) != 2+len(DaemonServe) || args[0] != "-i" || !slices.Equal(args[2:], DaemonServe) {
 			return nil, noDocker(argv)
 		}
-		return &Action{Docker: argv}, nil
+		id, ok := p.ownContainerID(d, args[1])
+		if !ok {
+			return nil, noDocker(argv)
+		}
+		return &Action{Docker: slices.Concat([]string{"exec", "-i", id}, DaemonServe)}, nil
 	case "build":
 		return decideUtilBuild(args, known)
 	case "run":
@@ -354,14 +379,17 @@ func decideInspect(args []string, p Policy, d Daemon) (*Action, error) {
 		}
 		return &Action{Output: out.String()}, nil
 	}
-	for _, t := range targets {
-		if !p.ownContainer(d, t) {
-			return nil, refuse("not this project's: docker inspect %s", t)
-		}
+	ids, t, ok := p.ownContainerIDs(d, targets)
+	if !ok {
+		return nil, refuse("not this project's: docker inspect %s", t)
 	}
-	// A container's, by its type: untyped, Docker answers for an image or a volume of the
-	// same name, another's, once the container went after the check.
-	return &Action{Docker: append([]string{"inspect", "--type", "container"}, args...)}, nil
+	// A container's, by its type and the id read: untyped, Docker answers for an image or a
+	// volume of the same name, and by the caller's word for whatever it names by then.
+	docker := []string{"inspect", "--type", "container"}
+	for _, f := range formats {
+		docker = append(docker, "--format", f)
+	}
+	return &Action{Docker: append(docker, ids...)}, nil
 }
 
 func decideNetwork(args []string, p Policy) (*Action, error) {
@@ -475,22 +503,24 @@ func decideVolume(args []string, p Policy) (*Action, error) {
 }
 
 func decideRM(args []string, p Policy, d Daemon) (*Action, error) {
+	docker := []string{"rm"}
+	var removes []string
 	for _, a := range args {
 		switch {
 		case a == "-f" || a == "--force":
+			docker = append(docker, a)
 		case strings.HasPrefix(a, "-"):
 			return nil, refuse("docker rm: %s", a)
-		case !p.ownContainer(d, a):
-			return nil, refuse("not this project's: docker rm %s", a)
+		default:
+			// By the id read, never the caller's word, which Docker would resolve again.
+			id, ok := p.ownContainerID(d, a)
+			if !ok {
+				return nil, refuse("not this project's: docker rm %s", a)
+			}
+			removes = append(removes, id)
 		}
 	}
-	var removes []string
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
-			removes = append(removes, a)
-		}
-	}
-	return &Action{Docker: append([]string{"rm"}, args...), Removes: removes}, nil
+	return &Action{Docker: append(docker, removes...), Removes: removes}, nil
 }
 
 // decideUtilBuild builds only devopsy's util image, from the door's own

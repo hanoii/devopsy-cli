@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -30,6 +31,11 @@ const startWait = time.Minute
 func TestMain(m *testing.M) {
 	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
 		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
+	}
+	if os.Getenv("DEVOPSY_TEST_EXEC_DECIDED") != "" {
+		// TestDoorGivesWhatItExecsItsStops: as runDoor, then the exec.
+		signal.Ignore(doorStops...)
+		panic(execDecided("/bin/sh", []string{"sh", "-c", "grep '^SigIgn:' /proc/self/status"}, os.Environ()))
 	}
 	dir, err := os.MkdirTemp("", "devopsy-test")
 	if err != nil {
