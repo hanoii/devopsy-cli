@@ -62,7 +62,9 @@ func TestCheckNamesRefusesAProjectUsersNames(t *testing.T) {
 
 // --project-users remove ends the project user's processes once its entry and keys are
 // gone, so the door answers no new call meanwhile: one it left running would outlive its
-// logins. A kill that fails fails the command, which says the rest is done.
+// logins. What the door kept for it goes too (its registry logins, its claimed images'
+// record), another project's staying. A kill that fails fails the command, which says the
+// rest is done.
 //
 // Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
 func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
@@ -85,8 +87,17 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	write(t, syncKeys, "a sync's key\n", 0o600)
 	other := remote.DoorKeysFile("devopsy-blog")
 	write(t, other, "another's keys\n", 0o600)
-	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" {
+	space := t.TempDir()
+	logins, record := filepath.Join(space, "logins", "shop", "config.json"), filepath.Join(space, "images", "devopsy-shop")
+	theirs := filepath.Join(space, "logins", "blog", "config.json")
+	for _, f := range []string{logins, record, theirs} {
+		write(t, f, "{}\n", 0o600)
+	}
+	if code := removeProjectUser(&remote.Door{Space: space}, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" {
 		t.Errorf("remove (exit %d) ended %q", code, ended)
+	}
+	if fileExists(logins) || fileExists(record) || !fileExists(theirs) {
+		t.Errorf("after remove: its logins %v, its images' record %v, another's logins %v", fileExists(logins), fileExists(record), fileExists(theirs))
 	}
 	if fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
 		t.Errorf("after remove: its entry %v, its keys %v, its sync keys %v, another's keys %v", fileExists(entry), fileExists(keys), fileExists(syncKeys), fileExists(other))

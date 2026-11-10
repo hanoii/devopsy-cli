@@ -84,7 +84,8 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A release by the deploy user of a compose project under a project user's names is refused before its switch (`--check-names`, `doorNameOwner`, the door's own `OwnName` among the server's projects): the door would then refuse that user's every compose command.
 - `add` refuses a project name that extends another's on the server, or another extends (`projectNameClash`, over the door's users and the release root): compose names are flat, so whichever came first would hold the other's networks, volumes and containers.
 - What `add` writes in a project user's home is written as that user (`runuser`), and only when the user is new: root writing in a home its user owns follows the links that user put there.
-- `remove` drops a project user's entry, keys and sync keys, never its Unix user: deleting a user that holds a tree and data is not one subcommand's.
+- `remove` drops a project user's entry, keys and sync keys, and what the door kept for it (its registry logins, its claimed images' record), never its Unix user: deleting a user that holds a tree and data is not one subcommand's.
+- The door lifts the file size limit its caller hands it through sudo, and refuses to run under one it cannot lift (`doorLimits`): its append to the refusals' log would fail without a word.
 - A door killed mid-way leaves its work directory for the next request's sweep, a day on (`sweepWork`).
 - A root container holds no path a project user can change: input is copied in and output collected by that user's rights, and a restore streams through a container with no mounts.
 - A project's registry login reaches compose as its `auth` values alone, in the door's own directory: Docker's CLI loads plugins and helpers from a `DOCKER_CONFIG`, which would run the project's program as the deploy user.

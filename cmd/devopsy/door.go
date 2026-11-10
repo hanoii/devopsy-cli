@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"golang.org/x/sys/unix"
 )
 
 // The deploy user's side of the door, from sudo: it checks a project user's request
@@ -775,6 +776,10 @@ func doorKnown() door.Known {
 func runDoor(args []string) int {
 	// A caller's umask comes through sudo, and the door's modes are its own.
 	syscall.Umask(0o022)
+	if err := doorLimits(); err != nil {
+		report.Error(err.Error())
+		return 2
+	}
 	doorWho = os.Getenv("SUDO_USER")
 	home, err := doorEnvironment()
 	if err != nil {
@@ -1315,6 +1320,27 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	}
 	err = syscall.Exec(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
+}
+
+// doorLimits lifts the file size limit the door's caller hands it through sudo, or refuses
+// to run under one it cannot lift: under it the door's append to its refusals' log would fail
+// without a word (SIGXFSZ ignored or not), and its caller keep what it was refused out of the
+// admin's sight.
+func doorLimits() error {
+	var l unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &l); err != nil {
+		return err
+	}
+	if l.Cur != l.Max {
+		l.Cur = l.Max
+		if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &l); err != nil {
+			return err
+		}
+	}
+	if l.Max != unix.RLIM_INFINITY {
+		return errors.New("refused: the door runs with no file size limit, and its caller's cannot be lifted")
+	}
+	return nil
 }
 
 // serviceContexts is the compose that first reads a build context service:<name> as another

@@ -305,6 +305,15 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	if err := os.Remove(remote.DoorKeysFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return failErr(err)
 	}
+	// What the door kept for it: its registry logins and the record of the images it claimed.
+	if d != nil && d.Space != "" {
+		if err := os.RemoveAll(filepath.Join(d.Space, "logins", project)); err != nil {
+			return failErr(err)
+		}
+		if err := os.Remove(filepath.Join(d.Space, "images", who)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return failErr(err)
+		}
+	}
 	if err := end(who); err != nil {
 		return fail("removed " + who + "'s entry and keys, but its processes could not be ended: " + err.Error())
 	}

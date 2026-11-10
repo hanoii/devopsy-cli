@@ -24,6 +24,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"golang.org/x/sys/unix"
 )
 
 // utilScripts are the util containers' scripts by name, as the code calls them: what
@@ -1405,5 +1406,31 @@ func TestDoorPullsNoUtilImage(t *testing.T) {
 	}
 	if _, err := door.Decide([]string{"pull", "-q", remote.UtilImage}, p, nil, doorTestHost{}, doorKnown()); err == nil {
 		t.Errorf("the door pulls %s for a project user", remote.UtilImage)
+	}
+}
+
+// The door runs with no file size limit, whatever its caller's through sudo: under one, its
+// append to the refusals' log fails without a word. A soft limit is lifted to the hard one.
+//
+// Not parallel: it sets the process's file size limit.
+func TestDoorLiftsTheFileSizeLimit(t *testing.T) {
+	var was unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &was); err != nil {
+		t.Fatal(err)
+	}
+	if was.Max != unix.RLIM_INFINITY {
+		t.Skip("this process runs under a hard file size limit")
+	}
+	t.Cleanup(func() { _ = unix.Setrlimit(unix.RLIMIT_FSIZE, &was) })
+	low := unix.Rlimit{Cur: 1 << 20, Max: was.Max}
+	if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &low); err != nil {
+		t.Fatal(err)
+	}
+	if err := doorLimits(); err != nil {
+		t.Fatal(err)
+	}
+	var now unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &now); err != nil || now.Cur != unix.RLIM_INFINITY {
+		t.Errorf("the door's file size limit: %+v (%v)", now, err)
 	}
 }
