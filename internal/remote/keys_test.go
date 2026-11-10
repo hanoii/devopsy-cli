@@ -78,16 +78,21 @@ func TestKeysRemoveLast(t *testing.T) {
 // Removing any of a project user's keys ends every process it runs, as root through the util
 // image under the host's pids, which nothing of the user's can signal: a key removed is one
 // no longer trusted, and what it may have left running (nohup, setsid) would outlive it and
-// keep calling the door by its group. The deploy user's own keys never end anything. A kill
+// keep calling the door by its group. Its sync keys go after its processes end, so one added
+// meanwhile by what still ran goes too. The deploy user's own keys never end anything. A kill
 // that fails says so and fails: the key is gone, and the operator must know what runs.
 func TestKeysRemoveEndsTheUsersProcesses(t *testing.T) {
 	t.Parallel()
 	home, bin := t.TempDir(), t.TempDir()
 	calls := filepath.Join(bin, "calls")
+	syncKeys := filepath.Join(home, "door", "sync-keys", "devopsy-shop")
+	const syncLine = `restrict,command="devopsy --sync-child 1.0a1b2c /home/devopsy-shop/shop/prod vm2:shop/prod" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g devopsy-sync-1.0a1b2c`
 	for name, body := range map[string]string{
-		"flock":   "exit 0",
-		"id":      `case "$1" in -nG) echo devopsy ;; -u) [ "$2" = devopsy-shop ] && echo 10002 || /usr/bin/id -u ;; *) exit 1 ;; esac`,
-		"devopsy": `echo "devopsy $*" >>` + calls,
+		"flock": "exit 0",
+		"id":    `case "$1" in -nG) echo devopsy ;; -u) [ "$2" = devopsy-shop ] && echo 10002 || /usr/bin/id -u ;; *) exit 1 ;; esac`,
+		// Called between the key's removal and the end (the util image's check): a process of
+		// the user's, not ended yet, would ask the door for a sync key there.
+		"devopsy": `echo "devopsy $*" >>` + calls + ` && mkdir -p ` + filepath.Dir(syncKeys) + ` && printf '%s\n' '` + syncLine + `' >>` + syncKeys,
 		"docker":  `echo "docker $*" >>` + calls + `; [ ! -e ` + filepath.Join(bin, "fails") + ` ]`,
 	} {
 		if err := testfile.Write(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
@@ -114,14 +119,17 @@ func TestKeysRemoveEndsTheUsersProcesses(t *testing.T) {
 	if code, out := remove("devopsy-shop", "AAAAone"); code != 0 || !ended(out) {
 		t.Errorf("one of two keys (%d) leaves its processes:\n%s", code, out)
 	}
+	if fileExists(syncKeys) {
+		t.Errorf("a sync key added before the processes ended outlives the removal:\n%s", readFile(syncKeys))
+	}
 	write(t, keys, "ssh-ed25519 AAAAtwo ci\n# ssh-ed25519 AAAAold retired\n")
 	if code, out := remove("devopsy-shop", "AAAAtwo"); code != 0 || !ended(out) {
 		t.Errorf("its last key (%d) leaves its processes:\n%s", code, out)
 	}
 	write(t, filepath.Join(bin, "fails"), "")
 	write(t, keys, "ssh-ed25519 AAAAtwo ci\n")
-	if code, out := remove("devopsy-shop", "AAAAtwo"); code == 0 || !strings.Contains(out, "could not be ended") {
-		t.Errorf("a kill that failed (%d) passes for one:\n%s", code, out)
+	if code, out := remove("devopsy-shop", "AAAAtwo"); code == 0 || !strings.Contains(out, "could not be ended") || fileExists(syncKeys) {
+		t.Errorf("a kill that failed (%d) passes for one, or keeps the sync keys (%v):\n%s", code, fileExists(syncKeys), out)
 	}
 	os.Remove(filepath.Join(bin, "fails"))
 	write(t, filepath.Join(home, ".ssh", "authorized_keys"), "ssh-ed25519 AAAAone laptop\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItwo ci\n")

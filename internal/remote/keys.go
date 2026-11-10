@@ -190,7 +190,16 @@ fi
 	} else {
 		end = `uid=$(id -u ` + Quote(user) + `)
 devopsy ` + UtilImageFlag + ` >/dev/null 2>&1 || :
-docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || {
+ended=1
+docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || ended=
+# Its sync keys go with any of its keys, a leaked one could have added them: once what it
+# left running is ended, under the lock the door adds them by (lockedKeys), which refuses
+# an add asked before this edit of its keys.
+mkdir -p "$(dirname "$sf")"
+exec 8>"$(dirname "$sf")/.$(basename "$sf").lock"
+flock -w 60 8 || { ` + echoLine(report.ErrorLevel, "another edit of $sf did not end in a minute") + `; exit 75; }
+rm -f "$sf"
+[ -n "$ended" ] || {
   ` + echoLine(report.ErrorLevel, "the key is removed, but the processes of "+user+" could not be ended") + `
   exit 1
 }
@@ -202,8 +211,6 @@ docker ` + endProcessesShell(`"$uid"`) + ` >/dev/null 2>&1 || {
 grep -qF -- " $blob" "$f" || { ` + echoLine(report.ErrorLevel, "that key is not authorized") + `; exit 3; }
 grep -vF -- " $blob" "$f" > "$f.tmp" || true
 ` + last + `mv -f "$f.tmp" "$f"
-# A project user's sync keys go with any of its keys: a leaked one could have added them.
-[ -z "${sf:-}" ] || rm -f "$sf"
 ` + end + `printf '%s\n' "$f"
 `
 }

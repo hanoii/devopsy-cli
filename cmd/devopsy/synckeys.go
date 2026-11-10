@@ -32,7 +32,7 @@ func runSyncKey(args []string) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	if err := editSyncKeys(filepath.Join(home, ".ssh", "authorized_keys"), selfPath(), args, time.Now()); err != nil {
+	if err := editSyncKeys(filepath.Join(home, ".ssh", "authorized_keys"), selfPath(), args, time.Now(), nil); err != nil {
 		return fail(err.Error())
 	}
 	return 0
@@ -55,8 +55,9 @@ func selfPath() string {
 // --ssh-keys scripts take beside it (keysLock), so neither loses the other's edit: add
 // writes the sync's line (remote.SyncKeyLine, devopsy the forced command's), one per sync,
 // sweeping the sync keys whose expiry passed; remove drops a sync's, if any. Every other
-// line stays as it is.
-func editSyncKeys(file, devopsy string, args []string, now time.Time) error {
+// line stays as it is. still, if any, refuses an add under that lock: the door's, for a
+// request its user's keys changed under (doorSide.keysAt).
+func editSyncKeys(file, devopsy string, args []string, now time.Time, still func() error) error {
 	usage := errors.New("usage: devopsy " + remote.SyncKeyFlag + " add <id> <base> <to> <reset|-> <blob> | remove <id>")
 	switch {
 	case len(args) == 6 && args[0] == "add" && (args[4] == "reset" || args[4] == "-"):
@@ -65,6 +66,11 @@ func editSyncKeys(file, devopsy string, args []string, now time.Time) error {
 			return err
 		}
 		return lockedKeys(file, func(lines []string) ([]string, error) {
+			if still != nil {
+				if err := still(); err != nil {
+					return nil, err
+				}
+			}
 			var kept []string
 			for _, l := range lines {
 				id, base, exp, sync := syncKeyOf(l)

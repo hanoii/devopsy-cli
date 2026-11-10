@@ -172,6 +172,9 @@ type doorSide struct {
 	vets   []remote.DoorVet
 	// made are this request's work directories, so that a refusal leaves none behind.
 	made []string
+	// keysAt is the project user's keys file as the request found it: a sync key is added
+	// only while it is still that file (syncKey).
+	keysAt os.FileInfo
 	// daemonPlatform is the daemon's "<os> <architecture>", once read (platform).
 	daemonPlatform string
 }
@@ -773,10 +776,11 @@ func runDoor(args []string) int {
 	doorLog = filepath.Join(policy.Space, "refused.log")
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
+	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
 	if !remote.KeysLeft(remote.DoorKeysFile(doorWho)) {
 		return doorRefused(errors.New("refused: " + doorWho + " has no key left"))
 	}
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets}
+	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt}
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))
 	}
@@ -875,7 +879,17 @@ func (s *doorSide) syncKey(args []string) int {
 	if len(args) == 6 && args[0] == "add" && !s.policy.InTree(args[2]) {
 		return doorRefused(fmt.Errorf("refused: a sync key for %s, outside %s's tree", args[2], s.policy.User))
 	}
-	if err := editSyncKeys(remote.DoorSyncKeysFile(s.policy.User), selfPath(), args, time.Now()); err != nil {
+	// A key removal ends what the user left running, then drops its sync keys under this
+	// lock (KeysRemoveScript); a request it found already past its sudo, from a key since
+	// removed, would add one after.
+	still := func() error {
+		now, err := os.Stat(remote.DoorKeysFile(s.policy.User))
+		if err != nil || s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
+			return errors.New(s.policy.User + "'s keys changed during this request")
+		}
+		return nil
+	}
+	if err := editSyncKeys(remote.DoorSyncKeysFile(s.policy.User), selfPath(), args, time.Now(), still); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
 	}
 	return 0

@@ -33,14 +33,14 @@ func TestEditSyncKeys(t *testing.T) {
 	}
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 	add := func(id string, at time.Time) error {
-		return editSyncKeys(file, "/usr/local/bin/devopsy", []string{"add", id, "/srv/shop/stage", "vm2:stage", "-", blob}, at)
+		return editSyncKeys(file, "/usr/local/bin/devopsy", []string{"add", id, "/srv/shop/stage", "vm2:stage", "-", blob}, at, nil)
 	}
 	if err := add("1762600000.000001", now.Add(-remote.SyncKeyLife-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	// Another environment's sync key stays; an earlier sync's into this
 	// one goes with the next add, its holder gone.
-	if err := editSyncKeys(file, "/usr/local/bin/devopsy", []string{"add", "1762600000.000009", "/srv/shop/prod", "vm2:prod", "-", blob}, now); err != nil {
+	if err := editSyncKeys(file, "/usr/local/bin/devopsy", []string{"add", "1762600000.000009", "/srv/shop/prod", "vm2:prod", "-", blob}, now, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := add("1762600000.000003", now); err != nil {
@@ -49,7 +49,7 @@ func TestEditSyncKeys(t *testing.T) {
 	if err := add("1762600000.000002", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := editSyncKeys(file, "", []string{"remove", "1762600000.000009"}, now); err != nil {
+	if err := editSyncKeys(file, "", []string{"remove", "1762600000.000009"}, now, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := add("1762600000.000002", now); err == nil || !strings.Contains(err.Error(), "has a key already") {
@@ -64,7 +64,7 @@ func TestEditSyncKeys(t *testing.T) {
 		t.Errorf("mode %v", fi.Mode().Perm())
 	}
 	for _, id := range []string{"1762600000.000002", "1762600000.000002"} {
-		if err := editSyncKeys(file, "", []string{"remove", id}, now); err != nil {
+		if err := editSyncKeys(file, "", []string{"remove", id}, now, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -72,7 +72,7 @@ func TestEditSyncKeys(t *testing.T) {
 		t.Fatalf("after remove:\n%s", got)
 	}
 	for _, bad := range [][]string{{"add", "x", "/srv/shop/stage", "vm2:stage", "-", blob}, {"add", "1762600000.000003", "/srv/shop/stage", "vm2:stage", "maybe", blob}, {"remove", `1" x`}, {"list"}} {
-		if err := editSyncKeys(file, "/usr/local/bin/devopsy", bad, now); err == nil {
+		if err := editSyncKeys(file, "/usr/local/bin/devopsy", bad, now, nil); err == nil {
 			t.Errorf("%q: taken", bad)
 		}
 	}
@@ -80,8 +80,9 @@ func TestEditSyncKeys(t *testing.T) {
 
 // The door writes a project user's sync key into its sync keys, apart from its keys, only
 // for an environment in that user's tree; --authorized-keys serves both, the sync key's
-// quoted options whole; and removing any of its keys (--ssh-keys --for remove) drops its
-// sync keys, which a leaked key could have added.
+// quoted options whole. A request its user's keys changed under adds none: a key removal
+// (--ssh-keys --for remove) ends what the user left running, then drops its sync keys, which
+// a leaked key could have added, and a door already past its sudo would add one after.
 //
 // Not parallel: it sets DEVOPSY_HOME (the door's directory) and PATH (doorFakes).
 func TestDoorSyncKeys(t *testing.T) {
@@ -95,18 +96,31 @@ func TestDoorSyncKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob := strings.Fields(pub)[1]
-	if code := side.syncKey([]string{"add", "1762600000.000001", "/srv/other/prod", "vm2:prod", "-", blob}); code == 0 {
-		t.Fatal("a sync key outside the caller's tree")
-	}
-	if code := side.syncKey([]string{"add", "1762600000.000001", tree + "/stage", "vm2:stage", "-", blob}); code != 0 {
-		t.Fatalf("add: %d", code)
-	}
 	keys := remote.DoorKeysFile("devopsy-shop")
 	if err := os.MkdirAll(filepath.Dir(keys), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(keys, []byte("ssh-ed25519 "+blob+" admin@laptop\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if side.keysAt, err = os.Stat(keys); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.syncKey([]string{"add", "1762600000.000001", "/srv/other/prod", "vm2:prod", "-", blob}); code == 0 {
+		t.Fatal("a sync key outside the caller's tree")
+	}
+	if code := side.syncKey([]string{"add", "1762600000.000001", tree + "/stage", "vm2:stage", "-", blob}); code != 0 {
+		t.Fatalf("add: %d", code)
+	}
+	// The keys replaced, as a removal replaces them: a request from before adds nothing.
+	if err := os.WriteFile(keys+".tmp", []byte("ssh-ed25519 "+blob+" admin@laptop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(keys+".tmp", keys); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.syncKey([]string{"add", "1762600000.000002", tree + "/prod", "vm2:prod", "-", blob}); code == 0 || strings.Contains(readString(remote.DoorSyncKeysFile("devopsy-shop")), "1762600000.000002") {
+		t.Errorf("a sync key added after the user's keys changed (%d)", code)
 	}
 	var out bytes.Buffer
 	if code := printAuthorizedKeys(&out, keys); code != 0 {
