@@ -387,12 +387,14 @@ func TestContentHashSeesWhatACopyHolds(t *testing.T) {
 	}
 }
 
-// Ids no container runs as, whatever else is on the server: this user's, the door's users',
-// and a user that is gone is no error.
+// Ids no container runs as, whatever else is on the server: the deploy user's from its passwd
+// entry, never the door's own process ids (its group is sudo's -g, devopsy-door, so its gid
+// is not the deploy user's), the door's users', and a user that is gone is no error.
 func TestHostIDs(t *testing.T) {
 	t.Parallel()
-	ids := hostIDs([]string{"root", "no-such-user-here"})
-	for _, want := range []int{os.Getuid(), os.Getgid(), 0} {
+	deploy := &user.User{Uid: "1234", Gid: "4321"}
+	ids := hostIDs(deploy, []string{"root", "no-such-user-here"})
+	for _, want := range []int{1234, 4321, 0} {
 		if !slices.Contains(ids, want) {
 			t.Errorf("%d is not in %v", want, ids)
 		}

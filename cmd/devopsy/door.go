@@ -1006,7 +1006,11 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 	if tree == "" {
 		tree = filepath.Join(u.HomeDir, s.Project)
 	}
-	ids := hostIDs(s.Users)
+	deploy, err := user.Current()
+	if err != nil {
+		return door.Policy{}, err
+	}
+	ids := hostIDs(deploy, s.Users)
 	p := door.Policy{
 		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
 		ForbiddenIDs: ids, Others: otherProjects(s),
@@ -1032,20 +1036,28 @@ func otherProjects(s remote.DoorUser) []string {
 	return others
 }
 
-// hostIDs are ids no container may run as: the deploy user's, the door's users', and the
-// Docker socket's group. Other system accounts stay usable: images take low ids of their
-// own, and nobody logs in as those.
-func hostIDs(users []string) []int {
-	ids := []int{os.Getuid(), os.Getgid()}
-	for _, name := range users {
-		u, err := user.Lookup(name)
-		if err != nil {
-			continue
-		}
-		for _, v := range []string{u.Uid, u.Gid} {
+// hostIDs are ids no container may run as: the deploy user's (deploy, from its passwd entry,
+// never this process's ids: the door's group is sudo's -g), the door's users', devopsy's two
+// groups, and the Docker socket's group. Other system accounts stay usable: images take low
+// ids of their own, and nobody logs in as those.
+func hostIDs(deploy *user.User, users []string) []int {
+	var ids []int
+	add := func(vs ...string) {
+		for _, v := range vs {
 			if id, err := strconv.Atoi(v); err == nil {
 				ids = append(ids, id)
 			}
+		}
+	}
+	add(deploy.Uid, deploy.Gid)
+	for _, name := range users {
+		if u, err := user.Lookup(name); err == nil {
+			add(u.Uid, u.Gid)
+		}
+	}
+	for _, name := range []string{remote.DoorGroup, remote.DoorRunGroup} {
+		if g, err := user.LookupGroup(name); err == nil {
+			add(g.Gid)
 		}
 	}
 	if fi, err := os.Stat(dockerSocket); err == nil {
