@@ -1293,6 +1293,8 @@ func TestSyncFileEntry(t *testing.T) {
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.mnt("prod"), "app.ini"), "[prod]\n", 0o644)
 	env := []string{"FAKE_APP_MOUNT=/app.ini"}
+	// The child's labels name it too: a copy writes only what both sides name.
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT=/app.ini\n", 0o644)
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
@@ -5046,5 +5048,78 @@ func TestDaemonListingFilledFirst(t *testing.T) {
 	b := make([]byte, 64)
 	if n, _ := f.Read(b); string(b[:n]) != "@RSYNCD: 31.0\n\n" {
 		t.Errorf("its request: %q", b[:n])
+	}
+}
+
+// A copy writes only what both sides' labels name, on one server or across two: an entry the
+// child's release does not mount (a branch cut before the parent's mount, a variable of its
+// own) is skipped with a word, before anything stops, and the rest is copied; across servers
+// the child's receive refuses what its labels do not name, past the stop.
+func TestSyncSkipsAnEntryTheChildDoesNotName(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("the child's first release (%d):\n%s", code, out)
+	}
+	s.logs()
+	// The child's app mounts mnt/other, the parent's mnt/storage: the parent copies db and
+	// storage, and the child's labels name db and other.
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT=/other\n", 0o644)
+	for _, env := range [][]string{nil, {"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}} {
+		addr := "@dev"
+		if env != nil {
+			addr = "@devopsy@two:dev"
+		}
+		rows := "rows of " + addr + "\n"
+		write(t, filepath.Join(s.mnt("prod"), "db", "ibdata"), rows, 0o644)
+		out, code := s.run(env, addr, "--sync", "--yes")
+		docker, _ := s.logs()
+		if code != 0 || !strings.Contains(out, "mnt/storage not copied: the child's labels name no such entry") || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != rows {
+			t.Errorf("%s (%d):\n%s\n%s", addr, code, out, docker)
+		}
+		if strings.Contains(docker, "storage") && strings.Contains(docker, "rsync") && strings.Contains(docker, "/storage/") {
+			t.Errorf("%s: mnt/storage copied:\n%s", addr, docker)
+		}
+	}
+}
+
+// An entry the child has as another kind than the parent's (a file where the parent's is a
+// directory: Docker made one for a bind mount, say) is refused before anything stops, on
+// either path, as a copy would fail there past the entries before it; a reset wipes the
+// child's entries first, so it starts the child over whichever entry it is.
+func TestSyncEntryOfAnotherKind(t *testing.T) {
+	t.Parallel()
+	for _, entry := range []string{"storage", "db"} {
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+				t.Fatalf("the child's first release (%d):\n%s", code, out)
+			}
+			s.logs()
+			// The child's entry is a file, the parent's a directory.
+			if err := os.RemoveAll(filepath.Join(s.mnt("dev"), entry)); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(s.mnt("dev"), entry), "a file\n", 0o644)
+			across := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+			for _, env := range [][]string{nil, across} {
+				addr := "@dev"
+				if env != nil {
+					addr = "@devopsy@two:dev"
+				}
+				out, code := s.run(env, addr, "--sync", "--yes")
+				docker, _ := s.logs()
+				if code == 0 || !strings.Contains(out, "the child's mnt/"+entry+" is a file and the parent's a directory") || parentChanged(docker) || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+					t.Errorf("%s, a sync (%d):\n%s\n%s", addr, code, out, docker)
+				}
+			}
+			out, code := s.run(across, "@devopsy@two:dev", "--reset", "--yes")
+			if code != 0 {
+				t.Errorf("a reset over mnt/%s of another kind (%d):\n%s", entry, code, out)
+			}
+		})
 	}
 }

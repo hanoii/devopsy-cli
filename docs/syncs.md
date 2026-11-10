@@ -43,7 +43,9 @@ What moves is what the labels say ([Data labels](data.md#data-labels)):
   mounting it sees the new content. Files that a running service removes
   during the copy (rsync's "vanished" files, its exit 24) are a notice,
   not a failure, and the rest is copied. An entry missing on the parent
-  is skipped with a message, and the child's is left as it is.
+  is skipped with a message, and the child's is left as it is. So is an
+  entry or a volume the child's labels do not name (its release mounts
+  another): a sync copies only what both sides name.
 - A `custom` service's data is streamed. The parent's `export <service>`
   writes into a file in the child's directory
   (`.devopsy-sync.stream.<service>.<sync id>`). Only once the export has
@@ -69,6 +71,9 @@ services, and refuses when:
   `volumes` on the child means a copy while it runs is wanted.
 - a service the parent streams is not `custom` on the child, or one the
   child streams is copied as files (`volumes`) on the parent.
+- an entry the parent copies is of another kind on the child (a file
+  where the parent's is a directory, or a link). `--reset` empties the
+  child's entries first, so it takes such an entry.
 
 The child then starts its services again; nothing was copied.
 

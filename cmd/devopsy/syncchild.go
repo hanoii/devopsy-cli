@@ -153,7 +153,7 @@ type receivePlan struct {
 	args               []string
 }
 
-func planReceive(r *syncReceive, child []childService, mnt, toProject string) (receivePlan, error) {
+func planReceive(r *syncReceive, child []childService, mnt, toProject string, reset bool) (receivePlan, error) {
 	var dirs, vols []string
 	for _, c := range child {
 		dirs = append(dirs, c.Dirs...)
@@ -174,7 +174,8 @@ func planReceive(r *syncReceive, child []childService, mnt, toProject string) (r
 		return receivePlan{}, fmt.Errorf("the child's labels name no entry %q", e)
 	}
 	file := r.File
-	if fi, err := os.Lstat(filepath.Join(mnt, e)); err == nil {
+	// A reset's claim wipes the child's entries before the first write: what it has now goes.
+	if fi, err := os.Lstat(filepath.Join(mnt, e)); err == nil && !reset {
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return receivePlan{}, fmt.Errorf("mnt/%s is a symbolic link: nothing copied", e)
 		}
@@ -227,7 +228,7 @@ func receiveOne(r *syncReceive, id, base, toDir, toProject string, env map[strin
 	if err != nil {
 		return fail(err.Error())
 	}
-	plan, err := planReceive(r, child, mnt, toProject)
+	plan, err := planReceive(r, child, mnt, toProject, reset)
 	if err != nil {
 		return fail(err.Error())
 	}

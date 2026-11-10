@@ -1170,6 +1170,9 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if src, err = syncData(ctx, projectDir, dirs, vols); err != nil {
 			return finish(fail(err.Error()), false)
 		}
+		if err := kindMismatch(src, child, reset); err != nil {
+			return finish(fail(err.Error()), false)
+		}
 	}
 	// Where the data clones by reflinks, the services stopped for its
 	// copy are down for the clone only: the copy is made from the clone,
@@ -1361,6 +1364,10 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 	if err != nil {
 		return nil, fail(err.Error())
 	}
+	// One plan for the copy, on one server or across two: an entry or a volume the child's
+	// labels do not name (its release mounts another) is not copied, said here, before
+	// anything stops.
+	dirs, vols = childNamed(dirs, vols, child)
 	// A restore that did not complete on the child: a sync clears its
 	// mark only by copying every service of the snapshot, all of each.
 	if len(restoreMark) > 0 && !reset {
@@ -1814,6 +1821,8 @@ type childService struct {
 	Owners                  map[string]string
 	// Reflink is its cli.DataCopyReflinkLabel.
 	Reflink bool
+	// Kinds are its entries the child has, each a file, a dir or a link (listKinds).
+	Kinds map[string]string
 }
 
 // listReflink is the list's seventh field for a service labeled
@@ -1840,6 +1849,93 @@ func childShares(child []childService) map[string]bool {
 // the rsync gives every file it writes there (--chown), so a parent's
 // owners never land on the child. The child's own check refuses two
 // owners on one entry.
+// childNamed are dirs and vols, the parent's to copy, that the child's labels name too, the
+// rest said and left out: the child mounts none of them, and its receive refuses what its
+// labels do not name.
+func childNamed(dirs []string, vols []cli.Volume, child []childService) ([]string, []cli.Volume) {
+	var named, keys []string
+	for _, c := range child {
+		named, keys = append(named, c.Dirs...), append(keys, c.Volumes...)
+	}
+	var d []string
+	for _, e := range dirs {
+		if slices.Contains(named, e) {
+			d = append(d, e)
+		} else {
+			report.Info("mnt/" + e + " not copied: the child's labels name no such entry")
+		}
+	}
+	var v []cli.Volume
+	for _, vol := range vols {
+		if slices.Contains(keys, vol.Key) {
+			v = append(v, vol)
+		} else {
+			report.Info("the volume " + vol.Key + " not copied: the child's labels name no such volume")
+		}
+	}
+	return d, v
+}
+
+// kindMismatch refuses an entry the parent copies that the child has as another kind (a file
+// for a directory, a link), before anything stops: the copy would fail at that entry, past
+// the ones before it. A reset wipes the child's entries first, so none is refused there.
+func kindMismatch(src dataSet, child []childService, reset bool) error {
+	if reset {
+		return nil
+	}
+	kinds := childKinds(child)
+	for _, e := range src.entries {
+		want := "dir"
+		if slices.Contains(src.files, e) {
+			want = "file"
+		}
+		switch k := kinds[e]; {
+		case k == "link":
+			return fmt.Errorf("the child's mnt/%s is a symbolic link: nothing copied", e)
+		case k != "" && k != want:
+			return fmt.Errorf("the child's mnt/%s is a %s and the parent's a %s: make it a %s there, or start it over (--reset): nothing copied", e, kindName(k), kindName(want), kindName(want))
+		}
+	}
+	return nil
+}
+
+func kindName(k string) string {
+	if k == "dir" {
+		return "directory"
+	}
+	return k
+}
+
+// childKinds are the kinds of the entries the child has (its list's eighth field).
+func childKinds(child []childService) map[string]string {
+	kinds := map[string]string{}
+	for _, c := range child {
+		for e, k := range c.Kinds {
+			kinds[e] = k
+		}
+	}
+	return kinds
+}
+
+// listKinds is a service's kinds column in --sync-services list: <entry>=file|dir|link for
+// each of its entries mnt has, space separated.
+func listKinds(mnt string, s cli.SyncService) string {
+	var out []string
+	for _, d := range s.Dirs {
+		fi, err := os.Lstat(filepath.Join(mnt, d))
+		switch {
+		case err != nil:
+		case fi.Mode()&os.ModeSymlink != 0:
+			out = append(out, d+"=link")
+		case fi.IsDir():
+			out = append(out, d+"=dir")
+		default:
+			out = append(out, d+"=file")
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 func childOwners(child []childService) map[string]string {
 	owners := map[string]string{}
 	for _, c := range child {
@@ -1946,6 +2042,14 @@ func parseChildServices(out string) (services []childService, mark string, resto
 		}
 		if len(f) > 6 {
 			c.Reflink = f[6] == listReflink
+		}
+		if len(f) > 7 {
+			c.Kinds = map[string]string{}
+			for _, ek := range strings.Fields(f[7]) {
+				if e, k, ok := strings.Cut(ek, "="); ok {
+					c.Kinds[e] = k
+				}
+			}
 		}
 		services = append(services, c)
 	}
@@ -2685,12 +2789,17 @@ func childList(p place, services []cli.SyncService) int {
 	if _, err := cli.MntOwners(services); err != nil {
 		return fail(err.Error())
 	}
+	mnt, _ := filepath.EvalSymlinks(filepath.Join(p.projectDir, "mnt"))
 	for _, s := range services {
 		reflink := ""
 		if s.Reflink {
 			reflink = listReflink
 		}
-		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink)
+		kinds := ""
+		if mnt != "" {
+			kinds = listKinds(mnt, s)
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink, kinds)
 	}
 	if m := readMark(p.base); m.IsImport() {
 		fmt.Printf("%s\t%s\n", listMark, m.From)

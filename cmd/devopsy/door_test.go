@@ -169,7 +169,7 @@ func TestDoorTakesComputedForms(t *testing.T) {
 	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "1:2"}}}
 	c := newContainer("sync", "shop-dev", "1.abcdef-receive", remote.SyncTask("1.abcdef"))
 	for _, r := range []syncReceive{{Entry: "storage"}, {Entry: "app.ini", File: true}, {Volume: "db"}} {
-		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev")
+		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev", false)
 		if err != nil {
 			t.Fatalf("%+v: %v", r, err)
 		}
