@@ -1302,6 +1302,24 @@ func TestSyncFileEntry(t *testing.T) {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
+	// An empty directory in its place, which a first release makes for an entry it does not
+	// know is a file: on one server the copy goes on, and the rsync replaces it (the fake's
+	// copies into it, so the file is put back after: TestDoorDataFlows has the real one).
+	if err := os.Remove(filepath.Join(s.mnt("dev"), "app.ini")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(s.mnt("dev"), "app.ini"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(env, "@dev", "--sync", "--yes"); code != 0 || strings.Contains(out, "is a directory") {
+		t.Errorf("over an empty directory (%d):\n%s", code, out)
+	}
+	s.logs()
+	if err := os.RemoveAll(filepath.Join(s.mnt("dev"), "app.ini")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(s.mnt("dev"), "app.ini"), "[prod]\n", 0o644)
+
 	env = append(env, "DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock")
 	out, code = s.run(env, "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()

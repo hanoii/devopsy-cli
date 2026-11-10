@@ -1878,9 +1878,11 @@ func childNamed(dirs []string, vols []cli.Volume, child []childService) ([]strin
 
 // kindMismatch refuses an entry the parent copies that the child has as another kind (a file
 // for a directory), before anything stops: the copy would fail at that entry, past the ones
-// before it. A link is refused across servers, where the receive mounts the entry alone (on
-// one server the rsync mounts the child's mnt whole, and a link there is the child's data on
-// another disk). A reset wipes the child's entries first, so none is refused there.
+// before it. A link, and an empty directory for a file, are refused across servers only, as
+// the receive refuses them: on one server the rsync mounts the child's mnt whole, a link
+// there is the child's data on another disk, and an empty directory is what its first release
+// made for an entry it did not know is a file, which the rsync replaces. A reset wipes the
+// child's entries first, so none is refused there.
 func kindMismatch(src dataSet, child []childService, reset, across bool) error {
 	if reset {
 		return nil
@@ -1894,7 +1896,9 @@ func kindMismatch(src dataSet, child []childService, reset, across bool) error {
 		switch k := kinds[e]; {
 		case k == "link" && across:
 			return fmt.Errorf("the child's mnt/%s is a symbolic link: nothing copied", e)
-		case k == "link":
+		case k == "empty" && want == "file" && across:
+			return fmt.Errorf("the child's mnt/%s is a directory and the parent's a file: make it a file there, or start it over (--reset): nothing copied", e)
+		case k == "link", k == "empty":
 		case k != "" && k != want:
 			return fmt.Errorf("the child's mnt/%s is a %s and the parent's a %s: make it a %s there, or start it over (--reset): nothing copied", e, kindName(k), kindName(want), kindName(want))
 		}
@@ -1920,8 +1924,9 @@ func childKinds(child []childService) map[string]string {
 	return kinds
 }
 
-// listKinds is a service's kinds column in --sync-services list: <entry>=file|dir|link for
-// each of its entries mnt has, space separated.
+// listKinds is a service's kinds column in --sync-services list: <entry>=file|dir|empty|link
+// for each of its entries mnt has, space separated, empty an empty directory (one a first
+// release made for its start, the entry's kind not known yet).
 func listKinds(mnt string, s cli.SyncService) string {
 	var out []string
 	for _, d := range s.Dirs {
@@ -1931,7 +1936,11 @@ func listKinds(mnt string, s cli.SyncService) string {
 		case fi.Mode()&os.ModeSymlink != 0:
 			out = append(out, d+"=link")
 		case fi.IsDir():
-			out = append(out, d+"=dir")
+			if ents, err := os.ReadDir(filepath.Join(mnt, d)); err == nil && len(ents) == 0 {
+				out = append(out, d+"=empty")
+			} else {
+				out = append(out, d+"=dir")
+			}
 		default:
 			out = append(out, d+"=file")
 		}

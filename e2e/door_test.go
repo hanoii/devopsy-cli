@@ -335,11 +335,13 @@ func TestDoorBuildModeLife(t *testing.T) {
 		}
 		return out
 	}
+	// It runs the image devopsy's name for its build holds, by that image's id: the door pins
+	// its own names by id, which nothing moves between its check and compose's create.
 	runs := func(after, want string) {
 		t.Helper()
-		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker exec doorbuild-prod-web-1 cat /v")
-		if got := strings.Fields(out); len(got) != 2 || got[0] != "devopsy.internal/doorbuild-prod/web" || got[1] != want {
-			t.Errorf("after %s, web runs %q, want devopsy.internal/doorbuild-prod/web with %s", after, out, want)
+		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker image inspect -f '{{.Id}}' devopsy.internal/doorbuild-prod/web && docker exec doorbuild-prod-web-1 cat /v")
+		if got := strings.Fields(out); len(got) != 3 || !strings.HasPrefix(got[0], "sha256:") || got[0] != got[1] || got[2] != want {
+			t.Errorf("after %s, web runs %q, want devopsy.internal/doorbuild-prod/web's image with %s", after, out, want)
 		}
 	}
 	commitAll(t, dir)
