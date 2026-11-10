@@ -280,3 +280,42 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 		t.Fatalf("a sync onto a child below the parent (%d), stamp %q:\n%s", code, stamp, out)
 	}
 }
+
+// BUG: a run step that builds (`up --build`: what --init writes as release: and rollback:,
+// and what a missing step's message offers in build mode) builds each service again and tags
+// it as its image:, which devopsy's compose file now gives as the image's id.
+//
+// On Docker's classic store the tag is refused ("refusing to create an ambiguous tag using
+// digest algorithm as name": checked by hand on Docker 29.8 with overlay2, compose 5.5), so
+// every release fails past its switch, the first included, and its restart, the same step,
+// too. On the containerd store, which the suite's servers run, the build is tagged
+// sha256:<the pinned id>, a name in a repository called sha256 that no listing has, no
+// removal takes and `docker rmi sha256:<id>` cannot name (it reads as an id): one image left
+// per release, while the container goes on running the image the fetch built. A plain
+// `devopsy @server:prod build` or `up --build` by hand does the same, where it built under
+// the service's name before the pin, and so does any up once the pinned image is gone (it
+// builds, tags the same way, then fails on "No such image").
+func TestBuildModeRunStepThatBuilds(t *testing.T) {
+	dir := project(t, "upbuild", map[string]string{
+		// As devopsy --init writes it.
+		".devopsy/config.yaml":  "project: upbuild\ndefaults:\n  release: up -d --wait --remove-orphans --build\n  rollback: up -d --wait --remove-orphans --build\nenvironments:\n  prod: {}\n",
+		".devopsy/compose.yaml": "services:\n  app:\n    build: .\n    command: [sleep, infinity]\n    stop_grace_period: 0s\n",
+		".devopsy/Dockerfile":   "FROM busybox:1.37\n",
+	})
+	commitAll(t, dir)
+	t.Cleanup(func() {
+		srv(t, "docker images --format '{{.Repository}}:{{.Tag}}' | grep '^sha256:' | sed 's|^|docker.io/library/|' | xargs -r docker rmi >/dev/null 2>&1 || true")
+	})
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("the release, its run step up --build (%d):\n%s", code, out)
+	}
+	if out, _ := srv(t, "docker ps --filter label=com.docker.compose.project=upbuild-prod --format '{{.State}}'"); strings.TrimSpace(out) != "running" {
+		t.Errorf("not running: %q", out)
+	}
+	if out, code := op(t, dir, "devopsy @server:prod build"); code != 0 {
+		t.Errorf("a build by hand in the release (%d):\n%s", code, out)
+	}
+	if out, _ := srv(t, "docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep '^sha256:' || true"); strings.TrimSpace(out) != "" {
+		t.Errorf("the run step's build left an image named like the id devopsy's compose file pins, which nothing lists or removes:\n%s", out)
+	}
+}
