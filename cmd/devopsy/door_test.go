@@ -735,7 +735,7 @@ func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(log)
-	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges -v " + data + ":/e/0 -v " + ini + ":/e/1 " + remote.UtilImage +
+	want := "run --rm --network none --cap-drop MKNOD --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m -v " + data + ":/e/0 -v " + ini + ":/e/1 " + remote.UtilImage +
 		" find /e/0 /e/1 -xdev ( -type d -o -type f ) ! -perm -g=w -exec setfacl -m u:10002:rwX {} +\n"
 	if string(got) != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)

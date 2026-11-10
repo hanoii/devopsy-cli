@@ -64,12 +64,15 @@ var (
 
 // DaemonServe is a sync's daemon serving one connection over docker exec's pipe, rsync's
 // daemon as over a remote shell: the push relays each connection on its own socket to it.
-var DaemonServe = []string{"rsync", "--server", "--daemon", "--config=/etc/rsyncd.conf", "."}
+var DaemonServe = []string{"rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."}
 
 // RootUtil is what every util container the door runs as root holds back, root not
-// being needed for it: nothing there makes a device or gains privileges.
+// being needed for it: nothing there makes a device or gains privileges, and nothing
+// writes its own files (a link a project user swaps mid-copy would lead a write there, and
+// a later step of the same container runs what it finds), only its mounts and a small /tmp
+// that runs nothing.
 func RootUtil() []string {
-	return []string{"--cap-drop", "MKNOD", "--security-opt", "no-new-privileges"}
+	return []string{"--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1m"}
 }
 
 // cloneShape is a path in a project's clones: its directory, a take's in it, and from

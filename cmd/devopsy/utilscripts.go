@@ -27,5 +27,5 @@ done`
 	receiveScript = remote.ReceiveShim
 	// rsyncDaemonScript is a sync's read-only rsync daemon, from its settings: they wait
 	// for each session, which runs door.DaemonServe through docker exec.
-	rsyncDaemonScript = `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec sleep infinity`
+	rsyncDaemonScript = `printf "%s\n" "$RSYNCD_CONF" > /tmp/rsyncd.conf && exec sleep infinity`
 )

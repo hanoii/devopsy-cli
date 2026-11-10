@@ -358,7 +358,7 @@ case "$*" in
     done ;;
   # A sync's daemon serving one connection: here its listing, which says its
   # settings are there.
-  "exec -i "*" rsync --server --daemon --config=/etc/rsyncd.conf .") printf '@RSYNCD: 31.0\n@RSYNCD: EXIT\n' ;;
+  "exec -i "*" rsync --server --daemon --config=/tmp/rsyncd.conf .") printf '@RSYNCD: 31.0\n@RSYNCD: EXIT\n' ;;
   "inspect "*) echo 172.17.0.9 ;;
   # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
   # none with FAKE_UTIL_MISSING; a build fails with FAIL_UTIL_BUILD, else
@@ -1445,7 +1445,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !regexp.MustCompile(childSSH+` -T -p 22 devopsy@two\n`).MatchString(ssh) {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/etc/rsyncd.conf .\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-", " --network none -v " + s.mnt("dev") + "/db:/mnt/db devopsy.internal/util:5 sh -c ", "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse devopsy::db/ /mnt/db/\n", "devopsy::storage/ /mnt/storage/\n", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/tmp/rsyncd.conf .\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-", " --network none -v " + s.mnt("dev") + "/db:/mnt/db devopsy.internal/util:5 sh -c ", "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse devopsy::db/ /mnt/db/\n", "devopsy::storage/ /mnt/storage/\n", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}

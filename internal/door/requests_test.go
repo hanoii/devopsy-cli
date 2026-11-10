@@ -116,7 +116,7 @@ func TestDecideRefuses(t *testing.T) {
 		{"info", []string{"info"}},
 		{"system prune", []string{"system", "prune", "-f"}},
 		{"exec in its own", []string{"exec", "mine", "sh"}},
-		{"exec in another, the daemon's form", []string{"exec", "-i", "victim", "rsync", "--server", "--daemon", "--config=/etc/rsyncd.conf", "."}},
+		{"exec in another, the daemon's form", []string{"exec", "-i", "victim", "rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."}},
 		{"inspect of another", []string{"inspect", "victim"}},
 		{"inspect by a format of another", []string{"inspect", "--format", "{{json .}}", "victim"}},
 		{"inspect by a format's other spelling", []string{"inspect", "--format={{json .Config.Env}}", "victim"}},
@@ -314,7 +314,7 @@ func TestDecideOnlyWhatTheDoorMade(t *testing.T) {
 	t.Parallel()
 	for _, id := range []string{"adopted", "theirs"} {
 		for _, argv := range [][]string{
-			{"inspect", id}, {"rm", "-f", id}, {"exec", "-i", id, "rsync", "--server", "--daemon", "--config=/etc/rsyncd.conf", "."},
+			{"inspect", id}, {"rm", "-f", id}, {"exec", "-i", id, "rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."},
 		} {
 			if _, err := decide(t, argv...); err == nil {
 				t.Errorf("%q: not refused", argv)
@@ -366,7 +366,7 @@ func TestDecideAllows(t *testing.T) {
 		{"volume", "inspect", "--format", "{{.Name}}", "shop-prod_data"},
 		{"tag", "sha256:abc", "busybox:devopsy-shop-prod-20260101"},
 		{"rm", "-f", "mine"},
-		{"exec", "-i", "task", "rsync", "--server", "--daemon", "--config=/etc/rsyncd.conf", "."},
+		{"exec", "-i", "task", "rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."},
 		{"run", "--rm", "--name", "devopsy-sync-shop-prod-12.abcdef-daemon", "util:1", "sh", "-c", "own script"},
 		{"run", "--rm", "--name", "devopsy-owners-shop-prod-1", "--label", "devopsy.env=shop-prod", "--label", "devopsy.task=owners", "--network", "none",
 			"--mount", "type=bind,source=" + entry + ",target=/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "10001:10001"},
@@ -439,7 +439,7 @@ func TestDecideAnswersWhatDevopsyAsks(t *testing.T) {
 
 // A root container never holds a path a project user can change: what is read is
 // copied in by that user's rights, what is written goes back by them, and what the
-// container runs gives up what it does not need.
+// container runs gives up what it does not need, its own files read-only among them.
 func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	t.Parallel()
 	tree := "/home/devopsy-shop/shop/prod"
@@ -453,7 +453,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	if strings.Contains(joined, tree) {
 		t.Errorf("a root container holds the tree: %s", joined)
 	}
-	for _, want := range []string{"/space/work/in/stream:/in/stream:ro", "/space/mnt/shop-prod/data:/mnt/data", "--network none", "--cap-drop MKNOD", "--security-opt no-new-privileges"} {
+	for _, want := range []string{"/space/work/in/stream:/in/stream:ro", "/space/mnt/shop-prod/data:/mnt/data", "--network none", "--cap-drop MKNOD", "--security-opt no-new-privileges", "--read-only", "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("no %q in %s", want, joined)
 		}
