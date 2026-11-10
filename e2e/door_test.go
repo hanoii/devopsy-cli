@@ -1082,26 +1082,27 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.dock
 	}
 }
 
-// A claim proves the project can fetch the image's content, not only that a registry answered.
-// Docker's pull fetches no layer it holds, so a registry serving only a manifest that names
-// another project's image (its digests, from a CI log) would land the claim on that image:
-// its configuration (Env, build arguments) shown to the claimant, its starts free to run it.
-// The proof fetches the image on the project's own builder, whose store holds only what the
-// project fetched or built: there, nothing is skipped. The manifest here is a real push whose
-// blobs are then deleted, which is what such a registry serves knowing only the digests; the
-// control is that the registry serves none of the content (and TestDoorRegistryLogins' release
-// the proof passing).
+// A claim proves the project can fetch the image's content, not only that a registry answered:
+// the project's own builder, whose store holds only what the project fetched or built, fetches
+// every blob and unpacks every layer against the config's diff_ids. Two forgeries a registry of
+// the claimant's can serve, knowing only another's digests (from a CI log), are refused:
+//   - a manifest naming another's blobs, serving none (here a real push whose blobs are then
+//     deleted): Docker fetches no blob it holds, so it would land on the other's image;
+//   - a config of the claimant's naming the other's layers by their diff_ids, over junk blobs:
+//     a load maps those diff_ids onto the layers already in the store, and runs their files.
+// The first's control is the registry keeping its manifests alone; the second's, the forgery
+// loaded by hand as the deploy user, as a claim with no proof would, running the victim's file.
 func TestDoorClaimProvesTheContent(t *testing.T) {
 	user := doorUser(t, "doorclaim")
 	reg := doorRegistry(t, "doorclaim-reg", "5004", false)
 	t.Cleanup(func() {
-		doorRoot(t, "docker image rm -f doorclaimv-prod-web:1 "+reg+"/evil/x:1 >/dev/null 2>&1; true")
+		doorRoot(t, "docker image rm -f doorclaimv-prod-web:1 "+reg+"/evil/x:1 >/dev/null 2>&1; docker images -q --filter reference='"+reg+"/evil/*' | xargs -r docker image rm -f >/dev/null 2>&1; rm -rf /tmp/doorclaim-*; true")
 	})
 	// Another's private image: the deploy user's build here, which the door holds apart from
 	// a project user as it does another project's.
 	if out, code := doorRoot(t, `set -e
 d=$(mktemp -d)
-printf 'FROM busybox:1.37\nENV SECRET=s3cret-image\n' >"$d/Dockerfile"
+printf 'FROM busybox:1.37\nENV SECRET=s3cret-image\nRUN echo s3cret-file >/secret\n' >"$d/Dockerfile"
 docker build -q -t doorclaimv-prod-web:1 "$d" >/dev/null
 docker tag doorclaimv-prod-web:1 `+reg+`/evil/x:1
 docker push -q `+reg+`/evil/x:1 >/dev/null
@@ -1113,12 +1114,54 @@ docker exec doorclaim-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	}
 	id, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' doorclaimv-prod-web:1")
 	id = strings.TrimSpace(id)
-	out, code := doorAs(t, user, "docker image inspect --format '{{json .Config.Env}}' "+reg+"/evil/x:1 2>&1")
-	if code == 0 || strings.Contains(out, "s3cret-image") || !strings.Contains(out, "did not serve") {
-		t.Errorf("a registry serving only a manifest made another's image this project's (%d):\n%s", code, out)
+	refused := func(what, ref string) {
+		t.Helper()
+		out, code := doorAs(t, user, "docker image inspect --format '{{json .Config.Env}}' "+ref+" 2>&1")
+		if code == 0 || strings.Contains(out, "s3cret") || !strings.Contains(out, "did not serve") {
+			t.Errorf("%s made another's image this project's (%d):\n%s", what, code, out)
+		}
 	}
+	refused("a registry serving only a manifest", reg+"/evil/x:1")
+	// The second forgery: the claimant's config naming the victim's diff_ids, over junk.
+	forged, code := doorRoot(t, `set -e
+r=https://`+reg+` n=evil/b
+ids=$(docker image inspect -f '{{json .RootFS.Layers}}' doorclaimv-prod-web:1)
+arch=$(docker version -f '{{.Server.Arch}}')
+d=$(mktemp -d /tmp/doorclaim-XXXXXX) && cd "$d"
+mkdir j && echo junk >j/junk && tar -C j -cf - junk | gzip -n >layer
+printf '{"architecture":"%s","os":"linux","config":{"Cmd":["cat","/secret"]},"rootfs":{"type":"layers","diff_ids":%s}}' "$arch" "$ids" >config
+put() {
+  loc=$(curl -sS -D - -o /dev/null -X POST "$r/v2/$n/blobs/uploads/" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
+  case $loc in http*) ;; *) loc=$r$loc ;; esac
+  case $loc in *\?*) sep='&' ;; *) sep='?' ;; esac
+  curl -sSf -X PUT -H 'Content-Type: application/octet-stream' --data-binary @"$1" "$loc${sep}digest=sha256:$(sha256sum "$1" | cut -d' ' -f1)" >/dev/null
+}
+put layer && put config
+cdg=sha256:$(sha256sum config | cut -d' ' -f1) cs=$(stat -c%s config)
+ldg=sha256:$(sha256sum layer | cut -d' ' -f1) lsz=$(stat -c%s layer)
+layers=$(for x in $(echo "$ids" | tr -d '[]"' | tr ',' ' '); do printf '{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"%s","size":%s},' "$ldg" "$lsz"; done | sed 's/,$//')
+printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"%s","size":%s},"layers":[%s]}' "$cdg" "$cs" "$layers" >manifest
+curl -sSf -X PUT -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' --data-binary @manifest "$r/v2/$n/manifests/1" >/dev/null
+echo "sha256:$(sha256sum manifest | cut -d' ' -f1) $(stat -c%s manifest)"`)
+	f := strings.Fields(forged)
+	if code != 0 || len(f) < 2 {
+		t.Fatalf("the forged image (%d): %s", code, forged)
+	}
+	digest, size := f[len(f)-2], f[len(f)-1]
+	refused("a registry serving the victim's diff_ids over junk", reg+"/evil/b:1")
 	if out, _ := doorRoot(t, "cat "+doorSpace+"/images/"+user+" 2>/dev/null"); strings.Contains(out, id) {
 		t.Errorf("the door recorded another's image %s as %s's", id, user)
+	}
+	// The control: loaded by hand, as a claim with no proof would load it, the forgery runs the
+	// victim's file.
+	if out, code := doorRoot(t, `set -e
+d=$(mktemp -d /tmp/doorclaim-XXXXXX)
+docker buildx imagetools create --prefer-index=false --tag "oci-layout://$d/l:claim" `+reg+`/evil/b@`+digest+` >/dev/null 2>&1
+cd "$d/l"
+printf '{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"%s","size":%s,"annotations":{"io.containerd.image.name":"%s"}}]}' `+digest+` `+size+` `+reg+`/evil/b@`+digest+` >index.json
+tar -cf - oci-layout index.json blobs | docker load >/dev/null
+docker run --rm `+reg+`/evil/b@`+digest+` cat /secret`); code != 0 || !strings.Contains(out, "s3cret-file") {
+		t.Errorf("the control: the forgery loaded by hand does not run the victim's file, so this proves nothing (%d):\n%s", code, out)
 	}
 }
 
