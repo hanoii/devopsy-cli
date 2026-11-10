@@ -1629,3 +1629,37 @@ func TestDoorFlagsTakeNoWordThatOnlyStartsLikeThem(t *testing.T) {
 		}
 	}
 }
+
+// A start of an image pinned by a multi-platform index's digest (repo:tag@sha256:<index>, as a
+// registry shows a tag and pinning tools write it) runs the entry its claim checked and loaded
+// for the daemon's platform: no image here goes by the index's digest, so compose given it
+// would fail under pull_policy never, or run Docker's own choice from an index another's pull
+// left, which the door checked nothing of.
+func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	repo := "registry.example.com/multi"
+	amd := fakeManifest(t, dir, plainManifest("multi-amd64"), repo+":amd64")
+	index := `{"schemaVersion":2,"manifests":[{"digest":"` + amd + `","platform":{"os":"linux","architecture":"amd64"}}]}`
+	idx := fakeManifest(t, dir, index, repo+":1")
+	// The registry serves it by its tag and digest too, as a registry does.
+	write(t, filepath.Join(dir, "raw", strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(repo+":1@"+idx)), index, 0o644)
+	write(t, filepath.Join(dir, "store"), "", 0o644)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	// With its tag and without.
+	for _, image := range []string{repo + ":1@" + idx, repo + "@" + idx} {
+		os.Remove(filepath.Join(dir, "calls"))
+		file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
+		if err := side.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
+		if _, err := side.inspectImage(got); err != nil || !strings.HasSuffix(got, "@"+amd) {
+			t.Errorf("%s: compose gets %q, not the %s@%s the claim loaded:\n%s", image, got, repo, amd, readString(filepath.Join(dir, "store")))
+		}
+	}
+	if !strings.Contains(readString(side.policy.ImagesFile()), amd) {
+		t.Errorf("the claim recorded no %s: %q", amd, readString(side.policy.ImagesFile()))
+	}
+}

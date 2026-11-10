@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -466,5 +467,224 @@ func TestDoorClaimReadEndsAtItsTime(t *testing.T) {
 			t.Errorf("the read's child (%d) outlived its time", pid)
 			break
 		}
+	}
+}
+
+// A claim whose copy fails (a registry that is down, a full disk) leaves the project's record
+// as it was: nothing was loaded, so no name was left for a skip to take, and an image the
+// project claimed and still has under one repository stays its own when a claim of the same
+// digest in another fails at its copy.
+func TestDoorClaimFailedCopyKeepsTheRecord(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	app, mirror := "registry.example.com/blog/app", "mirror.example.com/blog/app"
+	d := fakeManifest(t, dir, plainManifest("app"), app+":1")
+	fakeManifest(t, dir, plainManifest("app"), mirror+":1")
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	if _, _, err := side.claim(app+":1", filepath.Join(dir, "none.json")); err != nil || readString(side.policy.ImagesFile()) != d+"\n" {
+		t.Fatalf("the control, a first claim (%v): %q", err, readString(side.policy.ImagesFile()))
+	}
+	// The mirror serves the manifest, then not its blobs.
+	write(t, filepath.Join(dir, "uncopied"), mirror+"@"+d+"\n", 0o644)
+	if _, _, err := side.claim(mirror+":1", filepath.Join(dir, "none.json")); err == nil || !strings.Contains(err.Error(), "did not serve") {
+		t.Fatalf("the control, a copy that fails: %v", err)
+	}
+	if strings.Contains(readString(filepath.Join(dir, "calls")), "\nload "+mirror) {
+		t.Fatal("the control: the failed copy loaded")
+	}
+	if got := readString(side.policy.ImagesFile()); got != d+"\n" || !slices.Contains(side.policy.Images, d) {
+		t.Errorf("a copy that failed, nothing loaded, took the project's image %s out of its record: %q", d, got)
+	}
+}
+
+// A layout's check and its tar stream each blob, never holding one whole: a layer may be
+// larger than the door's memory, and an image a project names could push it towards the OOM
+// killer, taking other projects' processes with it.
+//
+// Not parallel: it measures the process's allocations (runtime.MemStats).
+func TestCheckLayoutStreamsItsBlobs(t *testing.T) {
+	dir := t.TempDir()
+	layer := strings.Repeat("0123456789abcdef", 16<<20)
+	m := testLayout(t, dir, layer)
+	layer = ""
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	blobs, _, err := checkLayout(dir, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLayout(io.Discard, dir, []byte(`{}`), blobs); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	if got := (after.TotalAlloc - before.TotalAlloc) >> 20; got > 32 {
+		t.Errorf("checking and writing a layout of one 256 MB layer allocated %d MB: its blobs are read whole", got)
+	}
+}
+
+// The door's pull skips a service under pull_policy missing (or if_not_present) whose image is
+// here and the project's, as compose's pull skips one it has ("Skipped Image is already present
+// locally"), asking no registry: a release's fetch keeps the image it has, even when its
+// registry moved the tag or no longer has it.
+func TestDoorPullKeepsAPresentImageUnderMissing(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
+	private := "registry.example.com/blog/private:1"
+	d := fakeManifest(t, dir, plainManifest("private"), private)
+	// Here, by its tag and its digest, and the project's.
+	repo := images.RepoOf(private)
+	write(t, filepath.Join(dir, "store"), private+"|"+d+"|"+repo+"@"+d+"|"+private+"|{}\n"+repo+"@"+d+"|"+d+"|"+repo+"@"+d+"|"+private+"|{}\n", 0o644)
+	side := door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}
+	write(t, side.ImagesFile(), d+"\n", 0o600)
+	// Its registry moved the tag since.
+	fakeManifest(t, dir, plainManifest("private2"), private)
+	file := `{"name":"shop-prod","services":{"web":{"image":"` + private + `","pull_policy":"missing","user":"10001:10001","security_opt":["no-new-privileges"]}}}`
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=pull", "DEVOPSY_TEST_DOOR_FILE="+file,
+		"DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := c.CombinedOutput()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatal(err)
+	}
+	if calls := readString(filepath.Join(dir, "calls")); strings.Contains(calls, "imagetools") {
+		t.Errorf("a pull under pull_policy missing of an image here asked its registry, as compose's does not (exit %d):\n%s\n%s", c.ProcessState.ExitCode(), out, calls)
+	}
+}
+
+// A claim checks buildx's version (hostReady, doorHostReady) under the DOCKER_CONFIG its copy
+// runs with: Docker finds a plugin in $DOCKER_CONFIG/cli-plugins first, so the deploy user's own
+// ~/.docker could hold another buildx than the one that copies, and an older one there fails
+// the copy in words the floor is there to replace.
+func TestDoorClaimChecksTheBuildxThatCopies(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	envCalls := filepath.Join(dir, "envcalls")
+	wrap := filepath.Join(dir, "docker-wrap")
+	write(t, wrap, "#!/bin/sh\necho \"${DOCKER_CONFIG-unset}|$*\" >>"+envCalls+"\nexec "+fake+" \"$@\"\n", 0o755)
+	private := "registry.example.com/blog/private"
+	fakeManifest(t, dir, plainManifest("private"), private+":1")
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: wrap}
+	if _, _, err := side.claim(private+":1", filepath.Join(dir, "none.json")); err != nil {
+		t.Fatal(err)
+	}
+	config := map[string]string{}
+	for _, line := range strings.Split(readString(envCalls), "\n") {
+		cfg, args, _ := strings.Cut(line, "|")
+		switch {
+		case args == "buildx version":
+			config["version"] = cfg
+		case strings.HasPrefix(args, "buildx imagetools create "):
+			config["copy"] = cfg
+		}
+	}
+	if config["version"] != config["copy"] {
+		t.Errorf("buildx's version read with DOCKER_CONFIG %q, its copy run with %q:\n%s", config["version"], config["copy"], readString(envCalls))
+	}
+}
+
+// A descriptor's size below 0 (a config's, a layer's, the registry's to write) is refused,
+// never read as "any size": every blob's size is checked.
+func TestCheckLayoutRefusesASizeBelowZero(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	m := testLayout(t, dir, "a layer's tar")
+	path := func(d string) string {
+		return filepath.Join(dir, "blobs", "sha256", strings.TrimPrefix(d, "sha256:"))
+	}
+	var manifest map[string]any
+	data, err := os.ReadFile(path(m))
+	if err != nil || json.Unmarshal(data, &manifest) != nil {
+		t.Fatal(err)
+	}
+	manifest["layers"].([]any)[0].(map[string]any)["size"] = -1
+	manifest["config"].(map[string]any)["size"] = -1
+	body, _ := json.Marshal(manifest)
+	m = digestOf(body)
+	write(t, path(m), string(body), 0o644)
+	write(t, filepath.Join(dir, "index.json"), `{"schemaVersion":2,"manifests":[{"digest":"`+m+`"}]}`, 0o644)
+	if _, _, err := checkLayout(dir, m); err == nil {
+		t.Errorf("a manifest naming its config and its layer with size -1 was taken")
+	}
+}
+
+// A bounded read (doorAnswer) with no session of its own still ends at its time: its kill goes
+// to the read's own process group, which it gets.
+func TestDoorAnswerEndsAReadWithNoSessionAtItsTime(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "docker")
+	write(t, fake, "#!/bin/sh\nexec sleep 5\n", 0o755)
+	side := &doorSide{real: fake}
+	// As registryRead builds it.
+	c := side.docker("buildx", "imagetools", "inspect", "--raw", "registry.example.com/app:1")
+	start := time.Now()
+	_, err := doorAnswer(c, maxManifest, 200*time.Millisecond)
+	if took := time.Since(start); err == nil || took > 3*time.Second {
+		t.Errorf("a manifest's read bounded to 200ms ended after %s (%v)", took.Round(100*time.Millisecond), err)
+	}
+}
+
+// A blob a manifest names twice, as two kinds, is read as each (containerd reads each position
+// by its own media type): one named compressed and then plain is checked as plain the second
+// time, and refused when that content is not its config's.
+func TestCheckLayoutReadsALayerNamedTwiceAsEachKind(t *testing.T) {
+	t.Parallel()
+	content := "a layer's tar"
+	var gz bytes.Buffer
+	w := gzip.NewWriter(&gz)
+	w.Write([]byte(content))
+	w.Close()
+	const oci = "application/vnd.oci.image.layer.v1.tar"
+	dir := t.TempDir()
+	m := testLayoutOf(t, dir, testLayer{oci + "+gzip", gz.Bytes(), content}, testLayer{oci, gz.Bytes(), content})
+	if _, _, err := checkLayout(dir, m); err == nil {
+		t.Errorf("a gzip blob named again as a plain layer was taken for its decompressed content")
+	}
+}
+
+// A ref pinned by an index's digest takes only the index of those bytes: one its registry
+// serves otherwise is refused before any entry of it is read, so the registry never chooses
+// the image a tag or an inspect then acts on.
+func TestDoorClaimChecksAPinnedIndexsBytes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	repo := "registry.example.com/multi"
+	amd := fakeManifest(t, dir, plainManifest("substituted"), repo+":amd64")
+	index := `{"schemaVersion":2,"manifests":[{"digest":"` + amd + `","platform":{"os":"linux","architecture":"amd64"}}]}`
+	pinned := repo + "@" + digestOf([]byte("the index the project pinned"))
+	key := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace
+	write(t, filepath.Join(dir, "raw", key(pinned)), index, 0o644)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	if d, _, err := side.claim(pinned, filepath.Join(dir, "none.json")); err == nil {
+		t.Errorf("%s, its registry serving another index, claimed as %s", pinned, d)
+	}
+}
+
+// Under --ignore-pull-failures the pull says each failed claim as a warning and exits 0: an
+// error is what fails the command, and a line in red in a release that succeeded reads as a
+// failure.
+func TestDoorPullPastFailuresWarns(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	write(t, filepath.Join(dir, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] || exit 1\nprintf '%s\\n' \"$2\"\n", 0o755)
+	file := `{"name":"shop-prod","services":{"web":{"image":"registry.example.com/gone:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}`
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=pull --ignore-pull-failures", "DEVOPSY_TEST_DOOR_FILE="+file,
+		"DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := c.CombinedOutput()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatal(err)
+	}
+	if c.ProcessState.ExitCode() != 0 || strings.Contains(string(out), "devopsy: error: ") || !strings.Contains(string(out), "devopsy: warning: ") {
+		t.Errorf("a pull past its failures (exit %d) says:\n%s", c.ProcessState.ExitCode(), out)
 	}
 }
