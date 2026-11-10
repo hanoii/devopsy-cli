@@ -1460,3 +1460,29 @@ func TestDoorGivesWhatItExecsItsStops(t *testing.T) {
 		}
 	}
 }
+
+// BUG: sudo's rule for a project user is `devopsy --door *`, and sudoers matches a command's
+// arguments as one string joined by spaces, a wildcard crossing words (sudoers(5)): a first
+// argument that is one word holding a space, "--door x", matches the rule as `--door x` does.
+// devopsy takes only the exact word for the door, so that one goes on as any devopsy command,
+// as the deploy user, in the directory its caller chose: it finds the project there and runs
+// its env capability, a program of the project user's, with the deploy user's rights and its
+// Docker socket. The same holds for a word that starts like --door-read. A first word under
+// the door's flags that is not one of them is refused before anything reads a directory.
+func TestDoorFlagsTakeNoWordThatOnlyStartsLikeThem(t *testing.T) {
+	t.Parallel()
+	for _, first := range []string{"--door x", "--door  ", "--door x up", "--door\tx", "--door-read x", "--doorway"} {
+		dir := t.TempDir()
+		ran := filepath.Join(dir, "helper-ran")
+		write(t, filepath.Join(dir, ".devopsy", "config.yaml"), "project: shop\n", 0o644)
+		write(t, filepath.Join(dir, ".devopsy", "compose.yaml"), "services:\n  web:\n    image: busybox:1.37\n", 0o644)
+		write(t, filepath.Join(dir, ".devopsy", "capabilities", "env", "compute"), "#!/bin/sh\ntouch "+ran+"\n", 0o755)
+		out, code := runDevopsy(t, dir, []string{"SUDO_USER=devopsy-shop"}, first, "up")
+		if _, err := os.Stat(ran); err == nil {
+			t.Errorf("%q: the project's own program ran as whoever sudo ran devopsy as:\n%s", first, out)
+		}
+		if code == 0 {
+			t.Errorf("%q: not refused:\n%s", first, out)
+		}
+	}
+}
