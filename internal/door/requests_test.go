@@ -772,9 +772,13 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 			t.Errorf("an inspect of its own %s reads %v (%v)", image, a, err)
 		}
 	}
-	// A tag puts a hold of its own or its own build's name on an image of its own (a
-	// rollback puts its build's name back, Restore), never a name another reads.
-	for _, target := range []string{"devopsy.internal/shop-prod/web", "devopsy.internal/shop-stage/web:1"} {
+	// A tag puts a hold of its own (a release's bookmark, which a record tags) on an image of
+	// its own, never a name another reads, nor its build's plain name, the door's build to
+	// write.
+	if _, err := Decide([]string{"tag", "sha256:aaa", "devopsy.internal/shop-prod/web"}, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+		t.Error("a tag onto its build's plain name")
+	}
+	for _, target := range []string{"devopsy.internal/shop-prod/web:devopsy-shop-prod-20240101000001", "busybox:devopsy-shop-stage-1"} {
 		if _, err := Decide([]string{"tag", "sha256:aaa", target}, p, testDaemon, &fakeHost{}, testKnown); err != nil {
 			t.Errorf("a tag onto its own %s: %v", target, err)
 		}
@@ -821,9 +825,12 @@ func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
 				t.Errorf("%q: taken, a pull writing a name taken as a project's own: %+v", argv, a)
 			}
 		}
+		// Compose's pull verb: another's refused, one of its own left out (pull_policy:
+		// never, which compose's pull skips): it writes neither.
 		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
-		file["services"].(map[string]any)["web"].(map[string]any)["image"] = ref
-		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
+		web := file["services"].(map[string]any)["web"].(map[string]any)
+		web["image"] = ref
+		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 && web["pull_policy"] != "never" {
 			t.Errorf("compose's pull of %s is taken", ref)
 		}
 	}

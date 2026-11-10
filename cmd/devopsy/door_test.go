@@ -880,6 +880,7 @@ case "$all" in
     # What a registry serves for a ref (fakeManifest), nothing for one it does not know.
     f=`+in("raw")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -f "$f" ] || exit 1; cat "$f" ;;
   'version --format '*) echo "linux amd64" ;;
+  'compose version --short') echo "${FAKE_COMPOSE_VERSION:-2.40.0}" | grep -v '^$' || echo 2.40.0 ;;
   'tag '*|'image rm '*) ;;
   'buildx inspect '*) ;;
   'buildx build '*)
@@ -1145,22 +1146,11 @@ func TestDoorClaimActsByDigest(t *testing.T) {
 	}
 }
 
-// A word the door leaves in a build's file is no path in the project user's tree, however
-// the compose it runs reads it: compose's client reads a build's contexts with the deploy
-// user's rights, which is why the door seals the context and refuses a path as another.
-//
-// BUG: `service:<name>` is a service only to a compose that knows the form (v2.33.0 on,
-// compose-go's absContextPath); an older one (Debian's and Ubuntu's own packages are)
-// reads it as a path relative to the project directory, and the door hands compose the
-// project user's own directory for that (--project-directory, checked to be in its tree,
-// then given as typed). There `service:base` is the project user's to make, a link to
-// anything the deploy user reads (its ~/.ssh, its config and the door's keys, another
-// project's entries under <space>/mnt), which that compose sends to the project's builder
-// as the named context, for a Dockerfile to COPY out. Nothing checks compose's version.
-// The test asks for the path to lead nowhere of the project's (a project directory of the
-// door's own for a build); a refusal of the form on a compose that does not know it is the
-// other way, and would need this test rewritten.
-func TestDoorBuildContextIsNoPathOfTheProjects(t *testing.T) {
+// A build context reaches compose only when that compose reads service:<name> as another
+// service's build (v2.33.0 on): one before reads it as a path in the project's directory,
+// the project user's to make (a link to the deploy user's keys, another project's entries),
+// which its client sends to the builder with the deploy user's rights. Unread, refused too.
+func TestDoorBuildContextNeedsAComposeThatKnowsIt(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
@@ -1186,22 +1176,20 @@ esac
 	file := `{"name":"shop-prod","services":{` +
 		`"base":` + svc(`{"context":"`+code+`/base"}`) + `,` +
 		`"app":` + svc(`{"context":"`+code+`/app","additional_contexts":{"shop-base":"service:base"}}`) + `}}`
-	c := exec.Command(os.Args[0], "-test.run", "^$")
-	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=build", "DEVOPSY_TEST_DOOR_FILE="+file,
-		"DEVOPSY_TEST_DOOR_DIR="+code, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	out, err := c.CombinedOutput()
-	if err != nil {
-		t.Fatalf("the door did not exec compose (%v):\n%s", err, out)
+	run := func(version string) (string, error) {
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=build", "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_DIR="+code, "FAKE_COMPOSE_VERSION="+version, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		return string(out), err
 	}
-	args, _, _ := strings.Cut(string(out), "\n")
-	_, rest, ok := strings.Cut(args, " --project-directory ")
-	if !ok || !strings.Contains(string(out), `"shop-base":"service:base"`) {
-		t.Fatalf("compose got no project directory, or no context:\n%s", out)
+	for _, version := range []string{"2.32.4", "v2.20.2", "garbage"} {
+		if out, err := run(version); err == nil || strings.Contains(out, "ARGS: ") || !strings.Contains(out, "a build context needs compose 2.33.0 or later") {
+			t.Errorf("compose %s ran a build with a context (%v):\n%s", version, err, out)
+		}
 	}
-	project, _, _ := strings.Cut(rest, " ")
-	// As a compose before v2.33.0 resolves it.
-	if read := filepath.Join(project, "service:base"); strings.HasPrefix(read, dir+"/") {
-		t.Errorf("an older compose reads the context service:base as %s, a path the project user makes, with the deploy user's rights", read)
+	if out, err := run("2.33.0"); err != nil || !strings.Contains(out, `"shop-base":"service:base"`) {
+		t.Errorf("the control, compose 2.33.0 (%v):\n%s", err, out)
 	}
 }
 
@@ -1212,7 +1200,7 @@ esac
 func doorComposeHelper(dir string) {
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
-		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH")},
+		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
 	if req := os.Getenv("DEVOPSY_TEST_DOOR_REQUEST"); req != "" {

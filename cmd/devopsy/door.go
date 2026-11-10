@@ -1217,6 +1217,11 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
 		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
+	if argv[0] == "build" && door.HasContexts(file) {
+		if err := s.composeKnowsServiceContexts(); err != nil {
+			return doorRefused(err)
+		}
+	}
 	name, _ := file["name"].(string)
 	s.policy.Label(file)
 	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
@@ -1283,6 +1288,23 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	}
 	err = syscall.Exec(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
+}
+
+// serviceContexts is the compose that first reads a build context service:<name> as another
+// service's build: one before reads it as a path in the project's directory, the project
+// user's to make, which its client then reads with the deploy user's rights.
+var serviceContexts = [3]int{2, 33, 0}
+
+// composeKnowsServiceContexts refuses a build with contexts (all service:<name>, CheckFile)
+// on a compose before serviceContexts, or one whose version cannot be read.
+func (s *doorSide) composeKnowsServiceContexts() error {
+	out, err := s.docker("compose", "version", "--short").Output()
+	v := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
+	var got [3]int
+	if _, serr := fmt.Sscanf(v, "%d.%d.%d", &got[0], &got[1], &got[2]); err != nil || serr != nil || slices.Compare(got[:], serviceContexts[:]) < 0 {
+		return fmt.Errorf("refused: a build context needs compose %d.%d.%d or later, which reads service:<name> as another service's build (this server's: %q)", serviceContexts[0], serviceContexts[1], serviceContexts[2], v)
+	}
+	return nil
 }
 
 // downProject takes this project's compose name down by that name alone, no file to

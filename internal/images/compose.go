@@ -30,7 +30,7 @@ const ComposeFile = "devopsy-compose.yaml"
 const HeldLabel = "devopsy.held"
 
 // composeHold is how ComposeFile names a service's image: Image its image:
-// ("" for none: a pulled name, a door project's build), From HeldLabel's
+// ("" for none: a pulled name with no digest), From HeldLabel's
 // value ("" for an own image by its bookmark, no hold). bookmark: by the
 // release's own bookmark, named once its listing is known
 // (resolveBookmarks).

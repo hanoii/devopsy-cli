@@ -196,7 +196,7 @@ type Set struct {
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
 	// Door: the project's user goes through the door, which names its builds
-	// itself: its own images by bookmark only when held (resolveBookmarks).
+	// itself and refuses a tag of devopsy's: its fetch has no fetch file (WriteFetch).
 	Door bool
 	// ListAll lists every profile's (ListComposeAll), for the labels of what
 	// a copy writes. List without it.
@@ -527,6 +527,11 @@ func (s *Set) entries(rel string, strict bool) ([]entry, error) {
 				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, t)
 			}
 			ref = t
+		} else if strict && s.Door && svc.Build {
+			// Behind the door, with no fetch file, by the name the door built it under.
+			if _, err := s.Docker.ID(ref); err != nil {
+				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, ref)
+			}
 		}
 		es = append(es, s.entryOf(svc, ref, mode))
 	}

@@ -220,10 +220,10 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 	case "volume":
 		return decideVolume(args, p)
 	case "tag":
-		// Onto a name only this project writes: a hold of its own, or its build's name,
-		// which a rollback puts back on the build it runs (Restore).
-		if len(args) != 2 || !p.OwnRef(args[1]) || strings.HasPrefix(args[0], "-") {
-			return nil, refuse("docker tag %s: only onto a hold or a build of this project's", strings.Join(args, " "))
+		// Onto a hold of its own, a release's bookmark, the one name devopsy tags: its build's
+		// plain name is the door's build to write.
+		if len(args) != 2 || !p.ownHold(args[1]) || strings.HasPrefix(args[0], "-") {
+			return nil, refuse("docker tag %s: only onto a hold of this project's", strings.Join(args, " "))
 		}
 		// Its source is an image this project names too: its own, or claimed. An own one
 		// by the id that made it so, a claimed one by the digest its claim got (Claims):
@@ -557,8 +557,8 @@ func (p Policy) OwnContainerName(name string) bool {
 
 // OwnRef says whether ref is a name only this project writes: its build's, which the door
 // names for one of its environments (images.DoorBuild, under a host no registry serves), or
-// a hold of its own. Its image stays this project's until it moves the name, under its image
-// lock; any other name is a registry's, or another project's, and anyone's on the server to
+// a hold of its own (a release's bookmark). Its image stays this project's until it moves the
+// name; any other name is a registry's, or another project's, and anyone's on the server to
 // move by a pull.
 func (p Policy) OwnRef(ref string) bool {
 	if strings.Contains(ref, "@") {

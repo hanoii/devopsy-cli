@@ -307,7 +307,7 @@ func TestDoorProjectsLife(t *testing.T) {
 // A door project's life in build mode: what it builds runs under devopsy's name for it
 // (devopsy.internal/<compose name>/<service>), whatever image: says, so a name a registry
 // serves, which another project may pull and run, is never the project's to write; a
-// rollback puts that name back on the build it ran, and --status reads it. (The life in
+// rollback runs the build it restores by its release's bookmark, and --status reads it. (The life in
 // image mode: TestDoorProjectsLife.)
 func TestDoorBuildModeLife(t *testing.T) {
 	dir := doorProject(t, "doorbuild", `services:
@@ -335,13 +335,15 @@ func TestDoorBuildModeLife(t *testing.T) {
 		}
 		return out
 	}
-	// It runs the image devopsy's name for its build holds, by that image's id: the door pins
-	// its own names by id, which nothing moves between its check and compose's create.
+	// It runs its release's build of devopsy's name for it, by that image's id: the door pins
+	// its own images by id, which nothing moves between its check and compose's create, and
+	// the release names its build by its bookmark, so a rollback runs the build it restores
+	// whatever the name holds since.
 	runs := func(after, want string) {
 		t.Helper()
-		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker image inspect -f '{{.Id}}' devopsy.internal/doorbuild-prod/web && docker exec doorbuild-prod-web-1 cat /v")
-		if got := strings.Fields(out); len(got) != 3 || !strings.HasPrefix(got[0], "sha256:") || got[0] != got[1] || got[2] != want {
-			t.Errorf("after %s, web runs %q, want devopsy.internal/doorbuild-prod/web's image with %s", after, out, want)
+		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker exec doorbuild-prod-web-1 cat /v")
+		if got := strings.Fields(out); len(got) != 2 || !strings.HasPrefix(got[0], "sha256:") || got[1] != want {
+			t.Errorf("after %s, web runs %q, want its release's build with %s", after, out, want)
 		}
 	}
 	commitAll(t, dir)

@@ -3527,13 +3527,6 @@ func TestDoorRollbackRunsItsOwnBuild(t *testing.T) {
 // A record fails on a build it cannot read, before the switch, whoever the project's user
 // is: for any other project a fetch tag missing fails it (TestRecordNeedsItsFetch), since
 // an own image runs by the bookmark its record puts.
-//
-// BUG: behind the door there is no fetch file, so no entry is strict: a build the record
-// cannot read (gone, an inspect the door or Docker failed) is listed with no image, the
-// record goes through, and devopsy's compose file names nothing for the service. Its start
-// is then the door's to name, the build's own name (images.DoorBuild), which every later
-// fetch of the environment moves (a cancelled release's, a rollback's rebuild): the release
-// runs unpinned, the one case the build pins were to end.
 func TestDoorRecordNeedsItsBuild(t *testing.T) {
 	t.Parallel()
 	d := newFake()

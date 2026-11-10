@@ -478,11 +478,6 @@ func TestNameOfLeavesLongerProjects(t *testing.T) {
 	}
 }
 
-// A build takes no labels of its own, as checkLabels reads a service's only: a build's go
-// on the image and from there on every container of it, as an image's LABEL does (`docker
-// inspect` shows them in .Config.Labels), which is what imports read for a role and what a
-// proxy reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
-// needs a check at the daemon's side, which this test does not ask.
 // A build takes another service's build of the same file as a context (compose's
 // additional_contexts: service:<name>), its way to build one service on another: that build
 // runs on the project's own builder from its own release, under the project's own name. Any
@@ -519,6 +514,11 @@ func TestCheckFileBuildOnAnotherServicesBuild(t *testing.T) {
 	}
 }
 
+// A build takes no labels of its own, as checkLabels reads a service's only: a build's go
+// on the image and from there on every container of it, as an image's LABEL does (`docker
+// inspect` shows them in .Config.Labels), which is what imports read for a role and what a
+// proxy reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
+// needs a check at the daemon's side, which this test does not ask.
 func TestCheckFileBuildLabels(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"build":{"context":"/home/devopsy-shop/shop/prod/code","labels":{"devopsy.role":"proxy"}}`)+`}}`)
@@ -542,14 +542,22 @@ func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
 	if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
 		t.Errorf("compose's pull of another project's hold %s is taken", hold)
 	}
-	// A build's name is the door's to write, never a pull's, this project's own included; a
-	// registry's name is anyone's to pull, a project's name at its start included (no build
-	// is named so).
+	// A build's name is the door's to write, never a pull's: another project's is refused,
+	// this project's own left out of the pull (pull_policy: never, which compose's pull
+	// skips); a registry's name is anyone's to pull, a project's name at its start included
+	// (no build is named so).
 	p.Others = []string{"mongo"}
-	for image, refused := range map[string]bool{"devopsy.internal/blog-prod/web": true, "devopsy.internal/blog-prod/web:1": true, "devopsy.internal/shop-prod/web": true, "mongo-express:1": false} {
+	for image, want := range map[string]string{"devopsy.internal/blog-prod/web": "refused", "devopsy.internal/blog-prod/web:1": "refused", "devopsy.internal/shop-prod/web": "skipped", "mongo-express:1": "pulled"} {
 		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
-		if errs := CheckFile(file, p, "pull", &fakePaths{}); (len(errs) > 0) != refused {
-			t.Errorf("a pull of %s: %v", image, errs)
+		errs := CheckFile(file, p, "pull", &fakePaths{})
+		got := "pulled"
+		if len(errs) > 0 {
+			got = "refused"
+		} else if file["services"].(map[string]any)["web"].(map[string]any)["pull_policy"] == "never" {
+			got = "skipped"
+		}
+		if got != want {
+			t.Errorf("a pull of %s: %s, want %s (%v)", image, got, want, errs)
 		}
 	}
 }
@@ -587,12 +595,6 @@ func TestMntPath(t *testing.T) {
 // run step's `devopsy pull <service>`, a restart command's, an operator's by hand) is about
 // the services that pull: the built one is skipped (its build: kept for that), and the
 // project's own bookmark is no name a pull writes.
-//
-// BUG: the pull verb asks Claimable of every service's image, the built ones' too, and a
-// bookmark is a hold, "which devopsy alone writes, never a pull": since own images run by
-// bookmarks (the build pins), every compose pull in a door project's live build-mode
-// release is refused whole, whatever service it names. Before the pins a door project's
-// file named no image for its builds, so the check only ever saw the project's image:.
 func TestCheckFilePullInAReleaseRunningByBookmarks(t *testing.T) {
 	t.Parallel()
 	bookmark := "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000"
@@ -610,12 +612,6 @@ func TestCheckFilePullInAReleaseRunningByBookmarks(t *testing.T) {
 // What a build writes for a service is what the next start of it reads: for the deploy
 // user's project compose tags the image: of the rendered file, the release's bookmark
 // (images.ComposeFile), and the `up` after it runs that build.
-//
-// BUG: behind the door the build verb names the build images.DoorBuild whatever image: the
-// rendered file holds, while a start keeps a name of the project's own (the bookmark): a
-// project user's `devopsy @t build web` then `devopsy @t up -d web` builds one name and
-// starts the other, the release's image as it was, with no word said. Either side may be
-// the one to change (the build landing on the bookmark, or said to be a release's alone).
 func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
 	t.Parallel()
 	bookmark := "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000"

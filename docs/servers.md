@@ -346,7 +346,8 @@ root, and says which.
 A project user has images of its own too: those it builds, and those
 its releases hold. devopsy names what a project user builds
 `devopsy.internal/<compose name>/<service>`, whatever the service's
-`image:` says, which is the name `docker ps` and `--releases` show;
+`image:` says, which is the name `--releases` shows (its containers
+run each release's build by that release's own tag of it);
 `devopsy -- config` shows the `image:` the project wrote. `.internal`
 is reserved for private networks and never exists on the public
 internet, so a project user's build never lands on a name a registry

@@ -338,8 +338,12 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		checkBuild(svc, block, services, p, paths, fail)
 		// A build writes devopsy's name for it in the server's one image store, whatever
 		// image: says: under a host no registry serves, so no name a project writes is one
-		// a registry's pull writes too, or another project reads.
-		s["image"] = images.DoorBuild(name, svc)
+		// a registry's pull writes too, or another project reads. Devopsy's own file may name
+		// its release's bookmark of that name, which a start then runs: a build by hand lands
+		// there, as any project's does.
+		if image, _ := s["image"].(string); !p.ownHold(image) || images.RepoOf(image) != images.DoorBuild(name, svc) {
+			s["image"] = images.DoorBuild(name, svc)
+		}
 	case verb == "pull":
 		// A pull has only to skip what is built: nothing of the block is read.
 		s["build"] = map[string]any{"context": "."}
@@ -363,9 +367,13 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		fail("%s: an image named like a flag: %s", svc, image)
 	}
 	// A pull writes each name in the server's one image store, as a claim does: never one a
-	// project alone writes (Claimable), its own included.
+	// project alone writes (Claimable). One of its own (a release's bookmark, a hold, its
+	// build's name: what devopsy's own file names for what it built) is no registry's to pull,
+	// and is left out of it.
 	if image, _ := s["image"].(string); verb == "pull" && image != "" {
-		if err := p.Claimable(image); err != nil {
+		if p.OwnRef(image) {
+			s["pull_policy"] = "never"
+		} else if err := p.Claimable(image); err != nil {
 			fail("%s: %s", svc, strings.TrimPrefix(err.Error(), "refused: "))
 		}
 	}
@@ -641,6 +649,19 @@ func checkContexts(svc string, v any, services map[string]any, fail func(string,
 			fail("%s: build: additional_contexts: %s: no other service of this file that builds: %q", svc, name, value)
 		}
 	}
+}
+
+// HasContexts says whether a file's build holds additional_contexts (checkContexts): the
+// door's side checks that the compose it runs reads them as CheckFile does.
+func HasContexts(file map[string]any) bool {
+	services, _ := file["services"].(map[string]any)
+	for _, sv := range services {
+		s, _ := sv.(map[string]any)
+		if b, ok := s["build"].(map[string]any); ok && b["additional_contexts"] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedKeys(m map[string]any) []string {
