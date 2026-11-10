@@ -359,7 +359,9 @@ func decideInspect(args []string, p Policy, d Daemon) (*Action, error) {
 			return nil, refuse("not this project's: docker inspect %s", t)
 		}
 	}
-	return &Action{Docker: append([]string{"inspect"}, args...)}, nil
+	// A container's, by its type: untyped, Docker answers for an image or a volume of the
+	// same name, another's, once the container went after the check.
+	return &Action{Docker: append([]string{"inspect", "--type", "container"}, args...)}, nil
 }
 
 func decideNetwork(args []string, p Policy) (*Action, error) {

@@ -275,6 +275,16 @@ func TestDecidePS(t *testing.T) {
 	}
 }
 
+// An inspect of its own container goes to Docker typed: untyped, Docker answers for an image
+// or a volume of the same name, another's, once the container went after the check.
+func TestDecideInspectIsAContainers(t *testing.T) {
+	t.Parallel()
+	a, err := decide(t, "inspect", "--format", "{{.State.Status}}", "mine")
+	if err != nil || !slices.Equal(a.Docker, []string{"inspect", "--type", "container", "--format", "{{.State.Status}}", "mine"}) {
+		t.Errorf("an inspect of its own: %+v, %v", a, err)
+	}
+}
+
 func TestDecideInspectLabels(t *testing.T) {
 	t.Parallel()
 	a, err := decide(t, "inspect", "--format", "{{.Id}} {{json .Config.Labels}}", "mine", "victim", "gone")
