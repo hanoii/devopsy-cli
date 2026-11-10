@@ -2387,7 +2387,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// a volume by the name compose gives its key there, never by what the
 	// manifest says (an imported one is anyone's), all checked before
 	// anything stops.
-	_, restored, err := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
+	restoredCode := filepath.Join(rel, remote.CodeDir)
+	_, restored, err := cli.SyncServices(restoredCode, os.Environ())
 	if err != nil {
 		return failErr(fmt.Errorf("nothing restored, the restored code's labels cannot be read: %w", err))
 	}
@@ -2454,6 +2455,17 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			return fail("the environment is marked, and snapshot " + id + " has no " + strings.Join(bad, ", ") + ", which would stay as the cut copy left it: nothing restored")
 		}
 	}
+	// A volume it restores that Docker lacks is made first, before anything
+	// stops, as the restored code's compose makes it (its options among
+	// them), never the current release's, which may lack its service.
+	for _, t := range tars {
+		if t.volume == "" {
+			continue
+		}
+		if err := ensureVolumes(ctx, restoredCode, composeName(cwd), []cli.Volume{volumes[t.name]}, restored); err != nil {
+			return fail(err.Error() + ": nothing restored")
+		}
+	}
 	// Stopped: the current release's services with data, and any of its
 	// services that mounts what the restore writes, a label or not.
 	var names []string
@@ -2507,7 +2519,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			e.volume = &v
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
-		if err := extractEntry(ctx, cwd, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd), restored); err != nil {
+		if err := extractEntry(ctx, restoredCode, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd), restored); err != nil {
 			return stayDown(err.Error())
 		}
 	}
