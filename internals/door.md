@@ -65,7 +65,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A service sharing a build's image behind the door (an `image:` with no `build:`) is not one of the project's own: the door renames the build, never the sharer, so it builds with the same context instead.
 - Every name a container answers for on a shared network is the project's (`checkAliases`): its service's, no alias, and its hostname, which Docker's DNS answers for there too; no domainname.
 - A container request goes to Docker by the full id the check read (`ownContainerID`: inspect, rm, a sync daemon's exec), never the caller's word, a name or an id's prefix Docker would resolve again.
-- The door ignores its caller's terminal stop signals until it execs (`doorStops`, `execDecided`): one held between a check and its use would stretch every window between them, and what it execs gets them back.
+- The door catches its caller's terminal stop signals until it execs (`doorStops`, `holdStops`), never ignoring them: one held between a check and its use would stretch every window between them, and an exec resets a caught signal to its default, keeping an ignored one ignored.
 - An entry's owner (the owners form) is held as a container's user is (`userRefused`): never root's or an id of the host's.
 - A network's labels, as a volume's, are never compose's or devopsy's.
 - devopsy refuses a first word that only starts like a door flag, and any call through sudo from a member of the project users' group that is not the door (`inDoorGroup`), before it reads a project: sudo matches `--door *` against one string, a wildcard across words, so one argument "--door x" passes it.

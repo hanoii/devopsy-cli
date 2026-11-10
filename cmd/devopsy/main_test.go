@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,7 +33,7 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("DEVOPSY_TEST_EXEC_DECIDED") != "" {
 		// TestDoorGivesWhatItExecsItsStops: as runDoor, then the exec.
-		signal.Ignore(doorStops...)
+		holdStops()
 		panic(execDecided("/bin/sh", []string{"sh", "-c", "grep '^SigIgn:' /proc/self/status"}, os.Environ()))
 	}
 	dir, err := os.MkdirTemp("", "devopsy-test")

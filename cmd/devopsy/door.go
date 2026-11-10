@@ -777,9 +777,7 @@ func doorKnown() door.Known {
 func runDoor(args []string) int {
 	// A caller's umask comes through sudo, and the door's modes are its own.
 	syscall.Umask(0o022)
-	// Its caller's terminal cannot stop it between a check and its use: a door held there
-	// would stretch every window between them. What it execs gets them back (execDecided).
-	signal.Ignore(doorStops...)
+	holdStops()
 	if err := doorLimits(); err != nil {
 		report.Error(err.Error())
 		return 2
@@ -1326,14 +1324,19 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	return doorRefused(err)
 }
 
-// doorStops are the terminal's stop signals, which the door ignores until it execs.
+// doorStops are the terminal's stop signals, which the door takes until it execs.
 var doorStops = []os.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU}
 
-// execDecided execs what the door decided, with the terminal's stop signals back to their
-// default: an ignored signal stays ignored across an exec, and compose's own, Ctrl-Z
-// included, is its to have (devopsy replaces itself).
+// holdStops keeps its caller's terminal from stopping the door between a check and its use,
+// which would stretch every window between them: the signals are caught, never ignored, so
+// what the door execs has them at their default again (an exec resets a caught signal, and
+// keeps an ignored one ignored), compose's Ctrl-Z being compose's (devopsy replaces itself).
+func holdStops() {
+	signal.Notify(make(chan os.Signal, 1), doorStops...)
+}
+
+// execDecided execs what the door decided.
 func execDecided(path string, argv, env []string) error {
-	signal.Reset(doorStops...)
 	return syscall.Exec(path, argv, env)
 }
 
