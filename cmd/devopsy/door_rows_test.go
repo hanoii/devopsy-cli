@@ -111,25 +111,11 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	}
 	seen := filepath.Join(dir, "seen")
 	// Docker answers the door's look at what runs, which has nothing of another's, and the
-	// claim of the image: its manifest, its pull by that manifest's digest, and the image.
-	manifest := plainManifest("busybox")
-	b1 := digestOf([]byte(manifest))
-	docker := filepath.Join(dir, "docker")
-	if err := testfile.Write(docker, []byte(`#!/bin/sh
-case "$1 $2" in
-  "ps "*) ;;
-  "buildx imagetools") printf '%s' '`+manifest+`' ;;
-  "version --format") echo "linux amd64" ;;
-  "pull busybox@`+b1+`") echo "Digest: `+b1+`" ;;
-  "tag "*) ;;
-  "buildx inspect") echo 'Driver Options: network="devopsy-shop-build"' ;;
-  "buildx "*) cat >/dev/null ;;
-  "image inspect") echo '{"Id":"sha256:b1","RepoDigests":["busybox@`+b1+`"],"Config":{"Labels":{}}}' ;;
-  *) exit 1 ;;
-esac
-`), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// claim of the image (doorImageFake): its registry serves busybox:1.37, and the build's
+	// name is on disk.
+	docker := doorImageFake(t, dir)
+	b1 := fakeManifest(t, dir, plainManifest("busybox"), "busybox:1.37")
+	write(t, filepath.Join(dir, "store"), "devopsy.internal/shop-prod/web|sha256:b1||devopsy.internal/shop-prod/web|{}\n", 0o644)
 	vet := filepath.Join(dir, "vet")
 	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho \"$DEVOPSY_DOOR_PROJECT\" >"+seen+".project\necho no >&2\nexit 2\n"), 0o755); err != nil {
 		t.Fatal(err)

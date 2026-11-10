@@ -375,6 +375,10 @@ func repoKey(ref string) string {
 	return strings.TrimPrefix(rest, "library/")
 }
 
+// Familiar is a name as Docker shows it (familiar), what `docker load` prints of an image it
+// loaded under ref.
+func Familiar(ref string) string { return familiar(ref) }
+
 // familiar is a name as Docker shows it, so a name devopsy computed and
 // one Docker reports compare equal: nginx is nginx:latest, and
 // nginx:1.27@sha256:... is nginx@sha256:... (a digest wins over a tag).

@@ -193,6 +193,9 @@ type doorSide struct {
 	keysAt os.FileInfo
 	// daemonPlatform is the daemon's "<os> <architecture>", once read (platform).
 	daemonPlatform string
+	// hostChecked and hostErr are doorHostReady's answer, once read (hostReady).
+	hostChecked bool
+	hostErr     error
 }
 
 // read runs a read of the project's tree, as its user.
@@ -570,86 +573,15 @@ func (s *doorSide) Image(ref string) (string, []string, error) {
 	return f[0], f[1:], nil
 }
 
-// claim pulls ref with the project's registry logins (config, the caller's docker config)
-// and records the image the pull got as the project's (door.Policy.Images, ImagesFile):
-// an image another project pulled with its own logins is this one's only once its own
-// pull of it goes through, a public one at the cost of one pull. It gives the digest the
-// pull got and that image, read by that digest: the name is anyone's on the server to move
-// right after the pull (another project's pull of a tag its registry moved, the deploy
-// user's build of a registry's name), so nothing reads it
-// again. What the pull says goes to stderr on a failure, stdout being the request's answer.
-func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
-	d, err := s.logins(config)
-	if err != nil {
-		return "", images.Image{}, err
-	}
-	refused := fmt.Errorf("refused: %s is not this project's, and its registry logins do not pull it", ref)
-	m, err := s.platformManifest(ref, d)
-	if err != nil {
-		if err == errNoRead {
-			return "", images.Image{}, refused
-		}
-		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
-	}
-	pinned := images.ByDigest(ref, m)
-	var said bytes.Buffer
-	pull := s.docker("pull", pinned)
-	pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
-	pull.Stdout, pull.Stderr = &said, &said
-	if pull.Run() != nil {
-		os.Stderr.Write(said.Bytes())
-		return "", images.Image{}, refused
-	}
-	img, err := s.inspectImage(pinned)
-	if err != nil {
-		return "", images.Image{}, fmt.Errorf("refused: %s: %v", ref, err)
-	}
-	if !slices.Contains(s.policy.Images, img.ID) {
-		if err := s.prove(pinned, d); err != nil {
-			// The reference the pull made goes, and the image with it unless another name
-			// holds it: a later claim landing there would pull nothing.
-			_ = s.docker("image", "rm", pinned).Run()
-			return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
-		}
-		if err := s.record(img.ID); err != nil {
-			return "", images.Image{}, err
-		}
-	}
-	// The name asked, the registry's content proven under it, so a start finds it here and
-	// asks the registry nothing.
-	if !images.Pinned(ref) {
-		_ = s.docker("tag", pinned, ref).Run()
-	}
-	return m, img, nil
-}
-
-// record adds id to this project's claimed images (Policy.ImagesFile).
-func (s *doorSide) record(id string) error {
-	file := s.policy.ImagesFile()
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = f.WriteString(id + "\n")
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	s.policy.Images = append(s.policy.Images, id)
-	return err
-}
-
 // errNoRead is a registry that gives a project's logins nothing for a ref.
 var errNoRead = errors.New("its registry logins do not read it")
 
 // platformManifest is the digest of the one image manifest ref comes to on this server, read
 // with the logins in the DOCKER_CONFIG dir logins: ref's own when it is a manifest, else the
 // entry of its index for the daemon's platform, itself a manifest, its bytes checked against
-// its digest. A claim pulls, proves and pins that digest, never an index's: Docker's pull and
-// BuildKit's fetch choose from an index by rules of their own, and one index could send each
-// to another image.
+// its digest. A claim proves, copies and pins that digest, never an index's: BuildKit's fetch
+// and imagetools' copy could each choose from an index by rules of their own, and one index
+// could send each to another image.
 func (s *doorSide) platformManifest(ref, logins string) (string, error) {
 	raw, err := s.registryRead(logins)
 	if err != nil {
@@ -751,12 +683,13 @@ func (s *doorSide) platform() (goos, arch, variant string, err error) {
 	return goos, arch, variant, nil
 }
 
-// prove fetches the image pinned names (<repo>@<digest>, what a claim's pull got) on the
-// project's own builder, with its logins (the DOCKER_CONFIG dir logins): the builder's store
-// holds only what the project fetched or built, so every blob it lacks comes from the
-// claimant's registry, checked by its digest, and the exporter needs every one. A pull alone
-// proves only that a registry answered: Docker fetches no layer it holds, so a registry that
-// names another project's layers, serving none, lands on them. Every first claim proves.
+// prove fetches the image pinned names (<repo>@<digest>, the platform manifest a claim read) on
+// the project's own builder, with its logins (the DOCKER_CONFIG dir logins): the builder's
+// store holds only what the project fetched or built, so every blob it lacks comes from the
+// claimant's registry, checked by its digest, and the exporter needs every one, each layer
+// unpacked against the config's diff_ids. A copy alone proves only that a registry answered:
+// Docker loads no blob it holds, so a registry that names another project's layers, serving
+// none, or a config naming their diff_ids over junk, lands on them. Every first claim proves.
 func (s *doorSide) prove(pinned, logins string) error {
 	b, err := s.builder()
 	if err != nil {

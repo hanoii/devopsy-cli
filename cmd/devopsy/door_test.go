@@ -3,8 +3,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
@@ -879,7 +877,9 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 // lines, which a test moves apart); its registry dir/registry, `<ref>|<digest>` a line,
 // what a pull of the ref gets, printed as docker pull prints it (`Digest: ...`), and what
 // buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails, and a
-// claim's proof (buildx build) of a <repo>@<digest> listed in dir/unserved. It logs
+// claim's proof (buildx build) of a <repo>@<digest> listed in dir/unserved. A claim's copy
+// (imagetools create) is the layout fakeManifest wrote for the ref, and its load puts the
+// image in the store (see the cases). It logs
 // every call in dir/calls, lists no containers, and answers compose with its arguments
 // and the file it was given, for a door that execs it (doorComposeHelper). Image
 // inspects answer the two formats the door uses today and `{{json .}}`, as
@@ -907,6 +907,32 @@ case "$all" in
     # What a registry serves for a ref (fakeManifest), nothing for one it does not know.
     f=`+in("raw")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -f "$f" ] || exit 1; cat "$f" ;;
   'version --format '*) echo "linux amd64" ;;
+  'info --format '*) echo '[[driver-type io.containerd.snapshotter.v1]]' ;;
+  'buildx version') echo "github.com/docker/buildx v0.38.2 e25e2b7a4b6a" ;;
+  'buildx imagetools create '*)
+    # A copy of what the registry serves for the ref (fakeManifest's layout), none for one it
+    # does not, or one listed in dir/uncopied; with dir/slowcopy, it says dir/copying once
+    # the copy is there and then hangs, for a signal to cut it.
+    dest=; while [ $# -gt 0 ]; do [ "$1" = --tag ] && dest=${2#oci-layout://} && dest=${dest%:claim}; shift; done
+    grep -qxF -- "$ref" `+in("uncopied")+` 2>/dev/null && exit 1
+    l=`+in("layouts")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -d "$l" ] || exit 1
+    mkdir -p "$dest" && cp -R "$l/." "$dest" || exit 1
+    [ -f `+in("slowcopy")+` ] && { touch `+in("copying")+`; exec sleep 30; }
+    true ;;
+  'load')
+    # Docker's load: the name its index gives, said as Docker says it (familiar), and the image
+    # put first in the store under it, its id the manifest's digest, its labels those of an
+    # image of that digest the store has (the same config, by content); one listed in
+    # dir/unpacked says Docker's unpacking error after, and exits 0, as Docker does; with
+    # dir/loadsays, it says that file instead.
+    d=$(mktemp -d) && tar -xf - -C "$d"
+    name=$(sed -n 's/.*"io.containerd.image.name":"\([^"]*\)".*/\1/p' "$d/index.json")
+    fam=${name#docker.io/library/}; fam=${fam#docker.io/}
+    echo "load $name" >>`+in("calls")+`
+    if [ -f `+in("loadsays")+` ]; then cat `+in("loadsays")+`; else echo "Loaded image: $fam"; fi
+    if grep -qxF -- "$fam" `+in("unpacked")+` 2>/dev/null; then echo "Error unpacking image $fam: content digest not found"; exit 0; fi
+    ls=$(field "$(entry "$fam")" 5); [ -n "$ls" ] || ls='{}'
+    { echo "$fam|${fam#*@}|$fam||$ls"; cat `+in("store")+` 2>/dev/null || true; } >"$d/store" && cat "$d/store" >`+in("store")+` ;;
   'compose version --short') echo "${FAKE_COMPOSE_VERSION:-2.40.0}" | grep -v '^$' || echo 2.40.0 ;;
   'tag '*|'image rm '*) ;;
   'buildx inspect '*) ;;
@@ -935,30 +961,47 @@ esac
 }
 
 // fakeManifest has the fake registry of doorImageFake serve body for each of refs and for the
-// first one's repository at body's digest, which it returns: a manifest, or an index.
+// first one's repository at body's digest, which it returns: a manifest, or an index. For a
+// manifest of plainManifest's, it also writes the OCI layout imagetools would copy of it, by
+// that digest: the manifest and its config, each under its hash.
 func fakeManifest(t *testing.T, dir, body string, refs ...string) string {
 	t.Helper()
-	sum := sha256.Sum256([]byte(body))
-	d := "sha256:" + hex.EncodeToString(sum[:])
+	d := digestOf([]byte(body))
+	key := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace
 	for _, r := range append(refs, images.RepoOf(refs[0])+"@"+d) {
-		write(t, filepath.Join(dir, "raw", strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(r)), body, 0o644)
+		write(t, filepath.Join(dir, "raw", key(r)), body, 0o644)
+	}
+	var m struct {
+		Annotations map[string]string `json:"annotations"`
+	}
+	if json.Unmarshal([]byte(body), &m) == nil && m.Annotations["x-config"] != "" {
+		layout := filepath.Join(dir, "layouts", key(images.RepoOf(refs[0])+"@"+d))
+		blob := func(data string) {
+			write(t, filepath.Join(layout, "blobs", "sha256", strings.TrimPrefix(digestOf([]byte(data)), "sha256:")), data, 0o644)
+		}
+		blob(body)
+		blob(m.Annotations["x-config"])
+		write(t, filepath.Join(layout, "index.json"), `{"schemaVersion":2,"manifests":[{"digest":"`+d+`","annotations":{"org.opencontainers.image.ref.name":"claim"}}]}`, 0o644)
+		write(t, filepath.Join(layout, "oci-layout"), `{"imageLayoutVersion":"1.0.0"}`, 0o644)
 	}
 	return d
 }
 
-// plainManifest is an image manifest's body, its config named for name.
+// plainManifest is an image manifest's body, its config named for name: a config blob of its
+// own, which its annotation carries for fakeManifest's layout.
 func plainManifest(name string) string {
-	return `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:config-` + name + `"},"layers":[]}`
+	config := `{"name":"` + name + `"}`
+	return `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"` + digestOf([]byte(config)) + `","size":` + strconv.Itoa(len(config)) + `},"layers":[],"annotations":{"x-config":` + strconv.Quote(config) + `}}`
 }
 
 // A start runs an image of this project's by name (a build's, a hold of its own, devopsy's
 // util image: names only this project or the deploy user writes, under this project's
-// lock), or one it claims first: pulled with its own registry logins, the id then recorded
-// in its space, so the next start asks the registry nothing. One already on disk that
-// another project pulled (a private one with that project's login), or a name without a
-// host the deploy user built (blog-prod-web, a registry's name to the door), or an id
-// alone, is refused when this project's pull of it fails, and another's build name or
-// hold is never pulled at all.
+// lock), or one it claims first: copied by the door's client with its own registry logins and
+// loaded, the id then recorded in its space, so the next start asks the registry nothing.
+// One already on disk that another project claimed (a private one with that project's
+// login), or a name without a host the deploy user built (blog-prod-web, a registry's name to
+// the door), or an id alone, is refused when this project's claim of it fails, and another's
+// build name or hold is never claimed at all.
 //
 // A claimed image goes to compose pinned, `<image as given>@<digest>`, the digest the
 // image has in the service's repository (as the devopsy.digest label chooses it, the tag
@@ -966,8 +1009,8 @@ func plainManifest(name string) string {
 // on the server to move between this check and compose's create (another project's pull of
 // a tag its registry moved, the deploy user's build of a Docker Hub name), and Docker
 // resolves repo:tag@digest by the digest. The digest, the labels read and the id recorded
-// are the image the project's pull got, read by digest or id, never by the name again
-// after the pull; an image with no digest in its repository never goes by its plain name.
+// are the image the project's claim loaded, read by digest or id, never by the name again
+// after the load; an image with no digest in its repository never goes by its plain name.
 func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1008,18 +1051,25 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
 		return got, err
 	}
-	pulled := func() bool { return strings.Contains(readString(calls), "pull ") }
+	// pulled says the start claimed an image: the door's copy of it, which only a claim makes.
+	pulled := func() bool { return strings.Contains(readString(calls), "imagetools create ") }
 	pin := private + ":1@" + p1
 	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
 		t.Errorf("claimed by its pull (%v), pulled %v, goes to compose as %q, want %q:\n%s", err, pulled(), got, pin, readString(calls))
 	}
-	if got := readString(side.policy.ImagesFile()); got != "sha256:p1\n" {
+	// Docker's containerd store names an image by its manifest's digest.
+	if got := readString(side.policy.ImagesFile()); got != p1+"\n" {
 		t.Errorf("the record: %q", got)
 	}
-	// The claim pulled the manifest's digest, never the name, proved it on the project's
-	// builder (its files exported, each layer unpacked), and named it as asked.
+	// The claim proved the manifest's digest, never the name, on the project's builder (its
+	// files exported, each layer unpacked), copied it as the registry serves it, loaded it
+	// under its canonical name by that digest, Docker's daemon asking no registry (no pull),
+	// and named it as asked.
 	c := readString(calls)
-	for _, want := range []string{"\npull " + private + "@" + p1 + "\n", "\nproof FROM " + private + "@" + p1 + "\n", "buildx build --output type=tar,dest=/dev/null", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
+	if strings.Contains(c, "\npull ") {
+		t.Errorf("a claim had Docker's daemon pull:\n%s", c)
+	}
+	for _, want := range []string{"\nproof FROM " + private + "@" + p1 + "\n", "buildx build --output type=tar,dest=/dev/null", "imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("a claim with no %q:\n%s", want, c)
 		}
@@ -1028,14 +1078,13 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if got, err := start(private + ":1"); err != nil || pulled() || got != pin || strings.Contains(readString(calls), "proof ") {
 		t.Errorf("claimed already (%v), pulled or proven again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
 	}
-	// A registry that names content the server has but serves none of it (Docker's pull
-	// fetches no layer it holds): the proof fails, the claim is refused, nothing recorded,
-	// and the reference its pull made goes.
+	// A registry that names content the server has but serves none of it: the proof fails,
+	// the claim is refused before anything is copied or loaded, nothing recorded.
 	write(t, filepath.Join(dir, "unserved"), labelled+"@"+l1+"\n", 0o644)
-	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "did not serve") || !strings.Contains(readString(calls), "\nimage rm "+labelled+"@"+l1+"\n") {
+	if _, err := start(labelled + ":1"); err == nil || !strings.Contains(err.Error(), "did not serve") || pulled() || strings.Contains(readString(calls), "\nload ") {
 		t.Errorf("an image its registry did not serve: %v\n%s", err, readString(calls))
 	}
-	if got := readString(side.policy.ImagesFile()); strings.Contains(got, "sha256:l1") {
+	if got := readString(side.policy.ImagesFile()); strings.Contains(got, l1) {
 		t.Errorf("an unproven claim recorded: %q", got)
 	}
 	os.Remove(filepath.Join(dir, "unserved"))
@@ -1105,7 +1154,7 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if got, err := start("mongo-express:1"); err != nil || !pulled() || got != "mongo-express:1@"+hh {
 		t.Errorf("a name moved right after its pull (%v), pulled %v, goes to compose as %q, want the registry's digest:\n%s", err, pulled(), got, readString(calls))
 	}
-	if got := readString(side.policy.ImagesFile()); !strings.Contains(got, "sha256:hhh") || strings.Contains(got, "sha256:mmm") {
+	if got := readString(side.policy.ImagesFile()); !strings.Contains(got, hh) || strings.Contains(got, "sha256:mmm") {
 		t.Errorf("the record after the swap holds the name's image, not the pull's: %q", got)
 	}
 }
@@ -1151,7 +1200,7 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 }
 
 // A request that claims an image (a tag's source, an inspect) then acts on it by the digest
-// its claim's pull got: the name is anyone's on the server to move right after the pull,
+// its claim loaded: the name is anyone's on the server to move right after the load,
 // and a tag would make the mover's image a hold of this project's, which it then runs by
 // its own name, unpinned. In a helper process (doorComposeHelper), since the door execs
 // Docker, here the fake, which logs its calls.
