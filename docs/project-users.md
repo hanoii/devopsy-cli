@@ -146,9 +146,11 @@ keys ends every process the user runs, so nothing a leaked key started
 outlives it, and removes the project's builder with its caches, which a
 leaked key's build could have filled and the next build would trust.
 A project user also has no cron or at jobs and no linger,
-which would run its programs with no session, and sshd runs nothing of
-its home at a login (`~/.ssh/rc`) and forwards it no agent, X11 or
-tunnel, so `--ssh-option ForwardAgent=yes` does nothing there.
+which would run its programs with no session. Nothing of its home runs
+at a login: sshd runs no `~/.ssh/rc`, its login shell is devopsy's,
+which reads no `~/.profile`, and it has no systemd user manager, which
+would start the units in its home. sshd forwards it no agent, X11 or
+tunnel either, so `--ssh-option ForwardAgent=yes` does nothing there.
 
 A leaked key could still change what the project user owns: its home
 and its tree, the steps of an older release among them, which a

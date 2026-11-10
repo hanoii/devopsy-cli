@@ -518,9 +518,10 @@ COMPOSE_PROJECT_NAME=doorcache-prod docker compose build -q`
 	}
 }
 
-// Nothing of a project user's home runs at its login (sshd's PermitUserRC no, in devopsy's
-// drop-in): a leaked key writes ~/.ssh/rc, its removal leaves it, and the next login of a key
-// kept or rotated in would run it as that user, whatever it starts outliving the key. Nor does
+// Nothing of a project user's home runs at its login: neither ~/.ssh/rc (sshd's PermitUserRC
+// no, in devopsy's drop-in) nor ~/.profile (its login shell, devopsy's, reads none). A leaked
+// key writes one, its removal leaves it, and the next login of a key kept or rotated in would
+// run it as that user, whatever it starts outliving the key. Nor does
 // an operator's forwarded agent reach the user's session, where a process a leaked key left
 // could use it.
 func TestDoorLoginRunsNothingOfTheHome(t *testing.T) {
@@ -550,6 +551,23 @@ func TestDoorLoginRunsNothingOfTheHome(t *testing.T) {
 	}
 	if out, code := doorRoot(t, "cat "+ran); code == 0 {
 		t.Errorf("the removed key's ~/.ssh/rc ran at the kept key's login, as %s", strings.TrimSpace(out))
+	}
+	// Nor its ~/.profile, at a login shell of a key kept: sshd's own, with no command, and
+	// --shell-host's (its login shell -l), the user's shell being devopsy's (doorShell).
+	profiled := "/tmp/opusrc-profiled"
+	t.Cleanup(func() { doorRoot(t, "rm -f "+profiled) })
+	if out, code := doorAs(t, user, "echo 'touch "+profiled+"' >>~/.profile"); code != 0 {
+		t.Fatalf("its ~/.profile (%d): %s", code, out)
+	}
+	for _, login := range []string{`ssh -o BatchMode=yes -T ` + user + `@doorsrv <<'S'
+exit
+S`, `ssh -o BatchMode=yes -T ` + user + `@doorsrv 'exec "${SHELL:-/bin/sh}" -l' </dev/null`} {
+		if out, code := op(t, "/", login); code != 0 {
+			t.Fatalf("a kept key's login (%d): %s", code, out)
+		}
+		if _, code := doorRoot(t, "test -e "+profiled); code == 0 {
+			t.Errorf("a login shell ran the home's ~/.profile: %s", login)
+		}
 	}
 	out, code := op(t, "/", `eval "$(ssh-agent -s)" >/dev/null && ssh -A -o BatchMode=yes `+user+`@doorsrv 'echo "agent:${SSH_AUTH_SOCK:-none}"' 2>&1; kill "$SSH_AGENT_PID"`)
 	if code != 0 || !strings.Contains(out, "agent:none") {

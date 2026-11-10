@@ -27,6 +27,7 @@ const DoorRebootMarker = "/run/devopsy-door-reboot"
 const (
 	DoorSSHDropIn   = "/etc/ssh/sshd_config.d/devopsy.conf"
 	DoorKeysCommand = "/usr/local/libexec/devopsy-authorized-keys"
+	DoorShell       = "/usr/local/libexec/devopsy-shell"
 	DoorSudoers     = "/etc/sudoers.d/devopsy-projects"
 	DoorDockerLink  = "/usr/local/bin/docker"
 )
@@ -55,6 +56,20 @@ func doorKeysCommand(devopsy string) string {
 	return "#!/bin/sh\n# Written by devopsy (devopsy @<server> --project-users add): sshd's\n" +
 		"# AuthorizedKeysCommand for project users.\nexec " + Quote(devopsy) + " --authorized-keys \"$1\"\n"
 }
+
+// doorShell is a project user's login shell, root's file: it runs a command as sh -c does and
+// an interactive shell (sshd's login, --shell-host's -l) as one that is no login shell, with
+// no ENV, so nothing of the home runs at a login (~/.profile, a file ENV names): the home is
+// the user's to write, and a leaked key's hook would run at a kept key's next login.
+const doorShell = `#!/bin/sh
+# Written by devopsy (devopsy @<server> --project-users add): a project user's login shell,
+# which reads nothing of its home.
+unset ENV BASH_ENV
+if [ "${1:-}" = -c ]; then
+  exec /bin/sh -c "$2"
+fi
+exec /bin/sh -i
+`
 
 // doorSudoers is the door's two rules: a project user asks its deploy user, which reads a
 // project's tree as that project's user. A project user's sudo to the door keeps none of its
@@ -175,6 +190,7 @@ fi
 mkdir -p ` + path.Dir(DoorKeysCommand) + ` ` + path.Dir(DoorSSHDropIn) + `
 put ` + DoorSudoers + ` 440 'visudo -cqf "$1"' ` + Quote(doorSudoers(deploy, devopsy)) + ` || :
 put ` + DoorKeysCommand + ` 755 'sh -n "$1"' ` + Quote(doorKeysCommand(devopsy)) + ` || :
+put ` + DoorShell + ` 755 'sh -n "$1"' ` + Quote(doorShell) + ` || :
 old=$(cat ` + DoorSSHDropIn + ` 2>/dev/null || :)
 if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
   if ! sshd -t; then
@@ -190,7 +206,7 @@ made=
 if ! id -u "$user" >/dev/null 2>&1; then
   # Its ids from the project users' range, which no container of the door's runs as: a user
   # made later never takes the uid of a container already running.
-  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 ` + projectIDRange + ` --create-home --shell /bin/sh --groups "$group" "$user"
+  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 ` + projectIDRange + ` --create-home --shell ` + DoorShell + ` --groups "$group" "$user"
   usermod -p '*' "$user"
   made=1
 fi
@@ -206,8 +222,13 @@ id -nG "$user" | tr ' ' '\n' | grep -qx "$group" || usermod -aG "$group" "$user"
 for f in /etc/cron.deny /etc/at.deny; do
   grep -qxF "$user" "$f" 2>/dev/null || printf '%s\n' "$user" >>"$f"
 done
-# Nor a user manager of its own lingering with no session, for the same reason.
+# Nor a user manager of its own lingering with no session, for the same reason, nor one at all:
+# pam_systemd starts it at every login, and it runs the units of the home, the user's to write.
 rm -f "/var/lib/systemd/linger/$user"
+mkdir -p /etc/systemd/system
+ln -sfn /dev/null "/etc/systemd/system/user@$uid.service"
+# Its login shell reads nothing of the home (doorShell), a user made before included.
+[ "$(getent passwd "$user" | cut -d: -f7)" = ` + DoorShell + ` ] || usermod -s ` + DoorShell + ` "$user"
 home=$(getent passwd "$user" | cut -d: -f6)
 chmod 750 "$home"
 [ -z "$tree" ] || [ -e "$tree" ] || install -d -m 750 -o "$user" -g "$user" "$tree"
