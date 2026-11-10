@@ -412,8 +412,8 @@ func (a *activation) fetch() string {
 	// fetch_release: the release's images under the shared lock,
 	// undone before the lock goes on a failure or a signal, so no
 	// removal comes in between: a new release's own images are
-	// bookmarked, so they go with it, and the live release's names come
-	// back (img undo; a rollback's target keeps its bookmarks). A
+	// bookmarked, so they go with it, and its fetch tags go (img undo; a
+	// rollback's target keeps its bookmarks). A
 	// signal only sets fetch_sig: the fetch's child gets it too and
 	// fails, and the same path undoes it, with signals and SIGPIPE
 	// ignored from there on, so neither a second Ctrl-C nor a write to
@@ -535,7 +535,7 @@ func (a *activation) restoreData() string {
 		// again; from it the set stays down under a restore mark. Nothing
 		// interrupts it, so its output goes to the server's log from here
 		// (followOutput's marker tells the operator's devopsy it goes on),
-		// and a failure puts the images' names back as the log check does.
+		// and a failure settles the fetch as the log check does.
 		s += "trap '' PIPE\n" + followOutput + `ln -sfn "` + toBase + `shared/.env" "$code/.devopsy/.env"
 ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
 [ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
@@ -543,9 +543,9 @@ rd_status=0
 ` + a.snapStep("restore-data", `"$snap"`, `"$rel"`) + ` || rd_status=$?
 if [ "$rd_status" != 0 ]; then
   set +e
-  # The images' names back first: what the settle below starts again, or
-  # makes again (images.Recreate), must run the current release's images,
-  # never the ones the restore's fetch gave the names.
+  # The fetch settled first (img undo): what the settle below starts again,
+  # or makes again (images.Recreate), runs the current release's images by
+  # its bookmarks, which the restore's fetch never moved.
 ` + a.undoLocked() + `` + killedSays(a.t, a.project, "rd_status", "nothing restored") + `  not_live 1
 fi
 ` + sayTook("restore_t", `"snapshot `+a.restore.Snapshot+`'s data restored"`)

@@ -249,7 +249,6 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 		return holds, nil, nil
 	}
 	tid := s.idOf(rel)
-	own := s.own(rel)
 	var lines []string
 	for i, o := range es {
 		h, ok := held[o.Service]
@@ -263,7 +262,7 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 				h.line = ran{Service: o.Service, Ref: alt.Ref, ID: alt.ID, Version: alt.DataVersion, Tag: alt.Tag}
 			}
 		}
-		e, ch, err := s.holdOn(o, h, src, from, own, pulled)
+		e, ch, err := s.holdOn(o, h, src, from, pulled)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -295,7 +294,7 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 // restart's last try): a pulled one held all the same, for the run step to
 // pull, a built one its release's own instead (ownInstead), said, naming
 // the release that fixes forward.
-func (s *Set) holdOn(o entry, h hold, src entry, from string, own map[string]bool, pulled *[]string) (entry, composeHold, error) {
+func (s *Set) holdOn(o entry, h hold, src entry, from string, pulled *[]string) (entry, composeHold, error) {
 	ch := composeHold{From: cmp.Or(from, historyHeld)}
 	what := heldWhat(from)
 	svc := o.Service

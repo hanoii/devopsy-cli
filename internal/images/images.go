@@ -650,31 +650,6 @@ func withOwnBuilds(es []entry) []entry {
 	return append(out, builds...)
 }
 
-// own is every bookmark the environment's releases and snapshots make,
-// rel's siblings and rel, as Docker shows them: what a restore may move
-// without changing another environment. Without a snapshot's own, every
-// rollback of a built image after a snapshot would take its bookmark for
-// another environment's, and leave the name on the newer image (third
-// review of the snapshots plan).
-func (s *Set) own(rel string) map[string]bool {
-	own := map[string]bool{}
-	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(rel), "*"))
-	if b := s.base(); b != "" {
-		more, _ := filepath.Glob(filepath.Join(b, "releases", "*"))
-		dirs = append(dirs, more...)
-	}
-	if sn := s.snapshots(); sn != "" {
-		more, _ := filepath.Glob(filepath.Join(sn, "*"))
-		dirs = append(dirs, more...)
-	}
-	for _, d := range dirs {
-		for _, b := range bookmarks(readList(d), s.Name, s.idOf(d)) {
-			own[familiar(b)] = true
-		}
-	}
-	return own
-}
-
 // SnapshotsEnv and BaseEnv are where an environment's snapshots go and
 // its directory, which every script exports (remote's basePrelude) for
 // the devopsy it runs: a Set without its own reads them.
@@ -706,28 +681,6 @@ func (s *Set) BookmarkFrom(dir, rel string) error {
 		return errors.New("release " + filepath.Base(rel) + " lists no images")
 	}
 	return s.keep(dir, es)
-}
-
-// others are who besides this environment uses an image: other compose
-// projects' containers, and bookmarks none of its releases made. When
-// Docker cannot tell, that is said as a user, so the name stays.
-func (s *Set) others(img string, own map[string]bool) []string {
-	users, err := s.Docker.Users(img)
-	if err != nil {
-		return []string{"Docker could not tell: " + err.Error()}
-	}
-	var others []string
-	for _, u := range users {
-		if u != s.Name {
-			others = append(others, u)
-		}
-	}
-	who := describe(others)
-	tags, err := s.Docker.Tags(img)
-	if err != nil {
-		return append(who, "Docker could not tell: "+err.Error())
-	}
-	return append(who, holding(tags, own, s.leftBookmarks()[img])...)
 }
 
 // Remove takes a going release's images: its bookmarks are untagged, and
