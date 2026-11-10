@@ -1583,7 +1583,14 @@ func (s *doorSide) builder() ([]string, error) {
 		c.Env, c.Stderr = env, os.Stderr
 		return c.Output()
 	}
-	out, err := run("buildx", "inspect", name)
+	// A look whose failure is an answer (no builder yet, no network yet) says nothing: its
+	// words read as a failure of the build.
+	probe := func(args ...string) ([]byte, error) {
+		c := s.docker(args...)
+		c.Env = env
+		return c.Output()
+	}
+	out, err := probe("buildx", "inspect", name)
 	if err == nil && strings.Contains(string(out), `network="`+network+`"`) {
 		return b, nil
 	}
@@ -1593,14 +1600,14 @@ func (s *doorSide) builder() ([]string, error) {
 			return nil, fmt.Errorf("refused: %s's builder is on Docker's default bridge, and could not be removed: %v", s.policy.Project, err)
 		}
 	}
-	if _, err := run("network", "inspect", network); err != nil {
+	if _, err := probe("network", "inspect", network); err != nil {
 		if _, err := run("network", "create", network); err != nil {
 			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
 		}
 	}
 	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network); err != nil {
 		// Another environment's build may have made it meanwhile.
-		if out, ierr := run("buildx", "inspect", name); ierr == nil && strings.Contains(string(out), `network="`+network+`"`) {
+		if out, ierr := probe("buildx", "inspect", name); ierr == nil && strings.Contains(string(out), `network="`+network+`"`) {
 			return b, nil
 		}
 		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)

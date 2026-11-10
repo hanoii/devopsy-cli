@@ -349,7 +349,11 @@ func TestDoorBuildModeLife(t *testing.T) {
 		}
 	}
 	commitAll(t, dir)
-	release("a first release", "--release")
+	// Its builder is made at its first build, the looks that find none saying nothing: their
+	// words would read as the build failing.
+	if out := release("a first release", "--release"); strings.Contains(out, "no builder") || strings.Contains(out, "network devopsy-doorbuild-build not found") {
+		t.Errorf("a first build says its builder's looks failed:\n%s", out)
+	}
 	runs("a first release", "one")
 	op(t, dir, "printf 'FROM busybox:1.37\\nRUN echo two >/v\\n' >.devopsy/Dockerfile")
 	commitAll(t, dir)
