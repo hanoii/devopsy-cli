@@ -437,7 +437,9 @@ func (s *doorSide) WorkDir() (string, error) {
 	return s.workDir("rX")
 }
 
-// workDir makes a directory in the deploy user's nosuid space, for this user alone.
+// workDir makes a directory in the deploy user's nosuid space, for this user alone with
+// perms (none with "": the deploy user's own, a login's), swept a day on (sweepWork) when
+// a killed door leaves it.
 func (s *doorSide) workDir(perms string) (string, error) {
 	root := filepath.Join(s.policy.Space, "work")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -448,6 +450,9 @@ func (s *doorSide) workDir(perms string) (string, error) {
 		return "", err
 	}
 	s.made = append(s.made, d)
+	if perms == "" {
+		return d, nil
+	}
 	if err := s.acl(d, perms, false); err != nil {
 		return "", err
 	}
@@ -853,15 +858,12 @@ func (s *doorSide) login(registry, user string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	root := filepath.Join(s.policy.Space, "work")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return doorRefused(err)
-	}
-	config, err := os.MkdirTemp(root, s.policy.Project+"-login-")
+	// The deploy user's own: docker login writes the password there.
+	config, err := s.workDir("")
 	if err != nil {
 		return doorRefused(err)
 	}
-	defer os.RemoveAll(config)
+	defer s.removeWork(config)
 	// In a pipe filled before it starts, never written after: a docker login that ended
 	// first would raise SIGPIPE.
 	in, err := filledPipe(string(bytes.TrimSuffix(password, []byte("\n"))))
