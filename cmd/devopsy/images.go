@@ -339,6 +339,12 @@ func runImages(args []string, color bool) int {
 		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
+		// A project user's builds go through the door, which names them itself and
+		// refuses a tag of devopsy's: its fetch runs with no file.
+		if behindDoor() {
+			_ = os.Remove(filepath.Join(rest[0], images.FetchFile))
+			break
+		}
 		if err := s.WriteFetch(rest[0]); err != nil {
 			report.Error("could not write the fetch's compose file: " + err.Error())
 			return 1

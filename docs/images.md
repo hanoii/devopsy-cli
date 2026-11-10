@@ -9,8 +9,12 @@ data limits which image may run on it.
 Once fetched, every image a release runs gets a second tag for that
 release, `devopsy-<compose name>-<release id>`. A long compose name is
 shortened, and a checksum is added when a release names one repository
-twice. Images pulled by digest are tagged too. The names Compose runs
-(`drupal11-prod-app`, `mariadb:11.8`) don't change.
+twice. Images pulled by digest are tagged too. A pulled name Compose
+runs (`mariadb:11.8`) doesn't change. An image the release builds, or
+never pulls, runs by the release's own tag instead, which no other
+environment writes: in build mode the fetch builds under it, never under
+the `image:` name, which every environment building the project on the
+server shares.
 
 devopsy never moves a pulled name back to an older image, because
 another environment, instance or project may be running it.
