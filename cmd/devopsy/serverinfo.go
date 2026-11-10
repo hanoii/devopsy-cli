@@ -544,7 +544,7 @@ func envDirs(dir string) []string {
 	entries, _ := os.ReadDir(dir)
 	var out []string
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") || removing.MatchString(e.Name()) {
+		if !projectDir(e.Name()) {
 			continue
 		}
 		if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {

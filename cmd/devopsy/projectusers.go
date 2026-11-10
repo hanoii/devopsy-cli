@@ -125,7 +125,7 @@ func serverProjects(door []string, root string) []string {
 	ps := slices.Clone(door)
 	if entries, err := os.ReadDir(root); err == nil {
 		for _, e := range entries {
-			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			if e.IsDir() && projectDir(e.Name()) {
 				ps = append(ps, e.Name())
 			}
 		}
@@ -217,7 +217,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		return 1
 	}
 	// The deploy user's own projects, closed to project users: none reads another's.
-	closed, err := closeDeployProjects(r.Root, os.Getuid())
+	closed, err := closeDeployProjects(r.Root, d.Space, os.Getuid())
 	if err != nil {
 		return failErr(err)
 	}
@@ -252,12 +252,18 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	return 0
 }
 
-// closeDeployProjects closes to everyone else each directory in root that the deploy user
-// (uid) owns and others may enter, and says which: its projects, made before the server had
-// project users with the session's umask (a release closes its own since, remote's prelude),
-// while a project user enters root to reach its own tree when root is not the deploy user's
-// home.
-func closeDeployProjects(root string, uid int) ([]string, error) {
+// projectDir says whether a directory named name in a release root is a project's: none
+// starting with a dot (a home's .cache, .config) or a removal cut off (removing).
+func projectDir(name string) bool {
+	return !strings.HasPrefix(name, ".") && !removing.MatchString(name)
+}
+
+// closeDeployProjects closes to everyone else each project directory in root (projectDir)
+// that the deploy user (uid) owns and others may enter, the door's space aside, and says
+// which: its projects, made before the server had project users with the session's umask (a
+// release closes its own since, remote's prelude), while a project user enters root to reach
+// its own tree when root is not the deploy user's home.
+func closeDeployProjects(root, space string, uid int) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -265,7 +271,7 @@ func closeDeployProjects(root string, uid int) ([]string, error) {
 	var closed []string
 	for _, e := range entries {
 		fi, err := e.Info()
-		if err != nil || !fi.IsDir() || fi.Mode().Perm()&0o077 == 0 {
+		if err != nil || !fi.IsDir() || fi.Mode().Perm()&0o077 == 0 || !projectDir(e.Name()) || filepath.Join(root, e.Name()) == filepath.Clean(space) {
 			continue
 		}
 		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != uid {

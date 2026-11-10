@@ -105,12 +105,14 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 // --project-users add closes the deploy user's projects in the release root to everyone else:
 // a project user enters the root to reach its own tree when it is not the deploy user's home,
 // and what a project made before the server had project users (with the session's umask) is
-// then that user's to read. Only what the deploy user owns and others may enter changes, and
+// then that user's to read. Only a project's directory (none of a home's own, .cache or
+// .config, nor the door's space) that the deploy user owns and others may enter changes, and
 // add says which.
 func TestCloseDeployProjects(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	for name, mode := range map[string]os.FileMode{"shop": 0o775, "blog": 0o755, "closed": 0o700} {
+	space := filepath.Join(root, "door")
+	for name, mode := range map[string]os.FileMode{"shop": 0o775, "blog": 0o755, "closed": 0o700, ".cache": 0o755, "door": 0o755} {
 		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -119,16 +121,21 @@ func TestCloseDeployProjects(t *testing.T) {
 		}
 	}
 	write(t, filepath.Join(root, "note"), "a file\n", 0o644)
-	if closed, err := closeDeployProjects(root, os.Getuid()+1); err != nil || len(closed) != 0 {
+	if closed, err := closeDeployProjects(root, space, os.Getuid()+1); err != nil || len(closed) != 0 {
 		t.Errorf("another user's directories closed: %q (%v)", closed, err)
 	}
-	closed, err := closeDeployProjects(root, os.Getuid())
+	closed, err := closeDeployProjects(root, space, os.Getuid())
 	if err != nil || strings.Join(closed, " ") != "blog shop" {
 		t.Fatalf("closed %q (%v)", closed, err)
 	}
 	for _, name := range []string{"shop", "blog", "closed"} {
 		if fi, err := os.Stat(filepath.Join(root, name)); err != nil || fi.Mode().Perm() != 0o700 {
 			t.Errorf("%s: %v (%v)", name, fi.Mode(), err)
+		}
+	}
+	for _, name := range []string{".cache", "door"} {
+		if fi, err := os.Stat(filepath.Join(root, name)); err != nil || fi.Mode().Perm() != 0o755 {
+			t.Errorf("%s, no project, closed: %v (%v)", name, fi.Mode(), err)
 		}
 	}
 	if fi, _ := os.Stat(filepath.Join(root, "note")); fi.Mode().Perm() != 0o644 {
