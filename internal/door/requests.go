@@ -608,8 +608,12 @@ func (p Policy) OwnRef(ref string) bool {
 // lands where a registry's manifest points, and Docker fetches no layer it holds: landing on
 // such a name, it would make another's image a project's with no claim and no proof. Every
 // other name is a registry's, and what a pull of it writes is claimed, then proven. A pull by
-// digest writes no name.
+// digest writes no name, but its host is still one Docker's daemon contacts for the project,
+// so the server's own and the metadata addresses are refused first, by digest or not.
 func (p Policy) Claimable(ref string) error {
+	if ownHost(registryHost(ref)) {
+		return refuse("%s: a registry on the server's own or a metadata address, which Docker would contact for this project", ref)
+	}
 	if strings.Contains(ref, "@") {
 		return nil
 	}
@@ -619,9 +623,6 @@ func (p Policy) Claimable(ref string) error {
 	}
 	if strings.HasPrefix(repo, images.DoorHost+"/") {
 		return refuse("%s: a build's name, which the door alone writes", ref)
-	}
-	if ownHost(registryHost(ref)) {
-		return refuse("%s: a registry on the server's own or a metadata address, which Docker would contact for this project", ref)
 	}
 	return nil
 }

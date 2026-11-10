@@ -854,6 +854,7 @@ func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
 // another server's). Each is read as Docker and a C resolver read it: a first part with a
 // capital is a registry's host (Localhost/x), a host is the same in any case (LOCALHOST), and a
 // name inet_aton reads as an address (127.1, 0x7f.1, 0x7f000001, 127.0.0.0x1) is that address.
+// By digest too: a digest writes no name, but the daemon still contacts its host.
 func TestNoRegistryOfTheServersOwn(t *testing.T) {
 	t.Parallel()
 	for _, ref := range []string{
@@ -863,19 +864,30 @@ func TestNoRegistryOfTheServersOwn(t *testing.T) {
 		"0177.0.0.1:5000/x", "LOCALHOST:5000/x:1", "Localhost/x:1", "reg.LocalHost:5000/x", "0x7f000001:5000/x",
 		"127.0.0.0x1:5000/x", "0x7f.0.0.0x1:5000/x", "0xa9fea9fe:5000/x", "169.254.169.0xfe:5000/x", "0X7F000001:5000/x",
 	} {
-		if err := testPolicy.Claimable(ref); err == nil {
-			t.Errorf("a pull of %s is taken", ref)
+		// By digest too, which writes no name but still has the daemon contact the host, and
+		// through compose's pull verb, which hands the reference to the daemon as it is.
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
+		file["services"].(map[string]any)["web"].(map[string]any)["image"] = ref + testDigest
+		if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) == 0 {
+			t.Errorf("compose's pull of %s is taken", ref+testDigest)
+		}
+		for _, r := range []string{ref, ref + testDigest} {
+			if err := testPolicy.Claimable(r); err == nil {
+				t.Errorf("a pull of %s is taken", r)
+			}
 		}
 	}
 	for _, ref := range []string{
 		"registry.example.com/x:1", "10.0.0.5:5000/x", "172.17.0.1:5003/x", "nginx:1", "ghcr.io/x/y:1", "library/2130706433:1",
-		"Registry.Example.com/x:1", "0x7f.example.com:5000/x",
+		"Registry.Example.com/x:1", "0x7f.example.com:5000/x", "registry.example.com/x" + testDigest,
 	} {
 		if err := testPolicy.Claimable(ref); err != nil {
 			t.Errorf("a pull of %s: %v", ref, err)
 		}
 	}
 }
+
+const testDigest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 // idDaemon is a daemon that, as Docker does, takes a container by a name or a prefix of its id
 // and answers with its full id.
