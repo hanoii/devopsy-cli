@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -243,6 +244,7 @@ loop:
 		}
 	}
 	render := func() (string, error) {
+		sweepRenders(os.TempDir(), time.Now())
 		f, err := os.CreateTemp("", "devopsy-door-*")
 		if err != nil {
 			return "", err
@@ -270,7 +272,26 @@ loop:
 		report.Error("the compose file does not render: " + err.Error())
 		return 2
 	}
-	return doorHandOver(append([]string{"compose", dockerConfig(), f, strings.Join(profiles, ","), dir}, rest...))
+	code := doorHandOver(append([]string{"compose", dockerConfig(), f, strings.Join(profiles, ","), dir}, rest...))
+	// Here only when sudo did not run: the door takes the file once it does.
+	os.Remove(f)
+	return code
+}
+
+// sweepRenders removes this user's renders in dir an hour old: one a sudo that ran and
+// refused left (the door takes the file once it answers, and nothing of the client's runs
+// after sudo). Each holds the project's variables, its owner's alone to read.
+func sweepRenders(dir string, now time.Time) {
+	old, _ := filepath.Glob(filepath.Join(dir, "devopsy-door-*"))
+	for _, f := range old {
+		fi, err := os.Lstat(f)
+		if err != nil || !fi.Mode().IsRegular() || now.Sub(fi.ModTime()) < time.Hour {
+			continue
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) == os.Getuid() {
+			os.Remove(f)
+		}
+	}
 }
 
 // runMntReady gets an environment's shared/mnt ready, whichever user this is: a

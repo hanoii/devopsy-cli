@@ -179,3 +179,23 @@ func TestDoorClientDropsNoGlobalFlag(t *testing.T) {
 		t.Errorf("a render's flags, one in its = form, did not reach the door:\n%s%s", got, out)
 	}
 }
+
+// A render that a sudo which ran and refused left goes at the next render, an hour old: it
+// holds the project's variables. A newer one, another's or another file stays.
+func TestSweepRenders(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	now := time.Now()
+	for name, age := range map[string]time.Duration{"devopsy-door-old": 2 * time.Hour, "devopsy-door-new": time.Minute, "other-old": 2 * time.Hour} {
+		write(t, filepath.Join(dir, name), "{}\n", 0o600)
+		if err := os.Chtimes(filepath.Join(dir, name), now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sweepRenders(dir, now)
+	for name, kept := range map[string]bool{"devopsy-door-old": false, "devopsy-door-new": true, "other-old": true} {
+		if fileExists(filepath.Join(dir, name)) != kept {
+			t.Errorf("%s: kept %v", name, !kept)
+		}
+	}
+}
