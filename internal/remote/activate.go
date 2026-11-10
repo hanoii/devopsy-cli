@@ -165,8 +165,7 @@ func (a *activation) head() string {
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
 	// is gone or was built with other build arguments; that build failing,
-	// its bookmarks as they are (--as-built), never the failed release's
-	// image under the name. --restart: nothing refused, a data service the
+	// its bookmarks as they are (--as-built), never what a name holds. --restart: nothing refused, a data service the
 	// rule would refuse held on the failed release's image its data ran,
 	// in every one of the three (a fetch keeps the hold).
 	s += `get_images() {
@@ -593,9 +592,9 @@ func (a *activation) restartPrevious() string {
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
 	// release: (ReleaseStepsFlag).
-	// The new release's images took the names the previous one runs
-	// (build mode's are the compose project's, a floating tag's the
-	// registry's): its own back.
+	// The previous release runs its own images by its bookmarks, which the
+	// new release's fetch never moved; a floating tag the new one pulled
+	// stays the registry's.
 	// Not on a partial copy (a sync's that went wrong): the previous
 	// release's code would run on it.
 	s := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then

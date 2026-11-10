@@ -1360,6 +1360,11 @@ func writeRecord(t *testing.T, base, id, mode string) {
 
 // fakeImage is the id a tag holds in fakeImageTools' store, "" without
 // the tag.
+// fakeFetchTag sets t, in a fake devopsy's build run in a release's code/, to the file name of
+// the tag the release's fetch file names (images.FetchFile), as compose with that file
+// tags a build: empty without one.
+const fakeFetchTag = `t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../` + images.FetchFile + ` 2>/dev/null | head -1 | tr / _); `
+
 // releaseRuns is the fake image a release's devopsy-compose.yaml runs svc on, by the
 // image: it names (the release's bookmark, a hold), else ref: what an up there runs.
 func releaseRuns(root, rel, svc, ref string) string {
@@ -1408,7 +1413,7 @@ case "$*" in
       [ -z "${LOCK_AFTER:-}" ] || : >"$FAKE_ROOT/locked"
       exit "$FAIL_BUILD"
     fi
-    t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+    ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
   --mnt-owners*) [ "$id" != "${FAIL_OWNERS:-}" ] || exit 5 ;;
   "--check-mounts restored restart") exit ${FAIL_RESTART_CHECK:-0} ;;
@@ -1453,7 +1458,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1484,7 +1489,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\n3: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	rel1 := filepath.Join(base, "releases", "1")
@@ -2016,7 +2021,7 @@ case "$*" in
       touch "$FAKE_ROOT/building"
       while [ ! -e "$FAKE_ROOT/dropped" ]; do sleep 0.05; done
     fi
-    t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+    ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)
@@ -2468,7 +2473,7 @@ func TestAfterSwitchSurvives(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
-  "-- build --pull") id=$(pwd -P); id=${id%/code}; t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "${id##*/}" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+  "-- build --pull") id=$(pwd -P); id=${id%/code}; ` + fakeFetchTag + `echo "${id##*/}" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   deploy)
     if [ -n "${FAKE_WAIT:-}" ]; then
       touch "$FAKE_ROOT/running"
@@ -3009,7 +3014,7 @@ case "$*" in
       exit 1
     fi
     echo "$IMG" >"$FAKE_ROOT/images/mariadb:11.8" ;;
-  "-- build --pull") t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+  "-- build --pull") ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   # LOCK_ON_FAIL: a failing run step leaves the image lock held by
   # another (the restart's get_images waits for it in vain).
   deploy) [ -z "${FAIL_RUN:-}" ] || [ -z "${LOCK_ON_FAIL:-}" ] || : >"$FAKE_ROOT/locked"; exit ${FAIL_RUN:-0} ;;
@@ -3202,7 +3207,7 @@ case "$*" in
     if [ -n "${FAKE_SLOW_LIST:-}" ] && [ "$id" = 2 ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
     printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
-  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)
@@ -3351,7 +3356,7 @@ mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."},"image":"registry/app:prod"}}}' ;;
   "-- pull") echo "pulled-$id" >"$FAKE_ROOT/images/registry_app:prod" ;;
-  "-- build --pull") t=$(sed -n 's/^    image: "\(.*\)"$/\1/p' ../devopsy-fetch.yaml 2>/dev/null | head -1 | tr / _); echo "built-$id" >"$FAKE_ROOT/images/${t:-registry_app:prod}" ;;
+  "-- build --pull") ` + fakeFetchTag + `echo "built-$id" >"$FAKE_ROOT/images/${t:-registry_app:prod}" ;;
 esac
 exit 0
 `)

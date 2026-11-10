@@ -37,11 +37,12 @@ func fetchTag(name, id, ref string) string {
 }
 
 // WriteFetch writes rel's FetchFile before its fetch (img fetch-file): in build mode, each
-// service whose image is one the release builds, by its fetch tag; none otherwise, or with
-// nothing built.
+// service whose image is one the release builds, by its fetch tag; none otherwise, with
+// nothing built, or behind the door, which names a project user's builds itself and refuses
+// a tag of devopsy's.
 func (s *Set) WriteFetch(rel string) error {
 	path := filepath.Join(rel, FetchFile)
-	if ModeOf(rel) != ModeBuild {
+	if ModeOf(rel) != ModeBuild || s.Door {
 		return removeIfThere(path)
 	}
 	list := s.ListAll
@@ -127,15 +128,19 @@ func removeIfThere(path string) error {
 	return nil
 }
 
-// fromLine is a Dockerfile's FROM: its flags, the image, and the stage it names.
-var fromLine = regexp.MustCompile(`(?i)^\s*FROM\s+((?:--\S+\s+)*)(\S+)(?:\s+AS\s+(\S+))?\s*$`)
+// fromLine is a Dockerfile's FROM: its flags, the image, and the stage it names; fromFlag a
+// COPY's or ADD's --from= and a RUN --mount's from=, which read an image the same way.
+var (
+	fromLine = regexp.MustCompile(`(?i)^\s*FROM\s+((?:--\S+\s+)*)(\S+)(?:\s+AS\s+(\S+))?\s*$`)
+	fromFlag = regexp.MustCompile(`(?i)^\s*(?:(?:COPY|ADD)\s.*--from=([^\s,]+)|RUN\s.*--mount=\S*\bfrom=([^\s,]+))`)
+)
 
-// fromOtherBuilds says, for each built service whose Dockerfile builds FROM exactly an image
-// another service of the release builds, not given as a build context, how to name it: a
-// build lands under its release's own name, never the image: name, so FROM by that name
-// takes whatever another environment left there, or nothing. What it cannot read for
-// certain (an ${ARG}, a stage's own name, an inline Dockerfile, a remote context) it skips:
-// a warning, never a refusal.
+// fromOtherBuilds says, for each built service whose Dockerfile reads exactly an image
+// another service of the release builds (a FROM, a COPY --from, a RUN --mount from=), not
+// given as a build context, how to name it: a build lands under its release's own name,
+// never the image: name, so that name holds whatever another environment left there, or
+// nothing. What it cannot read for certain (an ${ARG}, a stage, a stage's index, an inline
+// Dockerfile, a remote context) it skips: a warning, never a refusal.
 func fromOtherBuilds(svcs []Service) []string {
 	built := map[string]string{}
 	for _, svc := range svcs {
@@ -166,22 +171,28 @@ func fromOtherBuilds(svcs []Service) []string {
 			continue
 		}
 		stages := map[string]bool{}
+		said := map[string]bool{}
 		for _, line := range strings.Split(strings.ReplaceAll(string(data), "\\\n", " "), "\n") {
-			m := fromLine.FindStringSubmatch(line)
-			if m == nil {
+			var image, stage string
+			if m := fromLine.FindStringSubmatch(line); m != nil {
+				image, stage = m[2], m[3]
+			} else if m := fromFlag.FindStringSubmatch(line); m != nil {
+				image = cmp.Or(m[1], m[2])
+			} else {
 				continue
 			}
-			image := m[2]
 			_, named := b.AdditionalContexts[image]
 			other, ok := built[familiar(image)]
-			skip := strings.Contains(image, "$") || stages[strings.ToLower(image)] || named || !ok || other == svc.Name
-			if m[3] != "" {
-				stages[strings.ToLower(m[3])] = true
+			_, index := strconv.Atoi(image)
+			skip := strings.Contains(image, "$") || stages[strings.ToLower(image)] || index == nil || named || !ok || other == svc.Name || said[image]
+			if stage != "" {
+				stages[strings.ToLower(stage)] = true
 			}
 			if skip {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("%s's Dockerfile builds FROM %s, which %s builds: give it as a build context (additional_contexts: %s: \"service:%s\"), or it builds on whatever another environment left under that name, or fails", svc.Name, image, other, image, other))
+			said[image] = true
+			lines = append(lines, fmt.Sprintf("%s's Dockerfile reads %s, which %s builds: give it as a build context (additional_contexts: %s: \"service:%s\"), or it reads whatever another environment left under that name, or fails", svc.Name, image, other, image, other))
 		}
 	}
 	return lines

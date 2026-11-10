@@ -60,10 +60,12 @@ exec devopsy exec -T "$1" sh -c "$load"
 }
 
 // rows are the values of table t in service's database of env, one per
-// line, sorted; "" without one.
+// line, sorted; "" without one. Read with the image the service's
+// container runs: devopsy's builds land under their release's own names,
+// never the project's.
 func rows(t *testing.T, name, env, service string) string {
 	t.Helper()
-	out, _ := srv(t, "docker run --rm -v \"$PWD\"/"+name+"/"+env+"/shared/mnt/"+service+":/data "+name+"-"+env+"-"+service+" sqlite3 /data/app.db 'select v from t order by v' 2>/dev/null")
+	out, _ := srv(t, "docker run --rm -v \"$PWD\"/"+name+"/"+env+"/shared/mnt/"+service+":/data \"$(docker inspect -f '{{.Image}}' "+name+"-"+env+"-"+service+"-1)\" sqlite3 /data/app.db 'select v from t order by v' 2>/dev/null")
 	return strings.Join(strings.Fields(out), " ")
 }
 

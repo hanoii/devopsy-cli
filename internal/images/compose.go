@@ -28,10 +28,11 @@ const ComposeFile = "devopsy-compose.yaml"
 // "snapshot <id>", or historyHeld: --status says so (heldWhat).
 const HeldLabel = "devopsy.held"
 
-// composeHold is how ComposeFile holds a service: Image its image: (""
-// when its own name holds it), From HeldLabel's value ("" for an own image
-// by its bookmark, no hold). bookmark: by the release's own bookmark,
-// named once its listing is known (resolveBookmarks).
+// composeHold is how ComposeFile names a service's image: Image its image:
+// ("" for none: a pulled name, a door project's build), From HeldLabel's
+// value ("" for an own image by its bookmark, no hold). bookmark: by the
+// release's own bookmark, named once its listing is known
+// (resolveBookmarks).
 type composeHold struct {
 	Image, From string
 	bookmark    bool
@@ -139,9 +140,10 @@ func composeFacts(rel string) (images, labels, held map[string]string) {
 // worth a word: running another image than rel gives it (its container
 // another activation's: one cut off past its switch, a rollback's whose
 // newer containers run on; OrbStack cuts, round 8), another image than
-// its activation gave it (DigestLabel: a plain up followed a name another
-// environment's pull moved, or something outside devopsy), or held on
-// another image than the release's own (HeldLabel), own names included.
+// its activation gave it (DigestLabel: something outside devopsy's file for
+// a service it names an image for, else a plain up that followed a pulled
+// name another environment moved), or held on another image than the
+// release's own (HeldLabel).
 // A hold is said, the rest warned.
 func StatusLines(d Docker, project, rel string) []StatusLine {
 	pins, labels, held := composeFacts(rel)

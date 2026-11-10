@@ -191,6 +191,9 @@ type Set struct {
 	Out io.Writer
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
+	// Door: the project's user goes through the door, which names its builds
+	// itself: its own images by bookmark only when held (resolveBookmarks).
+	Door bool
 	// ListAll lists every profile's (ListComposeAll), for the labels of what
 	// a copy writes. List without it.
 	ListAll func(rel string) ([]Service, error)
@@ -216,7 +219,7 @@ type Set struct {
 	// fix repeats (--release-sync, --reset, --sync --from <address>), in
 	// place of the check's own (--release, --sync): img's --again.
 	Again string
-	// AsBuilt has Restore put own images' bookmarks back even when their
+	// AsBuilt has Restore run own images by their bookmarks even when their
 	// build changed since (changed): the restart after a failed run step
 	// whose build again failed runs what the release built, never the
 	// failed release's image under the name.
@@ -591,12 +594,19 @@ func (s *Set) keep(rel string, es []entry) error {
 	}
 	names := bookmarks(es, s.Name, id)
 	keep := map[string]bool{}
+	// An own image's bookmark is what its release runs it by (resolveBookmarks):
+	// one that cannot be put fails the record, before the switch, once the rest
+	// are done; a pulled one's only costs a rollback a pull.
+	var ownErr error
 	for i, e := range es {
 		keep[familiar(names[i])] = true
 		// By id: another release's fetch may move the name meanwhile.
 		if e.ID != "" {
-			if err := s.Docker.Tag(e.ID, names[i]); err != nil {
-				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s builds or pulls it again", e.Ref, names[i], err, id)
+			if err := s.Docker.Tag(e.ID, names[i]); err != nil && e.Kind == KindOwn {
+				s.say(report.ErrorLevel, "could not bookmark %s as %s, which %s runs it by: %v", e.Ref, names[i], id, err)
+				ownErr = cmp.Or(ownErr, err)
+			} else if err != nil {
+				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s pulls it again", e.Ref, names[i], err, id)
 			}
 		}
 	}
@@ -625,7 +635,7 @@ func (s *Set) keep(rel string, es []entry) error {
 			}
 		}
 	}
-	return nil
+	return ownErr
 }
 
 // withOwnBuilds is es with one entry of no service for the own build of
@@ -694,6 +704,9 @@ func (s *Set) BookmarkFrom(dir, rel string) error {
 // Docker other than a missing image stops it: the release must stay, so
 // the next removal finds its listing again.
 func (s *Set) Remove(rel string) error {
+	// What a fetch of it left (a rollback's fetch killed outright, which no
+	// img recover finds): its tags are names no listing has.
+	s.dropFetch(rel)
 	id := s.idOf(rel)
 	es := readList(rel)
 	if len(es) == 0 {

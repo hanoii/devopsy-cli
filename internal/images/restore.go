@@ -34,7 +34,8 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 //     held by nothing: a pin or a commit tag is target's image anyway, a
 //     floating tag its current (patched) one;
 //   - an own image is target's, by its bookmark, which only target writes
-//     (no bookmark: ErrGone; with fetched, the name's just-built image).
+//     (no bookmark: ErrGone; with fetched, what its fetch built, by the
+//     fetch's tag).
 //
 // A data service's image is chosen as any service's, then its hold
 // derived (holdsFor) against the window its data has when target runs:
@@ -58,9 +59,14 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // a build and never fails on a pull: an own image gone stays as its
 // listing has it, a hold that cannot be had is held all the same.
 func (s *Set) Restore(target, against string, fetched bool) (err error) {
-	// What a fetch left goes too, adopted or given up: a restore without
-	// fetched comes before any fetch writes its file.
-	defer s.dropFetch(target)
+	// What a fetch left goes too once adopted or given up (AsBuilt); failed,
+	// the undo takes it: a restore without fetched comes before any fetch
+	// writes its file.
+	defer func() {
+		if err == nil || s.AsBuilt {
+			s.dropFetch(target)
+		}
+	}()
 	// What it pulled by digest goes when it fails: a name by digest alone
 	// that no listing names would never be removed.
 	var pulled []string
@@ -180,7 +186,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		steps = append(steps, st)
 	}
 
-	// The changes: pulls, an own image's name put back, the holds, then
+	// The changes: pulls, an own image by its bookmark, the holds, then
 	// the record.
 	es := make([]entry, 0, len(steps))
 	var lines []string
@@ -205,8 +211,14 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		switch {
 		case st.asIs:
 			// As its listing had it, never what a name holds now: no name but
-			// its bookmark is target's.
-			e := s.entryOf(svc, digestRef(svc.Ref), mode)
+			// its bookmark is target's, and one it has no image of has none
+			// (behind the door, whose builds are named by the project's name,
+			// that name).
+			ref := ""
+			if s.Door {
+				ref = digestRef(svc.Ref)
+			}
+			e := s.entryOf(svc, ref, mode)
 			if haveOld && o.ID != "" {
 				e = ownOf(o)
 				e.Service, e.DataVersion, e.Tag = svc.Name, svc.DataVersion, svc.tag()
@@ -423,8 +435,12 @@ const FetchFailedFile = "devopsy-fetch-failed"
 // become the target's). The live release runs its own by its bookmarks,
 // which no fetch moves.
 func (s *Set) Undo(rel string, rollback bool) {
+	// A listing its record wrote stays: its fetch's tags are gone by then,
+	// and the project's name is never the release's.
 	if !rollback {
-		s.Bookmark(rel)
+		if fetchTags(rel) != nil || len(readList(rel)) == 0 {
+			s.Bookmark(rel)
+		}
 		if f, err := os.Create(filepath.Join(rel, FetchFailedFile)); err == nil {
 			f.Close()
 		}

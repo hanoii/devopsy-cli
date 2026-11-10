@@ -16,8 +16,8 @@ import (
 // A data service is held (runs another image than its release's own)
 // exactly when the rule would refuse its release's own label and tag
 // against its data's window: on the image the window ends on (holdLine),
-// a pulled one by its registry digest, a built one by its own name or a
-// bookmark. A hold is never carried from one activation to the next:
+// a pulled one by its registry digest, a built one by the holding
+// release's bookmark of it. A hold is never carried from one activation to the next:
 // wherever devopsy writes a release's ComposeFile or decides what a data
 // service runs, it derives it again from the history (holdsFor, then
 // applyHolds): a release and a rollback (Record, Restore), which are
@@ -364,15 +364,23 @@ func (s *Set) ownInstead(o entry, h hold, what string) (entry, composeHold, erro
 // its image, which only it writes, never the project's, which every
 // environment building or pulling under it moves for the others (stage, a
 // branch's, a pull request's), nor the id, which a build cannot tag. A
-// hold on another reference (a digest) stays as it is.
+// hold on another reference (a digest) stays as it is. A service of no
+// entry sharing an own image (sharers: one under a profile) runs that
+// image's bookmark, its release's own build's while the entry is held.
+// A project behind the door names its builds through the door, which
+// refuses a tag of devopsy's: only its holds go by bookmark.
 func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeHold) {
+	names := bookmarks(es, s.Name, s.idOf(rel))
 	byRef := map[string]string{}
 	listed := map[string]bool{}
-	for i, b := range bookmarks(es, s.Name, s.idOf(rel)) {
+	for i, b := range names {
 		e := es[i]
+		if e.Service == "" {
+			continue
+		}
 		listed[e.Service] = true
 		ch, ok := holds[e.Service]
-		if e.Service == "" || ok && !ch.bookmark || !ok && (e.Kind != KindOwn || e.ID == "") {
+		if ok && !ch.bookmark || !ok && (s.Door || e.Kind != KindOwn || e.ID == "") {
 			continue
 		}
 		ch.Image, ch.bookmark = b, true
@@ -381,21 +389,60 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 			byRef[familiar(e.Ref)] = b
 		}
 	}
-	// A service under a profile (no entry: the listing is the default
-	// services') whose image: is exactly an own image's runs by its bookmark
-	// too: devopsy's builds write no project name it could run by.
-	if s.ListAll == nil || len(byRef) == 0 {
+	if s.Door {
 		return
 	}
-	all, err := s.ListAll(rel)
-	if err != nil {
-		return
-	}
-	for _, svc := range all {
-		if b, ok := byRef[familiar(svc.Ref)]; ok && !listed[svc.Name] && !svc.Build {
-			holds[svc.Name] = composeHold{Image: b, bookmark: true}
+	// A held service's own build (withOwnBuilds), for what shares it.
+	for i, e := range es {
+		if _, ok := byRef[familiar(e.Ref)]; !ok && e.Service == "" && e.Kind == KindOwn {
+			byRef[familiar(e.Ref)] = names[i]
 		}
 	}
+	for svc, ref := range sharers(rel, es, names) {
+		if b, ok := byRef[ref]; ok && !listed[svc] {
+			holds[svc] = composeHold{Image: b, bookmark: true}
+		}
+	}
+}
+
+// sharers are rel's services of no entry in es (one under a profile: the
+// listing is the default services') whose image is exactly an entry's, by
+// the entry's familiar ref: its fetch file's, which names every profile's
+// service sharing a build under that build's fetch tag, else its
+// ComposeFile's from the activation before, by the bookmark it names.
+func sharers(rel string, es []entry, names []string) map[string]string {
+	out := map[string]string{}
+	listed := map[string]bool{}
+	for _, e := range es {
+		listed[e.Service] = true
+	}
+	if tags := fetchTags(rel); tags != nil {
+		byTag := map[string]string{}
+		for _, e := range es {
+			if t := tags[e.Service]; t != "" && e.Service != "" {
+				byTag[t] = familiar(e.Ref)
+			}
+		}
+		for svc, t := range tags {
+			if ref, ok := byTag[t]; ok && !listed[svc] {
+				out[svc] = ref
+			}
+		}
+		return out
+	}
+	imgs, _, _ := composeFacts(rel)
+	for svc, img := range imgs {
+		if listed[svc] || !isBookmark(img) {
+			continue
+		}
+		for i, e := range es {
+			if e.Kind == KindOwn && (names[i] == img || repoOf(img) == repoOf(e.Ref)) {
+				out[svc] = familiar(e.Ref)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // writeHeld records rel's entries (keep: the listing and its bookmarks)
@@ -560,8 +607,8 @@ func (s *Set) LastHold(target, against string) error {
 	own := ownEntries(target, es, svcs, svcs)
 	held := holdsFor(own, readHistory(baseOf(target)).window)
 	imgs, _, wasHeld := composeFacts(target)
-	// What the file holds now stays but for what this changes: a hold by
-	// its own name has no image:, only its mark.
+	// What the file holds now stays but for what this changes, its own
+	// images by their bookmarks and the services sharing them included.
 	holds := map[string]composeHold{}
 	for svc, img := range imgs {
 		holds[svc] = composeHold{Image: img, From: wasHeld[svc]}

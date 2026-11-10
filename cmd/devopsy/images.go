@@ -48,8 +48,9 @@ import (
 // one cannot be), ran <environment> <release> [cut] (the history of what
 // ran on the data; cut: of an activation cut off past its switch),
 // remove <release>... (exit 1 when Docker failed: keep the
-// release), undo [--rollback] <release> [<current release>], recover
-// <environment> [<current release>], prune; for an environment's
+// release), fetch-file <release> (the fetch's own compose file, before a
+// build-mode fetch), undo [--rollback] <release>, recover <environment>,
+// prune; for an environment's
 // releases (images.ToPrune, RollbackTarget, RemoveReleases): to-prune
 // <environment> <keep> (the ids, one per line), rollback-target
 // <environment> (exit 1 without one; 3 when the rule refuses it,
@@ -82,7 +83,7 @@ func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll, Copied: copiedServices,
+	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose, ListAll: images.ListComposeAll, Door: behindDoor(), Copied: copiedServices,
 		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
 }
 
@@ -338,12 +339,6 @@ func runImages(args []string, color bool) int {
 	case "fetch-file":
 		if len(rest) != 1 {
 			return imagesUsage(color)
-		}
-		// A project user's builds go through the door, which names them itself and
-		// refuses a tag of devopsy's: its fetch runs with no file.
-		if behindDoor() {
-			_ = os.Remove(filepath.Join(rest[0], images.FetchFile))
-			break
 		}
 		if err := s.WriteFetch(rest[0]); err != nil {
 			report.Error("could not write the fetch's compose file: " + err.Error())

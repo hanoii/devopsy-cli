@@ -2977,8 +2977,10 @@ func TestRecordNeedsItsFetch(t *testing.T) {
 	if err := m.e.set.Record(m.e.rel(id), ""); err == nil || !errors.Is(err, errFetchedNone) {
 		t.Errorf("a record whose fetch built nothing: %v, %+v", err, readList(m.e.rel(id)))
 	}
+	// Failed, the record leaves the fetch to the undo, which bookmarks by its tags first.
+	m.e.set.Undo(m.e.rel(id), false)
 	if _, err := os.Stat(filepath.Join(m.e.rel(id), FetchFile)); err == nil {
-		t.Error("the fetch file outlived the record")
+		t.Error("the fetch file outlived the undo")
 	}
 }
 
@@ -3038,10 +3040,6 @@ func fetchTagsLeft(d *fakeDocker) []string {
 // A release's removal takes what a fetch of it left: a rollback's fetch killed outright (the
 // server rebooted, the build out of memory) writes no FetchingFile, so no img recover finds
 // its fetch file, and once the release is pruned nothing reads it again.
-//
-// BUG: Remove reads the listing alone, so the fetch tags of a rollback's cut fetch outlive
-// their release: no listing names them, they read as bookmarks (isBookmark) to every later
-// removal, which leaves their images "held by another release" for good.
 func TestRemoveTakesAFetchLeftBehind(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3083,10 +3081,6 @@ func (noTag) Tag(src, dst string) error { return errors.New("no space left on de
 
 // A record whose bookmark could not be put fails, before the switch: the release's file runs
 // each own image by that bookmark, so without it the run step has nothing to start.
-//
-// BUG: keep only warns ("a rollback to it builds or pulls it again", true while a service ran
-// by its project's name), Record goes on, writes image: <a bookmark nothing holds>, drops the
-// fetch tag, the build's last name, and the release goes live to fail in its run step.
 func TestRecordFailsWithoutItsBookmark(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3107,10 +3101,6 @@ func TestRecordFailsWithoutItsBookmark(t *testing.T) {
 // An undo after the record (the server's log could not be made, a fetch marker left between
 // the record and its removal: undoLocked, img recover) keeps the listing the record wrote:
 // the fetch's tags are gone by then, and the project's name is never the release's.
-//
-// BUG: Undo's Bookmark lists again, and without a fetch file reads each built service by its
-// project's name: the release's listing and its bookmark take whatever is there (another
-// environment's plain compose build), or lose their image.
 func TestUndoAfterRecordKeepsItsListing(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3138,9 +3128,6 @@ func TestUndoAfterRecordKeepsItsListing(t *testing.T) {
 // The restart's last try (--as-built) gives a service its listing has no image of (a
 // variable turned it on since) none: never what the project's name holds, which is no
 // release's.
-//
-// BUG: asIs falls back on entryOf by the project's name, so the release's bookmark goes
-// onto whatever another environment left there, and its file runs that.
 func TestAsBuiltNeverReadsTheProjectsName(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3173,10 +3160,6 @@ func TestAsBuiltNeverReadsTheProjectsName(t *testing.T) {
 // A service under a profile with the same image: and build: as a default one (one YAML
 // anchor for both, a tool run with --profile) runs its release's bookmark of that build, as
 // one with pull_policy: never does.
-//
-// BUG: resolveBookmarks leaves out a profile's service that has a build: section, while
-// WriteFetch names it: the file gives it no image, so its first run builds under the
-// project's name, which no listing removes, or runs what another environment left there.
 func TestProfileServiceBuildingTheSameImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3202,10 +3185,6 @@ func TestProfileServiceBuildingTheSameImage(t *testing.T) {
 // A service under a profile sharing a built data service's image keeps an image its
 // release has while that service is held: the file named the build's bookmark for it before
 // the hold.
-//
-// BUG: resolveBookmarks maps a profile's service only to an entry not held, so the restart
-// that holds the database drops the tool's image: and it runs the project's name, which
-// devopsy's builds never write.
 func TestProfileServiceSharingAHeldBuild(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -3236,10 +3215,6 @@ func TestProfileServiceSharingAHeldBuild(t *testing.T) {
 
 // A COPY --from of another service's image by its name reads that name as a FROM does, and
 // is said with it.
-//
-// BUG: fromOtherBuilds reads FROM lines alone, so a Dockerfile that only copies from the
-// other build (COPY --from=shop-base) fails its fetch, or copies another environment's
-// files, with no warning.
 func TestCopyFromAnotherBuildIsSaid(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -3258,5 +3233,23 @@ func TestCopyFromAnotherBuildIsSaid(t *testing.T) {
 	app := Service{Name: "app", Ref: "shop-app", Build: true, BuildSpec: spec("app.Dockerfile")}
 	if got := fromOtherBuilds([]Service{base, app}); len(got) != 1 {
 		t.Errorf("a COPY --from=shop-base, which base builds: %q", got)
+	}
+}
+
+// A project behind the door runs its own builds by their project name, which the door builds
+// under and checks: its file names no bookmark for them (the door refuses a build tagged
+// devopsy-), only for a hold.
+func TestDoorProjectRunsItsBuildsByName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: "shop-web", Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Door = true
+	if _, err := m.release(false, web); err != nil {
+		t.Fatal(err)
+	}
+	if imgs, _, _ := composeFacts(m.e.rel(m.cur)); imgs["web"] != "" {
+		t.Errorf("a door project's file runs web by %q", imgs["web"])
 	}
 }

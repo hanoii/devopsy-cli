@@ -38,7 +38,7 @@ How a release notices its operator gone, what a signal may stop, and how a relea
 - A signal during the fetch only sets `fetch_sig` (INT, TERM, HUP); the fetch's child gets it too and fails, and the same path undoes it under the image lock with signals ignored from there on, exit 130, so a second Ctrl-C cannot stop the undo.
 - PIPE is ignored from the fetch on: dash writes "Terminated" to the dead session.
 - `FetchingFile` marks a new release's fetch until a line says its images are ready, and until then the release counts as failed.
-- `img recover` (`recoverFetch`), run after the lock by every activation, a sync's holder, a `--no-code` restore, `--destroy` and `--releases remove`, marks such a release failed, bookmarks its images and restores current's own names.
+- `img recover` (`recoverFetch`), run after the lock by every activation, a sync's holder, a `--no-code` restore, `--destroy` and `--releases remove`, marks such a release failed and bookmarks its images by its fetch's tags.
 - A rollback never writes `FetchingFile`: it would mark a good release failed.
 - From the end of a fetch that went through, INT, TERM and HUP are ignored to the script's end, the run step included: a trapped signal still kills the foreground child (the `ln` and `mv` of `make_current`), which `set -e` turns into the script's end halfway through the switch.
 - `script` gets its own session past a fetch (`setsid -w`, `tty_detach` in `with_tty`): it reads its signals through a signalfd, ignored ones too, and exits 0 when signaled, which a restart's `get_images` would take for a fetch.
