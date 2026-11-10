@@ -693,3 +693,18 @@ func TestDoorReplacesAnEmptyDirectoryWithAFileEntry(t *testing.T) {
 		t.Errorf("a file entry asked again (exit %d) holds %q", code, readString(filepath.Join(mnt, "app.ini")))
 	}
 }
+
+// A removal the project user's rights do not take fails the request, naming what stays: what
+// asked for it (a release's removal, a clone's) resumes it, and goes on only from one that went.
+//
+// Not parallel: it sets PATH (the fake sudo).
+func TestDoorRemovalThatFailsFails(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] && { printf '%s\\n' \"$2\"; exit 0; }\n[ \"$1\" = remove ] && exit 1\nexit 0\n", 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	tree := filepath.Join(t.TempDir(), "shop")
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Tree: tree, Space: t.TempDir()}}
+	if code := side.request("", []string{"run", "-v", tree + "/snapshots:/s", remote.UtilImage, "rm", "-rf", "/s/.clone"}); code == 0 {
+		t.Error("a removal that failed passes for one")
+	}
+}

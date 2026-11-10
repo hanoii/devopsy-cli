@@ -1528,29 +1528,40 @@ func (s *doorSide) logins(config string) (string, error) {
 func (s *doorSide) request(config string, argv []string) int {
 	s.sweepWork()
 	a, err := door.Decide(argv, s.policy, s, s, doorKnown())
-	if err != nil {
+	// Whatever refuses leaves none of the work directories it made (copies, logins).
+	refused := func(err error) int {
 		for _, d := range s.made {
 			s.removeWork(d)
 		}
 		return doorRefused(err)
 	}
+	if err != nil {
+		return refused(err)
+	}
 	for _, e := range a.Entries {
 		if err := s.closedDir(filepath.Dir(e.Path), "rX"); err != nil {
-			return doorRefused(err)
+			return refused(err)
 		}
 		if err := s.makeEntry(e.Path, e.File); err != nil {
-			return doorRefused(err)
+			return refused(err)
 		}
 	}
+	// A removal that fails fails the request: what asked for it (a release's removal, a
+	// clone's) resumes it, and goes on only from one that went.
+	var kept []string
 	for _, path := range a.Remove {
 		if s.read("remove", path).Run() != nil {
-			report.Warn("could not remove " + path)
+			kept = append(kept, path)
 		}
+	}
+	if len(kept) > 0 {
+		report.Error("could not remove " + strings.Join(kept, ", "))
+		return 1
 	}
 	for _, ref := range a.Claims {
 		digest, _, err := s.claim(ref, config)
 		if err != nil {
-			return doorRefused(err)
+			return refused(err)
 		}
 		// What Docker then runs names the image the claim got, by its digest: the name is
 		// anyone's to move right after the pull (a tag's source would take the mover's). A
@@ -1573,7 +1584,7 @@ func (s *doorSide) request(config string, argv []string) int {
 	if a.Logins {
 		d, err := s.logins(config)
 		if err != nil {
-			return doorRefused(err)
+			return refused(err)
 		}
 		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
 	}
@@ -1583,7 +1594,7 @@ func (s *doorSide) request(config string, argv []string) int {
 	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
 	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
 		err := syscall.Exec(s.real, append([]string{"docker"}, a.Docker...), env)
-		return doorRefused(err)
+		return refused(err)
 	}
 	c := exec.Command(s.real, a.Docker...)
 	c.Env = env
