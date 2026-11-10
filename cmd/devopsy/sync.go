@@ -1170,7 +1170,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if src, err = syncData(ctx, projectDir, dirs, vols); err != nil {
 			return finish(fail(err.Error()), false)
 		}
-		if err := kindMismatch(src, child, reset); err != nil {
+		if err := kindMismatch(src, child, reset, os.Getenv(remote.SyncToEnv) != ""); err != nil {
 			return finish(fail(err.Error()), false)
 		}
 	}
@@ -1877,9 +1877,11 @@ func childNamed(dirs []string, vols []cli.Volume, child []childService) ([]strin
 }
 
 // kindMismatch refuses an entry the parent copies that the child has as another kind (a file
-// for a directory, a link), before anything stops: the copy would fail at that entry, past
-// the ones before it. A reset wipes the child's entries first, so none is refused there.
-func kindMismatch(src dataSet, child []childService, reset bool) error {
+// for a directory), before anything stops: the copy would fail at that entry, past the ones
+// before it. A link is refused across servers, where the receive mounts the entry alone (on
+// one server the rsync mounts the child's mnt whole, and a link there is the child's data on
+// another disk). A reset wipes the child's entries first, so none is refused there.
+func kindMismatch(src dataSet, child []childService, reset, across bool) error {
 	if reset {
 		return nil
 	}
@@ -1890,8 +1892,9 @@ func kindMismatch(src dataSet, child []childService, reset bool) error {
 			want = "file"
 		}
 		switch k := kinds[e]; {
-		case k == "link":
+		case k == "link" && across:
 			return fmt.Errorf("the child's mnt/%s is a symbolic link: nothing copied", e)
+		case k == "link":
 		case k != "" && k != want:
 			return fmt.Errorf("the child's mnt/%s is a %s and the parent's a %s: make it a %s there, or start it over (--reset): nothing copied", e, kindName(k), kindName(want), kindName(want))
 		}
