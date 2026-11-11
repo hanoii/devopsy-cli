@@ -105,8 +105,9 @@ restart_flag /run/docker-mark "$1"`, "sh", "id-1")
 // A host piece lands only when it is missing or differs, and only once it passed its check:
 // a sudoers file or a sshd drop-in that does not parse breaks every sudo, or every login, on
 // the server. One that is the same is left as it is, which is how add knows nothing changed
-// (no reboot asked), and one whose mode alone differs gets its mode back; one refused leaves
-// what was there, and nothing beside it.
+// (no reboot asked), and one whose mode alone differs gets its mode back with nothing
+// reported (keep: leaving the admin's); one refused leaves what was there, and nothing
+// beside it.
 func TestHostPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -152,20 +153,54 @@ func TestHostPut(t *testing.T) {
 	}
 	holds("a piece that differs", "rule two\n")
 	// The same text in another mode (a loader that lost its exec bit) gets its mode back,
-	// with no check run, and says it changed; then it is the same again.
+	// with no check run, and reports no new text, which callers read as a reboot or a reload.
 	if err := os.Chmod(f, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := put("exit 9", "rule two\n"); code != 0 {
+	if code, out := put("exit 9", "rule two\n"); code != 1 {
 		t.Errorf("the same piece in another mode (%d): %s", code, out)
 	}
 	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o640 {
 		t.Errorf("its mode put back: %v (%v)", fi.Mode(), err)
 	}
-	if code, out := put("exit 9", "rule two\n"); code != 1 {
-		t.Errorf("the same piece in its mode again (%d): %s", code, out)
-	}
 	holds("a piece whose mode was put back", "rule two\n")
+	// A link's mode is the file it names: that file's is put back, the link left a link.
+	target := filepath.Join(t.TempDir(), "named")
+	write(t, target, "rule two\n")
+	if err := os.Chmod(target, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("sh", "-c", "set -eu\n"+hostPut+`put "$1" 640 true "$2"`, "sh", link, "rule two\n")
+	if out, _ := c.CombinedOutput(); c.ProcessState.ExitCode() != 1 {
+		t.Errorf("a link to the same text (%d): %s", c.ProcessState.ExitCode(), out)
+	}
+	if fi, err := os.Stat(target); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("the linked file's mode: %v (%v)", fi.Mode(), err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link replaced: %v (%v)", fi.Mode(), err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	// keep: leaves the mode its admin gave it.
+	if err := os.Chmod(f, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = exec.Command("sh", "-c", "set -eu\n"+hostPut+`put "$1" keep:640 true "$2"`, "sh", f, "rule two\n")
+	if out, _ := c.CombinedOutput(); c.ProcessState.ExitCode() != 1 {
+		t.Errorf("keep: on the same text (%d): %s", c.ProcessState.ExitCode(), out)
+	}
+	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("keep: changed the admin's mode: %v (%v)", fi.Mode(), err)
+	}
+	if err := os.Chmod(f, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(f); err != nil {
 		t.Fatal(err)
 	}
@@ -309,5 +344,49 @@ esac
 		if out, err := c.CombinedOutput(); (err == nil) != ok {
 			t.Errorf("%s: %v %s", who, err, out)
 		}
+	}
+}
+
+// --project-users add asks a reboot for the sshd drop-in only when sshd has a new text to
+// take: a drop-in with devopsy's text in another mode (a hardening script's 600 on
+// sshd_config.d) changes nothing sshd reads, so its mode is put back with no reboot marker,
+// no restart flag and no word that project users wait for a reboot. The script's own lines
+// for the drop-in run here, its paths moved into a directory.
+func TestDoorHostScriptAsksNoRebootForADropInsMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s := DoorHostScript("deploy", "/opt/bin/devopsy")
+	from, to := strings.Index(s, "old=$(cat "+DoorSSHDropIn), strings.Index(s, "made=\n")
+	if from < 0 || to < from {
+		t.Fatalf("the drop-in's lines not found in the host script:\n%s", s)
+	}
+	dropIn := filepath.Join(dir, "devopsy.conf")
+	lines := strings.ReplaceAll(s[from:to], DoorSSHDropIn, dropIn)
+	write(t, filepath.Join(dir, "bin", "sshd"), "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(filepath.Join(dir, "bin", "sshd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func() string {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", "set -eu\n"+hostPut+"restart_flag() { echo \"flagged $1\"; }\n"+lines)
+		cmd.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return string(out)
+	}
+	// The control: a drop-in not there is put, and a reboot asked.
+	if out := run(); !strings.Contains(out, "reboot") || !strings.Contains(out, "flagged "+DoorRebootMarker) {
+		t.Fatalf("a new drop-in asked no reboot:\n%s", out)
+	}
+	if out := run(); out != "" {
+		t.Fatalf("the same drop-in again:\n%s", out)
+	}
+	if err := os.Chmod(dropIn, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := run(); out != "" {
+		t.Errorf("the drop-in's text as devopsy's, its mode 600: a reboot asked for nothing:\n%s", out)
 	}
 }

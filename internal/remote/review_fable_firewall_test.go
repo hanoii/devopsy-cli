@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -152,54 +151,5 @@ esac
 	if fileThere(filepath.Join(state, "fw.iptables.jump")) || fileThere(filepath.Join(state, "fw.iptables.chain")) || fileThere(mark) {
 		t.Errorf("after a removal, a loader that waited for its lock loaded the firewall again: jump %v, chain %v, mark %v\n%s",
 			fileThere(filepath.Join(state, "fw.iptables.jump")), fileThere(filepath.Join(state, "fw.iptables.chain")), fileThere(mark), out)
-	}
-}
-
-// --project-users add asks a reboot for the sshd drop-in only when sshd has a new text to
-// take: a drop-in with devopsy's text in another mode (a hardening script's 600 on
-// sshd_config.d) changes nothing sshd reads.
-//
-// Bug: a put whose mode alone differs now says it changed, which add's host script reads as
-// a new drop-in: it raises the reboot marker and the system's restart flag, and add and
-// --server-info say no project user logs in until a reboot, at every add after the mode
-// changed again.
-//
-// The script's own lines for the drop-in run here, its paths moved into a directory.
-func TestDoorHostScriptAsksNoRebootForADropInsMode(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	s := DoorHostScript("deploy", "/opt/bin/devopsy")
-	from, to := strings.Index(s, "old=$(cat "+DoorSSHDropIn), strings.Index(s, "made=\n")
-	if from < 0 || to < from {
-		t.Fatalf("the drop-in's lines not found in the host script:\n%s", s)
-	}
-	dropIn := filepath.Join(dir, "devopsy.conf")
-	lines := strings.ReplaceAll(s[from:to], DoorSSHDropIn, dropIn)
-	write(t, filepath.Join(dir, "bin", "sshd"), "#!/bin/sh\nexit 0\n")
-	if err := os.Chmod(filepath.Join(dir, "bin", "sshd"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	run := func() string {
-		t.Helper()
-		cmd := exec.Command("sh", "-c", "set -eu\n"+hostPut+"restart_flag() { echo \"flagged $1\"; }\n"+lines)
-		cmd.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin"}
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%v: %s", err, out)
-		}
-		return string(out)
-	}
-	// The control: a drop-in not there is put, and a reboot asked.
-	if out := run(); !strings.Contains(out, "reboot") || !strings.Contains(out, "flagged "+DoorRebootMarker) {
-		t.Fatalf("a new drop-in asked no reboot:\n%s", out)
-	}
-	if out := run(); out != "" {
-		t.Fatalf("the same drop-in again:\n%s", out)
-	}
-	if err := os.Chmod(dropIn, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if out := run(); out != "" {
-		t.Errorf("the drop-in's text as devopsy's, its mode 600: a reboot asked for nothing:\n%s", out)
 	}
 }
