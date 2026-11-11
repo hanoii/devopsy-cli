@@ -387,11 +387,17 @@ func applySetup(h setupHost, a setupApply) int {
 			recorded = true
 		}
 		if d.Left && s.State == setup.Changed {
-			if _, asked := a.answers[s.Part.Name]; asked {
+			_, asked := a.answers[s.Part.Name]
+			switch {
+			case asked:
 				report.Warn("daemon.json's " + s.Part.Name + " changed since it was asked about: left as it is, and asked again at the next --server-setup")
-			} else if a.upgrade && s.Observed == "{}" {
+			case !a.upgrade:
+				// --server-setup asks about every changed part it read: one with no answer
+				// changed between its two sessions.
+				report.Warn("daemon.json's " + s.Part.Name + " changed since it was read: left as it is, and asked at the next --server-setup")
+			case s.Observed == "{}":
 				report.Warn("daemon.json's "+s.Part.Name+" was removed by someone: left out", "--server-setup asks whether to put it back")
-			} else if a.upgrade {
+			default:
 				report.Warn("daemon.json's "+s.Part.Name+" is someone else's value: left as it is", "--server-setup asks whether to keep it")
 			}
 		}
@@ -533,7 +539,6 @@ func fixWords(fix string) []report.Remedy {
 	}
 	return []report.Remedy{report.Fix(fix)}
 }
-
 
 // allEnvBases are the environments' directories of every project in root.
 func allEnvBases(root string) []string {

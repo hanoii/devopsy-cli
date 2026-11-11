@@ -182,6 +182,10 @@ func TestServerSetupApplyAnswers(t *testing.T) {
 	}
 	write(t, daemon, `{"default-address-pools":[{"base":"10.100.0.0/16","size":24}]}`, 0o644)
 	other := `{"default-address-pools":[{"base":"10.100.0.0/16","size":24}]}`
+	// Changed since it was read, with no answer for it: left, said, asked at the next run.
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply"); code != 0 || !strings.Contains(out, "daemon.json's default-address-pools changed since it was read: left as it is, and asked at the next --server-setup") || observed() != other {
+		t.Errorf("no answer (%d):\n%s", code, out)
+	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--replace", part.Name+"="+setup.Digest(other)); code != 0 || observed() != part.Want || readRecordOf(t, s)[part.Name] != (setup.Entry{Applied: part.Want}) {
 		t.Errorf("a replace (%d):\n%s", code, out)
 	}
