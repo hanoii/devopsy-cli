@@ -121,6 +121,7 @@ type EntryToMake struct {
 
 const (
 	projectLabel = "com.docker.compose.project"
+	serviceLabel = "com.docker.compose.service"
 	envLabel     = "devopsy.env"
 	taskLabel    = "devopsy.task"
 	// DoorLabel is on every container the door makes, its value the project user it made it
@@ -183,6 +184,25 @@ func (p Policy) ownContainer(d Daemon, target string) bool {
 func (p Policy) ownContainerID(d Daemon, target string) (string, bool) {
 	id, labels, err := d.Inspect(target)
 	return id, err == nil && id != "" && p.ownLabels(labels)
+}
+
+// ServiceContainers are, by service, the full ids of compose name name's containers the door
+// made for this user, among candidates (a listing's ids), each read by its own inspect, as
+// ownContainerID reads one: what a listing says, a filter's cut included, proves nothing of
+// whose a container is. A candidate gone since its listing is left out.
+func (p Policy) ServiceContainers(d Daemon, candidates []string, name string) map[string][]string {
+	byService := map[string][]string{}
+	for _, c := range candidates {
+		id, labels, err := d.Inspect(c)
+		if err != nil || id == "" || !p.ownLabels(labels) || labels[projectLabel] != name {
+			continue
+		}
+		svc := labels[serviceLabel]
+		if !slices.Contains(byService[svc], id) {
+			byService[svc] = append(byService[svc], id)
+		}
+	}
+	return byService
 }
 
 // ownContainerIDs are targets' full ids when every one is this project's container.

@@ -288,36 +288,14 @@ func noLink(path string) error {
 // rights, and as an ordinary user's tar leaves them, with no setuid bits. Its directory
 // is closed: only the daemon, which is root, has to reach it.
 func (s *doorSide) Seal(path string) (string, error) {
-	sealed := s.policy.Sealed()
-	if err := os.MkdirAll(filepath.Dir(sealed), 0o755); err != nil {
-		return "", err
+	work, copied, sum, err := s.sealRead(path)
+	if work != "" {
+		defer os.RemoveAll(work)
 	}
-	if err := os.MkdirAll(sealed, 0o750); err != nil {
-		return "", err
-	}
-	work, err := os.MkdirTemp(sealed, ".seal-")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(work)
-	// The copy lands in a directory of its own, so no name the caller's tar holds meets the
-	// door's beside it (dir, below).
-	in := filepath.Join(work, "in")
-	if err := os.Mkdir(in, 0o700); err != nil {
-		return "", err
-	}
-	if err := s.untar(path, in); err != nil {
-		return "", err
-	}
-	copied := filepath.Join(in, filepath.Base(path))
-	if err := noLink(copied); err != nil {
-		return "", err
-	}
-	sum, err := contentHash(copied)
-	if err != nil {
-		return "", err
-	}
-	final := filepath.Join(sealed, sum)
+	final := filepath.Join(s.policy.Sealed(), sum)
 	if _, err := os.Lstat(final); err == nil {
 		// Used again, so not the oldest for pruneSealed.
 		now := time.Now()
@@ -337,6 +315,148 @@ func (s *doorSide) Seal(path string) (string, error) {
 		}
 	}
 	return filepath.Join(final, "x"), nil
+}
+
+// sealRead reads path as the project user, in a work directory of its own among the sealed
+// copies, and hashes what it read as a sealed copy is named (contentHash): the work directory,
+// which the caller removes whatever the error, the copy in it, and its hash. A seal and the
+// look at what a restart keeps (warnSealed) read through it, so the two hash alike.
+func (s *doorSide) sealRead(path string) (work, copied, sum string, err error) {
+	sealed := s.policy.Sealed()
+	if err := os.MkdirAll(filepath.Dir(sealed), 0o755); err != nil {
+		return "", "", "", err
+	}
+	if err := os.MkdirAll(sealed, 0o750); err != nil {
+		return "", "", "", err
+	}
+	work, err = os.MkdirTemp(sealed, ".seal-")
+	if err != nil {
+		return "", "", "", err
+	}
+	// The copy lands in a directory of its own, so no name the caller's tar holds meets the
+	// door's beside it (Seal's dir).
+	in := filepath.Join(work, "in")
+	if err := os.Mkdir(in, 0o700); err != nil {
+		return work, "", "", err
+	}
+	if err := s.untar(path, in); err != nil {
+		return work, "", "", err
+	}
+	copied = filepath.Join(in, filepath.Base(path))
+	if err := noLink(copied); err != nil {
+		return work, "", "", err
+	}
+	sum, err = contentHash(copied)
+	if err != nil {
+		return work, "", "", err
+	}
+	return work, copied, sum, nil
+}
+
+// warnSealed says, ahead of a restart or a start (door.KeepsSealed), which services' containers
+// hold another sealed copy of a read-only bind than the release would seal now: each keeps the
+// copy it was made with, and only a container made again (up) takes the release's. The release's
+// side is read and hashed as a seal would (sealRead), its copy then removed; a container's is the
+// hash its mount's source is named by (<sealed>/<hash>/x). Only containers the door made for
+// this user are read (door.Policy.ServiceContainers), and anything that fails loses only the
+// warning, never the verb. dir is the real path of compose's project directory, which the paths
+// said are relative to.
+func (s *doorSide) warnSealed(file map[string]any, argv []string, dir string) {
+	binds := s.policy.ReleaseBinds(file, argv)
+	if len(binds) == 0 {
+		return
+	}
+	name, _ := file["name"].(string)
+	// The door's own filters, of two keys, which narrow each other; whose each one is, its inspect
+	// says.
+	out, err := s.docker("ps", "-aq", "--no-trunc", "--filter", "label=com.docker.compose.project="+name,
+		"--filter", "label="+door.DoorLabel+"="+s.policy.User).Output()
+	if err != nil {
+		return
+	}
+	containers := s.policy.ServiceContainers(s, strings.Fields(string(out)), name)
+	mounts := map[string]map[string]string{}
+	sums := map[string]string{}
+	var differ, services []string
+	for _, b := range binds {
+		for _, id := range containers[b.Service] {
+			if _, ok := mounts[id]; !ok {
+				mounts[id], _ = s.containerMounts(id)
+			}
+			held, ok := s.sealedHash(mounts[id][b.Target])
+			if !ok {
+				continue
+			}
+			sum, ok := sums[b.Source]
+			if !ok {
+				sum = s.releaseHash(b.Source)
+				sums[b.Source] = sum
+			}
+			if sum == "" {
+				break
+			}
+			if held != sum {
+				differ = append(differ, b.Service+": "+shownIn(dir, b.Source))
+				if !slices.Contains(services, b.Service) {
+					services = append(services, b.Service)
+				}
+				break
+			}
+		}
+	}
+	if len(differ) == 0 {
+		return
+	}
+	report.Say(report.WarnLevel, "what these containers bind read-only differs from the release's: "+argv[0]+" keeps the copy each was made with",
+		differ, report.Fix("", "docker compose up -d "+strings.Join(services, " ")))
+}
+
+// releaseHash is the hash a seal of path would name its copy by, read as a seal reads it
+// (sealRead) and keeping no copy, or nothing when it cannot be read.
+func (s *doorSide) releaseHash(path string) string {
+	work, _, sum, err := s.sealRead(path)
+	if work != "" {
+		_ = os.RemoveAll(work)
+	}
+	if err != nil {
+		return ""
+	}
+	return sum
+}
+
+// containerMounts are the sources of the mounts of the container id (a full one) by their
+// targets.
+func (s *doorSide) containerMounts(id string) (map[string]string, error) {
+	out, err := s.docker("inspect", "--type", "container", "--format", "{{json .Mounts}}", id).Output()
+	if err != nil {
+		return nil, err
+	}
+	var mounts []struct{ Source, Destination string }
+	if err := json.Unmarshal(out, &mounts); err != nil {
+		return nil, err
+	}
+	by := map[string]string{}
+	for _, m := range mounts {
+		by[m.Destination] = m.Source
+	}
+	return by, nil
+}
+
+// sealedHash is the hash naming the sealed copy of this project's that source is in, when it is
+// in one (<sealed>/<hash>/x).
+func (s *doorSide) sealedHash(source string) (string, bool) {
+	rest, ok := strings.CutPrefix(source, s.policy.Sealed()+"/")
+	sum, _, _ := strings.Cut(rest, "/")
+	return sum, ok && sum != ""
+}
+
+// shownIn is path as a user reads it from dir: relative when it is inside (./config), else
+// as it is.
+func shownIn(dir, path string) string {
+	if rel, ok := strings.CutPrefix(path, strings.TrimRight(dir, "/")+"/"); ok {
+		return "./" + rel
+	}
+	return path
 }
 
 func (s *doorSide) untar(path, into string) error {
@@ -438,14 +558,13 @@ func (s *doorSide) pruneSealed() {
 		if id == "" || !s.policy.OwnName(project) {
 			continue
 		}
-		mounts, err := s.docker("inspect", "--format", "{{range .Mounts}}{{.Source}}\n{{end}}", id).Output()
+		mounts, err := s.containerMounts(id)
 		if err != nil {
 			return
 		}
-		for _, src := range strings.Fields(string(mounts)) {
-			if rest, ok := strings.CutPrefix(src, sealed+"/"); ok {
-				word, _, _ := strings.Cut(rest, "/")
-				held[word] = true
+		for _, src := range mounts {
+			if sum, ok := s.sealedHash(src); ok {
+				held[sum] = true
 			}
 		}
 	}
@@ -1320,6 +1439,10 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	}
 	if argv[0] == "up" {
 		s.pruneSealed()
+	}
+	// Ahead of the file's descriptor, which every process the compare starts would inherit.
+	if door.KeepsSealed(argv[0]) {
+		s.warnSealed(file, argv, real)
 	}
 	fd, err := unlinkedFile(checked)
 	if err != nil {

@@ -649,6 +649,40 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, seal b
 	fail("%s: a host path: %s: a bind is an entry of mnt (./mnt/<name>), or read-only in the release", svc, src)
 }
 
+// KeepsSealed says whether verb starts containers already made (restart, start), each of them
+// on the sealed copies it was made with, whatever the release holds now.
+func KeepsSealed(verb string) bool {
+	return verb == "restart" || verb == "start"
+}
+
+// ReleaseBind is a service's read-only bind of the release: its real path in the project's
+// tree (Source) and where the service's containers have it (Target).
+type ReleaseBind struct{ Service, Source, Target string }
+
+// ReleaseBinds are the read-only binds of the release in a file CheckFile checked for a verb
+// that seals nothing (checkBind leaves their real paths), of the services argv names, every
+// service of the file when it names none: what a restart's or a start's containers hold a
+// sealed copy of.
+func (p Policy) ReleaseBinds(file map[string]any, argv []string) []ReleaseBind {
+	services := mapOf(file["services"])
+	named := operands(argv)
+	var binds []ReleaseBind
+	for _, svc := range sortedKeys(services) {
+		if len(named) > 0 && !slices.Contains(named, svc) {
+			continue
+		}
+		for _, m := range list(mapOf(services[svc])["volumes"]) {
+			v := mapOf(m)
+			src, _ := v["source"].(string)
+			target, _ := v["target"].(string)
+			if t, _ := v["type"].(string); t == "bind" && truthy(v["read_only"]) && p.InTree(src) && target != "" {
+				binds = append(binds, ReleaseBind{svc, src, target})
+			}
+		}
+	}
+	return binds
+}
+
 func checkBuild(svc string, b map[string]any, services map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
 	for _, k := range sortedKeys(b) {
 		if !slices.Contains(buildKeys, k) {
