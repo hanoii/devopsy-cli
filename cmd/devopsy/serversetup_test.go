@@ -83,7 +83,7 @@ t=$2 op=$3 c=${4:-}
 shift $(($# < 4 ? $# : 4))
 case $op in
   -I) shift; r="$t $c $*"; { echo "$r"; grep -vxF "$r" "$s.jumps"; } >"$s.new" || :; mv "$s.new" "$s.jumps" ;;
-  -D) case $1 in [0-9]*) exit 0 ;; esac; r="$t $c $*"; grep -qxF "$r" "$s.jumps" || exit 1; grep -vxF "$r" "$s.jumps" >"$s.new" || :; mv "$s.new" "$s.jumps" ;;
+  -D) r="$t $c $*"; grep -qxF "$r" "$s.jumps" || exit 1; grep -vxF "$r" "$s.jumps" >"$s.new" || :; mv "$s.new" "$s.jumps" ;;
   -S)
     rules() { [ ! -e "$s.chain" ] || awk -v t="$t" -v c="${1:-}" '/^\*/ { in_t = substr($0, 2) == t } in_t && /^-A / && (c == "" || $2 == c)' "$s.chain"; }
     # A cgroup's path printed quoted, as iptables -S prints it.

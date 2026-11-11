@@ -281,17 +281,14 @@ func volumeHint(f setup.Facts) []string {
 // what --upgrade leaves to --server-setup; one to load again is said by its code
 // (report.FirewallNotLoaded), the unit's failure and the chains' findings its details.
 func firewallLines(fw *setup.FirewallFact) []string {
-	if fw.State == setup.FirewallReload {
-		lines := []string{report.FirewallNotLoaded.Msg()}
-		if fw.Unit != "" {
-			lines = append(lines, "devopsy-firewall.service: "+fw.Unit)
-		}
-		return append(lines, fw.Wrong...)
+	lines := []string{firewallLine(fw)}
+	if fw.Unit != "" {
+		lines = append(lines, "devopsy-firewall.service: "+fw.Unit)
 	}
-	return []string{firewallLine(fw)}
+	return append(lines, fw.Wrong...)
 }
 
-// firewallLine is firewallLines' one line for a state other than to load again.
+// firewallLine is firewallLines' first line.
 func firewallLine(fw *setup.FirewallFact) string {
 	switch fw.State {
 	case setup.FirewallLoad:
@@ -305,5 +302,5 @@ func firewallLine(fw *setup.FirewallFact) string {
 	case setup.FirewallRemove:
 		return "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services"
 	}
-	return ""
+	return report.FirewallNotLoaded.Msg()
 }

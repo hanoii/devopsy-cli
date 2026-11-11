@@ -83,24 +83,13 @@ func doorFacts(read string) *remote.DoorFacts {
 // host lacks from what it prints (remote.FirewallRead): the deploy user can neither
 // read nor change it.
 func doorFirewall(script string, write bool) ([]string, error) {
-	read, err := doorHostRead(script, write)
-	if err != nil {
+	var out bytes.Buffer
+	if err := firewallRun(script, write).run(&out, func(err error) error {
+		return fmt.Errorf("the project users' firewall: %v", err)
+	}); err != nil {
 		return nil, err
 	}
-	return remote.FirewallWrong(read)
-}
-
-// doorHostRead runs script as root on the host for the project users' firewall (firewallRun,
-// writing the host's files when write), and returns what it prints.
-func doorHostRead(script string, write bool) (string, error) {
-	var out bytes.Buffer
-	err := firewallRun(script, write).run(&out, func(err error) error {
-		return fmt.Errorf("the project users' firewall: %v", err)
-	})
-	if err != nil {
-		return "", err
-	}
-	return out.String(), nil
+	return firewallChainsWrong(out.String(), true)
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
