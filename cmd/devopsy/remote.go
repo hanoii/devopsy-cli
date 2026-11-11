@@ -159,6 +159,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 	switch args[0] {
 	case "--shell-host":
+		// What runs in a shell is the operator's typing, never the command that opened it: a
+		// hint there to run it again would open another shell.
+		remote.Command = ""
 		root := len(args) == 2 && args[1] == "--root"
 		if len(args) > 1 && !root {
 			return failErr(&report.Failure{Msg: "--shell-host takes only --root", Remedies: []report.Remedy{report.Fix("for one command:", "devopsy @"+targetRef(t)+" <command>")}})

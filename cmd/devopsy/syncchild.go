@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -92,6 +93,10 @@ func runSyncChild(args []string) int {
 	if reset {
 		env[remote.SyncResetEnv] = "1"
 	}
+	// The child's address for its devopsy's hints: the key's own, never the request's.
+	// sshd's clean environment brings neither it nor the operator's command, which the
+	// request does not carry, being on the parent's ssh command line, every user's to read.
+	maps.Copy(env, childAddress(to))
 	if req.Beat > 0 && req.Beat <= 300 {
 		env[remote.HeartbeatEnv] = strconv.Itoa(req.Beat)
 	}

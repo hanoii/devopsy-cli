@@ -2614,12 +2614,12 @@ func daemonListing(ctx context.Context, id string) (*exec.Cmd, error) {
 }
 
 // cleanEnvKeys are what the child's devopsy gets of the parent's
-// environment on the same server: the machine's, and the sync's addresses
-// and arguments and SyncWatchEnv (for the child's import), never the
-// project's. The
+// environment on the same server: the machine's, the sync's addresses
+// and arguments, SyncWatchEnv (for the child's import) and the operator's
+// command, passed on, never the project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.CommandEnv + `|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
 // childInheritEnv is the child's pending inherited variables' file
 // (remote.InheritPendingEnv), from the child's directory the push knows:
@@ -2643,7 +2643,20 @@ func cleanEnv(projectName string) []string {
 	if k, v := childInheritEnv(); k != "" {
 		env = append(env, k+"="+v)
 	}
+	for k, v := range childAddress(os.Getenv(remote.SyncToTargetEnv)) {
+		env = append(env, k+"="+v)
+	}
 	return append(env, "COMPOSE_PROJECT_NAME="+projectName)
+}
+
+// childAddress is the child's address for its devopsy's hints (remote.AddressEnv,
+// HintAddressEnv), the one the push has for it, to: the session the push runs in is the
+// parent's, and its address would name the parent.
+func childAddress(to string) map[string]string {
+	if !remote.IsAddress(to) {
+		return nil
+	}
+	return map[string]string{remote.AddressEnv: to, remote.HintAddressEnv: to}
 }
 
 // runSyncExec implements the hidden --sync-exec <args>...: devopsy args

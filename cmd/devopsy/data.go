@@ -1668,7 +1668,9 @@ func runResolved(cwd, name string) int {
 		return fail(err.Error())
 	}
 	removeSpools(base, name)
-	rerun := sessionHint(cwd).On(cli.ImportFlag + " " + name + " --resolved")
+	// The command the operator ran, else this one on its environment.
+	hint := sessionHint(cwd)
+	rerun := cmp.Or(hint.Command, hint.On(cli.ImportFlag+" "+name+" --resolved"))
 	again := offer(report.Fix, "fix what does not start, then run it again:", rerun, "fix what does not start, then run it again")
 	// What an mnt import may have extracted goes to its owners first, as
 	// a complete import does: a tar made anywhere carries its maker's
