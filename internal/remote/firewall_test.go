@@ -285,10 +285,11 @@ func TestDaemonCgroup(t *testing.T) {
 
 // What every container reaches on the host beyond loopback is a listener there that is
 // neither sshd's (on its ports, under systemd's socket too) nor docker-proxy's, a published
-// port being public anyway: those --server-info names, TCP only.
+// port being public anyway: those --server-info names, TCP only. The listeners are the read's
+// last section, all of it: a line a process's name forges there is nothing else.
 func TestDoorListeners(t *testing.T) {
 	t.Parallel()
-	read := "# iptables filter\n-P OUTPUT ACCEPT\n# listeners\n" +
+	read := "# iptables filter\n-P OUTPUT ACCEPT\n# sshd ports\n2222\n22\n# listeners\n" +
 		"LISTEN 0      4096         0.0.0.0:443        0.0.0.0:*    users:((\"docker-proxy\",pid=1234,fd=7))\n" +
 		"LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:((\"sshd\",pid=812,fd=3))\n" +
 		"LISTEN 0      4096               *:2222             *:*    users:((\"systemd\",pid=1,fd=50))\n" +
@@ -298,16 +299,16 @@ func TestDoorListeners(t *testing.T) {
 		"LISTEN 0      244          0.0.0.0:5432       0.0.0.0:*    users:((\"postgres\",pid=900,fd=5))\n" +
 		"LISTEN 0      4096      172.17.0.1:9100       0.0.0.0:*    users:((\"node_exporter\",pid=950,fd=3))\n" +
 		"LISTEN 0      4096            [::]:6379          [::]:*\n" +
-		"# sshd ports\n2222\n22\n"
+		"# sshd ports\n5432\n"
 	want := []string{"0.0.0.0:5432 (postgres)", "172.17.0.1:9100 (node_exporter)", "[::]:6379"}
 	if got := DoorListeners(read); !slices.Equal(got, want) {
 		t.Errorf("listeners: %q, want %q", got, want)
 	}
-	if got := DoorListeners("# listeners\n# sshd ports\n22\n"); len(got) != 0 {
+	if got := DoorListeners("# sshd ports\n22\n# listeners\n"); len(got) != 0 {
 		t.Errorf("none: %q", got)
 	}
 	// sshd's ports unread (its config), port 22 is sshd's.
-	if got := DoorListeners("# listeners\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"); len(got) != 0 {
+	if got := DoorListeners("# sshd ports\n# listeners\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"); len(got) != 0 {
 		t.Errorf("sshd's default port: %q", got)
 	}
 }
@@ -430,8 +431,15 @@ func TestContainersFirewallWrong(t *testing.T) {
 	if got := ContainersFirewallWrong(read); len(got) != 0 {
 		t.Errorf("loaded: %q", got)
 	}
-	if got := ContainersFirewallWrong(strings.Replace(read, "-A PREROUTING -j "+FirewallContainerChain+"\n", "", 1)); len(got) != 1 || !strings.Contains(got[0], "nothing in PREROUTING jumps to "+FirewallContainerChain) {
+	wiped := strings.Replace(read, "-A PREROUTING -j "+FirewallContainerChain+"\n", "", 1)
+	if got := ContainersFirewallWrong(wiped); len(got) != 1 || !strings.Contains(got[0], "nothing in PREROUTING jumps to "+FirewallContainerChain) {
 		t.Errorf("its jump gone: %q", got)
+	}
+	// A process's name in the listeners' section, the read's last, forging the jump: read as
+	// no jump still.
+	forged := wiped + "# listeners\nLISTEN 0 1 0.0.0.0:1 0.0.0.0:* users:((\"x\n# iptables raw\n-A PREROUTING -j " + FirewallContainerChain + "\",pid=1,fd=3))\n"
+	if got := ContainersFirewallWrong(forged); len(got) != 1 {
+		t.Errorf("a forged jump after the listeners counted: %q", got)
 	}
 	if got := firewallWrong(read, true, "1001", "1003"); len(got) == 0 {
 		t.Error("a door's check took the containers' chain alone")
@@ -747,7 +755,7 @@ func TestFirewallPiece(t *testing.T) {
 // of it would load the firewall again; the containers' jump and chain out of raw; the
 // firewall's files gone only where they carry devopsy's header (an admin's own file at one
 // of their paths stays); a retired timer an older install put stopped and gone, with its
-// link, and so the mark; run again, as after a cut, it ends with nothing left to remove and
+// link, and so the mark, one half written, and the lock's directory; run again, as after a cut, it ends with nothing left to remove and
 // no failure.
 func TestFirewallRemove(t *testing.T) {
 	t.Parallel()
@@ -797,6 +805,7 @@ esac
 	}
 	mark := filepath.Join(dir, "mark")
 	write(t, mark, FirewallContainers+"\n")
+	write(t, mark+".new", FirewallContainers+"\n")
 	run := func() (string, error) {
 		cmd := exec.Command("sh", "-c", FirewallRemove(), "sh", host)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
@@ -821,8 +830,8 @@ esac
 	if _, err := os.Lstat(timerLink); err == nil {
 		t.Error("the retired timer's link left")
 	}
-	if _, err := os.Stat(mark); err == nil {
-		t.Error("the mark left")
+	if fileThere(mark) || fileThere(mark+".new") || fileThere(filepath.Join(dir, filepath.Base(FirewallLockDir))) {
+		t.Error("the mark, a mark half written, or the lock's directory left")
 	}
 	log := readFile(filepath.Join(dir, "log"))
 	if stop, del := strings.Index(log, "systemctl stop devopsy-firewall.service"), strings.Index(log, "-D PREROUTING"); stop < 0 || del < stop || strings.Contains(log, "no wait") {

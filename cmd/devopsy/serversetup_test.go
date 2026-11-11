@@ -111,8 +111,8 @@ esac
 	return s, host
 }
 
-// firewallUnitFake is the case arms of a fake systemctl for devopsy-firewall.service and its
-// timer: the service's start runs the loader, as systemd's start of a oneshot does, and its
+// firewallUnitFake is the case arms of a fake systemctl for devopsy-firewall.service: its
+// start runs the loader, as systemd's start of a oneshot does, and its
 // result stays in fwresult until it runs again.
 var firewallUnitFake = `  "show -p Result --value devopsy-firewall.service") cat "$h/fwresult" 2>/dev/null || echo success ;;
   "start devopsy-firewall.service")
@@ -1556,5 +1556,269 @@ func TestReleaseWarnsOfAWipedFirewall(t *testing.T) {
 	out, code := s.run([]string{remote.HostRootEnv + "=" + host}, "@prod", "--release")
 	if code != 0 || !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @") {
 		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A release's read of the chains runs the util image only as it is there, never pulled: the
+// read checks the image with an inspect and then runs it, and an image gone in between (a
+// prune, a rebuild) would be the daemon's to pull by its name, a root container with the
+// host's network on whatever answers it. Every root run holds --pull never (hostRun's
+// dockerArgs), as every util container the door runs does (internals/door.md).
+func TestReleaseFirewallReadNeverPulls(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	s.logs()
+	if out, code := s.run(nil, remote.ServerReadyFlag, "one:"); code != 0 {
+		t.Fatalf("--server-ready (%d):\n%s", code, out)
+	}
+	docker, _ := s.logs()
+	ran := false
+	for line := range strings.SplitSeq(docker, "\n") {
+		if !strings.Contains(line, "chroot /host") {
+			continue
+		}
+		ran = true
+		if !strings.Contains(line, "--pull never") {
+			t.Errorf("the read's run may pull its image: %s", line)
+		}
+	}
+	if !ran {
+		t.Fatalf("no root read:\n%s", docker)
+	}
+}
+
+// A release's read of the chains ends within its bound when Docker's client hangs (a daemon
+// restarting, a socket that takes the connection and answers nothing), with an error and no
+// answer: a release is never held up for it.
+func TestReleaseFirewallReadIsBounded(t *testing.T) {
+	t.Parallel()
+	host := t.TempDir()
+	write(t, filepath.Join(host, remote.FirewallMark), remote.FirewallContainers+"\n", 0o644)
+	docker := filepath.Join(t.TempDir(), "docker")
+	// The image is there, and its run never answers.
+	write(t, docker, "#!/bin/sh\ncase $1 in image) echo sha256:1; exit 0 ;; esac\nexec sleep 60\n", 0o755)
+	start := time.Now()
+	right, err := releaseFirewall(setupHost{root: host}, docker, false)
+	if took := time.Since(start); took > firewallReadWait+5*time.Second {
+		t.Errorf("the read held a release for %s, its bound %s", took.Round(time.Second), firewallReadWait)
+	}
+	if err == nil || right {
+		t.Errorf("a read that never answered: right %v, %v", right, err)
+	}
+}
+
+// --server-info, on a server whose config gained door: while the containers' chain alone is
+// loaded, before any project user was added (no group of the door's yet), says the door's
+// chains are to load, and judges what is loaded by the kind loaded: the containers' chain
+// read and right, nothing of a read that failed.
+func TestServerInfoJudgesTheKindLoaded(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	setupConfig(t, s, "door:\n  space: $HOME/space\n")
+	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
+	if !strings.Contains(out, "door: is in this server's config, and devopsy's firewall loads the containers' chain alone") {
+		t.Fatalf("not the state this test is for:\n%s", out)
+	}
+	if strings.Contains(out, "could not be read as root") {
+		t.Errorf("a read that answered, said unread:\n%s", out)
+	}
+}
+
+// --server-setup's facts session and --server-info are read-only and build no util image
+// (internals/server-setup.md, Sessions), on a server whose firewall is loaded too: their read
+// of the chains as root runs only with the image there, as a release's does, and with none
+// the chains are said unread, the item judged by its files and mark alone. Each case has a
+// server of its own: a build in one would leave the image the next reads.
+func TestServerSetupFactsBuildNoUtilImage(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, env string }{{"missing", "FAKE_UTIL_MISSING=1"}, {"over a week old", "FAKE_UTIL_CREATED=2020-01-01T00:00:00Z"}} {
+		name, env := c.name, c.env
+		s, host := setupServer(t)
+		firewallLoaded(t, host, false)
+		s.logs()
+		if out, code := s.run([]string{env}, remote.ServerSetupFlag, "facts"); code != 0 {
+			t.Fatalf("%s: facts (%d):\n%s", name, code, out)
+		}
+		if docker, _ := s.logs(); strings.Contains(docker, "build ") {
+			t.Errorf("the util image %s: the facts session built it", name)
+		}
+		out, _ := s.run([]string{env}, "@devopsy@one:", "--server-info")
+		if docker, _ := s.logs(); strings.Contains(docker, "build ") || name == "missing" && !strings.Contains(out, "its chains could not be read as root: "+remote.UtilImage+" is not here") {
+			t.Errorf("the util image %s, --server-info:\n%s", name, out)
+		}
+	}
+}
+
+// A release says W0001 when devopsy's firewall is installed and its last load failed (a boot
+// whose loader failed once, a start of Docker whose drop-in's load failed), with no Docker
+// call: a failed load leaves no mark, and nothing loads it again. --server-info says W0001
+// there (the control), naming the failed load.
+func TestServerReadyWarnsAfterAFailedLoad(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	// The load that failed: no mark, the jump not in.
+	for _, p := range []string{remote.FirewallMark, "fw.iptables.jumps"} {
+		if err := os.Remove(filepath.Join(host, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "W0001") || !strings.Contains(out, "no load went in since the last that failed") {
+		t.Fatalf("the control: --server-info says no W0001 of a failed load:\n%s", out)
+	}
+	s.logs()
+	out, code := s.run(nil, remote.ServerReadyFlag, "one:")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it") || strings.Contains(docker, "chroot /host") {
+		t.Errorf("a release beside a firewall whose load failed (%d):\n%q\n%s", code, out, docker)
+	}
+}
+
+// The door's answer to "firewall" is one of three words, whatever fails inside it: right for a
+// firewall read as devopsy loads it, wrong for one installed whose last load failed (no Docker
+// call) or whose chains are out, unknown for nothing installed, a removal waiting (allow), no
+// util image, a read that fails, or a door's judgment its groups cannot make yet. docker is a
+// fake whose read prints canned chains.
+func TestDoorFirewallAnswers(t *testing.T) {
+	t.Parallel()
+	right := "# groups  \n# dockerd \n# iptables filter\n# iptables raw\n-A PREROUTING -j " + remote.FirewallContainerChain + "\n" + containersChain() + "# ip6tables off\n"
+	for name, c := range map[string]struct {
+		mark, read string
+		allow      bool
+		image, run bool // the util image there; its run succeeding
+		want       string
+	}{
+		"right":                 {remote.FirewallContainers, right, false, true, true, firewallRight},
+		"chains out":            {remote.FirewallContainers, strings.Replace(right, "-A PREROUTING -j "+remote.FirewallContainerChain+"\n", "", 1), false, true, true, firewallWrong},
+		"a failed load":         {"", right, false, true, true, firewallWrong},
+		"nothing installed":     {"-", right, false, true, true, firewallUnknown},
+		"allowed":               {remote.FirewallContainers, right, true, true, true, firewallUnknown},
+		"no util image":         {remote.FirewallContainers, right, false, false, true, firewallUnknown},
+		"the read fails":        {remote.FirewallContainers, right, false, true, false, firewallUnknown},
+		"the door's, no groups": {remote.FirewallDoor, right, false, true, true, firewallUnknown},
+	} {
+		host, dir := t.TempDir(), t.TempDir()
+		if c.mark != "-" {
+			write(t, filepath.Join(host, remote.FirewallScript), remote.FirewallLoader(false), 0o755)
+			if c.mark != "" {
+				write(t, filepath.Join(host, remote.FirewallMark), c.mark+"\n", 0o644)
+			}
+		}
+		write(t, filepath.Join(dir, "read"), c.read, 0o644)
+		docker := filepath.Join(dir, "docker")
+		write(t, docker, `#!/bin/sh
+echo "$*" >>`+dir+`/log
+case $1 in
+  image) `+map[bool]string{true: "echo sha256:1", false: "exit 1"}[c.image]+` ;;
+  run) `+map[bool]string{true: "cat " + dir + "/read", false: "exit 1"}[c.run]+` ;;
+esac
+`, 0o755)
+		got := firewallAnswer(setupHost{root: host}, docker, c.allow)
+		if got != c.want {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
+		}
+		if name == "a failed load" && fileExists(filepath.Join(dir, "log")) {
+			t.Errorf("%s: a docker call:\n%s", name, readString(filepath.Join(dir, "log")))
+		}
+	}
+}
+
+// containersChain is the containers' chain as iptables -S prints it, IPv4's, as the loader
+// restores it (its first *raw block, which is IPv4's).
+func containersChain() string {
+	l := remote.FirewallLoader(false)
+	block := l[strings.Index(l, "*raw\n"):]
+	block = block[:strings.Index(block, "COMMIT")]
+	var b strings.Builder
+	for line := range strings.SplitSeq(block, "\n") {
+		if strings.HasPrefix(line, "-A ") {
+			b.WriteString(line + "\n")
+		}
+	}
+	return b.String()
+}
+
+// The door refuses "firewall" with any argument: the request has none.
+func TestDoorRefusesAFirewallWithArguments(t *testing.T) {
+	t.Parallel()
+	if code := (&doorSide{}).answer([]string{"firewall", "x"}, nil, nil); code != 2 {
+		t.Errorf("firewall x: %d", code)
+	}
+}
+
+// A project user's ask of the door, where sudo has no rule for it (an older server's), says
+// nothing but a debug line.
+//
+// Not parallel: it sets PATH, for a sudo with no rule.
+func TestDoorFirewallWithNoRuleIsSilent(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\necho 'sudo: a password is required' >&2\nexit 1\n", 0o755)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	var b strings.Builder
+	warnDoorFirewallTo(report.New(&b, false, 1), askDoorFirewall)
+	if !strings.HasPrefix(b.String(), "devopsy: debug: the firewall not asked: ") || strings.Contains(b.String(), "warning") {
+		t.Errorf("%q", b.String())
+	}
+}
+
+// --server-info as a project user makes no root read: its docker is the door, which would
+// refuse it and log the refusal. Its --server-info then says nothing of the firewall.
+func TestProjectUserReadsNoChains(t *testing.T) {
+	t.Parallel()
+	fw := &setup.FirewallFact{Loaded: setup.ContainersFirewall}
+	if readsChains(fw, true) || !readsChains(fw, false) || readsChains(&setup.FirewallFact{}, false) || readsChains(nil, false) {
+		t.Error("the decision")
+	}
+}
+
+// With firewall: metadata: allow waiting for its removal, a release says nothing of the
+// firewall: its fix would remove it.
+func TestServerReadyIsSilentUnderAllow(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	s.logs()
+	out, code := s.run(nil, remote.ServerReadyFlag, "one:")
+	if docker, _ := s.logs(); code != 0 || out != "" || strings.Contains(docker, "chroot /host") {
+		t.Errorf("(%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// W0001 names what differs, each on a line of its own, for every state it is said for: the
+// chains' findings, and of the files a mode, a file not devopsy's, the boot link, an older
+// install's timer.
+func TestFirewallSaysWhatDiffers(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	if err := os.Chmod(filepath.Join(host, remote.FirewallScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, remote.FirewallUnit), "# Written by devopsy: an older unit\n", 0o644)
+	if err := os.Remove(filepath.Join(host, remote.FirewallUnitLink)); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, "/etc/systemd/system/devopsy-firewall.timer"), "# Written by devopsy (devopsy @<server> --project-users add).\n", 0o644)
+	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
+	for _, want := range []string{"metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it",
+		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " is not devopsy's",
+		remote.FirewallUnitLink + " does not enable " + remote.FirewallUnit, "/etc/systemd/system/devopsy-firewall.timer, an older install's, is still there"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q:\n%s", want, out)
+		}
 	}
 }

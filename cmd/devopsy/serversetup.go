@@ -285,7 +285,7 @@ func firewallLines(fw *setup.FirewallFact) []string {
 	if fw.Unit != "" {
 		lines = append(lines, "devopsy-firewall.service: "+fw.Unit)
 	}
-	return append(lines, fw.Wrong...)
+	return append(append(lines, fw.Differs...), fw.Wrong...)
 }
 
 // firewallLine is firewallLines' first line.

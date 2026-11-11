@@ -95,16 +95,17 @@ func JudgeFirewall(allow, door bool, loaded FirewallKind, inSync bool) FirewallS
 
 // FirewallFact is the metadata firewall as the server judged it, Door whether the loader to
 // load is the door's (FirewallWantsDoor), for one to load again Unit its unit's failure (""
-// otherwise). Wrong is what a root read of the chains found not as devopsy loads them, and
-// Unread why that read failed (--server-info's, Chains); Loaded what the server has of it,
-// for the server's own devopsy.
+// otherwise), and Differs what of its pieces differs from devopsy's. Wrong is what a root read
+// of the chains found not as devopsy loads them, and Unread why that read was not made or
+// failed (Chains); Loaded what the server has of it, for the server's own devopsy.
 type FirewallFact struct {
-	State  FirewallState `json:"state"`
-	Door   bool          `json:"door,omitempty"`
-	Unit   string        `json:"unit,omitempty"`
-	Wrong  []string      `json:"wrong,omitempty"`
-	Unread string        `json:"unread,omitempty"`
-	Loaded FirewallKind  `json:"-"`
+	State   FirewallState `json:"state"`
+	Door    bool          `json:"door,omitempty"`
+	Unit    string        `json:"unit,omitempty"`
+	Differs []string      `json:"differs,omitempty"`
+	Wrong   []string      `json:"wrong,omitempty"`
+	Unread  string        `json:"unread,omitempty"`
+	Loaded  FirewallKind  `json:"-"`
 }
 
 // Chains takes a root read's judgment of the chains (what is wrong, or why it could not be

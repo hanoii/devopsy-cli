@@ -111,10 +111,12 @@ var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system 
 
 // hostPut is put <file> <mode> <check> <content>: content into file when it differs, checked
 // before it lands, succeeding only then; when the text is the same it fails, its mode set
-// back first when only that differs, which no caller reads as a new text (a reboot, a reload).
-// A mode keep:<mode> keeps the file as its admin has it: a link stays, the file it names
-// written; its own mode and owner, <mode> (root's) only for a file it makes. Never in a
-// pipeline, whose subshell an exit would leave alone.
+// back first when only that differs and the file is no link, which no caller reads as a new
+// text (a reboot, a reload). A link with the same text stays as it is; with another, any mode
+// but keep: puts a file of devopsy's in its place. A mode keep:<mode> keeps the file as its
+// admin has it: a link stays, the file it names written; its own mode and owner, <mode>
+// (root's) only for a file it makes. Never in a pipeline, whose subshell an exit would leave
+// alone.
 var hostPut = `put() {
   pf=$1
   case $2 in
@@ -134,9 +136,10 @@ var hostPut = `put() {
   printf '%s' "$4" >"$tmp"
   if cmp -s "$tmp" "$pf" 2>/dev/null; then
     rm -f "$tmp"
-    # The same text in another mode (a loader that lost its exec bit) takes the mode back, a
-    # link's by the file it names; the text unchanged, it reports nothing new.
-    case $2 in keep:*) ;; *) [ -z "$(find -H "$pf" -prune ! -perm "$2")" ] || chmod "$2" "$pf" ;; esac
+    # The same text in another mode (a loader that lost its exec bit) takes the mode back, the
+    # text unchanged, reporting nothing new; a link's file keeps its mode, a file devopsy may
+    # not own.
+    case $2 in keep:*) ;; *) [ -L "$pf" ] || [ -z "$(find "$pf" -prune ! -perm "$2")" ] || chmod "$2" "$pf" ;; esac
     return 1
   fi
   if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi

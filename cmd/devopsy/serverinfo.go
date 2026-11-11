@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,13 +84,8 @@ func doorFacts(read string) *remote.DoorFacts {
 // host lacks from what it prints (remote.FirewallRead): the deploy user can neither
 // read nor change it.
 func doorFirewall(script string, write bool) ([]string, error) {
-	var out bytes.Buffer
-	if err := firewallRun(script, write).run(&out, func(err error) error {
-		return fmt.Errorf("the project users' firewall: %v", err)
-	}); err != nil {
-		return nil, err
-	}
-	return firewallChainsWrong(out.String(), true)
+	_, wrong, err := firewallJudged(context.Background(), firewallRun(script, write), true, true)
+	return wrong, err
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
@@ -128,11 +124,16 @@ func serverFacts() (remote.ServerInfo, error) {
 	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
 	hd := readHostDocker(h)
 	info.Docker = hd.facts
-	read := ""
+	// The firewall's chains read as root, for the setup's judgment and the door's listeners,
+	// an install's even where the setup cannot be read; never as a project user.
+	var fw *setup.FirewallFact
 	if rd, err := readSetup(h, hd); err == nil {
-		read = readChains(rd.facts.Firewall)
-		info.Setup = &rd.facts
+		info.Setup, fw = &rd.facts, rd.facts.Firewall
+	} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
+		fw = &setup.FirewallFact{Loaded: kind}
 	}
+	u, err := user.Current()
+	read := readChains(fw, err == nil && inDoorGroup(u.Username), false)
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {

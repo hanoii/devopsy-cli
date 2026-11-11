@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
 	"os/user"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -70,7 +72,7 @@ func runServerSetupStep(args []string) int {
 		if err != nil {
 			return failErr(err)
 		}
-		readChains(rd.facts.Firewall)
+		readChains(rd.facts.Firewall, false, false)
 		out, err := json.Marshal(rd.facts)
 		if err != nil {
 			return failErr(err)
@@ -266,53 +268,82 @@ func resolveRoot(root string) string {
 // firewallItem is the metadata firewall's item's name.
 const firewallItem = setup.FirewallItemName
 
-// firewallFact is the metadata firewall as the deploy user can judge it, who cannot read
-// iptables: what the server has of it (any file of devopsy's by its header, or the mark; the
-// door's where the mark or the loader says so), its files against devopsy's
+// firewallFact is the metadata firewall as the deploy user can judge it by stats, who cannot
+// read iptables: what the server has of it (firewallHere), its files against devopsy's
 // (remote.FirewallFiles, modes included), the boot's link to its unit, no retired unit left
-// (remote.FirewallRetired), and the mark the last load that went in left (remote.FirewallMark), whoever ran it. The unit's
-// result is words only, for a firewall to load again: a load the unit did not run leaves it
-// as it was. The full read of the chains is root's, the apply's.
+// (remote.FirewallRetired), and the mark the last load that went in left (remote.FirewallMark),
+// whoever ran it, each difference said (Differs). The unit's result is words only, for a
+// firewall to load again: a load the unit did not run leaves it as it was. The chains are read
+// as root apart (readChains).
 func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
-	mark, markErr := os.ReadFile(h.path(remote.FirewallMark))
-	loader, _ := os.ReadFile(h.path(remote.FirewallScript))
-	loaded := setup.NoFirewall
-	if markErr == nil || slices.ContainsFunc(append(slices.Collect(maps.Keys(remote.FirewallFiles(true))), slices.Collect(maps.Keys(remote.FirewallRetired))...), func(p string) bool {
-		return devopsysAt(h, p)
-	}) {
-		loaded = setup.ContainersFirewall
-	}
-	if strings.TrimSpace(string(mark)) == remote.FirewallDoor || strings.Contains(string(loader), remote.DoorChain) {
-		loaded = setup.DoorFirewall
-	}
+	loaded, mark := firewallHere(h)
 	wantDoor := setup.FirewallWantsDoor(door, loaded)
 	want := remote.FirewallContainers
 	if wantDoor {
 		want = remote.FirewallDoor
 	}
-	inSync := strings.TrimSpace(string(mark)) == want
-	for p, f := range remote.FirewallFiles(wantDoor) {
+	// What differs from devopsy's, each said for a firewall to load again.
+	var differs []string
+	switch mark {
+	case want:
+	case "":
+		differs = append(differs, "no load went in since the last that failed (no mark in "+path.Dir(remote.FirewallMark)+")")
+	default:
+		differs = append(differs, "its last load loaded the "+mark+"'s, devopsy's the "+want+"'s")
+	}
+	for _, p := range slices.Sorted(maps.Keys(remote.FirewallFiles(wantDoor))) {
+		f := remote.FirewallFiles(wantDoor)[p]
 		have, err := os.ReadFile(h.path(p))
 		fi, statErr := os.Stat(h.path(p))
-		inSync = inSync && err == nil && statErr == nil && string(have) == f.Text && fi.Mode().Perm() == f.Mode
+		switch {
+		case err != nil || statErr != nil:
+			differs = append(differs, p+" is missing")
+		case string(have) != f.Text:
+			differs = append(differs, p+" is not devopsy's")
+		case fi.Mode().Perm() != f.Mode:
+			differs = append(differs, fmt.Sprintf("%s is mode %o, devopsy's %o", p, fi.Mode().Perm(), f.Mode))
+		}
 	}
 	// The boot's link to the unit, without which no boot loads it.
-	to, err := os.Readlink(h.path(remote.FirewallUnitLink))
-	inSync = inSync && err == nil && to == remote.FirewallUnit
+	if to, err := os.Readlink(h.path(remote.FirewallUnitLink)); err != nil || to != remote.FirewallUnit {
+		differs = append(differs, remote.FirewallUnitLink+" does not enable "+remote.FirewallUnit+": no boot loads it")
+	}
 	// A retired unit an earlier install left, or the link left to it, which the next install
 	// takes as its removal does (remote.FirewallRetired).
-	for u, l := range remote.FirewallRetired {
+	for _, u := range slices.Sorted(maps.Keys(remote.FirewallRetired)) {
+		l := remote.FirewallRetired[u]
 		_, gone := os.Stat(h.path(u))
 		_, unlinked := os.Lstat(h.path(l))
-		inSync = inSync && !devopsysAt(h, u) && (unlinked != nil || gone == nil)
+		if devopsysAt(h, u) || unlinked == nil && gone != nil {
+			differs = append(differs, u+", an older install's, is still there")
+		}
 	}
-	fact := &setup.FirewallFact{Door: wantDoor, State: setup.JudgeFirewall(allow, door, loaded, inSync), Loaded: loaded}
+	fact := &setup.FirewallFact{Door: wantDoor, State: setup.JudgeFirewall(allow, door, loaded, len(differs) == 0), Loaded: loaded}
 	if fact.State == setup.FirewallReload {
+		fact.Differs = differs
 		if result := unitShow("devopsy-firewall.service", "Result"); result != "" && result != "success" {
 			fact.Unit = result
 		}
 	}
 	return fact
+}
+
+// firewallHere is what of devopsy's firewall the server has, by stats: its kind (none; the
+// containers' where the mark or any file of the firewall's devopsy wrote is there; the door's
+// where the mark or the loader says so) and the mark's word, "" with none.
+func firewallHere(h setupHost) (setup.FirewallKind, string) {
+	data, markErr := os.ReadFile(h.path(remote.FirewallMark))
+	mark := strings.TrimSpace(string(data))
+	loader, _ := os.ReadFile(h.path(remote.FirewallScript))
+	if markErr != nil && !slices.ContainsFunc(append(slices.Collect(maps.Keys(remote.FirewallFiles(true))), slices.Collect(maps.Keys(remote.FirewallRetired))...), func(p string) bool {
+		return devopsysAt(h, p)
+	}) {
+		return setup.NoFirewall, ""
+	}
+	if mark == remote.FirewallDoor || strings.Contains(string(loader), remote.DoorChain) {
+		return setup.DoorFirewall, mark
+	}
+	return setup.ContainersFirewall, mark
 }
 
 // devopsysAt says whether the host's file at p is one of the firewall's devopsy wrote, by its
@@ -529,7 +560,7 @@ func applySetup(h setupHost, a setupApply) int {
 	if err != nil {
 		return failed(err.Error())
 	}
-	readChains(rd.facts.Firewall)
+	readChains(rd.facts.Firewall, false, true)
 	f := rd.facts
 	// A required item refuses the apply; under --upgrade each is a warning, and only
 	// Docker's (no root run without it) or a broken record stops it.
@@ -985,10 +1016,7 @@ func serverReady(root, ref string, projectUser bool) []error {
 // (in words when "") when it makes or gives the root, else the check's own words.
 func releaseRootReady(root, nothing, ref string) error {
 	action, refusal := releaseRootCheck(root, os.Getuid())
-	setUp := report.Fix("set the server up with --server-setup first, which makes it the deploy user's")
-	if ref != "" {
-		setUp = report.Fix("set the server up:", "devopsy @"+ref+" --server-setup")
-	}
+	setUp := setupFix(ref, "set the server up:", "set the server up with --server-setup first, which makes it the deploy user's")
 	switch {
 	case refusal != nil:
 		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(refusal.Fix)}
@@ -1002,21 +1030,18 @@ func releaseRootReady(root, nothing, ref string) error {
 // as root through the firewall's own run, then reads the chains back, as root, for what they
 // lack.
 func applyFirewall(h setupHost, fw *setup.FirewallFact) error {
-	script := remote.FirewallInstall(fw.Door)
 	if fw.State == setup.FirewallRemove {
-		script = remote.FirewallRemove()
-	}
-	run := firewallRun(script, true)
-	run.Args = []string{h.root}
-	var out bytes.Buffer
-	if err := run.run(&out, func(err error) error { return fmt.Errorf("the firewall's run as root: %v", err) }); err != nil {
-		return err
-	}
-	if fw.State == setup.FirewallRemove {
+		run := firewallRun(remote.FirewallRemove(), true)
+		run.Args = []string{h.root}
+		if err := run.run(io.Discard, func(err error) error { return fmt.Errorf("the firewall's run as root: %v", err) }); err != nil {
+			return err
+		}
 		report.Info("removed devopsy's firewall (firewall: metadata: allow): containers reach the cloud's metadata services")
 		return nil
 	}
-	wrong, err := firewallChainsWrong(out.String(), fw.Door)
+	run := firewallRun(remote.FirewallInstall(fw.Door), true)
+	run.Args = []string{h.root}
+	_, wrong, err := firewallJudged(context.Background(), run, fw.Door, true)
 	if err != nil {
 		return err
 	}

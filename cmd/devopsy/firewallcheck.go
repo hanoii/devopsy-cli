@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -22,23 +21,23 @@ import (
 // firewallReadWait bounds a release's read of the chains: a release is not held up for it.
 const firewallReadWait = 5 * time.Second
 
-// firewallChains reads devopsy's firewall's chains as root (remote.FirewallRead, through
-// docker, the real client's path in the door) and judges them, the door's or the containers'
-// alone (firewallChainsWrong): what is not as devopsy loads it. quick: only with the util image
-// there, never built, within ctx, what the run says kept in its error.
-func firewallChains(ctx context.Context, docker string, door, quick bool) (read string, wrong []string, err error) {
-	run := firewallReadRun(docker)
+// firewallJudged runs run, a root run that prints remote.FirewallRead's chains (the read, or
+// an install that reads them back), and judges what it printed, the door's or the containers'
+// alone (firewallChainsWrong). build readies the util image first, as only an apply may;
+// otherwise the run goes only with the image there, within ctx, what it says kept in its
+// error.
+func firewallJudged(ctx context.Context, run hostRun, door, build bool) (read string, wrong []string, err error) {
 	var out, said bytes.Buffer
-	failed := func(err error) error { return fmt.Errorf("the firewall's read as root: %v", err) }
-	if quick {
-		// What the run says is the read's failure's, never the release's words.
+	failed := func(err error) error { return fmt.Errorf("the firewall's run as root: %v", err) }
+	if build {
+		err = run.run(&out, failed)
+	} else {
+		// What the run says is the read's failure's, never the command's words.
 		run.Stderr = &said
 		failed = func(err error) error {
 			return fmt.Errorf("the firewall's read as root: %v: %s", err, strings.TrimSpace(said.String()))
 		}
 		err = run.runIfReady(ctx, &out, failed)
-	} else {
-		err = run.run(&out, failed)
 	}
 	if err != nil {
 		return "", nil, err
@@ -47,11 +46,12 @@ func firewallChains(ctx context.Context, docker string, door, quick bool) (read 
 	return out.String(), wrong, err
 }
 
-// firewallReadRun is the chains' read as root through docker: devopsy's fixed script, the
-// host's root read-only, no argument and no environment of a caller's, so the door runs it for
-// a project user with nothing of that user's in it.
-func firewallReadRun(docker string) hostRun {
-	run := firewallRun(remote.FirewallRead, false)
+// firewallReadRun is a read of the chains as root through docker (script remote.FirewallRead,
+// with the host's listeners, or remote.FirewallChainsRead, the chains alone): devopsy's fixed
+// script, the host's root read-only, no argument and no environment of a caller's, so the door
+// runs it for a project user with nothing of that user's in it.
+func firewallReadRun(docker, script string) hostRun {
+	run := firewallRun(script, false)
 	run.Docker = docker
 	return run
 }
@@ -65,54 +65,87 @@ func firewallChainsWrong(read string, door bool) ([]string, error) {
 	return remote.ContainersFirewallWrong(read), nil
 }
 
-// readChains reads devopsy's firewall's chains as root where it is loaded, and judges them
-// into fw (setup.FirewallFact.Chains), so a wipe the files and the mark cannot show reads "to
-// load again", for --server-setup's facts and apply and for --server-info alike; it returns
-// the read, "" when none was made. None loaded, no root run.
-func readChains(fw *setup.FirewallFact) string {
-	if fw == nil || fw.Loaded == setup.NoFirewall {
+// readsChains says whether this devopsy reads fw's chains as root: where devopsy's firewall
+// is installed, never as a project user, whose docker is the door, which would refuse the root
+// run and log it.
+func readsChains(fw *setup.FirewallFact, projectUser bool) bool {
+	return fw != nil && fw.Loaded != setup.NoFirewall && !projectUser
+}
+
+// readChains reads devopsy's firewall's chains as root where readsChains says, and judges them
+// by the kind loaded into fw (setup.FirewallFact.Chains), so a wipe the files and the mark
+// cannot show reads "to load again", for --server-setup's facts and apply and for
+// --server-info alike; build readies the util image, as only an apply may, else with none
+// the chains are unread. It returns the read, "" when none was made.
+func readChains(fw *setup.FirewallFact, projectUser, build bool) string {
+	if !readsChains(fw, projectUser) {
 		return ""
 	}
-	read, wrong, err := firewallChains(context.Background(), "docker", fw.Door, false)
+	read, wrong, err := firewallJudged(context.Background(), firewallReadRun("docker", remote.FirewallRead), fw.Loaded == setup.DoorFirewall, build)
 	fw.Chains(wrong, err)
 	return read
 }
 
-// errNotMarked is releaseFirewall's when no mark says a firewall is loaded.
-var errNotMarked = errors.New("no firewall of devopsy's marked loaded")
+// Why releaseFirewall gives no answer.
+var (
+	errNotInstalled = errors.New("no firewall of devopsy's installed")
+	errAllowed      = errors.New("firewall: metadata: allow, its removal waiting")
+)
 
-// releaseFirewall says whether the firewall the mark says is loaded (remote.FirewallMark, its
-// kind) is as devopsy loads it, for a release, which it must cost little and never fail: no
-// mark, no util image, a read that fails or outlasts firewallReadWait, each an error and no
-// answer. docker is the client the read runs (the door's real one).
-func releaseFirewall(h setupHost, docker string) (bool, error) {
-	mark, err := os.ReadFile(h.path(remote.FirewallMark))
-	if err != nil {
-		return false, errNotMarked
+// releaseFirewall says, for a release, whether devopsy's firewall installed here is loaded as
+// devopsy loads it, by what the facts judge by stats (firewallHere): not installed, or allowed
+// (allow, firewall: metadata: allow in the deploy user's config, its removal waiting), no
+// answer; installed with no mark, its last load failed, wrong with
+// no Docker call; marked, its chains read as root by the kind the mark says and judged. It
+// must cost a release little and never fail it: no util image (never built), a read that
+// fails or outlasts firewallReadWait, each an error and no answer. docker is the client the
+// read runs (the door's real one).
+func releaseFirewall(h setupHost, docker string, allow bool) (bool, error) {
+	if allow {
+		return false, errAllowed
+	}
+	kind, mark := firewallHere(h)
+	switch {
+	case kind == setup.NoFirewall:
+		return false, errNotInstalled
+	case mark == "":
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), firewallReadWait)
 	defer cancel()
-	_, wrong, err := firewallChains(ctx, docker, strings.TrimSpace(string(mark)) == remote.FirewallDoor, true)
+	_, wrong, err := firewallJudged(ctx, firewallReadRun(docker, remote.FirewallChainsRead), mark == remote.FirewallDoor, false)
 	if err != nil {
 		return false, err
 	}
 	return len(wrong) == 0, nil
 }
 
+// firewallAllowed says whether the deploy user's config allows the metadata services
+// (firewall: metadata: allow): a config that does not load allows nothing.
+func firewallAllowed() bool {
+	r, err := remote.ReleaseSettings()
+	return err == nil && r.Firewall.Metadata == remote.MetadataAllow
+}
+
+// setupFix is the fix that runs --server-setup on the server ref names, its text before the
+// command, and words alone when no address is known.
+func setupFix(ref, text, words string) report.Remedy {
+	if ref == "" {
+		return report.Fix(words)
+	}
+	return report.Fix(text, "devopsy @"+ref+" --server-setup")
+}
+
 // warnReleaseFirewall is the deploy user's release's word on the firewall (--server-ready):
 // W0001 with --server-setup as the fix (ref the server as the session names it), nothing when
 // it is right, and a debug line when it could not be told.
 func warnReleaseFirewall(h setupHost, ref string) {
-	right, err := releaseFirewall(h, "docker")
+	right, err := releaseFirewall(h, "docker", firewallAllowed())
 	switch {
 	case err != nil:
 		report.Debug("the firewall not checked: " + err.Error())
 	case !right:
-		fix := report.Fix("run --server-setup for this server, as its deploy user")
-		if ref != "" {
-			fix = report.Fix("", "devopsy @"+ref+" --server-setup")
-		}
-		report.Default().SayCode(report.WarnLevel, report.FirewallNotLoaded, nil, fix)
+		report.Default().SayCode(report.WarnLevel, report.FirewallNotLoaded, nil, setupFix(ref, "", "run --server-setup for this server, as its deploy user"))
 	}
 }
 
@@ -125,9 +158,9 @@ const (
 )
 
 // firewallAnswer is the door's answer to "firewall", from releaseFirewall through docker, the
-// real client: right, wrong, or unknown when it could not be told.
-func firewallAnswer(h setupHost, docker string) string {
-	right, err := releaseFirewall(h, docker)
+// real client: right, wrong, or unknown when it could not be told, whatever failed.
+func firewallAnswer(h setupHost, docker string, allow bool) string {
+	right, err := releaseFirewall(h, docker, allow)
 	switch {
 	case err != nil:
 		return firewallUnknown
@@ -143,7 +176,8 @@ const doorFirewallWait = firewallReadWait + 5*time.Second
 
 // warnDoorFirewall is a project user's release's word on the firewall (--server-ready): the
 // door's answer, W0001 for the admin when the firewall is not as devopsy loads it, a debug
-// line when the door could not tell or refused (an older rule), past doorFirewallWait too.
+// line when the door could not tell or refused (an older rule, a missing one), past
+// doorFirewallWait too.
 func warnDoorFirewall(ask func() (string, error)) { warnDoorFirewallTo(report.Default(), ask) }
 
 // warnDoorFirewallTo is warnDoorFirewall through l.
@@ -159,21 +193,13 @@ func warnDoorFirewallTo(l *report.Logger, ask func() (string, error)) {
 	}
 }
 
-// askDoorFirewall asks the door's "firewall" request, within doorFirewallWait.
+// askDoorFirewall asks the door's "firewall" request through doorAnswer, its cap and its
+// deadline.
 func askDoorFirewall() (string, error) {
 	c, err := doorCommand("firewall")
 	if err != nil {
 		return "", err
 	}
-	var out bytes.Buffer
-	c.Stdout = &out
-	ownGroup(c)
-	if err := c.Start(); err != nil {
-		return "", err
-	}
-	defer killGroupAfter(c, doorFirewallWait)()
-	if err := c.Wait(); err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out.String()), nil
+	out, err := doorAnswer(c, 64, doorFirewallWait)
+	return strings.TrimSpace(string(out)), err
 }

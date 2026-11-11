@@ -191,8 +191,8 @@ fix:
 - a server never set up by devopsy, on which `--upgrade` applies nothing,
   and each item of the setup that is not devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
-  mounts drop-in) or that Docker has not taken yet, each fixed by
-  `--server-setup`;
+  mounts drop-in, the metadata firewall, `W0001`) or that Docker has not
+  taken yet, each fixed by `--server-setup`;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which

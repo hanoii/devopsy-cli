@@ -164,7 +164,8 @@ func TestHostPut(t *testing.T) {
 		t.Errorf("its mode put back: %v (%v)", fi.Mode(), err)
 	}
 	holds("a piece whose mode was put back", "rule two\n")
-	// A link's mode is the file it names: that file's is put back, the link left a link.
+	// A link with the same text is left as it is, the file it names keeping its mode: a file
+	// devopsy may not own.
 	target := filepath.Join(t.TempDir(), "named")
 	write(t, target, "rule two\n")
 	if err := os.Chmod(target, 0o600); err != nil {
@@ -178,7 +179,7 @@ func TestHostPut(t *testing.T) {
 	if out, _ := c.CombinedOutput(); c.ProcessState.ExitCode() != 1 {
 		t.Errorf("a link to the same text (%d): %s", c.ProcessState.ExitCode(), out)
 	}
-	if fi, err := os.Stat(target); err != nil || fi.Mode().Perm() != 0o640 {
+	if fi, err := os.Stat(target); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("the linked file's mode: %v (%v)", fi.Mode(), err)
 	}
 	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {

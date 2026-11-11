@@ -367,15 +367,24 @@ WantedBy=multi-user.target
 // FirewallRead prints, for FirewallWrong, the ids of the project users' group and the
 // door's as the loader reads them, then each family's tables as iptables -S does, a
 // "# <iptables> <table>" line before each, or "# ip6tables off" where the kernel has no IPv6;
-// then the host's TCP listeners and sshd's ports, for DoorListeners.
-var FirewallRead = firewallMarkSh + daemonCgroup + `echo "# groups $(getent group ` + DoorGroup + ` | cut -d: -f3) $(getent group ` + DoorRunGroup + ` | cut -d: -f3)"
+// then sshd's ports and, last, the host's TCP listeners, for DoorListeners.
+var FirewallRead = FirewallChainsRead + `echo "# sshd ports"
+sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || :
+` + firewallListenersLine + `
+ss -Htlnp 2>/dev/null || :
+`
+
+// FirewallChainsRead is FirewallRead's part that FirewallWrong judges, all a release's read
+// needs: the groups' ids, the daemon's cgroup and each family's tables.
+var FirewallChainsRead = firewallMarkSh + daemonCgroup + `echo "# groups $(getent group ` + DoorGroup + ` | cut -d: -f3) $(getent group ` + DoorRunGroup + ` | cut -d: -f3)"
 echo "# dockerd $cg"
 echo "# dockerd-cgroup $(ls -di "$cgroot$cg" 2>/dev/null | awk '{ print $1 }') $(cat "$dmark" 2>/dev/null || :)"
-` + firewallTablesRead() + `echo "# listeners"
-ss -Htlnp 2>/dev/null || :
-echo "# sshd ports"
-sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || :
-`
+` + firewallTablesRead()
+
+// firewallListenersLine starts FirewallRead's last section, the host's listeners: a process's
+// name there is anyone's to choose, so nothing after it is read as anything else
+// (firewallWrong, DoorListeners).
+const firewallListenersLine = `echo "# listeners"`
 
 // firewallTablesRead prints each family's tables for FirewallRead.
 func firewallTablesRead() string {
@@ -492,7 +501,8 @@ fi
 // firewall again once the removal let it go (a loader that gets the lock and finds its own
 // file gone loads nothing, for one run by other means), then the containers' jump and chain
 // out of raw, the files of FirewallFiles that are devopsy's by their header (FirewallPiece),
-// the retired units (firewallRetireSh), the boot link left, and the mark. It prints each file
+// the retired units (firewallRetireSh), the boot link left, the mark and the lock's directory
+// (a loader still waiting on it finds its own file gone). It prints each file
 // of FirewallFiles removed. A removal cut halfway is finished by the next: every step goes on
 // from what it finds.
 func FirewallRemove() string {
@@ -509,7 +519,8 @@ if ` + c + ` -S ` + FirewallContainerChain + ` >/dev/null 2>&1; then ` + c + ` -
   if devopsys "$host_root$f"; then rm -f "$host_root$f"; echo "removed $f"; fi
 done
 ` + firewallRetireSh() + `[ ! -L "$host_root` + FirewallUnitLink + `" ] || [ -e "$host_root` + FirewallUnit + `" ] || rm -f "$host_root` + FirewallUnitLink + `"
-rm -f "$mark"
+rm -f "$mark" "$mark.new" "$lockdir/lock"
+rmdir "$lockdir" 2>/dev/null || :
 SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload >/dev/null 2>&1 || :
 `
 }
@@ -521,7 +532,7 @@ SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload >/dev/null 2>&1 || :
 // when a group is not there yet.
 func FirewallWrong(read string) ([]string, error) {
 	var gids []string
-	for line := range strings.SplitSeq(read, "\n") {
+	for line := range strings.SplitSeq(beforeListeners(read), "\n") {
 		if g, ok := strings.CutPrefix(line, "# groups "); ok {
 			gids = strings.Split(g, " ")
 		}
@@ -532,6 +543,13 @@ func FirewallWrong(read string) ([]string, error) {
 		}
 	}
 	return firewallWrong(read, true, gids[0], gids[1]), nil
+}
+
+// beforeListeners is read up to its listeners' section (firewallListenersLine), the part a
+// judgment of the chains reads.
+func beforeListeners(read string) string {
+	before, _, _ := strings.Cut(read, "\n# listeners\n")
+	return before
 }
 
 // ContainersFirewallWrong is FirewallWrong for a server with no door: the containers' chain
@@ -546,7 +564,7 @@ func firewallWrong(read string, withDoor bool, gid, doorGid string) []string {
 	tables := map[string][]string{}
 	var key, cgroup string
 	var made []string
-	for line := range strings.SplitSeq(read, "\n") {
+	for line := range strings.SplitSeq(beforeListeners(read), "\n") {
 		if strings.HasPrefix(line, "# groups ") {
 			continue
 		}
@@ -635,22 +653,20 @@ func jumpedFirst(table []string, j firewallJump) string {
 // sshd's (its ports, 22 when unread, whoever holds them, systemd's socket included), nor
 // docker-proxy's, a published port being public anyway.
 func DoorListeners(read string) []string {
-	var lines, ports []string
+	var ports []string
 	section := ""
-	for line := range strings.SplitSeq(read, "\n") {
+	before, after, _ := strings.Cut(read, "\n# listeners\n")
+	for line := range strings.SplitSeq(before, "\n") {
 		if k, ok := strings.CutPrefix(line, "# "); ok {
 			section = k
 			continue
 		}
-		switch section {
-		case "listeners":
-			lines = append(lines, line)
-		case "sshd ports":
-			if p := strings.TrimSpace(line); p != "" {
-				ports = append(ports, p)
-			}
+		if p := strings.TrimSpace(line); section == "sshd ports" && p != "" {
+			ports = append(ports, p)
 		}
 	}
+	// The last section, all of it the listeners', whatever a process's name holds.
+	lines := strings.Split(after, "\n")
 	if len(ports) == 0 {
 		ports = []string{"22"}
 	}

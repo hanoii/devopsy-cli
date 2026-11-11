@@ -233,8 +233,12 @@ metadata firewall line, with `--server-setup` as the fix, when:
 - a chain is not devopsy's, nothing jumps to it, or a rule ahead of
   devopsy's jump lets packets through (a reload of the server's own
   firewall, an `iptables -F`);
-- Docker's daemon is in no cgroup of its own, so nothing covers it, or
-  in one made since the firewall loaded, which its rule does not hold.
+- Docker's daemon is in no cgroup of its own, so nothing covers it,
+  which no setup repairs: Docker run as `docker.service` under systemd
+  gives it one;
+- Docker's daemon is in a cgroup made since the firewall loaded (Docker
+  restarted outside its unit), which its rule does not hold; a start of
+  Docker by its unit, or `--server-setup`, loads it again.
 
 It also warns of a TCP listener open beyond loopback, other than
 sshd's and the ports Docker publishes, since containers reach it.

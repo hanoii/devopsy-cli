@@ -59,7 +59,10 @@ func (r hostRun) dockerArgs() []string {
 	if r.Write {
 		bind = "/:/host"
 	}
-	a = append(a, "-v", bind, remote.UtilImage, "chroot", "/host", "/bin/sh", "-c", r.Script)
+	// Never pulled: the util image is the deploy user's build, readied before a run
+	// (ensureUtilImage, an apply's alone), and one gone by now would be the daemon's to pull
+	// by its name from whatever answers it.
+	a = append(a, "-v", bind, "--pull", "never", remote.UtilImage, "chroot", "/host", "/bin/sh", "-c", r.Script)
 	if len(r.Args) > 0 {
 		a = append(append(a, "sh"), r.Args...)
 	}

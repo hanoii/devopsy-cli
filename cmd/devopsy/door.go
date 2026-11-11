@@ -947,6 +947,12 @@ func runDoor(args []string) int {
 	if err := side.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
 	}
+	return side.answer(args, rendered, renderErr)
+}
+
+// answer is the door's answer to a request, args its words (none of them trusted), rendered
+// the file a compose request handed over: each request by its shape, anything else refused.
+func (s *doorSide) answer(args []string, rendered map[string]any, renderErr error) int {
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))
 	}
@@ -955,22 +961,22 @@ func runDoor(args []string) int {
 		if renderErr != nil {
 			return doorRefused(renderErr)
 		}
-		return side.entries(rendered)
+		return s.entries(rendered)
 	case "mnt":
 		if len(args) == 2 {
-			return side.mnt(args[1])
+			return s.mnt(args[1])
 		}
 	case "entry":
 		if len(args) == 4 {
-			return side.entry(args[1], args[2], args[3] == "file")
+			return s.entry(args[1], args[2], args[3] == "file")
 		}
 	case "clone":
 		if len(args) == 2 {
-			return side.clone(args[1])
+			return s.clone(args[1])
 		}
 	case "mark":
 		if len(args) == 3 {
-			return side.mark(args[1], args[2])
+			return s.mark(args[1], args[2])
 		}
 	case "compose":
 		if len(args) < 5 {
@@ -979,20 +985,20 @@ func runDoor(args []string) int {
 		if renderErr != nil {
 			return doorRefused(renderErr)
 		}
-		return side.compose(args[1], rendered, args[3], args[4], args[5:])
+		return s.compose(args[1], rendered, args[3], args[4], args[5:])
 	case "down":
 		if len(args) >= 2 {
-			return side.downProject(args[1], args[2:])
+			return s.downProject(args[1], args[2:])
 		}
 	case "request":
 		if len(args) >= 3 {
-			return side.request(args[1], args[2:])
+			return s.request(args[1], args[2:])
 		}
 	case "sync-key":
-		return side.syncKey(args[1:])
+		return s.syncKey(args[1:])
 	case "firewall":
 		if len(args) == 1 {
-			return side.firewall()
+			return s.firewall()
 		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
@@ -1004,7 +1010,7 @@ func runDoor(args []string) int {
 // its environment, through the real client. It answers right, wrong or unknown, nothing more:
 // what is wrong is the admin's to read (--server-info).
 func (s *doorSide) firewall() int {
-	fmt.Println(firewallAnswer(setupHost{}, s.real))
+	fmt.Println(firewallAnswer(setupHost{}, s.real, firewallAllowed()))
 	return 0
 }
 
