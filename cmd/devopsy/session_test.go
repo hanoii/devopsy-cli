@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,7 +83,7 @@ func TestSessionsCarryTheCommandAndTheirAddress(t *testing.T) {
 		default:
 			continue
 		}
-		if !strings.Contains(sc, remote.AddressEnv+"='"+want+"' "+remote.HintAddressEnv+"='"+want+"'; export ") {
+		if !strings.Contains(sc, remote.AddressEnv+"='"+want+"' "+remote.HintAddressEnv+"='"+want+"' "+remote.EnvironmentEnv+"='shop-"+want[strings.LastIndex(want, ":")+1:]+"'; export ") {
 			t.Errorf("a sync's session not on %s's address:\n%s", want, sc)
 		}
 	}
@@ -94,8 +95,7 @@ func TestSessionsCarryTheCommandAndTheirAddress(t *testing.T) {
 // The push's sessions to the child (the same server's --sync-exec, another's sync key) run
 // the child's devopsy with the child's address for its hints, the one the push has for it,
 // never the push's own session's, which is the parent's; the operator's command goes on to
-// the same server's, and to another's not at all, sshd's environment bringing none and the
-// request on the parent's ssh command line, every user's to read there.
+// both, to another server's in the request, sshd's environment bringing none.
 func TestSyncHopsNameTheChild(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -114,7 +114,7 @@ func TestSyncHopsNameTheChild(t *testing.T) {
 		want string
 	}{
 		{nil, []string{"@dev", "--sync", "--yes"}, "devopsy@one:dev|devopsy@one:dev|devopsy @dev --sync --yes\n"},
-		{[]string{"DEVOPSY_SERVER_PROD=devopsy@one"}, []string{"@devopsy@two:dev", "--sync", "--yes"}, "devopsy@two:dev|devopsy@two:dev|unset\n"},
+		{[]string{"DEVOPSY_SERVER_PROD=devopsy@one"}, []string{"@devopsy@two:dev", "--sync", "--yes"}, "devopsy@two:dev|devopsy@two:dev|devopsy @devopsy@two:dev --sync --yes\n"},
 	} {
 		write(t, said, "", 0o644)
 		if out, code := s.run(c.env, c.args...); code != 0 || readString(said) != c.want {
@@ -160,5 +160,46 @@ func TestServerHintsNameWhatTheOperatorTyped(t *testing.T) {
 	typed := strings.TrimPrefix(saidCommand, "#!/bin/sh\n")
 	if out, errs, code := s.runIO([]string{"SHELL=/bin/sh"}, []byte(typed), "@box", "--shell-host"); code != 0 || !strings.Contains(string(out), "command=unset|address=box|hint=devopsy@one:prod\n") {
 		t.Errorf("a shell (%d):\n%s%s", code, out, errs)
+	}
+}
+
+// A devopsy typed in a host shell names, in its hints, the environment of the release it
+// runs in, never the one the shell was opened on: the operator moves in a shell, and a
+// command copied from a hint must act on the environment that said it.
+func TestShellHintsNameTheReleaseTheyRunIn(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	write(t, filepath.Join(dev, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-22 10:00:00", "devopsy@one:prod", remote.IncompleteCopy, "the copy was cut"), 0o644)
+
+	cmd := exec.Command(binary, "@prod", "--shell-host")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "SHELL=/bin/sh")
+	cmd.Stdin = strings.NewReader("cd " + remote.Quote(filepath.Join(dev, "current")) + " && " + remote.Quote(binary) + " --import db --resolved --yes\n")
+	out, _ := cmd.CombinedOutput()
+	if want := "sync it:\ndevopsy: | $ devopsy @devopsy@one:dev --sync\n"; !strings.Contains(string(out), want) {
+		t.Errorf("in dev's release, from a shell opened on prod, want %q:\n%s", want, out)
+	}
+}
+
+// A command offered to run again copies whole: every line of it after a "$ ", or the way
+// out in words.
+func TestRunItAgainIsNeverACutCommand(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	write(t, filepath.Join(s.base, "current", ".devopsy", "commands", "fix"), "#!/bin/sh\nexec devopsy --import db --resolved --yes\n", 0o755)
+	if _, out, code := s.runIO(append(s.env, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || !s.mark().IsImport() {
+		t.Fatalf("a failing import (%d):\n%s", code, out)
+	}
+	_, out, code := s.runIO([]string{"FAIL_START=shop-prod"}, nil, "@prod", "fix", "one\ntwo")
+	if code == 0 || !strings.Contains(out, "run it again") {
+		t.Fatalf("a resolve that fails to start (%d):\n%s", code, out)
+	}
+	if cut := "devopsy: | $ devopsy @prod fix 'one\ndevopsy: | two'\n"; strings.Contains(out, cut) {
+		t.Errorf("the command to run again is cut over two lines:\n%s", out)
 	}
 }

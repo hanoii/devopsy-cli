@@ -39,6 +39,9 @@ type syncRequest struct {
 	Spool string `json:"spool,omitempty"`
 	// Beat is the heartbeat's seconds (remote.HeartbeatEnv), the push's own.
 	Beat int `json:"beat,omitempty"`
+	// Command is the operator's command (remote.CommandEnv), for the hints the child's
+	// devopsy says, taken only as a session's is (remote.SessionFrom).
+	Command string `json:"command,omitempty"`
 }
 
 // syncReceive is a Receive request: one entry of mnt or one named volume by its key, which
@@ -95,8 +98,16 @@ func runSyncChild(args []string) int {
 	}
 	// The child's address for its devopsy's hints: the key's own, never the request's.
 	// sshd's clean environment brings neither it nor the operator's command, which the
-	// request does not carry, being on the parent's ssh command line, every user's to read.
-	maps.Copy(env, childAddress(to))
+	// request carries, checked as a session's is and only ever a hint's command.
+	maps.Copy(env, childAddress(to, toProject))
+	if c := remote.SessionFrom(func(k string) string {
+		if k == remote.CommandEnv {
+			return req.Command
+		}
+		return ""
+	}).Command; c != "" {
+		env[remote.CommandEnv] = c
+	}
 	if req.Beat > 0 && req.Beat <= 300 {
 		env[remote.HeartbeatEnv] = strconv.Itoa(req.Beat)
 	}

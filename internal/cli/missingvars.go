@@ -129,7 +129,7 @@ func missingVars(p *loadedProject) error {
 	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
-	if cmd := remote.SessionFrom(lookup).Or(func() string { return lookup("DEVOPSY_TARGET") }).On("--vars set <KEY>..."); cmd != "" {
+	if cmd := remote.SessionFrom(lookup).In(remote.ReleaseNames(p.dir)).On("--vars set <KEY>..."); cmd != "" {
 		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
 	}
 	return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose requires variables that are not set:", Details: lines, Remedies: []report.Remedy{fix}}}

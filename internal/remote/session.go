@@ -2,7 +2,11 @@ package remote
 
 import (
 	"cmp"
+	"os"
+	"regexp"
 	"strings"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 )
 
 // What every session carries for the hints a devopsy on the server says (SSHStreams):
@@ -17,6 +21,9 @@ const (
 	// HintAddressEnv is that address as a hint to release, roll back, sync or restore names
 	// it (HintAddress).
 	HintAddressEnv = "DEVOPSY_INTERNAL_HINT_ADDRESS"
+	// EnvironmentEnv is the compose name of the environment those addresses name
+	// (Target.ComposeName): what a devopsy in a release compares with its own (Session.In).
+	EnvironmentEnv = "DEVOPSY_INTERNAL_ENVIRONMENT"
 )
 
 // commandMax and addressMax cap what a session's values may hold, wherever they are read
@@ -57,6 +64,8 @@ func carried(c string) bool {
 // as a release's hint names it, each "" when the session carries none.
 type Session struct {
 	Command, Address, Hint string
+	// Name is the compose name of the environment Address and Hint name.
+	Name string
 }
 
 // SessionFrom reads the session's values from getenv: the command only as Command writes
@@ -70,20 +79,49 @@ func SessionFrom(getenv func(string) string) Session {
 	}
 	if a, h := getenv(AddressEnv), getenv(HintAddressEnv); IsAddress(a) && IsAddress(h) {
 		s.Address, s.Hint = a, h
+		if n := getenv(EnvironmentEnv); len(n) <= addressMax && composeNameRe.MatchString(n) {
+			s.Name = n
+		}
 	}
 	return s
 }
 
-// Or is s with release's address in both forms when the session carries none: a release's
-// own DEVOPSY_TARGET, the resolved address as of that release, read only then and taken
+// composeNameRe is what a compose name holds (Target.ComposeName).
+var composeNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// In is s for a devopsy in the release of the environment whose compose name is name and
+// whose DEVOPSY_TARGET is address (ReleaseNames), both "" outside a release. A session
+// opened on another environment (a shell that changed directory) names that one, so its
+// address is dropped: the directory says which environment a hint names, the session only
+// how the operator typed it. Without an address, the release's own, in both forms, taken
 // only as IsAddress takes it.
-func (s Session) Or(release func() string) Session {
-	if s.Address == "" {
-		if a := release(); IsAddress(a) {
-			s.Address, s.Hint = a, a
-		}
+func (s Session) In(name, address string) Session {
+	if name != "" && s.Name != name {
+		s.Address, s.Hint = "", ""
+	}
+	if s.Address == "" && IsAddress(address) {
+		s.Address, s.Hint = address, address
 	}
 	return s
+}
+
+// ReleaseNames reads, for the project at projectDir (its .devopsy/), its release's compose
+// name and DEVOPSY_TARGET from the release's own file (TargetEnvFile), never from the
+// environment, which a session opened elsewhere set; both "" when it is no release.
+func ReleaseNames(projectDir string) (name, address string) {
+	file := ReleaseFile(projectDir, TargetEnvFile)
+	if file == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", ""
+	}
+	vars, err := dotenv.UnmarshalWithLookup(string(data), nil)
+	if err != nil {
+		return "", ""
+	}
+	return vars["COMPOSE_PROJECT_NAME"], vars["DEVOPSY_TARGET"]
 }
 
 // On is the command devopsy @<Address> args, "" without an address.
@@ -145,7 +183,7 @@ func TypedAddress(t *Target) string {
 }
 
 // sessionExports is the head of a session's script on t: Command, and t's address as typed
-// and as a release's hint names it, unless t is a server named alone, which has no
+// and as a release's hint names it with its compose name, unless t is a server named alone, which has no
 // environment to name. Each value is one quoted word of the script, whatever it holds.
 func sessionExports(t *Target) string {
 	s := ""
@@ -154,7 +192,8 @@ func sessionExports(t *Target) string {
 	}
 	if t.Name != "" {
 		if typed, hint := TypedAddress(t), HintAddress(t); len(typed) <= addressMax && len(hint) <= addressMax {
-			s += AddressEnv + "=" + Quote(typed) + " " + HintAddressEnv + "=" + Quote(hint) + "; export " + AddressEnv + " " + HintAddressEnv + "\n"
+			s += AddressEnv + "=" + Quote(typed) + " " + HintAddressEnv + "=" + Quote(hint) + " " + EnvironmentEnv + "=" + Quote(t.ComposeName()) +
+				"; export " + AddressEnv + " " + HintAddressEnv + " " + EnvironmentEnv + "\n"
 		}
 	}
 	return s

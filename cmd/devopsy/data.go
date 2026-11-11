@@ -1842,11 +1842,12 @@ func composeName(cwd string) string {
 }
 
 // sessionHint is how a hint said on a server names the environment at cwd and the
-// command the operator ran: the session's (remote.SessionFrom), else the release's
-// DEVOPSY_TARGET for both forms of the address, else none. It only ever names a command
-// in a hint: nothing decides or acts by it.
+// command the operator ran: the session's (remote.SessionFrom) when it is on that
+// environment, else the release's DEVOPSY_TARGET for both forms of the address, else none
+// (remote.Session.In). It only ever names a command in a hint: nothing decides or acts by it.
 func sessionHint(cwd string) remote.Session {
-	return remote.SessionFrom(os.Getenv).Or(func() string { return projectVar(cwd, "DEVOPSY_TARGET") })
+	dir, _ := cli.FindProjectDir(cwd)
+	return remote.SessionFrom(os.Getenv).In(remote.ReleaseNames(dir))
 }
 
 // seeHint is remote.SeeHint by h's address, else in words.
