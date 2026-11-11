@@ -207,7 +207,15 @@ snapshots:
   root: /mnt/backups   # where snapshots (and mirrors) go; default: each environment's snapshots/
   max_keep: 5          # no environment keeps more manual snapshots (5)
   mirror: false        # no environment keeps a mirror here, whatever it asks (default: each decides)
+firewall:
+  metadata: block      # containers kept off the cloud's metadata services (block, the default), or not (allow)
 ```
+
+`firewall: metadata:` is the server's, applied by its next
+`--server-setup` ([Servers](servers.md#--server-setup)): `block` keeps
+every container off the cloud's metadata services, `allow` lets them
+reach them, and is refused on a server with project users (`door:`),
+whose containers never do.
 
 The release root must be a directory of the deploy user's: a release
 refuses one that is missing, or root's and empty, as `/srv` is on a new

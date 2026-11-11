@@ -319,33 +319,45 @@ echo "# sshd ports"
 sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || :
 `
 
+// FirewallFiles are the files the loader's install writes, by path, for withDoor: the loader,
+// its units and, with a door, the Docker drop-in.
+func FirewallFiles(withDoor bool) map[string]string {
+	files := map[string]string{FirewallScript: FirewallLoader(withDoor), FirewallUnit: firewallUnitText, FirewallTimer: firewallTimerText}
+	if withDoor {
+		files[FirewallDockerDropIn] = firewallDockerText
+	}
+	return files
+}
+
 // FirewallInstall is what --server-setup and add do for the firewall as root, chrooted into
-// the host with its network: the door's groups and the Docker drop-in only withDoor, the
+// the host with its network, the host's files under its first argument ("" on the host
+// itself, a test's directory): the door's groups and the Docker drop-in only withDoor, the
 // loader and its units when missing or different, the loader run, then FirewallRead.
 func FirewallInstall(withDoor bool) string {
-	s := "set -eu\numask 022\n"
+	s := "set -eu\numask 022\nhost_root=${1:-}\n"
 	if withDoor {
 		s += hostGroup
 	}
-	s += hostPut + "mkdir -p " + path.Dir(FirewallScript) + " /etc/systemd/system/multi-user.target.wants\n" +
-		"put " + FirewallScript + " 755 'sh -n \"$1\"' " + Quote(FirewallLoader(withDoor)) + " || :\n" +
-		"put " + FirewallUnit + " 644 true " + Quote(firewallUnitText) + " || :\n" +
-		"put " + FirewallTimer + " 644 true " + Quote(firewallTimerText) + " || :\n"
+	s += hostPut + `mkdir -p "$host_root` + path.Dir(FirewallScript) + `" "$host_root/etc/systemd/system/multi-user.target.wants"` + "\n" +
+		`put "$host_root` + FirewallScript + `" 755 'sh -n "$1"' ` + Quote(FirewallLoader(withDoor)) + " || :\n" +
+		`put "$host_root` + FirewallUnit + `" 644 true ` + Quote(firewallUnitText) + " || :\n" +
+		`put "$host_root` + FirewallTimer + `" 644 true ` + Quote(firewallTimerText) + " || :\n"
 	if withDoor {
-		s += "mkdir -p " + path.Dir(FirewallDockerDropIn) + "\n" +
-			"put " + FirewallDockerDropIn + " 644 true " + Quote(firewallDockerText) + " || :\n"
+		s += `mkdir -p "$host_root` + path.Dir(FirewallDockerDropIn) + `"` + "\n" +
+			`put "$host_root` + FirewallDockerDropIn + `" 644 true ` + Quote(firewallDockerText) + " || :\n"
 	}
-	return s + "ln -sfn " + FirewallUnit + " /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service\n" +
-		"mkdir -p /etc/systemd/system/timers.target.wants\n" +
-		"ln -sfn " + FirewallTimer + " /etc/systemd/system/timers.target.wants/devopsy-firewall.timer\n" +
-		FirewallScript + "\n" + FirewallRead
+	return s + "ln -sfn " + FirewallUnit + ` "$host_root/etc/systemd/system/multi-user.target.wants/devopsy-firewall.service"` + "\n" +
+		`mkdir -p "$host_root/etc/systemd/system/timers.target.wants"` + "\n" +
+		"ln -sfn " + FirewallTimer + ` "$host_root/etc/systemd/system/timers.target.wants/devopsy-firewall.timer"` + "\n" +
+		`"$host_root"` + FirewallScript + "\n" + FirewallRead
 }
 
 // FirewallRemove is what --server-setup does as root for a server whose containers may reach
-// the metadata services (firewall: metadata: allow, no door): the containers' jump and chain
-// out of raw, the loader's pieces gone that are devopsy's by their header, and the mark.
+// the metadata services (firewall: metadata: allow, no door), the host's files under its first
+// argument as FirewallInstall's: the containers' jump and chain out of raw, the loader's
+// pieces gone that are devopsy's by their header, and the mark. It prints each file removed.
 func FirewallRemove() string {
-	s := "set -eu\n"
+	s := "set -eu\nhost_root=${1:-}\n"
 	for _, f := range firewallFamilies {
 		r := `while ` + f.cmd + ` -t raw -D PREROUTING -j ` + FirewallContainerChain + ` 2>/dev/null; do :; done
 if ` + f.cmd + ` -t raw -S ` + FirewallContainerChain + ` >/dev/null 2>&1; then ` + f.cmd + ` -t raw -F ` + FirewallContainerChain + ` && ` + f.cmd + ` -t raw -X ` + FirewallContainerChain + `; fi
@@ -356,10 +368,10 @@ if ` + f.cmd + ` -t raw -S ` + FirewallContainerChain + ` >/dev/null 2>&1; then 
 		s += r
 	}
 	return s + `for f in ` + FirewallScript + ` ` + FirewallUnit + ` ` + FirewallTimer + ` ` + FirewallDockerDropIn + `; do
-  if [ -f "$f" ] && head -n 2 "$f" | grep -q '^# Written by devopsy'; then rm -f "$f"; echo "removed $f"; fi
+  if [ -f "$host_root$f" ] && head -n 2 "$host_root$f" | grep -q '^# Written by devopsy'; then rm -f "$host_root$f"; echo "removed $f"; fi
 done
 for l in /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service /etc/systemd/system/timers.target.wants/devopsy-firewall.timer; do
-  [ ! -L "$l" ] || [ -e "$l" ] || rm -f "$l"
+  [ ! -L "$host_root$l" ] || [ -e "$host_root$l" ] || rm -f "$host_root$l"
 done
 rm -f "${` + FirewallMarkEnv + `:-` + FirewallMark + `}"
 `

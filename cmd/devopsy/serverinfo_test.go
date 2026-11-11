@@ -216,6 +216,14 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup.Buffers[0].Live, i.Setup.Buffers[0].Low = 212992, true
 		}, "", "net.core.rmem_max is 212992, below 7500000|devopsy @vm1: --server-setup"},
 		{"setup pending", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Pending = true }, "", "has yet to take daemon.json, at its next restart|devopsy @vm1: --server-setup"},
+		{"setup firewall", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
+		}, "", "metadata firewall: containers reach the cloud's metadata services|devopsy @vm1: --server-setup"},
+		{"setup firewall failed", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallReload, Unit: "exit-code"}
+		}, "", "devopsy's firewall is not loaded as devopsy loads it (devopsy-firewall.service: exit-code)|devopsy @vm1: --server-setup"},
 		{"setup root", func(i *remote.ServerInfo) { i.Setup = setUp(setup.RootMake) }, "", "the release root /home/devopsy is missing: releases refuse it|devopsy @vm1: --server-setup"},
 		{"setup refusal", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")

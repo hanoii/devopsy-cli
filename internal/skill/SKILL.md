@@ -249,8 +249,10 @@ what `config.yaml` sets.
 - A new server is set up for devopsy as its deploy user with
   `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing):
   Docker's `daemon.json` (rotated logs, live-restore, address pools),
-  socket buffers, the release root, and Docker waiting at boot for its
-  mounts. A release refuses, before uploading, a server whose release
+  socket buffers, the release root, Docker waiting at boot for its
+  mounts, and containers kept off the cloud's metadata services
+  (`firewall: metadata: allow` in the deploy user's config turns it off,
+  refused with project users). A release refuses, before uploading, a server whose release
   root is missing or root's, or that lacks `tar` or `flock`. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
   and `--server-info` warns of what is not devopsy's.

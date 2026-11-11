@@ -1089,6 +1089,12 @@ Then it shows what is not as devopsy wants it, and asks:
                         to it when lower, never lowered
   mounts drop-in        Docker waits at boot for the release root's
                         mounts (a docker.service.d drop-in)
+  metadata firewall     containers kept off the cloud's metadata services,
+                        DNS there aside, loaded at boot and every five
+                        minutes; firewall: metadata: allow in the deploy
+                        user's config.yaml removes it, refused with project
+                        users. Its first load can cut an app off from its
+                        instance's credentials there
 
 Docker takes daemon.json when it restarts: it asks to restart it now,
 and does if Docker still has it to take once it holds its lock, which

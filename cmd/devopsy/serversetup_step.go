@@ -51,6 +51,8 @@ type setupRead struct {
 	// flags are the arguments docker.service starts dockerd with, but --config-file, and
 	// flagKeys the daemon.json keys of devopsy's parts they set.
 	flags, flagKeys []string
+	// door: the server has a door, whose firewall the loader loads too.
+	door bool
 	// fileVisible is what Docker shows once it takes the file; running what it shows now.
 	fileVisible, running setup.Visible
 }
@@ -194,6 +196,17 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		f.Candidates = append(f.Candidates, c)
 	}
 	f.Projects = len(deployEnvBases(f.Root)) > 0
+	d, err := remote.ServerDoor()
+	if err != nil {
+		return rd, err
+	}
+	rd.door = d != nil
+	allow := r.Firewall.Metadata == remote.MetadataAllow
+	f.Firewall = firewallFact(h, allow, rd.door)
+	if f.Firewall.State == setup.FirewallRefused {
+		f.Refusals = append(f.Refusals, setup.Refusal{Item: firewallItem, Message: "firewall: metadata: allow, on a server with a door: its project users' containers never reach a metadata service",
+			Fix: "take firewall: metadata: allow out of " + remote.UserConfigFile()})
+	}
 	return rd, nil
 }
 
@@ -243,6 +256,41 @@ func resolveRoot(root string) string {
 		parts = append(strings.Split(target, "/"), parts...)
 	}
 	return cur
+}
+
+// firewallItem is the metadata firewall's item's name.
+var firewallItem = setup.FirewallItem.Name
+
+// firewallFact is the metadata firewall as the deploy user can judge it, who cannot read
+// iptables: its pieces against devopsy's (remote.FirewallFiles), the mark the loader leaves
+// (remote.FirewallMark) and its unit's result; the full read of the chains is root's, the
+// apply's.
+func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
+	want := remote.FirewallContainers
+	if door {
+		want = remote.FirewallDoor
+	}
+	mark, markErr := os.ReadFile(h.path(remote.FirewallMark))
+	loader, _ := os.ReadFile(h.path(remote.FirewallScript))
+	applied := markErr == nil || devopsysFile(loader)
+	inSync := strings.TrimSpace(string(mark)) == want
+	for p, text := range remote.FirewallFiles(door) {
+		have, _ := os.ReadFile(h.path(p))
+		inSync = inSync && string(have) == text
+	}
+	fact := &setup.FirewallFact{Door: door}
+	if result := unitShow("devopsy-firewall.service", "Result"); result != "" && result != "success" {
+		fact.Unit, inSync = result, false
+	}
+	fact.State = setup.JudgeFirewall(allow, door, applied, inSync)
+	return fact
+}
+
+// devopsysFile says whether a file's text is one devopsy wrote whole: its header in its first
+// two lines (a script's after its #!).
+func devopsysFile(text []byte) bool {
+	lines := strings.SplitN(string(text), "\n", 3)
+	return slices.ContainsFunc(lines[:min(2, len(lines))], func(l string) bool { return strings.HasPrefix(l, "# Written by devopsy") })
 }
 
 // toolsItem is the tools' required item's name.
@@ -382,8 +430,11 @@ func judgeDaemon(data []byte, err error) (setup.Daemon, setup.Visible, string) {
 }
 
 // systemctlShow is docker.service's property, "" when systemctl cannot say.
-func systemctlShow(property string) string {
-	out, err := exec.Command("systemctl", "show", "-p", property, "--value", "docker.service").Output()
+func systemctlShow(property string) string { return unitShow("docker.service", property) }
+
+// unitShow is a unit's property, "" when systemctl cannot say.
+func unitShow(unit, property string) string {
+	out, err := exec.Command("systemctl", "show", "-p", property, "--value", unit).Output()
 	if err != nil {
 		return ""
 	}
@@ -627,6 +678,20 @@ func applySetup(h setupHost, a setupApply) int {
 		}
 	}
 
+	// The metadata firewall, by the firewall's own root run: its first load --server-setup's
+	// alone (setup.FirewallItem), loaded again or removed as the want says.
+	fwRan := false
+	if fw := f.Firewall; fw != nil && fw.State != setup.FirewallInSync && fw.State != setup.FirewallRefused {
+		if a.upgrade && !setup.FirewallItem.UpgradeApplies(fw.State != setup.FirewallLoad) {
+			report.Warn("containers reach the cloud's metadata services here: --server-setup loads devopsy's firewall, which keeps them off")
+		} else {
+			if err := applyFirewall(h, fw); err != nil {
+				return failed(err.Error(), report.Details(err)...)
+			}
+			fwRan = true
+		}
+	}
+
 	// The checks again: what was applied must read in sync now.
 	again, err := readSetup(h, readHostDocker(h))
 	if err != nil {
@@ -650,6 +715,13 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	if give && again.facts.RootAction != "" {
 		left = append(left, "the release root "+f.Root+" is still not the deploy user's")
+	}
+	if fw := again.facts.Firewall; fwRan && fw != nil && fw.State != setup.FirewallInSync {
+		why := "the metadata firewall is still " + fw.State.String()
+		if fw.Unit != "" {
+			why += ", its unit " + fw.Unit
+		}
+		left = append(left, why)
 	}
 	if len(left) > 0 {
 		return failed("what was applied did not hold", left...)
@@ -886,5 +958,37 @@ func releaseRootReady(root, nothing, ref string) error {
 	case action != "":
 		return &report.Failure{Msg: rootWords(root, action) + ": " + nothing, Remedies: []report.Remedy{setUp}}
 	}
+	return nil
+}
+
+// applyFirewall loads the metadata firewall as devopsy loads it, or removes it (fw's state),
+// as root through the firewall's own run, then reads the chains back, as root, for what they
+// lack.
+func applyFirewall(h setupHost, fw *setup.FirewallFact) error {
+	script := remote.FirewallInstall(fw.Door)
+	if fw.State == setup.FirewallRemove {
+		script = remote.FirewallRemove()
+	}
+	run := firewallRun(script, true)
+	run.Args = []string{h.root}
+	var out bytes.Buffer
+	if err := run.run(&out, func(err error) error { return fmt.Errorf("the firewall's run as root: %v", err) }); err != nil {
+		return err
+	}
+	if fw.State == setup.FirewallRemove {
+		report.Info("removed devopsy's firewall (firewall: metadata: allow): containers reach the cloud's metadata services")
+		return nil
+	}
+	wrong := remote.ContainersFirewallWrong(out.String())
+	if fw.Door {
+		var err error
+		if wrong, err = doorFirewallWrong(out.String()); err != nil {
+			return err
+		}
+	}
+	if len(wrong) > 0 {
+		return &report.Failure{Msg: "the firewall did not load as devopsy's", Details: wrong}
+	}
+	report.Info("loaded devopsy's firewall: containers kept off the cloud's metadata services, DNS there aside")
 	return nil
 }

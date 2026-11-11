@@ -63,8 +63,26 @@ case "$*" in
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
+	// iptables as the firewall's run uses it, its state in the host root: what a restore
+	// loaded, and whether raw's PREROUTING jumps to it.
+	for _, c := range []string{"iptables", "ip6tables"} {
+		write(t, filepath.Join(bin, c), `#!/bin/sh
+s=$DEVOPSY_INTERNAL_HOST_ROOT/fw.$(basename "$0")
+echo "$(basename "$0") $*" >>"$DEVOPSY_INTERNAL_HOST_ROOT/iptables.log"
+case "$*" in
+  "-t raw -I PREROUTING 1 -j `+remote.FirewallContainerChain+`") : >"$s.jump" ;;
+  "-t raw -D PREROUTING -j `+remote.FirewallContainerChain+`") [ -e "$s.jump" ] || exit 1; rm -f "$s.jump" ;;
+  "-t raw -S PREROUTING") echo "-P PREROUTING ACCEPT"; [ ! -e "$s.jump" ] || echo "-A PREROUTING -j `+remote.FirewallContainerChain+`" ;;
+  "-t raw -S `+remote.FirewallContainerChain+`") [ -e "$s.chain" ] || exit 1; grep '^-A ' "$s.chain" ;;
+  "-t raw -S") echo "-P PREROUTING ACCEPT"; [ ! -e "$s.jump" ] || echo "-A PREROUTING -j `+remote.FirewallContainerChain+`"; [ ! -e "$s.chain" ] || grep '^-A ' "$s.chain" ;;
+  "-t filter -S") echo "-P OUTPUT ACCEPT" ;;
+  "-t raw -F `+remote.FirewallContainerChain+`"|"-t raw -X `+remote.FirewallContainerChain+`") rm -f "$s.chain" ;;
+esac
+`, 0o755)
+		write(t, filepath.Join(bin, c+"-restore"), "#!/bin/sh\ncat >\"$DEVOPSY_INTERNAL_HOST_ROOT/fw.$(basename \"$0\" -restore).chain\"\n", 0o755)
+	}
 	write(t, filepath.Join(bin, "sysctl"), "#!/bin/sh\nk=${2%%=*}\necho \"${2#*=}\" >\"$DEVOPSY_INTERNAL_HOST_ROOT/proc/sys/$(echo \"$k\" | tr . /)\"\n", 0o755)
-	s.env = append(s.env, remote.HostRootEnv+"="+host)
+	s.env = append(s.env, remote.HostRootEnv+"="+host, remote.FirewallMarkEnv+"="+filepath.Join(host, remote.FirewallMark))
 	return s, host
 }
 
@@ -977,10 +995,11 @@ func TestServerSetupCutBeforeTheRecord(t *testing.T) {
 // trees are theirs, never walked or locked.
 func TestServerSetupRestartSaysProjectUsersAreNotWaitedFor(t *testing.T) {
 	t.Parallel()
-	s, _ := setupServer(t)
+	s, host := setupServer(t)
 	home := filepath.Join(filepath.Dir(s.root), "home")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
 	write(t, filepath.Join(home, "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
+	firewallLoaded(t, host, true)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--restart")
 	if code != 0 || !strings.Contains(out, "project users' releases are not waited for") {
 		t.Errorf("(%d):\n%s", code, out)
@@ -1031,5 +1050,86 @@ func TestServerSetupRestartRefusedBySystemd(t *testing.T) {
 	}
 	if !strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl reset-failed docker.service\nsystemctl daemon-reload\nsystemctl restart --no-block docker.service\n") {
 		t.Errorf("the start counter not cleared before the restart:\n%s", readString(filepath.Join(host, "systemctl.log")))
+	}
+}
+
+// firewallLoaded makes host's firewall as devopsy's loader leaves it, with a door's chains too
+// (door) or not: its pieces and its mark.
+func firewallLoaded(t *testing.T, host string, door bool) {
+	t.Helper()
+	for p, text := range remote.FirewallFiles(door) {
+		write(t, filepath.Join(host, p), text, 0o644)
+	}
+	what := remote.FirewallContainers
+	if door {
+		what = remote.FirewallDoor
+	}
+	write(t, filepath.Join(host, remote.FirewallMark), what+"\n", 0o644)
+}
+
+// --server-setup loads the metadata firewall on a server with no door, the containers' chain
+// alone, its first load among the differences, saying what it cuts; a second run changes
+// nothing; firewall: metadata: allow then removes what devopsy put, and a run after that
+// changes nothing either.
+func TestServerSetupMetadataFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "metadata firewall") || !strings.Contains(out, "which cuts an app running here off from what it reads there") ||
+		!strings.Contains(out, "loaded devopsy's firewall: containers kept off the cloud's metadata services") {
+		t.Fatalf("the first load (%d):\n%s", code, out)
+	}
+	for p, text := range remote.FirewallFiles(false) {
+		if readString(filepath.Join(host, p)) != text {
+			t.Errorf("%s not devopsy's", p)
+		}
+	}
+	if fileExists(filepath.Join(host, remote.FirewallDockerDropIn)) || !fileExists(filepath.Join(host, "fw.iptables.jump")) ||
+		strings.Contains(readString(filepath.Join(host, "fw.iptables.chain")), "*filter") || readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallContainers+"\n" {
+		t.Errorf("loaded otherwise:\n%s", readString(filepath.Join(host, "iptables.log")))
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("a second run (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(filepath.Dir(s.root), "home", "config.yaml"), "releases:\n  root: "+s.root+"\nfirewall:\n  metadata: allow\n", 0o644)
+	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "removed devopsy's firewall (firewall: metadata: allow)") || fileExists(filepath.Join(host, remote.FirewallScript)) ||
+		fileExists(filepath.Join(host, "fw.iptables.jump")) || fileExists(filepath.Join(host, "fw.iptables.chain")) || fileExists(filepath.Join(host, remote.FirewallMark)) {
+		t.Errorf("allow (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("a run after allow (%d):\n%s", code, out)
+	}
+}
+
+// --upgrade never makes the metadata firewall's first load, which can cut an app off: it
+// leaves a server without it and says --server-setup loads it; once loaded, it puts a piece
+// back as any of devopsy's own.
+func TestServerSetupUpgradeLeavesTheFirstFirewallLoad(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "warning: containers reach the cloud's metadata services here: --server-setup loads devopsy's firewall") || fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("not loaded (%d):\n%s", code, out)
+	}
+	firewallLoaded(t, host, false)
+	if err := os.Remove(filepath.Join(host, remote.FirewallTimer)); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || readString(filepath.Join(host, remote.FirewallTimer)) != remote.FirewallFiles(false)[remote.FirewallTimer] {
+		t.Errorf("loaded, a piece gone (%d):\n%s", code, out)
+	}
+}
+
+// firewall: metadata: allow on a server with a door is refused before anything changes: its
+// project users' containers never reach a metadata service.
+func TestServerSetupRefusesAllowWithADoor(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	home := filepath.Join(filepath.Dir(s.root), "home")
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\nfirewall:\n  metadata: allow\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server with a door") || fileExists(filepath.Join(host, setup.DaemonFile)) {
+		t.Errorf("(%d):\n%s", code, out)
 	}
 }

@@ -254,6 +254,20 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 	if f.Pending {
 		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
+	if fw := f.Firewall; fw != nil {
+		switch fw.State {
+		case setup.FirewallLoad:
+			entry(remote.StatusWarning, firewallItem, "containers reach the cloud's metadata services: devopsy's firewall keeps them off, DNS there aside, which cuts an app running here off from what it reads there (its instance's credentials)")
+		case setup.FirewallReload:
+			line := "devopsy's firewall is not loaded as devopsy loads it"
+			if fw.Unit != "" {
+				line += " (devopsy-firewall.service: " + fw.Unit + ")"
+			}
+			entry(remote.StatusWarning, firewallItem, line)
+		case setup.FirewallRemove:
+			entry(remote.StatusWarning, firewallItem, "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services")
+		}
+	}
 	if f.Hint() {
 		entry(remote.StatusInfo, "volumes", volumeHint(f)...)
 	}

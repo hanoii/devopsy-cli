@@ -22,6 +22,8 @@ type Facts struct {
 	// Files are the files devopsy writes whole, each in sync or not.
 	Files   []FileFact   `json:"files"`
 	Buffers []BufferFact `json:"buffers"`
+	// Firewall is the metadata firewall's, nil from a devopsy that judges none.
+	Firewall *FirewallFact `json:"firewall,omitempty"`
 	// Pending: Docker has yet to take daemon.json (Pending).
 	Pending bool `json:"pending,omitempty"`
 	// Running is how many containers run; LiveRestore whether the daemon keeps them
@@ -111,7 +113,7 @@ func (f Facts) Records() bool {
 // Changes says whether an apply would change the host with no answer asked: a part to put, a
 // file, a live buffer, or the root.
 func (f Facts) Changes() bool {
-	return f.RootAction != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
+	return f.RootAction != "" || f.Firewall != nil && f.Firewall.State != FirewallInSync && f.Firewall.State != FirewallRefused || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
 		slices.ContainsFunc(f.Files, func(x FileFact) bool { return !x.InSync }) ||
 		slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
 }

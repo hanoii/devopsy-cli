@@ -188,7 +188,7 @@ func TestFirewallScripts(t *testing.T) {
 	// (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules silently. A
 	// service that stays active once run would never run again by its timer.
 	install := FirewallInstall(true)
-	if !strings.Contains(install, "ln -sfn "+FirewallUnit+" /etc/systemd/system/multi-user.target.wants/") || !strings.Contains(install, "ln -sfn "+FirewallTimer+" /etc/systemd/system/timers.target.wants/") {
+	if !strings.Contains(install, "ln -sfn "+FirewallUnit+` "$host_root/etc/systemd/system/multi-user.target.wants/`) || !strings.Contains(install, "ln -sfn "+FirewallTimer+` "$host_root/etc/systemd/system/timers.target.wants/`) {
 		t.Errorf("the units not enabled:\n%s", install)
 	}
 	if strings.Contains(firewallUnitText, "RemainAfterExit") || !strings.Contains(firewallTimerText, "OnUnitInactiveSec=") {
@@ -217,7 +217,7 @@ func TestFirewallScripts(t *testing.T) {
 	}
 	// add runs the loader it wrote before it reads the rules back, as the read is what it
 	// checks; and both go by the daemon's cgroup found one way.
-	if run, read := strings.LastIndex(install, "\n"+FirewallScript+"\n"), strings.Index(install, `echo "# dockerd $cg"`); run < 0 || read < run {
+	if run, read := strings.LastIndex(install, "\n\"$host_root\""+FirewallScript+"\n"), strings.Index(install, `echo "# dockerd $cg"`); run < 0 || read < run {
 		t.Errorf("the install reads the rules before it loads them:\n%s", install)
 	}
 	if !strings.Contains(l, daemonCgroup) || !strings.Contains(FirewallRead, daemonCgroup) {
