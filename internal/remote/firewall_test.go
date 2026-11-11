@@ -326,9 +326,11 @@ case " $* " in *" -I "*" -m cgroup --path "*) echo "$(basename "$0"): RULE_INSER
 		"getent": `#!/bin/sh
 case "$2" in ` + DoorGroup + `) echo "` + DoorGroup + `:x:1001:" ;; ` + DoorRunGroup + `) echo "` + DoorRunGroup + `:x:1003:" ;; *) exit 2 ;; esac
 `,
-		// docker.service not started yet, as at boot: its unit there, no cgroup.
+		// docker.service not started yet, as at boot: its unit there, no cgroup. Its slice is one
+		// no host has, so its cgroup is not there whatever runs this (a CI runner's own Docker
+		// has system.slice/docker.service).
 		"systemctl": `#!/bin/sh
-case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo system.slice ;; "cat docker.service") ;; *) exit 1 ;; esac
+case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo devopsy-test-absent.slice ;; "cat docker.service") ;; *) exit 1 ;; esac
 `,
 		"pidof":             "#!/bin/sh\nexit 1\n",
 		"iptables":          tables,
