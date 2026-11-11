@@ -122,6 +122,20 @@ var hostPut = `put() {
 }
 `
 
+// RebootRequired is the system's restart flag, which unattended-upgrades takes at its reboot
+// time (devopsy-server's DEVOPSY_AUTO_REBOOT_TIME), its .pkgs naming what asked for it.
+const RebootRequired = "/run/reboot-required"
+
+// hostRestartFlag is restart_flag <marker> [<content>]: the marker of what waits for a
+// restart, empty or holding content, and the system's restart flag raised with devopsy in its
+// .pkgs, once. Its paths are under $host_root, unset on the host itself.
+var hostRestartFlag = `restart_flag() {
+  if [ $# -gt 1 ]; then printf '%s\n' "$2" >"${host_root:-}$1"; else touch "${host_root:-}$1"; fi
+  touch "${host_root:-}` + RebootRequired + `"
+  grep -qx devopsy "${host_root:-}` + RebootRequired + `.pkgs" 2>/dev/null || echo devopsy >>"${host_root:-}` + RebootRequired + `.pkgs"
+}
+`
+
 // doorSSHDTakes fails unless sshd takes the drop-in for $user, as it resolves that user's
 // settings (sshd -T): devopsy's keys command as the deploy user, and no file of keys. A
 // sshd_config with no Include of sshd_config.d, or with it below a Match, parses (sshd -t)
@@ -176,7 +190,7 @@ group=` + DoorGroup + `
 done
 (set -- "$user" "$tree"
 ` + doorUserCheck + doorTreeCheck + `)
-` + hostPut + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
+` + hostPut + hostRestartFlag + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
 # Docker. A real docker there would put the project users on the socket.
 if [ ! -L ` + DoorDockerLink + ` ] && [ -e ` + DoorDockerLink + ` ]; then
   ` + echoLine(report.ErrorLevel, DoorDockerLink+" is a real docker: project users would reach the socket through it") + `
@@ -197,8 +211,7 @@ if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
     ` + echoLine(report.ErrorLevel, "sshd refused "+DoorSSHDropIn+": put back as it was") + `
     exit 4
   fi
-  touch ` + DoorRebootMarker + ` /run/reboot-required
-  grep -qx devopsy /run/reboot-required.pkgs 2>/dev/null || echo devopsy >>/run/reboot-required.pkgs
+  restart_flag ` + DoorRebootMarker + `
   echo reboot
 fi
 made=
