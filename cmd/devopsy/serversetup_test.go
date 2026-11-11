@@ -2149,3 +2149,20 @@ func TestServerSetupReadsNoChainsThroughARefusedDocker(t *testing.T) {
 		}
 	}
 }
+
+// A Docker the setup refuses for its init (no systemd) is still this host's: it stops the
+// setup's steps, never --server-info's read of the chains, so a wipe there shows.
+func TestServerInfoReadsChainsWithoutSystemd(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	if err := os.RemoveAll(filepath.Join(host, "run", "systemd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "systemd is not this host's init") || !strings.Contains(out, "nothing in PREROUTING jumps to "+remote.FirewallContainerChain) {
+		t.Errorf("no systemd, the firewall wiped:\n%s", out)
+	}
+}

@@ -43,7 +43,8 @@ func (h setupHost) path(p string) string { return h.root + p }
 // setupRead is a server's setup as read: its facts and what an apply acts on.
 type setupRead struct {
 	facts setup.Facts
-	// docker: Docker answers as the host's docker.service, so a root run can go.
+	// docker: the Docker devopsy reaches is this host's (dockerHere), so a root run reads
+	// this host.
 	docker bool
 	daemon setup.Daemon
 	record setup.Record
@@ -156,7 +157,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	}
 	info, refusals := setupDocker(h, hd.facts)
 	f.Refusals = append(f.Refusals, refusals...)
-	rd.docker = !dockerRefused(refusals)
+	rd.docker = dockerHere(hd.facts)
 	f.Running, f.LiveRestore, rd.running = info.running, hd.facts.Running.LiveRestore, hd.facts.Running
 	rd.invocation, rd.flags, rd.flagKeys = info.invocation, info.flags, info.flagKeys
 
@@ -195,7 +196,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	}
 	marker, _ := os.ReadFile(h.path(setup.RestartMarker))
 	outside := setup.OutsideParts(rd.states)
-	f.Pending = rd.docker && f.DaemonError == "" && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
+	f.Pending = len(refusals) == 0 && f.DaemonError == "" && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
 
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
@@ -222,10 +223,13 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	return rd, nil
 }
 
-// dockerRefused says whether refusals refuse the Docker devopsy reaches (not answering, not
-// this host's), through which no root run goes.
-func dockerRefused(refusals []setup.Refusal) bool {
-	return slices.ContainsFunc(refusals, func(r setup.Refusal) bool { return cmp.Or(r.Stops, r.Item) == setup.RefusalDocker })
+// dockerHere says whether the Docker devopsy reaches answers and is this host's (not
+// rootless, not another host's through DOCKER_HOST): a root container through any other reads
+// another machine, so no chains' read goes through it (readsChains), whatever else of Docker
+// the setup refuses (no systemd, its unit inactive), which stops its steps alone.
+func dockerHere(d remote.DockerFacts) bool {
+	host, _ := os.Hostname()
+	return d.Error == "" && !slices.Contains(d.Security, "rootless") && d.Name == host
 }
 
 // emptyDir says whether dir holds nothing, a filesystem's own lost+found aside (a fresh
@@ -459,8 +463,7 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 	if state := systemctlShow("ActiveState"); state != "active" {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix})
 	}
-	host, _ := os.Hostname()
-	if slices.Contains(d.Security, "rootless") || d.Name != host {
+	if !dockerHere(d) {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
 	}
 	// The daemon's own flags, as docker.service starts it next: a key one sets is never put

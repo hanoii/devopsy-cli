@@ -137,8 +137,7 @@ func serverFacts() (remote.ServerInfo, error) {
 			info.Setup = &rd.facts
 			read = readChains(rd.facts.Firewall, rd.docker, false)
 		} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
-			_, refusals := setupDocker(h, hd.facts)
-			read = readChains(&setup.FirewallFact{Loaded: kind}, !dockerRefused(refusals), false)
+			read = readChains(&setup.FirewallFact{Loaded: kind}, dockerHere(hd.facts), false)
 		}
 	}
 	info.Door = doorFacts(read)
