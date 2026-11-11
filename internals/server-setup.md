@@ -4,13 +4,14 @@
 
 ## Items
 
-- An item is a want, a check and, for what devopsy sets, an apply: the required ones (the release root, `tar` and `flock`, Docker) refuse what depends on them before anything changes, and the tunables (`daemon.json`'s parts, the socket buffers, the mounts drop-in) are applied.
+- An item is a want, a check and, for what devopsy sets, an apply: the required ones (the release root, `tar` and `flock`, Docker) refuse what depends on them before anything changes, and the tunables (`daemon.json`'s parts, the socket buffers, the mounts drop-in, the metadata firewall) are applied.
 - devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).
 - Every state comes from the server's devopsy, which applies it (`readSetup`, `setup.Facts`); the operator only words them and asks.
 - Every item is idempotent: a second run in a row changes nothing and restarts nothing.
 - After an apply every item's check runs again, and what was applied and does not read in sync is an error naming the item.
-- A file devopsy writes whole sits at a path of its own and starts with `setup.Header`; devopsy writes or removes no other file, and none until its want is retired.
+- A file the setup writes whole sits at a path of its own and starts with `setup.Header`, the firewall's aside; devopsy writes or removes no other file, and none until its want is retired.
+- The firewall's files, which `--project-users add` writes too, start with `firewallHeader` instead, which says neither command, checked by one test in Go and the removal's shell (`FirewallPiece`, `firewallPieceSh`).
 - The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused by `remote.ReleaseSettings` in every command.
 - The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts, the upload's `--server-ready` (stats and path lookups only, never Docker) and `--project-users add` (its first check) all call.
 - The tools are one list, `serverTools`, the required ones marked: the setup's refusal reads it, and `--server-info` says each tool from it once.
@@ -22,14 +23,19 @@
 - The metadata firewall is an item of devopsy's own (`setup.JudgeFirewall`): put back, never asked keep or replace, loaded through the door's one loader, its unit and its timer, the containers' chain alone without a door.
 - The firewall's want is `firewall: metadata:` in the deploy user's config, `block` by default, never an address: on one server the address is the provider's, so naming it would be turning the block off.
 - The firewall's kind is the door's where `door:` is set or the door's is loaded (its mark, or a loader naming the door's chains), else the containers' alone (`setup.FirewallWantsDoor`): devopsy never takes a door's firewall off a server.
-- `allow` where the door's kind is wanted refuses before anything changes, a project user's containers never reaching a metadata service; `allow` otherwise removes what devopsy put, files by their header only (`FirewallRemove`), finishing a removal cut before.
-- The firewall's files devopsy writes whole start with one header (`firewallHeader`), checked by one test in Go and the removal's shell (`FirewallPiece`, `firewallPieceSh`).
-- The firewall's state for the deploy user, who cannot read iptables, is its files against devopsy's, modes included (`remote.FirewallFiles`), and the mark the last load left (`remote.FirewallMark`), which every load clears at its start and writes once it all went in, whoever ran it; the unit's result is words, never the judge, since a load the unit did not run leaves it as it was.
+- `allow` where the door's kind is wanted refuses before anything changes, a project user's containers never reaching a metadata service.
+- `allow` otherwise removes what devopsy put, files by their header only (`FirewallRemove`), finishing a removal cut before, the unit stopped under the lock, and a loader that then gets the lock with its own file gone loads nothing.
+- The firewall's state for the deploy user, who cannot read iptables, is its files against devopsy's, modes included (`remote.FirewallFiles`), the boot's link to its unit (`remote.FirewallUnitLink`), and the mark (`remote.FirewallMark`).
+- The mark is written by rename once a load went in and removed when one fails, whoever ran it, a load under way leaving the last one's: through a change of kind it says the old kind until the new is in.
+- The unit's result is words only, never the judge: a load the unit did not run leaves it as it was.
 - The full read of the chains is root's, in the apply (`firewallRun`, the firewall's own root run) and in `--project-users add`.
-- Every load and removal holds the firewall's lock (`firewallLock`, `flock` beside the mark, a minute at most), and every iptables call waits for xtables' lock (`xtablesWait`): a load deletes its jump's other copies by number, which another load between its read and its delete makes another rule's.
-- The install loads through `devopsy-firewall.service` where systemd answers from the chroot, so its result is the load's own and its failure the install's, and starts the timer after the load, since a timer started past its `OnBootSec` runs the unit at once; it runs the loader itself only where systemd does not answer.
-- Without a door the Docker drop-in is not put: it serves the daemon's cgroup jump, while the containers' chain goes by interface, and its jump, inserted first, stays first through Docker's start, which adds its own rules to raw's PREROUTING after it (a DROP per container publishing a port, on Docker 29).
-- `--upgrade` only loads the firewall again as the kind loaded (`setup.FirewallState.Upgrade`): a first load, the door's chains added to the containers' alone and a removal for `allow` change what the server's apps reach, so they are `--server-setup`'s, shown and confirmed (`--yes` confirms), and `--upgrade` says so.
+- Every load and removal holds the firewall's lock (`firewallLock`, a minute at most): a load deletes its jump's other copies by number, which another load between its read and its delete makes another rule's.
+- The lock is in a directory of root's no one else enters (`remote.FirewallLockDir`, 0700, made or closed again by each load): flock locks a file opened for reading, so a lock others could open is one they could hold.
+- Every iptables call waits for xtables' lock (`xtablesWait`), which iptables-legacy fails without.
+- The install loads through `devopsy-firewall.service` where systemd answers from the chroot, so its result is the load's own and its failure the install's; it runs the loader itself only where systemd does not answer.
+- Without a door the Docker drop-in is not put: it serves the daemon's cgroup jump, while the containers' chain goes by interface, and its jump, inserted first, stays first through Docker's start, which appends its own rules to raw's PREROUTING.
+- `--upgrade` only loads the firewall again as the kind loaded (`setup.FirewallState.Upgrade`): a first load, the door's chains added to the containers' alone and a removal for `allow` change what the server's apps reach, so they are `--server-setup`'s, shown and confirmed (`--yes` confirms).
+- Each firewall state is worded once (`firewallLine`), for `--server-setup`'s differences, `--server-info` and what `--upgrade` leaves.
 - No release refuses or warns for the metadata firewall.
 - A run raises a live socket buffer only when lower, never lowering it; one that cannot be raised fails the second check, naming the reboot that loads the file.
 - The sysctl file sets 7500000 at each boot, over an earlier file's higher value: a higher one belongs in a file sorting after `90-devopsy-net.conf`.

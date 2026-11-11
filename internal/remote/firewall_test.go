@@ -7,7 +7,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
@@ -366,7 +368,7 @@ case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo devopsy-te
 		t.Errorf("with docker.service's cgroup not there yet, the loader loaded no IPv6 chain or jump (%v): %s\nwhat it ran:\n%s", err, out, ran)
 	}
 	// Once it all went in, the mark says it loaded the door's.
-	if data, _ := os.ReadFile(filepath.Join(bin, "mark")); err == nil && string(data) != FirewallDoor+"\n" {
+	if data, _ := os.ReadFile(filepath.Join(bin, "mark")); string(data) != FirewallDoor+"\n" {
 		t.Errorf("the mark: %q", data)
 	}
 }
@@ -374,12 +376,12 @@ case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo devopsy-te
 // On a server with no door the loader loads the containers' chain alone, IPv4's and, where
 // the kernel has it, IPv6's, and its jump from raw's PREROUTING, with no group, no cgroup and
 // none of the door's chains, each iptables call waiting for xtables' lock; then it marks
-// what it loaded, a mark of an earlier load gone while it loads.
+// what it loaded.
 func TestFirewallWithoutADoor(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	log, mark := filepath.Join(bin, "log"), filepath.Join(bin, "mark")
-	tables := "#!/bin/sh\necho \"$(basename \"$0\") $*\" >>" + log + "\n[ ! -e " + mark + " ] || echo 'a mark while loading' >>" + log + "\n"
+	tables := "#!/bin/sh\necho \"$(basename \"$0\") $*\" >>" + log + "\n"
 	restore := "#!/bin/sh\necho \"$(basename \"$0\") $* $(cat)\" >>" + log + "\n"
 	for name, body := range map[string]string{"iptables": tables, "ip6tables": tables, "iptables-restore": restore, "ip6tables-restore": restore} {
 		write(t, filepath.Join(bin, name), body)
@@ -403,7 +405,7 @@ func TestFirewallWithoutADoor(t *testing.T) {
 	ran, _ := os.ReadFile(log)
 	w := " -w " + xtablesWait
 	if !strings.Contains(string(ran), "iptables-restore"+w+" --noflush *raw\n:"+FirewallContainerChain+" - [0:0]\n-A "+FirewallContainerChain+" -d 169.254.0.0/16 -i docker0 -p udp -m udp --dport 53 -j RETURN") ||
-		!strings.Contains(string(ran), "iptables"+w+" -t raw -I PREROUTING 1 -j "+FirewallContainerChain+"\n") || strings.Contains(string(ran), "*filter") || strings.Contains(string(ran), "a mark while loading") {
+		!strings.Contains(string(ran), "iptables"+w+" -t raw -I PREROUTING 1 -j "+FirewallContainerChain+"\n") || strings.Contains(string(ran), "*filter") {
 		t.Errorf("what it ran:\n%s", ran)
 	}
 	if _, err := os.Stat("/proc/net/if_inet6"); err == nil && !strings.Contains(string(ran), "ip6tables"+w+" -t raw -I PREROUTING 1 -j "+FirewallContainerChain+"\n") {
@@ -437,49 +439,32 @@ func TestContainersFirewallWrong(t *testing.T) {
 	}
 }
 
-// Two loads at once (the timer's and Docker's start, an install's and the timer's) take
-// turns on the firewall's lock, so another tool's rule in PREROUTING stays and one jump of
-// devopsy's is there after both: each loader deletes the jump's other copies by the numbers
-// it read, which a second loader's insert and delete between its read and its delete would
-// make another rule's (Docker's own in raw's PREROUTING, a firewall manager's in filter's
-// OUTPUT with a door). The fake iptables keeps PREROUTING in a file and holds each read
-// until both loaders inserted, and each delete until both read, a second at most: the
-// interleaving that loses the rule, which the lock never lets happen.
-func TestFirewallLoadersTakeTurns(t *testing.T) {
-	t.Parallel()
-	bin := t.TempDir()
-	state := t.TempDir()
-	other := "-s 10.9.9.9/32 -j DROP"
+// rawFirewallFakes writes, in bin, an iptables and its restore for each family that keep
+// raw's jump and chain as files in state (fw.<cmd>.jump, fw.<cmd>.chain), each call noted in
+// state/calls, and the flock a test needs where the system has none. With underLock, each
+// call also tries the firewall's lock beside state's mark, without waiting, and notes in
+// state/unlocked a call it got it for: one made outside the lock.
+func rawFirewallFakes(t *testing.T, bin, state string, underLock bool) {
+	t.Helper()
+	check := ""
+	if underLock {
+		check = `if { flock -w 0 8; } 8>"` + state + `/devopsy-firewall/lock"; then echo "$(basename "$0") $*" >>"` + state + `/unlocked"; fi
+`
+	}
 	tables := `#!/bin/sh
 [ "$1" != -w ] || shift 2
-s=` + state + `/$(basename "$0")
-until mkdir "$s.lock" 2>/dev/null; do sleep 0.01; done
-trap 'rmdir "$s.lock"' EXIT
-# wait_for <file>: until two lines are in file, a second at most.
-wait_for() {
-  rmdir "$s.lock"; trap - EXIT
-  n=0
-  while [ "$(wc -l <"$1" 2>/dev/null || echo 0)" -lt 2 ] && [ "$n" -lt 50 ]; do sleep 0.02; n=$((n + 1)); done
-  until mkdir "$s.lock" 2>/dev/null; do sleep 0.01; done
-  trap 'rmdir "$s.lock"' EXIT
-}
+` + check + `echo "$(basename "$0") $*" >>"` + state + `/calls"
+s=` + state + `/fw.$(basename "$0")
 case "$*" in
-  "-t raw -I PREROUTING 1 "*)
-    shift 5
-    { echo "$*"; cat "$s.pre"; } >"$s.new" && mv "$s.new" "$s.pre"
-    echo x >>"$s.inserts" ;;
-  "-t raw -S PREROUTING")
-    wait_for "$s.inserts"
-    echo "-P PREROUTING ACCEPT"
-    sed 's/^/-A PREROUTING /' "$s.pre"
-    echo x >>"$s.reads" ;;
-  "-t raw -D PREROUTING "*)
-    wait_for "$s.reads"
-    [ "$(wc -l <"$s.pre")" -ge "$5" ] || { echo "no rule $5" >&2; exit 1; }
-    awk -v n="$5" 'NR != n' "$s.pre" >"$s.new" && mv "$s.new" "$s.pre" ;;
+  "-t raw -I PREROUTING 1 -j ` + FirewallContainerChain + `") : >"$s.jump" ;;
+  "-t raw -S PREROUTING") echo "-P PREROUTING ACCEPT"; [ ! -e "$s.jump" ] || echo "-A PREROUTING -j ` + FirewallContainerChain + `" ;;
+  "-t raw -D PREROUTING -j ` + FirewallContainerChain + `") [ -e "$s.jump" ] || exit 1; rm -f "$s.jump" ;;
+  "-t raw -S ` + FirewallContainerChain + `") [ -e "$s.chain" ] || exit 1 ;;
+  "-t raw -F ` + FirewallContainerChain + `") ;;
+  "-t raw -X ` + FirewallContainerChain + `") rm -f "$s.chain" ;;
 esac
 `
-	restore := "#!/bin/sh\ncat >/dev/null\n"
+	restore := "#!/bin/sh\ncat >/dev/null\n" + check + ": >" + state + "/fw.$(basename \"$0\" -restore).chain\n"
 	for name, body := range map[string]string{"iptables": tables, "ip6tables": tables, "iptables-restore": restore, "ip6tables-restore": restore} {
 		write(t, filepath.Join(bin, name), body)
 		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
@@ -489,9 +474,17 @@ esac
 	if err := testfile.Flock(bin); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{"iptables", "ip6tables"} {
-		write(t, filepath.Join(state, c+".pre"), other+"\n")
-	}
+}
+
+// Every iptables call of a load runs under the firewall's lock, two loads at once taking
+// turns: a load deletes its jump's other copies by the numbers it read, which another load's
+// insert or delete in between would make another tool's rule (Docker's own in raw's
+// PREROUTING). The fake iptables tries the lock at each call, never waiting, and notes a call
+// it got it for.
+func TestFirewallLoadersTakeTurns(t *testing.T) {
+	t.Parallel()
+	bin, state := t.TempDir(), t.TempDir()
+	rawFirewallFakes(t, bin, state, true)
 	var wg sync.WaitGroup
 	outs := make([]string, 2)
 	errs := make([]error, 2)
@@ -509,9 +502,216 @@ esac
 			t.Errorf("a loader beside another failed: %v: %s", errs[i], outs[i])
 		}
 	}
-	data, _ := os.ReadFile(filepath.Join(state, "iptables.pre"))
-	if got := string(data); got != "-j "+FirewallContainerChain+"\n"+other+"\n" {
-		t.Errorf("PREROUTING after two loaders at once, another tool's rule (%s) and one jump wanted:\n%s", other, got)
+	if calls := readFile(filepath.Join(state, "calls")); strings.Count(calls, "-I PREROUTING") < 2 {
+		t.Fatalf("the control: the two loads made %q", calls)
+	}
+	if u := readFile(filepath.Join(state, "unlocked")); u != "" {
+		t.Errorf("calls made outside the firewall's lock:\n%s", u)
+	}
+}
+
+// The firewall's lock is root's alone to reach: flock takes an exclusive lock on a file
+// opened for reading, so a lock file others may open is one any user of the server (a
+// project user among them) holds for as long as it likes, every load failing meanwhile, and
+// Docker's start, with a door, delayed and its daemon's jump left on the old cgroup. The lock
+// lives in a directory of its own that only its owner enters, whatever the umask (systemd's
+// 022 here); the mark beside it stays readable, the deploy user's to judge by.
+func TestFirewallLockIsRootsAlone(t *testing.T) {
+	t.Parallel()
+	bin, state := t.TempDir(), t.TempDir()
+	rawFirewallFakes(t, bin, state, false)
+	mark := filepath.Join(state, "mark")
+	cmd := exec.Command("sh", "-c", "umask 022\n"+FirewallLoader(false))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	// The control: reading the file is enough to hold its lock.
+	lock := filepath.Join(state, filepath.Base(FirewallLockDir), "lock")
+	f, err := os.OpenFile(lock, os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("a lock file opened for reading takes no exclusive lock here: %v", err)
+	}
+	f.Close()
+	entries, err := os.ReadDir(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		fi, err := os.Lstat(filepath.Join(state, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case e.Name() == filepath.Base(mark):
+			if fi.Mode().Perm()&0o004 == 0 {
+				t.Errorf("the mark is %v: the deploy user reads it", fi.Mode().Perm())
+			}
+		case e.Name() == filepath.Base(FirewallLockDir):
+			if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 {
+				t.Errorf("the lock's directory is %v: another user reaches the lock", fi.Mode())
+			}
+		case strings.HasPrefix(e.Name(), "fw.") || e.Name() == "calls":
+		default:
+			t.Errorf("%s left beside the mark, %v", e.Name(), fi.Mode())
+		}
+	}
+	// A directory there already, opened to others, is closed again.
+	if err := os.Chmod(filepath.Join(state, filepath.Base(FirewallLockDir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("sh", "-c", FirewallLoader(false))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if fi, err := os.Stat(filepath.Join(state, filepath.Base(FirewallLockDir))); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the lock's directory opened to others stays so: %v (%v)", fi.Mode(), err)
+	}
+}
+
+// A load that cannot take the lock within its bound fails, saying the lock was held and for
+// how long, its mark left as the last load wrote it; flock failing for another reason says
+// that instead.
+func TestFirewallLoaderLockWait(t *testing.T) {
+	t.Parallel()
+	bin, state := t.TempDir(), t.TempDir()
+	rawFirewallFakes(t, bin, state, false)
+	mark := filepath.Join(state, "mark")
+	write(t, mark, FirewallContainers+"\n")
+	if err := os.MkdirAll(filepath.Join(state, filepath.Base(FirewallLockDir)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(state, filepath.Base(FirewallLockDir), "lock"), os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	run := func(path string) (string, error) {
+		cmd := exec.Command("sh", "-c", FirewallLoader(false))
+		cmd.Env = []string{"PATH=" + path, FirewallMarkEnv + "=" + mark, FirewallWaitEnv + "=0"}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := run(bin + ":/usr/bin:/bin")
+	if err == nil || !strings.Contains(out, "another load of devopsy's firewall held "+filepath.Join(state, filepath.Base(FirewallLockDir), "lock")+" for 0 s") || readFile(mark) != FirewallContainers+"\n" || fileThere(filepath.Join(state, "calls")) {
+		t.Errorf("a lock held (%v): %s, the mark %q", err, out, readFile(mark))
+	}
+	other := t.TempDir()
+	write(t, filepath.Join(other, "flock"), "#!/bin/sh\nexit 66\n")
+	if err := os.Chmod(filepath.Join(other, "flock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(other + ":" + bin + ":/usr/bin:/bin"); err == nil || !strings.Contains(out, "flock could not take") || !strings.Contains(out, "(exit 66)") {
+		t.Errorf("flock failing otherwise (%v): %s", err, out)
+	}
+}
+
+// A load leaves the last good mark while it runs, written by rename once it went in, and
+// none when it fails: a check made while the timer's load runs reads the firewall loaded.
+func TestFirewallLoaderMarks(t *testing.T) {
+	t.Parallel()
+	bin, state := t.TempDir(), t.TempDir()
+	rawFirewallFakes(t, bin, state, false)
+	mark := filepath.Join(state, "mark")
+	write(t, mark, FirewallDoor+"\n")
+	// The mark as the load's own restore finds it: the last load's, until this one is in.
+	write(t, filepath.Join(bin, "iptables-restore"), "#!/bin/sh\ncat >/dev/null\ncat "+mark+" >"+state+"/seen\n")
+	if err := os.Chmod(filepath.Join(bin, "iptables-restore"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", FirewallLoader(false))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if seen, now := readFile(filepath.Join(state, "seen")), readFile(mark); seen != FirewallDoor+"\n" || now != FirewallContainers+"\n" {
+		t.Errorf("the mark while loading %q, after %q", seen, now)
+	}
+	write(t, filepath.Join(bin, "iptables-restore"), "#!/bin/sh\nexit 1\n")
+	cmd = exec.Command("sh", "-c", FirewallLoader(false))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
+	if out, err := cmd.CombinedOutput(); err == nil || fileThere(mark) {
+		t.Errorf("a load that failed (%v) left its mark %q: %s", err, readFile(mark), out)
+	}
+}
+
+// A removal leaves nothing loaded, a load waiting for its lock included: it stops the timer
+// and the unit while it holds the lock, and a loader that still gets the lock after it (one
+// started by other means) finds its own file gone and loads nothing. The fake systemctl
+// starts such a loader when the timer is stopped, not stopping it with the unit, and holds the
+// removal until that loader asked for the lock.
+func TestFirewallRemovalLeavesNoLoadBehind(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin, host, state := filepath.Join(dir, "bin"), filepath.Join(dir, "host"), filepath.Join(dir, "state")
+	for _, d := range []string{bin, state} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rawFirewallFakes(t, bin, state, false)
+	// flock noting each call, then the real one (the system's, or the test's own).
+	realFlock := filepath.Join(bin, "flock.real")
+	if err := os.Rename(filepath.Join(bin, "flock"), realFlock); err != nil {
+		realFlock = "flock"
+		for _, d := range []string{"/usr/bin", "/bin"} {
+			if _, err := os.Stat(filepath.Join(d, "flock")); err == nil {
+				realFlock = filepath.Join(d, "flock")
+			}
+		}
+	}
+	loader := filepath.Join(host, FirewallScript)
+	for name, body := range map[string]string{
+		"flock": "#!/bin/sh\necho x >>" + state + "/flocks\nexec " + realFlock + " \"$@\"\n",
+		"systemctl": `#!/bin/sh
+echo "systemctl $*" >>` + state + `/systemctl.log
+case "$*" in
+  "stop devopsy-firewall.timer"*)
+    # As systemd starts it: none of the removal's descriptors, its lock's among them.
+    ( exec 9>&-; sh ` + loader + ` >` + state + `/loader.out 2>&1; : >` + state + `/loader.done ) &
+    n=0
+    while [ "$(wc -l <` + state + `/flocks)" -lt 2 ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done ;;
+esac
+`,
+	} {
+		write(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for p, f := range FirewallFiles(false) {
+		write(t, filepath.Join(host, p), f.Text)
+	}
+	mark := filepath.Join(state, "mark")
+	write(t, mark, FirewallContainers+"\n")
+	for _, c := range []string{"iptables", "ip6tables"} {
+		write(t, filepath.Join(state, "fw."+c+".jump"), "")
+		write(t, filepath.Join(state, "fw."+c+".chain"), "")
+	}
+	cmd := exec.Command("sh", "-c", FirewallRemove(), "sh", host)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the removal: %v: %s", err, out)
+	}
+	for start := time.Now(); !fileThere(filepath.Join(state, "loader.done")); time.Sleep(20 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			t.Fatal("the waiting loader never ended")
+		}
+	}
+	out := readFile(filepath.Join(state, "loader.out"))
+	if fileThere(filepath.Join(state, "fw.iptables.jump")) || fileThere(filepath.Join(state, "fw.iptables.chain")) || fileThere(mark) {
+		t.Errorf("after a removal, a loader that waited for its lock loaded the firewall again: jump %v, chain %v, mark %v\n%s",
+			fileThere(filepath.Join(state, "fw.iptables.jump")), fileThere(filepath.Join(state, "fw.iptables.chain")), fileThere(mark), out)
+	}
+	if l := readFile(filepath.Join(state, "systemctl.log")); !strings.Contains(l, "systemctl stop devopsy-firewall.timer devopsy-firewall.service\n") {
+		t.Errorf("the removal stopped no unit:\n%s", l)
 	}
 }
 
@@ -634,4 +834,40 @@ esac
 func fileThere(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// The install loads by the unit and then starts the timer, failing with words of its own
+// when either does not start: the unit's result and where systemd logged why, or a timer
+// that will load the firewall again only from the next boot.
+func TestFirewallInstallByItsUnit(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		systemctl, want string
+		code            int
+	}{
+		"the unit fails": {`  "start devopsy-firewall.service") exit 1 ;;
+  "show -p Result --value devopsy-firewall.service") echo exit-code ;;`,
+			"devopsy: error: devopsy-firewall.service did not load devopsy's firewall: exit-code\ndevopsy: | what it said, as root:\ndevopsy: | $ journalctl -u devopsy-firewall.service\n", 5},
+		"the timer fails": {`  "start devopsy-firewall.timer") exit 1 ;;`,
+			"devopsy: error: devopsy-firewall.timer did not start: devopsy's firewall is loaded, and loaded again only from the next boot\ndevopsy: | what it said, as root:\ndevopsy: | $ journalctl -u devopsy-firewall.timer\n", 5},
+	} {
+		dir := t.TempDir()
+		bin, host := filepath.Join(dir, "bin"), filepath.Join(dir, "host")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		rawFirewallFakes(t, bin, dir, false)
+		write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\ndir="+dir+"\necho \"systemctl $*\" >>\"$dir/systemctl.log\"\ncase \"$*\" in\n"+c.systemctl+"\nesac\nexit 0\n")
+		if err := os.Chmod(filepath.Join(bin, "systemctl"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", "-c", FirewallInstall(false), "sh", host)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + filepath.Join(dir, "mark")}
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		_ = cmd.Run()
+		if code := cmd.ProcessState.ExitCode(); code != c.code || c.want != "" && !strings.Contains(stderr.String(), c.want) {
+			t.Errorf("%s (%d): %s", name, code, stderr.String())
+		}
+	}
 }

@@ -94,7 +94,8 @@ func JudgeFirewall(allow, door bool, loaded FirewallKind, inSync bool) FirewallS
 }
 
 // FirewallFact is the metadata firewall as the server judged it, Door whether the loader to
-// load is the door's (FirewallWantsDoor), Unit its unit's failure ("" when none or in sync).
+// load is the door's (FirewallWantsDoor), for one to load again Unit its unit's failure (""
+// otherwise).
 type FirewallFact struct {
 	State FirewallState `json:"state"`
 	Door  bool          `json:"door,omitempty"`

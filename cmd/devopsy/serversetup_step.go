@@ -268,10 +268,9 @@ const firewallItem = setup.FirewallItemName
 // firewallFact is the metadata firewall as the deploy user can judge it, who cannot read
 // iptables: what the server has of it (any file of devopsy's by its header, or the mark; the
 // door's where the mark or the loader says so), its files against devopsy's
-// (remote.FirewallFiles, modes included), and the mark the last load left
-// (remote.FirewallMark), which no load leaves until it went through, whoever ran it. The
-// unit's result is words only, for a firewall not in sync: a load the unit did not run
-// leaves it as it was. The full read of the chains is root's, the apply's.
+// (remote.FirewallFiles, modes included), the boot's link to its unit, and the mark the last load that went in left (remote.FirewallMark), whoever ran it. The unit's
+// result is words only, for a firewall to load again: a load the unit did not run leaves it
+// as it was. The full read of the chains is root's, the apply's.
 func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 	mark, markErr := os.ReadFile(h.path(remote.FirewallMark))
 	loader, _ := os.ReadFile(h.path(remote.FirewallScript))
@@ -296,8 +295,11 @@ func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 		fi, statErr := os.Stat(h.path(p))
 		inSync = inSync && err == nil && statErr == nil && string(have) == f.Text && fi.Mode().Perm() == f.Mode
 	}
+	// The boot's link to the unit, without which no boot loads it.
+	to, err := os.Readlink(h.path(remote.FirewallUnitLink))
+	inSync = inSync && err == nil && to == remote.FirewallUnit
 	fact := &setup.FirewallFact{Door: wantDoor, State: setup.JudgeFirewall(allow, door, loaded, inSync)}
-	if fact.State.Changes() {
+	if fact.State == setup.FirewallReload {
 		if result := unitShow("devopsy-firewall.service", "Result"); result != "" && result != "success" {
 			fact.Unit = result
 		}
@@ -695,7 +697,7 @@ func applySetup(h setupHost, a setupApply) int {
 	fwRan := false
 	if fw := f.Firewall; fw != nil && fw.State.Changes() {
 		if a.upgrade && !fw.State.Upgrade() {
-			report.Warn(firewallLeft[fw.State])
+			report.Warn("--upgrade leaves the metadata firewall to --server-setup: " + firewallLine(fw))
 		} else {
 			if err := applyFirewall(h, fw); err != nil {
 				return failed(err.Error(), report.Details(err)...)
@@ -971,13 +973,6 @@ func releaseRootReady(root, nothing, ref string) error {
 		return &report.Failure{Msg: rootWords(root, action) + ": " + nothing, Remedies: []report.Remedy{setUp}}
 	}
 	return nil
-}
-
-// firewallLeft is what --upgrade says of a firewall state it leaves to --server-setup.
-var firewallLeft = map[setup.FirewallState]string{
-	setup.FirewallLoad:     "containers reach the cloud's metadata services here: --server-setup loads devopsy's firewall, which keeps them off",
-	setup.FirewallLoadDoor: "door: is in this server's config, and devopsy's firewall loads the containers' chain alone: --server-setup or --project-users add loads the door's",
-	setup.FirewallRemove:   "firewall: metadata: allow, and devopsy's firewall is still loaded: --server-setup removes it",
 }
 
 // applyFirewall loads the metadata firewall as devopsy loads it, or removes it (fw's state),

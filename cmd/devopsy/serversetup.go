@@ -254,25 +254,8 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 	if f.Pending {
 		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
-	if fw := f.Firewall; fw != nil {
-		switch fw.State {
-		case setup.FirewallLoad:
-			line := "containers reach the cloud's metadata services: devopsy's firewall keeps them off, DNS there aside, which cuts an app running here off from what it reads there (its instance's credentials)"
-			if fw.Door {
-				line += "; with door:, the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services"
-			}
-			entry(remote.StatusWarning, firewallItem, line)
-		case setup.FirewallLoadDoor:
-			entry(remote.StatusWarning, firewallItem, "door: is in this server's config, and devopsy's firewall loads the containers' chain alone: the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services")
-		case setup.FirewallReload:
-			line := "devopsy's firewall is not loaded as devopsy loads it"
-			if fw.Unit != "" {
-				line += " (devopsy-firewall.service: " + fw.Unit + ")"
-			}
-			entry(remote.StatusWarning, firewallItem, line)
-		case setup.FirewallRemove:
-			entry(remote.StatusWarning, firewallItem, "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services")
-		}
+	if fw := f.Firewall; fw != nil && fw.State.Changes() {
+		entry(remote.StatusWarning, firewallItem, firewallLine(fw))
 	}
 	if f.Hint() {
 		entry(remote.StatusInfo, "volumes", volumeHint(f)...)
@@ -288,4 +271,27 @@ func volumeHint(f setup.Facts) []string {
 		lines = append(lines, fmt.Sprintf("%s (%s on %s, %s, %s free)", c.MountPoint, c.FSType, c.Source, humanBytes(c.Size), humanBytes(c.Free)))
 	}
 	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
+}
+
+// firewallLine is what every command says of a metadata firewall whose state changes it
+// (setup.FirewallState.Changes): --server-setup's differences, --server-info's warning, and
+// what --upgrade leaves to --server-setup.
+func firewallLine(fw *setup.FirewallFact) string {
+	switch fw.State {
+	case setup.FirewallLoad:
+		line := "containers reach the cloud's metadata services: devopsy's firewall keeps them off, DNS there aside, which cuts an app running here off from what it reads there (its instance's credentials)"
+		if fw.Door {
+			line += "; with door:, the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services"
+		}
+		return line
+	case setup.FirewallLoadDoor:
+		return "door: is in this server's config, and devopsy's firewall loads the containers' chain alone: the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services"
+	case setup.FirewallRemove:
+		return "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services"
+	}
+	line := "devopsy's firewall is not loaded as devopsy loads it"
+	if fw.Unit != "" {
+		line += " (devopsy-firewall.service: " + fw.Unit + ")"
+	}
+	return line
 }

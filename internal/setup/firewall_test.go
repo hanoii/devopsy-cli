@@ -39,8 +39,11 @@ func TestJudgeFirewall(t *testing.T) {
 		if got != c.want || FirewallWantsDoor(c.door, c.loaded) != c.wantsDoor || got.Upgrade() != c.upgrade {
 			t.Errorf("%s: %s (door's %v, --upgrade %v), want %s", c.name, got, FirewallWantsDoor(c.door, c.loaded), got.Upgrade(), c.want)
 		}
-		if got.Changes() != (got != FirewallInSync && got != FirewallRefused) {
-			t.Errorf("%s: changes %v", c.name, got.Changes())
+	}
+	// An apply changes the firewall in every state but in sync and refused.
+	for st, changes := range map[FirewallState]bool{FirewallInSync: false, FirewallLoad: true, FirewallLoadDoor: true, FirewallReload: true, FirewallRemove: true, FirewallRefused: false} {
+		if st.Changes() != changes {
+			t.Errorf("%s: changes %v", st, st.Changes())
 		}
 	}
 	data, err := json.Marshal(FirewallFact{State: FirewallLoadDoor})
