@@ -263,7 +263,7 @@ func TestDoorSweepLeavesALongerProject(t *testing.T) {
 }
 
 // sealedFake is a docker that says this project's container holds source, and another's holds
-// other.
+// other, each mounted at /x.
 func sealedFake(t *testing.T, source, other string) string {
 	t.Helper()
 	fake := filepath.Join(t.TempDir(), "docker")
@@ -272,8 +272,8 @@ case "$1" in
   ps) echo 'mine shop-prod'; echo 'theirs other-prod' ;;
   inspect) for last; do :; done
     case "$last" in
-      mine) echo '` + source + `' ;;
-      theirs) echo '` + other + `' ;;
+      mine) echo '[{"Source":"` + source + `","Destination":"/x"}]' ;;
+      theirs) echo '[{"Source":"` + other + `","Destination":"/x"}]' ;;
     esac ;;
 esac
 `

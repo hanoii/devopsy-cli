@@ -84,3 +84,24 @@ func (p Policy) CheckVerb(argv []string) error {
 	}
 	return nil
 }
+
+// operands are the words of a checked argv that are no flag of its verb's nor a flag's value,
+// as CheckVerb reads them: a restart's or a start's services, for instance.
+func operands(argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+	known := Verbs[argv[0]]
+	var words []string
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			words = append(words, arg)
+			continue
+		}
+		if name, _, hasValue := strings.Cut(arg, "="); known[name] == 1 && !hasValue {
+			i++
+		}
+	}
+	return words
+}

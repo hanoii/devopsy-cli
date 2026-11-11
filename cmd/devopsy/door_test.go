@@ -890,10 +890,13 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 // buildx imagetools inspect answers; a pull of a ref listed in dir/fails fails. A claim's copy
 // (imagetools create) is the layout fakeManifest wrote for the ref (spoilCopy spoils one), and
 // its load puts the image in the store (see the cases). It logs
-// every call in dir/calls, lists no containers, and answers compose with its arguments
+// every call in dir/calls, and answers compose with its arguments
 // and the file it was given, for a door that execs it (doorComposeHelper). Image
 // inspects answer the two formats the door uses today and `{{json .}}`, as
-// images.CLI.Inspect reads it.
+// images.CLI.Inspect reads it. Its containers are dir/containers, one a line,
+// `<id>|<labels json>|<mounts json>`, which a listing by label filters gives whatever its
+// filters (whose each one is, its inspect says) and a container's inspect answers, unless
+// dir/inspectfails is there; a listing of every container gives none.
 func doorImageFake(t *testing.T, dir string) string {
 	t.Helper()
 	in := func(name string) string { return filepath.Join(dir, name) }
@@ -954,6 +957,14 @@ case "$all" in
   'buildx inspect '*) ;;
   'buildx build '*) cat >/dev/null ;;
   'ps -a '*) ;;
+  'ps -aq --no-trunc --filter '*) cut -d'|' -f1 `+in("containers")+` 2>/dev/null ;;
+  'inspect --type container '*)
+    [ -f `+in("inspectfails")+` ] && exit 1
+    e=$(awk -F'|' -v r="$ref" '$1==r' `+in("containers")+` 2>/dev/null | head -1); [ -n "$e" ] || exit 1
+    case "$all" in
+      *'{{json .Mounts}}'*) field "$e" 3 ;;
+      *) printf '%s %s\n' "$(field "$e" 1)" "$(field "$e" 2)" ;;
+    esac ;;
   'compose '*' config --format json')
     # Compose's reading of profiles, of the file on stdin (kept in dir/configread): a service
     # with profiles is active only under one of those asked.
@@ -1262,6 +1273,98 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 		t.Errorf("the empty config: %v %v", fi, err)
 	} else if entries, _ := os.ReadDir(empty); len(entries) > 0 {
 		t.Errorf("the empty config holds %v", entries)
+	}
+}
+
+// A restart or a start says which services' containers bind another copy of a read-only part
+// of the release than a start would seal now, and offers up -d, which makes them again: each
+// container keeps the sealed copy it was made with. The release is read and hashed as a seal
+// reads it (the same content is no warning), keeping no copy; only the services the verb names
+// are compared, only in containers of the file's compose name; no other verb says it; and a
+// compare that fails loses only the warning, never the verb. In a helper process
+// (doorComposeHelper), since the door execs compose, here the fake docker.
+func TestDoorWarnsOfACopyARestartKeeps(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	doorImageFake(t, dir)
+	write(t, filepath.Join(dir, "sudo"), `#!/bin/sh
+shift 5
+case "$1" in
+  real) printf '%s\n' "$2" ;;
+  tar) exec tar -C "$(dirname "$2")" -cf - -- "$(basename "$2")" ;;
+  *) exit 1 ;;
+esac
+`, 0o755)
+	code := filepath.Join(dir, "prod", "releases", "1", "code")
+	write(t, filepath.Join(code, "config", "app.conf"), "one\n", 0o644)
+	svc := `{"user":"10001:10001","security_opt":["no-new-privileges"],"volumes":[{"type":"bind","source":"` +
+		filepath.Join(code, "config") + `","target":"/etc/app","read_only":true}]}`
+	file := `{"name":"shop-prod","services":{"web":` + svc + `,"worker":` + svc + `}}`
+	run := func(verb string) string {
+		t.Helper()
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_DIR="+code, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "ARGS: compose ") {
+			t.Fatalf("%s: compose did not run (%v):\n%s", verb, err, out)
+		}
+		return string(out)
+	}
+	// The copy an up seals, which its containers are made with.
+	var got struct {
+		Services map[string]struct{ Volumes []struct{ Source string } }
+	}
+	out := run("up -d")
+	if _, body, ok := strings.Cut(out, "\n{"); !ok || json.Unmarshal([]byte("{"+body), &got) != nil || len(got.Services["web"].Volumes) != 1 {
+		t.Fatalf("up -d: compose got no file:\n%s", out)
+	}
+	sealedDir := filepath.Join(dir, "space", "sealed", "shop")
+	copied := got.Services["web"].Volumes[0].Source
+	if filepath.Dir(filepath.Dir(copied)) != sealedDir {
+		t.Fatalf("up -d binds %s, no sealed copy", copied)
+	}
+	container := func(id, project, service, source string) string {
+		return id + `|{"com.docker.compose.project":"` + project + `","com.docker.compose.service":"` + service +
+			`","devopsy.door":"devopsy-shop"}|[{"Source":"` + source + `","Destination":"/etc/app"}]`
+	}
+	write(t, filepath.Join(dir, "containers"), container("c1", "shop-prod", "web", copied)+"\n"+
+		container("c2", "shop-prod", "worker", copied)+"\n"+
+		// Another environment's web, on another copy: none of this file's.
+		container("c3", "shop-dev", "web", filepath.Join(sealedDir, "0123456789abcdef01234567", "x"))+"\n", 0o644)
+	warning := func(verb string, services ...string) string {
+		lines := []string{"devopsy: warning: what these containers bind read-only differs from the release's: " + verb + " keeps the copy each was made with"}
+		for _, s := range services {
+			lines = append(lines, "devopsy: | "+s+": ./config")
+		}
+		return strings.Join(append(lines, "devopsy: | to fix it:", "devopsy: | $ docker compose up -d "+strings.Join(services, " ")), "\n") + "\n"
+	}
+	if out := run("restart"); strings.Contains(out, "devopsy: warning: ") {
+		t.Errorf("a restart on the copy the release seals warned:\n%s", out)
+	}
+	write(t, filepath.Join(code, "config", "app.conf"), "two\n", 0o644)
+	for _, verb := range []string{"restart", "start"} {
+		if out := run(verb); !strings.Contains(out, warning(verb, "web", "worker")) {
+			t.Errorf("%s on a copy the release no longer holds, want:\n%s\ngot:\n%s", verb, warning(verb, "web", "worker"), out)
+		}
+	}
+	if out := run("restart -t 5 web"); !strings.Contains(out, warning("restart", "web")) {
+		t.Errorf("restart of web alone, want:\n%s\ngot:\n%s", warning("restart", "web"), out)
+	}
+	if out := run("stop"); strings.Contains(out, "devopsy: warning: ") {
+		t.Errorf("stop warned:\n%s", out)
+	}
+	write(t, filepath.Join(dir, "inspectfails"), "", 0o644)
+	if out := run("restart"); strings.Contains(out, "devopsy: warning: ") {
+		t.Errorf("a compare that failed warned:\n%s", out)
+	}
+	// The compares kept no copy: only the up's is there.
+	entries, _ := os.ReadDir(sealedDir)
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(filepath.Dir(copied)) {
+		t.Errorf("the sealed copies after the compares: %v, want only %s", entries, filepath.Base(filepath.Dir(copied)))
 	}
 }
 

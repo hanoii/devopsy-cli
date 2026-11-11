@@ -82,11 +82,11 @@ name or a path resolved again later is one nobody checked:
 - A bind mount's source is a real path the door made in `<space>`, not a
   path in the project's tree, where the project user could swap a link
   between the check and the start. Read-only files from a release are
-  copied into `<space>` first, at each start (`up`, `create`, `run`): a
-  container sees them as they were then, so a file edited in place in a
-  release shows after `docker compose up -d`, never after a restart. A
-  bind is an entry itself (`./mnt/data`), never a directory inside one
-  (`./mnt/data/sub`), which the door refuses.
+  copied into `<space>` first, at each start (`up`, `create`, `run`),
+  and a container keeps that copy ([Changing a file of a running
+  release](#changing-a-file-of-a-running-release)). A bind is an entry
+  itself (`./mnt/data`), never a directory inside one (`./mnt/data/sub`),
+  which the door refuses.
 - The rendered file reaches compose as an open file with no name on
   disk.
 
@@ -396,6 +396,35 @@ its time on stderr, nothing with `-q`. It takes compose's `-q`,
 `--ignore-buildable`, `--ignore-pull-failures` and `--include-deps`,
 and stops at the first image that fails, where compose pulls the others
 first.
+
+## Changing a file of a running release
+
+A read-only bind of a path in the release (`./config:/etc/app:ro`) is a
+copy the door made when compose made the container. The container keeps
+that copy for as long as it exists, so a file changed in place in the
+release shows in it only once compose makes the container again:
+
+```sh
+docker compose up -d
+```
+
+Locally, that is `devopsy @prod up -d`. Compose makes again each
+container whose copy is no longer the release's, and leaves the others
+running.
+
+`restart` and `start` keep each container's copy. Before they run, they
+warn of the services whose copy differs from what the release holds now,
+which is also the case for a container made from an older release:
+
+```
+devopsy: warning: what these containers bind read-only differs from the release's: restart keeps the copy each was made with
+devopsy: | web: ./config
+devopsy: | to fix it:
+devopsy: | $ docker compose up -d web
+```
+
+A bind of `./mnt/<name>` is no copy: what is written there shows at
+once.
 
 ## Registries
 
