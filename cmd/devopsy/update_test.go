@@ -70,3 +70,25 @@ func TestNoWorkingDirectory(t *testing.T) {
 		}
 	}
 }
+
+// An upgrade applies the server's setup only from a release build, on a server whose record
+// is there: a laptop, a server never set up and a development build apply nothing.
+func TestUpgradeApplies(t *testing.T) {
+	t.Parallel()
+	there := func(string) bool { return true }
+	gone := func(string) bool { return false }
+	for _, c := range []struct {
+		version, record string
+		exists          func(string) bool
+		want            bool
+	}{
+		{"0.60.0", "/home/devopsy/.config/devopsy/server.yaml", there, true},
+		{"0.60.0", "/home/devopsy/.config/devopsy/server.yaml", gone, false},
+		{"0.60.0", "", there, false},
+		{"dev", "/home/devopsy/.config/devopsy/server.yaml", there, false},
+	} {
+		if got := upgradeApplies(c.version, c.record, c.exists); got != c.want {
+			t.Errorf("%s, %q: %v", c.version, c.record, got)
+		}
+	}
+}

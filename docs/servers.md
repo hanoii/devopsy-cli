@@ -187,6 +187,14 @@ changes, says what is missing, and says to run `devopsy @<target>
 A sync across servers checks the child's devopsy against the parent's
 the same way, before the parent stops anything.
 
+On a server `--server-setup` set up (its `server.yaml` there), `--upgrade`
+then applies the setup with the new devopsy, asking nothing: it puts
+devopsy's values where they are devopsy's (a part new in this devopsy
+included), leaves and says each value someone else set, and never
+restarts Docker. When it changes `daemon.json` it says Docker takes it at
+its next restart and raises `/run/reboot-required`. What fails is a
+warning naming `--server-setup`; the upgrade itself has succeeded.
+
 `DEVOPSY_PROTOCOL_CHECK=warn` turns that stop into a warning and goes on,
 at your own risk. It is for a local build ahead of the servers, when what
 you run may not need what the server's devopsy lacks.

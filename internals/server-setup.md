@@ -55,5 +55,5 @@
 - A project user is refused through `askedAsProjectUser`, the same exit as `--ssh-keys --for`, and `refuseProjectUser` names the deploy user's address.
 - Declining saves nothing; `--yes` goes through the same two sessions, and without a terminal a question fails naming `--yes`.
 - `apply --upgrade` asks nothing and restarts nothing: a changed part is left and said, a missing release root said and never made, every failure a warning, exit 0.
-- A server is one whose `server.yaml` exists, from its first `--server-setup` on, with no other sign: `--server-info` warns where it is missing.
+- A server is one whose `server.yaml` exists, from its first `--server-setup` on, with no other sign: only there does `--upgrade` apply (`serverApply`), and `--server-info` warns where it is missing.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.

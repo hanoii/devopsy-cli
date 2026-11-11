@@ -76,5 +76,6 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 
 ## --upgrade
 
+- Both ends of `runUpgrade` (the latest already, and the binary replaced) end in `serverApply`: with the record there and a release build (`upgradeApplies`), it replaces itself with the new binary's `--server-setup-step apply --upgrade` (internals/server-setup.md), else returns 0.
 - `--upgrade` reads the same release files as `install.sh` (archive names without a version, `checksums.txt`); the daily check runs detached (`--upgrade-check`), and only release builds upgrade or check.
 - To try them by hand, build a release build (`go build -ldflags "-X main.version=0.8.0" -o /tmp/devopsy ./cmd/devopsy`), then `/tmp/devopsy --upgrade`; the notice needs a terminal (`script -q out ./devopsy ps`).
