@@ -81,7 +81,7 @@ What it keeps as devopsy wants it:
 | `daemon.json`'s logs | `"log-driver": "local"`, `"log-opts": {"max-size": "20m", "max-file": "5"}` |
 | `daemon.json`'s `live-restore` | `true` |
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
-| Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, never lowered |
+| Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it) |
 | Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
@@ -102,8 +102,8 @@ yet, and restarts it only if that is still so once it holds its lock. A
 restart cuts every docker command under way, and stops every container
 unless Docker keeps them (`live-restore`); it is refused while a release
 runs in one of the deploy user's environments, or while
-`dockerd --validate` refuses `daemon.json` (Docker would not start
-again), and
+`dockerd --validate`, given `docker.service`'s own flags, refuses
+`daemon.json` (Docker would not start again), and
 waits up to two minutes for Docker to come back: not back by then is an
 error, `/run/reboot-required` raised for a reboot that takes the file
 when Docker still answers, and said when it does not. Not restarted now,

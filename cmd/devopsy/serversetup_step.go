@@ -670,9 +670,8 @@ func fixWords(fix string) []report.Remedy {
 	return []report.Remedy{report.Fix(fix)}
 }
 
-// rootSetupRun runs remote.SetupRootScript as root on the host: the host's network and
-// NET_ADMIN for the live buffers (sysctl), its pid namespace for systemctl (systemd refuses a
-// peer it cannot see), writing the host's files.
+// rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,
+// the docker client's own dropped once the restart is queued.
 func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation string, flags []string, out *bytes.Buffer) error {
 	q := &queuedLines{out: out}
 	flag := func(b bool) string {
@@ -688,7 +687,8 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string
 }
 
 // setupRun is remote.SetupRootScript's root run with its arguments: the host's network and
-// NET_ADMIN for sysctl, its pid namespace for systemctl, writing the host's files.
+// NET_ADMIN for the live buffers (sysctl), its pid namespace for systemctl (systemd refuses a
+// peer it cannot see), writing the host's files.
 func setupRun(args ...string) hostRun {
 	return hostRun{Write: true, Network: true, PID: true, NetAdmin: true, Script: remote.SetupRootScript, Args: args}
 }

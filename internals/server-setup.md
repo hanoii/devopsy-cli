@@ -1,6 +1,6 @@
 # Server setup
 
-`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing: parts, states, the merge, the record, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`).
+`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`).
 
 ## Items
 
@@ -19,7 +19,8 @@
 - A root that resolves to `/`, through a link, refuses as `/` does.
 - The mounts drop-in's want comes from the release root alone, in its one form, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.
-- A live socket buffer is raised only when lower, never lowered; one that cannot be raised fails the second check, naming the reboot that loads the file.
+- A run raises a live socket buffer only when lower, never lowering it; one that cannot be raised fails the second check, naming the reboot that loads the file.
+- The sysctl file sets 7500000 at each boot, over an earlier file's higher value: a higher one belongs in a file sorting after `90-devopsy-net.conf`.
 
 ## `daemon.json` and the record
 
@@ -40,16 +41,17 @@
 
 ## Root on the host
 
-- Every root step on a host is one `hostRun`, declaring what it needs (a writable root, the host's network, `NET_ADMIN`, the pid and cgroup namespaces, AppArmor's profile off) and getting nothing more; `remote.EndUserArgs` is apart, as it runs devopsy itself.
+- Every root step on a host is one `hostRun`, declaring what it needs (a writable root, the host's network, `NET_ADMIN`, the pid and cgroup namespaces) and getting nothing more; `remote.EndUserArgs` is apart, as it runs devopsy itself.
 - An apply is one root run of `SetupRootScript`, its arguments what to put, the root to make or give, the buffers to raise, and the restart or the marker; it prints a line per change, which the server's devopsy words.
-- That run has the host's network and `NET_ADMIN`, for `sysctl`, and its pid namespace, for `systemctl`: systemd refuses a peer it cannot see.
+- That run has the host's network and `NET_ADMIN`, for `sysctl`, and its pid namespace, for `systemctl`: systemd refuses a peer it cannot see. Docker's own AppArmor profile, `docker-default`, refuses neither.
 - The root script's system paths sit under its host root argument, "" on a host (`remote.HostRootEnv` in tests), so its tests run it on a temporary directory; the release root is passed as the host names it.
 - `daemon.json` is put through `hostPut` with `dockerd --validate` as its check: a refused file leaves the one there.
 
 ## Restarting Docker
 
 - `--server-setup` offers a restart when the run changes `daemon.json` or Docker has yet to take it (`setup.Pending`), and the operator passes its answer as a condition (`--restart`, `--yes`'s `--restart-idle`, only with no container running): the apply judges it under its locks, restarting only when this run put `daemon.json` or something is pending then, else saying why not.
-- A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up, walking only the deploy user's own projects (`deployEnvBases`, `ownProjects`, `--server-info`'s filter): a project user's tree is never walked or locked, being that user's to change, and the run says its releases are not covered.
+- A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up.
+- The restart's locks are the deploy user's own projects' alone (`deployEnvBases`, `ownProjects`, `--server-info`'s filter), a project user's tree being that user's to change: never walked or locked, and the run says those releases are not waited for.
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
 - The restart is queued with `--no-block`, `daemon-reload` first, after the root run writes the marker with the `InvocationID` read just before the run: a restart that comes ends pending by its new id, the marker left to be read so (`/run` empties at a boot), and one that does not leaves Docker pending.
 - A root run that fails once its restart was asked (its `asked` line, or the marker it wrote) goes on to the bounded wait, which tells whether the restart came: a restart cuts the run's container, and its client's words then go unsaid.

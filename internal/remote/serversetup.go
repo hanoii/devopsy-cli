@@ -43,18 +43,17 @@ const (
 	SetupNoSystem = "nosystemctl" // systemctl refused from the chroot: marked instead
 )
 
-// SetupRootScript is what an apply runs as root on the host (through the util image, chrooted
-// into the host, the system's files under $host_root, the release root as it is given): each file put only when it differs and passes
-// its check, daemon.json's by dockerd itself, the live buffers raised only when lower, the
-// release root made and given to the deploy user only when missing or root's, then Docker
-// restarted (on a daemon.json dockerd takes, daemon-reload first, the restart queued with
-// --no-block) or, when daemon.json
-// changed, the restart marker written with the daemon's InvocationID and the system's restart
-// flag raised. Its arguments, in order: the host root, the deploy user's uid:gid, 1 to make
-// or give the root, the root, daemon.json's text, the sysctl file's, the drop-in's (each ""
-// to leave it), 1 to raise the buffers, restart (now) or mark (the marker and flag whatever
-// changed; "" marks only when daemon.json changed), the InvocationID for the marker, and the
-// flags docker.service starts dockerd with, one a line, which dockerd's check takes too.
+// SetupRootScript is what an apply runs as root on the host, through the util image chrooted
+// into it (the system's files under $host_root, the release root as given): each file put only
+// when it differs and passes its check, daemon.json's by dockerd itself with the unit's flags;
+// the live buffers raised only when lower; the release root made and given to the deploy
+// user; then Docker restarted (the marker written first, on a daemon.json dockerd takes,
+// daemon-reload, the restart queued with --no-block), or, when daemon.json changed, the
+// marker written and the system's restart flag raised. Its arguments, in order: the host
+// root, the deploy user's uid:gid, 1 to make or give the root, the root, daemon.json's text,
+// the sysctl file's, the drop-in's (each "" to leave it), 1 to raise the buffers, restart
+// (now) or mark (the marker and flag, whatever changed; "" marks only when daemon.json
+// changed), the InvocationID for the marker, and the unit's dockerd flags, one a line.
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}

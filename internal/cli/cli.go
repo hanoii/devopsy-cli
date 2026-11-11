@@ -1084,8 +1084,9 @@ Then it shows what is not as devopsy wants it, and asks:
                         keep (Enter) or replace; a kept one is not asked
                         again while it stays as it is; one set outside
                         the file (docker.service's flags) is left
-  socket buffers        /etc/sysctl.d/90-devopsy-net.conf, and the live
-                        values raised to 7.5 MB when lower
+  socket buffers        /etc/sysctl.d/90-devopsy-net.conf, which sets
+                        7.5 MB at each boot, and the live values raised
+                        to it when lower, never lowered
   mounts drop-in        Docker waits at boot for the release root's
                         mounts (a docker.service.d drop-in)
 

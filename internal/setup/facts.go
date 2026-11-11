@@ -9,8 +9,8 @@ import (
 // refuse, every tunable item's state, pending, and what the operator words around them. The
 // server's devopsy, which applies, computes every state; the operator only words them.
 type Facts struct {
-	// Root is the release root, links resolved when it is there; RootAction what an apply
-	// does to it (RootMake, RootGive), "" for nothing.
+	// Root is the release root in its one form, its links followed as far as it is there;
+	// RootAction what an apply does to it (RootMake, RootGive), "" for nothing.
 	Root       string `json:"root"`
 	RootAction string `json:"root_action,omitempty"`
 	// Refusals are the required items that refuse, each said with its fix.
