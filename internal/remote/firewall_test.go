@@ -881,3 +881,33 @@ esac
 		t.Errorf("(%d): %s", code, stderr.String())
 	}
 }
+
+// A piece the install cannot write (a full disk, a read-only file system) ends it there with
+// put's exit 5, its `|| :` taking only put's "same text": nothing loads a loader not written.
+func TestFirewallInstallStopsAtAPieceNotWritten(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin, host := filepath.Join(dir, "bin"), filepath.Join(dir, "host")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rawFirewallFakes(t, bin, dir, false)
+	for name, body := range map[string]string{
+		"systemctl": "#!/bin/sh\necho \"$*\" >>" + dir + "/systemctl\n",
+		"mv":        "#!/bin/sh\nfor a; do case $a in */" + filepath.Base(FirewallScript) + ") exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n",
+	} {
+		write(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("sh", "-c", FirewallInstall(false), "sh", host)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + filepath.Join(dir, "mark")}
+	out, _ := cmd.CombinedOutput()
+	if code := cmd.ProcessState.ExitCode(); code != 5 || !strings.Contains(string(out), host+FirewallScript+" could not be written") {
+		t.Errorf("(%d): %s", code, out)
+	}
+	if fileThere(filepath.Join(dir, "systemctl")) || fileThere(filepath.Join(dir, "fw.iptables.chain")) || fileThere(host+FirewallScript) {
+		t.Errorf("a firewall loaded past a piece not written:\n%s", out)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -403,5 +404,50 @@ func TestDoorHostScriptAsksNoRebootForADropInsMode(t *testing.T) {
 	}
 	if out := run(); out != "" {
 		t.Errorf("the drop-in's text as devopsy's, its mode 600: a reboot asked for nothing:\n%s", out)
+	}
+}
+
+// Each piece --project-users add's host step puts ends the step when it cannot be written (a
+// full disk, a read-only file system), as each is called: put's exit 5 goes through its
+// `|| :` and its if, never read as the same text, so no step after it runs on a piece missing.
+func TestDoorHostScriptStopsAtAPieceNotWritten(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	for name, body := range map[string]string{"mv": "#!/bin/sh\nexit 1\n", "visudo": "#!/bin/sh\n", "sshd": "#!/bin/sh\n"} {
+		write(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each call from its start to its end, its quoted text across lines: put's own lines and
+	// what it is called by.
+	script := DoorHostScript("deploy", "/opt/bin/devopsy")
+	n := 0
+	for _, at := range regexp.MustCompile(`(?m)^\s*(if )?put `).FindAllStringIndex(script, -1) {
+		call := script[at[0]:]
+		cut := min(strings.Index(call+" || :\n", " || :\n"), strings.Index(call+"; then\n", "; then\n"))
+		if cut == len(call) {
+			t.Fatalf("a put called otherwise than in an if or with || : (a pipeline or $(...) keeps its exit): %.80s", call)
+		}
+		ifCall := strings.HasPrefix(strings.TrimSpace(call), "if ")
+		target, args, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(call[:cut]), "if "), " ")
+		target, args, _ = strings.Cut(args, " ")
+		n++
+		piece := `put "$1" ` + args
+		if ifCall {
+			piece = "if " + piece + "; then :; fi"
+		} else {
+			piece += " || :"
+		}
+		f := filepath.Join(t.TempDir(), filepath.Base(target))
+		c := exec.Command("sh", "-c", "set -eu\n"+hostPut+piece+"\necho after", "sh", f)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, _ := c.CombinedOutput()
+		if code := c.ProcessState.ExitCode(); code != 5 || !strings.Contains(string(out), "could not be written") || strings.Contains(string(out), "after") {
+			t.Errorf("%s, not written (%d): %s", target, code, out)
+		}
+	}
+	if n < 3 {
+		t.Errorf("%d pieces put, want the sudoers rule, the keys command and the sshd drop-in at least", n)
 	}
 }
