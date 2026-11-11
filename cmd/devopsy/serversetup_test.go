@@ -934,3 +934,40 @@ func TestServerSetupRefusesARootLinkedToSlash(t *testing.T) {
 		t.Errorf("the release root is / with no refusal, its action %q:\n%s", f.RootAction, out)
 	}
 }
+
+// An apply cut between its root run and its record leaves every part it put in sync, which
+// needs no record: the next run puts nothing, and writes the record.
+func TestServerSetupCutBeforeTheRecord(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if out, code := s.run([]string{"FAKE_CUT_AFTER_ROOT=1"}, remote.ServerSetupFlag, "apply"); code == 0 || fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
+		t.Fatalf("the cut apply (%d):\n%s", code, out)
+	}
+	d, _ := setup.ParseDaemon([]byte(readString(filepath.Join(host, setup.DaemonFile))))
+	for _, p := range setup.Parts {
+		if d.Observed(p) != p.Want {
+			t.Fatalf("%s not put before the cut", p.Name)
+		}
+	}
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply")
+	if code != 0 || strings.Contains(out, "put "+setup.DaemonFile) || !strings.Contains(out, "this server is set up by devopsy now") {
+		t.Errorf("the next apply (%d):\n%s", code, out)
+	}
+	if rec := readRecordOf(t, s); rec["logs"] != (setup.Entry{Applied: setup.Parts[0].Want}) {
+		t.Errorf("the record: %+v", rec)
+	}
+}
+
+// A restart on a server with project users says their releases are not waited for: their
+// trees are theirs, never walked or locked.
+func TestServerSetupRestartSaysProjectUsersAreNotWaitedFor(t *testing.T) {
+	t.Parallel()
+	s, _ := setupServer(t)
+	home := filepath.Join(filepath.Dir(s.root), "home")
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
+	write(t, filepath.Join(home, "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--restart")
+	if code != 0 || !strings.Contains(out, "project users' releases are not waited for") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}

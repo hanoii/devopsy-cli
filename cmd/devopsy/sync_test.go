@@ -200,7 +200,9 @@ case "$*" in
     [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
     while [ "$1" != -c ]; do shift; done
     script=$2; shift 2
-    exec sh -c "$script" "$@" ;;
+    # FAKE_CUT_AFTER_ROOT: the devopsy that ran it killed outright once it is done.
+    [ -n "${FAKE_CUT_AFTER_ROOT:-}" ] || exec sh -c "$script" "$@"
+    sh -c "$script" "$@"; kill -KILL "$PPID"; exit 137 ;;
   # docker info: the host root's docker-info.json, when a test writes one.
   "info --format {{json .}}")
     [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
