@@ -46,11 +46,18 @@ echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
+  # The unit's state while a restart is waited for, as a test writes it (state, result).
+  "show -p ActiveState,Result,InvocationID docker.service")
+    echo "ActiveState=$(cat "$h/state" 2>/dev/null || echo active)"
+    echo "Result=$(cat "$h/result" 2>/dev/null || echo success)"
+    echo "InvocationID=$(cat "$h/invocation")" ;;
   # The unit's command, as a test writes it in execstart.
   "show -p ExecStart --value docker.service") [ ! -f "$h/execstart" ] || cat "$h/execstart" ;;
   # FAKE_RESTART_STUCK: a restart queued that never comes; FAKE_RESTART_DOWN: one that takes
-  # Docker down for good.
+  # Docker down for good; FAKE_RESTART_FAILS: one whose start systemd refuses, the unit failed
+  # with that result.
   "restart --no-block docker.service")
+    [ -z "${FAKE_RESTART_FAILS:-}" ] || { : >"$h/docker-down"; echo failed >"$h/state"; echo "$FAKE_RESTART_FAILS" >"$h/result"; exit 0; }
     [ -z "${FAKE_RESTART_DOWN:-}" ] || : >"$h/docker-down"
     [ -n "${FAKE_RESTART_STUCK:-}${FAKE_RESTART_DOWN:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
 esac
@@ -779,11 +786,12 @@ h=$DEVOPSY_INTERNAL_HOST_ROOT
 echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
-  "show -p InvocationID --value docker.service")
+  "show -p InvocationID --value docker.service"|"show -p ActiveState,Result,InvocationID docker.service")
     if [ -e "$h/restarting" ]; then
       n=$(($(cat "$h/reads" 2>/dev/null || echo 0) + 1)); echo "$n" >"$h/reads"
       [ "$n" -lt 2 ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; rm -f "$h/restarting"; }
     fi
+    case $3 in *,*) echo "ActiveState=activating"; echo "Result=success"; printf 'InvocationID=' ;; esac
     cat "$h/invocation" ;;
   "restart --no-block docker.service")
     if [ -n "${FAKE_RESTART_CUTS:-}" ]; then : >"$h/restarting"; kill -KILL "$PPID"; exit 0; fi
@@ -1003,4 +1011,25 @@ func binaryVersion(t *testing.T) string {
 	}
 	first, _, _ := strings.Cut(string(out), "\n")
 	return strings.TrimPrefix(first, "devopsy ")
+}
+
+// A restart whose start systemd refuses (its start limit hit) ends the wait at once, not at
+// its bound: the error names the unit's result, the journal, and the two commands that start
+// Docker again as root.
+func TestServerSetupRestartRefusedBySystemd(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	start := time.Now()
+	out, code := s.run([]string{"FAKE_RESTART_FAILS=start-limit-hit"}, "@devopsy@one:", "--server-setup", "--yes")
+	if took := time.Since(start); took > 30*time.Second {
+		t.Errorf("the wait went on for %s, though the unit failed", took)
+	}
+	if code != 1 || !strings.Contains(out, "error: Docker did not start again: start-limit-hit") || !strings.Contains(out, "$ journalctl -u docker.service") ||
+		!strings.Contains(out, "$ systemctl reset-failed docker.service\n") || !strings.Contains(out, "$ systemctl start docker\n") ||
+		readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	if !strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl reset-failed docker.service\nsystemctl daemon-reload\nsystemctl restart --no-block docker.service\n") {
+		t.Errorf("the start counter not cleared before the restart:\n%s", readString(filepath.Join(host, "systemctl.log")))
+	}
 }

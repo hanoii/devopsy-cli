@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -389,6 +390,32 @@ func systemctlShow(property string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// systemctlProps is docker.service's properties in one systemctl show, by name, none when
+// systemctl cannot say.
+func systemctlProps(names ...string) map[string]string {
+	props := map[string]string{}
+	out, err := exec.Command("systemctl", "show", "-p", strings.Join(names, ","), "docker.service").Output()
+	if err != nil {
+		return props
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if k, v, ok := strings.Cut(l, "="); ok {
+			props[k] = strings.TrimSpace(v)
+		}
+	}
+	return props
+}
+
+// startFailed is the error of a restart whose start systemd refused (result, the unit's
+// Result), with the commands that start Docker again when its start limit was hit.
+func startFailed(result string) error {
+	f := &report.Failure{Msg: "Docker did not start again: " + cmp.Or(result, "failed")}
+	if result == "start-limit-hit" {
+		f.Remedies = append(f.Remedies, report.Fix("start it again, as root:", "systemctl reset-failed docker.service", "systemctl start docker"))
+	}
+	return f
+}
+
 // applySetup applies the server's setup, in order: under the apply lock, the required checks
 // and the states read again, the release locks for a restart, one root run, the record, the
 // restart's wait, the checks again, then what it did and what waits. In upgrade mode a
@@ -582,13 +609,19 @@ func applySetup(h setupHost, a setupApply) int {
 			// The marker is there already; the system's restart flag goes now, by a root run
 			// that needs Docker up, and only now: raised before the restart, a restart that
 			// came would leave a reboot asked for nothing.
+			said := &report.Failure{Msg: err.Error()}
+			var cause *report.Failure
+			if errors.As(err, &cause) {
+				said.Remedies = cause.Remedies
+			}
+			said.Remedies = append(said.Remedies, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
 			var marked bytes.Buffer
 			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, rd.flags, &marked) == nil {
-				report.Fail(err, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
+				report.Fail(said)
 				sayRootLines(marked.String(), nil, f.Root)
 			} else {
-				report.Fail(&report.Failure{Msg: err.Error(), Details: []string{"Docker does not answer, so nothing was flagged for a reboot: it takes daemon.json whenever it starts again"},
-					Remedies: []report.Remedy{report.Hint("what Docker said, as root:", "journalctl -u docker.service")}})
+				said.Details = []string{"Docker does not answer, so nothing was flagged for a reboot: it takes daemon.json whenever it starts again"}
+				report.Fail(said)
 			}
 			return 1
 		}
@@ -776,7 +809,12 @@ func sayRootLines(out string, parts []string, root string) {
 // parts set outside it.
 func waitRestart(before string, h setupHost, outside []string) error {
 	return (boundedWait{what: "Docker's restart", bound: h.restartWait, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) {
-		if id := systemctlShow("InvocationID"); id == "" || id == before {
+		unit := systemctlProps("ActiveState", "Result", "InvocationID")
+		// A start systemd refused ends the wait: Docker will not come back by itself.
+		if unit["ActiveState"] == "failed" {
+			return false, startFailed(unit["Result"])
+		}
+		if id := unit["InvocationID"]; id == "" || id == before {
 			return false, nil
 		}
 		info := dockerInfo()
