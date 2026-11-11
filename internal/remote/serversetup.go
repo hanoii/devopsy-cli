@@ -56,7 +56,9 @@ const (
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}
-` + hostPut + hostRestartFlag + `changed=
+` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1), saying only what it refuses.
+validate='out=$(dockerd --validate --config-file "$1" 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }'
+changed=
 if [ -n "$give" ]; then
   p=$root
   if [ ! -e "$p" ]; then install -d -m 755 "$p"; echo "` + SetupMade + ` $root"; fi
@@ -64,7 +66,7 @@ if [ -n "$give" ]; then
 fi
 if [ -n "$daemon" ]; then
   mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
-  if put "$host_root` + setup.DaemonFile + `" keep:644 'out=$(dockerd --validate --config-file "$1" 2>&1) || { printf "%s\n" "$out"; exit 1; }' "$daemon"; then
+  if put "$host_root` + setup.DaemonFile + `" keep:644 "$validate" "$daemon"; then
     changed=1
     echo "` + SetupPut + ` ` + setup.DaemonFile + `"
   fi
@@ -96,8 +98,7 @@ mark() {
 case $after in
   restart)
     # A file Docker refuses would keep it down: never restarted on one, whoever wrote it.
-    if [ -e "$host_root` + setup.DaemonFile + `" ] && ! out=$(dockerd --validate --config-file "$host_root` + setup.DaemonFile + `" 2>&1); then
-      printf '%s\n' "$out" >&2
+    if [ -e "$host_root` + setup.DaemonFile + `" ] && ! sh -c "$validate" sh "$host_root` + setup.DaemonFile + `"; then
       ` + echoLine(report.ErrorLevel, "dockerd refuses "+setup.DaemonFile+", so Docker would not start again: not restarted", report.Fix("correct the file, then run --server-setup again")) + `
       exit 4
     fi

@@ -223,7 +223,7 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 	write(t, filepath.Join(host, setup.DaemonFile), `{"live-restore": false}`, 0o644)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
 	if code != 0 || !strings.Contains(out, "daemon.json's live-restore is someone else's value: left as it is") || !strings.Contains(out, "put "+setup.DaemonFile+": logs, default-address-pools") ||
-		!strings.Contains(out, "missing or root's") || fileExists(s.root) || readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") {
+		!strings.Contains(out, "is missing: --server-setup makes it the deploy user's") || fileExists(s.root) || readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade", "--restart"); code == 0 {

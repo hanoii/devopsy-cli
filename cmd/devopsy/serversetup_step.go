@@ -386,7 +386,8 @@ func applySetup(h setupHost, a setupApply) int {
 	// A required item refuses the apply; under --upgrade each is a warning, and only
 	// Docker's (no root run without it) or a broken record stops it.
 	for _, r := range f.Refusals {
-		report.Say(sayLevel(a.upgrade), r.Item+": "+r.Message, nil, fixWords(r.Fix)...)
+		msg, fixes := refusalWords(r)
+		report.Say(sayLevel(a.upgrade), msg, nil, fixes...)
 	}
 	stop := len(f.Refusals) > 0
 	if a.upgrade {
@@ -396,13 +397,14 @@ func applySetup(h setupHost, a setupApply) int {
 		return failed("nothing changed")
 	}
 	if a.upgrade && f.RootAction != "" {
-		report.Warn("the release root " + f.Root + " is missing or root's: --server-setup makes it the deploy user's")
-	}
-	if f.DaemonError != "" && !a.upgrade {
-		return failed(f.DaemonError+": nothing changed, the file left as it is", "make it a JSON object Docker reads, then run --server-setup again")
+		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}
 	if f.DaemonError != "" {
-		report.Warn(f.DaemonError+": its parts left as they are", "make it a JSON object Docker reads")
+		msg, fixes := daemonWords(f.DaemonError)
+		report.Say(sayLevel(a.upgrade), msg, nil, fixes...)
+		if !a.upgrade {
+			return failed("nothing changed")
+		}
 	}
 
 	// The parts' decisions, by the states read under the lock.
@@ -579,6 +581,30 @@ func applySetup(h setupHost, a setupApply) int {
 	return 0
 }
 
+// refusalWords is how every command says a refusal of the setup's: its item and message, its
+// fix.
+func refusalWords(r setup.Refusal) (string, []report.Remedy) {
+	return r.Item + ": " + r.Message, fixWords(r.Fix)
+}
+
+// daemonWords is how every command says a daemon.json devopsy cannot judge (why, the facts'
+// DaemonError), which none rewrites.
+func daemonWords(why string) (string, []report.Remedy) {
+	return why + ": devopsy leaves the file as it is", []report.Remedy{report.Fix("make it a JSON object Docker reads, each value of the type Docker takes")}
+}
+
+// rootWords is how every command says the release root that --server-setup makes or gives
+// (action, setup.RootMake or RootGive), "" for neither.
+func rootWords(root, action string) string {
+	switch action {
+	case setup.RootMake:
+		return "the release root " + root + " is missing"
+	case setup.RootGive:
+		return "the release root " + root + " is root's"
+	}
+	return ""
+}
+
 // sayLevel is a refusal's level: an error, a warning under --upgrade.
 func sayLevel(upgrade bool) report.Level {
 	if upgrade {
@@ -753,10 +779,8 @@ func releaseRootReady(root, nothing, ref string) error {
 	switch {
 	case refusal != nil:
 		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(refusal.Fix)}
-	case action == setup.RootMake:
-		return &report.Failure{Msg: "the release root " + root + " is missing: " + nothing, Remedies: []report.Remedy{setUp}}
-	case action == setup.RootGive:
-		return &report.Failure{Msg: "the release root " + root + " is root's: " + nothing, Remedies: []report.Remedy{setUp}}
+	case action != "":
+		return &report.Failure{Msg: rootWords(root, action) + ": " + nothing, Remedies: []report.Remedy{setUp}}
 	}
 	return nil
 }

@@ -1362,17 +1362,16 @@ func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
 	for _, r := range f.Refusals {
 		// The tools are said once, with the others the server needs (serverTools).
 		if r.Item != toolsItem {
-			line(remote.StatusWarning, r.Item+": "+r.Message, fixWords(r.Fix)...)
+			msg, fixes := refusalWords(r)
+			line(remote.StatusWarning, msg, fixes...)
 		}
 	}
-	switch f.RootAction {
-	case setup.RootMake:
-		line(remote.StatusWarning, "the release root "+f.Root+" is missing: releases refuse it", fix)
-	case setup.RootGive:
-		line(remote.StatusWarning, "the release root "+f.Root+" is root's: releases refuse it", fix)
+	if f.RootAction != "" {
+		line(remote.StatusWarning, rootWords(f.Root, f.RootAction)+": releases refuse it", fix)
 	}
 	if f.DaemonError != "" {
-		line(remote.StatusWarning, f.DaemonError, report.Fix("make it a JSON object Docker reads"))
+		msg, fixes := daemonWords(f.DaemonError)
+		line(remote.StatusWarning, msg, fixes...)
 	}
 	return append(es, setupItems(f, setup.ShowInfo, &fix, "setup")...)
 }

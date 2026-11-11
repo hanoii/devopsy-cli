@@ -56,13 +56,16 @@ func runServerSetup(t *remote.Target, args []string) int {
 	}
 	if len(f.Refusals) > 0 {
 		for _, r := range f.Refusals {
-			report.Say(report.ErrorLevel, r.Item+": "+r.Message, nil, fixWords(r.Fix)...)
+			msg, fixes := refusalWords(r)
+			report.Say(report.ErrorLevel, msg, nil, fixes...)
 		}
 		report.Error("nothing changed")
 		return 1
 	}
 	if f.DaemonError != "" {
-		report.Fail(errors.New(f.DaemonError+": nothing changed, the file left as it is"), report.Fix("make it a JSON object Docker reads, then run this again"))
+		msg, fixes := daemonWords(f.DaemonError)
+		report.Say(report.ErrorLevel, msg, nil, fixes...)
+		report.Error("nothing changed")
 		return 1
 	}
 	es := setupEntries(f)
@@ -182,11 +185,8 @@ func (a terminalAsker) confirm(question string, details ...string) (bool, error)
 // release root, then its items (setupItems).
 func setupEntries(f setup.Facts) []remote.StatusEntry {
 	root := remote.StatusEntry{Level: remote.StatusInfo, Key: "release root", Lines: []string{f.Root}}
-	switch f.RootAction {
-	case setup.RootMake:
-		root.Lines[0] += ": made, and given to the deploy user"
-	case setup.RootGive:
-		root.Lines[0] += ": root's, given to the deploy user"
+	if f.RootAction != "" {
+		root.Lines[0] = rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's"
 	}
 	return append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, "")...)
 }
