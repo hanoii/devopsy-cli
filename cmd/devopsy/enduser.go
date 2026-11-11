@@ -78,8 +78,40 @@ func runEndProjectUser(args []string) int {
 	if err := endProjectUser(args[0], endUser); err != nil {
 		return fail("the key is removed, but " + args[0] + ": " + err.Error())
 	}
+	if err := finishPendingRemoval(args[0]); err != nil {
+		return failErr(err)
+	}
 	report.Info("the processes of " + args[0] + " are ended")
 	return 0
+}
+
+// finishPendingRemoval does what a removal of who's left (remote.DoorRemovingFile) once its
+// end is done, as the end flag runs for keysSettle, whose script emptied the keys under their
+// lock: what the door kept for the project goes, then both marks. Nothing with no such mark.
+func finishPendingRemoval(who string) error {
+	data, err := os.ReadFile(remote.DoorRemovingFile(who))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	project := strings.TrimSpace(string(data))
+	d, err := remote.ServerDoor()
+	if err != nil {
+		return err
+	}
+	if d != nil && d.Space != "" && remote.ValidName(project) {
+		if err := removeKept(d.Space, project); err != nil {
+			return err
+		}
+	}
+	for _, f := range []string{remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // endUser ends every process of the user who and its linger (remote.EndUserArgs), as root

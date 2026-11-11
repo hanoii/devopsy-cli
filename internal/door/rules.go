@@ -445,7 +445,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		}
 		switch t, _ := v["type"].(string); t {
 		case "bind":
-			checkBind(svc, name, v, p, paths, startsContainers(verb), fail)
+			checkBind(svc, name, v, p, paths, StartsContainers(verb), fail)
 			// Docker never makes a bind's source: the door makes what it binds (an entry, a
 			// sealed copy) before compose runs, so a source gone in the meantime (a sealed copy
 			// pruned as another environment chose it) fails the start, never binds an empty
@@ -605,9 +605,9 @@ func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, f
 	}
 }
 
-// startsContainers says whether verb makes containers (up, create, run), the only verbs whose
-// file's binds the daemon binds.
-func startsContainers(verb string) bool {
+// StartsContainers says whether verb makes containers (up, create, run), the only verbs whose
+// file's binds the daemon binds, and whose images and vets the door checks before compose.
+func StartsContainers(verb string) bool {
 	return verb == "up" || verb == "create" || verb == "run"
 }
 

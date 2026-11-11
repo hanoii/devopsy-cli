@@ -93,10 +93,14 @@ func listProjectUsers(d *remote.Door) int {
 	}
 	// An end a key's or a user's removal began and did not see through (remote.DoorEndingFile),
 	// the user listed or not: the door answers it nothing until it completes.
-	pending, _ := filepath.Glob(remote.DoorEndingFile("*"))
-	for _, f := range pending {
-		who := strings.TrimSuffix(filepath.Base(f), ".ending")
-		report.Warn(who+": the end of its processes a removal began did not complete, and the door answers it nothing until it does",
+	ending, _ := filepath.Glob(remote.DoorEndingFile("*"))
+	removing, _ := filepath.Glob(remote.DoorRemovingFile("*"))
+	pending := map[string]bool{}
+	for _, f := range append(ending, removing...) {
+		pending[strings.TrimSuffix(strings.TrimSuffix(filepath.Base(f), ".ending"), ".removing")] = true
+	}
+	for _, who := range slices.Sorted(maps.Keys(pending)) {
+		report.Warn(who+": a removal it had did not complete, and the door answers it nothing until it does",
 			"a listing or an edit of its keys completes it, as a removal asked again does")
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
@@ -116,7 +120,7 @@ func projectNameClash(project string, others []string) string {
 	}
 	// useradd gives a user a group of its own name, which would be one of devopsy's: the
 	// project users' (sshd's Match, the firewall) or the door's (what the door runs under).
-	if u := "devopsy-" + project; u == remote.DoorGroup || u == remote.DoorRunGroup {
+	if u := door.UserOf(project); u == remote.DoorGroup || u == remote.DoorRunGroup {
 		return "its user, " + u + ", would bear the name of a group of devopsy's"
 	}
 	for _, o := range others {
@@ -336,11 +340,15 @@ func removeKept(space, project string) error {
 // removeProjectUser takes who's entry and keys, then ends its processes (end): the door
 // answers it no more first, so nothing it runs meanwhile gets a new call through.
 func removeProjectUser(d *remote.Door, project, who, entry string, end func(who string) error) int {
-	ending := remote.DoorEndingFile(who)
+	ending, removing := remote.DoorEndingFile(who), remote.DoorRemovingFile(who)
+	keys := remote.DoorKeysFile(who)
 	if _, err := os.Stat(entry); err != nil {
-		// A removal before whose end did not complete (its mark): asked again, it ends the user
-		// and goes on with what was left, the rest being gone already.
-		if _, err := os.Lstat(ending); err == nil {
+		// A removal before that did not see itself through (its own mark, never a key's
+		// removal's): asked again, it does what is left, its keys first, the entry being gone.
+		if _, err := os.Lstat(removing); err == nil {
+			if err := lockedKeys(keys, func([]string) ([]string, error) { return nil, nil }); err != nil {
+				return failErr(err)
+			}
 			return finishRemoval(d, project, who, end)
 		}
 		if d != nil {
@@ -350,21 +358,21 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 		}
 		return fail("no project user for " + project + " here")
 	}
-	// Its end is marked before anything goes (remote.DoorEndingFile): a failure or a cut
-	// session past here leaves the mark, which a removal asked again, or the next edit or
-	// listing of the user's keys, settles, the door answering the user nothing meanwhile.
-	if err := os.MkdirAll(filepath.Dir(ending), 0o700); err != nil {
-		return failErr(err)
-	}
-	if err := os.WriteFile(ending, nil, 0o600); err != nil {
-		return failErr(err)
-	}
-	if err := os.Remove(entry); err != nil {
-		return failErr(err)
-	}
-	// Its keys go under their lock, as every edit of them: an add meanwhile would bring the
-	// file back.
-	if err := lockedKeys(remote.DoorKeysFile(who), func([]string) ([]string, error) { return nil, nil }); err != nil {
+	// Under the keys' lock, in one stretch: the removal's mark (remote.DoorRemovingFile, with
+	// its project) and its end's, the entry and the keys, so a key's removal meanwhile, which
+	// holds that lock for its end, finds them all or none, and clears only its own mark. A
+	// failure or a cut session past here leaves the marks, which a removal asked again, or the
+	// next edit or listing of the user's keys, finish, the door answering the user nothing
+	// meanwhile.
+	if err := lockedKeys(keys, func([]string) ([]string, error) {
+		if err := os.WriteFile(removing, []byte(project+"\n"), 0o600); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(ending, nil, 0o600); err != nil {
+			return nil, err
+		}
+		return nil, os.Remove(entry)
+	}); err != nil {
 		return failErr(err)
 	}
 	return finishRemoval(d, project, who, end)
@@ -388,8 +396,11 @@ func finishRemoval(d *remote.Door, project, who string, end func(who string) err
 			return failErr(err)
 		}
 	}
-	if err := os.Remove(remote.DoorEndingFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return failErr(err)
+	// Its marks last, the removal's after the end's: what is left until then is done again.
+	for _, f := range []string{remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return failErr(err)
+		}
 	}
 	stays := "its Unix user, home and tree stay"
 	if _, err := user.Lookup(who); err != nil {

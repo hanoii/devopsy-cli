@@ -22,8 +22,9 @@ func TestReview6RemovalAskedAgainTakesTheKeys(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	entry := filepath.Join(t.TempDir(), "devopsy-shop.yaml")
 	keys := remote.DoorKeysFile("devopsy-shop")
-	// As a first removal left it: the mark written, the entry gone, the keys' lock not had.
+	// As a first removal cut before its keys' write left it: its marks, the entry gone, the keys.
 	write(t, keys, review6Key, 0o600)
+	write(t, remote.DoorRemovingFile("devopsy-shop"), "shop\n", 0o600)
 	write(t, remote.DoorEndingFile("devopsy-shop"), "", 0o600)
 	if code := removeProjectUser(&remote.Door{Space: t.TempDir()}, "shop", "devopsy-shop", entry, func(string) error { return nil }); code != 0 {
 		t.Fatalf("a removal asked again: exit %d", code)

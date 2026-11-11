@@ -69,9 +69,9 @@ func TestReview6KeysRemovalClearsAUsersRemovalMark(t *testing.T) {
 	entry := filepath.Join(t.TempDir(), who+".yaml")
 	keys := remote.DoorKeysFile(who)
 	kept := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM1Ehq6Bkq8p5W7iKjX1pXJ7ZcP9C0P1bQz2y3x4w5v6 dev@laptop\n"
-	// As the user's removal left it, its keys' lock not had in a minute: the mark, no entry,
-	// the keys.
+	// As the user's removal, cut before its keys' write, left it: its marks, no entry, the keys.
 	write(t, keys, review6OpusKey+kept, 0o600)
+	write(t, remote.DoorRemovingFile(who), "shop\n", 0o600)
 	write(t, remote.DoorEndingFile(who), "", 0o600)
 	// The key's removal that held the lock completes: its key gone, the mark cleared.
 	write(t, keys, kept, 0o600)

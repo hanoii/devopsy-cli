@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bytes"
+
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -328,5 +329,36 @@ func TestEndUserOfAUserGone(t *testing.T) {
 	t.Parallel()
 	if err := endUser("devopsy-nosuchuser-zz9"); err != nil {
 		t.Errorf("a user gone: %v", err)
+	}
+}
+
+// A removal's mark (remote.DoorRemovingFile) holds what is left of it until done: settled by
+// the end that keysSettle runs, what the door kept for the project goes (its logins, its record
+// and the record's lock), then both marks; with no mark, the end touches none of it.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the door's config and marks are.
+func TestPendingRemovalFinishesWhatItKept(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	space := t.TempDir()
+	write(t, filepath.Join(home, remote.ConfigFile), "door:\n  space: "+space+"\n", 0o600)
+	logins := filepath.Join(door.LoginsDirOf(space, "shop"), "config.json")
+	record := door.ImagesFileOf(space, "shop")
+	for _, f := range []string{logins, record, record + ".lock"} {
+		write(t, f, "{}\n", 0o600)
+	}
+	// With no removal pending, a key's end leaves them.
+	if err := finishPendingRemoval("devopsy-shop"); err != nil || !fileExists(logins) || !fileExists(record) {
+		t.Fatalf("a key's end with no removal pending (%v): its logins %v, its record %v", err, fileExists(logins), fileExists(record))
+	}
+	write(t, remote.DoorRemovingFile("devopsy-shop"), "shop\n", 0o600)
+	write(t, remote.DoorEndingFile("devopsy-shop"), "", 0o600)
+	if err := finishPendingRemoval("devopsy-shop"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{logins, record, record + ".lock", remote.DoorRemovingFile("devopsy-shop"), remote.DoorEndingFile("devopsy-shop")} {
+		if fileExists(f) {
+			t.Errorf("a pending removal finished left %s", f)
+		}
 	}
 }

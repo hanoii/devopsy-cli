@@ -85,8 +85,8 @@ name or a path resolved again later is one nobody checked:
   copied into `<space>` first, at each start (`up`, `create`, `run`): a
   container sees them as they were then, so a file edited in place in a
   release shows after `docker compose up -d`, never after a restart. A
-  bind of a directory inside an entry (`./mnt/data/sub`) needs that
-  directory made first: Docker makes no missing source.
+  bind is an entry itself (`./mnt/data`), never a directory inside one
+  (`./mnt/data/sub`), which the door refuses.
 - The rendered file reaches compose as an open file with no name on
   disk.
 
@@ -498,7 +498,14 @@ devopsy @devopsy@vm1: --project-users remove shop
 ```
 
 Its Unix user, home and tree stay. So do its environments' containers
-and volumes, which `--destroy` takes first.
+and volumes, which `--destroy` takes first. What the door kept for it,
+its registry logins and the record of the images it claimed, goes too.
+
+If the end of its processes fails (Docker restarting, say), the removal
+says so and stays marked: the door answers the user nothing, and the
+same command run again, or a listing of the user's keys
+(`--ssh-keys --for shop`), finishes it. `--project-users` lists any
+removal left so.
 
 Removing a project user clears nothing a leaked key left in its home:
 delete and recreate the home too.

@@ -150,15 +150,18 @@ exec 9>"$d/.$(basename "$f").lock"
 flock -w 60 9 || { ` + echoLine(report.ErrorLevel, "another edit of $f did not end in a minute") + `; exit 75; }
 `
 
-// keysSettle, under keysLock, finishes the end a project user's key's removal began and did
-// not see through (DoorEndingFile, "$f.ending"), before anything else of that user's keys: it
-// runs again until it completes.
+// keysSettle, under keysLock, finishes what a project user's key's removal or the user's own
+// removal began and did not see through (DoorEndingFile, "$f.ending"; DoorRemovingFile,
+// "$f.removing"), before anything else of that user's keys: a removal's keys go here, under
+// this lock, and the end (EndProjectUserFlag) does the rest, what the door kept for a removal
+// included. It runs again until it completes.
 func keysSettle(user string) string {
 	if user == "" {
 		return ""
 	}
-	return `if [ -e "$f.ending" ]; then
-  devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || { ` + echoLine(report.ErrorLevel, "the end of "+user+"'s processes a key's removal began did not complete: ask again") + `; exit 1; }
+	return `if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
+  if [ -e "$f.removing" ]; then : >"$f.tmp" && mv -f "$f.tmp" "$f"; fi
+  devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || { ` + echoLine(report.ErrorLevel, "the end of "+user+"'s processes a removal began did not complete: ask again") + `; exit 1; }
   rm -f "$f.ending"
 fi
 `
@@ -168,7 +171,7 @@ fi
 func KeysReadScript(user string) string {
 	settle := ""
 	if user != "" {
-		settle = `if [ -e "$f.ending" ]; then
+		settle = `if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
 ` + keysLock + keysSettle(user) + `fi
 `
 	}
@@ -298,6 +301,17 @@ func DoorKeysFile(user string) string {
 // while it is there: what the removed key left running would otherwise keep the door.
 func DoorEndingFile(user string) string {
 	return DoorKeysFile(user) + ".ending"
+}
+
+// DoorRemovingFile marks a project user whose removal (--project-users remove) did not see
+// itself through: written, with the project's name in it, under the keys' lock together with
+// the entry's and the keys' removal, and removed last. A key's removal clears only its own
+// mark (DoorEndingFile), so this one stays until what it says is done: the keys empty, the
+// end, what the door kept for the project (its logins, its record) gone. Whatever settles a
+// user (a removal asked again, keysSettle) finishes it, and the door answers the user nothing
+// while it is there.
+func DoorRemovingFile(user string) string {
+	return DoorKeysFile(user) + ".removing"
 }
 
 // DoorSyncKeysFile is a project user's sync keys (SyncKeyLine), apart from its keys: the

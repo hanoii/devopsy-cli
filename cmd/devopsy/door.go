@@ -191,12 +191,11 @@ type doorSide struct {
 	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
 	made   []string
 	madeMu sync.Mutex
-	// keysFile is the project user's keys file (remote.DoorKeysFile): what the door keeps for it
-	// is written only while it holds a key (whileAUser).
+	// keysFile is the project user's keys file (remote.DoorKeysFile), and keysAt that file as
+	// the request found it: the request acts on the user's behalf only while it is still that
+	// file, with a key, and no removal is pending (stillAsked).
 	keysFile string
-	// keysAt is the project user's keys file as the request found it: a sync key is added
-	// only while it is still that file (syncKey).
-	keysAt os.FileInfo
+	keysAt   os.FileInfo
 	// What a request reads once, for every claim and run it makes: the daemon's
 	// "<os> <architecture>" (platform), doorHostReady's answer (hostReady), the directory of
 	// its logins (logins) and its builder's environment (builder).
@@ -905,8 +904,10 @@ func (s *doorSide) stillAsked() error {
 	if s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
 		return errors.New(s.policy.User + "'s keys changed during this request: ask again")
 	}
-	if _, err := os.Lstat(remote.DoorEndingFile(s.policy.User)); err == nil {
-		return errors.New("a removal's end of " + s.policy.User + "'s processes did not complete: the next listing or edit of its keys completes it")
+	for _, mark := range []string{remote.DoorEndingFile(s.policy.User), remote.DoorRemovingFile(s.policy.User)} {
+		if _, err := os.Lstat(mark); err == nil {
+			return errors.New("a removal of " + s.policy.User + "'s did not complete: the next listing or edit of its keys completes it")
+		}
 	}
 	return nil
 }
@@ -1275,7 +1276,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return s.pull(config, file, profiles, dir, argv)
 	}
 	s.policy.Label(file)
-	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
+	starts := door.StartsContainers(argv[0])
 	// The image check pins what it checked into the file (startImage), so the file compose
 	// gets, and the vets judge, is marshalled after it.
 	if starts {
