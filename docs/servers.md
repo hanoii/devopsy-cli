@@ -209,6 +209,12 @@ fix:
   restarting, paused, dead, unhealthy, or exited on an error of their
   own (a stop's codes excepted), each as `--status` says it.
 
+`--json` prints the facts and the same lines for scripts and agents. Its
+fields may change before 1.0.0: the door's `firewall_wrong`,
+`firewall_error` and `project` are gone, the setup's `firewall` (its
+`state`, `differs`, `wrong` and `unread`) saying the firewall for both
+kinds.
+
 A sync or a snapshot under way is reported as information. So are the
 volumes the release root could be on, while it holds no project and is
 not on one, and the memory kdump keeps, with how to free it
