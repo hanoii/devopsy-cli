@@ -15,6 +15,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"strconv"
 	"syscall"
@@ -201,6 +202,25 @@ func TestServerInfoReport(t *testing.T) {
 		}, "", "shop/prod: web paused|"},
 		// Judged as --status judges it (containerTrouble): an exit on an
 		// error of its own, never a one-off's.
+		// The server's setup: never set up, each item not devopsy's, what refuses releases
+		// there, and Docker yet to take daemon.json, each fixed by --server-setup.
+		{"setup never", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Record = "" }, "", "never set up by devopsy: --upgrade applies nothing here|devopsy @vm1: --server-setup"},
+		{"setup part", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Parts[1].State, i.Setup.Parts[1].Observed = setup.Changed, `{"live-restore":false}`
+		}, "",
+			`live-restore: {"live-restore":false}, someone else's; devopsy's {"live-restore":true}|devopsy @vm1: --server-setup`},
+		{"setup file", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Files[1].InSync = false }, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf is not devopsy's|devopsy @vm1: --server-setup"},
+		{"setup buffer", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Buffers[0].Live, i.Setup.Buffers[0].Low = 212992, true
+		}, "", "net.core.rmem_max is 212992, below 7500000|devopsy @vm1: --server-setup"},
+		{"setup pending", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Pending = true }, "", "has yet to take daemon.json, at its next restart|devopsy @vm1: --server-setup"},
+		{"setup root", func(i *remote.ServerInfo) { i.Setup = setUp(setup.RootMake) }, "", "the release root /home/devopsy is missing: releases refuse it|devopsy @vm1: --server-setup"},
+		{"setup refusal", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Refusals = []setup.Refusal{{Item: "Docker", Message: "systemd is not this host's init, which --server-setup restarts Docker with"}}
+		}, "", "Docker: systemd is not this host's init|"},
 		{"exited on an error", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "exited", ExitCode: 1},
 				remote.HostContainer{Project: "shop-prod", Service: "app", State: "exited", ExitCode: 2, OneOff: true})
@@ -267,6 +287,33 @@ func TestServerInfoReport(t *testing.T) {
 		strings.Contains(fixText(warnings[0].fixes), "--shell-host") ||
 		fixText(warnings[1].fixes) != "\n$ cd /home/devopsy/shop/dev/current && devopsy --status\n" {
 		t.Errorf("local: %+v", warnings)
+	}
+
+	// Set up by devopsy: where its record is, a kept part said and never warned, the volume
+	// hint a line; the logs part covering json-file without max-size, said once. Locally, the
+	// fix is words, with no address to name.
+	info = healthy()
+	info.Setup = setUp("")
+	info.Setup.Parts[2].State, info.Setup.Parts[2].Observed = setup.Kept, `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`
+	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9}}
+	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+	for _, want := range []string{"setup         by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `              daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
+		"              volumes: the release root is on no volume of its own; volumes that could hold it:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("set up: no %q in:\n%s", want, out)
+		}
+	}
+	if len(warnings) != 0 {
+		t.Errorf("set up: %+v", warnings)
+	}
+	info.Docker.LogOpts = nil
+	info.Setup.Parts[0].State, info.Setup.Parts[0].Observed = setup.Changed, `{"log-driver":"json-file"}`
+	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !strings.Contains(warnings[0].msg, "logs: ") {
+		t.Errorf("json-file without max-size, judged as the logs part: %+v", warnings)
+	}
+	info.Setup.Record = ""
+	if _, warnings = serverInfoSays(info, "", "", "0.53.0", now); len(warnings) != 2 || fixText(warnings[0].fixes) != "run --server-setup for this server, as its deploy user\n" {
+		t.Errorf("never set up, locally: %+v", warnings)
 	}
 
 	// A kernel without AppArmor is said, not warned: nothing to install.
@@ -389,7 +436,9 @@ case "$1 $2" in
 esac
 exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 `, 0o755)
-	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "@devopsy@one:", "--server-info")
+	// The host's own files are a host root of the test's: no systemd, nothing set up.
+	host := t.TempDir()
+	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin", remote.HostRootEnv + "=" + host}, "@devopsy@one:", "--server-info")
 	for _, want := range []string{
 		"@devopsy@one:\n",
 		"releases      " + s.root + ", keep 5",
@@ -406,6 +455,10 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		// The server's clock, taken last and compared on arrival.
 		"clock not synchronized, ",
 		"$ timedatectl timesync-status",
+		// The setup as --server-setup judges it, with its fixes.
+		"setup         never set up by devopsy: --upgrade applies nothing here\n              to fix it:\n              $ devopsy @devopsy@one: --server-setup\n",
+		"              Docker: systemd is not this host's init",
+		"              daemon.json: logs: none, devopsy's",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
@@ -732,4 +785,18 @@ func TestServerInfoReadsNoTreeOfARemovedProjectUser(t *testing.T) {
 	if _, own := walk(); len(own) != 0 {
 		t.Errorf("after --project-users remove, the deploy user reads the tree its Unix user still owns: %v", own)
 	}
+}
+
+// setUp is a server's setup as devopsy left it, every item devopsy's, the release root's
+// action rootAction.
+func setUp(rootAction string) *setup.Facts {
+	f := &setup.Facts{Root: "/home/devopsy", RootAction: rootAction, Record: "/home/devopsy/.config/devopsy/server.yaml",
+		Files: []setup.FileFact{{Item: setup.ItemBuffers, Path: setup.SysctlFile, InSync: true}, {Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: true}}}
+	for _, p := range setup.Parts {
+		f.Parts = append(f.Parts, setup.PartFact{Name: p.Name, State: setup.InSync, Observed: p.Want, Want: p.Want})
+	}
+	for _, k := range setup.BufferKeys {
+		f.Buffers = append(f.Buffers, setup.BufferFact{Key: k, Live: setup.BufferSize})
+	}
+	return f
 }

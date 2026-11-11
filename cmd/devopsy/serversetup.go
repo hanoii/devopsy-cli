@@ -183,8 +183,7 @@ func (a terminalAsker) confirm(question string, details ...string) (bool, error)
 }
 
 // setupEntries are what --server-setup shows before it asks, as --status shows entries: the
-// release root, then each item that is not devopsy's (a warning), each kept part, pending,
-// and the volume hint.
+// release root, then its items (setupItems).
 func setupEntries(f setup.Facts) []remote.StatusEntry {
 	root := remote.StatusEntry{Level: remote.StatusInfo, Key: "release root", Lines: []string{f.Root}}
 	switch f.RootAction {
@@ -193,50 +192,80 @@ func setupEntries(f setup.Facts) []remote.StatusEntry {
 	case setup.RootGive:
 		root.Lines[0] += ": root's, given to the deploy user"
 	}
-	es := []remote.StatusEntry{root}
+	return append([]remote.StatusEntry{root}, setupItems(f, nil, "")...)
+}
+
+// setupItems are the setup's tunable items as --server-setup and --server-info show them:
+// what is not devopsy's one warning per item with fix (none when nil), each kept part a line,
+// pending a warning, the volume hint a line. Each is under its item's key, or under key with
+// the item's name first when key is not "".
+func setupItems(f setup.Facts, fix *report.Remedy, key string) []remote.StatusEntry {
+	var es []remote.StatusEntry
+	entry := func(level, item string, lines ...string) {
+		if len(lines) == 0 {
+			return
+		}
+		e := remote.StatusEntry{Level: level, Key: item, Lines: lines}
+		if key != "" {
+			e.Key, e.Lines = key, append([]string{item + ": " + lines[0]}, lines[1:]...)
+		}
+		if level == remote.StatusWarning && fix != nil {
+			e.Remedies = []report.Remedy{*fix}
+		}
+		es = append(es, e)
+	}
 	none := func(v string) string {
 		if v == "{}" {
 			return "none"
 		}
 		return v
 	}
+	var differ, kept []string
 	for _, p := range f.Parts {
 		switch p.State {
 		case setup.Devopsys:
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + ", devopsy's " + p.Want}})
+			differ = append(differ, p.Name+": "+none(p.Observed)+", devopsy's "+p.Want)
 		case setup.Changed:
 			whose := ", someone else's; devopsy's "
 			if p.Observed == "{}" {
 				whose = ", removed by someone; devopsy's "
 			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + whose + p.Want}})
+			differ = append(differ, p.Name+": "+none(p.Observed)+whose+p.Want)
 		case setup.Kept:
-			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + ", kept by the admin"}})
+			kept = append(kept, p.Name+": "+none(p.Observed)+", kept by the admin")
 		}
 	}
+	entry(remote.StatusWarning, "daemon.json", differ...)
+	entry(remote.StatusInfo, "daemon.json", kept...)
 	for _, x := range f.Files {
+		var lines []string
 		if !x.InSync {
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: x.Item, Lines: []string{x.Path + " is not devopsy's"}})
+			lines = append(lines, x.Path+" is not devopsy's")
 		}
-		if x.Item != setup.ItemBuffers {
-			continue
-		}
-		for _, b := range f.Buffers {
-			if b.Low {
-				es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: setup.ItemBuffers, Lines: []string{fmt.Sprintf("%s is %d, below %d", b.Key, b.Live, setup.BufferSize)}})
+		if x.Item == setup.ItemBuffers {
+			for _, b := range f.Buffers {
+				if b.Low {
+					lines = append(lines, fmt.Sprintf("%s is %d, below %d", b.Key, b.Live, setup.BufferSize))
+				}
 			}
 		}
+		entry(remote.StatusWarning, x.Item, lines...)
 	}
 	if f.Pending {
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "Docker", Lines: []string{"has yet to take daemon.json, at its next restart"}})
+		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
 	if f.Hint() {
-		hint := remote.StatusEntry{Level: remote.StatusInfo, Key: "volumes"}
-		for _, c := range f.Candidates {
-			hint.Lines = append(hint.Lines, fmt.Sprintf("%s (%s on %s, %s, %s free)", c.MountPoint, c.FSType, c.Source, humanBytes(c.Size), humanBytes(c.Free)))
-		}
-		hint.Lines = append(hint.Lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
-		es = append(es, hint)
+		entry(remote.StatusInfo, "volumes", volumeHint(f)...)
 	}
 	return es
+}
+
+// volumeHint is the volume hint's lines: each volume the release root could be on, then how
+// to put releases there.
+func volumeHint(f setup.Facts) []string {
+	lines := []string{"the release root is on no volume of its own; volumes that could hold it:"}
+	for _, c := range f.Candidates {
+		lines = append(lines, fmt.Sprintf("%s (%s on %s, %s, %s free)", c.MountPoint, c.FSType, c.Source, humanBytes(c.Size), humanBytes(c.Free)))
+	}
+	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
 }

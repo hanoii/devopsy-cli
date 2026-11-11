@@ -124,6 +124,8 @@ in `--shell-host`; anywhere else it refuses. It reports:
   kdump, and whether its clock is synchronized and how far it is from the
   local one;
 - Docker: its image store, security options and logs;
+- its setup as `--server-setup` judges it: whether devopsy set it up,
+  where its record is, and the values someone else set that were kept;
 - the filesystems of the release root, Docker's and containerd's data,
   the snapshot root and `/`: free space, and whether the release root
   makes reflinks;
@@ -142,7 +144,13 @@ fix:
 - a clock out of sync;
 - a kernel with AppArmor and no `apparmor_parser`, on which no container
   starts;
-- Docker logs that grow without a limit;
+- Docker logs that grow without a limit, on a server whose devopsy does
+  not judge its setup yet;
+- a server never set up by devopsy, on which `--upgrade` applies nothing,
+  and each item of the setup that is not devopsy's (a release root
+  releases refuse, a part of `daemon.json`, the socket buffers, the
+  mounts drop-in) or that Docker has not taken yet, each fixed by
+  `--server-setup`;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
@@ -159,8 +167,9 @@ fix:
   restarting, paused, dead, unhealthy, or exited on an error of their
   own (a stop's codes excepted), each as `--status` says it.
 
-A sync or a snapshot under way is reported as information. So is the
-memory kdump keeps, with how to free it
+A sync or a snapshot under way is reported as information. So are the
+volumes the release root could be on, while it holds no project and is
+not on one, and the memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check. `--json` prints

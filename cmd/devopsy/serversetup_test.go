@@ -222,6 +222,15 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade", "--restart"); code == 0 {
 		t.Errorf("--upgrade with a restart (%d):\n%s", code, out)
 	}
+	// What fails is a warning naming --server-setup, and the upgrade ends with 0: its binary
+	// is in place.
+	if err := os.RemoveAll(filepath.Join(host, "run", "systemd")); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || !strings.Contains(out, "devopsy: warning: Docker: systemd is not this host's init") ||
+		!strings.Contains(out, "devopsy: warning: nothing changed\n") || !strings.Contains(out, "run --server-setup for this server") {
+		t.Errorf("--upgrade on a failure (%d):\n%s", code, out)
+	}
 }
 
 // scripted answers --server-setup's questions in order, saying which it was asked.

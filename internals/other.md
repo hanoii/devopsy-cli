@@ -28,6 +28,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - Facts agree with what the scripts read: roles from what `docker ps` lists, restarting and paused included (`RoleHoldersScript`, `cli.Running`), a `tail` that answers `--version` (`followOutput`), health only of a running container.
 - Said, never warned: the classic image store (warned on a server with project users, as a Docker the door's claims refuse, `doorHostReady`), Docker's security options, and a sync or a snapshot under way; `EnvStatus`'s `busy` is ignored on a server without `flock`, where every lock reads held.
 - AppArmor is warned about only as a kernel with it and no `apparmor_parser` (looked for in sbin, outside the deploy user's PATH): `docker info` lists AppArmor whenever the kernel has it, and Docker then loads its profile with the parser, without which no container starts.
+- The server's setup is `--server-setup`'s facts from the same gatherer (`readSetup`, `ServerInfo.Setup`, nil from an older server, which shows nothing), worded by `setupInfoEntries` under one `setup` key, one warning per item with `--server-setup` as its fix, words locally; the json-file `max-size` warning goes wherever the logs part was judged.
 - A full disk's fix follows what is on it (Docker's cache, snapshots); the no-reflinks fix names the server's `snapshots: {mirror: false}` first when it refuses every mirror.
 
 ## --ssh-keys

@@ -1031,7 +1031,8 @@ for no lock, or without a server the Linux server it runs on (in
 --shell-host): its devopsy and release settings, the system (memory,
 load, uptime, the memory the kernel keeps for Kexec HandOver and kdump,
 whether its clock is synchronized and how far it is from the local one),
-Docker (image store, security options, logs), the filesystems of the
+Docker (image store, security options, logs), its setup as
+--server-setup judges it, the filesystems of the
 release root, Docker's and containerd's data, the snapshot root and /
 (free space, reflinks on the release root), the roles projects hold and
 what they export, and every environment under the release root with its
@@ -1041,7 +1042,8 @@ What needs attention is a warning under what it is about, with its fix:
 an older devopsy, a reboot the system asks for, memory Kexec HandOver
 keeps as CMA (the kernel's own allocations can run out with memory
 free), a clock out of sync, a kernel with AppArmor and no
-apparmor_parser (no container starts), logs without a size limit, a disk
+apparmor_parser (no container starts), logs without a size limit, a
+server never set up by devopsy or an item of its setup not devopsy's, a disk
 90% full or with less than 5 GB free, no reflinks, a snapshot root on
 the release root's filesystem, a tool the server needs missing, a role
 held twice, and an environment whose first release failed, cut off past

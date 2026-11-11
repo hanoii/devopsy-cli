@@ -1,5 +1,7 @@
 package remote
 
+import "github.com/hanoii/devopsy-cli/internal/setup"
+
 // ServerFactsFlag is the hidden flag behind --server-info: run by its
 // session on the server, it prints the server's facts as one JSON
 // document (ServerInfo), which the operator's devopsy formats and judges.
@@ -51,6 +53,9 @@ type ServerInfo struct {
 	CrashKernel int64 `json:"crash_kernel,omitempty"`
 
 	Docker DockerFacts `json:"docker"`
+	// Setup is the server's setup as --server-setup judges it, nil from a devopsy older than
+	// it.
+	Setup *setup.Facts `json:"setup,omitempty"`
 	// Door is the server's door, nil on a server with none (ServerDoor).
 	Door  *DoorFacts `json:"door,omitempty"`
 	Disks []Disk     `json:"disks"`

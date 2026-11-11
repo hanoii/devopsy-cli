@@ -24,6 +24,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
@@ -156,6 +157,9 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	info.Docker = dockerFacts()
+	if rd, err := readSetup(setupHost{root: os.Getenv(remote.HostRootEnv)}); err == nil {
+		info.Setup = &rd.facts
+	}
 	info.Door = doorFacts()
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
@@ -956,13 +960,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			logs += " (daemon.json unreadable)"
 		}
 		more(logs)
-		if d.LogDriver == "json-file" && d.LogOptsKnown && d.LogOpts["max-size"] == "" {
+		// The setup's logs part covers it where it was judged, and stays silent on a value kept.
+		judged := info.Setup != nil && info.Setup.DaemonError == ""
+		if !judged && d.LogDriver == "json-file" && d.LogOptsKnown && d.LogOpts["max-size"] == "" {
 			warn("containers' logs grow without a limit (json-file without max-size) until the disk is full",
 				report.Fix(`"log-opts": {"max-size": "20m", "max-file": "5"} in /etc/docker/daemon.json, then restart Docker, as root: containers created after it get it`))
 		}
 		if d.Proxy != "" {
 			more("proxy " + d.Proxy)
 		}
+	}
+
+	// The server's setup, as --server-setup judges it.
+	if info.Setup != nil {
+		es = append(es, setupInfoEntries(*info.Setup, ref)...)
 	}
 
 	// The disks.
@@ -1283,4 +1294,36 @@ func sortedKeysOf[V any](m map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// setupInfoEntries are --server-info's lines on the server's setup (f): under setup, whether
+// devopsy set it up and what refuses releases there, then its items (setupItems), each not
+// devopsy's fixed by --server-setup on ref (in words locally, ref "").
+func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
+	fix := report.Fix("", "devopsy @"+ref+" --server-setup")
+	if ref == "" {
+		fix = report.Fix("run --server-setup for this server, as its deploy user")
+	}
+	var es []remote.StatusEntry
+	line := func(level, msg string, fixes ...report.Remedy) {
+		es = append(es, remote.StatusEntry{Level: level, Key: "setup", Lines: []string{msg}, Remedies: fixes})
+	}
+	if f.Record == "" {
+		line(remote.StatusWarning, "never set up by devopsy: --upgrade applies nothing here", fix)
+	} else {
+		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
+	}
+	for _, r := range f.Refusals {
+		line(remote.StatusWarning, r.Item+": "+r.Message, fixWords(r.Fix)...)
+	}
+	switch f.RootAction {
+	case setup.RootMake:
+		line(remote.StatusWarning, "the release root "+f.Root+" is missing: releases refuse it", fix)
+	case setup.RootGive:
+		line(remote.StatusWarning, "the release root "+f.Root+" is root's: releases refuse it", fix)
+	}
+	if f.DaemonError != "" {
+		line(remote.StatusWarning, f.DaemonError, report.Fix("make it a JSON object Docker reads"))
+	}
+	return append(es, setupItems(f, &fix, "setup")...)
 }
