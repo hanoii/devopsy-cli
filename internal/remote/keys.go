@@ -111,6 +111,15 @@ func ParseAuthorizedKeys(content string) []AuthorizedKey {
 // whose keys are its deploy user's to edit: the deploy user's name is on stdout.
 const AskedAsProjectUser = 5
 
+// askedAsProjectUser exits AskedAsProjectUser, the deploy user's name on stdout (the owner of
+// the devopsy it finds), when the session's user is a project user: what follows is the
+// deploy user's to do.
+var askedAsProjectUser = `if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
+  stat -c %U "$(readlink -f "$(command -v devopsy)")" 2>/dev/null || :
+  exit ` + fmt.Sprint(AskedAsProjectUser) + `
+fi
+`
+
 // keysPrelude is the file whose keys a --ssh-keys script edits: the deploy user's own
 // authorized_keys, or with user a project user's keys in the door's directory (DoorKeysFile),
 // which the deploy user edits and sshd asks it for (--authorized-keys).
@@ -123,11 +132,7 @@ f=$HOME/.ssh/authorized_keys
 	}
 	return `set -eu
 umask 077
-if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
-  stat -c %U "$(readlink -f "$(command -v devopsy)")" 2>/dev/null || :
-  exit ` + fmt.Sprint(AskedAsProjectUser) + `
-fi
-id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
+` + askedAsProjectUser + `id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
 ` + doorDirShell + `
 f=$door/keys/` + user + `
 sf=$door/sync-keys/` + user + `
