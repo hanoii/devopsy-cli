@@ -51,3 +51,24 @@ func TestSessionFromTakesOnlyWhatParses(t *testing.T) {
 		}
 	}
 }
+
+// A hint on a server names the session's address, else the release's DEVOPSY_TARGET (read
+// only then, and only when it parses), else none: no command, never a placeholder.
+func TestSessionOrTheRelease(t *testing.T) {
+	t.Parallel()
+	read := 0
+	release := func(a string) func() string { return func() string { read++; return a } }
+	s := SessionFrom(getenv(map[string]string{AddressEnv: "box", HintAddressEnv: "vm1:prod"})).Or(release("vm2:prod"))
+	if s.On("--status") != "devopsy @box --status" || s.Releasing("--sync") != "devopsy @vm1:prod --sync" || read != 0 {
+		t.Errorf("the session's: %q, %q, the release read %d times", s.On("--status"), s.Releasing("--sync"), read)
+	}
+	s = Session{}.Or(release("vm2:prod"))
+	if s.On("--status") != "devopsy @vm2:prod --status" || s.Releasing("--sync") != "devopsy @vm2:prod --sync" {
+		t.Errorf("the release's: %q, %q", s.On("--status"), s.Releasing("--sync"))
+	}
+	for _, none := range []string{"", "<target>"} {
+		if s := (Session{}).Or(release(none)); s.On("--status") != "" || s.Releasing("--sync") != "" {
+			t.Errorf("none (%q): %q, %q", none, s.On("--status"), s.Releasing("--sync"))
+		}
+	}
+}

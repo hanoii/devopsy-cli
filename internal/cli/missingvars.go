@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
 	"path/filepath"
@@ -126,8 +127,10 @@ func missingVars(p *loadedProject) error {
 		lines = append(lines, fmt.Sprintf("  %-*s  %s", width, m[0], m[1]))
 	}
 	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
-	if target, _ := p.env.Lookup("DEVOPSY_TARGET"); target != "" {
-		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @"+target+" --vars set <KEY>...")
+	// On a server, the address the operator typed (the session's), else the release's.
+	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }
+	if cmd := remote.SessionFrom(lookup).Or(func() string { return lookup("DEVOPSY_TARGET") }).On("--vars set <KEY>..."); cmd != "" {
+		fix = report.Fix("set them in the environment's shared/.env (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", cmd)
 	}
 	return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose requires variables that are not set:", Details: lines, Remedies: []report.Remedy{fix}}}
 }

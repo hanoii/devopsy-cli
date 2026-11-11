@@ -66,6 +66,35 @@ func SessionFrom(getenv func(string) string) Session {
 	return s
 }
 
+// Or is s with release's address in both forms when the session carries none: a release's
+// own DEVOPSY_TARGET, the resolved address as of that release, read only then and taken
+// only as IsAddress takes it.
+func (s Session) Or(release func() string) Session {
+	if s.Address == "" {
+		if a := release(); IsAddress(a) {
+			s.Address, s.Hint = a, a
+		}
+	}
+	return s
+}
+
+// On is the command devopsy @<Address> args, "" without an address.
+func (s Session) On(args string) string {
+	if s.Address == "" {
+		return ""
+	}
+	return "devopsy @" + s.Address + " " + args
+}
+
+// Releasing is On by the address a hint to release, roll back, sync or restore names
+// (Hint), "" without one.
+func (s Session) Releasing(args string) string {
+	if s.Hint == "" {
+		return ""
+	}
+	return "devopsy @" + s.Hint + " " + args
+}
+
 // IsAddress says whether s is an environment's address, as typed after @, within its cap:
 // an alias, or [<server>:][<instance>/]<environment> with a server ParseServer takes.
 func IsAddress(s string) bool {

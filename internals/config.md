@@ -30,6 +30,7 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 - `parent:` names a concrete environment, never a pattern; a cycle, one naming itself included, is an error, since neither could be released first; `parent: ~` is no parent, as any key's null.
 - A parent resolves one level only, at the child's instance, its server from the usual variables, never from the child's (`ParentTarget`): a guessed server would copy the wrong data.
 - A parent that cannot be resolved goes into `ParentErr` instead of failing the load, so every other command works on the child; `DescribeTarget` resolves it leniently (internals/syncs.md for what fails with it).
+- An address a session carries (internals/sessions.md) is taken only within its cap and when it parses as an environment's, its server as `remote.ParseServer` takes one (`remote.IsAddress`, `SessionFrom`), and dropped otherwise, never an error: it only names a command in a hint, and a hint then says its way out in words.
 - A target's `From` holds each value's origin, and `Env` every definition of a variable as it loads (`EnvDef`, `TraceEnv`), what `--debug env` prints.
 
 ## Release settings

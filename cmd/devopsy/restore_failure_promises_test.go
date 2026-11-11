@@ -9,9 +9,8 @@ import (
 
 // What a restore's failure after its mark promises holds at the steps that
 // only just said it (moving --with-env's files, reading the landing's
-// settings): its way out names the environment's real address, never the
-// <target> targetAddress falls back on, and nothing starts the services it
-// says stay down.
+// settings): its way out names the environment's real address, never a
+// placeholder, and nothing starts the services it says stay down.
 func TestRestoreFailureKeepsItsPromises(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
