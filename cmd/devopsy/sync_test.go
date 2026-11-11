@@ -685,6 +685,10 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	t.Cleanup(s.waitReleaseTars)
 	home := filepath.Join(tmp, "home")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\n", 0o644)
+	// The release root is there, as --server-setup leaves it: an upload refuses one missing.
+	if err := os.Mkdir(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	s.dot = filepath.Join(s.project, ".devopsy")
 	write(t, filepath.Join(s.dot, "compose.yaml"), "services:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)

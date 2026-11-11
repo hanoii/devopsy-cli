@@ -250,7 +250,8 @@ what `config.yaml` sets.
   `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing):
   Docker's `daemon.json` (rotated logs, live-restore, address pools),
   socket buffers, the release root, and Docker waiting at boot for its
-  mounts.
+  mounts. A release refuses, before uploading, a server whose release
+  root is missing or root's, or that lacks `tar` or `flock`.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
 

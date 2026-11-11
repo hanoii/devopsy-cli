@@ -125,15 +125,8 @@ func readSetup(h setupHost) (setupRead, error) {
 	if real, err := filepath.EvalSymlinks(r.Root); err == nil {
 		f.Root = real
 	}
-	var missing []string
-	for _, tool := range setupTools {
-		if _, err := exec.LookPath(tool); err != nil {
-			missing = append(missing, tool)
-		}
-	}
-	if len(missing) > 0 {
-		f.Refusals = append(f.Refusals, setup.Refusal{Item: "tools", Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
-			Fix: "install them with the system's packages (tar, util-linux), or with devopsy-server's setup.sh"})
+	if r := toolsRefusal(); r != nil {
+		f.Refusals = append(f.Refusals, *r)
 	}
 	action, refusal := releaseRootCheck(f.Root, os.Getuid())
 	f.RootAction = action
@@ -202,15 +195,27 @@ func readSetup(h setupHost) (setupRead, error) {
 	return rd, nil
 }
 
-// releaseRootCheck is the release root's required item: there, a directory, uid's. What an
-// apply can fix is its action (setup.RootMake, setup.RootGive); anything else refuses: /, not
-// a directory, or another user's.
+// toolsRefusal is the tools' required item: tar and flock in PATH, nil when both are.
+func toolsRefusal() *setup.Refusal {
+	var missing []string
+	for _, tool := range setupTools {
+		if _, err := exec.LookPath(tool); err != nil {
+			missing = append(missing, tool)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return &setup.Refusal{Item: "tools", Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
+		Fix: "install them with the system's packages (tar, util-linux), or with devopsy-server's setup.sh"}
+}
+
+// releaseRootCheck is the release root's required item: there, a directory, uid's (/ is
+// refused by remote.ReleaseSettings already). What --server-setup fixes is its action
+// (setup.RootMake, setup.RootGive); anything else refuses: not a directory, or another user's.
 func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	refuse := func(msg string) (string, *setup.Refusal) {
 		return "", &setup.Refusal{Item: "release root", Message: msg, Fix: "set releases: root in " + remote.UserConfigFile() + " to a directory of the deploy user's, or move this one aside"}
-	}
-	if filepath.Clean(root) == "/" {
-		return refuse("releases: root is /, where releases would sit among the system's own directories")
 	}
 	fi, err := os.Stat(root)
 	switch {
@@ -659,4 +664,63 @@ func waitRestart(before string, h setupHost) error {
 		want, err := d.Visible()
 		return err == nil && want.Equal(running), err
 	})
+}
+
+// runServerReady is remote.ServerReadyFlag, the upload's first step on the server: what every
+// release needs of it, by stats and path lookups alone, said with its fix (ref the server as
+// the address named it). A project user checks nothing: its tree is --project-users add's,
+// and its Docker the door.
+func runServerReady(args []string) int {
+	if len(args) != 1 {
+		return fail("usage: devopsy " + remote.ServerReadyFlag + " <server>")
+	}
+	u, err := user.Current()
+	if err == nil && inDoorGroup(u.Username) {
+		return 0
+	}
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		report.Fail(fmt.Errorf("%w: nothing released", err))
+		return 1
+	}
+	errs := serverReady(r.Root, args[0])
+	for _, err := range errs {
+		report.Fail(err)
+	}
+	if len(errs) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// serverReady is what refuses a release on this server: the tools, the release root.
+func serverReady(root, ref string) []error {
+	var errs []error
+	if t := toolsRefusal(); t != nil {
+		errs = append(errs, &report.Failure{Msg: t.Message + ": nothing released", Remedies: fixWords(t.Fix)})
+	}
+	if err := releaseRootReady(root, "nothing released", ref); err != nil {
+		errs = append(errs, err)
+	}
+	return errs
+}
+
+// releaseRootReady refuses a release root that is not a directory of this user's
+// (releaseRootCheck), what goes undone said in nothing, with the fix: --server-setup on ref
+// (in words when "") when it makes or gives the root, else the check's own words.
+func releaseRootReady(root, nothing, ref string) error {
+	action, refusal := releaseRootCheck(root, os.Getuid())
+	setUp := report.Fix("set the server up with --server-setup first, which makes it the deploy user's")
+	if ref != "" {
+		setUp = report.Fix("set the server up:", "devopsy @"+ref+" --server-setup")
+	}
+	switch {
+	case refusal != nil:
+		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(refusal.Fix)}
+	case action == setup.RootMake:
+		return &report.Failure{Msg: "the release root " + root + " is missing: " + nothing, Remedies: []report.Remedy{setUp}}
+	case action == setup.RootGive:
+		return &report.Failure{Msg: "the release root " + root + " is root's: " + nothing, Remedies: []report.Remedy{setUp}}
+	}
+	return nil
 }

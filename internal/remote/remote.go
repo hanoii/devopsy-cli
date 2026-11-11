@@ -692,7 +692,12 @@ func closeProject(project string) string {
 }
 
 func prelude(t *Target, create bool) string {
-	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	return "set -eu\n" + basePrelude(t) + releasePrelude(t, create)
+}
+
+// releasePrelude is prelude past basePrelude.
+func releasePrelude(t *Target, create bool) string {
+	return `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: release and rollback do not apply"
   exit 1
 fi
@@ -733,7 +738,10 @@ func UploadScript(t *Target, syncs bool) string {
 fi
 ` + markRefusal(t, "nothing released", syncFixes(t, releaseSyncFix(t)), "exit 1")
 	}
-	return prelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
+	// What every release needs of the server, before the lock is taken or $base made: a
+	// refusal leaves nothing.
+	ready := devopsyCall("", []string{ServerReadyFlag, ServerRef(t)}, false) + "\n"
+	return "set -eu\n" + basePrelude(t) + ready + releasePrelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 rel="$base/releases/$id"
 [ ! -e "$rel" ] || { devopsy --say error "release $id exists already on $base"; exit 1; }
 rm -rf "$rel.tmp"

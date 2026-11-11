@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +22,10 @@ import (
 func setupServer(t *testing.T) (*syncSetup, string) {
 	t.Helper()
 	s := newSyncSetup(t)
+	// A fresh server: no release root yet.
+	if err := os.Remove(s.root); err != nil {
+		t.Fatal(err)
+	}
 	tmp := filepath.Dir(s.root)
 	host, bin := filepath.Join(tmp, "host"), filepath.Join(tmp, "bin")
 	name, err := os.Hostname()
@@ -307,8 +312,8 @@ func TestSetupFactsJSON(t *testing.T) {
 	}
 }
 
-// The release root is a directory of the deploy user's: never /, made when missing, and
-// refused when it is no directory.
+// The release root is a directory of the deploy user's: made when missing, and refused when
+// it is no directory.
 func TestReleaseRootCheck(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -318,7 +323,6 @@ func TestReleaseRootCheck(t *testing.T) {
 		root, action string
 		refused      bool
 	}{
-		{"/", "", true},
 		{dir, "", false},
 		{filepath.Join(dir, "new", "releases"), setup.RootMake, false},
 		{file, "", true},
@@ -331,5 +335,63 @@ func TestReleaseRootCheck(t *testing.T) {
 	// Another user's: refused, by its name.
 	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || !strings.Contains(refusal.Message, "is ") {
 		t.Errorf("another user's: %+v", refusal)
+	}
+}
+
+// --server-ready refuses a release on a server that lacks what every release needs, through
+// the real binary: a release root missing or root's (fixed by --server-setup, named as the
+// address named the server), one that is no directory, and a tool missing; a ready one says
+// nothing.
+func TestServerReady(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	tar, err := exec.LookPath("tar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	if err := os.Symlink(tar, filepath.Join(bin, "tar")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "file")
+	write(t, file, "", 0o644)
+	ready := func(root, path string) (string, int) {
+		t.Helper()
+		home := t.TempDir()
+		write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\n", 0o644)
+		c := exec.Command(binary, remote.ServerReadyFlag, "devopsy@vm1:")
+		c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + path}
+		out, _ := c.CombinedOutput()
+		return string(out), c.ProcessState.ExitCode()
+	}
+	for _, c := range []struct {
+		root, path string
+		says       []string
+	}{
+		{dir, bin, nil},
+		{filepath.Join(dir, "missing"), bin, []string{"the release root " + filepath.Join(dir, "missing") + " is missing: nothing released", "$ devopsy @devopsy@vm1: --server-setup"}},
+		{"/", bin, []string{"releases: root must not be /", "nothing released"}},
+		{file, bin, []string{"the release root " + file + " is not a directory: nothing released"}},
+		{dir, filepath.Join(dir, "none"), []string{"no tar or flock in PATH, which every release needs: nothing released"}},
+	} {
+		out, code := ready(c.root, c.path)
+		if (code == 0) != (c.says == nil) {
+			t.Errorf("%s, PATH %s (%d):\n%s", c.root, c.path, code, out)
+		}
+		for _, want := range c.says {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s, PATH %s: no %q:\n%s", c.root, c.path, want, out)
+			}
+		}
+		if c.says == nil && out != "" {
+			t.Errorf("ready, yet said:\n%s", out)
+		}
+	}
+	// root's, given by --server-setup; never checked as root itself.
+	if os.Getuid() != 0 {
+		if out, code := ready("/usr", bin); code == 0 || !strings.Contains(out, "the release root /usr is root's: nothing released") {
+			t.Errorf("root's (%d):\n%s", code, out)
+		}
 	}
 }

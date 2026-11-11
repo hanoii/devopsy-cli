@@ -170,6 +170,8 @@ func run() int {
 			return runProjectUsersStep(args[1:])
 		case remote.ServerSetupFlag:
 			return runServerSetupStep(args[1:])
+		case remote.ServerReadyFlag:
+			return runServerReady(args[1:])
 		case remote.SyncKeyFlag:
 			return runSyncKey(args[1:])
 		case remote.SyncChildFlag:

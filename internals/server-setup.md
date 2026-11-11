@@ -11,7 +11,8 @@
 - Every item is idempotent: a second run in a row changes nothing and restarts nothing.
 - After an apply every item's check runs again, and what was applied and does not read in sync is an error naming the item.
 - A file devopsy writes whole sits at a path of its own and starts with `setup.Header`; devopsy writes or removes no other file, and none until its want is retired.
-- The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused (`releaseRootCheck`).
+- The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused by `remote.ReleaseSettings` in every command.
+- The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts, the upload's `--server-ready` (stats and path lookups only, never Docker) and `--project-users add` (before it changes anything) all call.
 - The release root is made when missing and given to the deploy user only when root owns it, never recursively; another user's, or one that is no directory, refuses.
 - The mounts drop-in's want comes from the release root alone, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.

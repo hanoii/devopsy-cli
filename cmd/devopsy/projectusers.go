@@ -210,6 +210,11 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if err != nil {
 		return failErr(err)
 	}
+	// The release root a project user's tree goes in, as every release needs it.
+	if err := releaseRootReady(r.Root, "no project user made", ""); err != nil {
+		report.Fail(err)
+		return 1
+	}
 	projects := serverProjects(doorProjects(d), r.Root)
 	if why := projectNameClash(project, projects); why != "" {
 		report.Fail(errors.New("a project "+project+" here would share compose names: "+why),

@@ -13,6 +13,11 @@ import (
 // upgrade.
 const ServerSetupFlag = "--server-setup-step"
 
+// ServerReadyFlag is the hidden flag an upload calls first (UploadScript), with the server
+// as an address names it: what every release needs of the server (the release root, tar and
+// flock), checked by stats and path lookups alone.
+const ServerReadyFlag = "--server-ready"
+
 // HostRootEnv roots every path the server's setup reads and writes on the host ("" for /),
 // for tests: the facts read there, and the root script gets it as its first argument.
 const HostRootEnv = "DEVOPSY_INTERNAL_HOST_ROOT"

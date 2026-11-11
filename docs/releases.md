@@ -304,6 +304,13 @@ by its `deploy`.
 
 ## Uploads
 
+Before anything is uploaded or made on the server, the upload refuses a
+server without `tar` or `flock`, or whose release root is not a
+directory of the deploy user's: `devopsy @<server> --server-setup` makes
+a missing root or one root owns the deploy user's ([Servers](servers.md)).
+A project user's release checks neither: its tree is
+`--project-users add`'s.
+
 A release says how much it uploads, shows the upload's progress on one
 line while it runs (at a terminal only), then its id, size and time,
 which the release log keeps. The server names the release by the
