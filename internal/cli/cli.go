@@ -1076,8 +1076,8 @@ directory.
 
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
-                        root's (releases: root in the deploy user's
-                        config.yaml, else its home, never /)
+                        root's and empty (releases: root in the deploy
+                        user's config.yaml, else its home, never /)
   daemon.json           rotated logs (log-driver local), live-restore,
                         and /24 address pools, merged in: every other key
                         stays. A value someone else set is asked about,

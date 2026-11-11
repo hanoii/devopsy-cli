@@ -370,11 +370,33 @@ func TestReleaseRootCheck(t *testing.T) {
 			t.Errorf("%s: %q, %+v", c.root, action, refusal)
 		}
 	}
-	// Root's: given by --server-setup, never refused; a plain user's test alone can say so.
+	// Root's: given by --server-setup only when empty, a fresh volume's lost+found aside, else
+	// refused, so a system directory (releases: root: /usr) is never handed over; a plain
+	// user's test alone can say so.
 	if os.Getuid() != 0 {
-		if action, refusal := releaseRootCheck("/usr", os.Getuid()); action != setup.RootGive || refusal != nil {
+		if action, refusal := releaseRootCheck("/usr", os.Getuid()); action != "" || refusal == nil || !strings.Contains(refusal.Message, "/usr is root's and holds files") {
 			t.Errorf("/usr: %q, %+v", action, refusal)
 		}
+		empty := ""
+		for _, d := range []string{"/mnt", "/srv", "/media", "/var/empty", "/opt"} {
+			if fi, err := os.Stat(d); err == nil && fi.IsDir() && fi.Sys().(*syscall.Stat_t).Uid == 0 && emptyDir(d) {
+				empty = d
+				break
+			}
+		}
+		if empty == "" {
+			t.Log("no empty directory of root's here: the empty case untested")
+		} else if action, refusal := releaseRootCheck(empty, os.Getuid()); action != setup.RootGive || refusal != nil {
+			t.Errorf("%s, empty and root's: %q, %+v", empty, action, refusal)
+		}
+	}
+	if !emptyDir(t.TempDir()) || emptyDir(dir) {
+		t.Error("emptyDir")
+	}
+	lf := t.TempDir()
+	write(t, filepath.Join(lf, "lost+found", ".keep"), "", 0o644)
+	if !emptyDir(lf) {
+		t.Error("a lost+found alone is no file of anyone's")
 	}
 	// Another user's: refused, by its name.
 	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || !strings.Contains(refusal.Message, "is ") {
@@ -432,9 +454,9 @@ func TestServerReady(t *testing.T) {
 			t.Errorf("ready, yet said:\n%s", out)
 		}
 	}
-	// root's, given by --server-setup; never checked as root itself.
+	// root's and full: refused; never checked as root itself.
 	if os.Getuid() != 0 {
-		if out, code := ready("/usr", bin); code == 0 || !strings.Contains(out, "the release root /usr is root's: nothing released") {
+		if out, code := ready("/usr", bin); code == 0 || !strings.Contains(out, "the release root /usr is root's and holds files") {
 			t.Errorf("root's (%d):\n%s", code, out)
 		}
 	}
@@ -851,5 +873,64 @@ func TestServerSetupRestartCutsItsOwnRun(t *testing.T) {
 	}
 	if !fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
 		t.Errorf("no record after a restart that went:\n%s\nsystemctl:\n%s", out, readString(filepath.Join(host, "systemctl.log")))
+	}
+}
+
+// A .. in the release root, or in a link's target, goes up from where the link before it led,
+// as the system resolves it, so the root made and the mounts drop-in are for the path releases
+// use.
+func TestResolveRootGoesUpFromALinksTarget(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "real", "sub", ".keep"), "", 0o644)
+	if err := os.Symlink(filepath.Join(dir, "real", "sub"), filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir+"/link/../other", filepath.Join(dir, "up")); err != nil {
+		t.Fatal(err)
+	}
+	for root, want := range map[string]string{
+		dir + "/link/../made": filepath.Join(dir, "real", "made"),
+		dir + "/up/srv":       filepath.Join(dir, "real", "other", "srv"),
+	} {
+		if got := resolveRoot(root); got != want {
+			t.Errorf("resolveRoot(%s) = %s, want %s", root, got, want)
+		}
+	}
+	// The system's own answer for the first, once it is there.
+	if err := os.Mkdir(filepath.Join(dir, "real", "made"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if real, err := filepath.EvalSymlinks(dir + "/link/../made"); err != nil || real != filepath.Join(dir, "real", "made") {
+		t.Fatalf("the system resolves it to %s, %v", real, err)
+	}
+}
+
+// A release root that is a link to / is refused as / is, never given to the deploy user.
+func TestServerSetupRefusesARootLinkedToSlash(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root owns /: nothing to give")
+	}
+	s, _ := setupServer(t)
+	link := filepath.Join(filepath.Dir(s.root), "slash")
+	if err := os.Symlink("/", link); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(filepath.Dir(s.root), "home", "config.yaml"), "releases:\n  root: "+link+"\n", 0o644)
+	out, _ := s.run(nil, remote.ServerSetupFlag, "facts")
+	i := strings.Index(out, "{")
+	if i < 0 {
+		return // refused before any facts
+	}
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[i:]), &f); err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	if f.Root == "/" && len(f.Refusals) == 0 {
+		t.Errorf("the release root is / with no refusal, its action %q:\n%s", f.RootAction, out)
 	}
 }

@@ -210,10 +210,11 @@ snapshots:
 ```
 
 The release root must be a directory of the deploy user's: a release
-refuses one that is missing or root's, as `/srv` is on a new server, until
-`devopsy @<server> --server-setup` makes it or gives it to the deploy
-user, and one another user owns or that is no directory until it is moved
-aside ([Servers](servers.md#--server-setup)).
+refuses one that is missing, or root's and empty, as `/srv` is on a new
+server, until `devopsy @<server> --server-setup` makes it or gives it to
+the deploy user, and one root owns that holds files, one another user
+owns or one that is no directory until `root:` names another
+([Servers](servers.md#--server-setup)).
 
 To move a server's release root:
 

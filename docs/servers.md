@@ -67,15 +67,17 @@ first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
 host's `docker.service`. It installs none of them: devopsy-server's
 `setup.sh` does. The release root (`releases: root` in the deploy user's
-`config.yaml`, else its home, never `/`) it makes when missing and gives
-to the deploy user when root owns it; one another user owns, or that is
-no directory, it refuses.
+`config.yaml`, else its home, never `/`, a link to it included) it makes
+when missing, and gives to the deploy user when root owns it and it is
+empty (a fresh volume's `lost+found` aside); one root owns that holds
+files (a system directory), one another user owns, or one that is no
+directory, it refuses.
 
 What it keeps as devopsy wants it:
 
 | Item | devopsy's value |
 |---|---|
-| The release root | made when missing, given to the deploy user when root owns it |
+| The release root | made when missing, given to the deploy user when root owns it and it is empty |
 | `daemon.json`'s logs | `"log-driver": "local"`, `"log-opts": {"max-size": "20m", "max-file": "5"}` |
 | `daemon.json`'s `live-restore` | `true` |
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |

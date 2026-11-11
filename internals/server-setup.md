@@ -14,8 +14,9 @@
 - The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused by `remote.ReleaseSettings` in every command.
 - The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts, the upload's `--server-ready` (stats and path lookups only, never Docker) and `--project-users add` (its first check) all call.
 - The tools are one list, `serverTools`, the required ones marked: the setup's refusal reads it, and `--server-info` says each tool from it once.
-- The release root has one form, its links followed by what they say as far as its parts are there, the rest as written (`resolveRoot`): a root behind a link, made or not, its volume mounted or not, gives one want.
-- The release root is made when missing and given to the deploy user only when root owns it, never recursively; another user's, or one that is no directory, refuses.
+- The release root has one form, its links followed by what they say as far as its parts are there, each `..` walked from where the part before it led, the rest as written (`resolveRoot`): a root behind a link, made or not, its volume mounted or not, gives one want.
+- The release root is made when missing and given to the deploy user only when root owns it and it is empty, a filesystem's own `lost+found` aside (`emptyDir`), never recursively: a root-owned directory with files is a system's (`/var`, `/opt`), and refuses, as another user's or one that is no directory does.
+- A root that resolves to `/`, through a link, refuses as `/` does.
 - The mounts drop-in's want comes from the release root alone, in its one form, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.
 - A live socket buffer is raised only when lower, never lowered; one that cannot be raised fails the second check, naming the reboot that loads the file.

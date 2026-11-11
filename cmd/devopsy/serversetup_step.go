@@ -196,18 +196,36 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	return rd, nil
 }
 
-// resolveRoot is root with every link along it followed, as far as its parts are there, the
-// rest as written: one form whether the root is made yet or not, which the mounts drop-in
-// names (systemd follows no link in RequiresMountsFor). A link is followed by what it says,
-// so one to a volume not mounted, or gone, gives the same path as once it is there.
+// emptyDir says whether dir holds nothing, a filesystem's own lost+found aside (a fresh
+// volume's mount point).
+func emptyDir(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	return err == nil && !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() != "lost+found" })
+}
+
+// resolveRoot is root with every link along it followed, as far as its parts are there, each
+// .. walked from where the part before it led, the rest as written: one form whether the root
+// is made yet or not, which the mounts drop-in names (systemd follows no link in
+// RequiresMountsFor). A link is followed by what it says, so one to a volume not mounted, or
+// gone, gives the same path as once it is there.
 func resolveRoot(root string) string {
-	parts := strings.Split(strings.Trim(filepath.Clean(root), "/"), "/")
+	parts := strings.Split(root, "/")
 	cur := "/"
-	for i, hops := 0, 0; i < len(parts); i++ {
-		next := filepath.Join(cur, parts[i])
+	for hops := 0; len(parts) > 0; {
+		p := parts[0]
+		parts = parts[1:]
+		switch p {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, p)
 		fi, err := os.Lstat(next)
 		if err != nil {
-			return filepath.Join(append([]string{next}, parts[i+1:]...)...)
+			// Nothing there: no link further on either, the rest as written.
+			return filepath.Join(append([]string{next}, parts...)...)
 		}
 		if fi.Mode()&os.ModeSymlink == 0 || hops >= 40 {
 			cur = next
@@ -215,13 +233,13 @@ func resolveRoot(root string) string {
 		}
 		target, err := os.Readlink(next)
 		if err != nil {
-			return filepath.Join(append([]string{next}, parts[i+1:]...)...)
+			return filepath.Join(append([]string{next}, parts...)...)
 		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(cur, target)
+		hops++
+		if filepath.IsAbs(target) {
+			cur = "/"
 		}
-		parts = append(strings.Split(strings.Trim(filepath.Clean(target), "/"), "/"), parts[i+1:]...)
-		cur, i, hops = "/", -1, hops+1
+		parts = append(strings.Split(target, "/"), parts...)
 	}
 	return cur
 }
@@ -257,6 +275,9 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	refuse := func(msg string) (string, *setup.Refusal) {
 		return "", &setup.Refusal{Item: "release root", Message: msg, Fix: "set releases: root in " + remote.UserConfigFile() + " to a directory of the deploy user's, or move this one aside"}
 	}
+	if resolveRoot(root) == "/" {
+		return refuse("the release root " + root + " is /, through a link: releases would sit among the system's own directories")
+	}
 	fi, err := os.Stat(root)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -270,8 +291,10 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	switch {
 	case !ok, int(st.Uid) == uid:
 		return "", nil
-	case st.Uid == 0:
+	case st.Uid == 0 && emptyDir(root):
 		return setup.RootGive, nil
+	case st.Uid == 0:
+		return refuse("the release root " + root + " is root's and holds files: only an empty one is given to the deploy user, never a system directory")
 	}
 	owner := strconv.Itoa(int(st.Uid))
 	if u, err := user.LookupId(owner); err == nil {
