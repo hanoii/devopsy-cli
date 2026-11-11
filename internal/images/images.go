@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,6 +136,9 @@ type Image struct {
 	// Docker's containerd store an image built or loaded has them too, so
 	// they never tell a pulled image from an own one (Service.own does).
 	Digests []string
+	// Tags are its names (RepoTags), Labels its image's labels.
+	Tags    []string
+	Labels  map[string]string
 	Created time.Time
 	// Version is its org.opencontainers.image.version label: display
 	// only, never compared (images have no common version field).
@@ -192,7 +196,7 @@ type Set struct {
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
 	// Door: the project's user goes through the door, which names its builds
-	// itself: its own images by bookmark only when held (resolveBookmarks).
+	// itself and refuses a tag of devopsy's: its fetch has no fetch file (WriteFetch).
 	Door bool
 	// ListAll lists every profile's (ListComposeAll), for the labels of what
 	// a copy writes. List without it.
@@ -328,24 +332,52 @@ func bookmarkPrefix(composeName string) string {
 	return "devopsy-" + composeName + "-"
 }
 
-// repoOf is a ref's repository: no digest, no tag; a registry's port stays.
-func repoOf(ref string) string {
-	r, _, _ := strings.Cut(ref, "@")
-	slash := strings.LastIndex(r, "/")
-	if colon := strings.LastIndex(r, ":"); colon > slash {
-		r = r[:colon]
-	}
-	return r
+// RepoOf is a ref's repository: no digest, no tag; a registry's port stays.
+func RepoOf(ref string) string {
+	repo, _ := SplitRef(ref)
+	return repo
 }
+
+// SplitRef is a ref's repository and tag ("" for none), its digest dropped: a colon is the
+// tag's only past the last slash, so a registry's port stays in the repository.
+func SplitRef(ref string) (repo, tag string) {
+	r, _, _ := strings.Cut(ref, "@")
+	if colon := strings.LastIndex(r, ":"); colon > strings.LastIndex(r, "/") {
+		return r[:colon], r[colon+1:]
+	}
+	return r, ""
+}
+
+// HoldOf says whether ref's tag is a bookmark or a hold devopsy writes (bookmarkPrefix,
+// devopsy-<compose name>-<release id>[-<cksum>]), and gives what follows devopsy-: the one
+// reading of that grammar, for the door's too.
+func HoldOf(ref string) (rest string, ok bool) {
+	_, tag := SplitRef(ref)
+	return strings.CutPrefix(tag, "devopsy-")
+}
+
+// Pinned says whether ref names an image by its content (a digest, or an id), which nothing
+// moves: any other name is anyone's on the server to move. An id only whole: Docker takes a
+// short one as a prefix of any image's (a digest it takes only whole).
+func Pinned(ref string) bool {
+	return strings.Contains(ref, "@") || wholeID.MatchString(ref)
+}
+
+var wholeID = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
 func repoKey(ref string) string {
-	r := repoOf(ref)
-	r = strings.TrimPrefix(r, "index.docker.io/")
-	r = strings.TrimPrefix(r, "docker.io/")
-	return strings.TrimPrefix(r, "library/")
+	domain, rest, _ := SplitDomain(RepoOf(ref))
+	if !hubName(domain) {
+		return domain + "/" + rest
+	}
+	return strings.TrimPrefix(rest, "library/")
 }
+
+// Familiar is a name as Docker shows it (familiar), what `docker load` prints of an image it
+// loaded under ref.
+func Familiar(ref string) string { return familiar(ref) }
 
 // familiar is a name as Docker shows it, so a name devopsy computed and
 // one Docker reports compare equal: nginx is nginx:latest, and
@@ -354,7 +386,7 @@ func familiar(ref string) string {
 	if _, digest, ok := strings.Cut(ref, "@"); ok {
 		return repoKey(ref) + "@" + digest
 	}
-	rest := ref[len(repoOf(ref)):]
+	rest := ref[len(RepoOf(ref)):]
 	if rest == "" {
 		rest = ":latest"
 	}
@@ -365,15 +397,15 @@ func familiar(ref string) string {
 // digest dropped (nginx@sha256:..., not nginx:1.27@sha256:...).
 func digestRef(ref string) string {
 	if _, digest, ok := strings.Cut(ref, "@"); ok {
-		return repoOf(ref) + "@" + digest
+		return RepoOf(ref) + "@" + digest
 	}
 	return ref
 }
 
 // isBookmark says whether a tag (repo:tag) is a release's bookmark.
 func isBookmark(tag string) bool {
-	r := repoOf(tag)
-	return len(tag) > len(r) && strings.HasPrefix(tag[len(r)+1:], "devopsy-")
+	_, ok := HoldOf(tag)
+	return ok
 }
 
 // bookmarks are the bookmark names of a release's entries, in order: a
@@ -394,7 +426,7 @@ func bookmarks(entries []entry, name, id string) []string {
 	prefix := bookmarkPrefix(name)
 	bs := make([]string, len(entries))
 	for i, e := range entries {
-		b := repoOf(e.Ref) + ":" + prefix + id
+		b := RepoOf(e.Ref) + ":" + prefix + id
 		if count[repoKey(e.Ref)] > 1 {
 			sum := e.Ref
 			if len(images[familiar(e.Ref)]) > 1 {
@@ -500,6 +532,11 @@ func (s *Set) entries(rel string, strict bool) ([]entry, error) {
 				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, t)
 			}
 			ref = t
+		} else if strict && s.Door && svc.Build {
+			// Behind the door, with no fetch file, by the name the door built it under.
+			if _, err := s.Docker.ID(ref); err != nil {
+				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, ref)
+			}
 		}
 		es = append(es, s.entryOf(svc, ref, mode))
 	}
@@ -525,7 +562,7 @@ func (s *Set) entryOf(svc Service, ref, mode string) entry {
 	}
 	e.ID = img.ID
 	if e.Kind != KindOwn {
-		e.Digest = digestIn(img, svc.Ref)
+		e.Digest = DigestIn(img, svc.Ref)
 		e.Version = sanitize(img.Version)
 		if e.Digest == "" {
 			// Nothing to hold it by: restored like an own image.
@@ -545,18 +582,44 @@ func (svc Service) tag() string {
 	return TagOf(svc.Ref)
 }
 
-// digestIn is img's registry digest for ref's repository, as a name,
+// DigestIn is img's registry digest for ref's repository, as a name,
 // spelled as Docker shows it (mariadb@sha256:..., not
 // docker.io/library/mariadb@...): every hold written the same way, so a
 // rollback holding the same image never changes the reference compose
 // sees, which would recreate the container; "" without one.
-func digestIn(img Image, ref string) string {
+func DigestIn(img Image, ref string) string {
 	for _, d := range img.Digests {
 		if repoKey(d) == repoKey(ref) {
 			return repoKey(ref) + "@" + digestOf(d)
 		}
 	}
 	return ""
+}
+
+// Pin is ref pinned to digest's content, ref@sha256:... (digest a name's,
+// repo@sha256:..., or the digest alone): Docker takes repo:tag@digest and
+// resolves the digest, which no build or tag moves, and docker ps shows
+// the tag; ref as it is when it carries a digest already, or without one.
+// It is what compose runs, from ComposeFile and the door's file alike, so
+// a pin has one spelling there; a Docker command goes by ByDigest.
+func Pin(ref, digest string) string {
+	if i := strings.LastIndex(digest, "@"); i >= 0 {
+		digest = digest[i+1:]
+	}
+	if strings.Contains(ref, "@") || digest == "" {
+		return ref
+	}
+	return ref + "@" + digest
+}
+
+// ByDigest is ref's image by digest as Docker names it, repo@sha256:...
+// (digest a name's or the digest alone): what a Docker command the door
+// runs after a claim takes, the name no longer read.
+func ByDigest(ref, digest string) string {
+	if i := strings.LastIndex(digest, "@"); i >= 0 {
+		digest = digest[i+1:]
+	}
+	return RepoOf(ref) + "@" + digest
 }
 
 // digestOf is a name's digest, sha256:...; "" without one.

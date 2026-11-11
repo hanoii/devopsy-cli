@@ -91,6 +91,9 @@ fix:
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
 - a tool the server needs, missing;
+- on a server with project users, a Docker without its containerd image
+  store or buildx 0.33.0, on which the door refuses every image a project
+  user does not build ([project users](project-users.md));
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
   its switch, a sync, an import or a restore that did not complete, an
@@ -152,9 +155,22 @@ since a `-p` there applies to every server a command reaches, a parent's
 on another server included. devopsy refuses a server whose port
 `DEVOPSY_SSH_COMMAND` overrides.
 
+For one command, `--ssh-option <key=value>` before everything else, as
+many as needed, adds an ssh `-o` to every session it opens, after
+`DEVOPSY_SSH_COMMAND`'s options and before devopsy's:
+
+```sh
+devopsy --ssh-option ForwardAgent=yes @vm1 --shell-host
+```
+
 devopsy adds `-o ClearAllForwardings=yes` to every session. It needs none
 of the host's `LocalForward` lines, and each session would try to bind
-them again while another holds them.
+them again while another holds them. It adds `-o ForwardAgent=no` too,
+whatever `~/.ssh/config` says: a session's user, a project user's above
+all, would otherwise reach every server your agent's keys open. A sync
+across servers needs none: it uses a key made for it
+([Syncs](syncs.md)). `--ssh-option ForwardAgent=yes` asks for the agent
+by hand; on `--shell` it reaches the server, not the container.
 
 A key for CI is set up with `--ssh-keys` (Keys on a server, below).
 
@@ -195,20 +211,31 @@ too.
 
 - `--ssh-keys` lists the keys: fingerprint, type, comment, options.
 - `--ssh-keys add <file>` authorizes a public key. `add --restricted` is
-  for a machine's key: `restrict` (commands only, no shell) plus the agent
-  and port forwarding a sync across servers needs.
+  for a machine's key: `restrict` (commands only, no shell, no pty, no
+  forwarding).
 - `--ssh-keys remove <fingerprint or comment>` removes one. It refuses
   the last, which would lock everyone out.
+- `--ssh-keys --for <project>`, with any of the above, edits a project
+  user's keys instead, on a server with project users (below), logged in
+  as the deploy user: they are kept in its config directory, out of the
+  project user's reach, and sshd asks devopsy for them. Removing any of
+  its keys ends every process that user runs, a session of another key's
+  included (a release cut there is marked and settled by the next one);
+  its last key may go, which is how its logins stop, and the door
+  answers it no more.
 - Without a target, `devopsy --ssh-keys-generate [<name>]` makes an
   ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>` for
   elsewhere), sending nothing anywhere.
 
 For CI: generate a pair, `add` the `.pub` on each server with
 `--restricted`, store the private key as a protected file variable, and
-in the job run `eval "$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY"` before
-`devopsy @prod --release`. To rotate it, generate another, add it, then
+in the job run `devopsy --ssh-option IdentityFile="$DEVOPSY_SSH_KEY"
+@prod --release`, or load it into an agent. To rotate it, generate another, add it, then
 remove the old one.
 
-## Project users with no Docker socket
+## Project users
 
-A deploy user's key is root on the server, since its group reaches Docker's socket. A project can have a Unix user of its own that does not: it finds devopsy as `docker`, and asks the deploy user through sudo for what its compose file needs, each request checked. A leaked key of that user then reaches its project, not the server or the others. Nothing sets this up yet: a server takes `door:` in its deploy user's config, shown by `devopsy --debug schema`, and what `internals/door.md` lists. Everything else stays as it is on a server without it.
+A project can have a Unix user of its own with no access to Docker's
+socket, so that its keys reach that project and not the server: see
+[Project users](project-users.md), which covers the setup, the rules a
+project's compose file follows there, and the firewall.

@@ -301,7 +301,7 @@ func FilterImported(snap, cur string) error {
 	repos := map[string]string{}
 	for _, e := range readList(cur) {
 		if e.Service != "" {
-			repos[e.Service] = repoOf(e.Ref)
+			repos[e.Service] = RepoOf(e.Ref)
 		}
 	}
 	var kept []entry
@@ -310,15 +310,15 @@ func FilterImported(snap, cur string) error {
 		if e.Service == "" || !ok {
 			continue
 		}
-		e.Ref = repo + e.Ref[len(repoOf(e.Ref)):]
+		e.Ref = repo + e.Ref[len(RepoOf(e.Ref)):]
 		if e.Digest != "" {
-			e.Digest = repo + e.Digest[len(repoOf(e.Digest)):]
+			e.Digest = repo + e.Digest[len(RepoOf(e.Digest)):]
 		}
 		if e.OwnRef != "" {
-			e.OwnRef = repo + e.OwnRef[len(repoOf(e.OwnRef)):]
+			e.OwnRef = repo + e.OwnRef[len(RepoOf(e.OwnRef)):]
 		}
 		if e.OwnDigest != "" {
-			e.OwnDigest = repo + e.OwnDigest[len(repoOf(e.OwnDigest)):]
+			e.OwnDigest = repo + e.OwnDigest[len(RepoOf(e.OwnDigest)):]
 		}
 		// Its id is the other server's word: bookmarked by it, any local
 		// image of another repository it names would be tagged into the

@@ -106,9 +106,6 @@ func TestServerAndInstanceVariables(t *testing.T) {
 			t.Errorf("%s written back: %s %s", tg.Address, again.Host, again.Address)
 		}
 	}
-	if got := ChildCheck("devopsy@vm1:5369:b/dev", "true", nil); !strings.Contains(got, "devopsy @devopsy@vm1:5369: --upgrade") {
-		t.Errorf("the child's server in its check:\n%s", got)
-	}
 	env["DEVOPSY_SERVER"] = "devopsy@vm1:5369"
 	if tg := load("b/prod"); tg.Host != "devopsy@vm1:5369" || tg.Address != "devopsy@vm1:5369:b/prod" {
 		t.Errorf("a port from a variable: %+v", tg)

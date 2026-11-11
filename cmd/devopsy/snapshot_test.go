@@ -3478,7 +3478,7 @@ func TestRestoreDataVersion(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("%v: the restore (%d):\n%s", args, code, out)
 		}
-		if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") {
+		if c := readString(releaseFile(t, current, images.ComposeFile)); heldIn(c, strings.TrimPrefix(env[0], "FAKE_DB_IMAGE=")) {
 			t.Errorf("%v: something held after the restore:\n%s", args, c)
 		}
 		h := readString(history)
@@ -3520,7 +3520,7 @@ func TestRestoreDataUnholds(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "db runs ") || !strings.Contains(out, "own image again") {
 		t.Fatalf("the --no-code restore (%d):\n%s", code, out)
 	}
-	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "mariadb@sha256:snap") {
+	if c := readString(releaseFile(t, current, images.ComposeFile)); heldIn(c, "mariadb:11.8") || !strings.Contains(c, "mariadb@sha256:snap") {
 		t.Errorf("still held after the restore:\n%s", c)
 	}
 	if l := readString(releaseFile(t, current, images.ListFile)); !strings.Contains(l, "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap") {
@@ -3993,5 +3993,46 @@ func TestRestoreQuestionOffersSnapshotAsAHint(t *testing.T) {
 	}
 	if strings.Contains(out, "--snapshot first keeps it") || !strings.Contains(out, "devopsy: | $ devopsy @devopsy@one:prod --snapshot\n") {
 		t.Errorf("the question names --snapshot in its words, not as a hint:\n%s", out)
+	}
+}
+
+// A full restore makes a volume it restores that Docker lacks, one with options among them,
+// with the restored release's compose, before anything stops: the release it replaces may
+// lack the volume's service, or give it other options (the restored code added it, its volume
+// pruned since; a snapshot imported from elsewhere).
+func TestRestoreMakesAVolumeWithTheRestoredCompose(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.labels(`FAKE_DB_VOLUME=dbdata FAKE_DB_VOLUME_OPTS='{"type":"cifs","o":"username=app,password=s3cret"}'`)
+	s.releaseProd(nil)
+	vol := filepath.Join(s.log+".vol", "shop-prod_dbdata")
+	write(t, filepath.Join(vol, "ibd"), "pages\n", 0o644)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	was := s.current("prod")
+	if err := os.RemoveAll(vol); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	if code != 0 || readString(filepath.Join(vol, "ibd")) != "pages\n" || s.current("prod") == was {
+		t.Fatalf("the restore (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol, "ibd")), out, docker)
+	}
+	made := false
+	for _, line := range strings.Split(docker, "\n") {
+		if !strings.Contains(line, " create --no-build --no-recreate ") {
+			continue
+		}
+		made = true
+		if !strings.Contains(line, "/"+s.current("prod")+"/") {
+			t.Errorf("the volume made with another release's compose than the restored one's (%s, current was %s):\n%s", s.current("prod"), was, line)
+		}
+	}
+	if !made {
+		t.Errorf("the volume not made by compose:\n%s", docker)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -33,9 +34,17 @@ func run() int {
 	args := os.Args[1:]
 	// Before anything reads a project or the environment: every word here is a
 	// project user's, on the deploy user's rights (door.go).
+	// A project user's login shell, sshd's (a login's argv[0] starts with a dash).
+	if strings.TrimPrefix(filepath.Base(os.Args[0]), "-") == filepath.Base(remote.DoorShell) {
+		return runDoorShell(args)
+	}
 	if filepath.Base(os.Args[0]) == "docker" {
 		report.SetDefault(report.New(errOut, color, 0))
 		return runDocker(args)
+	}
+	// sshd's, before any login: nothing of a project or the network (authorizedkeys.go).
+	if len(args) > 0 && args[0] == authorizedKeysFlag {
+		return runAuthorizedKeys(args[1:])
 	}
 	if len(args) > 0 && (args[0] == doorFlag || args[0] == doorReadFlag) {
 		report.SetDefault(report.New(errOut, color, 0))
@@ -46,19 +55,60 @@ func run() int {
 		_ = os.Chdir("/")
 		return runDoorRead(args[1:])
 	}
+	// sudo matches a rule's arguments as one string, wildcards across words, so its
+	// `--door *` takes one word that only starts like a door flag ("--door x"): never the
+	// CLI under it, which would load the caller's project and run its programs as the deploy
+	// user. And a project user's call through sudo is the door's alone, whatever its words.
+	if len(args) > 0 && strings.HasPrefix(args[0], "--door") {
+		report.SetDefault(report.New(errOut, color, 0))
+		report.Error("refused: " + strconv.Quote(args[0]) + " is no flag of devopsy's")
+		return 2
+	}
+	if who := os.Getenv("SUDO_USER"); who != "" && inDoorGroup(who) {
+		report.SetDefault(report.New(errOut, color, 0))
+		report.Error("refused: " + who + " goes through sudo to the door alone")
+		return 2
+	}
 
-	// -v or -vv goes before everything else, and is passed on through
-	// DEVOPSY_VERBOSE to nested devopsy calls: project commands calling
-	// devopsy, and devopsy on servers.
-	for len(args) > 0 && (args[0] == "-v" || args[0] == "-vv") {
+	// -v or -vv, and --ssh-option, go before everything else, in any
+	// order. -v is passed on through DEVOPSY_VERBOSE to nested devopsy
+	// calls: project commands calling devopsy, and devopsy on servers;
+	// --ssh-option through remote.SSHOptionsEnv, to nested calls only,
+	// since a server's sessions to another are its own.
+	var sshOptions []string
+	var badSSHOption string
+	for len(args) > 0 && (args[0] == "-v" || args[0] == "-vv" || args[0] == cli.SSHOptionFlag) {
+		if args[0] == cli.SSHOptionFlag {
+			if len(args) < 2 || !cli.SSHOptionValue.MatchString(args[1]) {
+				badSSHOption = "(none)"
+				if len(args) > 1 {
+					badSSHOption = args[1]
+				}
+				break
+			}
+			sshOptions = append(sshOptions, args[1])
+			args = args[2:]
+			continue
+		}
 		os.Setenv(cli.VerboseEnv, strconv.Itoa(len(args[0])-1))
 		args = args[1:]
+	}
+	if len(sshOptions) > 0 {
+		if prev := os.Getenv(remote.SSHOptionsEnv); prev != "" {
+			sshOptions = append(strings.Split(prev, "\n"), sshOptions...)
+		}
+		os.Setenv(remote.SSHOptionsEnv, strings.Join(sshOptions, "\n"))
 	}
 	verboseLevel := cli.VerboseLevel(os.Getenv(cli.VerboseEnv))
 	// Everything devopsy says goes through report, on errOut: never a
 	// broken pipe when the session that called a server's devopsy is
 	// gone.
 	report.SetDefault(report.New(errOut, color, verboseLevel))
+	if badSSHOption != "" {
+		report.Fail(&report.Failure{Msg: cli.SSHOptionFlag + " takes key=value, as ssh's -o does, not " + badSSHOption,
+			Remedies: []report.Remedy{report.Fix("for example:", "devopsy "+cli.SSHOptionFlag+" ForwardAgent=yes @<server> --shell-host")}})
+		return 2
+	}
 	if os.Getenv(hookStartEnv) != "" && !awaitHookStart() {
 		report.Error("the data capability's hook did not run: the devopsy that started it could not record it, or is gone")
 		return 1
@@ -90,6 +140,11 @@ func run() int {
 			return runProbe(args[1:], color)
 		case "--ssh-keys-generate":
 			return runSSHKeysGenerate(args[1:], color)
+		case "--project-users":
+			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
+				return 0
+			}
 		case "--ssh-keys":
 			// Its help needs no target; the rest does (below).
 			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
@@ -102,6 +157,12 @@ func run() int {
 			return runMntReady(args[1:])
 		case remote.ServerFactsFlag:
 			return runServerFacts()
+		case remote.ProjectUsersFlag:
+			return runProjectUsersStep(args[1:])
+		case remote.SyncKeyFlag:
+			return runSyncKey(args[1:])
+		case remote.SyncChildFlag:
+			return runSyncChild(args[1:])
 		case "--server-info":
 			return runServerInfo(nil, args[1:])
 		case imagesFlag:
@@ -116,6 +177,10 @@ func run() int {
 			return runSay(args[1:])
 		case remote.UtilImageFlag:
 			return runUtilImage()
+		case remote.EndProjectUserFlag:
+			return runEndProjectUser(args[1:])
+		case remote.EndUIDFlag:
+			return runEndUID(args[1:])
 		}
 	}
 
@@ -157,6 +222,21 @@ func run() int {
 		}
 		if err != nil {
 			return failErr(err)
+		}
+		// The deploy user's release under a project user's names: the door would refuse
+		// that user's every compose command while it runs.
+		if !behindDoor() {
+			// A door that does not read stops the release: its names are then no one's to tell.
+			d, err := remote.ServerDoor()
+			if err != nil {
+				return failErr(err)
+			}
+			r, _ := remote.ReleaseSettings()
+			name := composeName(cwd)
+			if who := doorNameOwner(d, r.Root, name); who != "" {
+				return failErr(&report.Failure{Msg: "compose project " + name + " is under the names of project user " + who + " here: the door would refuse that user's every compose command while it runs",
+					Remedies: []report.Remedy{report.Fix("release it as that user:", "DEVOPSY_SERVER="+who+"@<server> devopsy @<target> --release")}})
+			}
 		}
 		return 0
 	}
@@ -309,4 +389,19 @@ func dockerVersion() string {
 		return "docker " + client
 	}
 	return "docker " + client + " (server " + server + ")"
+}
+
+// inDoorGroup says whether the user who is in the project users' group (remote.DoorGroup):
+// one whose call through sudo is the door's alone. A user or group not found is none.
+func inDoorGroup(who string) bool {
+	u, err := user.Lookup(who)
+	if err != nil {
+		return false
+	}
+	g, err := user.LookupGroup(remote.DoorGroup)
+	if err != nil {
+		return false
+	}
+	ids, err := u.GroupIds()
+	return err == nil && slices.Contains(ids, g.Gid)
 }

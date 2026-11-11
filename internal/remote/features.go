@@ -20,11 +20,11 @@ import (
 // from what it calls; TestFeaturesCoverScripts fails on a flag a script
 // calls that is not listed here.
 var featureFlags = []string{
-	"check-images", "check-mounts", "check-names", "destroy-data", "env-trace", "export", "images",
-	"import", "missing-vars", "mnt-owners", "mnt-ready", "prepare-release",
+	"check-images", "check-mounts", "check-names", "destroy-data", "end-project-user", "env-trace", "export", "images",
+	"import", "missing-vars", "mnt-owners", "mnt-ready", "prepare-release", "project-users-step",
 	"release-id", "release-inherit", "release-settings", "release-steps",
 	"say", "server-facts",
-	"snapshot-step", "status-facts", "stdin-guard", "sync-push",
+	"snapshot-step", "status-facts", "stdin-guard", "sync-key", "sync-push",
 	"sync-services", "upgrade", "util-image", "watch-session",
 }
 
@@ -45,6 +45,15 @@ var namedFeatures = []struct {
 	// which every activation calls (partialGuard), and which tolerates
 	// labels it cannot read.
 	{DataCopyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|export|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}(prepare|finish|import|list)\b`)},
+	// A sync across servers through a key made for it: the push takes it
+	// on its stdin (--sync-push's key word), and the holder authorizes it
+	// (--sync-key, a flag of its own). An older parent would wait for an
+	// agent and read the key as its session's beats.
+	{SyncKeyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push([ '\\]{1,8}reset)?[ '\\]{1,8}key\b`)},
+	// A sync's receive over its session, its key with no forward: the push relays each
+	// entry's session to its daemon, and the holder's key runs a child that receives so.
+	// An older parent would ask for a forward, an older child for a port.
+	{SyncSessionFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push([ '\\]{1,8}reset)?[ '\\]{1,8}key\b|devopsy[ '\\]{1,8}--sync-key[ '\\]{1,8}add\b`)},
 	// --reset: the parent's push wipes the child at its first write,
 	// through the child's --sync-services wipe. An older parent would
 	// sync without wiping, an older child refuse the word.
@@ -98,7 +107,7 @@ var namedFeatures = []struct {
 	// run step) and a restore's snapshot, which a devopsy without them
 	// refuses as usage after the switch.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
-	// The util image a script runs, devopsy-util:4 (setfacl, for the door's
+	// The util image a script runs, devopsy.internal/util:5 (setfacl, for the door's
 	// grants), whose tag a devopsy without it never readies, where a sync's
 	// receive runs it after its claim (the copy then counted as cut).
 	// childNeeds carries it to the child's first session, so a child
@@ -133,8 +142,8 @@ const ContainerLabelsFeature = "container-labels"
 // images' settings itself, each release's mode from its record first.
 const RecordModeFeature = "record-mode"
 
-// UtilImageFeature is UtilImage's tag's named feature: devopsy-util:4.
-const UtilImageFeature = "util-image-4"
+// UtilImageFeature is UtilImage's tag's named feature: devopsy.internal/util:5.
+const UtilImageFeature = "util-image-5"
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"
@@ -154,6 +163,13 @@ const DataVersionFeature = "data-version"
 
 // ResetFeature is --reset's named feature.
 const ResetFeature = "reset"
+
+// SyncKeyFeature is the push's named feature for a sync's key, in place of
+// the operator's forwarded agent.
+const SyncKeyFeature = "sync-push-key"
+
+// SyncSessionFeature is the named feature of a sync's receive over its session.
+const SyncSessionFeature = "sync-session"
 
 // DataCopyFeature is the data labels' named feature: devopsy.data=true
 // and devopsy.data.copy (the data-labels before it read devopsy.data as

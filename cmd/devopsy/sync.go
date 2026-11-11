@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	crand "crypto/rand"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,12 +16,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -67,17 +68,28 @@ type syncJob struct {
 	// names (remote.ParseInherit), read in the preflight: inheritVars
 	// writes them, never what the checkout's names.
 	inherit []string
+	// key and pub are the sync key's halves (remote.NewSyncKey), across
+	// servers: the holder authorizes pub, the push gets key on its stdin.
+	key []byte
+	pub string
+	// parentProjectUser: the parent's user is a project user, which the
+	// child's must be too (remote.KindsDiffer).
+	parentProjectUser bool
 }
 
 // sameServer sets what a child's side copies of a parent on its own
 // server (remote.SyncOptions.SameServerFrom): its directory, the child's
-// copy's header naming the sync's source, kept alone for a --from.
+// copy's header naming the sync's source, kept alone for a --from; across
+// servers the sync key's public half; and the parent's kind either way.
 func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 	if job.sameHost {
 		o.SameServerFrom = job.parent.Path
 		o.SameServerHeader = remote.ParentEnvHeader(job.sourceRef(), job.from)
 		o.SameServerKeep = job.from
+	} else {
+		o.Key = job.pub
 	}
+	o.ParentProjectUser = job.parentProjectUser
 	return o
 }
 
@@ -111,9 +123,10 @@ func newSyncID() string {
 
 // syncPreflight checks a sync of p into c can start, before anything
 // changes: c is a child with a run step, p another environment of the same
-// project, released; across servers, an SSH agent to forward and a child
-// the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
+// project, released; across servers, a child the parent's server can
+// reach, and the sync's key pair; with the child's facts (a release's
+// check), both sides of one kind and the child's host keys there.
+func syncPreflight(c, p *remote.Target, projectName string, reset bool, child *remote.Current) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -128,16 +141,13 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	}
 	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), id: newSyncID(), reset: reset}
 	job.sameHost = sameHost(c.Host, p.Host)
-	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
+	// Addresses that resolve apart may still be one machine: a marker the parent's check
+	// writes says so, once read back through the child's address (sameMachine).
+	probe := !job.sameHost && oneUser(c.Host, p.Host)
+	if p.Address == c.Address {
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
 	}
 	if !job.sameHost {
-		if os.Getenv("SSH_AUTH_SOCK") == "" {
-			return nil, agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally", p.Host, c.Host))
-		}
-		if err := agentHasKeys(p.Host, c.Host); err != nil {
-			return nil, err
-		}
 		user, hostname, port, err := remote.ChildAddress(c.Host)
 		if err != nil {
 			return nil, err
@@ -146,29 +156,58 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 		if user != "" {
 			job.to = user + "@" + hostname
 		}
+		if job.key, job.pub, err = remote.NewSyncKey(); err != nil {
+			return nil, err
+		}
+		job.pub = strings.TrimPrefix(job.pub, "ssh-ed25519 ")
 	}
 	// The parent's devopsy must have what the push needs, checked in this
 	// session already open, before the holder stops anything on the
 	// child or a first release uploads.
 	var out bytes.Buffer
-	var pushEnv map[string]string
+	pushEnv := map[string]string{}
 	if reset {
-		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
+		pushEnv[remote.SyncResetEnv] = "1"
+	}
+	if !job.sameHost {
+		pushEnv[remote.SyncKeyedEnv] = "1"
 	}
 	// The push also checks a restore's mark on the child (copiesService),
 	// which came with restoreMarkNeed: a parent without it would clear the
 	// mark over what it does not copy.
 	needs := append(remote.Needs(remote.PushScript(p, job.parentName, pushEnv)), restoreMarkNeed)
-	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, needs), bytes.NewReader(nil), &out, false)
+	check := remote.ParentCheckScript(p, job.parentName, needs)
+	if probe {
+		check += remote.SameMachineMark(job.id)
+	}
+	code, err := remote.SSH(p, check, bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
 	if code != 0 {
 		return nil, fmt.Errorf("could not check the parent @%s (%d)", p.Address, code)
 	}
+	if probe && sameMachine(c, job.id, remote.ParseSameMark(out.String())) {
+		job.sameHost = true
+		job.to, job.port, job.key, job.pub = "", "", nil, ""
+	}
+	if job.sameHost && p.Path == c.Path {
+		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
+	}
 	cur := remote.ParseCurrent(out.String())
 	job.images = remote.ParseParentData(out.String())
 	job.inherit = remote.ParseInherit(out.String())
+	job.parentProjectUser = cur.ProjectUser
+	// What the child's check read already (a release's): refused before
+	// the upload. Otherwise the holder refuses, before it stops anything.
+	if child != nil {
+		if child.ProjectUser != cur.ProjectUser {
+			return nil, &report.Failure{Msg: remote.KindsDiffer(cur.ProjectUser), Remedies: []report.Remedy{remote.KindsFix()}}
+		}
+		if !job.sameHost && !child.HostKeys {
+			return nil, fmt.Errorf("@%s's server's sshd host keys are not in /etc/ssh: the parent's server could not check it is that one", c.Address)
+		}
+	}
 	switch {
 	case !cur.Current:
 		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) has no current release", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("release it first:", "devopsy @"+remote.HintAddress(p)+" --release")}}
@@ -182,6 +221,30 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 		return nil, &report.Failure{Msg: fmt.Sprintf("the parent @%s (%s:%s) holds data from a sync that did not complete", p.Address, p.Host, p.Path), Remedies: []report.Remedy{report.Fix("sync it first:", "devopsy @"+remote.HintAddress(p)+" --sync")}}
 	}
 	return job, nil
+}
+
+// sameMachine says whether the child's address reaches the machine the parent's check wrote
+// sync id's marker on: its content read back there. A machine that never saw the marker
+// cannot answer with it, so a child elsewhere, a hostile one included, is never taken for
+// the parent's server, which would then copy into a directory the child names.
+func sameMachine(c *remote.Target, id, mark string) bool {
+	if mark == "" {
+		return false
+	}
+	var out bytes.Buffer
+	if code, err := remote.SSH(c, remote.SameMachineProbe(id), bytes.NewReader(nil), &out, false); err != nil || code != 0 {
+		return false
+	}
+	return strings.TrimSpace(out.String()) == mark
+}
+
+// oneUser says whether two SSH destinations log in as one user, as ssh -G resolves them: the
+// marker sameMachine reads is that user's alone, root aside, and two users on one machine are
+// two kinds of sync (KindsDiffer) or none devopsy makes.
+func oneUser(a, b string) bool {
+	ea, errA := remote.SSHEffective(a)
+	eb, errB := remote.SSHEffective(b)
+	return errA == nil && errB == nil && ea["user"] == eb["user"]
 }
 
 // sameHost reports whether two SSH destinations are one server: the same
@@ -311,11 +374,12 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		}
 	case found := <-marker:
 		marked = true
-		base, id, _ := strings.Cut(found, "\t")
+		base, rest, _ := strings.Cut(found, "\t")
+		id, hostKeys, _ := strings.Cut(rest, "\t")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		pushed := make(chan int, 1)
-		go func() { pushed <- runPush(ctx, job, base, id, rlog, color) }()
+		go func() { pushed <- runPush(ctx, job, base, id, hostKeys, rlog, color) }()
 		var code int
 		interrupted := false
 		select {
@@ -442,10 +506,12 @@ func lostSays(t *remote.Target, when, left string) string {
 const staysDown = "what it stopped may stay down until the next release, sync, import or snapshot there"
 
 // runPush is the push session: devopsy --sync-push on the parent's
-// server, into the child's directory base. Across servers it forwards the
-// SSH agent, so the parent's server reaches the child's for this session
-// only.
-func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLog, color bool) int {
+// server, into the child's directory base. Across servers its stdin
+// carries the sync key's private half first, and its environment the
+// child's host keys as the holder sent them (hostKeys): the parent's
+// server reaches the child's with that key alone, never the operator's
+// agent.
+func runPush(ctx context.Context, job *syncJob, base, id, hostKeys string, rlog *releaseLog, color bool) int {
 	p := job.parent
 	env := map[string]string{
 		remote.SyncToEnv:         job.to,
@@ -466,10 +532,12 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	if color {
 		env[remote.ColorEnv] = "1"
 	}
-	var extra []string
 	where := "same server"
-	if !job.sameHost {
-		extra = []string{"-o", "ForwardAgent=yes"}
+	if job.sameHost {
+		env[remote.SyncToPathEnv] = job.child.Path
+	} else {
+		env[remote.SyncKeyedEnv] = "1"
+		env[remote.SyncHostKeysEnv] = hostKeys
 		where = "from " + p.Host + " to " + job.to
 	}
 	log := report.Default().Tee(rlog.Line)
@@ -489,8 +557,16 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	// did not exec, it does not).
 	stop := context.AfterFunc(ctx, func() { w.Close() })
 	defer stop()
+	// The key before any beat, so the push reads it whole (takeSyncKey);
+	// the pipe holds it until the session starts.
+	if !job.sameHost {
+		if _, err := w.Write(job.key); err != nil {
+			log.Fail(err)
+			return 1
+		}
+	}
 	defer heartbeat(w)()
-	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
+	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, nil, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
 		log.Fail(err)
 		return 1
@@ -701,7 +777,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return failErr(fmt.Errorf("--from: %w", err))
 		}
 	}
-	job, err := syncPreflight(t, p, projectName, reset)
+	job, err := syncPreflight(t, p, projectName, reset, nil)
 	if err != nil {
 		return failErr(err)
 	}
@@ -988,24 +1064,34 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
 		return fail(err.Error())
 	}
-	switch {
-	case len(args) == 1 && args[0] == "reset":
-		// The child's first write wipes it first: this side's own, and
-		// the child's devopsy's (its imports) through --sync-exec.
-		os.Setenv(remote.SyncResetEnv, "1")
-	case len(args) > 0:
-		return fail("usage: devopsy " + cli.SyncPushFlag + " [reset]")
+	keyed := false
+	for _, a := range args {
+		switch a {
+		case "reset":
+			// The child's first write wipes it first: this side's own, and
+			// the child's devopsy's (its imports) through --sync-exec.
+			os.Setenv(remote.SyncResetEnv, "1")
+		case "key":
+			keyed = true
+		default:
+			return fail("usage: devopsy " + cli.SyncPushFlag + " [reset] [key]")
+		}
 	}
 	reset := os.Getenv(remote.SyncResetEnv) != ""
-	if to := os.Getenv(remote.SyncToEnv); to != "" && os.Getenv("SSH_AUTH_SOCK") == "" {
-		host, _ := os.Hostname()
-		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it (authorize it with `restrict,agent-forwarding,port-forwarding`, or use a key without restrictions), and so does sshd with AllowAgentForwarding no", host))
-	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
 		return fail(err.Error())
 	}
 	base, project := filepath.Dir(cwd), composeName(cwd)
+	// Across servers, the sync's key first on stdin, before the session's
+	// beats: its sessions to the child go with it alone.
+	if keyed {
+		done, err := takeSyncKey(base)
+		if err != nil {
+			return fail("the sync's key: " + err.Error())
+		}
+		defer done()
+	}
 	ctx, stop := interruptible()
 	defer stop()
 	if os.Getenv(remote.SyncWatchEnv) != "" {
@@ -1082,6 +1168,9 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	var src dataSet
 	if len(dirs)+len(vols) > 0 {
 		if src, err = syncData(ctx, projectDir, dirs, vols); err != nil {
+			return finish(fail(err.Error()), false)
+		}
+		if err := kindMismatch(src, child, reset, os.Getenv(remote.SyncToEnv) != ""); err != nil {
 			return finish(fail(err.Error()), false)
 		}
 	}
@@ -1271,10 +1360,14 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 	// So is an import's mark on the child for a service this side does
 	// not copy: only a sync that writes it may clear it. Asked even with
 	// nothing to copy here, for that mark.
-	child, mark, restoreMark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
+	child, mark, restoreMark, err := childServices(ctx)
 	if err != nil {
 		return nil, fail(err.Error())
 	}
+	// One plan for the copy, on one server or across two: an entry or a volume the child's
+	// labels do not name (its release mounts another) is not copied, said here, before
+	// anything stops.
+	dirs, vols = childNamed(dirs, vols, child)
 	// A restore that did not complete on the child: a sync clears its
 	// mark only by copying every service of the snapshot, all of each.
 	if len(restoreMark) > 0 && !reset {
@@ -1380,7 +1473,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 // removal. The next holder of the parent's sync lock removes what a
 // killed devopsy left (removeLeftoverClones).
 func cloneContainer(env, id string) container {
-	return container{remote.SyncContainerPrefix + "parent-" + id, env, remote.TaskSource}
+	return newContainer("sync", env, "parent-"+id, remote.TaskSource)
 }
 
 // cloneCheck says, before anything stops, whether src, the data of the
@@ -1393,7 +1486,7 @@ func cloneCheck(ctx context.Context, env, base, id string, src dataSet) bool {
 		_ = os.Remove(dir)
 		return false
 	}
-	if data, err := duData(ctx, container{"", env, remote.TaskSource}, src); err == nil && freeBytes(base) < data {
+	if data, err := duData(ctx, newContainer("sync", env, "", remote.TaskSource), src); err == nil && freeBytes(base) < data {
 		report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while the copy is made", size(freeBytes(base)), size(data), base))
 	}
 	return true
@@ -1432,7 +1525,7 @@ func removeLeftoverClones(env, base string) error {
 	}
 	for _, dir := range left {
 		report.Info("removing " + filepath.Base(dir) + ", a clone an earlier copy left")
-		if err := removeClone(context.Background(), container{fmt.Sprintf("%s%d-unclone", remote.SyncContainerPrefix, os.Getpid()), env, remote.TaskSource}, base, filepath.Base(dir)); err != nil {
+		if err := removeClone(context.Background(), newContainer("sync", env, strconv.Itoa(os.Getpid())+"-unclone", remote.TaskSource), base, filepath.Base(dir)); err != nil {
 			return fmt.Errorf("removing %s: %w", dir, err)
 		}
 	}
@@ -1610,7 +1703,7 @@ func exportStream(ctx context.Context, cwd, projectDir, name string, env []strin
 			_ = os.Remove(spool)
 		}
 	} else {
-		err = exportInto(ctx, cwd, projectDir, name, env, to, spool)
+		err = exportInto(ctx, cwd, projectDir, name, env, to)
 	}
 	if err != nil {
 		return fmt.Errorf("export %s: %w: nothing imported", name, err)
@@ -1671,26 +1764,28 @@ func importStream(ctx context.Context, name string, last bool) error {
 }
 
 // childSSHArgs are ssh's arguments for a session from the parent's
-// server to the child's (to) running script behind the check of the
-// child's devopsy (remote.ChildCheck, needs the later sessions'): -o
-// option, remote.ChildSSH, nil, -T, extra, the sync's port;
-// traced, script aside.
-func childSSHArgs(to, script string, needs []string, option string, extra ...string) []string {
+// server to the child's (to) asking req of it, with the sync's key, whose
+// forced command takes the request (--sync-child): -o option,
+// remote.ChildSSH, -T, extra, the sync's port; traced.
+func childSSHArgs(to string, req syncRequest, option string, extra ...string) []string {
 	args := append([]string{"-o", option}, remote.ChildSSH()...)
 	args = append(append(args, "-T"), extra...)
 	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
 		args = append(args, "-p", p)
 	}
-	trace(append([]string{"ssh"}, append(args, to)...))
-	script = remote.ChildCheck(os.Getenv(remote.SyncToTargetEnv), script, needs)
-	return append(args, to, "sh -c "+remote.Quote(script))
+	if b, err := strconv.Atoi(os.Getenv(remote.HeartbeatEnv)); err == nil {
+		req.Beat = b
+	}
+	data, _ := json.Marshal(req)
+	trace(append([]string{"ssh"}, append(args, to, string(data))...))
+	return append(args, to, string(data))
 }
 
-// exportInto runs the export of name with its stdout written to spool on
-// the child's server (to), by cat in an SSH session the forwarded agent
-// opens. Both must succeed.
-func exportInto(ctx context.Context, cwd, projectDir, name string, env []string, to, spool string) error {
-	sshArgs := childSSHArgs(to, "umask 077; cat > "+remote.Quote(spool), nil, "ClearAllForwardings=yes")
+// exportInto runs the export of name with its stdout written to its spool
+// on the child's server (to), which the child names (a spool request).
+// Both must succeed.
+func exportInto(ctx context.Context, cwd, projectDir, name string, env []string, to string) error {
+	sshArgs := childSSHArgs(to, syncRequest{Spool: name}, "ClearAllForwardings=yes")
 	r, w, err := os.Pipe()
 	if err != nil {
 		return err
@@ -1714,37 +1809,6 @@ func exportInto(ctx context.Context, cwd, projectDir, name string, env []string,
 	return exported
 }
 
-// childNeeds is what the sync's later sessions to the child's server
-// need of its devopsy (remote.Needs): the imports' and, with entries or
-// volumes to copy (dirs), the receive's, and the data labels always (every later session
-// reads them), checked on the first session (childServices), so a
-// child's devopsy older than this one refuses before anything stops.
-func childNeeds(dirs, streams []string) []string {
-	toDir, toProject := os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv)
-	script := ""
-	for i, name := range streams {
-		args := []string{cli.SyncServicesFlag, "import", name}
-		if i == len(streams)-1 {
-			args = append(args, "last")
-		}
-		script += remote.SyncExecScript(toDir, toProject, nil, args)
-	}
-	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, toProject, nil, len(streams) == 0, wipeScript(), false)
-	}
-	if os.Getenv(remote.SyncResetEnv) != "" {
-		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
-	}
-	needs := remote.Needs(script)
-	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature, remote.DataVersionFeature} {
-		if !slices.Contains(needs, f) {
-			needs = append(needs, f)
-		}
-	}
-	slices.Sort(needs)
-	return needs
-}
-
 // childService is a line of the child's --sync-services list: a service,
 // how a copy carries its data there (volumes, custom or none) and its
 // stop word, its
@@ -1757,6 +1821,8 @@ type childService struct {
 	Owners                  map[string]string
 	// Reflink is its cli.DataCopyReflinkLabel.
 	Reflink bool
+	// Kinds are its entries the child has, each a file, a dir or a link (listKinds).
+	Kinds map[string]string
 }
 
 // listReflink is the list's seventh field for a service labeled
@@ -1783,6 +1849,105 @@ func childShares(child []childService) map[string]bool {
 // the rsync gives every file it writes there (--chown), so a parent's
 // owners never land on the child. The child's own check refuses two
 // owners on one entry.
+// childNamed are dirs and vols, the parent's to copy, that the child's labels name too, the
+// rest said and left out: the child mounts none of them, and its receive refuses what its
+// labels do not name.
+func childNamed(dirs []string, vols []cli.Volume, child []childService) ([]string, []cli.Volume) {
+	var named, keys []string
+	for _, c := range child {
+		named, keys = append(named, c.Dirs...), append(keys, c.Volumes...)
+	}
+	var d []string
+	for _, e := range dirs {
+		if slices.Contains(named, e) {
+			d = append(d, e)
+		} else {
+			report.Info("mnt/" + e + " not copied: the child's labels name no such entry")
+		}
+	}
+	var v []cli.Volume
+	for _, vol := range vols {
+		if slices.Contains(keys, vol.Key) {
+			v = append(v, vol)
+		} else {
+			report.Info("the volume " + vol.Key + " not copied: the child's labels name no such volume")
+		}
+	}
+	return d, v
+}
+
+// kindMismatch refuses an entry the parent copies that the child has as another kind (a file
+// for a directory), before anything stops: the copy would fail at that entry, past the ones
+// before it. A link, and an empty directory for a file, are refused across servers only, as
+// the receive refuses them: on one server the rsync mounts the child's mnt whole, a link
+// there is the child's data on another disk, and an empty directory is what its first release
+// made for an entry it did not know is a file, which the rsync replaces. A reset wipes the
+// child's entries first, so none is refused there.
+func kindMismatch(src dataSet, child []childService, reset, across bool) error {
+	if reset {
+		return nil
+	}
+	kinds := childKinds(child)
+	for _, e := range src.entries {
+		want := "dir"
+		if slices.Contains(src.files, e) {
+			want = "file"
+		}
+		switch k := kinds[e]; {
+		case k == "link" && across:
+			return fmt.Errorf("the child's mnt/%s is a symbolic link: nothing copied", e)
+		case k == "empty" && want == "file" && across:
+			return fmt.Errorf("the child's mnt/%s is a directory and the parent's a file: make it a file there, or start it over (--reset): nothing copied", e)
+		case k == "link", k == "empty":
+		case k != "" && k != want:
+			return fmt.Errorf("the child's mnt/%s is a %s and the parent's a %s: make it a %s there, or start it over (--reset): nothing copied", e, kindName(k), kindName(want), kindName(want))
+		}
+	}
+	return nil
+}
+
+func kindName(k string) string {
+	if k == "dir" {
+		return "directory"
+	}
+	return k
+}
+
+// childKinds are the kinds of the entries the child has (its list's eighth field).
+func childKinds(child []childService) map[string]string {
+	kinds := map[string]string{}
+	for _, c := range child {
+		for e, k := range c.Kinds {
+			kinds[e] = k
+		}
+	}
+	return kinds
+}
+
+// listKinds is a service's kinds column in --sync-services list: <entry>=file|dir|empty|link
+// for each of its entries mnt has, space separated, empty an empty directory (one a first
+// release made for its start, the entry's kind not known yet).
+func listKinds(mnt string, s cli.SyncService) string {
+	var out []string
+	for _, d := range s.Dirs {
+		fi, err := os.Lstat(filepath.Join(mnt, d))
+		switch {
+		case err != nil:
+		case fi.Mode()&os.ModeSymlink != 0:
+			out = append(out, d+"=link")
+		case fi.IsDir():
+			if ents, err := os.ReadDir(filepath.Join(mnt, d)); err == nil && len(ents) == 0 {
+				out = append(out, d+"=empty")
+			} else {
+				out = append(out, d+"=dir")
+			}
+		default:
+			out = append(out, d+"=file")
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 func childOwners(child []childService) map[string]string {
 	owners := map[string]string{}
 	for _, c := range child {
@@ -1823,7 +1988,7 @@ const listRestore = "!restore"
 // service of its import's mark if any, through --sync-exec, after it
 // prepared them: across servers the sync's first session there, which
 // checks the child's devopsy for needs too.
-func childServices(ctx context.Context, needs []string) ([]childService, string, []childService, error) {
+func childServices(ctx context.Context) ([]childService, string, []childService, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, "", nil, err
@@ -1831,7 +1996,6 @@ func childServices(ctx context.Context, needs []string) ([]childService, string,
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "list")
 	cmd.Stdout, cmd.Stderr = &out, errOut
-	cmd.Env = append(os.Environ(), remote.SyncNeedsEnv+"="+strings.Join(needs, " "))
 	if err := cmd.Run(); err != nil {
 		return nil, "", nil, fmt.Errorf("listing the child's services: %w", err)
 	}
@@ -1890,6 +2054,14 @@ func parseChildServices(out string) (services []childService, mark string, resto
 		}
 		if len(f) > 6 {
 			c.Reflink = f[6] == listReflink
+		}
+		if len(f) > 7 {
+			c.Kinds = map[string]string{}
+			for _, ek := range strings.Fields(f[7]) {
+				if e, k, ok := strings.Cut(ek, "="); ok {
+					c.Kinds[e] = k
+				}
+			}
 		}
 		services = append(services, c)
 	}
@@ -2143,7 +2315,7 @@ func shareInto(ctx context.Context, c container, src, dst, what string) (ok, clo
 // the directory of a service without data). The daemon lives for one
 // copy and publishes no port.
 func rsyncdConf(entries, files, volumes []string) string {
-	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n"
+	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
 	for _, e := range entries {
 		if slices.Contains(files, e) {
 			// A module is a directory: mnt, filtered down to the file.
@@ -2217,8 +2389,9 @@ func (d dataSet) in(dir string) dataSet {
 // written. parent is the parent's compose name, whose daemon an earlier
 // push may have left (remote.TaskSource).
 // Same server: one container with both mounts. Across servers: an rsync
-// daemon on this server, reached by the child's server through a reverse forward of
-// an SSH session the forwarded agent opens.
+// daemon on this server with no network, and per entry or volume an SSH
+// session with the sync's key whose stdin and stdout are the daemon's, the
+// child's rsync at the other end (receiveOne).
 func syncRsync(ctx context.Context, src dataSet, parent string, owners map[string]string, shares map[string]bool, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
@@ -2259,7 +2432,7 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 			}
 		}
 		// The sync's writes into the child: what its holder ends.
-		write := container{remote.SyncContainerPrefix + syncID, toProject, remote.SyncTask(syncID)}
+		write := newContainer("sync", toProject, syncID, remote.SyncTask(syncID))
 		shares = shareable(src, childMnt, shares)
 		shared := map[string]string{}
 		// The first that will not clone says so for all, and the rest are
@@ -2313,25 +2486,18 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 	if err := removeLeft(parent, remote.TaskSource); err != nil {
 		return err
 	}
-	daemon := append(append([]string{"run", "--rm", "-d"}, container{remote.SyncContainerPrefix + syncID + "-daemon", parent, remote.TaskSource}.runArgs()...), "-v", src.mnt+":/mnt:ro")
+	daemon := append(append([]string{"run", "--rm", "-d", "--network", "none"}, newContainer("sync", parent, syncID+"-daemon", remote.TaskSource).runArgs()...), "-v", src.mnt+":/mnt:ro")
 	var keys []string
 	for _, v := range volumes {
 		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
 		keys = append(keys, v.Key)
 	}
-	// On the host's loopback, which a local user reaches, so with a password of this
-	// sync's: a project user must not read another's data as it is copied, and a rule by
-	// its group keeps it off Docker's networks, this push's user included.
-	secret := make([]byte, 16)
-	if _, err := crand.Read(secret); err != nil {
-		return err
-	}
-	password := hex.EncodeToString(secret)
-	start := append(daemon, "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), "-e", "RSYNC_SECRET", remote.UtilImage,
+	// With no network and no password: it serves each session over docker exec
+	// (daemonServe), and nothing else reaches it.
+	start := append(daemon, "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), remote.UtilImage,
 		"sh", "-c", rsyncDaemonScript)
 	trace(append([]string{"docker"}, start...))
 	startCmd := exec.CommandContext(ctx, "docker", start...)
-	startCmd.Env = append(os.Environ(), "RSYNC_SECRET="+password)
 	startCmd.Stderr = errOut
 	out, err := startCmd.Output()
 	id := strings.TrimSpace(string(out))
@@ -2346,61 +2512,105 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		cmd.Stderr = errOut // stdout: the id again
 		_ = cmd.Run()
 	}()
-	address, err := dockerOut(ctx, "port", id, "873")
-	if err != nil || address == "" {
-		return fmt.Errorf("the rsync daemon's address: %v", err)
-	}
-	// Its first line, the one on the loopback: never more than one here.
-	address, _, _ = strings.Cut(address, "\n")
+	// Its settings are written last: a listing of its modules proves them there.
 	ready := false
 	for i := 0; i < 50 && !ready; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if ready = exec.CommandContext(ctx, "docker", "exec", id, "rsync", "rsync://127.0.0.1/").Run() == nil; !ready {
+		c, err := daemonListing(ctx, id)
+		if err != nil {
+			return err
+		}
+		out, _ := c.Output()
+		c.Stdin.(*os.File).Close()
+		if ready = bytes.Contains(out, []byte("@RSYNCD: EXIT")); !ready {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	if !ready {
 		return fmt.Errorf("the rsync daemon did not answer in 5 seconds")
 	}
-
-	// A port free on the child's server: ssh fails at once when the
-	// forward cannot listen (ExitOnForwardFailure), then another. Never
-	// ClearAllForwardings here: it clears command-line forwardings too.
-	for attempt := 0; ; attempt++ {
-		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, toBase, syncID, port, present, files, keys, toProject, owners, last, wipeScript(), true), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+address)
-		cmd := remote.SSHCommandContext(ctx, sshArgs...)
-		var stderr bytes.Buffer
-		// On stdin, since a command line shows to every user of the server.
-		secretIn, err := filledPipe(password + "\n")
-		if err != nil {
+	// One session per entry and volume: the child's rsync and this daemon at its two ends.
+	var items []syncReceive
+	for _, d := range present {
+		items = append(items, syncReceive{Entry: d, File: slices.Contains(files, d)})
+	}
+	for _, k := range keys {
+		items = append(items, syncReceive{Volume: k})
+	}
+	items[len(items)-1].Last = last
+	for _, it := range items {
+		if err := receiveSession(ctx, to, id, it); err != nil {
 			return err
 		}
-		cmd.Stdin = secretIn
-		cmd.Stdout = errOut
-		cmd.Stderr = io.MultiWriter(errOut, &stderr)
-		err = cmd.Run()
-		secretIn.Close()
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			// The child's script says which entry when rsync fails; cut
-			// by the session's end, it says nothing.
-			report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
-			return interrupted(ctx, err)
-		}
-		if strings.Contains(stderr.String(), "remote port forwarding failed") {
-			if attempt < 2 {
-				continue
-			}
-			// sshd answers a refused forward as it does a taken port.
-			return fmt.Errorf("copying into %s: its server refused the reverse forward %d times: a key with `restrict` needs `port-forwarding` too (`restrict,agent-forwarding,port-forwarding`), and sshd's AllowTcpForwarding must allow remote forwards", to, attempt+1)
-		}
-		return fmt.Errorf("copying into %s: %w", to, err)
 	}
+	return nil
+}
+
+// receiveSession is one receive on the child at to, the session's stdout into the daemon's
+// stdin and the daemon's stdout into the session's stdin, through pipes: nothing of devopsy's
+// writes to either, and either end's exit ends the other's input.
+func receiveSession(ctx context.Context, to, id string, it syncReceive) error {
+	ssh := remote.SSHCommandContext(ctx, childSSHArgs(to, syncRequest{Receive: &it}, "ClearAllForwardings=yes")...)
+	serve := daemonServe(ctx, id)
+	toDaemon, fromSSH, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	toSSH, fromDaemon, err := os.Pipe()
+	if err != nil {
+		toDaemon.Close()
+		fromSSH.Close()
+		return err
+	}
+	ssh.Stdin, ssh.Stdout, ssh.Stderr = toSSH, fromSSH, errOut
+	serve.Stdin, serve.Stdout, serve.Stderr = toDaemon, fromDaemon, errOut
+	startErr := ssh.Start()
+	if startErr == nil {
+		if startErr = serve.Start(); startErr != nil {
+			_ = ssh.Process.Kill()
+			_ = ssh.Wait()
+		}
+	}
+	for _, f := range []*os.File{toDaemon, fromSSH, toSSH, fromDaemon} {
+		f.Close()
+	}
+	if startErr != nil {
+		return startErr
+	}
+	err = ssh.Wait()
+	if serr := serve.Wait(); err == nil && serr != nil && ctx.Err() == nil {
+		err = fmt.Errorf("the rsync daemon: %w", serr)
+	}
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		// The child's side says which entry when rsync fails; cut by the session's end,
+		// it says nothing.
+		report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
+		return interrupted(ctx, err)
+	}
+	return fmt.Errorf("copying into %s: %w", to, err)
+}
+
+// daemonServe is a sync's daemon serving one connection on the command's stdin and stdout.
+func daemonServe(ctx context.Context, id string) *exec.Cmd {
+	return exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", id}, door.DaemonServe...)...)
+}
+
+// daemonListing asks a sync's daemon for its modules, which proves its settings there. Its
+// request sits in a pipe filled before it starts: written by devopsy after, to a docker exec
+// that ended first, it would raise SIGPIPE, which the push takes for its session's end.
+func daemonListing(ctx context.Context, id string) (*exec.Cmd, error) {
+	in, err := filledPipe("@RSYNCD: 31.0\n\n")
+	if err != nil {
+		return nil, err
+	}
+	c := daemonServe(ctx, id)
+	c.Stdin = in
+	return c, nil
 }
 
 // cleanEnvKeys are what the child's devopsy gets of the parent's
@@ -2410,21 +2620,6 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
 var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
-
-// syncExecEnv are the sync's variables the child's devopsy gets across
-// servers, as cleanEnvKeys lets them through on the same one.
-func syncExecEnv() map[string]string {
-	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
-		if v, ok := os.LookupEnv(k); ok {
-			env[k] = v
-		}
-	}
-	if k, v := childInheritEnv(); k != "" {
-		env[k] = v
-	}
-	return env
-}
 
 // childInheritEnv is the child's pending inherited variables' file
 // (remote.InheritPendingEnv), from the child's directory the push knows:
@@ -2454,7 +2649,7 @@ func cleanEnv(projectName string) []string {
 // runSyncExec implements the hidden --sync-exec <args>...: devopsy args
 // in the child's current release, as its project, stdin, stdout and stderr
 // through: the push's look at the child's services, and its imports.
-// Across servers over SSH (the forwarded agent); on the same one with a
+// Across servers over SSH, a request with the sync's key; on the same one with a
 // clean environment.
 func runSyncExec(args []string, color bool) int {
 	toDir, toProject, err := syncEnv(cli.SyncExecFlag)
@@ -2466,7 +2661,7 @@ func runSyncExec(args []string, color bool) int {
 	}
 	if to := os.Getenv(remote.SyncToEnv); to != "" {
 		remote.Verbose = cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0
-		sshArgs := childSSHArgs(to, remote.SyncExecScript(toDir, toProject, syncExecEnv(), args), strings.Fields(os.Getenv(remote.SyncNeedsEnv)), "ClearAllForwardings=yes")
+		sshArgs := childSSHArgs(to, syncRequest{Exec: args}, "ClearAllForwardings=yes")
 		cmd := remote.SSHCommand(sshArgs...)
 		err := syscall.Exec(cmd.Path, cmd.Args, os.Environ())
 		return fail(err.Error())
@@ -2591,12 +2786,17 @@ func childList(p place, services []cli.SyncService) int {
 	if _, err := cli.MntOwners(services); err != nil {
 		return fail(err.Error())
 	}
+	mnt, _ := filepath.EvalSymlinks(filepath.Join(p.projectDir, "mnt"))
 	for _, s := range services {
 		reflink := ""
 		if s.Reflink {
 			reflink = listReflink
 		}
-		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink)
+		kinds := ""
+		if mnt != "" {
+			kinds = listKinds(mnt, s)
+		}
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink, kinds)
 	}
 	if m := readMark(p.base); m.IsImport() {
 		fmt.Printf("%s\t%s\n", listMark, m.From)
@@ -2623,6 +2823,13 @@ func childSettle(p place, services []cli.SyncService) int {
 	if err := settleStops(p.cwd, p.base); err != nil {
 		return fail(err.Error())
 	}
+	// A gate left is a dead holder's (settle runs under the lock, before a
+	// holder opens its own): gone, nothing claims it, and its sync's key
+	// does nothing any more (--sync-child).
+	gates, _ := filepath.Glob(filepath.Join(p.base, remote.SyncOpenPrefix+"*"))
+	for _, g := range gates {
+		_ = os.Remove(g)
+	}
 	started, taken := filepath.Join(p.base, remote.SyncStartedFile), filepath.Join(p.base, remote.SyncTakenFile)
 	if !fileExists(started) && !fileExists(taken) {
 		return 0
@@ -2643,10 +2850,6 @@ func childSettle(p place, services []cli.SyncService) int {
 		code = fail(err.Error())
 	}
 	_ = os.Remove(taken)
-	gates, _ := filepath.Glob(filepath.Join(p.base, remote.SyncOpenPrefix+"*"))
-	for _, g := range gates {
-		_ = os.Remove(g)
-	}
 	syncLeftovers(p.base)
 	if err := runDataHook(context.Background(), p.cwd, p.projectDir, recordHookEnv(p.cwd, services), nil, nil, nil, "finish", "child", "partial"); err != nil {
 		code = fail("the data capability's finish child partial: " + err.Error())
@@ -2711,7 +2914,7 @@ func childPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []
 	// The volumes a copy writes into, made when missing (a first
 	// release, a volume added since) as compose would: the parent's
 	// rsync never makes one.
-	if err := ensureVolumes(context.Background(), composeName(p.cwd), copiedVolumes(services)); err != nil {
+	if err := ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(services), services); err != nil {
 		return fail(err.Error())
 	}
 	if _, err := stopServices(p.cwd, set); err != nil {
@@ -2822,15 +3025,6 @@ func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []s
 func fileExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
-}
-
-// wipeScript is the receive script's wipe of the child for a reset
-// (remote.SyncResetEnv), "" for a sync.
-func wipeScript() string {
-	if os.Getenv(remote.SyncResetEnv) == "" {
-		return ""
-	}
-	return remote.SyncExecScript(os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv), syncExecEnv(), []string{cli.SyncServicesFlag, "wipe"})
 }
 
 // wipeChild runs the child's --sync-services wipe on this server
@@ -2955,7 +3149,7 @@ func wipeData(p place) error {
 	// The sync's task, so a holder deciding meanwhile removes it
 	// (endWriters): no write outlives its sync.
 	id := os.Getenv(remote.SyncIDEnv)
-	wipe := container{remote.SyncContainerPrefix + id + "-wipe", composeName(p.cwd), remote.SyncTask(id)}
+	wipe := newContainer("sync", composeName(p.cwd), id+"-wipe", remote.SyncTask(id))
 	if err := emptyMnt(context.Background(), p.projectDir, wipe); err != nil {
 		return err
 	}
@@ -2976,14 +3170,14 @@ func wipeData(p place) error {
 	// too, for the rsync to write into.
 	owners, mnt, err := projectOwners(p.cwd)
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, container{remote.SyncContainerPrefix + id + "-owners", composeName(p.cwd), remote.SyncTask(id)})
+		err = ownMnt(context.Background(), mnt, owners, newContainer("sync", composeName(p.cwd), id+"-owners", remote.SyncTask(id)))
 	}
 	if err != nil {
 		return err
 	}
 	_, services, err := cli.SyncServices(p.cwd, os.Environ())
 	if err == nil {
-		err = ensureVolumes(context.Background(), composeName(p.cwd), copiedVolumes(services))
+		err = ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(services), services)
 	}
 	if err != nil {
 		return err
@@ -2991,26 +3185,6 @@ func wipeData(p place) error {
 	rec, _ := readSyncRecord(p.cwd)
 	rec.first, rec.stops, rec.own, rec.snaps = true, nil, nil, nil
 	return rec.write(p.cwd)
-}
-
-// agentHasKeys asks the local agent for its keys before anything starts:
-// SSH_AUTH_SOCK set is not an agent (macOS always sets it, CI may leave a
-// stale one), and a parent with a forwarded agent holding no key would
-// only find out after the child's services were stopped. A missing
-// ssh-add is not an error: ssh itself reports later.
-func agentHasKeys(parent, child string) error {
-	err := exec.Command("ssh-add", "-l").Run()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) {
-		return nil
-	}
-	switch exit.ExitCode() {
-	case 1:
-		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and it holds no key: ssh-add the key %s accepts (in CI, each server's CI key)", parent, child, child)
-	case 2:
-		return agentFailure(fmt.Sprintf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s)", parent, child, os.Getenv("SSH_AUTH_SOCK")))
-	}
-	return nil
 }
 
 // syncLeftovers removes what earlier syncs left in base, as a finish or
@@ -3030,10 +3204,4 @@ func syncLeftovers(base string) {
 			_ = os.Remove(f)
 		}
 	}
-}
-
-// agentFailure is msg, a sync that needs an SSH agent and has none, with
-// the way to start one.
-func agentFailure(msg string) error {
-	return &report.Failure{Msg: msg, Remedies: []report.Remedy{report.Fix("start one with your key (in CI, add the key to an agent):", `eval "$(ssh-agent)"; ssh-add`)}}
 }

@@ -51,7 +51,9 @@ type ServerInfo struct {
 	CrashKernel int64 `json:"crash_kernel,omitempty"`
 
 	Docker DockerFacts `json:"docker"`
-	Disks  []Disk      `json:"disks"`
+	// Door is the server's door, nil on a server with none (ServerDoor).
+	Door  *DoorFacts `json:"door,omitempty"`
+	Disks []Disk     `json:"disks"`
 	// Missing are the tools a server needs that are not there.
 	Missing []string `json:"missing,omitempty"`
 	// Containers are every container on the host, any state.
@@ -77,6 +79,28 @@ type DockerFacts struct {
 	LogOpts      map[string]string `json:"log_opts,omitempty"`
 	LogOptsKnown bool              `json:"log_opts_known"`
 	Proxy        string            `json:"proxy,omitempty"`
+}
+
+// DoorFacts are what a door needs of its host, as --server-info reports them.
+type DoorFacts struct {
+	Space string `json:"space"`
+	// Unguarded is why the space's mount takes setuid files or devices, the door then
+	// refusing every request; empty when it has nosuid and nodev.
+	Unguarded string `json:"unguarded,omitempty"`
+	// Docker is what of Docker the door lacks (the containerd image store, buildx's OCI
+	// layout), the door then refusing every claim; empty when it has both.
+	Docker string `json:"docker,omitempty"`
+	Users  int    `json:"users"`
+	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
+	Reboot bool `json:"reboot,omitempty"`
+	// FirewallWrong is what of the project users' firewall the host lacks (DoorFirewallWrong);
+	// FirewallError why it could not be read. Project is one of its projects, which add
+	// loads the firewall again for.
+	FirewallWrong []string `json:"firewall_wrong,omitempty"`
+	FirewallError string   `json:"firewall_error,omitempty"`
+	// Listeners are the host's TCP listeners every container reaches (DoorListeners).
+	Listeners []string `json:"listeners,omitempty"`
+	Project   string   `json:"project,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.
@@ -112,6 +136,9 @@ type HostContainer struct {
 type Environment struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
+	// User is the project user whose tree holds it, "" for the deploy user's: set by the
+	// deploy user's devopsy after that user's read, never taken from its answer.
+	User string `json:"user,omitempty"`
 }
 
 // ServerInfoScript runs ServerFactsFlag on the server, after the

@@ -38,11 +38,7 @@ type form struct {
 	// matches says whether a command is this form, its arguments included.
 	matches func(cmd []string) bool
 	mounts  []mountRule
-	// network is what it gets: none unless it says so.
-	network string
-	// secret is the variable it takes on stdin.
-	secret string
-	// conf says it takes a sync daemon's settings and publishes its port.
+	// conf says it takes a sync daemon's settings.
 	conf bool
 	// narrow, for an rsync, is the one entry it writes, out of the mnt it asked for.
 	narrow func(cmd []string) (entry string, file bool, ok bool)
@@ -51,8 +47,11 @@ type form struct {
 var (
 	// A word of a path or an argument: never `.`, `..`, nor a leading dash, which
 	// `find "$@"` and rsync would take for a flag.
-	word      = `(?:[A-Za-z0-9_]|\.[A-Za-z0-9_-])[A-Za-z0-9_.-]*`
-	wordOnly  = regexp.MustCompile(`^` + word + `$`)
+	word = `(?:[A-Za-z0-9_]|\.[A-Za-z0-9_-])[A-Za-z0-9_.-]*`
+	// Word is a name safe as one path element and one argument, the one rule for every
+	// name a request carries (an entry, a volume's key, a clone): never `.`, `..`, nor a
+	// leading dash, which `find "$@"` and rsync would take for a flag.
+	Word      = regexp.MustCompile(`^` + word + `$`)
 	ownerArg  = regexp.MustCompile(`^\d+:\d+$`)
 	kindDir   = regexp.MustCompile(`^(mnt|volumes)$`)
 	tarMember = regexp.MustCompile(`^(\./)?` + word + `(/` + word + `)*/?$`)
@@ -61,10 +60,21 @@ var (
 	duArg     = regexp.MustCompile(`^(/m/` + word + `|/v/` + word + `)$`)
 )
 
+// DaemonServe is a sync's daemon serving one connection over docker exec's pipe, rsync's
+// daemon as over a remote shell: the push relays each connection on its own socket to it.
+var DaemonServe = []string{"rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."}
+
+// UtilNoPull keeps a util run from having Docker's daemon pull its image when it is gone: the
+// deploy user builds it, under a name the network's DNS may answer.
+var UtilNoPull = []string{"--pull", "never"}
+
 // RootUtil is what every util container the door runs as root holds back, root not
-// being needed for it: nothing there makes a device or gains privileges.
+// being needed for it: nothing there makes a device or gains privileges, and nothing
+// writes its own files (a link a project user swaps mid-copy would lead a write there, and
+// a later step of the same container runs what it finds), only its mounts and a small /tmp
+// that runs nothing. Its image is never pulled (UtilNoPull).
 func RootUtil() []string {
-	return []string{"--cap-drop", "MKNOD", "--security-opt", "no-new-privileges"}
+	return append(slices.Clone(UtilNoPull), "--cap-drop", "MKNOD", "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1m")
 }
 
 // cloneShape is a path in a project's clones: its directory, a take's in it, and from
@@ -73,28 +83,49 @@ func RootUtil() []string {
 // links, which a root container would follow.
 func cloneShape(rest string) bool {
 	parts := strings.Split(rest, "/")
-	for _, part := range parts {
-		if !wordOnly.MatchString(part) {
+	for i := 1; i < len(parts) && i <= 2; i++ {
+		if kindDir.MatchString(parts[i]) {
+			return CloneDir(strings.Join(parts[:i], "/")) && len(parts)-i <= 2 && Word.MatchString(parts[len(parts)-1])
+		}
+	}
+	return CloneDir(rest)
+}
+
+// CloneDir says whether rest, a path under a project's clones, is a directory devopsy's own
+// clones make there: a clone's, and a take's in it, never named mnt or volumes. Every part of
+// those is the door's or a root copy's, so none is a link the project user swaps between the
+// door's check and its write; deeper is inside a copy, where directories keep the project
+// user as their owner. The door's clone, mark and removal take only these.
+func CloneDir(rest string) bool {
+	parts := strings.Split(rest, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for i, part := range parts {
+		if !Word.MatchString(part) || i == 1 && kindDir.MatchString(part) {
 			return false
 		}
 	}
-	if len(parts) > 1 && !kindDir.MatchString(parts[1]) {
-		parts = parts[1:] // a take
-	}
-	return len(parts) <= 3 && (len(parts) < 2 || kindDir.MatchString(parts[1]))
+	return true
 }
 
 func target(pattern string) *regexp.Regexp { return regexp.MustCompile(`^` + pattern + `$`) }
 
 // script matches `sh -c <text> sh <args>`, each argument of the form at its place, the
-// last repeating. A word never starts with a dash: `find "$@"` would take it as code.
+// last repeating. A script with arguments has `sh` for its $0, as devopsy's own pass it:
+// without it the first argument would be $0 and each other one place before where the script
+// reads it, so each would be checked against another's pattern. A word never starts with a
+// dash: `find "$@"` would take it as code.
 func script(text string, args ...*regexp.Regexp) func([]string) bool {
 	return func(cmd []string) bool {
 		if len(cmd) < 3 || cmd[0] != "sh" || cmd[1] != "-c" || cmd[2] != text {
 			return false
 		}
 		rest := cmd[3:]
-		if len(rest) > 0 && rest[0] == "sh" {
+		if len(rest) > 0 {
+			if rest[0] != "sh" {
+				return false
+			}
 			rest = rest[1:]
 		}
 		for i, a := range rest {
@@ -138,14 +169,14 @@ func forms(known Known) []form {
 	copied := []sourceKind{kindEntry, kindVolume, kindClone}
 	localSrc := regexp.MustCompile(`^/src/(` + word + `)(/?)$`)
 	localDst := regexp.MustCompile(`^/dst/((` + word + `)/)?$`)
-	recvSrc := regexp.MustCompile(`^rsync://127\.0\.0\.1:\d+/(` + word + `)/(` + word + `)?$`)
-	recvDst := regexp.MustCompile(`^/(mnt|vol)/((` + word + `)/)?$`)
+	recvSrc := regexp.MustCompile(`^devopsy::(` + word + `)/(` + word + `)?$`)
+	recvDst := regexp.MustCompile(`^/(mnt|vol)/(` + word + `)/?$`)
 	return []form{
-		{name: "owners", matches: script(known.Owners, wordOnly, ownerArg),
+		{name: "owners", matches: script(known.Owners, Word, ownerArg),
 			mounts: []mountRule{{target(`/mnt/` + word), false, []sourceKind{kindEntry}}}},
-		{name: "export", matches: script(known.Export, wordOnly),
+		{name: "export", matches: script(known.Export, Word),
 			mounts: []mountRule{{target(`/x/` + word), true, copied}}},
-		{name: "import", matches: script(known.Import, inPath, wordOnly, tarMember),
+		{name: "import", matches: script(known.Import, inPath, Word, tarMember),
 			mounts: []mountRule{{target(`/mnt/` + word), false, entryOrVolume}, {target(`/in/` + word), true, []sourceKind{kindTreeIn, kindClone}}}},
 		{name: "probe", matches: script(known.ReflinkProbe, probePath),
 			mounts: []mountRule{
@@ -161,7 +192,7 @@ func forms(known Known) []form {
 			{target(`/c`), false, []sourceKind{kindClone}},
 		}},
 		{name: "snapshot tar", matches: func(cmd []string) bool {
-			return script(known.SnapshotTar, kindDir, wordOnly, wordOnly, ownerArg)(cmd) && len(cmd) == 8
+			return script(known.SnapshotTar, kindDir, Word, Word, ownerArg)(cmd) && len(cmd) == 8
 		}, mounts: []mountRule{
 			{target(`/m`), true, []sourceKind{kindClone}},
 			{target(`/m/mnt`), true, []sourceKind{kindMnt, kindClone}},
@@ -212,29 +243,34 @@ func forms(known Known) []form {
 			m := localSrc.FindStringSubmatch(src)
 			return m[1], true, m[2] == "" && slices.Contains(cmd, "--inplace")
 		}},
-		// A sync's receive: the one thing with the host's network, from the forward on its
-		// loopback, by the sync's password, into one entry or volume.
-		{name: "receive", network: "host", secret: "RSYNC_PASSWORD", matches: func(cmd []string) bool {
-			src, dst, ok := rsyncArgs(cmd, known)
-			return ok && recvSrc.MatchString(src) && recvDst.MatchString(dst)
+		// A sync's receive: rsync as a client of the parent's daemon over its session's
+		// stdin and stdout (known.Receive, its $0 rsync), no network, into one entry, mounted
+		// alone so nothing the daemon serves can replace it, or one volume. An entry that is
+		// a file is mounted as the file, written in place.
+		{name: "receive", matches: func(cmd []string) bool {
+			if len(cmd) < 4 || cmd[0] != "sh" || cmd[1] != "-c" || cmd[2] != known.Receive {
+				return false
+			}
+			src, dst, ok := rsyncArgs(cmd[3:], known)
+			if !ok || !recvSrc.MatchString(src) || !recvDst.MatchString(dst) {
+				return false
+			}
+			s, d := recvSrc.FindStringSubmatch(src), recvDst.FindStringSubmatch(dst)
+			file := s[2] != ""
+			switch {
+			case d[1] == "vol":
+				return !file && s[1] == d[2] && strings.HasSuffix(dst, "/")
+			case file:
+				return s[2] == d[2] && !strings.HasSuffix(dst, "/") && slices.Contains(cmd, "--inplace")
+			}
+			return s[1] == d[2] && strings.HasSuffix(dst, "/")
 		}, mounts: []mountRule{
-			{target(`/mnt`), false, []sourceKind{kindMnt}},
+			{target(`/mnt/` + word), false, []sourceKind{kindEntry}},
 			{target(`/vol/` + word), false, []sourceKind{kindVolume}},
-		}, narrow: func(cmd []string) (string, bool, bool) {
-			src, dst, _ := rsyncArgs(cmd, known)
-			d := recvDst.FindStringSubmatch(dst)
-			if d[1] == "vol" {
-				return "", false, true
-			}
-			if d[3] != "" {
-				return d[3], false, true
-			}
-			s := recvSrc.FindStringSubmatch(src)
-			return s[2], true, s[2] != "" && slices.Contains(cmd, "--inplace")
 		}},
-		// A sync's read-only daemon: its settings in one form, on the host's loopback, by a
-		// password of that sync's.
-		{name: "daemon", network: "bridge", secret: "RSYNC_SECRET", conf: true, matches: func(cmd []string) bool {
+		// A sync's read-only daemon: its settings in one form, no network (it serves over
+		// docker exec, DaemonServe), so no password: nothing reaches it but its own push.
+		{name: "daemon", conf: true, matches: func(cmd []string) bool {
 			return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && cmd[2] == known.Daemon
 		}, mounts: []mountRule{
 			{target(`/mnt`), true, []sourceKind{kindMnt, kindClone}},
@@ -247,7 +283,7 @@ func forms(known Known) []form {
 // into a --mount or a -v, so it holds none of their syntax.
 func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 	if !strings.HasPrefix(m.source, "/") {
-		if m.kind == "bind" || !wordOnly.MatchString(m.source) || !p.OwnName(m.source) {
+		if m.kind == "bind" || !p.OwnVolume(m.source) {
 			return 0, "", refuse("docker run: another's volume: %s", m.source)
 		}
 		return kindVolume, m.source, nil
@@ -270,17 +306,15 @@ func classify(m mount, p Policy, h Host) (sourceKind, string, error) {
 		}
 		return kindClone, real, nil
 	}
-	mntRoot := filepath.Join(p.Space, "mnt") + "/"
-	if rest, ok := strings.CutPrefix(real, mntRoot); ok {
-		name, entry, nested := strings.Cut(rest, "/")
+	if strings.HasPrefix(real, filepath.Join(p.Space, "mnt")+"/") {
+		_, entry, ok := p.MntPath(real)
 		switch {
-		case !p.OwnName(name) || strings.Contains(entry, "/"):
-		case !nested:
+		case !ok:
+			return 0, "", refuse("docker run: a host path: %s", m.source)
+		case entry == "":
 			return kindMnt, real, nil
-		case wordOnly.MatchString(entry):
-			return kindEntry, real, nil
 		}
-		return 0, "", refuse("docker run: a host path: %s", m.source)
+		return kindEntry, real, nil
 	}
 	if p.InTree(real) {
 		if m.readOnly {
@@ -296,7 +330,7 @@ func (r mountRule) takes(m mount, kind sourceKind) bool {
 }
 
 // decideForm checks a util container against the table, and says what it comes to.
-func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secret string, published bool, p Policy, h Host, known Known) (*Action, error) {
+func decideForm(cmd []string, mounts []mount, opts []string, network, conf string, p Policy, h Host, known Known) (*Action, error) {
 	var f *form
 	table := forms(known)
 	for i := range table {
@@ -308,19 +342,31 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 	if f == nil {
 		return nil, refuse("docker run: a script not devopsy's own: %.120q", strings.Join(cmd, " "))
 	}
-	if network != "" && network != "none" && network != f.network {
-		return nil, refuse("docker run: network %s, for %s", network, f.name)
+	if f.conf != (conf != "") {
+		return nil, refuse("docker run: settings, for %s", f.name)
 	}
-	if (f.network == "host") != (network == "host") {
-		return nil, refuse("docker run: the host's network, only and always for a sync's receive")
+	// Every owner a util container gives what it writes, one check for every form, so a form
+	// that takes one is never left out: the owners form's and an rsync's --chown go to a
+	// service's user, whom userRefused holds to an id no container of the host's is (never
+	// root's or devopsy's own); a snapshot tar's goes to the project user, who collects it,
+	// and is that user's uid alone. Nothing reads such an owner as trust today.
+	for _, a := range cmd {
+		owner, chown := strings.CutPrefix(a, "--chown=")
+		if !chown && !ownerArg.MatchString(a) || chown && !ownerArg.MatchString(owner) {
+			continue
+		}
+		if f.name == "snapshot tar" {
+			uid, gid, _ := strings.Cut(owner, ":")
+			if p.UID == "" || uid != p.UID || gid == "0" {
+				return nil, refuse("docker run: %s: an owner not %s's: %s", f.name, p.User, owner)
+			}
+			continue
+		}
+		if why := p.userRefused(owner); why != "" {
+			return nil, refuse("docker run: %s: an owner: %s", f.name, why)
+		}
 	}
-	if secret != f.secret {
-		return nil, refuse("docker run: an environment, for %s", f.name)
-	}
-	if f.conf != (conf != "") || f.conf != published {
-		return nil, refuse("docker run: settings or a port, for %s", f.name)
-	}
-	action := &Action{Secret: secret}
+	action := &Action{}
 	entry, file := "", false
 	if f.narrow != nil {
 		var ok bool
@@ -381,14 +427,22 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 		}
 	}
 	out := slices.Clone(opts)
-	if network == "" && f.network == "" {
+	if network == "" {
 		out = append(out, "--network", "none")
 	}
 	for i, m := range mounts {
 		if !mountTarget.MatchString(m.target) || (strings.HasPrefix(placed[i], "/") && !mountSource.MatchString(placed[i])) {
 			return nil, refuse("docker run: a mount it cannot hand on: %s", m.target)
 		}
-		if m.volumeFlag {
+		// A host path goes as a bind Docker never makes when it is missing (--mount, where -v
+		// would make an empty directory of root's there); a named volume as it came.
+		if m.volumeFlag && strings.HasPrefix(placed[i], "/") {
+			v := "type=bind,source=" + placed[i] + ",target=" + mounts[i].target
+			if m.readOnly {
+				v += ",readonly"
+			}
+			out = append(out, "--mount", v)
+		} else if m.volumeFlag {
 			v := placed[i] + ":" + mounts[i].target
 			if m.readOnly {
 				v += ":ro"
@@ -407,7 +461,7 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf, secr
 	// user when it exits, or for one detached when it is removed (Removes).
 	if !slices.Contains(opts, "-d") {
 		for i, m := range mounts {
-			if !m.readOnly && strings.HasPrefix(placed[i], filepath.Join(p.Space, "mnt")+"/") && filepath.Dir(placed[i]) != filepath.Join(p.Space, "mnt") {
+			if _, entry, ok := p.MntPath(placed[i]); !m.readOnly && ok && entry != "" {
 				action.Regrant = append(action.Regrant, placed[i])
 			}
 		}

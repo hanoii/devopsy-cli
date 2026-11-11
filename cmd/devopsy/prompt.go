@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"golang.org/x/term"
@@ -38,4 +40,33 @@ func typeToGoOn(what, name, nothing string, tty bool, hints ...report.Remedy) er
 		return errors.New(nothing)
 	}
 	return nil
+}
+
+// readSecret asks for a secret on the terminal, never echoed: an interrupt while it reads puts
+// the terminal back as it was before it ends devopsy, which a dead process would leave silent.
+func readSecret(question string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", err
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sigs:
+			_ = term.Restore(fd, state)
+			report.Default().EndPrompt()
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+	log := report.Default()
+	log.Prompt(question + ":")
+	b, err := term.ReadPassword(fd)
+	log.EndPrompt()
+	return string(b), err
 }

@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -20,14 +21,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"golang.org/x/sys/unix"
 )
 
 // The deploy user's side of the door, from sudo: it checks a project user's request
@@ -48,6 +50,20 @@ func doorEnvironment() (home string, err error) {
 	return u.HomeDir, nil
 }
 
+// doorGroupHeld refuses a door not running under remote.DoorRunGroup, its effective group, by
+// which the firewall covers what it starts on the host: sudo's rule gives it that group (-g),
+// and a door asked without it would start registry clients nothing holds.
+func doorGroupHeld() error {
+	g, err := user.LookupGroup(remote.DoorRunGroup)
+	if err != nil {
+		return fmt.Errorf("refused: no group %s here: --project-users add makes it", remote.DoorRunGroup)
+	}
+	if strconv.Itoa(os.Getegid()) != g.Gid {
+		return fmt.Errorf("refused: the door runs under the group %s (sudo -g %s), which the firewall covers", remote.DoorRunGroup, remote.DoorRunGroup)
+	}
+	return nil
+}
+
 // doorNotHere is the door's exit when it has nothing to say of this user.
 const doorNotHere = 3
 
@@ -56,7 +72,7 @@ const doorNotHere = 3
 var doorLog string
 
 func doorRefused(err error) int {
-	report.Error(err.Error())
+	report.Fail(err)
 	doorRecord(err.Error())
 	return 2
 }
@@ -116,6 +132,13 @@ func runDoorRead(args []string) int {
 		}
 		os.Stdout.Write(out)
 		return 0
+	case "environments":
+		// --server-info's, of this user's tree: as the deploy user would list them, but by this
+		// user's rights.
+		if json.NewEncoder(os.Stdout).Encode(projectEnvironments(filepath.Dir(path), path)) != nil {
+			return 1
+		}
+		return 0
 	case "isdir":
 		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 			return 0
@@ -164,15 +187,48 @@ type doorSide struct {
 	real   string
 	env    []string
 	vets   []remote.DoorVet
-	// made are this request's work directories, so that a refusal leaves none behind.
-	made []string
-	// lock is the project's image lock, when this request holds it (imageLock).
-	lock *os.File
+	// made are this request's work directories, so that a refusal, or a claim cut by a
+	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
+	made   []string
+	madeMu sync.Mutex
+	// keysFile is the project user's keys file (remote.DoorKeysFile), and keysAt that file as
+	// the request found it: the request acts on the user's behalf only while it is still that
+	// file, with a key, and no removal is pending (stillAsked).
+	keysFile string
+	keysAt   os.FileInfo
+	// What a request reads once, for every claim and run it makes: the daemon's
+	// "<os> <architecture>" (platform), doorHostReady's answer (hostReady), the directory of
+	// its logins (logins) and its builder's environment (builder).
+	daemonPlatform memo[string]
+	hostChecked    memo[struct{}]
+	loginsDir      memo[string]
+	builderEnv     memo[[]string]
+	// onFetch, when set, is said when a claim goes past its skip to fetch (the pull verb's
+	// progress).
+	onFetch func()
+}
+
+// memo is a value a door process reads once, its answer (an error included) kept for the
+// request's later uses: one request is one process, and what it reads does not change under it
+// in the time it runs.
+type memo[T any] struct {
+	done bool
+	v    T
+	err  error
+}
+
+// get is the value, read by read the first time.
+func (m *memo[T]) get(read func() (T, error)) (T, error) {
+	if !m.done {
+		m.v, m.err = read()
+		m.done = true
+	}
+	return m.v, m.err
 }
 
 // read runs a read of the project's tree, as its user.
 func (s *doorSide) read(op string, args ...string) *exec.Cmd {
-	return exec.Command("sudo", sudoArgs(s.policy.User, doorReadFlag, append([]string{op}, args...)...)...)
+	return doorRead(s.policy.User, append([]string{op}, args...)...)
 }
 
 // docker is a command of the real client's, in the door's environment.
@@ -198,13 +254,21 @@ func carriesLabel(file map[string]any, prefix string) bool {
 	return false
 }
 
-// Real implements door.Paths.
+// Real implements door.Paths: the project user's answer of where path ends, which is that
+// user's word (its read is its own process, to trace), so taken only absolute and clean: a
+// `..` read lexically (filepath.Dir, a prefix) would mean another place to the kernel through
+// a link the user made, and every caller (an entry's parent, a bind, a build's context) would
+// believe it otherwise.
 func (s *doorSide) Real(path string) (string, error) {
-	out, err := s.read("real", path).Output()
+	out, err := doorAnswer(s.read("real", path), maxPath, doorReadWait)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve %s", path)
 	}
-	return strings.TrimSpace(string(out)), nil
+	real := strings.TrimSuffix(string(out), "\n")
+	if !filepath.IsAbs(real) || filepath.Clean(real) != real {
+		return "", fmt.Errorf("cannot resolve %s: its answer is no clean path", path)
+	}
+	return real, nil
 }
 
 // noLink refuses a copy that came out a link: a path of the deploy user's, which
@@ -236,10 +300,16 @@ func (s *doorSide) Seal(path string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(work)
-	if err := s.untar(path, work); err != nil {
+	// The copy lands in a directory of its own, so no name the caller's tar holds meets the
+	// door's beside it (dir, below).
+	in := filepath.Join(work, "in")
+	if err := os.Mkdir(in, 0o700); err != nil {
 		return "", err
 	}
-	copied := filepath.Join(work, filepath.Base(path))
+	if err := s.untar(path, in); err != nil {
+		return "", err
+	}
+	copied := filepath.Join(in, filepath.Base(path))
 	if err := noLink(copied); err != nil {
 		return "", err
 	}
@@ -310,7 +380,10 @@ func pipeline(cmds ...*exec.Cmd) []error {
 	return errs
 }
 
-// contentHash hashes what a sealed copy holds: names, links and bytes.
+// contentHash hashes what a sealed copy holds: names, kinds, modes (a directory's too, its
+// special bits included), links and bytes, each file's by its length first, so no two trees
+// read as one stream. A copy is named by it and taken again by that name (Seal): what it
+// leaves out, a release changing it seals to the copy that does not have it.
 func contentHash(root string) (string, error) {
 	h := sha256.New()
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -318,26 +391,27 @@ func contentHash(root string) (string, error) {
 			return err
 		}
 		rel, _ := filepath.Rel(root, p)
-		fmt.Fprintf(h, "%s\x00%o\x00", rel, d.Type())
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := fi.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
+		fmt.Fprintf(h, "%q %o %o\x00", rel, d.Type(), mode)
 		switch {
 		case d.Type()&fs.ModeSymlink != 0:
 			target, err := os.Readlink(p)
 			if err != nil {
 				return err
 			}
-			h.Write([]byte(target))
+			fmt.Fprintf(h, "%q\x00", target)
 		case d.Type().IsRegular():
-			fi, err := d.Info()
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(h, "%o\x00", fi.Mode().Perm())
+			fmt.Fprintf(h, "%d\x00", fi.Size())
 			f, err := os.Open(p)
 			if err != nil {
 				return err
 			}
 			defer f.Close()
-			if _, err := io.Copy(h, f); err != nil {
+			if _, err := io.CopyN(h, f, fi.Size()); err != nil {
 				return err
 			}
 		}
@@ -384,6 +458,31 @@ func (s *doorSide) pruneSealed() {
 	}
 }
 
+// Within implements door.Paths: rel under a sealed copy, the deploy user's own, walked part by
+// part with no link followed (a copy keeps the links it holds), nothing there being no
+// refusal.
+func (s *doorSide) Within(root, rel string) error {
+	parts := strings.Split(filepath.Clean(rel), "/")
+	cur := root
+	for _, part := range parts {
+		if part == ".." || part == "" {
+			return errors.New("a path out of it")
+		}
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return errors.New("a link on its way")
+		}
+	}
+	return nil
+}
+
 // IsDir implements door.Host.
 func (s *doorSide) IsDir(path string) bool {
 	return s.read("isdir", path).Run() == nil
@@ -424,7 +523,9 @@ func (s *doorSide) WorkDir() (string, error) {
 	return s.workDir("rX")
 }
 
-// workDir makes a directory in the deploy user's nosuid space, for this user alone.
+// workDir makes a directory in the deploy user's nosuid space, for this user alone with
+// perms (none with "": the deploy user's own, a claim's copy), swept a day on (sweepWork) when
+// a killed door leaves it.
 func (s *doorSide) workDir(perms string) (string, error) {
 	root := filepath.Join(s.policy.Space, "work")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -434,7 +535,12 @@ func (s *doorSide) workDir(perms string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.madeMu.Lock()
 	s.made = append(s.made, d)
+	s.madeMu.Unlock()
+	if perms == "" {
+		return d, nil
+	}
 	if err := s.acl(d, perms, false); err != nil {
 		return "", err
 	}
@@ -495,6 +601,149 @@ func (s *doorSide) Containers() ([]string, error) {
 	return strings.Fields(string(out)), nil
 }
 
+// Image is an image's id and names (door.Daemon), as the deploy user's docker has them.
+func (s *doorSide) Image(ref string) (string, []string, error) {
+	out, err := s.docker("image", "inspect", "--format", "{{.Id}}{{range .RepoTags}} {{.}}{{end}}", ref).Output()
+	f := strings.Fields(string(out))
+	if err != nil || len(f) == 0 {
+		return "", nil, fmt.Errorf("no image %s", ref)
+	}
+	return f[0], f[1:], nil
+}
+
+// errNoRead is a registry that gives a project's logins nothing for a ref.
+var errNoRead = errors.New("its registry logins do not read it")
+
+// platformManifest is the digest of the one image manifest ref comes to on this server, read
+// with the logins in the DOCKER_CONFIG dir logins: ref's own when it is a manifest, else the
+// entry of its index for the daemon's platform, itself a manifest, its bytes checked against
+// its digest. A claim copies and pins that digest, never an index's: imagetools' copy and
+// Docker's load could each choose from an index by rules of their own, and one index could
+// send each to another image.
+func (s *doorSide) platformManifest(g *claimCut, ref, logins string) (string, error) {
+	raw, err := s.registryRead(g, logins)
+	if err != nil {
+		return "", err
+	}
+	type platform struct{ OS, Architecture, Variant string }
+	type manifest struct {
+		Manifests []struct {
+			Digest   string
+			Platform *platform
+		}
+		Config *struct{ Digest string }
+	}
+	data, err := raw(ref)
+	if err != nil {
+		return "", err
+	}
+	// A ref by digest, an index's as a manifest's, is those bytes or nothing: an index not
+	// checked would name any entry its registry chose.
+	if _, digest, ok := strings.Cut(ref, "@"); ok && digestOf(data) != digest {
+		return "", fmt.Errorf("its registry served other bytes than %s", digest)
+	}
+	var m manifest
+	if json.Unmarshal(data, &m) != nil {
+		return "", errNoRead
+	}
+	if len(m.Manifests) == 0 {
+		if m.Config == nil {
+			return "", errors.New("its registry serves no image manifest for it")
+		}
+		return digestOf(data), nil
+	}
+	goos, arch, variant, err := s.platform()
+	if err != nil {
+		return "", err
+	}
+	entry := ""
+	for _, e := range m.Manifests {
+		if p := e.Platform; p != nil && p.OS == goos && p.Architecture == arch && (p.Variant == "" || p.Variant == variant) {
+			entry = e.Digest
+			break
+		}
+	}
+	if entry == "" {
+		return "", registryFailure{fmt.Errorf("no image for %s/%s in its index", goos, arch)}
+	}
+	data, err = raw(images.ByDigest(ref, entry))
+	if err != nil && err != errNoRead {
+		return "", err
+	}
+	m = manifest{}
+	if err != nil || digestOf(data) != entry || json.Unmarshal(data, &m) != nil || len(m.Manifests) > 0 || m.Config == nil {
+		return "", fmt.Errorf("its index's entry for %s/%s, %s, is no image manifest", goos, arch, entry)
+	}
+	return entry, nil
+}
+
+// registryRead gives what reads a ref's manifest, with the logins in the DOCKER_CONFIG dir
+// logins: buildx's client on the host, its builder's settings (a mirror, as the admin gave
+// them to the builders; a CA from the host's store), under the door's group, which the
+// firewall keeps off the host's loopback and the metadata services (remote.DoorRunGroup), as a
+// registry the project user names answers as it likes (a redirect, a token's realm). A
+// registry's refusal is errNoRead, what it said on stderr, as a refused pull's. Each read is
+// the claim's child (g), bounded in size and time: a registry that answers and then says
+// nothing would hold the door.
+func (s *doorSide) registryRead(g *claimCut, logins string) (func(ref string) ([]byte, error), error) {
+	b, err := s.builder()
+	if err != nil {
+		return nil, errors.New(strings.TrimPrefix(err.Error(), "refused: "))
+	}
+	return func(ref string) ([]byte, error) {
+		var said bytes.Buffer
+		c := s.docker("buildx", "imagetools", "inspect", "--raw", ref)
+		c.Env = append(append(slices.Clone(s.env), b...), "DOCKER_CONFIG="+logins)
+		out := capBuffer{max: maxManifest}
+		c.Stdout, c.Stderr = &out, &said
+		c.WaitDelay = time.Second
+		if err := g.runWithin(c, doorReadWait); err != nil {
+			os.Stderr.Write(said.Bytes())
+			return nil, errNoRead
+		}
+		return out.Bytes(), nil
+	}, nil
+}
+
+// digestOf is data's sha256 digest, as a registry names it.
+func digestOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// platform is the daemon's os, architecture and the variant an index's entry for it may name
+// (arm64's v8, arm's v7), read once.
+func (s *doorSide) platform() (goos, arch, variant string, err error) {
+	read, err := s.daemonPlatform.get(func() (string, error) {
+		out, err := s.docker("version", "--format", "{{.Server.Os}} {{.Server.Arch}}").Output()
+		if err != nil {
+			return "", fmt.Errorf("the daemon's platform: %v", err)
+		}
+		return strings.TrimSpace(string(out)), nil
+	})
+	if err != nil {
+		return "", "", "", err
+	}
+	goos, arch, _ = strings.Cut(read, " ")
+	variant = map[string]string{"arm64": "v8", "arm": "v7"}[arch]
+	return goos, arch, variant, nil
+}
+
+// inspectImage is ref's image as Docker has it now, read once.
+func (s *doorSide) inspectImage(ref string) (images.Image, error) {
+	out, err := s.docker("image", "inspect", "--format", images.InspectFormat, ref).Output()
+	if err != nil {
+		return images.Image{}, fmt.Errorf("no image %s", ref)
+	}
+	return images.ParseImage(out)
+}
+
+// claimedImages reads a project user's record of claimed images (door.Policy.ImagesFile).
+func claimedImages(file string) []string {
+	data, _ := os.ReadFile(file)
+	return strings.Fields(string(data))
+}
+
 // doorKnown is what devopsy's own util containers run.
 func doorKnown() door.Known {
 	return door.Known{
@@ -508,6 +757,7 @@ func doorKnown() door.Known {
 		Space:        spaceProbeScript,
 		Share:        shareScript,
 		Daemon:       rsyncDaemonScript,
+		Receive:      receiveScript,
 		Restore:      restoreStreamScript,
 		RsyncCopy:    remote.RsyncCopy,
 		Clone:        door.CloneScriptForm,
@@ -519,6 +769,11 @@ func doorKnown() door.Known {
 func runDoor(args []string) int {
 	// A caller's umask comes through sudo, and the door's modes are its own.
 	syscall.Umask(0o022)
+	holdStops()
+	if err := doorLimits(); err != nil {
+		report.Error(err.Error())
+		return 2
+	}
 	doorWho = os.Getenv("SUDO_USER")
 	home, err := doorEnvironment()
 	if err != nil {
@@ -547,8 +802,24 @@ func runDoor(args []string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
+	if err := doorGroupHeld(); err != nil {
+		return doorRefused(err)
+	}
+	// From here every refusal is recorded, the space's own included.
 	doorLog = filepath.Join(policy.Space, "refused.log")
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets}
+	if err := spaceGuarded(policy.Space); err != nil {
+		report.Fail(err, spaceFix(policy.Space))
+		doorRecord(err.Error())
+		return 2
+	}
+	// A project user with no key left logs in no more, and what it left running gets nothing
+	// from the door either (KeysRemoveScript ends it).
+	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
+	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho)}
+	// With no key left, or an end pending: what a removed key left running gets nothing.
+	if err := side.stillAsked(); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))
 	}
@@ -590,8 +861,69 @@ func runDoor(args []string) int {
 		if len(args) >= 3 {
 			return side.request(args[1], args[2:])
 		}
+	case "sync-key":
+		return side.syncKey(args[1:])
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
+}
+
+// syncKey is --sync-key for the caller: its sync keys (remote.DoorSyncKeysFile), never its
+// keys, each line the door's own (remote.SyncKeyLine: the id's and the key's form checked,
+// its options and expiry the door's), for an environment in the caller's tree. A sync's gate
+// there is no boundary, the tree being the caller's: what a sync key may do runs as the
+// caller, so it does nothing the caller cannot already.
+func (s *doorSide) syncKey(args []string) int {
+	if len(args) == 6 && args[0] == "add" && !s.policy.InTree(args[2]) {
+		return doorRefused(fmt.Errorf("refused: a sync key for %s, outside %s's tree", args[2], s.policy.User))
+	}
+	// A user's end drops its sync keys and makes its keys file anew under this lock
+	// (endProjectUser): a request begun before it, past its sudo, which no end reaches, finds
+	// that file changed and adds none.
+	if err := editSyncKeys(remote.DoorSyncKeysFile(s.policy.User), selfPath(), args, time.Now(), s.stillAsked); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
+	return 0
+}
+
+// stillAsked says whether the request's user is still as the request found it: its keys file
+// the same (keysAt), a key left in it, no end of its processes pending (remote.DoorEndingFile).
+// A user's end renews its keys file and kills its processes, never the door's, which are the
+// deploy user's: a request begun before, past its sudo (one parked on a registry's copy for
+// days), finds the file changed, and acts no further. Every request asks before it acts on the
+// user's behalf: before Docker or compose runs, before what the door keeps for the user is
+// written (whileAUser), before a sync key goes in. A key added meanwhile renews the file too,
+// so such a request is refused and asked again.
+func (s *doorSide) stillAsked() error {
+	if s.keysFile == "" {
+		return nil
+	}
+	now, err := os.Stat(s.keysFile)
+	if err != nil || !remote.KeysLeft(s.keysFile) {
+		return errors.New(s.policy.User + " has no key left")
+	}
+	if s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
+		return errors.New(s.policy.User + "'s keys changed during this request: ask again")
+	}
+	for _, mark := range []string{remote.DoorEndingFile(s.policy.User), remote.DoorRemovingFile(s.policy.User)} {
+		if _, err := os.Lstat(mark); err == nil {
+			return errors.New("a removal of " + s.policy.User + "'s did not complete: the next listing or edit of its keys completes it")
+		}
+	}
+	return nil
+}
+
+// spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a
+// container's setuid file crosses projects and a crafted tar reaches root, so the door does
+// nothing rather than half its promise.
+func spaceGuarded(space string) error {
+	nosuid, nodev, err := mountGuards(space)
+	if err != nil {
+		return fmt.Errorf("refused: the door's space %s: %v", space, err)
+	}
+	if !nosuid || !nodev {
+		return fmt.Errorf("refused: the door's space %s is not on a mount with nosuid and nodev", space)
+	}
+	return nil
 }
 
 // doorPolicy reads what the host says of a project user.
@@ -607,47 +939,58 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 	if tree == "" {
 		tree = filepath.Join(u.HomeDir, s.Project)
 	}
-	ids, err := hostIDs(s.Users)
+	deploy, err := user.Current()
 	if err != nil {
 		return door.Policy{}, err
 	}
-	return door.Policy{
-		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles, ReadAll: s.ReadAll,
+	ids := hostIDs(deploy, s.Users)
+	p := door.Policy{
+		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
 		ForbiddenIDs: ids, Others: otherProjects(s),
-	}, nil
+	}
+	p.Images = claimedImages(p.ImagesFile())
+	return p, nil
 }
 
 // otherProjects are the server's projects but this one: what the door's users hold, and
 // what the deploy user's release root does. Names are flat, so a longer one is out of
 // this project's reach (door.Policy.OwnName).
 func otherProjects(s remote.DoorUser) []string {
-	others := slices.Clone(s.Others)
+	root := ""
 	if r, err := remote.ReleaseSettings(); err == nil {
-		if entries, err := os.ReadDir(r.Root); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != s.Project {
-					others = append(others, e.Name())
-				}
-			}
+		root = r.Root
+	}
+	var others []string
+	for _, p := range serverProjects(s.Others, root) {
+		if p != s.Project {
+			others = append(others, p)
 		}
 	}
 	return others
 }
 
-// hostIDs are ids no container may run as: the deploy user's, the door's users', and the
-// Docker socket's group. Other system accounts stay usable: images take low ids of their
-// own, and nobody logs in as those.
-func hostIDs(users []string) ([]int, error) {
-	ids := []int{os.Getuid(), os.Getgid()}
-	for _, name := range users {
-		u, err := user.Lookup(name)
-		if err != nil {
-			continue
-		}
-		for _, v := range []string{u.Uid, u.Gid} {
+// hostIDs are ids no container may run as: the deploy user's (deploy, from its passwd entry,
+// never this process's ids: the door's group is sudo's -g), the door's users', devopsy's two
+// groups, and the Docker socket's group. Other system accounts stay usable: images take low
+// ids of their own, and nobody logs in as those.
+func hostIDs(deploy *user.User, users []string) []int {
+	var ids []int
+	add := func(vs ...string) {
+		for _, v := range vs {
 			if id, err := strconv.Atoi(v); err == nil {
 				ids = append(ids, id)
 			}
+		}
+	}
+	add(deploy.Uid, deploy.Gid)
+	for _, name := range users {
+		if u, err := user.Lookup(name); err == nil {
+			add(u.Uid, u.Gid)
+		}
+	}
+	for _, name := range []string{remote.DoorGroup, remote.DoorRunGroup} {
+		if g, err := user.LookupGroup(name); err == nil {
+			add(g.Gid)
 		}
 	}
 	if fi, err := os.Stat(dockerSocket); err == nil {
@@ -656,18 +999,16 @@ func hostIDs(users []string) ([]int, error) {
 		}
 	}
 	sort.Ints(ids)
-	return slices.Compact(ids), nil
+	return slices.Compact(ids)
 }
 
 // takeFile reads a rendered file by the caller's rights, and removes it.
 func takeFile(who, path string) (map[string]any, error) {
-	var out bytes.Buffer
-	c := exec.Command("sudo", sudoArgs(who, doorReadFlag, "take", path)...)
-	c.Stdout = &out
-	if err := c.Run(); err != nil {
+	out, err := doorAnswer(doorRead(who, "take", path), maxRendered, doorReadWait)
+	if err != nil {
 		return nil, errors.New("refused: not a file this project's user can read")
 	}
-	d := json.NewDecoder(&out)
+	d := json.NewDecoder(bytes.NewReader(out))
 	// A large number stays as written: compose reads what this writes back.
 	d.UseNumber()
 	file := map[string]any{}
@@ -676,6 +1017,42 @@ func takeFile(who, path string) (map[string]any, error) {
 	}
 	return file, nil
 }
+
+// capBuffer holds at most max bytes of what a read of a caller's file writes, and fails the
+// write past them, which fails the read: a file a project user names, however large, takes no
+// more of the host's memory than the door would ever use of it. Its buffer is a field, never
+// embedded: io.Copy would take the buffer's ReadFrom, past this Write.
+type capBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *capBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		return 0, errors.New("past what the door reads of a file")
+	}
+	return b.buf.Write(p)
+}
+
+func (b *capBuffer) Bytes() []byte { return b.buf.Bytes() }
+
+// doorReadWait is how long a door request waits for a read as its project user (a path's
+// resolution, a rendered file, its docker config): one held open (a FIFO the user names)
+// would hold a process of the deploy user's for good, and many, the deploy user's process
+// limit, which sshd's look at every project user's keys runs under.
+const doorReadWait = time.Minute
+
+// maxRendered, maxLogins, maxPath and maxEnvironments are what the deploy user reads at most
+// of a project user's answer: a rendered compose file, a project's docker config, a path's
+// resolution, and its environments for --server-info; maxManifest of a registry's manifest or
+// index, which the door holds whole (a registry's own limit is 4 MiB).
+const (
+	maxRendered     = 8 << 20
+	maxLogins       = 1 << 20
+	maxPath         = 64 << 10
+	maxEnvironments = 4 << 20
+	maxManifest     = 4 << 20
+)
 
 // closedDir makes a directory only the deploy user and this project user can reach.
 func (s *doorSide) closedDir(path, perms string) error {
@@ -725,7 +1102,7 @@ func (s *doorSide) entry(mnt, e string, file bool) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	if !s.policy.OwnName(filepath.Base(real)) || real != s.policy.Mnt(filepath.Base(real)) || !doorPlainName.MatchString(e) {
+	if !s.policy.OwnName(filepath.Base(real)) || real != s.policy.Mnt(filepath.Base(real)) || !door.Word.MatchString(e) {
 		return doorRefused(fmt.Errorf("refused: not an entry of this project's: %s/%s", mnt, e))
 	}
 	if err := s.makeEntry(filepath.Join(real, e), file); err != nil {
@@ -750,10 +1127,8 @@ func (s *doorSide) clone(path string) int {
 		return doorRefused(err)
 	}
 	if rest, ok := strings.CutPrefix(real, root+"/"); ok {
-		for _, word := range strings.Split(rest, "/") {
-			if !doorPlainName.MatchString(strings.TrimPrefix(word, ".")) {
-				return doorRefused(errors.New("refused: not a clone's name: " + path))
-			}
+		if !door.CloneDir(rest) {
+			return doorRefused(errors.New("refused: not a clone's name: " + path))
 		}
 		if err := os.MkdirAll(real, 0o750); err != nil {
 			return doorRefused(err)
@@ -778,7 +1153,7 @@ func (s *doorSide) mark(dir, id string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	if !strings.HasPrefix(real, s.policy.Clones()+"/") || !doorPlainName.MatchString(id) {
+	if rest, ok := strings.CutPrefix(real, s.policy.Clones()+"/"); !ok || !door.CloneDir(rest) || !door.Word.MatchString(id) {
 		return doorRefused(errors.New("refused: not a clone of this project's: " + dir))
 	}
 	// Under a directory a root container filled, whose owner may be anyone's: a file of
@@ -797,8 +1172,6 @@ func (s *doorSide) mark(dir, id string) int {
 	}
 	return 0
 }
-
-var doorPlainName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 // makeEntry makes an entry the project user writes inside, and cannot replace.
 func (s *doorSide) makeEntry(path string, file bool) error {
@@ -878,7 +1251,12 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 // an unlinked file, so nothing of a project's environment stays on disk, with no .env,
 // in the release it says it is from, since devopsy reads compose's working_dir.
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
+	// A claim's copy is a work directory too, which a door killed mid-start leaves.
+	s.sweepWork()
 	if err := s.policy.CheckVerb(argv); err != nil {
+		return doorRefused(err)
+	}
+	if err := s.foreign(); err != nil {
 		return doorRefused(err)
 	}
 	refused := door.CheckFile(file, s.policy, argv[0], s)
@@ -894,17 +1272,29 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
 	name, _ := file["name"].(string)
+	if argv[0] == "pull" {
+		return s.pull(config, file, profiles, dir, argv)
+	}
+	s.policy.Label(file)
+	starts := door.StartsContainers(argv[0])
+	// The image check pins what it checked into the file (startImage), so the file compose
+	// gets, and the vets judge, is marshalled after it.
+	if starts {
+		if err := s.checkImageLabels(file, config); err != nil {
+			return doorRefused(err)
+		}
+		// What starts is the image claimed: one gone in the moment since fails the start, never
+		// pulled by Docker's daemon, which contacts no registry a project names.
+		services, _ := file["services"].(map[string]any)
+		for _, svc := range services {
+			if m, ok := svc.(map[string]any); ok {
+				m["pull_policy"] = "never"
+			}
+		}
+	}
 	checked, err := json.Marshal(file)
 	if err != nil {
 		return doorRefused(err)
-	}
-	starts := slices.Contains([]string{"up", "create", "run"}, argv[0])
-	if starts || argv[0] == "build" || argv[0] == "pull" {
-		unlock, err := s.imageLock()
-		if err != nil {
-			return doorRefused(err)
-		}
-		defer unlock()
 	}
 	if starts {
 		for _, v := range s.vets {
@@ -922,9 +1312,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 	}
 	if starts {
-		if err := s.checkImageLabels(file, config); err != nil {
-			return doorRefused(err)
-		}
 		// The checked file's sources are real paths already.
 		same := func(p string) (string, error) { return p, nil }
 		if err := s.bindEntries(file, name, same); err != nil {
@@ -938,13 +1325,9 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err != nil {
 		return doorRefused(err)
 	}
-	env := s.env
-	if slices.Contains([]string{"up", "pull", "create", "run", "build"}, argv[0]) {
-		d, err := s.logins(config)
-		if err != nil {
-			return doorRefused(err)
-		}
-		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
+	env, err := s.composeEnv(config, argv[0] == "build")
+	if err != nil {
+		return doorRefused(err)
 	}
 	if argv[0] == "build" {
 		b, err := s.builder()
@@ -952,15 +1335,75 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			return doorRefused(err)
 		}
 		env = append(slices.Clone(env), b...)
-	}
-	cmd := []string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}
-	for _, p := range strings.Split(profiles, ",") {
-		if composeProfile.MatchString(p) {
-			cmd = append(cmd, "--profile", p)
+		// Read under the build's own environment: Docker finds compose in
+		// $DOCKER_CONFIG/cli-plugins first, so another DOCKER_CONFIG may be another compose.
+		if door.HasContexts(file) {
+			if err := s.composeKnowsServiceContexts(env); err != nil {
+				return doorRefused(err)
+			}
 		}
 	}
-	err = s.execKeeping(append(cmd, argv...), env)
+	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
+	if err := s.stillAsked(); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
+	err = execDecided(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
+}
+
+// doorStops are the terminal's stop signals, which the door takes until it execs.
+var doorStops = []os.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU}
+
+// holdStops keeps its caller's terminal from stopping the door between a check and its use,
+// which would stretch every window between them: the signals are caught, never ignored, so
+// what the door execs has them at their default again (an exec resets a caught signal, and
+// keeps an ignored one ignored), compose's Ctrl-Z being compose's (devopsy replaces itself).
+func holdStops() {
+	signal.Notify(make(chan os.Signal, 1), doorStops...)
+}
+
+// execDecided execs what the door decided.
+func execDecided(path string, argv, env []string) error {
+	return syscall.Exec(path, argv, env)
+}
+
+// doorLimits lifts the file size limit the door's caller hands it through sudo, or refuses
+// to run under one it cannot lift: under it the door's append to its refusals' log would fail
+// without a word (SIGXFSZ ignored or not), and its caller keep what it was refused out of the
+// admin's sight.
+func doorLimits() error {
+	var l unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &l); err != nil {
+		return err
+	}
+	if l.Cur != l.Max {
+		l.Cur = l.Max
+		if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &l); err != nil {
+			return err
+		}
+	}
+	if l.Max != unix.RLIM_INFINITY {
+		return errors.New("refused: the door runs with no file size limit, and its caller's cannot be lifted")
+	}
+	return nil
+}
+
+// serviceContexts is the compose that first reads a build context service:<name> as another
+// service's build: one before reads it as a path in the project's directory, the project
+// user's to make, which its client then reads with the deploy user's rights.
+var serviceContexts = [3]int{2, 33, 0}
+
+// composeKnowsServiceContexts refuses a build with contexts (all service:<name>, CheckFile)
+// on a compose before serviceContexts, or one whose version cannot be read, the compose the
+// build's environment env runs.
+func (s *doorSide) composeKnowsServiceContexts(env []string) error {
+	c := s.docker("compose", "version", "--short")
+	c.Env = env
+	out, err := c.Output()
+	if v, ok := versionAtLeast(string(out), serviceContexts); err != nil || !ok {
+		return fmt.Errorf("refused: a build context needs compose %s or later, which reads service:<name> as another service's build (this server's: %q)", floorWords(serviceContexts), v)
+	}
+	return nil
 }
 
 // downProject takes this project's compose name down by that name alone, no file to
@@ -973,52 +1416,44 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
-	err := syscall.Exec(s.real, append([]string{"docker", "compose", "-p", name}, argv...), s.env)
+	if err := s.foreign(); err != nil {
+		return doorRefused(err)
+	}
+	env, err := s.composeEnv("", false)
+	if err != nil {
+		return doorRefused(err)
+	}
+	// From /, which holds no compose file of anyone's: compose looks for one in its directory
+	// and every parent, and a down by name runs with none.
+	if err := os.Chdir("/"); err != nil {
+		return doorRefused(err)
+	}
+	if err := s.stillAsked(); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
+	err = execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), env)
 	return doorRefused(err)
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a
 // proxy reads: a build's or an image's LABEL lands in a container's labels, past any check
-// of a file's. An image not here yet comes first, with this project's logins, and one
-// still missing refuses the start: compose would pull or build it after this check. The
-// image lock (imageLock) keeps what was checked until compose has created its containers.
+// of a file's. It also decides the image compose runs, written into the file (startImage):
+// one compose must not resolve again after this check.
 func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 	services, _ := file["services"].(map[string]any)
-	name, _ := file["name"].(string)
 	for _, svc := range slices.Sorted(maps.Keys(services)) {
 		sv, _ := services[svc].(map[string]any)
+		// The render named every build (images.DoorBuild) and dropped its build: section.
 		image, _ := sv["image"].(string)
-		_, builds := sv["build"]
-		if image == "" && builds {
-			image = name + "-" + svc // compose's name for what it builds
-		}
 		if image == "" {
 			continue
 		}
-		inspect := func() ([]byte, error) {
-			return s.docker("image", "inspect", "--format", "{{json .Config.Labels}}", image).Output()
-		}
-		out, err := inspect()
+		run, labels, err := s.startImage(svc, image, config)
 		if err != nil {
-			// Compose would pull it after this check, so it comes first. What builds is
-			// never pulled: its name is this project's alone.
-			if !builds {
-				d, lerr := s.logins(config)
-				if lerr != nil {
-					return lerr
-				}
-				pull := s.docker("pull", "-q", image)
-				pull.Env = append(slices.Clone(s.env), "DOCKER_CONFIG="+d)
-				pull.Stderr = os.Stderr
-				pull.Run()
-			}
-			if out, err = inspect(); err != nil {
-				return fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
-			}
+			return err
 		}
-		labels := map[string]string{}
-		if json.Unmarshal(out, &labels) != nil {
-			continue
+		if run != image {
+			sv["image"] = run
 		}
 		for k := range labels {
 			low := strings.ToLower(k)
@@ -1035,38 +1470,43 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 	return nil
 }
 
-// imageLock holds this project's image lock until the door's process ends, compose's
-// after an exec included (execKeeping): a build, pull or tag of the project's waits while
-// a start runs, which otherwise could change an image between its label check and
-// compose's create. A wait is said, and ends in 10 minutes. unlock lets it go for a door
-// that returns rather than execs.
-func (s *doorSide) imageLock() (unlock func(), err error) {
-	dir := filepath.Join(s.policy.Space, "locks")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, s.policy.Project), os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	unlock = func() { s.lock = nil; f.Close() }
-	fd := int(f.Fd())
-	took := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
-	if !took {
-		what := s.policy.Project + "'s images"
-		timer := report.Start("waiting for " + what + ", up to 10 minutes")
-		for end := time.Now().Add(10 * time.Minute); time.Now().Before(end) && !took; {
-			time.Sleep(250 * time.Millisecond)
-			took = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
+// startImage is the image svc's start runs, as compose is to name it, and that image's
+// labels. Every name moves between this check and compose's create: a name only this
+// project writes (a build's, a hold of its own, OwnRef) or devopsy's util image by the
+// project's own build or tag in another environment, so it goes by the id read here; any
+// other is anyone's on the server (another project's pull of a tag its registry moved, the
+// deploy user's build of a registry's name), so it goes pinned, <image>@<digest>
+// (images.Pin): an image of this project's (claimed by its id, or named by a hold of its
+// own) by its digest in the image's repository, as the devopsy.digest label chooses it,
+// read in one inspect; else claimed first, by the digest its claim loaded, a reference by an
+// index's digest included. A reference by digest the project has, or an id, is a pin already. An image not here yet is claimed too, with this
+// project's logins, and one still missing refuses the start: compose would pull or build it
+// after this check.
+func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
+	missing := fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
+	if image == doorKnown().Image || s.policy.OwnRef(image) {
+		img, err := s.inspectImage(image)
+		if err != nil || img.ID == "" {
+			return "", nil, missing
 		}
-		if !took {
-			f.Close()
-			return nil, fmt.Errorf("refused: %s did not end in 10 minutes", what)
-		}
-		timer.Stop("done waiting for " + what)
+		return img.ID, img.Labels, nil
 	}
-	s.lock = f
-	return unlock, nil
+	img, err := s.inspectImage(image)
+	owned := err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
+	pinned := images.Pinned(image)
+	digest := ""
+	if owned && !pinned {
+		digest = images.DigestIn(img, image)
+	}
+	if !owned || !pinned && digest == "" {
+		if digest, img, err = s.claim(image, config); err != nil {
+			return "", nil, fmt.Errorf("%s: %w", svc, err)
+		}
+		// A pin by an index's digest goes by the entry the claim checked and loaded for the
+		// daemon's platform: no image here goes by the index's.
+		image, _, _ = strings.Cut(image, "@")
+	}
+	return images.Pin(image, digest), img.Labels, nil
 }
 
 // regrant gives this project user back rwX in entries a root container wrote, where
@@ -1103,7 +1543,6 @@ func (s *doorSide) regrant(entries []string) error {
 // writtenEntries are the entries of this project's that containers write, by their
 // mounts: a detached copy's, given back once it is removed.
 func (s *doorSide) writtenEntries(containers []string) []string {
-	mnt := filepath.Join(s.policy.Space, "mnt") + "/"
 	var entries []string
 	for _, c := range containers {
 		out, err := s.docker("inspect", "--type", "container", "-f", `{{range .Mounts}}{{if .RW}}{{println .Source}}{{end}}{{end}}`, c).Output()
@@ -1111,7 +1550,7 @@ func (s *doorSide) writtenEntries(containers []string) []string {
 			continue
 		}
 		for _, src := range strings.Fields(string(out)) {
-			if strings.HasPrefix(src, mnt) && filepath.Dir(src)+"/" != mnt {
+			if _, entry, ok := s.policy.MntPath(src); ok && entry != "" {
 				entries = append(entries, src)
 			}
 		}
@@ -1122,33 +1561,60 @@ func (s *doorSide) writtenEntries(containers []string) []string {
 // builder is what a build's environment needs to run on this project's own BuildKit,
 // made at its first build: on one builder, cache mounts are shared across projects by
 // their id, so one project's build would fill a cache another's trusts. Its settings are
-// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets.
+// the door's (BUILDX_CONFIG), apart from the directory of logins a build gets. Read once
+// per request.
 func (s *doorSide) builder() ([]string, error) {
-	name := "devopsy-" + s.policy.Project
-	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name}
-	env := append(slices.Clone(s.env), b[0])
-	inspect := s.docker("buildx", "inspect", name)
-	inspect.Env = env
-	if inspect.Run() != nil {
-		create := s.docker("buildx", "create", "--name", name, "--driver", "docker-container")
-		create.Env, create.Stdout, create.Stderr = env, os.Stderr, os.Stderr
-		if err := create.Run(); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
-		}
-	}
-	return b, nil
+	return s.builderEnv.get(s.ensureBuilder)
 }
 
-// execKeeping execs docker keeping the image lock, if the door holds it, open in what
-// it becomes: Go's descriptors close at an exec, and any process it starts before
-// would otherwise hold the lock too.
-func (s *doorSide) execKeeping(argv, env []string) error {
-	if s.lock != nil {
-		if _, err := unix.FcntlInt(s.lock.Fd(), unix.F_SETFD, 0); err != nil {
-			return err
+// ensureBuilder makes the project's builder when it is not there as it should be (builder).
+func (s *doorSide) ensureBuilder() ([]string, error) {
+	name := door.BuilderOf(s.policy.Project)
+	// Its network is its own: on Docker's default bridge, which every container shares, a
+	// build step is a member of it, and reaches another project's builder and what its build
+	// listens on.
+	network := door.BuilderNetworkOf(s.policy.Project)
+	// No git of the deploy user's in a context a project user wrote: buildx's client asks git
+	// about the context it builds, and a sealed copy is the deploy user's own, so git trusts
+	// the repository config the project user put in it, which can name a program (a promisor
+	// remote's uploadpack) git then runs as the deploy user, Docker's socket in hand.
+	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
+	env := append(slices.Clone(s.env), b[0])
+	run := func(args ...string) ([]byte, error) {
+		c := s.docker(args...)
+		c.Env, c.Stderr = env, os.Stderr
+		return c.Output()
+	}
+	// A look whose failure is an answer (no builder yet, no network yet) says nothing: its
+	// words read as a failure of the build.
+	probe := func(args ...string) ([]byte, error) {
+		c := s.docker(args...)
+		c.Env = env
+		return c.Output()
+	}
+	out, err := probe("buildx", "inspect", name)
+	if err == nil && strings.Contains(string(out), `network="`+network+`"`) {
+		return b, nil
+	}
+	if err == nil {
+		// Made otherwise, on the default bridge: made again.
+		if _, err := run("buildx", "rm", name); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder is on Docker's default bridge, and could not be removed: %v", s.policy.Project, err)
 		}
 	}
-	return syscall.Exec(s.real, argv, env)
+	if _, err := probe("network", "inspect", network); err != nil {
+		if _, err := run("network", "create", network); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
+		}
+	}
+	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network); err != nil {
+		// Another environment's build may have made it meanwhile.
+		if out, ierr := probe("buildx", "inspect", name); ierr == nil && strings.Contains(string(out), `network="`+network+`"`) {
+			return b, nil
+		}
+		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
+	}
+	return b, nil
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)
@@ -1173,67 +1639,143 @@ func unlinkedFile(data []byte) (int, error) {
 	return fd, nil
 }
 
-// logins leaves a project's registry logins alone in a directory of the door's.
-// Never its own directory: Docker's CLI loads plugins and helpers from there, which
-// would run the project's own program as the deploy user.
+// logins leaves a project's registry logins alone in a directory of the door's, read once
+// per request. Never its own directory: Docker's CLI loads plugins and helpers from there,
+// which would run the project's own program as the deploy user.
 func (s *doorSide) logins(config string) (string, error) {
-	var out bytes.Buffer
-	c := s.read("cat", config)
-	c.Stdout = &out
+	return s.loginsDir.get(func() (string, error) { return s.writeLogins(config) })
+}
+
+// writeLogins writes the logins' directory (logins).
+func (s *doorSide) writeLogins(config string) (string, error) {
+	out, err := doorAnswer(s.read("cat", config), maxLogins, doorReadWait)
 	auths := map[string]map[string]string{}
-	if c.Run() == nil {
+	if err == nil {
 		var parsed struct {
 			Auths map[string]struct {
 				Auth string `json:"auth"`
 			} `json:"auths"`
 		}
-		if json.Unmarshal(out.Bytes(), &parsed) == nil {
+		if json.Unmarshal(out, &parsed) == nil {
 			for k, v := range parsed.Auths {
 				auths[k] = map[string]string{"auth": v.Auth}
 			}
 		}
 	}
-	dir := filepath.Join(s.policy.Space, "logins", s.policy.Project)
+	dir := door.LoginsDirOf(s.policy.Space, s.policy.Project)
+	return dir, s.whileAUser(func() error { return writeAuths(dir, auths) })
+}
+
+// writeAuths writes a project's logins' directory, dir, holding auths alone.
+func writeAuths(dir string, auths map[string]map[string]string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return err
 	}
 	data, err := json.Marshal(map[string]any{"auths": auths})
 	if err != nil {
-		return "", err
+		return err
 	}
 	tmp := filepath.Join(dir, ".config.json."+strconv.Itoa(os.Getpid()))
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return "", err
+		return err
 	}
-	return dir, os.Rename(tmp, filepath.Join(dir, "config.json"))
+	return os.Rename(tmp, filepath.Join(dir, "config.json"))
 }
 
-var doorSecret = regexp.MustCompile(`^[a-f0-9]{32}$`)
+// profileArgs are compose's --profile flags for profiles, a comma-separated list: a profile
+// that is not one of compose's names is left out.
+func profileArgs(profiles string) []string {
+	var args []string
+	for _, p := range strings.Split(profiles, ",") {
+		if composeProfile.MatchString(p) {
+			args = append(args, "--profile", p)
+		}
+	}
+	return args
+}
+
+// composeEnv is the environment every compose the door runs gets: compose reads its logins,
+// helpers and plugins from DOCKER_CONFIG, the deploy user's own ~/.docker when unset, so a
+// build gets the project's logins (from its docker config, config) and anything else an empty
+// one.
+func (s *doorSide) composeEnv(config string, build bool) ([]string, error) {
+	dir, err := s.emptyConfig()
+	if build {
+		dir, err = s.logins(config)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return append(slices.Clone(s.env), "DOCKER_CONFIG="+dir), nil
+}
+
+// emptyConfig is a Docker config directory with nothing in it, the deploy user's and closed to
+// writes (<space>/docker-empty), for a compose that needs no logins.
+func (s *doorSide) emptyConfig() (string, error) {
+	dir := filepath.Join(s.policy.Space, "docker-empty")
+	if err := os.MkdirAll(s.policy.Space, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o555); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	return dir, os.Chmod(dir, 0o555)
+}
 
 // request answers a Docker command other than compose.
 func (s *doorSide) request(config string, argv []string) int {
 	s.sweepWork()
 	a, err := door.Decide(argv, s.policy, s, s, doorKnown())
-	if err != nil {
+	// Whatever refuses leaves none of the work directories it made (copies, logins).
+	refused := func(err error) int {
 		for _, d := range s.made {
 			s.removeWork(d)
 		}
 		return doorRefused(err)
 	}
+	if err != nil {
+		return refused(err)
+	}
 	for _, e := range a.Entries {
 		if err := s.closedDir(filepath.Dir(e.Path), "rX"); err != nil {
-			return doorRefused(err)
+			return refused(err)
 		}
 		if err := s.makeEntry(e.Path, e.File); err != nil {
-			return doorRefused(err)
+			return refused(err)
 		}
 	}
+	// A removal that fails fails the request: what asked for it (a release's removal, a
+	// clone's) resumes it, and goes on only from one that went.
+	var kept []string
 	for _, path := range a.Remove {
 		if s.read("remove", path).Run() != nil {
-			report.Warn("could not remove " + path)
+			kept = append(kept, path)
+		}
+	}
+	if len(kept) > 0 {
+		report.Error("could not remove " + strings.Join(kept, ", "))
+		return 1
+	}
+	for _, ref := range a.Claims {
+		digest, _, err := s.claim(ref, config)
+		if err != nil {
+			return refused(err)
+		}
+		// What Docker then runs names the image the claim got, by its digest: the name is
+		// anyone's to move right after the pull (a tag's source would take the mover's). A
+		// format's value is no image.
+		for i := 1; i < len(a.Docker); i++ {
+			if a.Docker[i] == ref && a.Docker[i-1] != "--format" && a.Docker[i-1] != "-f" {
+				a.Docker[i] = images.ByDigest(ref, digest)
+			}
+		}
+	}
+	if a.Stream != nil || len(a.Docker) > 0 {
+		if err := s.stillAsked(); err != nil {
+			return refused(fmt.Errorf("refused: %w", err))
 		}
 	}
 	if a.Stream != nil {
@@ -1245,35 +1787,13 @@ func (s *doorSide) request(config string, argv []string) int {
 	}
 	env := s.env
 	stdin := io.Reader(os.Stdin)
-	if a.Secret != "" {
-		value, err := io.ReadAll(io.LimitReader(os.Stdin, 64))
-		if err != nil || !doorSecret.Match(value) {
-			return doorRefused(errors.New("refused: not a secret of a sync's"))
-		}
-		env = append(slices.Clone(env), a.Secret+"="+string(value))
-		stdin = strings.NewReader("")
-	}
-	if a.Images {
-		unlock, err := s.imageLock()
-		if err != nil {
-			return doorRefused(err)
-		}
-		defer unlock()
-	}
-	if a.Logins {
-		d, err := s.logins(config)
-		if err != nil {
-			return doorRefused(err)
-		}
-		env = append(slices.Clone(env), "DOCKER_CONFIG="+d)
-	}
 	if a.Stdin != "" {
 		stdin = strings.NewReader(a.Stdin)
 	}
 	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
-	if a.Stdin == "" && a.Secret == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
-		err := s.execKeeping(append([]string{"docker"}, a.Docker...), env)
-		return doorRefused(err)
+	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
+		err := execDecided(s.real, append([]string{"docker"}, a.Docker...), env)
+		return refused(err)
 	}
 	c := exec.Command(s.real, a.Docker...)
 	c.Env = env
@@ -1316,4 +1836,58 @@ func (s *doorSide) stream(st *door.Stream) int {
 		}
 	}
 	return 0
+}
+
+// containerRows is what says whose each container is, one JSON array per line: a label's
+// value is anyone's to write, spaces included.
+var containerRows = []string{"ps", "-a", "--no-trunc", "--format",
+	`[{{json .ID}},{{json (.Label "com.docker.compose.project")}},{{json (.Label "devopsy.env")}},{{json (.Label "devopsy.door")}}]`}
+
+// containerLabels are the server's containers by id, with the labels that say whose they are.
+func containerLabels(c *exec.Cmd) (map[string]map[string]string, error) {
+	out, err := c.Output()
+	if err != nil {
+		return nil, fmt.Errorf("cannot read what runs: %v", err)
+	}
+	all := map[string]map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var row []string
+		if err := json.Unmarshal([]byte(line), &row); err != nil || len(row) != 4 {
+			return nil, fmt.Errorf("cannot read what runs: %q", line)
+		}
+		all[row[0]] = map[string]string{"com.docker.compose.project": row[1], "devopsy.env": row[2], door.DoorLabel: row[3]}
+	}
+	return all, nil
+}
+
+// foreign refuses while a container the door did not make for this user is under the
+// project's names (door.Policy.Foreign).
+func (s *doorSide) foreign() error {
+	all, err := containerLabels(s.docker(containerRows...))
+	if err != nil {
+		return fmt.Errorf("refused: %v", err)
+	}
+	if ids := s.policy.Foreign(all); len(ids) > 0 {
+		return foreignError(s.policy.Project, ids, all)
+	}
+	return nil
+}
+
+// foreignError names what holds a project's names outside the door, and how it goes.
+func foreignError(project string, ids []string, all map[string]map[string]string) error {
+	var names []string
+	for _, id := range ids {
+		name := all[id]["com.docker.compose.project"]
+		if name == "" {
+			name = all[id]["devopsy.env"]
+		}
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return &report.Failure{Msg: fmt.Sprintf("refused: containers the door did not make are under %s's names: %s", project, strings.Join(names, ", ")),
+		Remedies: []report.Remedy{report.Fix("the deploy user takes them down, which keeps their volumes:", "docker compose -p "+names[0]+" down")}}
 }

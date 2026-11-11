@@ -9,12 +9,13 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -41,34 +42,123 @@ func behindDoor() bool {
 	if err != nil || reachesDocker() {
 		return false
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	a, errA := filepath.EvalSymlinks(found)
-	b, errB := filepath.EvalSymlinks(self)
-	return errA == nil && errB == nil && a == b
+	self := selfPath()
+	a, err := filepath.EvalSymlinks(found)
+	return self != "" && err == nil && a == self
 }
 
-// devopsyPath is what sudo's rules name, wherever this was found as.
+// devopsyPath is what sudo's rules name and what a project user asks sudo to run: this
+// binary's own path, links resolved, which add's devopsy and a project user's are, being one
+// file, whatever either's PATH finds first (devopsy upgrades in place, at the same path).
 func devopsyPath() string {
-	if p, err := exec.LookPath("devopsy"); err == nil {
+	if p := selfPath(); p != "" {
 		return p
 	}
 	return "/usr/local/bin/devopsy"
 }
 
-// sudoArgs are sudo's arguments to run devopsy with flag as another user.
+// sudoArgs are sudo's arguments to run devopsy with flag as another user, the door under its
+// own group (remote.DoorRunGroup), which the firewall covers.
 func sudoArgs(as, flag string, args ...string) []string {
-	return append([]string{"-n", "-u", as, devopsyPath(), flag}, args...)
+	head := []string{"-n", "-u", as}
+	if flag == doorFlag {
+		head = append(head, "-g", remote.DoorRunGroup)
+	}
+	return append(append(head, devopsyPath(), flag), args...)
+}
+
+// doorCommand is the door asked as the deploy user through sudo (--door), the one way every
+// call of a project user's starts it: a hand-over, a question.
+func doorCommand(args ...string) (*exec.Cmd, error) {
+	deploy, err := deployUser()
+	if err != nil {
+		return nil, fmt.Errorf("who is the deploy user: %w", err)
+	}
+	sudo, err := exec.LookPath("sudo")
+	if err != nil {
+		return nil, fmt.Errorf("a project user's docker goes through sudo: %w", err)
+	}
+	return exec.Command(sudo, sudoArgs(deploy.Username, doorFlag, args...)...), nil
+}
+
+// doorRead is a read as the project user who (--door-read), the one way any caller starts
+// it: in a session of its own, with no controlling terminal, since its process is that
+// user's to trace, and in the caller's session it would hold the caller's terminal (an
+// admin's, under --server-info) to read and type into. It reads no terminal.
+func doorRead(who string, args ...string) *exec.Cmd {
+	c := exec.Command("sudo", sudoArgs(who, doorReadFlag, args...)...)
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return c
+}
+
+// doorAnswer runs c, a read as a project user (doorRead), for what it prints: at most max bytes,
+// past which it fails, and, when within is not zero, nothing after within, its session killed
+// then. The read runs on files that user writes, which make it as long, and last as long, as
+// that user chooses (a FIFO where a state file goes, say): every answer the deploy user waits
+// on from such a read comes through here.
+func doorAnswer(c *exec.Cmd, max int, within time.Duration) ([]byte, error) {
+	out := capBuffer{max: max}
+	c.Stdout = &out
+	// A child of the read's that keeps its output open ends Wait a second after the read.
+	c.WaitDelay = time.Second
+	ownGroup(c)
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	defer killGroupAfter(c, within)()
+	if err := c.Wait(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// composeHelp says whether a compose command (its verb first) asks for compose's help: -h or
+// --help among compose's own flags, which for exec and run stop at the service, what follows
+// it being the service's command (`exec web df -h`, `run web drush --help`), as door.CheckVerb
+// reads it.
+func composeHelp(rest []string) bool {
+	if len(rest) == 0 {
+		return false
+	}
+	verb, flags := rest[0], door.Verbs[rest[0]]
+	for i := 1; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case a == "-h" || a == "--help":
+			return true
+		case !strings.HasPrefix(a, "-") || a == "-":
+			if verb == "exec" || verb == "run" {
+				return false
+			}
+		case !strings.Contains(a, "=") && flags[a] == 1:
+			i++
+		}
+	}
+	return false
+}
+
+// ownGroup gives c a process group of its own, unless it has a session of its own already
+// (doorRead's sudo): a kill of its group (killGroupAfter, claimCut) then reaches what it runs
+// (the docker CLI's buildx plugin among them), and never the door's.
+func ownGroup(c *exec.Cmd) {
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+}
+
+// killGroupAfter kills the process group of c, started in its own (ownGroup), once within has
+// passed (never when within is 0); what it gives stops the clock.
+func killGroupAfter(c *exec.Cmd, within time.Duration) func() {
+	if within <= 0 {
+		return func() {}
+	}
+	t := time.AfterFunc(within, func() { _ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL) })
+	return func() { t.Stop() }
 }
 
 // realDocker is the docker on PATH that is not this binary.
 func realDocker() string {
-	self, _ := os.Executable()
-	if r, err := filepath.EvalSymlinks(self); err == nil {
-		self = r
-	}
+	self := selfPath()
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		candidate := filepath.Join(dir, "docker")
 		r, err := filepath.EvalSymlinks(candidate)
@@ -84,12 +174,9 @@ func realDocker() string {
 
 // deployUser is who owns this binary: devopsy upgrades itself as its deploy user.
 func deployUser() (*user.User, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	if r, err := filepath.EvalSymlinks(self); err == nil {
-		self = r
+	self := selfPath()
+	if self == "" {
+		return nil, errors.New("this binary's path is not known")
 	}
 	fi, err := os.Stat(self)
 	if err != nil {
@@ -109,9 +196,11 @@ func runDocker(args []string) int {
 		return doorExec(real, args)
 	}
 	switch args[0] {
-	// No daemon behind these: how devopsy learns compose's words, and a project's login.
-	case "__complete", "login", "logout", "--version", "--help":
+	// No daemon behind these: how devopsy learns compose's words, and a project's logout.
+	case "__complete", "logout", "--version", "--help":
 		return doorExec(real, args)
+	case "login":
+		return doorLogin(args[1:])
 	case "compose":
 		return dockerCompose(real, args[1:])
 	}
@@ -124,33 +213,15 @@ func doorExec(path string, args []string) int {
 	return 1
 }
 
-// secretFlag finds a secret docker would read from this environment, `-e NAME`: it
-// goes on stdin to the door, since sudo clears the environment and a command line shows.
-var secretFlag = regexp.MustCompile(`^RSYNC_(SECRET|PASSWORD)$`)
-
 // doorHandOver asks the door, as the deploy user, and becomes that: sudo relays
 // signals and exits with the code of what it runs.
 func doorHandOver(args []string) int {
-	deploy, err := deployUser()
+	c, err := doorCommand(args...)
 	if err != nil {
-		report.Error("who is the deploy user: " + err.Error())
+		report.Error(err.Error())
 		return 1
 	}
-	sudo, err := exec.LookPath("sudo")
-	if err != nil {
-		report.Error("a project user's docker goes through sudo: " + err.Error())
-		return 1
-	}
-	for i, a := range args {
-		if a == "-e" && i+1 < len(args) && secretFlag.MatchString(args[i+1]) {
-			if err := stdinIs(os.Getenv(args[i+1])); err != nil {
-				report.Error(err.Error())
-				return 1
-			}
-			break
-		}
-	}
-	err = syscall.Exec(sudo, append([]string{"sudo"}, sudoArgs(deploy.Username, doorFlag, args...)...), os.Environ())
+	err = syscall.Exec(c.Path, append([]string{"sudo"}, c.Args[1:]...), os.Environ())
 	report.Error("running sudo: " + err.Error())
 	return 1
 }
@@ -172,26 +243,6 @@ func filledPipe(text string) (*os.File, error) {
 	return r, nil
 }
 
-// stdinIs makes stdin hold text.
-func stdinIs(text string) error {
-	r, err := filledPipe(text)
-	if err != nil {
-		return err
-	}
-	// The lowest free descriptor is what Dup gives: closed first, that is stdin.
-	if err := syscall.Close(0); err != nil {
-		return err
-	}
-	fd, err := syscall.Dup(int(r.Fd()))
-	if err != nil {
-		return err
-	}
-	if fd != 0 {
-		return errors.New("stdin was not free for the door's secret")
-	}
-	return nil
-}
-
 // dockerConfig is where this user's registry logins are.
 func dockerConfig() string {
 	config := os.Getenv("DOCKER_CONFIG")
@@ -201,8 +252,13 @@ func dockerConfig() string {
 	return filepath.Join(config, "config.json")
 }
 
-// composeGlobals are compose's own flags that take a value.
-var composeGlobals = []string{"-f", "--file", "--project-directory", "-p", "--project-name", "--env-file", "--ansi", "--progress", "--parallel"}
+// composeGlobals are compose's own flags that take a value, and composeLone those that take
+// none and change only what renders. Any other global flag (for example --dry-run) is
+// refused: the door gets the verb and what follows it, so it would run the command without.
+var (
+	composeGlobals = []string{"-f", "--file", "--project-directory", "-p", "--project-name", "--env-file", "--ansi", "--progress", "--parallel"}
+	composeLone    = []string{"--compatibility", "--all-resources"}
+)
 
 // dockerCompose renders what a compose command is about, with this user's rights,
 // and asks the door to run the verb on that.
@@ -227,8 +283,25 @@ loop:
 			}
 			global = append(global, a, args[i+1])
 			i += 2
+		case a == "-h" || a == "--help":
+			// Compose's own help, which no daemon is behind.
+			return doorExec(real, append([]string{"compose"}, args...))
 		case strings.HasPrefix(a, "-"):
-			global = append(global, a)
+			name, value, valued := strings.Cut(a, "=")
+			switch {
+			case valued && name == "--profile":
+				profiles = append(profiles, value)
+			case valued && slices.Contains(composeGlobals, name):
+				if name == "--project-directory" {
+					dir = value
+				}
+				global = append(global, a)
+			case !valued && slices.Contains(composeLone, a):
+				global = append(global, a)
+			default:
+				report.Error("docker compose " + a + ": not taken for a project user, whose door runs the command without it")
+				return 2
+			}
 			i++
 		default:
 			break loop
@@ -236,7 +309,7 @@ loop:
 	}
 	rest := args[i:]
 	// No daemon behind these.
-	if (len(rest) > 0 && rest[0] == "version") || slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
+	if (len(rest) > 0 && rest[0] == "version") || composeHelp(rest) {
 		return doorExec(real, append([]string{"compose"}, args...))
 	}
 	// A whole project by its name (composeDownProject): no file to render.
@@ -246,6 +319,7 @@ loop:
 		}
 	}
 	render := func() (string, error) {
+		sweepRenders(os.TempDir(), time.Now())
 		f, err := os.CreateTemp("", "devopsy-door-*")
 		if err != nil {
 			return "", err
@@ -273,7 +347,26 @@ loop:
 		report.Error("the compose file does not render: " + err.Error())
 		return 2
 	}
-	return doorHandOver(append([]string{"compose", dockerConfig(), f, strings.Join(profiles, ","), dir}, rest...))
+	code := doorHandOver(append([]string{"compose", dockerConfig(), f, strings.Join(profiles, ","), dir}, rest...))
+	// Here only when sudo did not run: the door takes the file once it does.
+	os.Remove(f)
+	return code
+}
+
+// sweepRenders removes this user's renders in dir an hour old: one a sudo that ran and
+// refused left (the door takes the file once it answers, and nothing of the client's runs
+// after sudo). Each holds the project's variables, its owner's alone to read.
+func sweepRenders(dir string, now time.Time) {
+	old, _ := filepath.Glob(filepath.Join(dir, "devopsy-door-*"))
+	for _, f := range old {
+		fi, err := os.Lstat(f)
+		if err != nil || !fi.Mode().IsRegular() || now.Sub(fi.ModTime()) < time.Hour {
+			continue
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) == os.Getuid() {
+			os.Remove(f)
+		}
+	}
 }
 
 // runMntReady gets an environment's shared/mnt ready, whichever user this is: a
@@ -353,11 +446,10 @@ func doorRefusedIt(err error) bool {
 // doorAsk asks the door something it answers on stdout. A question whose failure
 // has a plain way on says nothing of it: it is every server with no door.
 func doorAsk(say bool, args ...string) (string, error) {
-	deploy, err := deployUser()
+	c, err := doorCommand(args...)
 	if err != nil {
 		return "", err
 	}
-	c := exec.Command("sudo", sudoArgs(deploy.Username, doorFlag, args...)...)
 	var said bytes.Buffer
 	c.Stderr = &said
 	if say {

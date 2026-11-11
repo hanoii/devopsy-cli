@@ -124,8 +124,8 @@ func PortError(server string) error {
 	}
 	return &report.Failure{
 		Msg:      fmt.Sprintf("server %q names port %s, and ssh would connect to %s", server, port, eff["port"]),
-		Details:  []string{"DEVOPSY_SSH_COMMAND's options come first, and ssh keeps the first value of each: a -p there applies to every server a command reaches"},
-		Remedies: []report.Remedy{report.Fix("take the port out of DEVOPSY_SSH_COMMAND, or out of the server")},
+		Details:  []string{"DEVOPSY_SSH_COMMAND's and --ssh-option's options come first, and ssh keeps the first value of each: a port there applies to every server a command reaches"},
+		Remedies: []report.Remedy{report.Fix("take the port out of DEVOPSY_SSH_COMMAND or --ssh-option, or out of the server")},
 	}
 }
 
@@ -137,7 +137,7 @@ var SSHEffective = func(dest string) (map[string]string, error) {
 	// Once per destination and ssh (DEVOPSY_SSH_COMMAND, else PATH's): a
 	// sync asks for its two servers' several times (the ports, sameHost,
 	// ChildAddress).
-	key := os.Getenv("DEVOPSY_SSH_COMMAND") + "\x00" + os.Getenv("PATH") + "\x00" + dest
+	key := os.Getenv("DEVOPSY_SSH_COMMAND") + "\x00" + os.Getenv(SSHOptionsEnv) + "\x00" + os.Getenv("PATH") + "\x00" + dest
 	if m, ok := sshEffective.Load(key); ok {
 		return m.(map[string]string), nil
 	}

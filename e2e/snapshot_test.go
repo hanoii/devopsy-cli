@@ -57,7 +57,7 @@ func TestSnapshotTakeRestore(t *testing.T) {
 	}
 	snap := "snaptake/prod/snapshots/" + m[1]
 	for file, member := range map[string]string{"volume.dbdata.tar.zst": "dbdata/table", "mnt.files.tar.zst": "files/a.jpg"} {
-		list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:4 sh -c 'zstd -dc /s/"+file+" | tar -tf -'")
+		list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy.internal/util:5 sh -c 'zstd -dc /s/"+file+" | tar -tf -'")
 		if code != 0 || !strings.Contains(list, member) {
 			t.Errorf("%s (%d): %s", file, code, list)
 		}
@@ -109,7 +109,7 @@ func TestSnapshotTakeRestore(t *testing.T) {
 	// zstd's write of the rest then dies of SIGPIPE, which pipefail made
 	// the extraction's failure, past the restore's point of no return,
 	// the services left down and the environment marked.
-	if out, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:4 sh -c 'cd /tmp && zstd -dc /s/mnt.files.tar.zst | tar -xpf - --numeric-owner && tar -b 2048 --numeric-owner -cf - files | zstd -q' >"+snap+"/data/mnt.files.new && mv "+snap+"/data/mnt.files.new "+snap+"/data/mnt.files.tar.zst"); code != 0 {
+	if out, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy.internal/util:5 sh -c 'cd /tmp && zstd -dc /s/mnt.files.tar.zst | tar -xpf - --numeric-owner && tar -b 2048 --numeric-owner -cf - files | zstd -q' >"+snap+"/data/mnt.files.new && mv "+snap+"/data/mnt.files.new "+snap+"/data/mnt.files.tar.zst"); code != 0 {
 		t.Fatalf("remaking the files' tar with 1 MiB records: %s", out)
 	}
 	// The entry is its owner's: removed as the app would, in a container.
@@ -200,7 +200,7 @@ func TestReleaseSnapshotE2E(t *testing.T) {
 		if manifest, _ := srv(t, "cat "+snap+"/manifest"); !strings.Contains(manifest, "release\t"+strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(first), "releases/"), "/code")) {
 			t.Errorf("%s: the snapshot is not the first release's:\n%s", c.name, manifest)
 		}
-		if list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:4 sh -c 'zstd -dc /s/volume.dbdata.tar.zst | tar -xOf - dbdata/table'"); code != 0 || strings.TrimSpace(list) != "rows" {
+		if list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy.internal/util:5 sh -c 'zstd -dc /s/volume.dbdata.tar.zst | tar -xOf - dbdata/table'"); code != 0 || strings.TrimSpace(list) != "rows" {
 			t.Errorf("%s: the database's tar (%d): %s", c.name, code, list)
 		}
 	}
@@ -245,7 +245,7 @@ func TestSnapshotReflinkE2E(t *testing.T) {
 	if manifest, _ := srv(t, "cat "+snap+"/manifest"); !strings.Contains(manifest, "copy\treflink") {
 		t.Errorf("the manifest:\n%s", manifest)
 	}
-	if list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:4 sh -c 'zstd -dc /s/mnt.files.tar.zst | tar -tf -'"); code != 0 || !strings.Contains(list, "files/a.jpg") {
+	if list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy.internal/util:5 sh -c 'zstd -dc /s/mnt.files.tar.zst | tar -tf -'"); code != 0 || !strings.Contains(list, "files/a.jpg") {
 		t.Errorf("the tar (%d): %s", code, list)
 	}
 	if left, _ := srv(t, "ls snapref/prod/snapshots/.clone 2>/dev/null"); strings.TrimSpace(left) != "" {

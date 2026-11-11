@@ -15,6 +15,9 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"strconv"
+	"syscall"
 )
 
 // The facts read on a server: os-release, /proc/meminfo, docker info,
@@ -122,6 +125,23 @@ func TestServerInfoReport(t *testing.T) {
 	}{
 		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "older than the local 0.54.0|devopsy @vm1: --upgrade"},
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "needs a reboot (for linux-image-amd64)|reboot it"},
+		// The door: a space that takes setuid, sshd waiting for a reboot, its firewall, which
+		// add loads again, named for one of its projects.
+		{"door unguarded", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
+		}, "", "the door refuses every request|/space /space none bind,nosuid,nodev 0 0"},
+		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
+		// A Docker the door cannot claim with: the classic image store, an old buildx.
+		{"door docker", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Docker: "Docker runs the classic image store, and project users need its containerd image store (io.containerd.snapshotter.v1)"}
+		}, "", "the door refuses every image a project user does not build|move Docker to its containerd image store"},
+		{"door firewall", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Project: "blog", FirewallWrong: []string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}}
+		}, "",
+			"keeps them off\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --project-users add blog"},
+		{"door listeners", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
+		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
@@ -471,11 +491,59 @@ func TestServerInfoEnvironments(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	for _, e := range environments(root) {
+	for _, e := range environments(root, nil, nil, ownedByMe) {
 		got = append(got, e.Path)
 	}
 	if !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
 		t.Errorf("environments: %v", got)
+	}
+	// A project user's tree is never the deploy user's to read, a link there least of all:
+	// its environments come from what that user reads (--door-read), and nothing of the
+	// deploy user's is walked through a link the project user put there.
+	secret := filepath.Join(t.TempDir(), "deploy-only")
+	if err := os.MkdirAll(filepath.Join(secret, "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, "app", "stolen")); err != nil {
+		t.Fatal(err)
+	}
+	asked := ""
+	got = nil
+	for _, e := range environments(root, map[string]string{filepath.Join(root, "app"): "devopsy-app"}, func(user, tree string) []remote.Environment {
+		asked = user + " " + tree
+		return []remote.Environment{{Path: "app/prod", Status: "as its user\n"}}
+	}, ownedByMe) {
+		got = append(got, e.Path+"="+e.Status)
+	}
+	if asked != "devopsy-app "+filepath.Join(root, "app") || !slices.Contains(got, "app/prod=as its user\n") || slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, "app/stolen") }) {
+		t.Errorf("a project user's tree (asked %q): %v", asked, got)
+	}
+	// A project user's tree outside the release root, in its own home by default, is read too.
+	tree := filepath.Join(t.TempDir(), "devopsy-shop", "shop")
+	got = nil
+	for _, e := range environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
+		return []remote.Environment{{Path: "shop/prod", Status: "as " + user + "\n"}}
+	}, ownedByMe) {
+		got = append(got, e.Path)
+	}
+	if !slices.Contains(got, "app/prod") || !slices.Contains(got, "shop/prod") {
+		t.Errorf("a project user's tree in its own home: %v", got)
+	}
+}
+
+// What a project user's read answers for its tree is that user's to write: only an
+// environment of its project, under names devopsy gives, is listed, since an admin's
+// --server-info offers a command with it.
+func TestEnvPathIn(t *testing.T) {
+	t.Parallel()
+	for path, ok := range map[string]bool{
+		"shop/prod": true, "shop/eu/prod": true, "shop/Stage.2": true,
+		"blog/prod": false, "shop": false, "shop/a/b/c": false, "shop/prod$(touch x)": false,
+		"shop/prod;id": false, "shop/it's": false, "shop/../blog": false, "shop/EU/prod": false, "shop/-x": false,
+	} {
+		if envPathIn("shop", path) != ok {
+			t.Errorf("%q: %v", path, !ok)
+		}
 	}
 }
 
@@ -497,5 +565,171 @@ func TestServerInfoDocsNameContainerTroubles(t *testing.T) {
 				t.Errorf("%s does not say a container %s warns", where, trouble)
 			}
 		}
+	}
+}
+
+// The command a hint offers to copy for an environment on this machine quotes its path when
+// a shell would read any of it: the path is a project user's to name, and a copy must run
+// cd and --status, nothing it adds.
+func TestStatusHintQuotesItsPath(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{
+		"shop/prod":          "cd /srv/shop/prod/current && devopsy --status",
+		"shop/prod;rm -rf ~": "cd '/srv/shop/prod;rm -rf ~/current' && devopsy --status",
+		"shop/it's":          `cd '/srv/shop/it'\''s/current' && devopsy --status`,
+	} {
+		if got := statusHint("", "/srv", remote.Environment{Path: path}).Cmds; len(got) != 1 || got[0] != want {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
+	}
+	// On a server, the address it offers quotes the environment the same way.
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	for _, env := range []string{"prod$(touch ran)", "prod;touch ran", "it's"} {
+		cmds := statusHint("vm1", "/srv", remote.Environment{Path: "shop/" + env}).Cmds
+		if len(cmds) != 1 {
+			t.Fatalf("%q: commands %q", env, cmds)
+		}
+		// The command as a shell reads it, devopsy printing its arguments.
+		sh := exec.Command("sh", "-c", `devopsy() { printf '%s\n' "$@"; }`+"\n"+cmds[0])
+		sh.Dir = dir
+		out, err := sh.CombinedOutput()
+		if want := "@vm1:" + env + "\n--status\n"; err != nil || string(out) != want || fileExists(marker) {
+			t.Errorf("%q: the offered command %q gives a shell %q (%v, ran what the name holds: %v), want %q", env, cmds[0], out, err, fileExists(marker), want)
+		}
+		os.Remove(marker)
+	}
+}
+
+// --server-info offers a project user's environment's --status as that user, from the
+// project's checkout, never `cd <tree> && devopsy --status` for whoever reads it on the
+// server, the deploy user: devopsy there would load that user's project and run its programs
+// (the env capability, a status capability) with the deploy user's Docker socket, and whether
+// the warning shows is that user's to choose, its state lines being its own read's answer.
+// The environment's user is the deploy user's devopsy's to set, never the read's.
+func TestServerInfoOffersNoStatusInAProjectUsersTree(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	tree := filepath.Join(root, "shop")
+	info := remote.ServerInfo{Version: "0.53.0", Root: root}
+	// As serverFacts lists them: the tree read as its user, who answers a first release
+	// that failed, which --server-info warns of.
+	info.Environments = environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
+		return []remote.Environment{{Path: "shop/prod", Status: "none\t20261027110000\n", User: ""}}
+	}, ownedByMe)
+	_, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
+	warned := false
+	for _, w := range warnings {
+		if !strings.Contains(w.msg, "shop/prod") {
+			continue
+		}
+		warned = true
+		for _, f := range w.fixes {
+			for _, c := range f.Cmds {
+				if strings.HasPrefix(c, "cd "+filepath.Join(tree, "prod", "current")+" ") && strings.Contains(c, "devopsy") {
+					t.Errorf("offered to whoever reads --server-info on the server, the deploy user: %s", c)
+				}
+				if c != "devopsy @devopsy-shop@<server>:prod --status" {
+					t.Errorf("offered for a project user's environment: %s", c)
+				}
+			}
+		}
+	}
+	if !warned {
+		t.Fatalf("the control: no warning of shop/prod: %+v", warnings)
+	}
+}
+
+// Asked of a server, the address offered names the project user on that server.
+func TestStatusHintNamesTheProjectUser(t *testing.T) {
+	t.Parallel()
+	for host, want := range map[string]string{"devopsy@vm1": "devopsy @devopsy-shop@vm1:prod --status", "vm1": "devopsy @devopsy-shop@vm1:prod --status"} {
+		if got := statusHint(host, "/srv", remote.Environment{Path: "shop/prod", User: "devopsy-shop"}).Cmds; len(got) != 1 || got[0] != want {
+			t.Errorf("%s: %q, want %q", host, got, want)
+		}
+	}
+}
+
+// --server-info gives up on a project user's read of its tree that does not answer in time
+// (treeEnvironments, doorAnswer), its environments left out and the rest of the server's facts
+// still coming: that read runs as the project user, on files it writes, and a FIFO where an
+// environment's state file goes blocks it on its open. The read's own bound is a second
+// here; the test's, the behavior's, ten.
+//
+// Not parallel: it sets PATH, for a sudo that never answers.
+func TestServerInfoWaitsForNoProjectUsersRead(t *testing.T) {
+	bin := t.TempDir()
+	pid := filepath.Join(bin, "pid")
+	if err := testfile.Write(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\necho $$ >"+pid+"\nexec sleep 300\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	tree := filepath.Join(t.TempDir(), "shop")
+	done, ended := make(chan []remote.Environment, 1), make(chan struct{})
+	go func() { done <- treeEnvironments("devopsy-shop", tree, time.Second); close(ended) }()
+	// The read that never answers goes with the test, whatever came of it.
+	t.Cleanup(func() {
+		data, _ := os.ReadFile(pid)
+		if p, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			_ = syscall.Kill(p, syscall.SIGKILL)
+		}
+		select {
+		case <-ended:
+		case <-time.After(startWait):
+		}
+	})
+	select {
+	case envs := <-done:
+		if len(envs) != 0 {
+			t.Errorf("a read that never answered gave environments: %v", envs)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("--server-info still waits for a project user's read that never answers")
+	}
+}
+
+// Once --project-users remove took a project user's entry, the deploy user still never walks
+// that user's tree in the release root, which remove keeps: whose a directory is comes from
+// its owner (owned), never from the door's list alone. Else remote.EnvStatus would read its
+// files with no bound (a FIFO where a release's record goes), follow its links, and statusHint
+// offer `cd <tree>/<environment>/current && devopsy --status`, devopsy running what that user
+// wrote. The tree here is the test's own user's, so owned names it another's.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the door's entries are.
+func TestServerInfoReadsNoTreeOfARemovedProjectUser(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	root := t.TempDir()
+	tree := filepath.Join(root, "shop")
+	if err := os.MkdirAll(filepath.Join(tree, "prod", "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(home, "config.yaml"), "door:\n  space: "+t.TempDir()+"\n", 0o600)
+	entry := filepath.Join(remote.DoorDir(), "users", "devopsy-shop.yaml")
+	write(t, entry, "project: shop\ntree: "+tree+"\n", 0o600)
+	// walk is --server-info's list: how many trees it asked their user for, and the
+	// environments the deploy user read itself.
+	walk := func() (asked int, own []string) {
+		owned := func(p string) bool { return p != tree }
+		for _, e := range environments(root, doorTrees(root), func(string, string) []remote.Environment { asked++; return nil }, owned) {
+			if e.User == "" {
+				own = append(own, e.Path)
+			}
+		}
+		return asked, own
+	}
+	// The control: with its entry, the tree is read as its user alone.
+	if asked, own := walk(); asked != 1 || len(own) != 0 {
+		t.Fatalf("with its entry: %d trees asked of their user, the deploy user read %v", asked, own)
+	}
+	d, err := remote.ServerDoor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := removeProjectUser(d, "shop", "devopsy-shop", entry, func(string) error { return nil }); code != 0 {
+		t.Fatalf("remove: exit %d", code)
+	}
+	if _, own := walk(); len(own) != 0 {
+		t.Errorf("after --project-users remove, the deploy user reads the tree its Unix user still owns: %v", own)
 	}
 }

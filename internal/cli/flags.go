@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -91,7 +92,8 @@ var Flags = []FlagGroup{
 	}},
 	{"Servers and SSH", []Flag{
 		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "a local SSH key pair, for CI"},
-		{Name: "--ssh-keys", Args: "[list | add <file> | remove <key>]", Scope: Server, Desc: "who may log in as the deploy user"},
+		{Name: "--project-users", Args: "[list | add <project> | remove <project>]", Scope: Server, Desc: "project users, with no Docker socket"},
+		{Name: "--ssh-keys", Args: "[--for <project>] [list | add <file> | remove <key>]", Scope: Server, Desc: "keys of the deploy user, or a project user"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
@@ -105,6 +107,7 @@ var Flags = []FlagGroup{
 		{Name: "--ai-skill", Args: "[--stub] [install [--global]]", Scope: Local, Desc: "the skill for agents: print it,\nor install it"},
 		{Name: "--version", Scope: Local, Desc: "devopsy's, docker's and compose's versions"},
 		{Name: "-v", Also: "-vv", Scope: Local, Desc: "first: what devopsy runs; -vv: scripts too"},
+		{Name: SSHOptionFlag, Args: "<key=value>", Scope: Local, Desc: "first, repeatable: an ssh -o for every\nsession this command opens"},
 		{Name: "--help", Also: "-h", Scope: LocalOrTarget, Desc: "this help; after a flag, its own"},
 	}},
 }
@@ -261,3 +264,11 @@ func flagsHelp() string {
 	}
 	return b.String()
 }
+
+// SSHOptionFlag is --ssh-option <key=value>, before everything else like
+// -v: an ssh -o for every session of this command (remote.SSHOptionsEnv).
+const SSHOptionFlag = "--ssh-option"
+
+// SSHOptionValue is what --ssh-option takes: ssh's -o key=value, never
+// another of ssh's arguments, and one line.
+var SSHOptionValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*=[^\n]+$`)

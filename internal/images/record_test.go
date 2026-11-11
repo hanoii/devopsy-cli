@@ -86,8 +86,25 @@ func TestRecordListing(t *testing.T) {
 	if d.names["mariadb:"+bookmarkPrefix("app-prod")+id] != "sha256:m1" {
 		t.Errorf("not bookmarked: %v", d.names)
 	}
+	// ComposeFile pins each pulled service to the digest its listing records, as
+	// image:, in the service's own spelling with the digest after it (the tag kept, so
+	// docker ps shows it; Docker takes repo:tag@digest and resolves the digest): the run
+	// step, a plain up or a reload resolves the name again otherwise, and a name is
+	// anyone's on the server to have moved since the fetch (another project's pull of a tag
+	// its registry moved, the deploy user's build of a Docker Hub name). An own image goes by
+	// its release's bookmark, a name only that release writes.
+	// The label stays the digest alone, as Docker spells it.
+	imgs, labels, _ := composeFacts(e.rel(id))
+	for svc, want := range map[string]string{"app": "app-prod-app:devopsy-app-prod-" + id, "database": "mariadb:11.8@sha256:m1", "alwaysup": "caddy:2-alpine@sha256:c1"} {
+		if imgs[svc] != want {
+			t.Errorf("%s's image: in %s is %q, want %q", svc, ComposeFile, imgs[svc], want)
+		}
+	}
+	if labels["database"] != "mariadb@sha256:m1" || labels["app"] != "sha256:a1" {
+		t.Errorf("labels: %v", labels)
+	}
 	// In image mode the app is pulled: no data service for having a
-	// build: section.
+	// build: section, and pinned like any pulled image.
 	e2 := newRecEnv(t, d, "app-stage", ModeImage, &out)
 	id2 := e2.release(appSvc)
 	if err := e2.set.Record(e2.rel(id2), ""); err != nil {
@@ -95,6 +112,9 @@ func TestRecordListing(t *testing.T) {
 	}
 	if got := readList(e2.rel(id2)); got[0].Kind != KindPulled || got[0].Digest != "app-prod-app@sha256:a1" {
 		t.Errorf("image mode app: %+v", got[0])
+	}
+	if imgs, _, _ := composeFacts(e2.rel(id2)); imgs["app"] != "app-prod-app@sha256:a1" {
+		t.Errorf("image mode app's image: in %s is %q", ComposeFile, imgs["app"])
 	}
 }
 
@@ -208,7 +228,7 @@ func TestParseComposeConfig(t *testing.T) {
 			{"type":"volume","source":""}]},
 		"whole":{"image":"busybox","labels":{"devopsy.data":"true"},"volumes":[{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt"}]},
 		"tool":{"image":"local/tool","pull_policy":"never"},
-		"web":{"image":"caddy:2"}}}`))
+		"web":{"image":"caddy:2"}}}`), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +248,7 @@ func TestParseComposeConfig(t *testing.T) {
 			t.Errorf("%d: %+v, want %+v", i, svcs[i], want[i])
 		}
 	}
-	if _, err := ParseComposeConfig([]byte("")); err == nil {
+	if _, err := ParseComposeConfig([]byte(""), false); err == nil {
 		t.Error("no error for no config")
 	}
 }

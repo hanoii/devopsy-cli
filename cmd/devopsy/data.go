@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -465,7 +466,7 @@ func runExport(cwd string, args []string, color bool) int {
 				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
 			run = append(append(run, remote.UtilImage, "sh", "-c", exportTarScript, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
-			err = dockerRunIO(ctx, container{fmt.Sprintf("devopsy-export-%d", os.Getpid()), composeName(cwd), remote.TaskExport}, nil, os.Stdout, run...)
+			err = dockerRunIO(ctx, newContainer("export", composeName(cwd), strconv.Itoa(os.Getpid()), remote.TaskExport), nil, os.Stdout, run...)
 		}
 	}
 	if err != nil {
@@ -514,7 +515,7 @@ func localServices(cwd string) ([]images.Service, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("compose config: %w", err)
 	}
-	return images.ParseComposeConfig(out.Bytes())
+	return images.ParseComposeConfig(out.Bytes(), false)
 }
 
 // imagesShared takes the server's image lock shared (imagesLockPath),
@@ -1000,9 +1001,9 @@ esac
 // empty directory or file as the tar has it, for the container to mount;
 // a named volume (project's, by its key) is made when missing as compose
 // would, and mounted by name.
-func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, c container, project string) error {
+func extractEntries(ctx context.Context, cwd, mnt, spool string, entries []tarEntry, c container, project string, services []cli.SyncService) error {
 	for i, e := range entries {
-		if err := extractEntry(ctx, mnt, spool, e, c.with(fmt.Sprintf("-extract-%d", i)), project); err != nil {
+		if err := extractEntry(ctx, cwd, mnt, spool, e, c.with(fmt.Sprintf("-extract-%d", i)), project, services); err != nil {
 			return err
 		}
 	}
@@ -1012,13 +1013,13 @@ func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, 
 // extractEntry empties and extracts the entry or volume e from the tar
 // file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
 // each, in the util container c, which mounts the file read-only.
-func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, c container, project string) error {
+func extractEntry(ctx context.Context, cwd, mnt, tarFile string, e tarEntry, c container, project string, services []cli.SyncService) error {
 	var mount string
 	var err error
 	if e.volume != nil {
 		// A volume: made when missing, as compose would, and mounted
 		// by name.
-		if err := ensureVolumes(ctx, project, []cli.Volume{*e.volume}); err != nil {
+		if err := ensureVolumes(ctx, cwd, project, []cli.Volume{*e.volume}, services); err != nil {
 			return err
 		}
 		mount = "type=volume,source=" + e.volume.Name + ",target=/mnt/" + e.name
@@ -1479,7 +1480,7 @@ func (r importRun) write(ctx context.Context) error {
 	}
 	report.Info("importing " + r.name + ": mnt/" + strings.Join(r.tar.names, ", mnt/") + " replaced")
 	cname := importContainer(r.cwd)
-	err = extractEntries(ctx, r.tar.mnt, r.spool, r.tar.entries, cname, composeName(r.cwd))
+	err = extractEntries(ctx, r.cwd, r.tar.mnt, r.spool, r.tar.entries, cname, composeName(r.cwd), r.services)
 	// What it extracted goes to its owner before the import counts
 	// as complete: a tar made anywhere carries its maker's owners.
 	// Not locally on macOS, as localMnt: Docker Desktop's file

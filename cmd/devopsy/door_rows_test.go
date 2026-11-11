@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
@@ -58,9 +60,10 @@ func TestDoorEnvironmentIsItsOwn(t *testing.T) {
 	}
 }
 
-// BUG: doorRecord writes what was refused as it is, and that holds a caller's words: a
-// newline there is a line of the log's own, naming whoever it likes. What a leaked key tried
-// is worth having only if it cannot write the log. Arguments are quoted (%q); the reason not.
+// doorRecord keeps each refusal on one line: what was refused holds a caller's words, and a
+// newline there would be a line of the log's own, naming whoever it likes. What a leaked key
+// tried is worth having only if it cannot write the log. Who asked is sudo's word, the reason
+// and the arguments quoted (%q).
 //
 // Not parallel: it sets doorLog and doorWho.
 func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
@@ -90,7 +93,9 @@ func TestDoorLogKeepsACallersWordsOnOneLine(t *testing.T) {
 }
 
 // A door's vet refuses by anything but 0, a missing program included; it reads what compose
-// would run, its build block gone, and says in the log. Case does not get a label past it.
+// would run, its build block gone and its images pinned, with the project in
+// DEVOPSY_DOOR_PROJECT, and says in the log. Case does not
+// get a label past it.
 //
 // Not parallel: it sets doorLog and doorWho, and PATH (doorFakes).
 func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
@@ -105,20 +110,29 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := filepath.Join(dir, "seen")
+	// Docker answers the door's look at what runs, which has nothing of another's, and the
+	// claim of the image (doorImageFake): its registry serves busybox:1.37, and the build's
+	// name is on disk.
+	docker := doorImageFake(t, dir)
+	b1 := fakeManifest(t, dir, plainManifest("busybox"), "busybox:1.37")
+	write(t, filepath.Join(dir, "store"), "devopsy.internal/shop-prod/web|sha256:b1||devopsy.internal/shop-prod/web|{}\n", 0o644)
 	vet := filepath.Join(dir, "vet")
-	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho no >&2\nexit 2\n"), 0o755); err != nil {
+	if err := testfile.Write(vet, []byte("#!/bin/sh\ncat >"+seen+"\necho \"$DEVOPSY_DOOR_PROJECT\" >"+seen+".project\necho no >&2\nexit 2\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	file := func(label string) map[string]any {
-		return map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{
-			"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
-			"build":  map[string]any{"context": "/etc", "ssh": []any{"default"}},
-			"labels": map[string]any{label: "1"},
-		}}}
+		return map[string]any{"name": "shop-prod", "services": map[string]any{
+			"web": map[string]any{
+				"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
+				"build":  map[string]any{"context": "/etc", "ssh": []any{"default"}},
+				"labels": map[string]any{label: "1"},
+			},
+			"db": map[string]any{"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"}},
+		}}
 	}
 	side := func(command string) *doorSide {
 		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
-			vets: []remote.DoorVet{{Prefix: "vetted.", Command: command}}, real: "/bin/false"}
+			vets: []remote.DoorVet{{Prefix: "vetted.", Command: command}}, real: docker}
 	}
 	for _, label := range []string{"vetted.x", "VETTED.X", "Vetted.Host"} {
 		if err := os.Remove(seen); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -132,8 +146,14 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 			t.Errorf("%s: the vet was not asked: %v", label, err)
 			continue
 		}
-		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) {
+		// The build goes by the id of devopsy's name for it, the claimed image pinned, and
+		// neither is pulled at the start.
+		if strings.Contains(string(got), "/etc") || strings.Contains(string(got), `"build"`) || !strings.Contains(string(got), `"web":{"image":"sha256:b1"`) || !strings.Contains(string(got), `"busybox:1.37@`+b1+`"`) || strings.Count(string(got), `"pull_policy":"never"`) != 2 {
 			t.Errorf("%s: the vet read what compose will not run: %s", label, got)
+		}
+		// Whose file it is, for a vet that judges by project.
+		if got := strings.TrimSpace(readString(seen + ".project")); got != "shop" {
+			t.Errorf("%s: the vet was told the project is %q", label, got)
 		}
 	}
 	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "refused by the vet: no") {
@@ -145,7 +165,8 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 }
 
 // One read of the rendered file, gone after it: whatever a second document or a repeated key
-// says, what goes on is what was checked, and a large number stays as written.
+// says, what goes on is what was checked, and a large number stays as written. A file past
+// what the door reads of one (maxRendered) is refused, read no further.
 //
 // Not parallel: it sets PATH.
 func TestDoorTakesTheFileOnce(t *testing.T) {
@@ -174,7 +195,8 @@ func TestDoorTakesTheFileOnce(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the file stays: %v", err)
 	}
-	for name, body := range map[string]string{"not json": "services: {}\n", "a list": "[1]", "nothing": ""} {
+	huge := `{"name":"shop-prod","x":"` + strings.Repeat("a", maxRendered) + `"}`
+	for name, body := range map[string]string{"not json": "services: {}\n", "a list": "[1]", "nothing": "", "past the cap": huge} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -226,8 +248,8 @@ func TestDoorSweepsItsOwnWork(t *testing.T) {
 	}
 }
 
-// BUG: sweepWork goes by the prefix <project>-, and names are flat: shop sweeps shop-eu's
-// work, whose container may still read it, where OwnName exists for this.
+// sweepWork leaves a longer project's work (OwnName): names are flat, so by the prefix
+// <project>- alone shop would sweep shop-eu's, whose container may still read it.
 func TestDoorSweepLeavesALongerProject(t *testing.T) {
 	t.Parallel()
 	space := t.TempDir()
@@ -288,9 +310,9 @@ func TestDoorPrunesSealedCopies(t *testing.T) {
 	}
 }
 
-// BUG: pruneSealed skips names starting with a dot, and a door killed while sealing leaves
-// its .seal- behind: nothing ever sweeps it, against "Nothing stays" for what sweepWork does
-// in <space>/work, and every killed request adds a copy of the release.
+// pruneSealed sweeps the .seal- a door killed while sealing leaves behind, as sweepWork
+// leaves nothing in <space>/work: nothing else sweeps it, and every killed request would
+// add a copy of the release.
 func TestDoorPrunesAKilledSeal(t *testing.T) {
 	t.Parallel()
 	space := t.TempDir()
@@ -333,7 +355,9 @@ func TestContentHashSeesWhatACopyHolds(t *testing.T) {
 	for what, change := range map[string]func(string){
 		"a file's bytes": func(r string) { _ = os.WriteFile(filepath.Join(r, "d", "f"), []byte("b"), 0o644) },
 		"a file's mode":  func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o755) },
-		"a file's name":  func(r string) { _ = os.Rename(filepath.Join(r, "d", "f"), filepath.Join(r, "d", "g")) },
+		// A release that closes a directory to others, or opens one.
+		"a directory's mode":   func(r string) { _ = os.Chmod(filepath.Join(r, "d"), 0o700) },
+		"a file's special bit": func(r string) { _ = os.Chmod(filepath.Join(r, "d", "f"), 0o644|os.ModeSetuid) },
 		"a link's end": func(r string) {
 			_ = os.Remove(filepath.Join(r, "l"))
 			_ = os.Symlink("u", filepath.Join(r, "l"))
@@ -350,15 +374,14 @@ func TestContentHashSeesWhatACopyHolds(t *testing.T) {
 	}
 }
 
-// Ids no container runs as, whatever else is on the server: this user's, the door's users',
-// and a user that is gone is no error.
+// Ids no container runs as, whatever else is on the server: the deploy user's from its passwd
+// entry, never the door's own process ids (its group is sudo's -g, devopsy-door, so its gid
+// is not the deploy user's), the door's users', and a user that is gone is no error.
 func TestHostIDs(t *testing.T) {
 	t.Parallel()
-	ids, err := hostIDs([]string{"root", "no-such-user-here"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []int{os.Getuid(), os.Getgid(), 0} {
+	deploy := &user.User{Uid: "1234", Gid: "4321"}
+	ids := hostIDs(deploy, []string{"root", "no-such-user-here"})
+	for _, want := range []int{1234, 4321, 0} {
 		if !slices.Contains(ids, want) {
 			t.Errorf("%d is not in %v", want, ids)
 		}
@@ -485,45 +508,192 @@ func TestDoorBindEntriesStayInTheirMnt(t *testing.T) {
 	}
 }
 
-// A secret comes from stdin in one form, or nothing runs with it.
-//
-// Not parallel: it sets os.Stdin.
-func TestDoorSecretHasOneForm(t *testing.T) {
-	saved := os.Stdin
-	t.Cleanup(func() { os.Stdin = saved })
-	logged := filepath.Join(t.TempDir(), "ran")
-	fake := filepath.Join(t.TempDir(), "docker")
-	// What the copy had; the door's own calls after it (its grant) have no password.
-	if err := testfile.Write(fake, []byte("#!/bin/sh\ncase \"$*\" in \"image inspect \"*) echo \"sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)\"; exit ;; esac\n[ -z \"$RSYNC_PASSWORD\" ] || echo \"$RSYNC_PASSWORD\" >"+logged+"\n"), 0o755); err != nil {
+// The file compose runs has no name: it holds a project's environment, and nothing of it
+// stays on disk after compose, which reads it by its descriptor.
+func TestDoorHandsComposeAFileWithNoName(t *testing.T) {
+	t.Parallel()
+	fd, err := unlinkedFile([]byte(`{"name":"shop-prod"}`))
+	if err != nil {
 		t.Fatal(err)
 	}
-	ask := func(t *testing.T, value string) int {
-		t.Helper()
-		r, err := filledPipe(value)
-		if err != nil {
+	f := os.NewFile(uintptr(fd), "rendered")
+	defer f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil || st.Nlink != 0 {
+		t.Errorf("the file has %d names (%v)", st.Nlink, err)
+	}
+	got := make([]byte, 64)
+	n, err := f.ReadAt(got, 0)
+	if string(got[:n]) != `{"name":"shop-prod"}` {
+		t.Errorf("compose would read %q (%v)", got[:n], err)
+	}
+	// It survives the door's exec into compose.
+	if flags, err := unix.FcntlInt(uintptr(fd), syscall.F_GETFD, 0); err != nil || flags&syscall.FD_CLOEXEC != 0 {
+		t.Errorf("the descriptor closes at the exec: %d (%v)", flags, err)
+	}
+}
+
+// A project's registry logins reach Docker as their auth values alone, in a directory of
+// the door's: Docker's CLI runs the helpers and plugins a config names, as whoever runs it,
+// here the deploy user. An identity token is no login of the door's.
+//
+// Not parallel: it sets PATH, for a sudo that reads as the project user would.
+func TestDoorLoginsAreTheirAuthsAlone(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = cat ] || exit 1\nexec cat \"$2\"\n", 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	config := filepath.Join(t.TempDir(), "config.json")
+	write(t, config, `{"auths":{"registry.example.com":{"auth":"YWxpY2U6czNjcmV0","identitytoken":"t0ken","email":"a@example.com"}},
+	  "credsStore":"evil","credHelpers":{"registry.example.com":"evil"},"cliPluginsExtraDirs":["/home/devopsy-shop/plugins"],
+	  "plugins":{"compose":{"x":"y"}},"proxies":{"default":{"httpProxy":"http://evil"}},"currentContext":"evil","aliases":{"builder":"evil"}}`, 0o600)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: t.TempDir()}}
+	dir, err := side.logins(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != filepath.Join(side.policy.Space, "logins", "shop") {
+		t.Errorf("the logins are in %s", dir)
+	}
+	if got := readString(filepath.Join(dir, "config.json")); got != `{"auths":{"registry.example.com":{"auth":"YWxpY2U6czNjcmV0"}}}` {
+		t.Errorf("Docker's config for the project:\n%s", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("beside the config: %v", entries)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the directory's mode: %v (%v)", fi.Mode(), err)
+	}
+	// A config that is not there, or is no JSON, is no login: never the last one's. Each is
+	// another request (one is read once per request).
+	for _, c := range []string{filepath.Join(t.TempDir(), "none"), bin + "/sudo"} {
+		if _, err := (&doorSide{policy: side.policy}).logins(c); err != nil {
 			t.Fatal(err)
 		}
-		defer r.Close()
-		os.Stdin = r
-		space := t.TempDir()
-		argv := []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", filepath.Join(space, "mnt", "shop-prod") + ":/mnt", remote.UtilImage}
-		argv = append(append(argv, remote.RsyncCopy...), "rsync://127.0.0.1:9/data/", "/mnt/data/")
-		side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", UID: "10002", Space: space, Tree: "/none"}, real: fake}
-		return side.request("", argv)
+		if got := readString(filepath.Join(dir, "config.json")); got != `{"auths":{}}` {
+			t.Errorf("with %s for a config, Docker's:\n%s", c, got)
+		}
 	}
-	doorFakes(t)
-	if code := ask(t, strings.Repeat("a", 32)); code != 0 {
-		t.Fatalf("the control: exit %d", code)
-	}
-	if got, _ := os.ReadFile(logged); strings.TrimSpace(string(got)) != strings.Repeat("a", 32) {
-		t.Fatalf("the control: docker had %q", got)
-	}
-	if err := os.Remove(logged); err != nil {
+}
+
+// What the door makes in its space is closed to every other user, whatever modes a container
+// gives the files inside: a mnt and the clones reached by this project user through an ACL
+// that lets it read and enter, never write, an entry written inside by it, and the sealed
+// copies and its work by nobody else at all. A mnt's name comes from where the environment
+// is in the user's tree.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorSpaceIsClosedToOthers(t *testing.T) {
+	acl, _ := doorFakes(t)
+	root := t.TempDir()
+	space, tree := filepath.Join(root, "space"), filepath.Join(root, "tree")
+	if err := os.MkdirAll(filepath.Join(tree, "prod", "conf"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"", "short", strings.Repeat("A", 32), strings.Repeat("a", 32) + "\n", strings.Repeat("a", 33), "a\nb"} {
-		if code := ask(t, value); code == 0 || exists(logged) {
-			t.Errorf("%q: exit %d", value, code)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: tree}}
+	closed := func(what, path string) {
+		t.Helper()
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm()&0o007 != 0 {
+			t.Errorf("%s is open to others: %v (%v)", what, fi.Mode(), err)
 		}
+	}
+	mnt := side.policy.Mnt("shop-prod")
+	if code := side.mnt(filepath.Join(tree, "prod")); code != 0 {
+		t.Fatalf("mnt: exit %d", code)
+	}
+	closed("a mnt", mnt)
+	if code := side.mnt(filepath.Join(tree, "eu", "prod")); code != 0 {
+		t.Fatalf("an instance's mnt: exit %d", code)
+	}
+	closed("an instance's mnt", side.policy.Mnt("shop-eu-prod"))
+	if code := side.entry(mnt, "data", false); code != 0 {
+		t.Fatalf("entry: exit %d", code)
+	}
+	if code := side.clone(filepath.Join(tree, "prod", "snapshots", ".clone")); code != 0 {
+		t.Fatalf("clone: exit %d", code)
+	}
+	closed("the clones", side.policy.Clones())
+	sealed, err := side.Seal(filepath.Join(tree, "prod", "conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed("the sealed copies", side.policy.Sealed())
+	work, err := side.WorkDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(work); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("a work directory: %v (%v)", fi.Mode(), err)
+	}
+	got := strings.Split(strings.TrimSpace(readString(acl)), "\n")
+	want := []string{
+		"-m u:devopsy-shop:rX " + mnt,
+		"-m u:devopsy-shop:rX " + side.policy.Mnt("shop-eu-prod"),
+		"-m u:devopsy-shop:rwX -d -m u:devopsy-shop:rwX " + mnt + "/data",
+		"-m u:devopsy-shop:rX " + side.policy.Clones(),
+		"-m u:devopsy-shop:rX -d -m u:devopsy-shop:rX " + side.policy.Clones(),
+		"-m u:devopsy-shop:rX " + work,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("what the project user was given:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if strings.Contains(readString(acl), filepath.Dir(sealed)) || strings.Contains(readString(acl), side.policy.Sealed()) {
+		t.Errorf("the project user was given the sealed copies:\n%s", readString(acl))
+	}
+}
+
+// An entry the door made a directory, not knowing it is a file (as Docker would at up), is
+// replaced by the file while it is empty; one that holds something stays, and is refused.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorReplacesAnEmptyDirectoryWithAFileEntry(t *testing.T) {
+	doorFakes(t)
+	space := t.TempDir()
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: space, Tree: t.TempDir()}}
+	mnt := side.policy.Mnt("shop-prod")
+	if err := os.MkdirAll(mnt, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []string{"app.ini", "full.ini"} {
+		if code := side.entry(mnt, e, false); code != 0 {
+			t.Fatalf("%s as a directory: exit %d", e, code)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(mnt, "full.ini", "kept"), []byte("data\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.entry(mnt, "app.ini", true); code != 0 {
+		t.Errorf("a file over its empty directory: exit %d", code)
+	}
+	if fi, err := os.Lstat(filepath.Join(mnt, "app.ini")); err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("the entry is no file: %v (%v)", fi, err)
+	}
+	if code := side.entry(mnt, "full.ini", true); code == 0 {
+		t.Error("a file over a directory that holds something: taken")
+	}
+	if got := readString(filepath.Join(mnt, "full.ini", "kept")); got != "data\n" {
+		t.Errorf("what the directory held: %q", got)
+	}
+	// A file entry there already stays as it is.
+	if err := os.WriteFile(filepath.Join(mnt, "app.ini"), []byte("a=b\n"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if code := side.entry(mnt, "app.ini", true); code != 0 || readString(filepath.Join(mnt, "app.ini")) != "a=b\n" {
+		t.Errorf("a file entry asked again (exit %d) holds %q", code, readString(filepath.Join(mnt, "app.ini")))
+	}
+}
+
+// A removal the project user's rights do not take fails the request, naming what stays: what
+// asked for it (a release's removal, a clone's) resumes it, and goes on only from one that went.
+//
+// Not parallel: it sets PATH (the fake sudo).
+func TestDoorRemovalThatFailsFails(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\nshift 5\n[ \"$1\" = real ] && { printf '%s\\n' \"$2\"; exit 0; }\n[ \"$1\" = remove ] && exit 1\nexit 0\n", 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	tree := filepath.Join(t.TempDir(), "shop")
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Tree: tree, Space: t.TempDir()}}
+	if code := side.request("", []string{"run", "-v", tree + "/snapshots:/s", remote.UtilImage, "rm", "-rf", "/s/.clone"}); code == 0 {
+		t.Error("a removal that failed passes for one")
 	}
 }

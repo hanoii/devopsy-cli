@@ -26,13 +26,14 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - The server's time is taken last (`ServerInfo.Time`) and compared with the local clock at the facts' first byte (`firstWrite`), never at the session's end; an unsynchronized clock whose time service runs gets a fix naming a network's own time server, not `set-ntp`.
 - Environments are the directories with `releases/` two or three levels under the release root, through links as the scripts reach them, never a cut `--destroy`'s `<base>.rm.<pid>`; their containers come from one `docker inspect` of all, read even when it fails, matched by compose name (`composeNameOf`).
 - Facts agree with what the scripts read: roles from what `docker ps` lists, restarting and paused included (`RoleHoldersScript`, `cli.Running`), a `tail` that answers `--version` (`followOutput`), health only of a running container.
-- Said, never warned: the classic image store, Docker's security options, and a sync or a snapshot under way; `EnvStatus`'s `busy` is ignored on a server without `flock`, where every lock reads held.
+- Said, never warned: the classic image store (warned on a server with project users, as a Docker the door's claims refuse, `doorHostReady`), Docker's security options, and a sync or a snapshot under way; `EnvStatus`'s `busy` is ignored on a server without `flock`, where every lock reads held.
 - AppArmor is warned about only as a kernel with it and no `apparmor_parser` (looked for in sbin, outside the deploy user's PATH): `docker info` lists AppArmor whenever the kernel has it, and Docker then loads its profile with the parser, without which no container starts.
 - A full disk's fix follows what is on it (Docker's cache, snapshots); the no-reflinks fix names the server's `snapshots: {mirror: false}` first when it refuses every mirror.
 
 ## --ssh-keys
 
-- `--ssh-keys` edits only the deploy user's own `~/.ssh/authorized_keys`, over the usual session: no root, so devopsy stays out of host setup except for this file, which that user owns.
+- `--ssh-keys` edits the deploy user's own `~/.ssh/authorized_keys`, or with `--for <project>` a project user's keys in the door's directory (`DoorKeysFile`), over the usual session as the deploy user: no root, both files that user's. A project user's last key may go, the deploy user's never.
+- The same scripts edit both, the file a parameter (`keysPrelude`), and asked as a project user a `--for` script exits `AskedAsProjectUser` with the deploy user's name, for the hint: only the server knows it.
 - Lines are parsed locally (`ParseAuthorizedKey`, the fingerprint from the blob, no ssh-keygen) and edited on the server under a lock next to the file, by blob: a comment never identifies a key.
 - `add` refuses a duplicate (exit 3) and `remove` the last key (exit 4; commented-out keys are none, and devopsy refuses it locally before opening a session); `--restricted` on `add` writes `RestrictedKeyOptions`, the one place that line is written.
 - `--ssh-keys-generate [<name>] [--out <file>]` is local and its own flag: `ssh-keygen`, nothing sent; the `.pub` is added per server.
@@ -58,8 +59,10 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 
 ## SSH sessions
 
-- Every session is `ssh [DEVOPSY_SSH_COMMAND's options] [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` for any command at a terminal (a shell, a project or compose command, `--upgrade`), never for activations and holders (internals/sessions.md).
-- Every session but a sync's rsync session (internals/syncs.md) passes `ClearAllForwardings=yes` (the operator's `LocalForward` lines clash between sessions), and every session refuses passwords (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`), never `BatchMode`, which would refuse a passphrase and a new host key too: a devopsy server takes keys only, so a prompt means a missing key, asked again per session of a release.
+- Every session is `ssh [DEVOPSY_SSH_COMMAND's options] [--ssh-option's] [the session's own] [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` for any command at a terminal (a shell, a project or compose command, `--upgrade`), never for activations and holders (internals/sessions.md).
+- `--ssh-option <key=value>` goes first, like `-v`, repeatable, `key=value` only (`cli.SSHOptionValue`), never another of ssh's arguments; `SSHCommand` adds it to every ssh, `ssh -G` included, so what devopsy resolves is what its sessions use, and it reaches nested devopsy calls through `remote.SSHOptionsEnv`, never a server.
+- Every session passes `ForwardAgent=no` (`SSHOptions`), so an ssh config's `ForwardAgent yes` never forwards the operator's agent to a server's user: only `--ssh-option ForwardAgent=yes` does, before devopsy's options, and never to a project user, whose sshd forwards it none (internals/door.md); a sync across servers uses a key of its own (internals/syncs.md).
+- Every session passes `ClearAllForwardings=yes` (the operator's `LocalForward` lines clash between sessions), and every session refuses passwords (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`), never `BatchMode`, which would refuse a passphrase and a new host key too: a devopsy server takes keys only, so a prompt means a missing key, asked again per session of a release.
 - Every session also bounds its connection (internals/sessions.md), and `DEVOPSY_SSH_COMMAND`'s options come first, so they win: ssh keeps the first value of each option.
 - Connection sharing is the operator's SSH config, which `--ssh-config` suggests and never writes.
 - Test fakes of ssh run their last argument.

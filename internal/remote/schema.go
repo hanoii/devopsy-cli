@@ -184,8 +184,6 @@ door:
       joinable: [tunnel]
       # Roles it was given.
       roles: []
-      # Lets it read every container and network, secrets included.
-      read_all: false
 
 # Settings for releases landing on this machine: on a server, its own
 # file. Never from a project.

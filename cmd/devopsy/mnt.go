@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -124,17 +125,12 @@ func dockerRunFresh(ctx context.Context, c container, args ...string) error {
 	return dockerRunIO(ctx, c, nil, nil, args...)
 }
 
-// ownersPrefix starts the names of the owners' containers of a release's
-// switch and of a local command (ownMnt): it, the compose project,
-// devopsy's pid and -<n>.
-const ownersPrefix = "devopsy-owners-"
-
 // ownersContainer is the owners' container of a release's switch and of
 // a local command in the project at cwd (ownMnt), remote.TaskOwners: what
 // --mnt-owners removes, a killed devopsy's (never locally, where another
 // terminal's step may run).
 func ownersContainer(cwd string) container {
-	return container{fmt.Sprintf("%s%s-%d", ownersPrefix, composeName(cwd), os.Getpid()), composeName(cwd), remote.TaskOwners}
+	return newContainer("owners", composeName(cwd), strconv.Itoa(os.Getpid()), remote.TaskOwners)
 }
 
 // makeEntry makes the entry e of mnt when missing, 0755 whatever the

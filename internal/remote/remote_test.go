@@ -201,7 +201,7 @@ func TestSyncFilesPrefixed(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
 		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end", "") + StatusScript(tg) +
-		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, "", nil, true, "", false)
+		ClaimWriteScript("$base", "1.2") + SyncClaimScript("$base", "1.2", "db", "app-dev", "wipe")
 	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
 		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
 			t.Errorf("a sync's file not prefixed: %s", m[1])
@@ -239,11 +239,13 @@ func allScripts() map[string]string {
 		"parent copy":     ParentEnvCopyScript(tg, "app/a/prod", ParentEnvHeader("vm1:a/prod", true), true),
 		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, ""),
 		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),
-		"keys read":       KeysReadScript(),
+		"keys read":       KeysReadScript(""),
 		"status":          StatusScript(tg),
 		"server info":     ServerInfoScript(&Target{Host: "h"}),
-		"keys add":        KeysAddScript(),
-		"keys remove":     KeysRemoveScript(),
+		"keys add":        KeysAddScript(""),
+		"keys remove":     KeysRemoveScript(""),
+		"keys for":        KeysRemoveScript("devopsy-shop") + KeysAddScript("devopsy-shop"),
+		"project users":   ProjectUsersScript(&Target{Host: "h"}, []string{"add", "shop"}),
 		"destroy":         DestroyScript(tg, "app"),
 		"reload":          ReloadScript(tg, "app"),
 		"vars hint":       VarsHintScript(tg),
@@ -256,16 +258,17 @@ func allScripts() map[string]string {
 		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
 		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Inherit: true, ID: "1.2", Again: "--reset"}, true),
 		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
+		"holder keyed":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2", Key: "AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g", ParentProjectUser: true, Reset: true}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
+		"push keyed":      PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy", SyncKeyedEnv: "1", SyncResetEnv: "1"}),
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataCopyFeature}),
 		"parent check":    ParentCheckScript(tg, "app-prod", []string{"sync-push"}),
-		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, []string{"dbdata"}, "it's-dev", map[string]string{"storage": "10001:10001"}, true, "", true),
-		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, []string{"dbdata"}, "app-dev", nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"}), false),
-		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, "", map[string]string{"app.ini": "1:2"}, false, "", false),
+		"receive claim":   SyncClaimScript("/srv/it's", "1.2", "dbdata", "it's-dev", ""),
+		"receive reset":   SyncClaimScript("/srv/it's", "1.2", "", "app-dev", SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
+		"receive shim":    ReceiveShim,
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
-		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
 		"export":          ExportScript(tg, "app-prod", "it's db"),
 		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n", "database"),
 		"resolved check":  ResolvedCheckScript(tg),
@@ -308,7 +311,7 @@ func TestImagesAgain(t *testing.T) {
 // settle, which every activation calls, stays out.
 func TestDataCopyFeature(t *testing.T) {
 	t.Parallel()
-	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder plain", "import", "push", "resolved", "sync only"}
+	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder keyed", "holder plain", "import", "push", "push keyed", "resolved", "sync only"}
 	for name, s := range allScripts() {
 		got := slices.Contains(Needs(s), DataCopyFeature)
 		if got != slices.Contains(need, name) {
@@ -336,7 +339,7 @@ func TestDataCopyFeature(t *testing.T) {
 // owners and mounts check are flags of their own.
 func TestMntOwnerFeature(t *testing.T) {
 	t.Parallel()
-	need := []string{"exec list", "import", "push", "resolved"}
+	need := []string{"exec list", "import", "push", "push keyed", "resolved"}
 	for name, s := range allScripts() {
 		if got := slices.Contains(Needs(s), MntOwnerFeature); got != slices.Contains(need, name) {
 			t.Errorf("%s needs %s: %v", name, MntOwnerFeature, got)
@@ -354,7 +357,7 @@ func TestMntOwnerFeature(t *testing.T) {
 // root in UtilImage it makes them on the child's host, where bind mounts
 // are not nodev, and --chown then gives them to the entry's owner, a
 // block device of the server's disk the raw disk for that UID. Checked
-// in devopsy-util:4: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
+// in devopsy.internal/util:5: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
 // copied by RsyncCopy with --chown=10001:10001, land as `brw-r--r--
 // 10001 10001 8, 0 disk` and `prw-r--r-- 10001 10001 fifo` (review of
 // 2026-10-23, round 4). Both paths, the same server's and the receive
@@ -365,19 +368,6 @@ func TestRsyncCopySkipsDevices(t *testing.T) {
 	specials := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-specials")
 	if devices || specials {
 		t.Errorf("RsyncCopy %q copies device nodes (%v) and FIFOs or sockets (%v): rsync -a includes -D", RsyncCopy, devices, specials)
-	}
-}
-
-// The receive's rsync gives an entry the child owns to its owner
-// (--chown), and keeps the others' (--numeric-ids).
-func TestSyncReceiveOwners(t *testing.T) {
-	t.Parallel()
-	s := allScripts()["receive"]
-	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse $4 ") {
-		t.Errorf("receive:\n%s", s)
-	}
-	if s := allScripts()["receive bare"]; !strings.Contains(s, "copy 'app.ini' 'app.ini/app.ini' '' '--inplace --chown=1:2'\n") {
-		t.Errorf("a file's owner:\n%s", s)
 	}
 }
 
@@ -448,11 +438,47 @@ func TestDataChecksFirst(t *testing.T) {
 	order(data, "export "+ImagesAcceptEnv, `'--check-images' '--restore' '20261025120000'`, `'restore-data'`)
 }
 
+// A sync across servers goes by a key of its own: the push that takes it
+// on its stdin needs sync-push-key, and every script holding a sync's
+// child side calls --sync-key, so a server whose devopsy predates them
+// refuses before anything changes. The holder authorizes the key once
+// prepared, sends the host keys with its marker, removes the key once it
+// decided, and checks the two sides' kinds before its prepare.
+func TestSyncKeyFeature(t *testing.T) {
+	t.Parallel()
+	s := allScripts()
+	for name, script := range s {
+		if slices.Contains(Needs(script), SyncKeyFeature) != (name == "push keyed") {
+			t.Errorf("%s needs %s: %v", name, SyncKeyFeature, !slices.Contains(Needs(script), SyncKeyFeature))
+		}
+		holds := strings.HasPrefix(name, "holder") || name == "activate+sync" || name == "sync only"
+		if slices.Contains(Needs(script), "sync-key") != holds {
+			t.Errorf("%s needs sync-key: %v", name, !holds)
+		}
+	}
+	if !strings.Contains(s["push keyed"], "'--sync-push' 'reset' 'key'") {
+		t.Errorf("the keyed push's words:\n%s", s["push keyed"])
+	}
+	h := s["holder keyed"]
+	order := []string{"export " + SyncKeyEnv + "=", "export " + SyncParentKindEnv + "=yes", `if [ "$sync_me" != "$` + SyncParentKindEnv + `" ]; then`, "sync_hostkeys=$(", "'--sync-services' 'prepare'", "devopsy --sync-key add \"$sync_id\" \"$base\"", "ready for sync in", `"${sync_hostkeys:-}"`, `mv -f "$base/.devopsy-sync.started"`, `devopsy --sync-key remove "$sync_id"`}
+	at := 0
+	for _, w := range order {
+		i := strings.Index(h[at:], w)
+		if i < 0 {
+			t.Fatalf("%q missing or out of order in the keyed holder:\n%s", w, h)
+		}
+		at += i + len(w)
+	}
+	if strings.Contains(s["holder plain"], "export "+SyncKeyEnv) {
+		t.Error("a holder on the parent's server authorizes a key")
+	}
+}
+
 func TestResetFeature(t *testing.T) {
 	t.Parallel()
 	tg := &Target{Path: "app/prod"}
 	for name, s := range allScripts() {
-		if name != "receive reset" && slices.Contains(Needs(s), ResetFeature) {
+		if name != "receive reset" && name != "push keyed" && slices.Contains(Needs(s), ResetFeature) {
 			t.Errorf("%s needs %s", name, ResetFeature)
 		}
 	}
@@ -532,17 +558,14 @@ func TestLockWaitSaysItsTime(t *testing.T) {
 }
 
 // devopsy's containers found by their labels: only the push needs it,
-// since its receive script labels the child's rsync, which the child's
-// holder removes by them; the receive's container is labeled so.
+// since the child's receive labels its rsync, which the child's holder
+// removes by them (TestSyncDifferentHosts).
 func TestContainerLabelsFeature(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
-		if slices.Contains(Needs(s), ContainerLabelsFeature) != (name == "push") {
+		if slices.Contains(Needs(s), ContainerLabelsFeature) != (name == "push" || name == "push keyed") {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
-	}
-	if s := allScripts()["receive"]; strings.Count(s, `--name "$rs_name" '--label' 'devopsy.env=it'\''s-dev' '--label' 'devopsy.task=sync-1.2' --network host`) != 2 {
-		t.Errorf("the receive's containers not labeled for its holder:\n%s", s)
 	}
 }
 
@@ -568,10 +591,14 @@ func TestFeaturesCoverScripts(t *testing.T) {
 			}
 		}
 	}
-	// The receive script gets the util image ready on the child's server
-	// before using it, which an older devopsy there lacks.
-	if got := Needs(SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"db"}, nil, nil, "", nil, true, "", false)); !slices.Contains(got, "util-image") {
-		t.Errorf("receive script needs: %v", got)
+	// A sync across servers needs its receive over the session on both sides: the
+	// parent's push and the child's key.
+	push := PushScript(&Target{Path: "app/prod"}, "app-prod", map[string]string{SyncKeyedEnv: "1"})
+	holder := HolderScript(&Target{Path: "app/dev", Project: &Project{Name: "app"}}, "app-dev", &SyncOptions{From: "vm1:prod", Key: "AAAA"}, true)
+	for name, s := range map[string]string{"push": push, "holder": holder} {
+		if got := Needs(s); !slices.Contains(got, SyncSessionFeature) {
+			t.Errorf("the %s's needs: %v", name, got)
+		}
 	}
 	// The operator's own command is no need of the script's.
 	if got := Needs(RunScript(&Target{Path: "app/prod"}, "app", []string{"--env"})); slices.Contains(got, "env") {
@@ -1868,7 +1895,7 @@ exit 0
 	if out, err := release("1", "DB=mariadb:11.8", "IMG=I1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("release 1 (%v):\n%s", err, out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "image:") || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); heldIn(got, "mariadb:11.8") || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
 		t.Errorf("devopsy's compose file:\n%s", got)
 	}
 	// What ran on the data: none here (no container), so written by hand,
@@ -3073,8 +3100,9 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 	if err != nil || current() != "releases/1/code" {
 		t.Fatalf("rollback (%v), current %q: its fetch pulled release 1's old hold of the database:\n%s", err, current(), out)
 	}
-	// No hold: the database by its name, the app it built again by its bookmark.
-	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "mariadb@I1") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
+	// No hold: the database by its pin to what the rollback pulled, the app it built
+	// again by its bookmark.
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); strings.Contains(got, "@I1") || strings.Contains(got, "devopsy.held") || !strings.Contains(got, "\"app\":\n    image: \"app-prod-app:devopsy-app-prod-1\"\n") {
 		t.Errorf("release 1's compose file after the rollback holds what nothing asked for:\n%s", got)
 	}
 }
@@ -3463,5 +3491,61 @@ func TestImportFixesTextsNameNoCommand(t *testing.T) {
 		if strings.Contains(r.Text, "devopsy @") {
 			t.Errorf("a fix's text names a command: %q", r.Text)
 		}
+	}
+}
+
+// A push on one server goes only into the child's own directory under the release root,
+// whatever its holder named: a child wrongly taken for the parent's machine would otherwise
+// choose where the parent's server writes, or wipes on a --reset.
+func TestSyncToOwn(t *testing.T) {
+	t.Parallel()
+	for base, ok := range map[string]bool{"/srv/shop/dev": true, "/srv/blog/prod": false, "/srv/shop/dev/..": false, "/etc": false} {
+		script := "devopsy() { echo \"$*\" >&2; }\nroot=/srv\n" + SyncToBaseEnv + "=" + Quote(base) + "\n" + syncToOwn("shop/dev") + "echo pushed\n"
+		out, err := exec.Command("sh", "-c", script).CombinedOutput()
+		if (err == nil) != ok || strings.Contains(string(out), "pushed") != ok {
+			t.Errorf("%s: %v %s", base, err, out)
+		}
+	}
+	env := map[string]string{SyncIDEnv: "1.abcdef", SyncToPathEnv: "shop/dev"}
+	if s := PushScript(&Target{Path: "shop/prod"}, "shop", env); !strings.Contains(s, syncToOwn("shop/dev")) || !strings.Contains(s, SameMachineClear("1.abcdef")) {
+		t.Errorf("the push on one server:\n%s", s)
+	}
+}
+
+// heldIn says whether a release's devopsy-compose.yaml, c, holds a service: a hold's label,
+// or an image: other than a pin of ref, the service's own name (`<ref>@<digest>`, which
+// every pulled service gets).
+func heldIn(c, ref string) bool {
+	for _, line := range strings.Split(c, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "image: "); ok && !strings.HasPrefix(strings.Trim(v, `"`), ref+"@") {
+			return true
+		}
+	}
+	return strings.Contains(c, images.HeldLabel)
+}
+
+// A release keeps its project's directory closed to other users, and fails with a word of its
+// own when it cannot (another user owns it), never chmod's line alone.
+func TestCloseProject(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "shop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(project string) (string, error) {
+		c := exec.Command("sh", "-c", "set -eu\ndevopsy() { printf '%s\\n' \"$*\"; }\n"+closeProject(project), "sh")
+		c.Env = append(os.Environ(), "root="+root)
+		c.Dir = root
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run("shop"); err != nil || out != "" {
+		t.Fatalf("closing its own (%v): %s", err, out)
+	}
+	if fi, err := os.Stat(filepath.Join(root, "shop")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("its directory: %v (%v)", fi.Mode(), err)
+	}
+	if out, err := run("gone"); err == nil || !strings.Contains(out, "--say error "+root+"/gone cannot be closed to other users") {
+		t.Errorf("one it cannot close (%v): %s", err, out)
 	}
 }

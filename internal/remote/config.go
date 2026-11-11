@@ -29,14 +29,19 @@ const LocalConfigFile = "config.local.yaml"
 // that machine keeps releases. Not ~/.devopsy: devopsy would take the home
 // directory for a project.
 func UserConfigFile() string {
-	if h := os.Getenv("DEVOPSY_HOME"); h != "" {
+	home, _ := os.UserHomeDir()
+	return userConfigFile(os.Getenv, home)
+}
+
+// userConfigFile is UserConfigFile from getenv and the home directory ("" for none).
+func userConfigFile(getenv func(string) string, home string) string {
+	if h := getenv("DEVOPSY_HOME"); h != "" {
 		return filepath.Join(h, ConfigFile)
 	}
-	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+	if x := getenv("XDG_CONFIG_HOME"); x != "" {
 		return filepath.Join(x, "devopsy", ConfigFile)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	if home == "" {
 		return ""
 	}
 	return filepath.Join(home, ".config", "devopsy", ConfigFile)
@@ -1069,6 +1074,9 @@ func validateParents(envs map[string]*Target) error {
 
 // ValidName reports whether s can be a project's or an instance's name.
 func ValidName(s string) bool { return nameRe.MatchString(s) }
+
+// ValidEnvName reports whether s can be an environment's name.
+func ValidEnvName(s string) bool { return envName.MatchString(s) }
 
 // LoadProject reads only what a project's config says about the project.
 func LoadProject(projectDir string) (*Project, error) {

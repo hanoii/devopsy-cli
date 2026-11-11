@@ -1262,7 +1262,7 @@ func TestSyncReset(t *testing.T) {
 	// decides while it runs (the session cut mid-wipe) ends it
 	// (endWriters), and it never deletes what a later sync copies.
 	for _, l := range strings.Split(docker, "\n") {
-		if strings.Contains(l, " find /mnt -mindepth 1 -delete") && !strings.Contains(l, "--name "+remote.SyncContainerPrefix) {
+		if strings.Contains(l, " find /mnt -mindepth 1 -delete") && !strings.Contains(l, "--name devopsy-sync-") {
 			t.Errorf("the wipe empties mnt in a container no holder ends: %s", l)
 		}
 	}
@@ -1359,7 +1359,7 @@ func TestImportExportImages(t *testing.T) {
 	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 		t.Fatalf("an import at the data's version (%d):\n%s", code, errs)
 	}
-	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") {
+	if c := readString(releaseFile(t, current, images.ComposeFile)); heldIn(c, "mariadb:11.8") {
 		t.Errorf("held on the export's image:\n%s", c)
 	}
 	if h := readString(filepath.Join(base, images.HistoryFile)); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\t11.8\t11.8\n") {
@@ -1451,7 +1451,7 @@ func TestImportDropsHold(t *testing.T) {
 	if code != 0 || !strings.Contains(errs, "app runs ") || !strings.Contains(errs, "own image again") {
 		t.Fatalf("--resolved after the import (%d):\n%s", code, errs)
 	}
-	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "shop-prod-app@sha256:own") {
+	if c := readString(releaseFile(t, current, images.ComposeFile)); heldIn(c, "shop-prod-app") || !strings.Contains(c, "shop-prod-app@sha256:own") {
 		t.Errorf("still held after the import:\n%s", c)
 	}
 	if l := readString(list); !strings.Contains(l, "shop-prod-app\tsha256:own\tapp\tpulled\tshop-prod-app@sha256:own") {
@@ -1528,7 +1528,7 @@ func TestImportExportImagesImageLock(t *testing.T) {
 }
 
 // A pax global header is no member to archive/tar, but GNU tar applies
-// its records to every member after it (checked in devopsy-util:4, GNU
+// its records to every member after it (checked in devopsy.internal/util:5, GNU
 // tar 1.35): a path or linkpath there renames members and retargets
 // links the checks never saw, storage/b -> a extracted as storage/evil
 // -> /etc/shadow. The export's header carries its record alone; a global
@@ -1653,4 +1653,16 @@ func TestRemediesThroughAliasNameHintAddress(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "$ devopsy @devopsy@one:prod --sync") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --reset") || strings.Contains(out, "$ devopsy @a-shop --") {
 		t.Errorf("--resolved on a sync's mark through an alias without source (%d):\n%s", code, out)
 	}
+}
+
+// heldIn says whether a release's devopsy-compose.yaml, c, holds a service: a hold's label,
+// or an image: other than a pin of ref, the service's own name (`<ref>@<digest>`, which
+// every pulled service gets).
+func heldIn(c, ref string) bool {
+	for _, line := range strings.Split(c, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "image: "); ok && !strings.HasPrefix(strings.Trim(v, `"`), ref+"@") {
+			return true
+		}
+	}
+	return strings.Contains(c, images.HeldLabel)
 }

@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -47,6 +50,87 @@ var serverTools = []struct{ name, without string }{
 	{"tail", "only the traps protect a release after its switch (a tail that answers --version)"},
 }
 
+// doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
+// waits for a reboot to take it, and its firewall, read as root through the util image.
+func doorFacts() *remote.DoorFacts {
+	d, err := remote.ServerDoor()
+	if err != nil || d == nil || d.Space == "" {
+		return nil
+	}
+	f := &remote.DoorFacts{Space: d.Space, Users: len(d.Users)}
+	if err := spaceGuarded(d.Space); err != nil {
+		f.Unguarded = err.Error()
+	}
+	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
+		f.Docker = err.Error()
+	}
+	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
+		f.Reboot = true
+	}
+	for u := range d.Users {
+		if p := d.Users[u].Project; f.Project == "" || p < f.Project {
+			f.Project = p
+		}
+	}
+	read, err := doorHostRead(remote.DoorFirewallRead, false)
+	if err != nil {
+		f.FirewallError = err.Error()
+		return f
+	}
+	f.Listeners = remote.DoorListeners(read)
+	if f.FirewallWrong, err = doorFirewallWrong(read); err != nil {
+		f.FirewallError = err.Error()
+	}
+	return f
+}
+
+// doorFirewall runs script as root on the host with its network, through the util image
+// (writing the host's files when write), and says what of the project users' firewall the
+// host lacks from what it prints (remote.DoorFirewallRead): the deploy user can neither
+// read nor change it.
+func doorFirewall(script string, write bool) ([]string, error) {
+	read, err := doorHostRead(script, write)
+	if err != nil {
+		return nil, err
+	}
+	return doorFirewallWrong(read)
+}
+
+// doorFirewallWrong is what of the project users' firewall read lacks, by the ids of the
+// project users' group and the door's.
+func doorFirewallWrong(read string) ([]string, error) {
+	g, err := user.LookupGroup(remote.DoorGroup)
+	if err != nil {
+		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
+	}
+	d, err := user.LookupGroup(remote.DoorRunGroup)
+	if err != nil {
+		return nil, fmt.Errorf("no %s group yet", remote.DoorRunGroup)
+	}
+	return remote.DoorFirewallWrong(read, g.Gid, d.Gid), nil
+}
+
+// doorHostRead runs script as root on the host with its network, its processes and its
+// cgroups, through the util image (writing the host's files when write), and returns what it
+// prints: the firewall finds Docker's daemon and names its cgroup as the host has them.
+func doorHostRead(script string, write bool) (string, error) {
+	if err := ensureUtilImage(context.Background()); err != nil {
+		return "", err
+	}
+	bind := "/:/host:ro"
+	if write {
+		bind = "/:/host"
+	}
+	c := exec.Command("docker", "run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "-v", bind, remote.UtilImage,
+		"chroot", "/host", "/bin/sh", "-c", script)
+	c.Stderr = os.Stderr
+	out, err := c.Output()
+	if err != nil {
+		return "", fmt.Errorf("the project users' firewall: %v", err)
+	}
+	return string(out), nil
+}
+
 // runServerFacts implements the hidden --server-facts on a server: its
 // facts as one JSON document on stdout (remote.ServerInfo).
 func runServerFacts() int {
@@ -81,6 +165,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	info.Docker = dockerFacts()
+	info.Door = doorFacts()
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -91,7 +176,9 @@ func serverFacts() (remote.ServerInfo, error) {
 		}
 	}
 	info.Containers = hostContainers()
-	info.Environments = environments(info.Root)
+	info.Environments = environments(info.Root, doorTrees(info.Root), func(who, tree string) []remote.Environment {
+		return treeEnvironments(who, tree, doorTreeWait)
+	}, ownedByMe)
 	return info, nil
 }
 
@@ -442,27 +529,63 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 // environments is every environment under the release root,
 // <project>/[<instance>/]<environment> (a directory with releases/),
 // with its state lines (remote.EnvStatus). Not one a --destroy cut off
-// while removing it left (<base>.rm.<pid>, removeBase).
-func environments(root string) []remote.Environment {
+// while removing it left (<base>.rm.<pid>, removeBase). A project user's
+// tree there (trees, by its path) is read as that user (readTree): the
+// deploy user never reads a project's tree, where a link would show it
+// its own files. Nor any project directory there it does not own (owned):
+// a project user's whose entry is gone (--project-users remove keeps its
+// Unix user and tree), or one the door's list names by another spelling.
+func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment, owned func(path string) bool) []remote.Environment {
+	var envs []remote.Environment
+	for _, p := range envDirs(root) {
+		if _, ok := trees[p]; !ok && owned(p) {
+			envs = append(envs, projectEnvironments(root, p)...)
+		}
+	}
+	// A project user's tree, in the release root or elsewhere (by default its own home).
+	for _, tree := range slices.Sorted(maps.Keys(trees)) {
+		got := readTree(trees[tree], tree)
+		for i := range got {
+			got[i].User = trees[tree]
+		}
+		envs = append(envs, got...)
+	}
+	return envs
+}
+
+// ownedByMe says whether path, links resolved, is this user's own.
+func ownedByMe(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Getuid()
+}
+
+// envDirs are dir's directories, a link to one included: a project or an
+// environment moved to another disk and linked back is one, as the
+// scripts reach it.
+func envDirs(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	var out []string
+	for _, e := range entries {
+		if !projectDir(e.Name()) {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// projectEnvironments are the environments of the project at p under root.
+func projectEnvironments(root, p string) []remote.Environment {
 	var envs []remote.Environment
 	isEnv := func(dir string) bool {
 		fi, err := os.Stat(filepath.Join(dir, "releases"))
 		return err == nil && fi.IsDir()
-	}
-	dirs := func(dir string) []string {
-		entries, _ := os.ReadDir(dir)
-		var out []string
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), ".") || removing.MatchString(e.Name()) {
-				continue
-			}
-			// A project or an environment moved to another disk and linked
-			// back is one, as the scripts reach it.
-			if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {
-				out = append(out, filepath.Join(dir, e.Name()))
-			}
-		}
-		return out
 	}
 	add := func(dir string) {
 		rel, _ := filepath.Rel(root, dir)
@@ -471,20 +594,71 @@ func environments(root string) []remote.Environment {
 		out, _ := cmd.Output()
 		envs = append(envs, remote.Environment{Path: filepath.ToSlash(rel), Status: string(out)})
 	}
-	for _, p := range dirs(root) {
-		for _, e := range dirs(p) {
-			if isEnv(e) {
-				add(e)
-				continue
-			}
-			for _, i := range dirs(e) {
-				if isEnv(i) {
-					add(i)
-				}
+	for _, e := range envDirs(p) {
+		if isEnv(e) {
+			add(e)
+			continue
+		}
+		for _, i := range envDirs(e) {
+			if isEnv(i) {
+				add(i)
 			}
 		}
 	}
 	return envs
+}
+
+// doorTrees are the project users' trees under root, each to its user.
+func doorTrees(root string) map[string]string {
+	d, err := remote.ServerDoor()
+	if err != nil || d == nil {
+		return nil
+	}
+	trees := map[string]string{}
+	for who, u := range d.Users {
+		tree := u.Tree
+		if tree == "" {
+			pu, err := user.Lookup(who)
+			if err != nil {
+				continue
+			}
+			tree = filepath.Join(pu.HomeDir, u.Project)
+		}
+		trees[filepath.Clean(tree)] = who
+	}
+	return trees
+}
+
+// doorTreeWait is how long --server-info waits for a project user's read of its tree.
+const doorTreeWait = 30 * time.Second
+
+// treeEnvironments are a project user's environments as that user reads them (--door-read
+// environments), none when it cannot, or does not answer within (doorAnswer): only those
+// whose path is the tree's project and names devopsy gives (envPathIn), since that user
+// writes what the read answers, and an admin's --server-info offers commands with them.
+func treeEnvironments(who, tree string, within time.Duration) []remote.Environment {
+	out, err := doorAnswer(doorRead(who, "environments", tree), maxEnvironments, within)
+	if err != nil {
+		return nil
+	}
+	var envs []remote.Environment
+	if json.Unmarshal(out, &envs) != nil {
+		return nil
+	}
+	return slices.DeleteFunc(envs, func(e remote.Environment) bool { return !envPathIn(filepath.Base(tree), e.Path) })
+}
+
+// envPathIn says whether path is an environment's of project: <project>/[<instance>/]<env>,
+// each name one devopsy gives.
+func envPathIn(project, path string) bool {
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] != project {
+		return false
+	}
+	if len(parts) == 3 && !remote.ValidName(parts[1]) {
+		return false
+	}
+	return remote.ValidEnvName(parts[len(parts)-1])
 }
 
 // runServerInfo implements devopsy [@<server>] --server-info [--json]:
@@ -714,6 +888,33 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		warn(msg, fixes...)
 	}
 
+	if dr := info.Door; dr != nil {
+		row("door", fmt.Sprintf("%s, %d project users", dr.Space, dr.Users))
+		if dr.Unguarded != "" {
+			warn(dr.Unguarded+": the door refuses every request",
+				spaceFix(dr.Space))
+		}
+		if dr.Docker != "" {
+			warn(dr.Docker+": the door refuses every image a project user does not build",
+				report.Fix("move Docker to its containerd image store and a current buildx (docs/project-users.md)"))
+		}
+		if dr.Reboot {
+			warn("sshd takes the door at the next reboot: until then no project user logs in",
+				report.Fix("reboot it at a quiet time: its containers come back with Docker"))
+		}
+		switch {
+		case dr.FirewallError != "":
+			note("the project users' firewall could not be read: " + dr.FirewallError)
+		case len(dr.FirewallWrong) > 0:
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"project users reach what their firewall keeps them off"}, dr.FirewallWrong...),
+				Remedies: []report.Remedy{report.Fix("load it again, for any of its projects:", "devopsy @"+ref+" --project-users add "+cmp.Or(dr.Project, "<project>"))}})
+		}
+		if len(dr.Listeners) > 0 {
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),
+				Remedies: []report.Remedy{report.Fix("make each listen on 127.0.0.1, which no container reaches")}})
+		}
+	}
+
 	// Docker.
 	d := info.Docker
 	if d.Error != "" {
@@ -919,7 +1120,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			for _, p := range problems {
 				lines = append(lines, env.Path+": "+p)
 			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env.Path)}})
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env)}})
 		}
 	}
 	return es
@@ -1037,12 +1238,21 @@ func composeNameOf(path string) string {
 // statusHint is the --status of the environment at path, which says
 // how to fix what it warns of, in its project, or in its current release
 // under root on this machine (no host).
-func statusHint(host, root, path string) report.Remedy {
-	if host == "" {
-		return report.Hint("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
+func statusHint(host, root string, env remote.Environment) report.Remedy {
+	project, rest, _ := strings.Cut(env.Path, "/")
+	if env.User != "" {
+		// A project user's: its --status runs as that user, from the project's checkout, never
+		// as whoever reads this in that user's tree, where devopsy would run its programs.
+		server := "<server>"
+		if host != "" {
+			server = host[strings.LastIndex(host, "@")+1:]
+		}
+		return report.Hint("as "+env.User+", in "+project+"'s checkout:", "devopsy @"+env.User+"@"+server+":"+remote.QuoteWord(rest)+" --status")
 	}
-	project, rest, _ := strings.Cut(path, "/")
-	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
+	if host == "" {
+		return report.Hint("", "cd "+remote.QuoteWord(filepath.Join(root, env.Path, "current"))+" && devopsy --status")
+	}
+	return report.Hint("in "+project+"'s checkout:", "devopsy @"+host+":"+remote.QuoteWord(rest)+" --status")
 }
 
 // removing is a directory a --destroy cut off while removing it left

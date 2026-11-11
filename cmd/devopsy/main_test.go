@@ -7,10 +7,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
@@ -28,15 +30,50 @@ var binary string
 const startWait = time.Minute
 
 func TestMain(m *testing.M) {
-	if space := os.Getenv("DEVOPSY_TEST_LOCK_EXEC"); space != "" {
-		lockExecHelper(space) // TestDoorImageLockOutlivesItsExec
+	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
+		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
+	}
+	if args := os.Getenv("DEVOPSY_TEST_DOOR_LOGIN"); args != "" {
+		os.Exit(doorLogin(strings.Fields(args))) // TestDoorLoginIsSavedUnchecked
+	}
+	// The end flag as a keys script runs it, the user's processes ended by a fake that says so
+	// in DEVOPSY_TEST_ENDED (TestRemovalCuts).
+	if ended := os.Getenv("DEVOPSY_TEST_ENDED"); ended != "" && len(os.Args) == 3 && os.Args[1] == remote.EndProjectUserFlag {
+		os.Exit(endProjectUserWith(os.Args[2:], func(who string) error {
+			f, err := os.OpenFile(ended, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = f.WriteString(who + "\n")
+			return err
+		}))
+	}
+	// A claim's guard ended with a signal already waiting (TestDoorClaimEndKeepsALateSignal).
+	if space := os.Getenv("DEVOPSY_TEST_CLAIM_END"); space != "" {
+		s := &doorSide{policy: door.Policy{Project: "shop", Space: space}}
+		g := &claimCut{s: s, ch: make(chan os.Signal, 1), done: make(chan struct{})}
+		if _, err := g.workDir(); err != nil {
+			panic(err)
+		}
+		g.ch <- syscall.SIGTERM
+		g.end()
+		os.Exit(0)
+	}
+	if os.Getenv("DEVOPSY_TEST_EXEC_DECIDED") != "" {
+		// TestDoorGivesWhatItExecsItsStops: as runDoor, then the exec.
+		holdStops()
+		panic(execDecided("/bin/sh", []string{"sh", "-c", "grep '^SigIgn:' /proc/self/status"}, os.Environ()))
 	}
 	dir, err := os.MkdirTemp("", "devopsy-test")
 	if err != nil {
 		panic(err)
 	}
 	binary = filepath.Join(dir, "devopsy")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+	// Static, as a release builds it (.goreleaser.yaml): a project user's login shell is it.
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
 		panic(string(out))
 	}
 	code := m.Run()
@@ -329,6 +366,33 @@ func TestUserTargets(t *testing.T) {
 	}
 }
 
+// No session forwards the operator's agent, whatever an ssh config says
+// (Host * with ForwardAgent yes, say): devopsy's -o ForwardAgent=no comes
+// before the config files, and ssh keeps the first value; only
+// --ssh-option ForwardAgent=yes, before it, forwards it. Real ssh, -G:
+// it resolves the options and never connects.
+func TestSessionsForwardNoAgent(t *testing.T) {
+	t.Parallel()
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("no ssh")
+	}
+	tmp := t.TempDir()
+	cfg := filepath.Join(tmp, "config")
+	write(t, cfg, "Host *\n  ForwardAgent yes\n", 0o644)
+	g := filepath.Join(tmp, "gssh")
+	write(t, g, "#!/bin/sh\nexec "+ssh+" -F "+cfg+" -G \"$@\"\n", 0o755)
+	for _, c := range []struct {
+		opts []string
+		want string
+	}{{nil, "forwardagent no"}, {[]string{"--ssh-option", "ForwardAgent=yes"}, "forwardagent yes"}} {
+		out, code := runDevopsy(t, tmp, []string{"DEVOPSY_SSH_COMMAND=" + g}, append(c.opts, "@devopsy@vm1.example.com", "--shell-host")...)
+		if !strings.Contains(out, "\n"+c.want+"\n") {
+			t.Errorf("%q: want %s (%d):\n%s", c.opts, c.want, code, out)
+		}
+	}
+}
+
 // A target's host can come from the project's .env, read before connecting.
 // Every session, a compose command's too, bounds its connection (a
 // connect timeout, keepalives counted in beats), after
@@ -345,8 +409,22 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv\n", 0o644)
 	// echo stands in for ssh: it prints the destination.
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo -o ConnectTimeout=5"}, "@prod", "ps")
-	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
+	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
+	}
+	// --ssh-option, first and repeatable like -v, goes after
+	// DEVOPSY_SSH_COMMAND's options and before devopsy's, so it wins over
+	// devopsy's and loses to the variable's.
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo -o ConnectTimeout=5"}, "--ssh-option", "ForwardAgent=yes", "-v", "--ssh-option", "IdentityFile=/k", "@prod", "ps")
+	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ForwardAgent=yes -o IdentityFile=/k -o ClearAllForwardings=yes") {
+		t.Errorf("--ssh-option (%d):\n%s", code, out)
+	}
+	// Only key=value, as ssh's -o takes it: never another argument of ssh's.
+	for _, bad := range [][]string{{"--ssh-option"}, {"--ssh-option", "-A"}, {"--ssh-option", "ForwardAgent"}, {"--ssh-option", "Forward Agent=yes"}} {
+		out, code := runDevopsy(t, project, nil, append(bad, "@prod", "ps")...)
+		if code == 0 || !strings.Contains(out, "--ssh-option takes key=value") {
+			t.Errorf("%q (%d):\n%s", bad, code, out)
+		}
 	}
 	// A server's port goes to ssh as -p, after DEVOPSY_SSH_COMMAND's
 	// options: one there that sets another port (ssh -G says so) is
@@ -361,12 +439,21 @@ func TestTargetHostFromDotenv(t *testing.T) {
 		t.Errorf("a port (%d):\n%s", code, out)
 	}
 	ssh := filepath.Join(tmp, "ssh")
-	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) echo 'port 22' ;; *) echo \"$@\" ;; esac\n", 0o755)
-	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + ssh + " -p 22"}, "@prod", "ps")
-	if code == 0 || strings.Contains(out, "sh -c") ||
-		!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\" names port 5369, and ssh would connect to 22\n") ||
-		!strings.Contains(out, "take the port out of DEVOPSY_SSH_COMMAND, or out of the server") {
-		t.Errorf("a port DEVOPSY_SSH_COMMAND overrides (%d):\n%s", code, out)
+	// As ssh -G: the port from a -p 22 or -o Port=22 it is given, else the
+	// server's.
+	write(t, ssh, "#!/bin/sh\ncase \" $* \" in *\" -G \"*) case \" $* \" in *\" -p 22 \"*|*\" Port=22 \"*) echo 'port 22' ;; *) echo 'port 5369' ;; esac ;; *) echo \"$@\" ;; esac\n", 0o755)
+	// --ssh-option's go to ssh -G too: what ssh resolves is what the
+	// sessions use.
+	for _, c := range []struct {
+		env  string
+		args []string
+	}{{ssh + " -p 22", nil}, {ssh, []string{"--ssh-option", "Port=22"}}} {
+		out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + c.env}, append(c.args, "@prod", "ps")...)
+		if code == 0 || strings.Contains(out, "sh -c") ||
+			!strings.Contains(out, "devopsy: error: server \"devopsy@from-dotenv:5369\" names port 5369, and ssh would connect to 22\n") ||
+			!strings.Contains(out, "take the port out of DEVOPSY_SSH_COMMAND or --ssh-option, or out of the server") {
+			t.Errorf("a port %q %q overrides (%d):\n%s", c.env, c.args, code, out)
+		}
 	}
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=ssh://devopsy@from-dotenv\n", 0o644)
 	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
@@ -1116,7 +1203,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	write(t, filepath.Join(bin, "fakeshell"), "#!/bin/sh\necho \"shell $*\"\n", 0o755)
 	for _, addr := range []string{"@devopsy@server", "@b/prod"} {
 		out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "argsssh"), "SHELL=" + filepath.Join(bin, "fakeshell")}, addr, "--shell-host", "--root")
-		if code != 0 || !strings.Contains(out, "-l root -T devopsy@server") || !strings.Contains(out, "shell -l") {
+		if code != 0 || !strings.Contains(out, "ssh -l root -o ") || !strings.Contains(out, " -T devopsy@server") || !strings.Contains(out, "shell -l") {
 			t.Fatalf("%s --shell-host --root (%d):\n%s", addr, code, out)
 		}
 	}
@@ -1465,7 +1552,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "devopsy: authorized SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "devopsy: | restricted:") {
 		t.Fatalf("add restricted (%d):\n%s", code, out)
 	}
-	if got := readString(authorized); !strings.HasPrefix(got, "restrict,agent-forwarding,port-forwarding ssh-ed25519 ") || !strings.Contains(got, " ci-server\n") || strings.Contains(got, "PRIVATE") {
+	if got := readString(authorized); !strings.HasPrefix(got, "restrict ssh-ed25519 ") || !strings.Contains(got, " ci-server\n") || strings.Contains(got, "PRIVATE") {
 		t.Errorf("authorized_keys after add: %q", got)
 	}
 	// add a plain key, from a file and from stdin, never twice.
@@ -1481,7 +1568,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("add a private key (%d):\n%s", code, out)
 	}
 	out, code = run("", "@prod", "--ssh-keys")
-	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict,agent-forwarding,port-forwarding]") {
+	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict]") {
 		t.Fatalf("list (%d):\n%s", code, out)
 	}
 	// remove by comment, by fingerprint prefix; never the last one.
@@ -1494,6 +1581,74 @@ func TestRemoteSSHKeys(t *testing.T) {
 	fp := strings.TrimSpace(strings.SplitN(strings.SplitN(run2(t, run, "@prod", "--ssh-keys"), "SHA256:", 2)[1], " ", 2)[0])
 	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code == 0 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "ci-server") {
 		t.Errorf("remove the last key (%d):\n%s", code, out)
+	}
+}
+
+// A project user's keys are in the door's directory, which the deploy user edits with --for and
+// sshd asks it for (--authorized-keys): its last key goes, which is how its logins stop. Asked
+// as a project user, which cannot edit its own, the server names the deploy user for the hint.
+func TestRemoteSSHKeysForAProjectUser(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, home := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	// id knows devopsy-shop, and says the session's user is in its group when FAKE_PROJECT is.
+	write(t, filepath.Join(bin, "id"), "#!/bin/sh\ncase \"$*\" in\n  '-nG') [ -n \"${FAKE_PROJECT:-}\" ] && echo 'devopsy-shop devopsy-projects' || echo devopsy ;;\n  '-u devopsy-shop') echo 10002 ;;\n  *) exit 1 ;;\nesac\n", 0o755)
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	run := func(asProject bool, args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = []string{"DEVOPSY_HOME=" + home, "DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
+		if asProject {
+			cmd.Env = append(cmd.Env, "FAKE_PROJECT=1")
+		}
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		return string(out), code
+	}
+	pub := filepath.Join(tmp, "op.pub")
+	write(t, pub, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o644)
+	keys := filepath.Join(home, "door", "keys", "devopsy-shop")
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "add", pub); code != 0 || !strings.Contains(out, "for devopsy-shop on devopsy@vm1 in "+keys) {
+		t.Fatalf("add for a project user (%d):\n%s", code, out)
+	}
+	if !strings.Contains(readString(keys), "op@laptop") || fileExists(filepath.Join(tmp, ".ssh", "authorized_keys")) {
+		t.Errorf("the key went elsewhere than the door's keys: %q", readString(keys))
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop"); code != 0 || !strings.Contains(out, "devopsy-shop's on devopsy@vm1 authorized keys (the door's, for project shop)") || !strings.Contains(out, "op@laptop") {
+		t.Errorf("list for a project user (%d):\n%s", code, out)
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "blog"); code == 0 || !strings.Contains(out, "no project user devopsy-blog here") {
+		t.Errorf("a project with no user (%d):\n%s", code, out)
+	}
+	if out, code := run(true, "@devopsy-shop@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code == 0 || !strings.Contains(out, "devopsy-shop is a project user") || !strings.Contains(out, "--ssh-keys --for shop remove op@laptop") || !strings.Contains(readString(keys), "op@laptop") {
+		t.Errorf("asked as the project user (%d):\n%s", code, out)
+	}
+	// A word that names nothing (empty, a fingerprint's prefix alone) removes nothing, even
+	// its one key, which every fingerprint and an empty comment would match.
+	for _, word := range []string{"", "SHA256:"} {
+		if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "remove", word); code == 0 || !strings.Contains(readString(keys), "op@laptop") {
+			t.Errorf("remove %q (%d):\n%s", word, code, out)
+		}
+	}
+	// Removing any of its keys drops its sync keys too: a leaked key could have added them.
+	syncKeys := filepath.Join(home, "door", "sync-keys", "devopsy-shop")
+	write(t, syncKeys, "a sync's key\n", 0o600)
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "shop", "remove", "op@laptop"); code != 0 || strings.Contains(readString(keys), "op@laptop") || fileExists(syncKeys) {
+		t.Errorf("its last key, its sync keys with it (%d):\n%s", code, out)
+	}
+	if out, code := run(false, "@devopsy@vm1:", "--ssh-keys", "--for", "Shop!"); code == 0 || !strings.Contains(out, "usage:") {
+		t.Errorf("a project name devopsy refuses (%d):\n%s", code, out)
 	}
 }
 

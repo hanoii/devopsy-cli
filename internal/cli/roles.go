@@ -15,6 +15,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -457,8 +458,11 @@ type ImportState struct {
 	Release       string
 	Imported, Set bool
 	Released      bool
-	Now           Exporter
-	Err           error
+	// Door is a project user's (its containers the door's, door.DoorLabel): its release is
+	// in that user's tree, which the deploy user never reads, so it is not read.
+	Door bool
+	Now  Exporter
+	Err  error
 }
 
 // Stale reports whether the release imported a value its source no longer
@@ -469,15 +473,19 @@ func (s ImportState) Stale() bool {
 
 // ImportStates lists the imports of every compose project running on the
 // host, from its containers' labels, and the values in its current release
-// (the target.env and .env next to its compose file).
+// (the target.env and .env next to its compose file), a project user's
+// aside (ImportState.Door).
 func (h Host) ImportStates() []ImportState {
 	var states []ImportState
 	for _, project := range h.Projects() {
 		imports := map[string]Import{}
-		dir := ""
+		dir, doored := "", false
 		for _, c := range h.Project(project) {
 			if d := c.Labels["com.docker.compose.project.working_dir"]; d != "" {
 				dir = d
+			}
+			if c.Labels[door.DoorLabel] != "" {
+				doored = true
 			}
 			for k, v := range c.Labels {
 				if !strings.HasPrefix(k, ImportPrefix) {
@@ -491,6 +499,10 @@ func (h Host) ImportStates() []ImportState {
 		if len(imports) == 0 {
 			continue
 		}
+		if doored {
+			// That label is the project user's word, and its files are in its tree.
+			dir = ""
+		}
 		set, imported, released := ReleaseEnv(dir)
 		vars := make([]string, 0, len(imports))
 		for v := range imports {
@@ -498,7 +510,7 @@ func (h Host) ImportStates() []ImportState {
 		}
 		sort.Strings(vars)
 		for _, v := range vars {
-			s := ImportState{Project: project, Import: imports[v], Released: released}
+			s := ImportState{Project: project, Import: imports[v], Released: released, Door: doored}
 			if val, ok := imported[v]; ok {
 				s.Release, s.Imported = val, true
 			} else if val, ok := set[v]; ok {

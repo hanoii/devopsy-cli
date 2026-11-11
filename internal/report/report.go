@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"unicode/utf8"
 )
 
 // Level is how much a line matters: what Paint colors it, and whether
@@ -186,8 +187,13 @@ func Lines(l Level, msg string, details []string, remedies []Remedy) []string {
 // shown, wherever it is in the line. An address already in quotes (a
 // word holding one, or between words opening and closing them) stays as
 // it is, and so do the punctuation after it and brackets of another kind
-// (a placeholder, @[<server>:]<env>).
+// (a placeholder, @[<server>:]<env>). A control character (a tab aside)
+// shows escaped, \x1b, never sent: a name another user chose (a project
+// user's directory or link, which --server-info shows an admin) would
+// otherwise move the cursor, rewrite what the line says, or reach the
+// terminal's own commands.
 func Copyable(line string) string {
+	line = escapeControls(line)
 	words := strings.Split(line, " ")
 	quoted := false
 	for i, w := range words {
@@ -269,3 +275,27 @@ func Remedies(err error) []Remedy {
 	}
 	return nil
 }
+
+// escapeControls is s with each control character but a tab (C0, DEL, C1), and each byte
+// that is no UTF-8 (an 8-bit terminal reads 0x9b as a control sequence), as \x<hex>.
+func escapeControls(s string) string {
+	if !strings.ContainsFunc(s, isControl) && utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && n == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case isControl(r):
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteString(s[i : i+n])
+		}
+		i += n
+	}
+	return b.String()
+}
+
+func isControl(r rune) bool { return r != '\t' && (r < 0x20 || r == 0x7f || r >= 0x80 && r < 0xa0) }

@@ -26,7 +26,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - `Plan.Starts` reads the labels from the project's own compose files (`ComposeConfig`), never a `-f` the command adds; never for a `--dry-run` where compose parses it (before the command, after it up to `--`, for `run` only before its service: `commandValueFlags`, `dryRun`); never in a release on a server (`cli.InRelease`), where `--mnt-owners` owns it, so a rollback's plain `up` never fails on labels `--mnt-owners restored` only warns about.
 - Locally, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
 - No owners are fixed for a stream's import (it writes as the service's user), restarts or reboots (owners persist), and no flag fixes owners: a release does it.
-- The owners in copies are a named feature, `mnt-owner` (internals/releases.md for what `childNeeds` carries), found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
+- The owners in copies are a named feature, `mnt-owner` found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
 
 ## The mounts check
 
@@ -59,7 +59,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 
 ## The util image
 
-- `UtilImage` (`devopsy-util:4`, built on each host from `UtilDockerfile`, `alpine:3` with rsync, GNU tar, find, chown, zstd and setfacl) runs every step on the data as root: the owners, a sync's rsync, `--export`'s and `--import`'s tars, a snapshot's tars and `--destroy`'s emptying of `mnt`, so owners and modes survive and the deploy user's permissions do not matter.
+- `UtilImage` (`devopsy.internal/util:5`, built on each host from `UtilDockerfile`, `alpine:3` with rsync, GNU tar, find, chown, zstd and setfacl) runs every step on the data as root: the owners, a sync's rsync, `--export`'s and `--import`'s tars, a snapshot's tars and `--destroy`'s emptying of `mnt`, so owners and modes survive and the deploy user's permissions do not matter.
 - `ensureUtilImage` readies it before every use (the scripts through the hidden `--util-image`, a feature), built when missing and built again once older than `UtilImageMaxAge` (a week), `build --pull --no-cache`: it runs as root on the data and serves rsync across servers, so `alpine:3`'s patches must reach it.
 - The image a rebuild replaced is removed without `-f`, so a container still running it keeps it.
 - A rebuild that fails warns and goes on with the image there, since a registry out of reach must never stop a sync, an import or `--destroy`; a missing one that fails to build fails.
@@ -70,6 +70,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 ## devopsy's containers
 
 - Every container devopsy starts in `UtilImage` carries `devopsy.env=<compose name>`, the environment whose data it works on, and `devopsy.task=<task>`, what it does (`remote.ContainerLabels`, `container` in `cmd/devopsy/writers.go`), never a `devopsy.data*` label, which are the project's.
+- A container devopsy names is named `devopsy-<word>-<compose name>-<part>` (`newContainer`, the part what makes it unique while it runs: devopsy's pid, a sync's id), its compose name the one its label says: the door takes a name only of its project's own environments.
 - The tasks (`remote.TaskOwners` and the rest):
   - `owners`, a release's or a local command's owners' step;
   - `import`, an import's or a restore's extraction and its owners';

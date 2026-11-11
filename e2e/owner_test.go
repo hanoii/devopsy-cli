@@ -87,7 +87,7 @@ func TestOwnerSyncAcross(t *testing.T) {
 	if got := owner(t, srv, "ownsync/prod/shared/mnt/data/stamp"); got != "1000:1000" {
 		t.Fatalf("the parent's file is %s's", got)
 	}
-	out, code := op(t, dir, agent+" devopsy @dev --release")
+	out, code := op(t, dir, noAgent+" devopsy @dev --release")
 	stamp, _ := srv2(t, "cat ownsync/dev/shared/mnt/data/stamp")
 	if code != 0 || strings.TrimSpace(stamp) != "one" || srv2State(t, "ownsync", "dev", "data") != "running" {
 		t.Fatalf("dev's first release, syncing across servers (%d), stamp %q:\n%s", code, stamp, out)
@@ -134,7 +134,8 @@ func TestOwnerImport(t *testing.T) {
 	if h, _ := srv(t, "cat ownimport/dev/.devopsy-data-images"); !strings.Contains(h, "\tdata\timport\tbusybox:1.37\t") {
 		t.Errorf("dev's history:\n%s", h)
 	}
-	if c, _ := srv(t, "cat ownimport/dev/current/../devopsy-compose.yaml"); strings.Contains(c, "image:") {
+	// Pinned by its digest, as every pulled service is; a hold carries devopsy.held.
+	if c, _ := srv(t, "cat ownimport/dev/current/../devopsy-compose.yaml"); strings.Contains(c, "devopsy.held") {
 		t.Errorf("dev's data service is held:\n%s", c)
 	}
 }

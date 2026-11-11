@@ -43,7 +43,9 @@ What moves is what the labels say ([Data labels](data.md#data-labels)):
   mounting it sees the new content. Files that a running service removes
   during the copy (rsync's "vanished" files, its exit 24) are a notice,
   not a failure, and the rest is copied. An entry missing on the parent
-  is skipped with a message, and the child's is left as it is.
+  is skipped with a message, and the child's is left as it is. So is an
+  entry or a volume the child's labels do not name (its release mounts
+  another): a sync copies only what both sides name.
 - A `custom` service's data is streamed. The parent's `export <service>`
   writes into a file in the child's directory
   (`.devopsy-sync.stream.<service>.<sync id>`). Only once the export has
@@ -69,6 +71,9 @@ services, and refuses when:
   `volumes` on the child means a copy while it runs is wanted.
 - a service the parent streams is not `custom` on the child, or one the
   child streams is copied as files (`volumes`) on the parent.
+- an entry the parent copies is of another kind on the child (a file
+  where the parent's is a directory, or a link). `--reset` empties the
+  child's entries first, so it takes such an entry.
 
 The child then starts its services again; nothing was copied.
 
@@ -156,64 +161,78 @@ them back together.
 
 ## How the data travels
 
-The rsync runs as root in `devopsy-util`, devopsy's image (alpine 3
+The rsync runs as root in `devopsy.internal/util`, devopsy's image (alpine 3
 with rsync and GNU tar, find and chown), so ownership and the deploy
 user's permissions do not matter. The image is built on each server the
 first time it is needed. Wherever it is used, an image a week old is
 built again with its base pulled, so what runs as root on your data gets
 alpine's fixes. A rebuild that fails (the registry out of reach) warns
-and goes on with the image already there. It replaced `devopsy-rsync`,
-`devopsy-util:1` and `:2`, which `docker image rm devopsy-rsync:2
-devopsy-util:1 devopsy-util:2` removes.
+and goes on with the image already there. It replaced `devopsy-rsync` and
+`devopsy-util:1` to `:4`, which `docker image rm devopsy-rsync:2
+devopsy-util:1 devopsy-util:2 devopsy-util:3 devopsy-util:4` removes.
 
 On one server, a single container copies between the two directories,
 without SSH, and a stream is written straight into the child's
-directory.
+directory. Two addresses are one server when ssh resolves them to the
+same user, host name and port. They are also one server when they log
+in as the same user and a marker devopsy writes on the parent's server,
+with random content, reads back the same through the child's address.
+So an environment addressed by a host name and another by the server's
+IP address count as one server.
 
-Across servers, the parent's server starts an rsync daemon (read-only,
-serving only the entries being copied, on its loopback only, with a
-password made for that sync) and reaches the child's server over SSH
-through a reverse forward. Your SSH agent is forwarded for that session
-only, and never on to the child. A stream also goes to the child's file through an SSH session from the
-parent's server. Data goes from server to server, never through your
-machine.
+Across servers, the parent's server starts an rsync daemon for the
+copy. It is read-only, serves only the entries being copied, and has
+no network. For each entry and volume, the parent's server opens an SSH
+session to the child's, and the child's rsync talks to the daemon over
+that session itself: no port is opened on either server, and the
+child's rsync has no network either. A stream is written to a file on
+the child's server over a session of its own. Data goes from server to
+server, never through your machine.
+
+The parent's server connects with a key made for that sync, never with
+your SSH agent ([CI](servers.md#ci)):
+
+- devopsy makes the key pair on your machine for each sync and keeps it
+  in memory. Once the child's side is ready, it authorizes the public
+  half. The parent's side receives the private half through its SSH
+  session's input, never on a command line, and keeps it in a file of
+  its own until the push ends.
+- On the child, the key runs only devopsy's command for that sync, and
+  only while the sync is open there: no shell, no terminal, no agent,
+  and no forwarding of any kind. The child builds every step from its
+  own release and labels: the parent picks which of the sync's steps to
+  run, only for names in the child's labels, and says which entries are
+  files, which an entry the child has already decides. The key is
+  removed once the child's side has the sync's result, and expires
+  within two days in any case.
+- The child's host keys come from the child's side too, over your own
+  session, so the parent's first connection checks the child's host key
+  instead of accepting whatever it is offered. A child whose `/etc/ssh`
+  holds no `ssh_host_*_key.pub` is refused before anything stops.
+- Whoever runs as the parent's user during a sync can read that key. It
+  can only run that sync's steps on the child, and only until the sync
+  ends.
 
 The sync's SSH sessions, like every session devopsy opens, send
 keepalives every 15 seconds, so a firewall does not drop a quiet copy.
-The parent gives up within 30 seconds on a child it cannot reach, or
-that refuses its key, instead of keeping its services stopped for
+If the child cannot be reached or refuses the key, the parent gives up
+within 30 seconds instead of keeping its own services stopped for
 minutes.
 
-Across servers:
+A sync across servers needs:
 
-- An agent must run where devopsy runs, with keys both servers accept,
-  since the parent's server reaches the child's through it. Before
-  anything starts, devopsy checks that the agent has keys, though not
-  which ones. In CI, use `eval $(ssh-agent); ssh-add` with the key the
-  servers accept, instead of `ssh -i`.
-- The parent's server can use every key in that agent for the session,
-  not only the child's. For example, with `prod` the parent of
-  `staging`, and `staging` the parent of `pr-*`, a sync of `pr-12`
-  forwards the agent to staging's server, prod's key included. When
-  servers trust each other less than that, load only the keys the sync
-  needs, or constrain them to their path (OpenSSH 8.9 or later, with
-  hosts written as in `known_hosts`):
-
-  ```sh
-  ssh-add -h vm1 ~/.ssh/vm1                # the parent's server, from your machine only
-  ssh-add -h vm2 -h 'vm1>vm2' ~/.ssh/vm2   # the child's: from your machine and from vm1
-  ```
-
-- The child's server must be reachable from the parent's as `ssh -G`
-  resolves it locally (user, hostname, port; its host key is accepted on
-  first use). A host behind a `ProxyCommand` or `ProxyJump` is refused,
-  since a relay through your machine is not supported.
-- A CI key needs `restrict,agent-forwarding,port-forwarding` in the
-  deploy user's `authorized_keys` on both servers, which is what
-  `--ssh-keys add --restricted` writes: agent forwarding for the
-  parent's session, port forwarding for the reverse forward to the
-  child's. A plain `restrict` refuses both, and devopsy says which one
-  failed.
+- The child's server reachable from the parent's at the user, hostname
+  and port `ssh -G` gives on your machine. A host behind a
+  `ProxyCommand` or `ProxyJump` is refused, since a relay through your
+  machine is not supported. Two users on one machine count as two
+  servers here.
+- The child's sshd reading `expiry-time` in a key's options (OpenSSH
+  7.7 or later).
+- Both sides project users ([Project users](project-users.md)), or neither: a
+  project user would otherwise drive a copy the deploy user runs, or
+  the other way round. devopsy refuses before anything stops, and
+  `--export` piped into `--import` moves a service's data across through
+  your machine instead.
 
 ## When a sync fails
 
@@ -408,3 +427,49 @@ which only `inherit:` copies, key by key.
 On the parent's own server, its instance and project files are already
 the child's, so the child gets only the parent's `parent.env`, down a
 chain.
+
+## Previews
+
+A preview (for example one environment for each pull request) runs
+code nobody has reviewed yet. Keep previews on a server of their own,
+away from production, and release the project as a project user on
+both servers ([Project
+users](project-users.md)), since a sync
+goes between two project users or two deploy users. `--project-users
+add shop` makes `devopsy-shop` on each server, with its own keys there,
+and each address names it ([Targets](config.md#targets)).
+
+Let previews sync from a base environment on their own server, not
+from production. A preview whose parent is production would stop
+production's data services for each of its syncs, and production's
+server would connect to the preview's to copy into it. The base's
+parent is production, and you sync it yourself when you want newer
+data in it:
+
+```yaml
+environments:
+  prod: {}
+  base: {parent: prod}       # on the preview server, synced by you
+  "pr-*": {parent: base}     # @pr-12, @pr-feature, on the same server
+```
+
+`DEVOPSY_SERVER_PROD` names production's server, and
+`DEVOPSY_SERVER_BASE` and `DEVOPSY_SERVER_PR` the preview server, each
+with the project user (`devopsy-shop@vm2`).
+
+The base and its previews run as one user on their server, so a
+preview's code can read and change the base, its data and releases
+included. The base keeps previews' syncs off production's server, not
+the previews off the base: its next sync from production copies into
+whatever a preview left there.
+
+Previews get production's data, personal data included, unless the
+base's `finish` step cleans it ([Order](#order)). They also
+get its instance and project `.env` through the base's `parent.env`
+([A parent on another server](#a-parent-on-another-server)), every key
+of them, on the preview server: set a key on that server and the
+previews use your value, but the copy still holds production's. So a
+secret only production may know goes in production's `shared/.env`,
+never in its instance or project `.env`. Nothing gets `shared/.env`
+but what a parent's `inherit:` names, and a preview only if the base's
+`inherit:` names it again.

@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 // Policy is what the server says of one project user.
@@ -33,36 +35,81 @@ type Policy struct {
 	Joinable []string
 	// Roles are the roles the admin gave it.
 	Roles []string
-	// ReadAll, the admin's grant, lets it read every container and network: their
-	// environments and secrets included.
-	ReadAll bool
 	// ForbiddenIDs are host ids no container may run as: a container as a host
 	// user's uid is that user's to reach through /proc.
 	ForbiddenIDs []int
 	// Others are the server's other projects. Names are flat, so one whose name extends
 	// this one's would otherwise be this one's to reach: shop-eu's, for shop.
 	Others []string
+	// Images are the ids of images the project claimed (Action.Claims), the door's
+	// record in its space (ImagesFile).
+	Images []string
 }
+
+// ImagesFile is the door's record of a project user's claimed images, one id a line, in
+// its space: the deploy user's, never the project user's to write.
+func (p Policy) ImagesFile() string { return ImagesFileOf(p.Space, p.Project) }
 
 // OwnName says whether a compose name is this project's (<project>-...), and
 // no other project's whose name extends this one's.
 func (p Policy) OwnName(name string) bool {
 	// One word: this names a directory (Mnt).
-	if !strings.HasPrefix(name, p.Project+"-") || !wordOnly.MatchString(name) {
+	if !Extends(name, p.Project) || !Word.MatchString(name) {
 		return false
 	}
 	for _, other := range p.Others {
-		if len(other) > len(p.Project) && (name == other || strings.HasPrefix(name, other+"-")) {
+		if len(other) > len(p.Project) && (name == other || Extends(name, other)) {
 			return false
 		}
 	}
 	return true
 }
 
+// OwnVolume says whether name is a named volume of this project's as compose names one,
+// <compose name>_<key>: the one shape every volume a project makes has (a rendered file's
+// top volumes, the door's volume create), so a name of its own with no key is none.
+func (p Policy) OwnVolume(name string) bool {
+	for i := strings.Index(name, "_"); i > 0; i = next(name, i) {
+		if p.OwnName(name[:i]) && Word.MatchString(name[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// next is the index of the next _ in name after i, -1 without one.
+func next(name string, i int) int {
+	j := strings.Index(name[i+1:], "_")
+	if j < 0 {
+		return -1
+	}
+	return i + 1 + j
+}
+
+// Extends says whether name is under project's names, compose's flat <project>-<rest>: a
+// project's own compose name, or another project's whose name starts with it.
+func Extends(name, project string) bool { return strings.HasPrefix(name, project+"-") }
+
 // Mnt is the directory of a compose name's entries: every part of it is the
 // deploy user's, so a project user cannot replace an entry.
 func (p Policy) Mnt(name string) string {
 	return filepath.Join(p.Space, "mnt", name)
+}
+
+// MntPath reads a real path in the door's mnts, the one rule for what is one: a mnt of this
+// project's, <space>/mnt/<compose name> (entry ""), or one of its entries,
+// <space>/mnt/<compose name>/<entry>, the entry a Word. Anything else under the mnts (deeper,
+// another's, a name no Word) is none of them.
+func (p Policy) MntPath(real string) (name, entry string, ok bool) {
+	rest, in := strings.CutPrefix(real, filepath.Join(p.Space, "mnt")+"/")
+	if !in {
+		return "", "", false
+	}
+	name, entry, nested := strings.Cut(rest, "/")
+	if !p.OwnName(name) || nested && !Word.MatchString(entry) {
+		return "", "", false
+	}
+	return name, entry, true
 }
 
 // NameOf is the compose name of an environment at a real path in this user's
@@ -113,6 +160,9 @@ type Paths interface {
 	// Seal copies a path of the project's, by content, into the deploy user's
 	// space, and returns the copy's path.
 	Seal(path string) (string, error)
+	// Within refuses a path rel under a sealed copy root that crosses a link on its
+	// way, or is one: a copy keeps the links it holds, as a bind needs.
+	Within(root, rel string) error
 }
 
 // Refusal is a request the door turns down.
@@ -140,7 +190,8 @@ var serviceKeys = []string{
 // buildKeys are what a build may hold: its client reads the context with the
 // deploy user's rights. A secret or an ssh agent would be that user's.
 // Labels go on the image and from it on every container, past what reads a service's.
-var buildKeys = []string{"args", "context", "dockerfile", "no_cache", "pull", "target"}
+// additional_contexts only as another service's build of the same file (checkBuild).
+var buildKeys = []string{"additional_contexts", "args", "context", "dockerfile", "no_cache", "pull", "target"}
 
 var numericUser = regexp.MustCompile(`^(\d+):(\d+)$`)
 
@@ -231,7 +282,9 @@ func checkTopVolumes(file map[string]any, name string, fail func(string, ...any)
 	for _, key := range sortedKeys(volumes) {
 		v, _ := volumes[key].(map[string]any)
 		n, _ := v["name"].(string)
-		if unknownKey(v, topVolumeKeys) != "" || !strings.HasPrefix(n, name+"_") {
+		labels, _ := v["labels"].(map[string]any)
+		reserved := slices.ContainsFunc(sortedKeys(labels), reservedVolumeLabel)
+		if unknownKey(v, topVolumeKeys) != "" || !strings.HasPrefix(n, name+"_") || reserved {
 			fail("volume %s: not the project's plain volume", key)
 		}
 	}
@@ -242,6 +295,14 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 	for _, key := range sortedKeys(networks) {
 		n, _ := networks[key].(map[string]any)
 		nm, _ := n["name"].(string)
+		if k := notBool(n, "external", "internal", "attachable", "enable_ipv6"); k != "" {
+			fail("network %s: %s must be true or false", key, k)
+			continue
+		}
+		// Compose's and devopsy's labels are theirs to set, as on a volume.
+		if labels, _ := n["labels"].(map[string]any); slices.ContainsFunc(sortedKeys(labels), reservedVolumeLabel) {
+			fail("network %s: a label of compose's or devopsy's", key)
+		}
 		if truthy(n["external"]) {
 			if !slices.Contains(p.Joinable, nm) {
 				fail("network %s: another's: %s", key, nm)
@@ -250,7 +311,8 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 		}
 		driver, _ := n["driver"].(string)
 		ipam, _ := n["ipam"].(map[string]any)
-		if !strings.HasPrefix(nm, name+"_") || unknownKey(n, topNetworkKeys) != "" || len(ipam) > 0 || (driver != "" && driver != "bridge") {
+		// No IPv6 of its own either: fewer paths across the server to keep shut.
+		if !strings.HasPrefix(nm, name+"_") || unknownKey(n, topNetworkKeys) != "" || len(ipam) > 0 || (driver != "" && driver != "bridge") || truthy(n["enable_ipv6"]) {
 			fail("network %s: not the project's plain network: %s", key, nm)
 		}
 	}
@@ -279,22 +341,27 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	case b == nil:
 	case verb == "build":
 		block, _ := b.(map[string]any)
-		checkBuild(svc, block, p, paths, fail)
-		// A build writes the tag it names, in the server's one image store.
-		if image, _ := s["image"].(string); image != "" {
-			repo, tag, _ := strings.Cut(image, ":")
-			if !p.OwnName(repo) || strings.HasPrefix(tag, "devopsy-") {
-				fail("%s: build: an image not this project's: %s", svc, image)
-			}
+		services, _ := file["services"].(map[string]any)
+		checkBuild(svc, block, services, p, paths, fail)
+		// A build writes devopsy's name for it in the server's one image store, whatever
+		// image: says: under a host no registry serves, so no name a project writes is one
+		// a registry's pull writes too, or another project reads. Devopsy's own file may name
+		// its release's bookmark of that name, which a start then runs: a build by hand lands
+		// there, as any project's does.
+		if image, _ := s["image"].(string); !p.ownHold(image) || images.RepoOf(image) != images.DoorBuild(name, svc) {
+			s["image"] = images.DoorBuild(name, svc)
 		}
 	case verb == "pull":
-		// A pull has only to skip what is built: nothing of the block is read.
-		s["build"] = map[string]any{"context": "."}
+		// The door's pull reads only whether a service builds (PlanPull): nothing of the
+		// block is read, and no compose runs it.
 	default:
-		// A build is its own request. Its image keeps compose's name.
+		// A build is its own request. Its image is the build's name, unless devopsy's own
+		// file holds the service on a pin (image mode's pull, a pulled image held) or on a
+		// name of this project's own (a hold, another environment's build).
 		delete(s, "build")
-		if s["image"] == nil {
-			s["image"] = name + "-" + svc
+		image, _ := s["image"].(string)
+		if !images.Pinned(image) && !p.OwnRef(image) {
+			s["image"] = images.DoorBuild(name, svc)
 		}
 	}
 	for _, k := range sortedKeys(s) {
@@ -306,9 +373,20 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 	if image, ok := s["image"].(string); ok && strings.HasPrefix(image, "-") {
 		fail("%s: an image named like a flag: %s", svc, image)
 	}
+	// A pull writes each name in the server's one image store, as a claim does: never one a
+	// project alone writes (Claimable), checked for every service before the first claim. One
+	// of its own (a release's bookmark, a hold, its build's name: what devopsy's own file names
+	// for what it built) is no registry's to pull, and PlanPull leaves it out.
+	if image, _ := s["image"].(string); verb == "pull" && image != "" && !p.OwnRef(image) {
+		if err := p.Claimable(image); err != nil {
+			fail("%s: %s", svc, strings.TrimPrefix(err.Error(), "refused: "))
+		}
+	}
 	checkIdentity(svc, s, p, fail)
 	checkLimits(svc, s, fail)
-	if nm, _ := s["network_mode"].(string); nm != "" && nm != "none" && nm != "bridge" {
+	// Never Docker's default bridge, docker0: every service with it shares it, and talks to
+	// the others' ports there, under none of the project's names.
+	if nm, _ := s["network_mode"].(string); nm != "" && nm != "none" {
 		fail("%s: network_mode %s", svc, nm)
 	}
 	if len(list(s["ports"])) > 0 {
@@ -367,7 +445,17 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		}
 		switch t, _ := v["type"].(string); t {
 		case "bind":
-			checkBind(svc, name, v, p, paths, fail)
+			checkBind(svc, name, v, p, paths, StartsContainers(verb), fail)
+			// Docker never makes a bind's source: the door makes what it binds (an entry, a
+			// sealed copy) before compose runs, so a source gone in the meantime (a sealed copy
+			// pruned as another environment chose it) fails the start, never binds an empty
+			// directory of root's in its place.
+			opts, _ := v["bind"].(map[string]any)
+			if opts == nil {
+				opts = map[string]any{}
+			}
+			opts["create_host_path"] = false
+			v["bind"] = opts
 		case "volume", "tmpfs":
 		default:
 			fail("%s: a mount of type %s", svc, t)
@@ -419,19 +507,41 @@ func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...
 	}
 }
 
+// ProjectIDMin and ProjectIDMax bound the ids --project-users add gives a project user and
+// its group: no container runs as one (userRefused), so a project user made later never
+// takes the uid of a container already running, whose environment, root and descriptors its
+// processes would then read through /proc.
+const (
+	ProjectIDMin = 50000
+	ProjectIDMax = 59999
+)
+
+// EndUID is the real and saved uid the end of a project user's processes takes (cmd/devopsy's
+// endUIDKill), so that none of the user's processes may signal it: no container of the door's
+// runs as it, so the end's kill(-1), which reaches whatever runs as that uid too, takes nothing
+// of another project's.
+const EndUID = 2147483646
+
 // userRefused says why a container may not run as user, or nothing: a user is numbers
-// only, since a name is the image's to map (to 0, say), and never root or an id of the
-// host's (ForbiddenIDs), whose processes it would reach through /proc. One check for a
-// service's user: and for exec's -u.
+// only, since a name is the image's to map (to 0, say), never root, an id of the host's
+// (ForbiddenIDs), whose processes it would reach through /proc, or one of the project users'
+// range, a user's to come, and no larger than a uid can be. One check for a service's user:
+// and for exec's -u.
 func (p Policy) userRefused(user string) string {
 	m := numericUser.FindStringSubmatch(user)
 	if m == nil {
 		return fmt.Sprintf(`%q: <uid>:<gid> in numbers, for example "10001:10001"`, user)
 	}
-	uid, _ := strconv.Atoi(m[1])
-	gid, _ := strconv.Atoi(m[2])
-	if uid == 0 || gid == 0 || slices.Contains(p.ForbiddenIDs, uid) || slices.Contains(p.ForbiddenIDs, gid) {
-		return user + ": a host id"
+	for _, s := range m[1:] {
+		id, err := strconv.Atoi(s)
+		switch {
+		case err != nil || id > 2147483647:
+			return user + ": an id past what a uid can be"
+		case id == 0 || id == EndUID || slices.Contains(p.ForbiddenIDs, id):
+			return user + ": a host id"
+		case id >= ProjectIDMin && id <= ProjectIDMax:
+			return fmt.Sprintf("%s: in %d to %d, the project users' ids", user, ProjectIDMin, ProjectIDMax)
+		}
 	}
 	return ""
 }
@@ -439,7 +549,7 @@ func (p Policy) userRefused(user string) string {
 func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	labels, _ := s["labels"].(map[string]any)
 	for _, k := range sortedKeys(labels) {
-		if strings.HasPrefix(k, "com.docker.compose.") || k == "devopsy.env" || k == "devopsy.task" {
+		if strings.HasPrefix(k, "com.docker.compose.") || k == envLabel || k == taskLabel || k == DoorLabel {
 			fail("%s: label %s", svc, k)
 		}
 		// A role is the admin's to give: others import from whoever claims it.
@@ -455,14 +565,32 @@ func checkLabels(svc string, s map[string]any, p Policy, fail func(string, ...an
 func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	networks, _ := file["networks"].(map[string]any)
 	nets, _ := s["networks"].(map[string]any)
-	if _, ok := s["networks"]; !ok && s["network_mode"] == nil {
-		nets = map[string]any{"default": nil} // compose's own, unless the file makes it shared
+	// No networks of its own, the key absent, empty or null: compose puts it on its default,
+	// unless the file makes that one shared. The key's content counts, never its presence.
+	if len(nets) == 0 && s["network_mode"] == nil {
+		nets = map[string]any{"default": nil}
 	}
 	for _, net := range sortedKeys(nets) {
 		top, _ := networks[net].(map[string]any)
 		opts, _ := nets[net].(map[string]any)
+		// Every name a container answers for on a shared network is one of the project's: its
+		// service's (compose's alias), no alias, and its hostname, which Docker's DNS answers
+		// for there too (with its domainname, a name of no one's rule).
 		if truthy(top["external"]) && !p.OwnName(svc) {
 			fail("%s: on the shared network %s, a service is named %s-<name>: compose answers for its name there", svc, net, p.Project)
+		}
+		// Lowercase, as Docker's DNS reads any case alike and OwnName does not.
+		if h, ok := s["hostname"]; truthy(top["external"]) && h != nil {
+			name, _ := h.(string)
+			if !ok || name == "" || strings.ToLower(name) != name || !p.OwnName(name) {
+				fail("%s: on the shared network %s, its hostname %v is no name of %s's: Docker answers for it there", svc, net, h, p.Project)
+			}
+		}
+		if truthy(top["external"]) && strings.ToLower(svc) != svc {
+			fail("%s: on the shared network %s, a service's name in lowercase: Docker answers for it in any case", svc, net)
+		}
+		if truthy(top["external"]) && s["domainname"] != nil {
+			fail("%s: a domainname on the shared network %s", svc, net)
 		}
 		if k := unknownKey(opts, netKeys); k != "" {
 			fail("%s: network %s: %s", svc, net, k)
@@ -477,11 +605,19 @@ func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, f
 	}
 }
 
+// StartsContainers says whether verb makes containers (up, create, run), the only verbs whose
+// file's binds the daemon binds, and whose images and vets the door checks before compose.
+func StartsContainers(verb string) bool {
+	return verb == "up" || verb == "create" || verb == "run"
+}
+
 // checkBind allows an entry of this compose name, or a read-only part of the
 // project's tree, and leaves in the file a path with no part the project user
 // can change: the daemon resolves a bind at each start, so a link swapped in
-// later would otherwise take a restart anywhere.
-func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
+// later would otherwise take a restart anywhere. The read-only part is sealed only when
+// the verb makes containers (seal): any other binds nothing, and a copy for it would be a
+// read, an extract and a hash for nothing; its path is checked all the same.
+func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, seal bool, fail func(string, ...any)) {
 	src, _ := v["source"].(string)
 	real, err := paths.Real(src)
 	if err != nil {
@@ -493,11 +629,15 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 		fail("%s: a host path: %s", svc, src)
 		return
 	}
-	if filepath.Dir(real) == p.Mnt(name) {
+	if n, entry, ok := p.MntPath(real); ok && n == name && entry != "" {
 		v["source"] = real
 		return
 	}
 	if p.InTree(real) && truthy(v["read_only"]) {
+		if !seal {
+			v["source"] = real
+			return
+		}
 		sealed, err := paths.Seal(real)
 		if err != nil {
 			fail("%s: sealing %s: %v", svc, src, err)
@@ -509,12 +649,13 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 	fail("%s: a host path: %s: a bind is an entry of mnt (./mnt/<name>), or read-only in the release", svc, src)
 }
 
-func checkBuild(svc string, b map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
+func checkBuild(svc string, b map[string]any, services map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
 	for _, k := range sortedKeys(b) {
 		if !slices.Contains(buildKeys, k) {
 			fail("%s: build: %s", svc, k)
 		}
 	}
+	checkContexts(svc, b["additional_contexts"], services, fail)
 	ctx, _ := b["context"].(string)
 	real, err := paths.Real(ctx)
 	if err != nil {
@@ -543,8 +684,62 @@ func checkBuild(svc string, b map[string]any, p Policy, paths Paths, fail func(s
 		fail("%s: sealing %s: %v", svc, ctx, err)
 		return
 	}
+	// What compose's client opens in the sealed copy as the deploy user, the Dockerfile and
+	// its ignore files: a directory on the way that became a link after the check above (the
+	// copy is a tar the project user makes later) would read any file that user reads, its
+	// lines coming back in BuildKit's parse error.
+	rel := strings.TrimPrefix(df, real+"/")
+	for _, f := range []string{rel, ".dockerignore", rel + ".dockerignore"} {
+		if err := paths.Within(sealed, f); err != nil {
+			fail("%s: build: %s in its sealed context: %v", svc, f, err)
+			return
+		}
+	}
 	b["context"] = sealed
-	b["dockerfile"] = strings.TrimPrefix(df, real+"/")
+	b["dockerfile"] = rel
+}
+
+// checkContexts takes a build's additional_contexts only as another service of the same file
+// that builds (service:<name>), compose's way to build on that build, which runs on the
+// project's own builder from its own release, under the project's own name for it: never a
+// path (the client reads it with the deploy user's rights, outside the sealed context), an
+// image (docker-image://, which a project's builder fetches from a registry with its logins,
+// past a claim), a URL or another form compose adds later.
+func checkContexts(svc string, v any, services map[string]any, fail func(string, ...any)) {
+	if v == nil {
+		return
+	}
+	contexts, ok := v.(map[string]any)
+	if !ok {
+		fail("%s: build: additional_contexts must be a map", svc)
+		return
+	}
+	for _, name := range sortedKeys(contexts) {
+		value, _ := contexts[name].(string)
+		other, isService := strings.CutPrefix(value, "service:")
+		target, _ := services[other].(map[string]any)
+		switch {
+		case !Word.MatchString(name):
+			fail("%s: build: additional_contexts: a name not one word: %q", svc, name)
+		case !isService:
+			fail("%s: build: additional_contexts: %s: only another service's build (service:<name>): %q", svc, name, value)
+		case other == svc || target == nil || target["build"] == nil:
+			fail("%s: build: additional_contexts: %s: no other service of this file that builds: %q", svc, name, value)
+		}
+	}
+}
+
+// HasContexts says whether a file's build holds additional_contexts (checkContexts): the
+// door's side checks that the compose it runs reads them as CheckFile does.
+func HasContexts(file map[string]any) bool {
+	services, _ := file["services"].(map[string]any)
+	for _, sv := range services {
+		s, _ := sv.(map[string]any)
+		if b, ok := s["build"].(map[string]any); ok && b["additional_contexts"] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -578,6 +773,20 @@ func isMap(v any) bool {
 func isList(v any) bool {
 	_, ok := v.([]any)
 	return ok
+}
+
+// notBool is the first of keys m holds as anything but a boolean. Compose reads a word for one
+// too ("true", "yes", "on"), which truthy reads as false: a key the rules read so is refused
+// in any other form.
+func notBool(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			if _, b := v.(bool); !b {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 func truthy(v any) bool {

@@ -558,6 +558,66 @@ func TestDataRelease(t *testing.T) {
 	}
 }
 
+// A release's run step, and every up after it (a plain one, a reload's,
+// a rollback's), runs the image the release fetched, whatever its name
+// holds by then: a name is anyone's on the server to move (a project
+// user's build of a Docker Hub name, mongo's mongo-express:1, outside
+// this environment's locks), so ComposeFile pins each pulled service to
+// the digest its listing records, a rollback's file too, and a landing
+// (derive) keeps the pin as it is, never taking it for an own image held
+// by a bookmark.
+func TestReleaseRunsWhatItFetched(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, appSvc, db118)
+	if err != nil || m.runs("database") != "I1" {
+		m.fail("the control, r1 (%v): %s", err, m.runs("database"))
+	}
+	// Another project's build lands on the name, with a registry digest of its own, as
+	// Docker's containerd store gives built images: a digest tells no pulled image apart.
+	swap := func() {
+		d.images["X1"] = true
+		d.names["mariadb:11.8"] = "X1"
+		d.digests["X1"] = []string{"mariadb@X1"}
+	}
+	swap()
+	m.up()
+	if m.runs("database") != "I1" || len(d.outside) != 0 {
+		m.fail("a plain up after the name moved runs %s, not I1 the release fetched (pulled by the up: %v)", m.runs("database"), d.outside)
+	}
+	// A copy landing (derive) sees the pin and leaves it: a pulled service's image: is no
+	// own image by a bookmark.
+	before, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile))
+	if err := m.e.set.derive(m.base(), m.e.rel(r1), map[string]Service{"app": appSvc, "database": db118}, false); err != nil {
+		m.fail("derive: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile))
+	if imgs, _, held := composeFacts(m.e.rel(r1)); string(after) != string(before) || held["database"] != "" || isBookmark(imgs["database"]) {
+		m.fail("a landing changed the pin:\n%s\nwas:\n%s", after, before)
+	}
+	// A rollback takes what the name holds at the time, under the lock (a floating tag
+	// goes forward), and pins that: the next up runs it whatever the name holds then.
+	d.names["mariadb:11.8"] = "I1"
+	d.publish("mariadb:11.8", "I2")
+	if _, err := m.release(false, appSvc, db118); err != nil || m.runs("database") != "I2" {
+		m.fail("r2 (%v): %s", err, m.runs("database"))
+	}
+	if err := m.rollback(r1, false); err != nil || m.runs("database") != "I2" {
+		m.fail("the rollback (%v): %s", err, m.runs("database"))
+	}
+	if imgs, _, _ := composeFacts(m.e.rel(r1)); imgs["database"] != "mariadb:11.8@I2" {
+		m.fail("the rollback's pin: %q", imgs["database"])
+	}
+	swap()
+	m.up()
+	if m.runs("database") != "I2" || len(d.outside) != 0 {
+		m.fail("an up after the rollback, the name moved, runs %s, not I2 (pulled by the up: %v)", m.runs("database"), d.outside)
+	}
+}
+
 // A rollback is checked as a release is: within a version and a tag it
 // goes, a floating tag forward; to a lower version it is refused before
 // any pull (nothing changes), naming the release that fixes forward, the
@@ -1007,7 +1067,7 @@ func TestDataLastResortUnholds(t *testing.T) {
 		m.fail("the last resort: %v", err)
 	}
 	imgs, labels, held := composeFacts(m.e.rel(r1))
-	if imgs["database"] != "" || held["database"] != "" || labels["database"] != "mariadb@I1" || !strings.Contains(out.String(), "database runs "+r1+"'s own image again") {
+	if imgs["database"] != "mariadb:11.8@I1" || held["database"] != "" || labels["database"] != "mariadb@I1" || !strings.Contains(out.String(), "database runs "+r1+"'s own image again") {
 		m.fail("devopsy's compose file: images %v, labels %v, held %v", imgs, labels, held)
 	}
 	m.cur = r1
@@ -1077,7 +1137,7 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	s2, _ := p.failRun(false, builtDB("app-stage", "12.1"))
 	built, _ := match(readList(p.e.rel(s2)), entry{Service: "database"})
 	imgs, _, _ = composeFacts(p.e.rel(s1))
-	if repoOf(imgs["database"]) != "app-stage-database" || !isBookmark(imgs["database"]) || d.names["mariadb:11.8"] != "I1" || p.runs("database") != built.ID {
+	if RepoOf(imgs["database"]) != "app-stage-database" || !isBookmark(imgs["database"]) || d.names["mariadb:11.8"] != "I1" || p.runs("database") != built.ID {
 		p.fail("built over pulled: image %q, mariadb:11.8 %s, runs %s (want %s)", imgs["database"], d.names["mariadb:11.8"], p.runs("database"), built.ID)
 	}
 	if e, _ := match(readList(p.e.rel(s1)), entry{Service: "database"}); e.ID != built.ID || e.Ref != "app-stage-database" {
@@ -1292,8 +1352,10 @@ func TestRemoveHistory(t *testing.T) {
 	}
 }
 
-// --status names a service a plain up moved off the image its activation
-// gave it; nothing is held by digest any more on a release.
+// --status names a service running another image than its activation gave
+// it: a plain up runs the pin whatever the name holds since, so only
+// something outside devopsy's file does that (an override's image:, a
+// container made by hand under the label); nothing is held by digest.
 func TestStatusLines(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1305,9 +1367,17 @@ func TestStatusLines(t *testing.T) {
 	d.publish("caddy:2-alpine", "C2")
 	d.pull("caddy:2-alpine", "C2")
 	stage.up()
+	if got := statusTexts(StatusLines(d, "app-stage", stage.e.rel(stage.cur))); len(got) != 0 {
+		t.Errorf("an up after the name moved: %v", got)
+	}
+	for i, c := range d.containers {
+		if c.service == "alwaysup" {
+			d.containers[i].image = "C2"
+		}
+	}
 	lines := StatusLines(d, "app-stage", stage.e.rel(stage.cur))
 	got := statusTexts(lines)
-	want := []string{"alwaysup runs caddy@C2, not caddy@C1 its activation gave it: caddy:2-alpine moved since (a plain up follows names)"}
+	want := []string{"alwaysup runs caddy@C2, not caddy@C1 its activation gave it: something outside devopsy's compose file made it"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("status lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
@@ -1698,7 +1768,7 @@ func TestDataCopyDropsHold(t *testing.T) {
 		rel := m.e.rel(m.cur)
 		imgs, _, h := composeFacts(rel)
 		e, _ := match(readList(rel), entry{Service: "database"})
-		if m.runs("database") != "I1" || imgs["database"] != "" || h["database"] != "" || e.held() || e.ID != "I1" || e.DataVersion != "11.8" {
+		if m.runs("database") != "I1" || imgs["database"] != "mariadb:11.8@I1" || h["database"] != "" || e.held() || e.ID != "I1" || e.DataVersion != "11.8" {
 			m.fail("after %s: runs %s, compose %v %v, listing %+v", what, m.runs("database"), imgs, h, e)
 		}
 		if !strings.Contains(out.String(), "database runs "+m.cur+"'s own image again") {
@@ -3451,5 +3521,28 @@ func TestDoorRollbackRunsItsOwnBuild(t *testing.T) {
 	if got := m.runs("web"); got != own {
 		e, _ := match(readList(m.e.rel(r1)), entry{Service: "web"})
 		t.Errorf("the rollback to %s went through, lists web on %s, and web runs %s (the release it left ran %s)", r1, e.ID, got, left)
+	}
+}
+
+// A record fails on a build it cannot read, before the switch, whoever the project's user
+// is: for any other project a fetch tag missing fails it (TestRecordNeedsItsFetch), since
+// an own image runs by the bookmark its record puts.
+func TestDoorRecordNeedsItsBuild(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	web := Service{Name: "web", Ref: DoorBuild("app-prod", "web"), Build: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Door = true
+	id := m.e.release(web)
+	rel := m.e.rel(id)
+	if err := m.e.set.WriteFetch(rel); err != nil {
+		t.Fatal(err)
+	}
+	// The fetch built nothing the record can read.
+	err := m.e.set.Record(rel, "")
+	imgs, _, _ := composeFacts(rel)
+	if err == nil {
+		t.Errorf("a door project's record went through with no image of web: listed %+v, its file names %q", readList(rel), imgs["web"])
 	}
 }

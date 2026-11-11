@@ -139,7 +139,7 @@ func TestSyncRsyncEntries(t *testing.T) {
 		name, child, childSrv, env := "entries", server, srv, ""
 		if across {
 			secondServer(t)
-			name, child, childSrv, env = "entriesx", server2, srv2, agent+" "
+			name, child, childSrv, env = "entriesx", server2, srv2, noAgent+" "
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := project(t, name, map[string]string{

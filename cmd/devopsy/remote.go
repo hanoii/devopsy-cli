@@ -240,6 +240,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--ssh-keys":
 		return runSSHKeys(t, args[1:], color)
 
+	case "--project-users":
+		return runProjectUsers(t, args[1:])
+
 	case "--server-info":
 		return runServerInfo(t, args[1:])
 
@@ -566,7 +569,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 				} else if t.ParentErr != nil {
 					return failParent(t, color, args[0])
 				}
-				if job, err = syncPreflight(t, p, projectName, false); err != nil {
+				if job, err = syncPreflight(t, p, projectName, false, &cur); err != nil {
 					return failErr(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync"))
 				}
 				job.first, job.from, job.fromAddr = first, from != "", from

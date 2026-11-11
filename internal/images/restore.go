@@ -411,7 +411,7 @@ func shownEntry(e entry) string {
 	if e.Digest == "" {
 		return short(e.ID)
 	}
-	s := repoOf(e.Digest) + "@" + short(digestOf(e.Digest))
+	s := RepoOf(e.Digest) + "@" + short(digestOf(e.Digest))
 	if e.Version != "" {
 		s += " (" + e.Version + ")"
 	}

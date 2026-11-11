@@ -44,14 +44,14 @@ volumes:
 	}
 	put(srv, "volacross-prod_dbdata", "one")
 
-	out, code := op(t, dir, agent+" devopsy @dev --release")
+	out, code := op(t, dir, noAgent+" devopsy @dev --release")
 	labels, _ := srv2(t, "docker volume inspect -f '{{index .Labels \"com.docker.compose.project\"}} {{index .Labels \"com.docker.compose.volume\"}}' volacross-dev_dbdata")
 	if code != 0 || stamp() != "one" || strings.TrimSpace(labels) != "volacross-dev dbdata" || strings.Contains(out, "not created by Docker Compose") || !strings.Contains(out, "rsync volume dbdata") {
 		t.Fatalf("dev's first release across servers (%d), stamp %q, labels %q:\n%s", code, stamp(), labels, out)
 	}
 
 	put(srv, "volacross-prod_dbdata", "two")
-	if out, code := op(t, dir, agent+" devopsy @prod --export db | "+agent+" devopsy @dev --import db --yes"); code != 0 || stamp() != "two" {
+	if out, code := op(t, dir, noAgent+" devopsy @prod --export db | "+noAgent+" devopsy @dev --import db --yes"); code != 0 || stamp() != "two" {
 		t.Errorf("an export into an import (%d), stamp %q:\n%s", code, stamp(), out)
 	}
 
@@ -72,7 +72,7 @@ volumes:
 networks:
   older: {}
 EOF
-`+agent+` devopsy @dev --release-no-sync`); code != 0 {
+`+noAgent+` devopsy @dev --release-no-sync`); code != 0 {
 			t.Fatalf("dev's release (%d):\n%s", code, out)
 		}
 	}
@@ -84,7 +84,7 @@ EOF
 	}
 
 	put(srv, "volacross-prod_dbdata", "three")
-	out, code = op(t, dir, agent+" devopsy @dev --reset --yes")
+	out, code = op(t, dir, noAgent+" devopsy @dev --reset --yes")
 	if left, _ := srv2(t, older); strings.TrimSpace(left) != "" {
 		t.Errorf("the older release's volume or network left by a reset: %q", left)
 	}

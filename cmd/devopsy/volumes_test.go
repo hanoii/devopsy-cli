@@ -29,12 +29,12 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "pages\n" {
 		t.Fatalf("first release (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
-	id := regexp.MustCompile(`devopsy-sync-([0-9.a-f]+)-rsync-v0 `).FindStringSubmatch(docker)
+	id := regexp.MustCompile(`devopsy-sync-shop-dev-([0-9.a-f]+)-rsync-v0 `).FindStringSubmatch(docker)
 	if id == nil {
 		t.Fatalf("no rsync of the volume:\n%s", docker)
 	}
 	order := []string{"volume create --label com.docker.compose.project=shop-dev --label com.docker.compose.volume=dbdata shop-dev_dbdata", "shop-dev compose", "stop db",
-		"-rsync-v0 --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:4 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/dbdata/ /dst/dbdata/"}
+		"-rsync-v0 --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/dbdata/ /dst/dbdata/"}
 	if !strings.Contains(out, "devopsy: rsync volume dbdata\n") {
 		t.Errorf("the volume's copy not said:\n%s", out)
 	}
@@ -56,11 +56,11 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "newer\n" {
 		t.Fatalf("across servers (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
-	id = regexp.MustCompile(`devopsy-sync-([0-9.a-f]+)-receive `).FindStringSubmatch(docker)
+	id = regexp.MustCompile(`devopsy-sync-shop-dev-([0-9.a-f]+)-receive `).FindStringSubmatch(docker)
 	if id == nil {
 		t.Fatalf("across servers, no receive:\n%s", docker)
 	}
-	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " --network host -e RSYNC_PASSWORD -v shop-dev_dbdata:/vol/dbdata devopsy-util:4 rsync", "/dbdata/ /vol/dbdata/"} {
+	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " --network none -v shop-dev_dbdata:/vol/dbdata devopsy.internal/util:5 sh -c ", "devopsy::dbdata/ /vol/dbdata/"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("across servers, missing %q in:\n%s", want, docker)
 		}
@@ -104,7 +104,7 @@ func TestExportImportVolumes(t *testing.T) {
 
 	out, errs, code := s.runIO(env, nil, "--export", "db")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(errs, "exporting db: a tar of mnt/db, the volume dbdata") || !strings.Contains(docker, "/db,target=/x/db,readonly -v shop_dbdata:/x/dbdata:ro devopsy-util:4 sh -c ") || !strings.Contains(docker, " sh db dbdata\n") {
+	if code != 0 || !strings.Contains(errs, "exporting db: a tar of mnt/db, the volume dbdata") || !strings.Contains(docker, "/db,target=/x/db,readonly -v shop_dbdata:/x/dbdata:ro devopsy.internal/util:5 sh -c ") || !strings.Contains(docker, " sh db dbdata\n") {
 		t.Fatalf("--export (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
@@ -135,5 +135,28 @@ func TestExportImportVolumes(t *testing.T) {
 	}
 	if _, errs, code := s.runIO(env, tarOf(t, map[string]string{"dbdata": "a file\n"}), "--import", "db", "--yes"); code == 0 || !strings.Contains(errs, "the tar carries dbdata as a file, and it is the volume dbdata here: nothing imported") {
 		t.Errorf("a volume carried as a file (%d):\n%s", code, errs)
+	}
+}
+
+// A volume made for a copy with options (a share's, its password in them) is made by the
+// project's own compose, through Docker's API: on docker volume create's command line, which
+// every user of the server reads in /proc, its options would show. One with none is made as
+// compose would make it, by its name.
+func TestVolumeOptionsNeverOnACommandLine(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.labels(`FAKE_DB_VOLUME=dbdata FAKE_DB_VOLUME_OPTS='{"type":"cifs","o":"username=app,password=s3cret"}'`)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.log+".vol", "shop-prod_dbdata", "ibd"), "pages\n", 0o644)
+	out, code := s.run(nil, "@dev", "--release")
+	docker, _ := s.logs()
+	if code != 0 || readString(filepath.Join(s.log+".vol", "shop-dev_dbdata", "ibd")) != "pages\n" {
+		t.Fatalf("first release (%d):\n%s\n%s", code, out, docker)
+	}
+	if strings.Contains(docker, "s3cret") || strings.Contains(docker, "volume create") {
+		t.Errorf("a volume's options on a command line:\n%s", docker)
+	}
+	if !strings.Contains(docker, "create --no-build --no-recreate db") {
+		t.Errorf("the volume not made by compose, for the service that mounts it:\n%s", docker)
 	}
 }

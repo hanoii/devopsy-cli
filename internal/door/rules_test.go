@@ -9,7 +9,7 @@ import (
 )
 
 var testPolicy = Policy{
-	Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop",
+	Project: "shop", User: "devopsy-shop", UID: "1", Space: "/space", Tree: "/home/devopsy-shop/shop",
 	Joinable: []string{"traefik"}, ForbiddenIDs: []int{1000, 1001, 999},
 }
 
@@ -26,6 +26,8 @@ func (f *fakePaths) Real(path string) (string, error) {
 	}
 	return filepath.Clean(path), nil
 }
+
+func (f *fakePaths) Within(root, rel string) error { return nil }
 
 func (f *fakePaths) Seal(path string) (string, error) {
 	f.sealed = append(f.sealed, path)
@@ -65,6 +67,17 @@ func TestCheckFileTakesWhatTemplatesUse(t *testing.T) {
 	}
 }
 
+// The pull policies under which compose runs the image the door read, and no network at all.
+func TestCheckFileTakesWhatPullsNothingAtAStart(t *testing.T) {
+	t.Parallel()
+	for _, extra := range []string{`,"pull_policy":"missing"`, `,"pull_policy":"never"`, `,"pull_policy":"if_not_present"`, `,"network_mode":"none"`} {
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(extra)+`}}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Errorf("%s refused: %v", extra, errs)
+		}
+	}
+}
+
 // A rendered file escapes its `$` by doubling: what compose then makes of it is a `$`.
 func TestCheckFileTakesEscapedDollars(t *testing.T) {
 	t.Parallel()
@@ -96,6 +109,9 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a key nobody knows yet", svc(`,"new_in_compose_9":1`), "web: new_in_compose_9"},
 		{"the host's network", svc(`,"network_mode":"host"`), "network_mode host"},
 		{"another container's network", svc(`,"network_mode":"container:victim"`), "network_mode container:victim"},
+		// Docker's default bridge, docker0, which every service with it shares, its
+		// containers talking to each other's ports: none of the project's names.
+		{"the default bridge", svc(`,"network_mode":"bridge"`), "network_mode bridge"},
 		{"ports", svc(`,"ports":[{"target":80}]`), "web: ports"},
 		{"a capability", svc(`,"cap_add":["SYS_ADMIN"]`), "cap_add SYS_ADMIN"},
 		{"sysctls", svc(`,"sysctls":{"net.ipv4.ip_forward":"1"}`), "sysctls"},
@@ -105,6 +121,7 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a hook as root", svc(`,"post_start":[{"command":["x"],"user":"0"}]`), "hook may hold only"},
 		{"a compose label", svc(`,"labels":{"com.docker.compose.project":"other-prod"}`), "label com.docker.compose.project"},
 		{"devopsy's container label", svc(`,"labels":{"devopsy.env":"other-prod"}`), "label devopsy.env"},
+		{"the door's label", svc(`,"labels":{"devopsy.door":"devopsy-shop"}`), "label devopsy.door"},
 		{"a role not given", svc(`,"labels":{"devopsy.role":"proxy"}`), "the role proxy"},
 		{"a bind mount of type npipe", svc(`,"volumes":[{"type":"npipe","source":"x"}]`), "a mount of type npipe"},
 		{"a bind of the host", svc(`,"volumes":[{"type":"bind","source":"/","target":"/h"}]`), "a host path"},
@@ -122,7 +139,15 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a network's driver options on a service", svc(`,"networks":{"default":{"driver_opts":{"a":"b"}}}`), "network default: driver_opts"},
 		{"a mac address", svc(`,"networks":{"default":{"mac_address":"x"}}`), "network default: mac_address"},
 		{"a volume's labels and driver", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","driver":"x"}}}`, "volume v"},
+		// What compose and devopsy read of a volume is theirs, as on the door's volume create.
+		{"a volume labelled as compose's", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","labels":{"com.docker.compose.project":"other-prod"}}}}`, "volume v"},
+		{"a volume labelled as devopsy's", `{"name":"shop-prod","volumes":{"v":{"name":"shop-prod_v","labels":{"devopsy.data":"true"}}}}`, "volume v"},
+		// IPv6 a project's network does without: fewer paths across its server to keep shut.
+		{"a network with IPv6", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","enable_ipv6":true}}}`, "plain network"},
 		{"a network's address space", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","ipam":{"config":[{"subnet":"10.0.0.0/8"}]}}}}`, "plain network"},
+		// A bridge of another name than Docker's (br-+) is one the project users' firewall
+		// does not match: only the deploy user renames one.
+		{"a network's bridge renamed", `{"name":"shop-prod","networks":{"n":{"name":"shop-prod_n","driver_opts":{"com.docker.network.bridge.name":"eth9"}}}}`, "plain network"},
 		{"labels in another form", svc(`,"labels":"a=b"`), "labels must be a map"},
 		{"mounts in another form", svc(`,"volumes":{"a":"b"}`), "volumes must be a list"},
 		{"ports in another form", svc(`,"ports":"80:80"`), "ports must be a list"},
@@ -131,11 +156,16 @@ func TestCheckFileRefuses(t *testing.T) {
 		{"a variable in a key", `{"name":"shop-prod","services":{"${X}":{}}}`, "a variable"},
 		// A start runs the image the door read: compose pulling or building one then would run another.
 		{"a pull at every start", svc(`,"pull_policy":"always"`), "pull_policy always"},
+		{"a pull once a day", svc(`,"pull_policy":"daily"`), "pull_policy daily"},
 		{"a build at every start", svc(`,"pull_policy":"build"`), "pull_policy build"},
 		{"an alias on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"shop-web":` + safe(`,"networks":{"t":{"aliases":["victim"]}}`) + `}}`, "an alias on the shared network"},
 		// Compose makes a service's name an alias on each of its networks.
 		{"another's name on a shared network", `{"name":"shop-prod","networks":{"t":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{"t":null}`) + `}}`, "a service is named shop-<name>"},
 		{"another's name on a shared default", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(``) + `}}`, "a service is named shop-<name>"},
+		// No networks of its own, said as an empty map or none: compose puts it on default all
+		// the same, as with no key.
+		{"another's name on a shared default, networks empty", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":{}`) + `}}`, "a service is named shop-<name>"},
+		{"another's name on a shared default, networks null", `{"name":"shop-prod","networks":{"default":{"name":"traefik","external":true}},"services":{"traefik":` + safe(`,"networks":null`) + `}}`, "a service is named shop-<name>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,9 +178,10 @@ func TestCheckFileRefuses(t *testing.T) {
 	}
 }
 
-// BUG: checkLabels and carriesLabel read labels only as a map, but the file is the
-// caller's and compose also takes a list (confirmed: docker compose config turns such a
-// list into these labels). A role, devopsy's own labels and the vet's prefix go unread.
+// A service's labels in a list are checked as in a map: the file is the caller's, and
+// compose takes a list too (docker compose config turns it into these labels), where
+// checkLabels and carriesLabel would leave a role, devopsy's own labels and the vet's
+// prefix unread.
 func TestCheckFileLabelsInListForm(t *testing.T) {
 	t.Parallel()
 	for _, label := range []string{"devopsy.role=proxy", "devopsy.env=other-prod", "devopsy.task=owners"} {
@@ -161,10 +192,10 @@ func TestCheckFileLabelsInListForm(t *testing.T) {
 	}
 }
 
-// BUG: the door checks words and compose then interpolates them, the file being the
-// caller's with no `$$` guaranteed (confirmed: docker compose config gives this source as
-// /space/mnt/shop-prod/..). The daemon then binds /space/mnt, every project's entries,
-// and the container's uid is the caller's to choose.
+// A source compose would interpolate is refused: the door checks words and compose then
+// interpolates them, the file being the caller's with no `$$` guaranteed (docker compose
+// config gives this source as /space/mnt/shop-prod/..). The daemon would then bind
+// /space/mnt, every project's entries, and the container's uid is the caller's to choose.
 func TestCheckFileBindSurvivesInterpolation(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/${X:-..}","target":"/d"}]`)+`}}`)
@@ -193,6 +224,13 @@ func TestCheckFileIdentity(t *testing.T) {
 		{"no-new-privileges:true", `{"user":"10001:10001","security_opt":["no-new-privileges:true"]}`, false},
 		{"no user", `{"security_opt":["no-new-privileges"]}`, true},
 		{"root", `{"user":"0:0","security_opt":["no-new-privileges"]}`, true},
+		// A project user made later takes an id of that range, which no container holds.
+		{"a project user's range", `{"user":"50000:10001","security_opt":["no-new-privileges"]}`, true},
+		{"a project user's range, its group", `{"user":"10001:59999","security_opt":["no-new-privileges"]}`, true},
+		{"past a uid", `{"user":"99999999999999999999:1","security_opt":["no-new-privileges"]}`, true},
+		{"below the range", `{"user":"49999:60000","security_opt":["no-new-privileges"]}`, false},
+		// The end's own uid (EndUID), whose kill(-1) reaches what runs as it.
+		{"the end's uid", `{"user":"2147483646:10001","security_opt":["no-new-privileges"]}`, true},
 		{"root's group", `{"user":"10001:0","security_opt":["no-new-privileges"]}`, true},
 		{"a name, which an image's passwd can make root", `{"user":"app:app","security_opt":["no-new-privileges"]}`, true},
 		{"a uid alone, leaving the image's group", `{"user":"10001","security_opt":["no-new-privileges"]}`, true},
@@ -237,6 +275,19 @@ func TestCheckFilePinsBinds(t *testing.T) {
 	if len(paths.sealed) != 1 || paths.sealed[0] != confReal {
 		t.Errorf("sealed %v, want its real path", paths.sealed)
 	}
+	// A verb that makes no container seals nothing (a read, an extract and a hash for none),
+	// its paths checked all the same; one that does seals as up does.
+	for verb, seals := range map[string]bool{"ps": false, "logs": false, "exec": false, "down": false, "pull": false, "create": true, "run": true} {
+		paths := &fakePaths{links: map[string]string{through: entry, conf: confReal}}
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[
+		  {"type":"bind","source":"`+conf+`","target":"/c","read_only":true}]`)+`}}`)
+		if errs := CheckFile(file, testPolicy, verb, paths); len(errs) != 0 {
+			t.Fatalf("%s: %v", verb, errs)
+		}
+		if got := len(paths.sealed) == 1; got != seals {
+			t.Errorf("%s sealed %v", verb, paths.sealed)
+		}
+	}
 	// shared/mnt swapped for a link to another's entries.
 	paths = &fakePaths{links: map[string]string{through: "/space/mnt/other-prod/data"}}
 	file = parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"`+through+`","target":"/d"}]`)+`}}`)
@@ -270,19 +321,17 @@ func TestCheckFileBuild(t *testing.T) {
 	if s := service(file); s["build"] != nil {
 		t.Errorf("an up keeps the build: %v", s["build"])
 	}
+	// Nor a pull, which runs no compose: the door reads only that the service builds.
 	file = parse(t, build(`{"context":"/etc"}`))
 	if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) != 0 {
 		t.Fatal(errs)
-	}
-	if ctx := service(file)["build"].(map[string]any)["context"]; ctx != "." {
-		t.Errorf("a pull keeps the context %v", ctx)
 	}
 	tests := []struct{ name, block, want string }{
 		{"a context outside", `{"context":"/home/devopsy"}`, "a context outside"},
 		{"a Dockerfile outside", `{"context":"` + ctx + `","dockerfile":"../../../../../../home/devopsy/.ssh/id"}`, "a Dockerfile outside"},
 		{"ssh, the deploy user's agent", `{"context":"` + ctx + `","ssh":["default"]}`, "build: ssh"},
 		{"secrets", `{"context":"` + ctx + `","secrets":["k"]}`, "build: secrets"},
-		{"another context", `{"context":"` + ctx + `","additional_contexts":{"a":"/etc"}}`, "build: additional_contexts"},
+		{"another context, a path", `{"context":"` + ctx + `","additional_contexts":{"a":"/etc"}}`, "only another service's build"},
 		{"the host's network", `{"context":"` + ctx + `","network":"host"}`, "build: network"},
 		{"privileged", `{"context":"` + ctx + `","privileged":true}`, "build: privileged"},
 		{"an entitlement", `{"context":"` + ctx + `","entitlements":["network.host"]}`, "build: entitlements"},
@@ -295,16 +344,39 @@ func TestCheckFileBuild(t *testing.T) {
 			}
 		})
 	}
-	// A build writes the tag it names, in the one image store.
-	for _, image := range []string{"other-prod-app", "busybox:1.37", "shop-prod-app:devopsy-other-prod-1"} {
-		file = parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"],"build":{"context":"`+ctx+`"}}}}`)
-		if errs := CheckFile(file, testPolicy, "build", &fakePaths{}); !anyHolds(errs, "an image not this project's") {
-			t.Errorf("%s: %v", image, errs)
+	// A build writes devopsy's name for it, whatever image: says (a registry's included),
+	// so no name a project writes is one a registry serves; a start runs that name, unless
+	// devopsy's own file holds the service on a pin or a hold of its own.
+	named := func(image string) string {
+		return `{"name":"shop-prod","services":{"web":{"image":"` + image + `","user":"10001:10001","security_opt":["no-new-privileges"],"build":{"context":"` + ctx + `"}}}}`
+	}
+	for _, image := range []string{"", "mongo-express:1", "other-prod-app", "shop-prod-app:1", "shop-prod-app:devopsy-other-prod-1", "registry.example.com/shop/app:1"} {
+		for _, verb := range []string{"build", "up", "run", "down"} {
+			file = parse(t, named(image))
+			if errs := CheckFile(file, testPolicy, verb, &fakePaths{}); len(errs) != 0 {
+				t.Fatalf("%s %s: %v", verb, image, errs)
+			}
+			if got := service(file)["image"]; got != "devopsy.internal/shop-prod/web" {
+				t.Errorf("%s of image %q runs %v", verb, image, got)
+			}
 		}
 	}
-	file = parse(t, `{"name":"shop-prod","services":{"web":{"image":"shop-prod-app:1","user":"10001:10001","security_opt":["no-new-privileges"],"build":{"context":"`+ctx+`"}}}}`)
-	if errs := CheckFile(file, testPolicy, "build", &fakePaths{}); len(errs) != 0 {
-		t.Errorf("its own image: %v", errs)
+	for _, image := range []string{"registry.example.com/shop/app:1@sha256:abc", "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000", "devopsy.internal/shop-stage/web"} {
+		file = parse(t, named(image))
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Fatalf("%s: %v", image, errs)
+		}
+		if got := service(file)["image"]; got != image {
+			t.Errorf("a start held on %s runs %v", image, got)
+		}
+	}
+	// A pull fetches what a registry serves under image: (image mode's builds): never renamed.
+	file = parse(t, named("registry.example.com/shop/app:1"))
+	if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if got := service(file)["image"]; got != "registry.example.com/shop/app:1" {
+		t.Errorf("a pull renamed its image: %v", got)
 	}
 	// A context that is a link out of the tree.
 	paths := &fakePaths{links: map[string]string{ctx + "/ctx": "/home/devopsy"}}
@@ -322,6 +394,8 @@ func TestCheckVerb(t *testing.T) {
 		{"up -d --wait --remove-orphans", true},
 		// A start runs the image the door read: compose pulling one then would run another.
 		{"up --pull never web", true},
+		{"up --pull missing web", false},
+		{"create --pull=never", true},
 		{"up --pull always web", false},
 		{"up -d --pull=always", false},
 		{"create --pull always", false},
@@ -397,10 +471,10 @@ func TestNameOf(t *testing.T) {
 	}
 }
 
-// BUG: OwnName goes by a prefix and Mnt by filepath.Join, so a compose name holding `..`
-// is this project's and its mnt anywhere: CheckFile takes a bind of it, and the door's
-// `entries`, which runs on a file not yet checked, sets an ACL and makes a directory
-// there as the deploy user (TestDoorEntriesStayInItsMnt).
+// A compose name of this project's is one word: OwnName goes by a prefix and Mnt by
+// filepath.Join, so a name holding `..` would put its mnt anywhere. CheckFile would take a
+// bind of it, and the door's `entries`, which runs on a file not yet checked, would set an
+// ACL and make a directory there as the deploy user (TestDoorEntriesStayInItsMnt).
 func TestCheckFileNameIsOneWord(t *testing.T) {
 	t.Parallel()
 	name := "shop-x/../../../home/deploy/.docker"
@@ -413,10 +487,10 @@ func TestCheckFileNameIsOneWord(t *testing.T) {
 	}
 }
 
-// BUG: NameOf says nothing of Others, which OwnName leaves out: <tree>/eu-prod is the
-// compose name of the project shop-eu's prod, and the door's `mnt` then opens that
-// project's <space>/mnt/shop-eu-prod to this user by an ACL (closedDir), the rule
-// "closed to every other user" gone, and its data readable.
+// NameOf leaves out Others, as OwnName does: <tree>/eu-prod is the compose name of the
+// project shop-eu's prod, and the door's `mnt` would open that project's
+// <space>/mnt/shop-eu-prod to this user by an ACL (closedDir), no longer "closed to every
+// other user", its data readable.
 func TestNameOfLeavesLongerProjects(t *testing.T) {
 	t.Parallel()
 	p := testPolicy
@@ -428,15 +502,203 @@ func TestNameOfLeavesLongerProjects(t *testing.T) {
 	}
 }
 
-// BUG: checkLabels reads a service's labels only. A build's own go on the image and from
-// there on every container of it, as an image's LABEL does (confirmed: `docker inspect`
-// shows them in .Config.Labels), which is what imports read for a role and what a proxy
-// reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
+// A build takes another service's build of the same file as a context (compose's
+// additional_contexts: service:<name>), its way to build one service on another: that build
+// runs on the project's own builder from its own release, under the project's own name. Any
+// other context is refused: a path the client would read with the deploy user's rights, an
+// image (docker-image://) the project's builder would fetch past a claim, a URL, the service
+// itself, a service with no build or none of the file, a name not one word.
+func TestCheckFileBuildOnAnotherServicesBuild(t *testing.T) {
+	t.Parallel()
+	ctx := "/home/devopsy-shop/shop/prod/releases/1/code"
+	file := func(contexts string) map[string]any {
+		return parse(t, `{"name":"shop-prod","services":{`+
+			`"base":`+safe(`,"build":{"context":"`+ctx+`/base"}`)+`,`+
+			`"db":`+safe(``)+`,`+
+			`"app":`+safe(`,"build":{"context":"`+ctx+`","additional_contexts":`+contexts+`}`)+`}}`)
+	}
+	if errs := CheckFile(file(`{"shop-base":"service:base"}`), testPolicy, "build", &fakePaths{}); len(errs) != 0 {
+		t.Errorf("another service's build as a context: %v", errs)
+	}
+	for contexts, want := range map[string]string{
+		`{"shop-base":"/etc"}`:                       "only another service's build",
+		`{"shop-base":"../base"}`:                    "only another service's build",
+		`{"shop-base":"docker-image://alpine:3.22"}`: "only another service's build",
+		`{"shop-base":"https://example.com/x.git"}`:  "only another service's build",
+		`{"shop-base":"target:base"}`:                "only another service's build",
+		`{"shop-base":"service:app"}`:                "no other service of this file that builds",
+		`{"shop-base":"service:db"}`:                 "no other service of this file that builds",
+		`{"shop-base":"service:blog"}`:               "no other service of this file that builds",
+		`{"shop base":"service:base"}`:               "a name not one word",
+		`["shop-base=service:base"]`:                 "additional_contexts must be a map",
+	} {
+		if errs := CheckFile(file(contexts), testPolicy, "build", &fakePaths{}); !anyHolds(errs, want) {
+			t.Errorf("%s: %v, want %q", contexts, errs, want)
+		}
+	}
+}
+
+// A build takes no labels of its own, as checkLabels reads a service's only: a build's go
+// on the image and from there on every container of it, as an image's LABEL does (`docker
+// inspect` shows them in .Config.Labels), which is what imports read for a role and what a
+// proxy reads for its routes, and the vet (carriesLabel) sees neither. A Dockerfile's LABEL
 // needs a check at the daemon's side, which this test does not ask.
 func TestCheckFileBuildLabels(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"build":{"context":"/home/devopsy-shop/shop/prod/code","labels":{"devopsy.role":"proxy"}}`)+`}}`)
 	if errs := CheckFile(file, testPolicy, "build", &fakePaths{}); len(errs) == 0 {
 		t.Error("a role claimed through a build's labels")
+	}
+}
+
+// Compose's pull verb writes no hold of another project's, as the door's own pull and a
+// claim do not (Claimable): that project runs its hold by name, so whoever serves the tag
+// would choose what its next start, rollback or restart runs.
+func TestCheckFileRefusesAPullOverAnotherHold(t *testing.T) {
+	t.Parallel()
+	p := testPolicy
+	p.Others = []string{"blog"}
+	hold := "registry.example.com/blog/app:devopsy-blog-prod-20240101000000"
+	if _, err := Decide([]string{"pull", "-q", hold}, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+		t.Fatal("the control: the door's own pull takes another's hold")
+	}
+	file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+hold+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+	if errs := CheckFile(file, p, "pull", &fakePaths{}); len(errs) == 0 {
+		t.Errorf("compose's pull of another project's hold %s is taken", hold)
+	}
+	// A build's name is the door's to write, never a pull's: another project's is refused,
+	// this project's own left out of the pull (PlanPull); a registry's name is anyone's to
+	// pull, a project's name at its start included (no build is named so).
+	p.Others = []string{"mongo"}
+	for image, want := range map[string]string{"devopsy.internal/blog-prod/web": "refused", "devopsy.internal/blog-prod/web:1": "refused", "devopsy.internal/shop-prod/web": "skipped", "mongo-express:1": "pulled"} {
+		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+image+`","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+		errs := CheckFile(file, p, "pull", &fakePaths{})
+		got := "pulled"
+		if len(errs) > 0 {
+			got = "refused"
+		} else if pull, err := PlanPull(file, []string{"web"}, []string{"pull"}, p); err != nil || len(pull.Images) == 0 {
+			got = "skipped"
+		}
+		if got != want {
+			t.Errorf("a pull of %s: %s, want %s (%v)", image, got, want, errs)
+		}
+	}
+}
+
+// One rule says what of the door's mnts a path is, for a mount's kind, a bind's source, and
+// what a copy wrote to give back: this project's mnt, or one of its entries, a Word; never
+// deeper, another project's, or a name a Word is not.
+func TestMntPath(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{
+		"/space/mnt/shop-prod":                "shop-prod ",
+		"/space/mnt/shop-prod/db":             "shop-prod db",
+		"/space/mnt/shop-eu-prod/app.ini":     "shop-eu-prod app.ini",
+		"/space/mnt/shop-prod/db/sub":         "",
+		"/space/mnt/blog-prod/db":             "",
+		"/space/mnt/shop-prod/-x":             "",
+		"/space/mnt/shop-prod/..":             "",
+		"/space/mnt":                          "",
+		"/space/clones/shop/abc/1/mnt/db":     "",
+		"/home/devopsy-shop/shop/prod/mnt/db": "",
+	} {
+		got := ""
+		if name, entry, ok := testPolicy.MntPath(path); ok {
+			got = name + " " + entry
+		}
+		if got != want {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
+	}
+}
+
+// A release in build mode runs each of its builds by its bookmark, which devopsy's own
+// compose file names (images.ComposeFile, <build's name>:devopsy-<compose name>-<id>), so
+// every render of a live release carries one per built service. A compose pull there (a
+// run step's `devopsy pull <service>`, a restart command's, an operator's by hand) is about
+// the services that pull: the built one is skipped (its build: kept for that), and the
+// project's own bookmark is no name a pull writes.
+func TestCheckFilePullInAReleaseRunningByBookmarks(t *testing.T) {
+	t.Parallel()
+	bookmark := "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000"
+	if !testPolicy.OwnRef(bookmark) {
+		t.Fatalf("the control: %s is no name of this project's own", bookmark)
+	}
+	file := parse(t, `{"name":"shop-prod","services":{`+
+		`"web":{"image":"`+bookmark+`","build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]},`+
+		`"proxy":`+safe(``)+`}}`)
+	if errs := CheckFile(file, testPolicy, "pull", &fakePaths{}); len(errs) != 0 {
+		t.Errorf("a pull in a release whose build runs by its bookmark: %v", errs)
+	}
+}
+
+// What a build writes for a service is what the next start of it reads: for the deploy
+// user's project compose tags the image: of the rendered file, the release's bookmark
+// (images.ComposeFile), and the `up` after it runs that build.
+func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
+	t.Parallel()
+	bookmark := "devopsy.internal/shop-prod/web:devopsy-shop-prod-20260101000000"
+	image := func(verb string) string {
+		file := parse(t, `{"name":"shop-prod","services":{"web":{"image":"`+bookmark+`",`+
+			`"build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+		if errs := CheckFile(file, testPolicy, verb, &fakePaths{}); len(errs) != 0 {
+			t.Fatalf("%s: %v", verb, errs)
+		}
+		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
+		return got
+	}
+	if built, started := image("build"), image("up"); built != started {
+		t.Errorf("a build lands on %s, and the start after it runs %s", built, started)
+	}
+}
+
+// A hostname on a shared network is one of the project's names (OwnName), as its service's is:
+// Docker (Engine 25 on) answers for a container's hostname on each of its networks, so one of
+// another's (traefik, another project's service) would draw visitors' requests meant for it.
+func TestCheckFileRefusesAnothersHostnameOnASharedNetwork(t *testing.T) {
+	t.Parallel()
+	shared := `"networks":{"default":{"name":"shop-prod_default"},"tunnel":{"name":"traefik","external":true}}`
+	for _, extra := range []string{`,"hostname":"traefik"`, `,"hostname":"other-web"`, `,"hostname":"other-web","domainname":"example.com"`, `,"hostname":"shop-EU-web"`, `,"hostname":7`} {
+		file := parse(t, `{"name":"shop-prod",`+shared+`,"services":{"shop-web":`+safe(extra+`,"networks":{"tunnel":null}`)+`}}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) == 0 {
+			t.Errorf("%s on a shared network: not refused", extra)
+		}
+	}
+	// On its own networks a hostname answers to nobody else, and one of its own names is its own.
+	for _, s := range []string{
+		`"services":{"web":` + safe(`,"hostname":"db","networks":{"default":null}`) + `}`,
+		`"services":{"shop-web":` + safe(`,"hostname":"shop-web","networks":{"tunnel":null}`) + `}`,
+	} {
+		file := parse(t, `{"name":"shop-prod",`+shared+`,`+s+`}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Errorf("%s: refused: %v", s, errs)
+		}
+	}
+}
+
+// Every bind the door passes holds create_host_path false, whatever the file said: the door
+// makes what it binds before compose runs, so a source gone since (a sealed copy pruned as
+// another environment chose it) fails the start, never binds an empty directory Docker made.
+func TestCheckFileBindsNoSourceDockerMakes(t *testing.T) {
+	t.Parallel()
+	for _, bind := range []string{``, `,"bind":{"create_host_path":true}`} {
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/data","target":"/d"`+bind+`}]`)+`}}`)
+		if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		v := list(file["services"].(map[string]any)["web"].(map[string]any)["volumes"])[0].(map[string]any)
+		if opts, _ := v["bind"].(map[string]any); opts["create_host_path"] != false {
+			t.Errorf("%q: the bind passes as %v", bind, v)
+		}
+	}
+}
+
+// A bind is an entry itself, never a directory inside one (`./mnt/data/sub`): the project
+// user writes inside an entry, so such a path has a part it can change.
+func TestCheckFileRefusesABindInsideAnEntry(t *testing.T) {
+	t.Parallel()
+	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/data/sub","target":"/d"}]`)+`}}`)
+	if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); !anyHolds(errs, "a host path") {
+		t.Errorf("a bind of a directory inside an entry: %v", errs)
 	}
 }

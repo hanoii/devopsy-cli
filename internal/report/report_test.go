@@ -40,6 +40,11 @@ func TestLines(t *testing.T) {
 		// already in quotes, and the punctuation after it, stay as they are.
 		{"brackets", ErrorLevel, "@[::1]:22:dev is locked", []string{"devopsy @[::1]:22:dev --log shows why, or run 'devopsy @[::1]:22:dev --release'", "(devopsy @[::1]:22:dev), or @[::1]:22:", "@[::1]:22:dev's .env", "devopsy @[<server>:]<env>"}, []Remedy{Fix("", "devopsy @vm1:dev --sync --from @[::1]:22:prod")},
 			"devopsy: error: @'[::1]:22:dev' is locked\ndevopsy: | devopsy @'[::1]:22:dev' --log shows why, or run 'devopsy @[::1]:22:dev --release'\ndevopsy: | (devopsy @'[::1]:22:dev'), or @'[::1]:22:'\ndevopsy: | @[::1]:22:dev's .env\ndevopsy: | devopsy @[<server>:]<env>\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:dev --sync --from @'[::1]:22:prod'"},
+		// A control character shows escaped, never sent: a name another user chose (a project
+		// user's directory, its current link, under --server-info) would otherwise move an
+		// admin's cursor, rewrite what the line says, or reach the terminal's own commands.
+		{"control characters", WarnLevel, "app\x1b[2Jprod\x07 is gone", []string{"a\x9bb\x7fc\td"}, []Remedy{Hint("", "cd /srv/x\x1b]0;y\x07 && devopsy --status")},
+			"devopsy: warning: app\\x1b[2Jprod\\x07 is gone\ndevopsy: | a\\x9bb\\x7fc\td\ndevopsy: | $ cd /srv/x\\x1b]0;y\\x07 && devopsy --status"},
 	} {
 		if got := strings.Join(Lines(c.lv, c.msg, c.details, c.fixes), "\n"); got != c.want {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, got, c.want)

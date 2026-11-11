@@ -471,7 +471,7 @@ parent and an import of each on the child:
                        (rsync -a --no-D --delete --numeric-ids
                        --modify-window=-1: no device nodes or FIFOs,
                        times to the nanosecond, as root in devopsy's own
-                       image, devopsy-util, built on each server), an
+                       image, devopsy.internal/util, built on each server), an
                        entry the child owns as its owner's
                        (devopsy.mnt.owner, --chown)
   devopsy.data.copy=custom
@@ -517,10 +517,10 @@ runs.
 
 On one server, one container copies between the two directories. Across
 servers, the parent's runs an rsync daemon for the copy and reaches the
-child's over SSH with your agent, forwarded for that session only: an agent
-must be running locally (in CI too), and the child's host must be reachable
-from the parent's as ssh -G resolves it locally (no ProxyCommand or ProxyJump).
-A CI key needs restrict,agent-forwarding,port-forwarding (--ssh-keys add --restricted).
+child's over SSH with a key made for that sync, which only does its requests
+there while it runs: no agent is forwarded, and the child's host must be
+reachable from the parent's as ssh -G resolves it locally (no ProxyCommand or
+ProxyJump). Both sides are project users, or neither.
 
 The parent comes from the child's instance and the usual server variables
 (DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
@@ -578,7 +578,7 @@ through SSH.
   custom   the data capability's export <service> (a dump)
   volumes  a tar of the entries of .devopsy/mnt it mounts and its named
            volumes (devopsy.data.exclude honored), made as root in
-           devopsy-util with numeric owners and modes: files,
+           devopsy.internal/util with numeric owners and modes: files,
            directories and links only
 
 Stopped meanwhile, then started again: the service when it is labeled
@@ -607,7 +607,7 @@ does anything change, and the file is removed afterwards.
            service brought up first (--no-deps) unless stopped, and
            down again after if it was
   volumes  a tar: each entry of mnt and named volume it carries is
-           emptied, then extracted as root in devopsy-util, owners and
+           emptied, then extracted as root in devopsy.internal/util, owners and
            modes as they were, and an entry its labels own given to its
            owner (devopsy.mnt.owner). A truncated tar, one carrying
            entries the service does not mount, or one whose links make
@@ -984,7 +984,7 @@ Removes the environment from the server, under the release lock, in its
 current release: the environment's destroy step if it has one (destroy:
 in config.yaml, optional: one devopsy command, while everything runs),
 then docker compose down with volumes and the images built without an
-image: name, then shared/mnt emptied as root in devopsy-util; then each
+image: name, then shared/mnt emptied as root in devopsy.internal/util; then each
 release's images, as pruning removes them, then its directory (releases, shared/ with its data
 and .env). A failure before the removal removes nothing. Asks for the
 target's name, unless --yes (CI, like when a pull request
@@ -1152,7 +1152,41 @@ Examples:
   devopsy @prod --status
   devopsy @prod --status --json
 `,
-	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
+	"--project-users": `Usage: devopsy @<server> --project-users [list | add <project> | remove <project>]
+
+A server's project users: one Unix user per project, devopsy-<project>,
+with no Docker socket. What it finds as docker is devopsy, which asks the
+deploy user's devopsy through sudo, and that one checks every request, so
+a project user's leaked key reaches its project and not the server or
+the others. Asked as the deploy user, the server named with its user
+(@devopsy@vm1:). The server needs a door: space: first, a directory on a
+mount of its own with nosuid and nodev (docs/project-users.md).
+
+  --project-users           list them: project, whether the Unix user is
+                            there, how many keys
+  --project-users add <p>   make devopsy-<p>, its home and, with releases:
+                            root elsewhere than the deploy user's home, its
+                            tree there, and its entry in the deploy user's
+                            config directory. The first one also puts the
+                            door on the host (its group, its sudo rules, and
+                            sshd's part, which sshd takes at the next
+                            reboot). A name that extends another project's,
+                            or another extends, is refused: compose names
+                            are flat, so shop's admin-prod is shop-admin's
+                            prod.
+  --project-users remove <p>
+                            drop devopsy-<p>'s entry and keys: it logs in no
+                            more and the door answers it no more. Its Unix
+                            user, home and tree stay.
+
+Its keys are --ssh-keys --for <project>.
+
+Examples:
+  devopsy @devopsy@vm1: --project-users add shop
+  devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
+  devopsy @devopsy@vm1: --project-users
+`,
+	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [--for <project>] [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
        devopsy --ssh-keys-generate [<name>] [--out <file>]
 
 The keys that may log in as the deploy user on the server: its
@@ -1162,23 +1196,25 @@ root. Any target on the server does too; the keys are the server's.
   --ssh-keys                list them: fingerprint, type, comment, options
   --ssh-keys add <file>     authorize the public key in <file> (- for stdin)
     --restricted            for a machine's key, like CI's: restrict
-                            (commands only, no shell, no X11), with
-                            agent-forwarding and port-forwarding, which a
-                            sync across servers needs. A person's key is
-                            added plain.
+                            (commands only, no shell, no pty, no
+                            forwarding). A person's key is added plain.
   --ssh-keys remove <key>   remove the key with that fingerprint (a prefix
                             will do) or that exact comment. The last key is
                             never removed: it would lock everyone out.
+  --for <project>           a project user's keys instead (devopsy-<project>,
+                            on a server with project users): the door's,
+                            which only the deploy user edits and sshd asks
+                            devopsy for. Its last key may go: that is how
+                            its logins stop.
 
 --ssh-keys-generate, without a target, makes a local ed25519 pair with ssh-keygen,
 ~/.ssh/<name> and .pub (default devopsy-ci; --out another file), the
 comment the name. Nothing is sent anywhere: add the .pub to each server.
 
 For CI: generate one, add the .pub with --restricted, store the private key as
-a protected file variable, and in the job load it into an agent (eval
-"$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY") before devopsy @<target>
---release. Rotate by generating another, adding it, then removing the old
-one.
+a protected file variable, and in the job run devopsy --ssh-option
+IdentityFile="$DEVOPSY_SSH_KEY" @<target> --release (or load it into an
+agent). Rotate by generating another, adding it, then removing the old one.
 
 Examples:
   devopsy @prod --ssh-keys
@@ -1186,6 +1222,7 @@ Examples:
   devopsy @prod --ssh-keys add ~/.ssh/ci-prod1.pub --restricted
   devopsy @prod --ssh-keys add ~/.ssh/id_ed25519.pub
   devopsy @prod --ssh-keys remove ci-prod1
+  devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
 `,
 }
 

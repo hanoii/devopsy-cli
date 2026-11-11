@@ -412,6 +412,17 @@ func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// QuoteWord is s as one word of a command offered to copy: as it is when no shell reads
+// anything in it, else quoted (Quote).
+func QuoteWord(s string) string {
+	if plainWord.MatchString(s) {
+		return s
+	}
+	return Quote(s)
+}
+
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
+
 // runningLine is the line before a step runs.
 func runningLine(args []string, phase string) string {
 	return sayQuoted(report.InfoLevel, "running 'devopsy "+strings.Join(args, " ")+"' ("+phase+")")
@@ -659,6 +670,18 @@ func HintAddress(t *Target) string {
 // Only the upload creates $base: an activation whose release went while
 // it waited (--destroy, a failed first release, --releases remove)
 // fails instead of making it again.
+// closeProject keeps the project's directory in $root its user's alone, failing with a word
+// when it cannot: under a root another user enters (a project user's, reaching its tree),
+// what its releases and their containers write would be theirs to read.
+func closeProject(project string) string {
+	dir := `"$root"/` + Quote(project)
+	return `chmod 700 ` + dir + ` 2>/dev/null || {
+  devopsy --say error "$root/` + project + ` cannot be closed to other users, its owner another: its releases would be theirs to read"
+  exit 1
+}
+`
+}
+
 func prelude(t *Target, create bool) string {
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: release and rollback do not apply"
@@ -668,7 +691,7 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" ` + sayRemedies(report.Fix("take them down, remove it, then release again:", "docker compose -p <project> down", `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current`)) + `
   exit 1
 fi
-` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared"
+` + releaseLock(false, create) + closeProject(strings.SplitN(t.Path, "/", 2)[0]) + `mkdir -p "$base/releases" "$base/shared"
 devopsy ` + MntReadyFlag + ` "$base"
 # An upload cut off leaves its .tmp, none running while the lock is held.
 # A watcher's file goes with its script: a sync's holder arms its own
@@ -1083,7 +1106,7 @@ func releaseSnapshotStopped(projectName string, restore bool) string {
 // stopped services start), under the release lock, in the current
 // release, before anything reads the mark.
 func settleSync(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if ` + settleNeeded + `; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 `
@@ -1602,6 +1625,11 @@ func SSHOptions() []string {
 	if v := os.Getenv(SSHAllowPasswordEnv); v == "" || v == "0" || strings.EqualFold(v, "false") {
 		opts = append(opts, "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
 	}
+	// Never the operator's agent, whatever an ssh config says (a Host *
+	// with ForwardAgent yes): a session's user, a project user's above
+	// all, would reach every server its keys open. --ssh-option, before
+	// these, is how a person asks for it.
+	opts = append(opts, "-o", "ForwardAgent=no")
 	return append(opts, connectOptions()...)
 }
 
@@ -1625,8 +1653,8 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 	return SSHWith(t, nil, script, stdin, stdout, tty, log)
 }
 
-// SSHWith is SSHLog with extra ssh options after SSHOptions (a sync's push
-// session forwards the agent: -o ForwardAgent=yes).
+// SSHWith is SSHLog with extra ssh options before SSHOptions, so they win
+// (--shell-host --root's -l root).
 func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	return SSHContext(context.Background(), t, extra, script, stdin, stdout, tty, log)
 }
@@ -1652,12 +1680,13 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
 	}
 	if os.Getenv(ProtocolCheckEnv) == "warn" {
-		// Exported: a push checks the child's devopsy the same way
-		// (ChildCheck).
+		// Exported: the server's own devopsy calls check the same way.
 		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
 	script = WithNeeds(script, alsoNeeds(ctx)...)
-	args := append(append(append(SSHOptions(), extra...), ttyFlag), SSHArgs(t.Host)...)
+	// extra first: ssh keeps the first value, so a session's own option
+	// (--shell-host --root's -l root) wins over SSHOptions.
+	args := append(append(append(extra[:len(extra):len(extra)], SSHOptions()...), ttyFlag), SSHArgs(t.Host)...)
 	args = append(args, "sh -c "+Quote(script))
 	if Trace != nil {
 		// As ssh gets them, but devopsy's own options and the script.
@@ -1921,9 +1950,29 @@ func WithoutInterrupt(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noInterruptKey{}, true)
 }
 
+// SSHOptionsEnv holds the operator's --ssh-option values, one key=value a
+// line: set by the first devopsy, read by every ssh it and the devopsy
+// calls it nests start (a project command's), on this machine only.
+const SSHOptionsEnv = "DEVOPSY_INTERNAL_SSH_OPTIONS"
+
+// SSHOptionArgs are the -o arguments of SSHOptionsEnv's value v.
+func SSHOptionArgs(v string) []string {
+	var args []string
+	for _, o := range strings.Split(v, "\n") {
+		if o != "" {
+			args = append(args, "-o", o)
+		}
+	}
+	return args
+}
+
 // SSHCommand is ssh with args, or DEVOPSY_SSH_COMMAND, which replaces
-// "ssh" like GIT_SSH_COMMAND, with them.
+// "ssh" like GIT_SSH_COMMAND, with them, the operator's --ssh-option
+// values between the two (SSHOptionsEnv): after the variable's own, so
+// those win, and before every caller's, ssh -G's included, so what ssh
+// resolves is what the sessions use.
 func SSHCommand(args ...string) *exec.Cmd {
+	args = append(SSHOptionArgs(os.Getenv(SSHOptionsEnv)), args...)
 	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {
 		// exec: signals reach the command itself, never only a shell
 		// around it (a cancel would leave the session open, a kill

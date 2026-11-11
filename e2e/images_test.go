@@ -99,7 +99,8 @@ func TestRollbackKeepsData(t *testing.T) {
 	if code != 0 || dbAfter != db2 || appAfter != app1 {
 		t.Errorf("rollback (%d): database on %s (want %s, what its tag holds now), app on %s (want %s):\n%s", code, dbAfter, db2, appAfter, app1, out)
 	}
-	if hold, _ := srv(t, "cat imgrb/prod/current/../devopsy-compose.yaml"); strings.Contains(hold, "image:") {
+	// Each pulled service is pinned there by its digest; a hold carries devopsy.held.
+	if hold, _ := srv(t, "cat imgrb/prod/current/../devopsy-compose.yaml"); strings.Contains(hold, "devopsy.held") {
 		t.Errorf("devopsy's compose file holds something:\n%s", hold)
 	}
 	if h, _ := srv(t, "cut -f2,3,7,8 imgrb/prod/.devopsy-data-images"); !strings.Contains(h, "database\tran\t1\tx") {
@@ -249,7 +250,7 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+	if out, code := op(t, dir, noAgent+" devopsy @dev --release"); code != 0 {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	_, dev1 := container(t, srv2, "imgsy-dev", "database")
@@ -259,7 +260,7 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 		t.Fatalf("prod again (%d):\n%s", code, out)
 	}
 	_, prod2 := container(t, srv, "imgsy-prod", "database")
-	out, code := op(t, dir, agent+" devopsy @dev --sync --yes")
+	out, code := op(t, dir, noAgent+" devopsy @dev --sync --yes")
 	_, dev2 := container(t, srv2, "imgsy-dev", "database")
 	stamp, _ := srv2(t, "cat imgsy/dev/shared/mnt/database/stamp")
 	if code != 0 || dev2 != dev1 || dev2 == prod2 || strings.TrimSpace(stamp) != "two" {
@@ -274,7 +275,7 @@ func TestSyncAcrossRunsChildImage(t *testing.T) {
 		t.Fatalf("prod at 2 (%d):\n%s", code, out)
 	}
 	srv(t, "echo three >imgsy/prod/shared/mnt/database/stamp")
-	out, code = op(t, dir, agent+" devopsy @dev --sync --yes")
+	out, code = op(t, dir, noAgent+" devopsy @dev --sync --yes")
 	stamp, _ = srv2(t, "cat imgsy/dev/shared/mnt/database/stamp")
 	if code == 0 || strings.TrimSpace(stamp) != "two" || !strings.Contains(out, "devopsy.data.version=1 is lower than the parent's data's version, 2") {
 		t.Fatalf("a sync onto a child below the parent (%d), stamp %q:\n%s", code, stamp, out)

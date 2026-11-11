@@ -29,8 +29,11 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"the whole mnt":     {entry + ":/mnt/data", mnt + ":/mnt/data"},
 			"a path of its own": {entry + ":/mnt/data", tree + "/x:/mnt/data"},
 			"a name as owner":   {"1:2", "root"},
-			"a walking word":    {"sh\x00data", "sh\x00../x"},
-			"deeper than one":   {entry + ":/mnt/data", entry + ":/mnt/data/x"},
+			// An entry's owner is a container's user: never root's or one of the host's own.
+			"root as owner":      {"1:2", "0:0"},
+			"a host id as owner": {"1:2", "1000:2"},
+			"a walking word":     {"sh\x00data", "sh\x00../x"},
+			"deeper than one":    {entry + ":/mnt/data", entry + ":/mnt/data/x"},
 		}},
 		{"export", []string{"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "data"}, map[string][2]string{
 			"written":           {entry + ":/x/data:ro", entry + ":/x/data"},
@@ -106,24 +109,28 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"a walking destination": {"/dst/data/", "/dst/../"},
 			"a far source":          {"/src/data/", "evil:/data/"},
 		}},
-		{"receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt + ":/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}, map[string][2]string{
-			"another's mnt":     {mnt + ":/mnt", "/space/mnt/other-prod:/mnt"},
-			"another host":      {"rsync://127.0.0.1:9000/data/", "rsync://evil:9000/data/"},
-			"a name like it":    {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1.evil:9000/data/"},
-			"no port":           {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1/data/"},
-			"a walking module":  {"rsync://127.0.0.1:9000/data/", "rsync://127.0.0.1:9000/../"},
-			"no host's network": {"host", "none"},
-			"no password":       {"RSYNC_PASSWORD", "RSYNC_SECRET"},
-			"elsewhere":         {"/mnt/data/", "/etc/data/"},
+		// A sync's receive reaches its parent's daemon over its session alone: never a port,
+		// on the host's loopback or elsewhere, which a root rsync on the host's network would
+		// reach past the project users' firewall, reading what any local service answers.
+		{"receive", receive(mnt+"/data:/mnt/data", "devopsy::data/", "/mnt/data/"), map[string][2]string{
+			"another's entry":    {mnt + "/data:/mnt/data", "/space/mnt/other-prod/data:/mnt/data"},
+			"the whole mnt":      {mnt + "/data:/mnt/data", mnt + ":/mnt"},
+			"a daemon on a port": {"devopsy::data/", "rsync://127.0.0.1:22/data/"},
+			"another host":       {"devopsy::data/", "evil::data/"},
+			"a walking module":   {"devopsy::data/", "devopsy::../"},
+			"another module":     {"devopsy::data/", "devopsy::db/"},
+			"the host's network": {"--network\x00none", "--network\x00host"},
+			"another script":     {"receive script", "own script"},
+			"elsewhere":          {"/mnt/data/", "/etc/data/"},
 		}},
-		{"daemon", []string{"run", "-p", "127.0.0.1::873", "-e", conf, "-e", "RSYNC_SECRET", "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
+		{"daemon", []string{"run", "-e", conf, "-v", mnt + ":/mnt:ro", "util:1", "sh", "-c", "daemon script"}, map[string][2]string{
 			"written":            {mnt + ":/mnt:ro", mnt + ":/mnt"},
 			"another's mnt":      {mnt + ":/mnt:ro", "/space/mnt/other-prod:/mnt:ro"},
-			"a port for anyone":  {"127.0.0.1::873", "0.0.0.0::873"},
+			"a port":             {"util:1", "-p\x00127.0.0.1::873\x00util:1"},
 			"a walking path":     {"path = /mnt/data", "path = /mnt/.."},
 			"a path of its own":  {"path = /mnt/data", "path = /etc"},
 			"a setting appended": {"path = /mnt/data\n", "path = /mnt/data\nread only = no\n"},
-			"the host's network": {"-p\x00127.0.0.1::873", "--network\x00host\x00-p\x00127.0.0.1::873"},
+			"the host's network": {"util:1", "--network\x00host\x00util:1"},
 		}},
 		{"restore", []string{"run", "-v", tree + "/s:/s:ro", "-v", tree + "/f:/o", "util:1", "sh", "-c", "restore script", "sh", "f.zst"}, map[string][2]string{
 			"another's file": {tree + "/s:/s:ro", "/home/devopsy-other/other/s:/s:ro"},
@@ -163,18 +170,23 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 	}
 }
 
-// BUG: word starts `[A-Za-z0-9_-]`, so a word may start with a dash, against "A word in a
-// util container's arguments never starts with a dash". TestDoorScriptArgumentsAreNotCode
-// does not show it: it is refused for its `.` and `;`, and takes no `-delete` alone. In this
-// image nothing writes for find past its read-only mounts, so no code runs yet (run by hand).
+// A word in a util container's arguments never starts with a dash, which `find "$@"` and
+// rsync would take for a flag. TestDoorScriptArgumentsAreNotCode does not show it: what it
+// sends is refused for its `.` and `;`, and it sends no `-delete` alone.
 func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	t.Parallel()
 	entry := "/space/mnt/shop-prod/data"
-	if !wordOnly.MatchString("data") {
-		t.Fatal("the control: a plain word is refused")
+	// Word is the one rule for every name a request carries (a util's argument, an entry a
+	// sync child takes, a clone's path), so it is checked whole here.
+	for _, w := range []string{"data", "_cache", ".env", "a.b-c", "x.."} {
+		if !Word.MatchString(w) {
+			t.Errorf("the control: %q is refused", w)
+		}
 	}
-	if wordOnly.MatchString("-delete") {
-		t.Error("-delete is a word")
+	for _, w := range []string{"-delete", ".", "..", "..x", ".", "", "a/b", "a b", "-"} {
+		if Word.MatchString(w) {
+			t.Errorf("%q is a word", w)
+		}
 	}
 	for what, argv := range map[string][]string{
 		"export":       {"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "-delete"},
@@ -187,26 +199,14 @@ func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	}
 }
 
-// BUG: narrow says "" for a receive into a volume, and decideForm then puts the mnt back
-// whole: rw in a root rsync on the host's network, against "An rsync that names a whole mnt
-// holds only the entry it writes". Worse, it is asked to make that "entry", which is the mnt
-// itself: where the mnt is new, makeEntry gives this user rwX on it, so it can replace an
-// entry, and a bind's next start follows the link (TestDoorReceiveLeavesTheMntClosed).
+// A receive into a volume holds no mnt: bound whole, the mnt would be rw in a root rsync, and
+// made as its entry, a new mnt would give this user rwX on it (makeEntry): it could then
+// replace an entry with a link, which a bind's next start follows.
 func TestDecideRunReceiveIntoAVolumeHoldsNoMnt(t *testing.T) {
 	t.Parallel()
 	mnt := "/space/mnt/shop-new"
-	a, err := decide(t, "run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt+":/mnt", "-v", "shop-new_db:/vol/db",
-		"util:1", "rsync", "-a", "rsync://127.0.0.1:9/db/", "/vol/db/")
-	if err != nil {
-		return
-	}
-	if slices.Contains(a.Docker, mnt+":/mnt") {
-		t.Errorf("a whole mnt, rw, in a root rsync: %q", a.Docker)
-	}
-	for _, e := range a.Entries {
-		if e.Path == mnt {
-			t.Errorf("the mnt is made as an entry, for this user to write: %+v", e)
-		}
+	if a, err := decide(t, slices.Insert(receive("shop-new_db:/vol/db", "devopsy::db/", "/vol/db/"), 5, "-v", mnt+":/mnt")...); err == nil {
+		t.Errorf("a whole mnt, rw, beside a receive into a volume: %q", a.Docker)
 	}
 }
 
@@ -248,9 +248,9 @@ func TestDecideRunTakesNoPathInsideAClone(t *testing.T) {
 	}
 }
 
-// BUG: Real's answer is believed for a path it says is under the clones, or in a mnt, with
-// no look at its words: `..` there walks out, and Docker binds where it ends. realpath never
-// says that by itself, but its process is the project user's, to trace (kernel.yama permitting).
+// Real's answer is believed only once its words are clean, for a path under the clones or in
+// a mnt too: `..` there walks out, and Docker binds where it ends. realpath never says that by
+// itself, but its process is the project user's, to trace (kernel.yama permitting).
 func TestPathsAnswerIsCleanBeforeItIsBelieved(t *testing.T) {
 	t.Parallel()
 	link := "/home/devopsy-shop/shop/prod/link"
@@ -268,9 +268,9 @@ func TestPathsAnswerIsCleanBeforeItIsBelieved(t *testing.T) {
 	}
 }
 
-// BUG: a restore keeps every option of the caller's and sets no network: `--network host`,
-// a published port and a default bridge for a root zstd reading the caller's bytes, where any
-// other form is `none` unless it says so.
+// A restore runs with `--network none` and none of the caller's network options: a root
+// zstd reads the caller's bytes, and gets no `--network host`, published port or default
+// bridge, as any other form is `none` unless it says so.
 func TestDecideRestoreTakesNoNetwork(t *testing.T) {
 	t.Parallel()
 	tree := "/home/devopsy-shop/shop/prod"
@@ -300,7 +300,7 @@ func TestDecideRunSaysWhatItWrites(t *testing.T) {
 		want []string
 	}{
 		{"an rsync, narrowed to its entry", []string{"run", "-v", mnt + ":/src:ro", "-v", dev + ":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, []string{dev + "/data"}},
-		{"a receive", []string{"run", "--network", "host", "-e", "RSYNC_PASSWORD", "-v", mnt + ":/mnt", "util:1", "rsync", "-a", "rsync://127.0.0.1:9000/data/", "/mnt/data/"}, []string{mnt + "/data"}},
+		{"a receive", receive(mnt+"/data:/mnt/data", "devopsy::data/", "/mnt/data/"), []string{mnt + "/data"}},
 		{"a share", []string{"run", "-v", mnt + "/data:/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"}, []string{dev + "/data"}},
 		{"an emptying of the whole mnt", []string{"run", "-v", mnt + ":/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"}, nil},
 	} {
@@ -310,6 +310,45 @@ func TestDecideRunSaysWhatItWrites(t *testing.T) {
 		}
 		if !slices.Equal(a.Regrant, tt.want) {
 			t.Errorf("%s: gives back %q, want %q", tt.name, a.Regrant, tt.want)
+		}
+	}
+	// A detached copy has not written yet when its run returns: nothing is given back then,
+	// and its removal names it, for the door to give back what it wrote (Removes).
+	a, err := decide(t, "run", "-d", "-v", mnt+":/src:ro", "-v", dev+":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/")
+	if err != nil || len(a.Regrant) != 0 {
+		t.Errorf("a detached copy gives back %q at its start (%v)", a.Regrant, err)
+	}
+	a, err = decide(t, "rm", "-f", "mine", "task")
+	if err != nil || !slices.Equal(a.Removes, []string{"mine", "task"}) {
+		t.Errorf("a removal names %q to give back (%v)", a.Removes, err)
+	}
+}
+
+// A script form's arguments are checked where the script reads them: one with arguments has
+// `sh` for its $0, as devopsy's own pass it, so a call without it, its arguments one place
+// off and each read against another's pattern, is refused.
+func TestScriptFormChecksArgumentsWhereTheScriptReadsThem(t *testing.T) {
+	t.Parallel()
+	entry, mnt, tree := "/space/mnt/shop-prod/data", "/space/mnt/shop-prod", "/home/devopsy-shop/shop/prod"
+	p := testPolicy
+	p.UID = "50001"
+	// Controls: devopsy's own shapes pass.
+	for name, argv := range map[string][]string{
+		"snapshot tar": {"run", "-v", mnt + ":/m/mnt:ro", "-v", tree + "/snapshots/1.tmp/data:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "f.zst", "50001:50001"},
+		"import":       {"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "data"},
+	} {
+		if _, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err != nil {
+			t.Fatalf("%s, devopsy's own: %v", name, err)
+		}
+	}
+	for name, argv := range map[string][]string{
+		// $0=mnt, $1=etc (no kind of devopsy's), $2=data, $3=50001:50001 (the output's name), $4 the owner.
+		"a snapshot tar with no $0, its kind any word": {"run", "-v", mnt + ":/m/mnt:ro", "-v", tree + "/snapshots/1.tmp/data:/o", "util:1", "sh", "-c", "tar script", "mnt", "etc", "data", "50001:50001", "50001:50001"},
+		// $0=/in/t, $1=data (the stream, no /in path), $2=data/sub/deeper (the entry emptied).
+		"an import with no $0, its entry a path": {"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "/in/t", "data", "data/sub/deeper"},
+	} {
+		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+			t.Errorf("%s: taken, and run as %q", name, a.Docker)
 		}
 	}
 }

@@ -613,6 +613,8 @@ func debugImports(st style, color bool) int {
 			state = fmt.Sprintf("set by the target: %q", s.Release)
 		case s.Imported:
 			state = st.ok("current")
+		case s.Door:
+			state = st.dim("a project user's release, not read")
 		case !s.Released:
 			state = st.dim("not a release")
 		default:
