@@ -92,8 +92,9 @@ Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
 restart it now when the run changes the file or Docker has not taken it
 yet. A restart cuts every docker command under way, and stops every
 container unless Docker keeps them (`live-restore`); it is refused while
-a release runs in one of the deploy user's environments, and waits up to
-two minutes for Docker to come back. Not restarted now, Docker takes the
+a release runs in one of the deploy user's environments, or while
+`dockerd --validate` refuses `daemon.json` (Docker would not start
+again), and waits up to two minutes for Docker to come back. Not restarted now, Docker takes the
 file at its next restart, and `/run/reboot-required` is raised for a
 reboot that takes it (devopsy-server's `DEVOPSY_AUTO_REBOOT_TIME`).
 

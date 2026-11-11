@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"os"
@@ -32,6 +33,8 @@ type hostRun struct {
 	// Script runs as /bin/sh -c, its arguments after "sh" as $0.
 	Script string
 	Args   []string
+	// Stderr is where the run's stderr goes, devopsy's own when nil.
+	Stderr io.Writer
 }
 
 // dockerArgs is docker's command line for r.
@@ -73,7 +76,7 @@ func (r hostRun) run(stdout io.Writer, failed func(error) error) error {
 		return err
 	}
 	c := exec.Command("docker", r.dockerArgs()...)
-	c.Stdout, c.Stderr = stdout, os.Stderr
+	c.Stdout, c.Stderr = stdout, cmp.Or[io.Writer](r.Stderr, os.Stderr)
 	if err := c.Run(); err != nil {
 		return failed(err)
 	}

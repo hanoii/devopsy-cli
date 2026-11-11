@@ -45,7 +45,7 @@ func setupHostRoot(t *testing.T) (host, bin string) {
 
 // The root script puts only what differs, each file after its check, daemon.json's by dockerd
 // itself, and a failed check leaves the file as it was; the live buffers rise only when lower;
-// the release root is made; the restart marker and the system's flag rise only when
+// the release root is made; a drop-in put is reloaded; the restart marker and the system's flag rise only when
 // daemon.json changed and Docker is not restarted now, and a restart is queued, daemon-reload
 // first, or marked when systemctl refuses.
 func TestSetupRootScript(t *testing.T) {
@@ -90,7 +90,7 @@ func TestSetupRootScript(t *testing.T) {
 	if read(setup.RestartMarker) != "inv-1\n" || read(RebootRequired+".pkgs") != "devopsy\n" {
 		t.Errorf("the marker %q, the flag's packages %q", read(setup.RestartMarker), read(RebootRequired+".pkgs"))
 	}
-	if c := read("calls"); !strings.Contains(c, "dockerd --validate --config-file ") || !strings.Contains(c, "sysctl -qw net.core.rmem_max=7500000") || strings.Contains(c, "systemctl") {
+	if c := read("calls"); !strings.Contains(c, "dockerd --validate --config-file ") || !strings.Contains(c, "sysctl -qw net.core.rmem_max=7500000") || !strings.HasSuffix(c, "1 systemctl daemon-reload\n") || strings.Contains(c, "restart") {
 		t.Errorf("calls:\n%s", c)
 	}
 
@@ -122,6 +122,12 @@ func TestSetupRootScript(t *testing.T) {
 	if code != 0 || !strings.HasSuffix(out, "queued\n") || read(setup.RestartMarker) != "" ||
 		!strings.HasPrefix(c, "dockerd --validate --config-file ") || !strings.HasSuffix(c, "1 systemctl daemon-reload\n1 systemctl restart --no-block docker.service\n") {
 		t.Errorf("a restart (%d):\n%s\ncalls:\n%s", code, out, read("calls"))
+	}
+
+	// A daemon.json dockerd refuses, whoever wrote it: never restarted on, which would keep
+	// Docker down.
+	if out, code := run([]string{"FAKE_DOCKERD_REFUSES=1"}, host, owner, "", root, "", "", "", "", "restart", "inv-2"); code != 4 || !strings.Contains(out, "so Docker would not start again: not restarted") || strings.Contains(read("calls"), "systemctl") {
+		t.Errorf("a restart on a file dockerd refuses (%d):\n%s", code, out)
 	}
 
 	// systemctl refused from the chroot: said, and marked for the next restart.

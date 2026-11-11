@@ -76,7 +76,11 @@ func runServerSetup(t *remote.Target, args []string) int {
 		return failErr(err)
 	}
 	if !run {
-		report.Info("nothing to change: " + t.Host + " is set up as devopsy wants it")
+		if f.Pending {
+			report.Info("nothing to change: Docker takes daemon.json at its next restart")
+		} else {
+			report.Info("nothing to change: " + t.Host + " is set up as devopsy wants it")
+		}
 		return 0
 	}
 	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply"}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
@@ -141,7 +145,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 				report.Info("Docker is not restarted, with containers running: it takes daemon.json at its next restart")
 			}
 		default:
-			if restart, err = ask.confirm("restart Docker now? "+cut, "else it takes daemon.json at its next restart"); err != nil {
+			if restart, err = ask.confirm("restart Docker now? " + cut); err != nil {
 				return nil, false, err
 			}
 		}
@@ -201,9 +205,13 @@ func setupEntries(f setup.Facts) []remote.StatusEntry {
 		case setup.Devopsys:
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + ", devopsy's " + p.Want}})
 		case setup.Changed:
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + ", someone else's; devopsy's " + p.Want}})
+			whose := ", someone else's; devopsy's "
+			if p.Observed == "{}" {
+				whose = ", removed by someone; devopsy's "
+			}
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + whose + p.Want}})
 		case setup.Kept:
-			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: "daemon.json", Lines: []string{p.Name + ": " + p.Observed + ", kept by the admin"}})
+			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: "daemon.json", Lines: []string{p.Name + ": " + none(p.Observed) + ", kept by the admin"}})
 		}
 	}
 	for _, x := range f.Files {

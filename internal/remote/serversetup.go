@@ -38,7 +38,8 @@ const (
 // into the host, the system's files under $host_root, the release root as it is given): each file put only when it differs and passes
 // its check, daemon.json's by dockerd itself, the live buffers raised only when lower, the
 // release root made and given to the deploy user only when missing or root's, then Docker
-// restarted (daemon-reload first, the restart queued with --no-block) or, when daemon.json
+// restarted (on a daemon.json dockerd takes, daemon-reload first, the restart queued with
+// --no-block) or, when daemon.json
 // changed, the restart marker written with the daemon's InvocationID and the system's restart
 // flag raised. Its arguments, in order: the host root, the deploy user's uid:gid, 1 to make
 // or give the root, the root, daemon.json's text, the sysctl file's, the drop-in's (each ""
@@ -55,7 +56,7 @@ if [ -n "$give" ]; then
 fi
 if [ -n "$daemon" ]; then
   mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
-  if put "$host_root` + setup.DaemonFile + `" 644 'dockerd --validate --config-file "$1" >/dev/null' "$daemon"; then
+  if put "$host_root` + setup.DaemonFile + `" 644 'out=$(dockerd --validate --config-file "$1" 2>&1) || { printf "%s\n" "$out"; exit 1; }' "$daemon"; then
     changed=1
     echo "` + SetupPut + ` ` + setup.DaemonFile + `"
   fi
@@ -73,7 +74,12 @@ if [ -n "$raise" ]; then
 fi
 if [ -n "$dropin" ]; then
   mkdir -p "$host_root` + path.Dir(setup.MountsDropIn) + `"
-  if put "$host_root` + setup.MountsDropIn + `" 644 true "$dropin"; then echo "` + SetupPut + ` ` + setup.MountsDropIn + `"; fi
+  if put "$host_root` + setup.MountsDropIn + `" 644 true "$dropin"; then
+    echo "` + SetupPut + ` ` + setup.MountsDropIn + `"
+    # systemd's view of docker.service, so it never says a drop-in changed on disk; a
+    # restart reloads anyway, and a reload refused waits for the next boot.
+    [ "$after" = restart ] || SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
+  fi
 fi
 mark() {
   restart_flag ` + setup.RestartMarker + ` "$id"
@@ -81,6 +87,12 @@ mark() {
 }
 case $after in
   restart)
+    # A file Docker refuses would keep it down: never restarted on one, whoever wrote it.
+    if [ -e "$host_root` + setup.DaemonFile + `" ] && ! out=$(dockerd --validate --config-file "$host_root` + setup.DaemonFile + `" 2>&1); then
+      printf '%s\n' "$out" >&2
+      ` + echoLine(report.ErrorLevel, "dockerd refuses "+setup.DaemonFile+", so Docker would not start again: not restarted", report.Fix("correct the file, then run --server-setup again")) + `
+      exit 4
+    fi
     rm -f "$host_root` + setup.RestartMarker + `"
     if SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload && SYSTEMD_IGNORE_CHROOT=1 systemctl restart --no-block docker.service; then
       echo ` + SetupQueued + `

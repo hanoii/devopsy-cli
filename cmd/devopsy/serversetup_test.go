@@ -306,3 +306,30 @@ func TestSetupFactsJSON(t *testing.T) {
 		t.Errorf("%+v, %v", back, err)
 	}
 }
+
+// The release root is a directory of the deploy user's: never /, made when missing, and
+// refused when it is no directory.
+func TestReleaseRootCheck(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	write(t, file, "", 0o644)
+	for _, c := range []struct {
+		root, action string
+		refused      bool
+	}{
+		{"/", "", true},
+		{dir, "", false},
+		{filepath.Join(dir, "new", "releases"), setup.RootMake, false},
+		{file, "", true},
+	} {
+		action, refusal := releaseRootCheck(c.root, os.Getuid())
+		if action != c.action || (refusal != nil) != c.refused {
+			t.Errorf("%s: %q, %+v", c.root, action, refusal)
+		}
+	}
+	// Another user's: refused, by its name.
+	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || !strings.Contains(refusal.Message, "is ") {
+		t.Errorf("another user's: %+v", refusal)
+	}
+}

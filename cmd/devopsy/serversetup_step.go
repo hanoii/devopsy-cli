@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -383,6 +384,8 @@ func applySetup(h setupHost, a setupApply) int {
 		if d.Left && s.State == setup.Changed {
 			if _, asked := a.answers[s.Part.Name]; asked {
 				report.Warn("daemon.json's " + s.Part.Name + " changed since it was asked about: left as it is, and asked again at the next --server-setup")
+			} else if a.upgrade && s.Observed == "{}" {
+				report.Warn("daemon.json's "+s.Part.Name+" was removed by someone: left out", "--server-setup asks whether to put it back")
 			} else if a.upgrade {
 				report.Warn("daemon.json's "+s.Part.Name+" is someone else's value: left as it is", "--server-setup asks whether to keep it")
 			}
@@ -547,8 +550,10 @@ func allEnvBases(root string) []string {
 }
 
 // rootSetupRun runs remote.SetupRootScript as root on the host: the host's network and
-// NET_ADMIN for the live buffers (sysctl), writing the host's files.
+// NET_ADMIN for the live buffers (sysctl), its pid namespace for systemctl (systemd refuses a
+// peer it cannot see), writing the host's files.
 func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation string, out *bytes.Buffer) error {
+	q := &queuedLines{out: out}
 	flag := func(b bool) string {
 		if b {
 			return "1"
@@ -556,9 +561,38 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string
 		return ""
 	}
 	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	run := hostRun{Write: true, Network: true, NetAdmin: true, Script: remote.SetupRootScript,
-		Args: []string{h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation}}
-	return run.run(out, func(err error) error { return fmt.Errorf("the setup's run as root: %v", err) })
+	run := hostRun{Write: true, Network: true, PID: true, NetAdmin: true, Script: remote.SetupRootScript,
+		Args: []string{h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation}, Stderr: quietQueued{q}}
+	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %v", err) })
+}
+
+// queuedLines is the root run's stdout, which says when Docker's restart is queued.
+type queuedLines struct {
+	mu     sync.Mutex
+	out    *bytes.Buffer
+	queued bool
+}
+
+func (q *queuedLines) Write(p []byte) (int, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n, err := q.out.Write(p)
+	q.queued = q.queued || hasLine(q.out.String(), remote.SetupQueued)
+	return n, err
+}
+
+// quietQueued is the root run's stderr, devopsy's until the restart is queued, then dropped:
+// the restart cuts the docker client's connection to its container, which it says, and that
+// is the restart, not a failure.
+type quietQueued struct{ q *queuedLines }
+
+func (w quietQueued) Write(p []byte) (int, error) {
+	w.q.mu.Lock()
+	defer w.q.mu.Unlock()
+	if w.q.queued {
+		return len(p), nil
+	}
+	return os.Stderr.Write(p)
 }
 
 // hasLine says whether out holds the line word, alone or first.

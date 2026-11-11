@@ -33,6 +33,7 @@
 
 - Every root step on a host is one `hostRun`, declaring what it needs (a writable root, the host's network, `NET_ADMIN`, the pid and cgroup namespaces, AppArmor's profile off) and getting nothing more; `remote.EndUserArgs` is apart, as it runs devopsy itself.
 - An apply is one root run of `SetupRootScript`, its arguments what to put, the root to make or give, the buffers to raise, and the restart or the marker; it prints a line per change, which the server's devopsy words.
+- That run has the host's network and `NET_ADMIN`, for `sysctl`, and its pid namespace, for `systemctl`: systemd refuses a peer it cannot see.
 - The root script's system paths sit under its host root argument, "" on a host (`remote.HostRootEnv` in tests), so its tests run it on a temporary directory; the release root is passed as the host names it.
 - `daemon.json` is put through `hostPut` with `dockerd --validate` as its check: a refused file leaves the one there.
 
@@ -40,7 +41,9 @@
 
 - `--server-setup` offers a restart when the run changes `daemon.json` or Docker has yet to take it (`setup.Pending`); `--yes` restarts only when no container runs.
 - A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up; project users' trees are not covered, and the run says so.
-- The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, never by the exit of a container the restart may cut.
+- Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
+- The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, never by the exit of a container the restart may cut, whose client's words then go unsaid.
+- A drop-in put without a restart is followed by a `daemon-reload`, failing quietly: else systemd says at each call that `docker.service` changed on disk.
 - A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, waited for through `lockWaiting`, bounded (`restartWait`); one not confirmed in time is an error naming the journal, the restart flag raised.
 - A change not restarted now raises the restart marker (`setup.RestartMarker`, with the `InvocationID` read before the run) and the system's flag, through `restart_flag`, only when the run changed `daemon.json`.
 - systemctl refusing from the chroot never leads to a privileged container in the host's pid namespace (internals/door.md): the run marks the change and names the restart for the admin.
