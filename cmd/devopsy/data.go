@@ -545,12 +545,12 @@ func imagesLockNow(how int) (unlock func(), ok bool, err error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("the server's image lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB); err != nil {
+	if ok, err := tryFlock(f, how); !ok {
 		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, false, nil
+		if err != nil {
+			return nil, false, fmt.Errorf("the server's image lock: %w", err)
 		}
-		return nil, false, fmt.Errorf("the server's image lock: %w", err)
+		return nil, false, nil
 	}
 	return func() { f.Close() }, true, nil
 }

@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -67,6 +69,16 @@ func (w boundedWait) wait(ctx context.Context, log *report.Logger, try func() (b
 			return w.ended(bound)
 		}
 	}
+}
+
+// tryFlock takes f's lock (how, syscall.LOCK_EX or LOCK_SH) if it is free now: false, with no
+// error, when another holds it.
+func tryFlock(f *os.File, how int) (bool, error) {
+	err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // ended is the error of a wait the bound, or its context, ended.

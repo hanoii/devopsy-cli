@@ -335,7 +335,7 @@ func applySetup(h setupHost, a setupApply) int {
 		return failed(err.Error())
 	}
 	defer lock.Close()
-	if err := (boundedWait{what: "another --server-setup"}).wait(context.Background(), report.Default(), flockNow(lock, syscall.LOCK_EX)); err != nil {
+	if err := (boundedWait{what: "another --server-setup"}).wait(context.Background(), report.Default(), func() (bool, error) { return tryFlock(lock, syscall.LOCK_EX) }); err != nil {
 		return failed(err.Error())
 	}
 
@@ -436,7 +436,7 @@ func applySetup(h setupHost, a setupApply) int {
 				return failed(err.Error())
 			}
 			held = append(held, l)
-			if ok, _ := flockNow(l, syscall.LOCK_EX)(); !ok {
+			if ok, _ := tryFlock(l, syscall.LOCK_EX); !ok {
 				report.Fail(errors.New("a release or another change runs in "+base+": Docker is not restarted under it, and nothing changed"),
 					report.Fix("run --server-setup again once it ends"))
 				return 1
@@ -534,16 +534,6 @@ func fixWords(fix string) []report.Remedy {
 	return []report.Remedy{report.Fix(fix)}
 }
 
-// flockNow tries f's lock (how, syscall.LOCK_EX or LOCK_SH) without waiting, for boundedWait.
-func flockNow(f *os.File, how int) func() (bool, error) {
-	return func() (bool, error) {
-		err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return false, nil
-		}
-		return err == nil, err
-	}
-}
 
 // allEnvBases are the environments' directories of every project in root.
 func allEnvBases(root string) []string {
