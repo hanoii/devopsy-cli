@@ -97,3 +97,25 @@ func TestReviewOpusUpgradeNotesNoVersionOverADaemonItCannotJudge(t *testing.T) {
 		t.Errorf("version %q noted while daemon.json's parts were refused:\n%s", r.Version, out)
 	}
 }
+
+// Bug: with a restart asked, the root run puts the mounts drop-in and skips its daemon-reload
+// (the restart reloads), then daemon.json's put, last since 0df19ef, fails its check and ends
+// the run before the restart: the drop-in stays put with no daemon-reload, so systemd says at
+// each call that docker.service changed on disk (server-setup.md: a drop-in put without a
+// restart is followed by a daemon-reload), and the apply, still counting the restart, never
+// says Docker waits for the mounts from its next start on. Before the reorder a refused
+// daemon.json ended the run before the drop-in. The firewall is allowed here so its own
+// install's daemon-reload does not hide the missing one.
+func TestReviewOpusDropInReloadedWhenDaemonPutFailsBeforeARestart(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	write(t, filepath.Join(filepath.Dir(host), "bin", "dockerd"), "#!/bin/sh\necho 'invalid' >&2\nexit 1\n", 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !fileExists(filepath.Join(host, setup.MountsDropIn)) || fileExists(filepath.Join(host, setup.DaemonFile)) {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	if l := readString(filepath.Join(host, "systemctl.log")); !strings.Contains(l, "daemon-reload") {
+		t.Errorf("the drop-in put, no restart and no daemon-reload:\n%s\nsystemctl:\n%s", out, l)
+	}
+}
