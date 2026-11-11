@@ -27,7 +27,7 @@ var externalNames = []string{"ClientAliveInterval", "IdentityAgent", "LocalForwa
 
 // projectFiles are file names the rules cite that are a project's (or
 // a server's), not the repository's.
-var projectFiles = []string{"config.yaml", "config.local.yaml", "devopsy-compose.yaml"}
+var projectFiles = []string{"config.yaml", "config.local.yaml", "devopsy-compose.yaml", "server.yaml"}
 
 // rootRules are the places in the root a package's doc comment may name
 // for its rules, in the words it uses, with the heading that must exist.

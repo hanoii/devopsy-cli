@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strconv"
@@ -21,14 +22,14 @@ const lockWaitEvery = 100 * time.Millisecond
 // time it took once the lock is held, "<what> did not end in <bound>" when the bound ends it.
 // held, for a what that is the thing locked rather than what holds it, names the holder in
 // the first line and makes the last "<what> still held by <held> after <bound>". A zero
-// bound is lockWaitBound.
+// bound is lockWaitBound, a zero every lockWaitEvery.
 type lockWaiting struct {
-	what, held string
-	bound      time.Duration
+	what, held   string
+	bound, every time.Duration
 }
 
 // wait takes a lock through try, which says whether it got it: at once, saying nothing, else
-// trying again every lockWaitEvery, saying so through log, until it gets it or the bound or
+// trying again every so often, saying so through log, until it gets it or the bound or
 // ctx ends the wait, as an error. An error of try's ends it as it is.
 func (w lockWaiting) wait(ctx context.Context, log *report.Logger, try func() (bool, error)) error {
 	if ok, err := try(); err != nil || ok {
@@ -44,7 +45,7 @@ func (w lockWaiting) wait(ctx context.Context, log *report.Logger, try func() (b
 	}
 	timer := log.Start(start + ", up to " + boundWords(bound))
 	deadline := time.Now().Add(bound)
-	tick := time.NewTicker(lockWaitEvery)
+	tick := time.NewTicker(cmp.Or(w.every, lockWaitEvery))
 	defer tick.Stop()
 	for {
 		select {

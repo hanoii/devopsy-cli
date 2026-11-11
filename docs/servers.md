@@ -39,7 +39,7 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--environments`, `--vars-project` and `--upgrade` (`--environments` and
+`--server-setup`, `--environments`, `--vars-project` and `--upgrade` (`--environments` and
 `--vars-project` with the checkout's project, or an alias's).
 
 They take `@<server>` alone, or any target, whose server they use, with
@@ -54,7 +54,63 @@ devopsy @vm1 --ssh-keys          # vm1's deploy user's keys, from anywhere
 devopsy @prod --ssh-keys         # prod's server's, in the project
 devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 devopsy @vm1 --server-info       # what the server is, and what needs attention
+devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
 ```
+
+## `--server-setup`
+
+`devopsy @devopsy@vm1: --server-setup` sets up what devopsy needs of a
+server, as its deploy user, the server named with that user. Steps as
+root run through devopsy's util image, so the deploy user needs no sudo:
+the docker group can do as much already. It needs systemd, and checks
+first, refusing with what is missing, that the server has `tar` and
+`flock`, Docker answering with its compose and buildx plugins as the
+host's `docker.service`, and a release root that is a directory of the
+deploy user's (`releases: root` in the deploy user's `config.yaml`, else
+its home), never `/`. It installs none of them: devopsy-server's
+`setup.sh` does.
+
+What it keeps as devopsy wants it:
+
+| Item | devopsy's value |
+|---|---|
+| The release root | made when missing, given to the deploy user when root owns it |
+| `daemon.json`'s logs | `"log-driver": "local"`, `"log-opts": {"max-size": "20m", "max-file": "5"}` |
+| `daemon.json`'s `live-restore` | `true` |
+| `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
+| Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, never lowered |
+| Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
+
+It shows what is not devopsy's, then asks. `daemon.json` is merged: every
+other key stays as it is (a proxy's `proxies`, for example). A part
+someone else set is asked about, keep (Enter) or replace; a value kept is
+not asked again while it stays the same. To go back to devopsy's value,
+write it in `daemon.json` or remove the keys and answer replace. A
+`daemon.json` that is not a JSON object is refused, and never rewritten.
+
+Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
+restart it now when the run changes the file or Docker has not taken it
+yet. A restart cuts every docker command under way, and stops every
+container unless Docker keeps them (`live-restore`); it is refused while
+a release runs in one of the deploy user's environments, and waits up to
+two minutes for Docker to come back. Not restarted now, Docker takes the
+file at its next restart, and `/run/reboot-required` is raised for a
+reboot that takes it (devopsy-server's `DEVOPSY_AUTO_REBOOT_TIME`).
+
+`--yes` asks nothing: it keeps every value someone else set, and restarts
+Docker only when no container runs, so a new server gets devopsy's
+address pools before its first release makes networks. Without a
+terminal it needs `--yes`.
+
+While the release root holds no project and is not on a volume of its
+own, it lists the volumes it could be on, with their size and free
+space: `releases: root: <mount point>` in the deploy user's
+`config.yaml`, before the first release, puts releases there.
+
+A second run changes nothing. What `--server-setup` applied, and the
+values kept, are recorded in `server.yaml` beside the deploy user's
+`config.yaml`: devopsy's record, never edited by hand. Its first run
+writes it.
 
 ## `--server-info`
 

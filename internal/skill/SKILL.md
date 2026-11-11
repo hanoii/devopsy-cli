@@ -246,6 +246,11 @@ what `config.yaml` sets.
   certificates and what to do next, and prints the `devopsy --probe`
   line that checks the same locally. A custom domain is a CNAME to the
   environment's wildcard URL.
+- A new server is set up for devopsy as its deploy user with
+  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing):
+  Docker's `daemon.json` (rotated logs, live-restore, address pools),
+  socket buffers, the release root, and Docker waiting at boot for its
+  mounts.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
 

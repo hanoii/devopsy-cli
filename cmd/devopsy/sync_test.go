@@ -194,6 +194,16 @@ vols="$DOCKER_LOG.vol"
 # client is killed.
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
+  # A root run on the host (hostRun): its chrooted script run here, on the test's host root
+  # (remote.HostRootEnv) as the script's first argument already says.
+  "run --rm --network "*" -v /:/host"*" chroot /host /bin/sh -c "*)
+    while [ "$1" != -c ]; do shift; done
+    script=$2; shift 2
+    exec sh -c "$script" "$@" ;;
+  # docker info: the host root's docker-info.json, when a test writes one.
+  "info --format {{json .}}") [ ! -f "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json" ] || cat "$DEVOPSY_INTERNAL_HOST_ROOT/docker-info.json" ;;
+  # FAKE_RUNNING: the ids of the containers running.
+  "ps -q") for c in ${FAKE_RUNNING:-}; do echo "$c"; done ;;
   *" config --format json")
     # FAIL_CONFIG: this project's compose config fails.
     [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }

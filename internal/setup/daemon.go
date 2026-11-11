@@ -4,7 +4,7 @@
 // files it writes whole. Pure logic, run by the server's devopsy, which applies it, and
 // read by the operator's, which words it; it imports nothing of devopsy's.
 //
-// Rules: internals/other.md.
+// Rules: internals/server-setup.md.
 package setup
 
 import (
