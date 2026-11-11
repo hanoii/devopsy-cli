@@ -160,8 +160,10 @@ func serverFacts() (remote.ServerInfo, error) {
 		Arch: runtime.GOARCH, CPUs: runtime.NumCPU(),
 	}
 	systemFacts(&info)
-	info.Docker = dockerFacts()
-	if rd, err := readSetup(setupHost{root: os.Getenv(remote.HostRootEnv)}); err == nil {
+	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
+	hd := readHostDocker(h)
+	info.Docker = hd.facts
+	if rd, err := readSetup(h, hd); err == nil {
 		info.Setup = &rd.facts
 	}
 	info.Door = doorFacts()
@@ -304,27 +306,42 @@ func zoneCMA(data string) int64 {
 	return pages
 }
 
-// dockerFacts asks docker info, docker compose version and reads the
-// daemon's configuration file.
-func dockerFacts() remote.DockerFacts {
-	d := dockerInfo()
+// hostDocker is the host's Docker as devopsy reads it once, for --server-info's facts and the
+// setup's: docker info, its compose and buildx, and daemon.json as the file holds it
+// (daemonErr why it could not be read; a missing file is none).
+type hostDocker struct {
+	facts     remote.DockerFacts
+	daemon    []byte
+	daemonErr error
+}
+
+// readHostDocker asks docker info and its plugins, and reads the daemon's configuration file,
+// its log-opts as --server-info shows them.
+func readHostDocker(h setupHost) hostDocker {
+	hd := hostDocker{facts: dockerInfo()}
 	if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
-		d.Compose = strings.TrimSpace(string(out))
+		hd.facts.Compose = strings.TrimSpace(string(out))
 	}
-	data, err := os.ReadFile("/etc/docker/daemon.json")
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		d.LogOptsKnown = true
-	case err == nil:
+	hd.facts.Buildx = exec.Command("docker", "buildx", "version").Run() == nil
+	hd.daemon, hd.daemonErr = readDaemonFile(h)
+	if hd.daemonErr == nil {
 		var conf struct {
-			LogDriver string            `json:"log-driver"`
-			LogOpts   map[string]string `json:"log-opts"`
+			LogOpts map[string]string `json:"log-opts"`
 		}
-		if json.Unmarshal(data, &conf) == nil {
-			d.LogOptsKnown, d.LogOpts = true, conf.LogOpts
+		if len(bytes.TrimSpace(hd.daemon)) == 0 || json.Unmarshal(hd.daemon, &conf) == nil {
+			hd.facts.LogOptsKnown, hd.facts.LogOpts = true, conf.LogOpts
 		}
 	}
-	return d
+	return hd
+}
+
+// readDaemonFile is the host's daemon.json, nil with no error when there is none.
+func readDaemonFile(h setupHost) ([]byte, error) {
+	data, err := os.ReadFile(h.path(setup.DaemonFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return data, err
 }
 
 // containerdRoot is where d's images and layers are when it uses the
@@ -362,6 +379,7 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 		HTTPProxy       string `json:"HttpProxy"`
 		HTTPSProxy      string `json:"HttpsProxy"`
 		ServerErrors    []string
+		Name            string
 	}
 	if err := json.Unmarshal(out, &info); err != nil {
 		return err
@@ -369,7 +387,11 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 	if len(info.ServerErrors) > 0 {
 		return errors.New(strings.Join(info.ServerErrors, "; "))
 	}
-	d.Version, d.Driver, d.RootDir, d.LogDriver = info.ServerVersion, info.Driver, info.DockerRootDir, info.LoggingDriver
+	running, err := setup.InfoVisible(out)
+	if err != nil {
+		return err
+	}
+	d.Version, d.Driver, d.RootDir, d.LogDriver, d.Name, d.Running = info.ServerVersion, info.Driver, info.DockerRootDir, info.LoggingDriver, info.Name, running
 	if info.CgroupVersion != "" {
 		d.Cgroup = "v" + info.CgroupVersion
 	}

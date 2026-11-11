@@ -59,7 +59,7 @@ func runServerSetupStep(args []string) int {
 		h.restartWait = time.Duration(n) * time.Second
 	}
 	if len(args) == 1 && args[0] == "facts" {
-		rd, err := readSetup(h)
+		rd, err := readSetup(h, readHostDocker(h))
 		if err != nil {
 			return failErr(err)
 		}
@@ -120,9 +120,10 @@ func parseApply(args []string) (setupApply, error) {
 	return a, nil
 }
 
-// readSetup reads the server's setup: the required items, each tunable's state, pending, and
-// what the operator words. It changes nothing and takes no lock.
-func readSetup(h setupHost) (setupRead, error) {
+// readSetup reads the server's setup from what was read of its Docker (hd): the required
+// items, each tunable's state, pending, and what the operator words. It changes nothing and
+// takes no lock.
+func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	var rd setupRead
 	r, err := remote.ReleaseSettings()
 	if err != nil {
@@ -138,10 +139,10 @@ func readSetup(h setupHost) (setupRead, error) {
 	if refusal != nil {
 		f.Refusals = append(f.Refusals, *refusal)
 	}
-	info, refusals := setupDocker(h)
+	info, refusals := setupDocker(h, hd.facts)
 	f.Refusals = append(f.Refusals, refusals...)
 	rd.docker = len(refusals) == 0
-	f.Running, f.LiveRestore, rd.running = info.running, info.visible.LiveRestore, info.visible
+	f.Running, f.LiveRestore, rd.running = info.running, hd.facts.Running.LiveRestore, hd.facts.Running
 	rd.invocation = info.invocation
 
 	recordPath := setup.RecordPath(remote.UserConfigFile())
@@ -152,15 +153,11 @@ func readSetup(h setupHost) (setupRead, error) {
 	if rd.exists {
 		f.Record = recordPath
 	}
-	data, err := os.ReadFile(h.path(setup.DaemonFile))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		f.DaemonError = setup.DaemonFile + ": " + err.Error()
-	} else if rd.daemon, err = setup.ParseDaemon(data); err != nil {
-		f.DaemonError = setup.DaemonFile + ": " + err.Error()
-	} else if rd.fileVisible, err = rd.daemon.Visible(); err != nil {
+	if d, visible, why := judgeDaemon(hd.daemon, hd.daemonErr); why != "" {
 		// A file Docker would refuse is judged no further: none of its parts is put.
-		f.DaemonError = setup.DaemonFile + ": " + err.Error()
+		f.DaemonError = why
 	} else {
+		rd.daemon, rd.fileVisible = d, visible
 		// What Docker runs with, when it answered, tells a part set outside the file.
 		var running *setup.Visible
 		if rd.docker {
@@ -191,7 +188,7 @@ func readSetup(h setupHost) (setupRead, error) {
 	f.Pending = rd.docker && f.DaemonError == "" && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
 
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
-	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), info.rootDir) {
+	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
 		if _, size, free, _, err := statDisk(c.MountPoint); err == nil {
 			c.Size, c.Free = size, free
 		}
@@ -285,65 +282,62 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	return refuse("the release root " + root + " is " + owner + "'s")
 }
 
-// dockerSetup is what the setup reads of Docker.
+// dockerSetup is what the setup reads of Docker beyond docker info: its service's
+// InvocationID and how many containers run.
 type dockerSetup struct {
 	running    int
 	invocation string
-	rootDir    string
-	visible    setup.Visible
 }
 
-// setupDocker reads Docker as the setup needs it, and refuses what it cannot set up: no
-// daemon answering, no compose or buildx, no systemd, or a daemon that is not the host's
-// docker.service (rootless, another host's).
-func setupDocker(h setupHost) (dockerSetup, []setup.Refusal) {
-	var d dockerSetup
+// setupDocker reads Docker as the setup needs it, from docker info as read (d), and refuses
+// what it cannot set up: no daemon answering, no compose or buildx, no systemd, or a daemon
+// that is not the host's docker.service (rootless, another host's).
+func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusal) {
+	var ds dockerSetup
 	fix := "install Docker, with its compose and buildx plugins, and start it: devopsy-server's setup.sh does"
-	refuse := func(msg string) (dockerSetup, []setup.Refusal) {
-		return d, []setup.Refusal{{Item: "Docker", Message: msg, Fix: fix}}
-	}
-	if _, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").Output(); err != nil {
-		return refuse("Docker's daemon does not answer: " + cmdError(err))
+	if d.Error != "" {
+		return ds, []setup.Refusal{{Item: "Docker", Message: "Docker's daemon does not answer: " + d.Error, Fix: fix}}
 	}
 	var refusals []setup.Refusal
-	for _, plugin := range []string{"compose", "buildx"} {
-		if err := exec.Command("docker", plugin, "version").Run(); err != nil {
-			refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "Docker has no " + plugin + " plugin", Fix: fix})
-		}
+	if d.Compose == "" {
+		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "Docker has no compose plugin", Fix: fix})
+	}
+	if !d.Buildx {
+		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "Docker has no buildx plugin", Fix: fix})
 	}
 	if _, err := os.Stat(h.path("/run/systemd/system")); err != nil {
 		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "systemd is not this host's init, which --server-setup restarts Docker with"})
-		return d, refusals
+		return ds, refusals
 	}
 	if state := systemctlShow("ActiveState"); state != "active" {
 		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix})
 	}
-	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
-	var info struct {
-		Name            string
-		DockerRootDir   string
-		SecurityOptions []string
-	}
-	if err == nil {
-		err = json.Unmarshal(out, &info)
-	}
-	if err == nil {
-		d.visible, err = setup.InfoVisible(out)
-	}
-	if err != nil {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "docker info: " + err.Error(), Fix: fix})
-		return d, refusals
-	}
 	host, _ := os.Hostname()
-	if slices.ContainsFunc(info.SecurityOptions, func(o string) bool { return strings.Contains(o, "rootless") }) || info.Name != host {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + info.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
+	if slices.Contains(d.Security, "rootless") || d.Name != host {
+		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
 	}
-	d.rootDir = info.DockerRootDir
-	d.invocation = systemctlShow("InvocationID")
+	ds.invocation = systemctlShow("InvocationID")
 	if ids, err := exec.Command("docker", "ps", "-q").Output(); err == nil {
-		d.running = len(strings.Fields(string(ids)))
+		ds.running = len(strings.Fields(string(ids)))
 	}
-	return d, refusals
+	return ds, refusals
+}
+
+// judgeDaemon is daemon.json as read (data, err from readDaemonFile) parsed, with what Docker
+// shows once it takes it, or why devopsy cannot judge it ("" when it can).
+func judgeDaemon(data []byte, err error) (setup.Daemon, setup.Visible, string) {
+	if err != nil {
+		return setup.Daemon{}, setup.Visible{}, setup.DaemonFile + ": " + err.Error()
+	}
+	d, err := setup.ParseDaemon(data)
+	if err != nil {
+		return d, setup.Visible{}, setup.DaemonFile + ": " + err.Error()
+	}
+	v, err := d.Visible()
+	if err != nil {
+		return d, v, setup.DaemonFile + ": " + err.Error()
+	}
+	return d, v, ""
 }
 
 // systemctlShow is docker.service's property, "" when systemctl cannot say.
@@ -384,7 +378,7 @@ func applySetup(h setupHost, a setupApply) int {
 		return failed(err.Error())
 	}
 
-	rd, err := readSetup(h)
+	rd, err := readSetup(h, readHostDocker(h))
 	if err != nil {
 		return failed(err.Error())
 	}
@@ -550,7 +544,7 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 
 	// The checks again: what was applied must read in sync now.
-	again, err := readSetup(h)
+	again, err := readSetup(h, readHostDocker(h))
 	if err != nil {
 		return failed(err.Error())
 	}
@@ -600,7 +594,6 @@ func fixWords(fix string) []report.Remedy {
 	}
 	return []report.Remedy{report.Fix(fix)}
 }
-
 
 // rootSetupRun runs remote.SetupRootScript as root on the host: the host's network and
 // NET_ADMIN for the live buffers (sysctl), its pid namespace for systemctl (systemd refuses a
@@ -697,21 +690,15 @@ func waitRestart(before string, h setupHost, outside []string) error {
 		if id := systemctlShow("InvocationID"); id == "" || id == before {
 			return false, nil
 		}
-		out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
-		if err != nil {
+		info := dockerInfo()
+		if info.Error != "" {
 			return false, nil
 		}
-		running, err := setup.InfoVisible(out)
-		if err != nil {
-			return false, nil
+		_, want, why := judgeDaemon(readDaemonFile(h))
+		if why != "" {
+			return false, errors.New(why)
 		}
-		data, _ := os.ReadFile(h.path(setup.DaemonFile))
-		d, err := setup.ParseDaemon(data)
-		if err != nil {
-			return false, err
-		}
-		want, err := d.Visible()
-		return err == nil && want.Except(outside).Equal(running.Except(outside)), err
+		return want.Except(outside).Equal(info.Running.Except(outside)), nil
 	})
 }
 

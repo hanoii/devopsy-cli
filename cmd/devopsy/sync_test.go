@@ -202,6 +202,8 @@ case "$*" in
     exec sh -c "$script" "$@" ;;
   # docker info: the host root's docker-info.json, when a test writes one.
   "info --format {{json .}}") [ ! -f "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json" ] || cat "$DEVOPSY_INTERNAL_HOST_ROOT/docker-info.json" ;;
+  # Compose's version, as the setup's Docker check reads it (FAKE_NO_COMPOSE: none).
+  "compose version --short") [ -n "${FAKE_NO_COMPOSE:-}" ] || echo 5.5.0 ;;
   # FAKE_RUNNING: the ids of the containers running.
   "ps -q") for c in ${FAKE_RUNNING:-}; do echo "$c"; done ;;
   *" config --format json")

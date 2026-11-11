@@ -70,15 +70,19 @@ type ServerInfo struct {
 // version and the daemon's configuration file.
 type DockerFacts struct {
 	// Error is why docker info said nothing.
-	Error      string   `json:"error,omitempty"`
-	Version    string   `json:"version,omitempty"`
-	Compose    string   `json:"compose,omitempty"`
-	Containerd bool     `json:"containerd"` // the containerd image store
-	Driver     string   `json:"driver,omitempty"`
-	Cgroup     string   `json:"cgroup,omitempty"`
-	RootDir    string   `json:"root_dir,omitempty"`
-	Security   []string `json:"security,omitempty"` // names: apparmor, seccomp, userns, rootless...
-	LogDriver  string   `json:"log_driver,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Version string `json:"version,omitempty"`
+	Compose string `json:"compose,omitempty"`
+	Buildx  bool   `json:"buildx"`
+	// Name is the daemon's host name; Running what of daemon.json it runs with.
+	Name       string        `json:"name,omitempty"`
+	Running    setup.Visible `json:"running"`
+	Containerd bool          `json:"containerd"` // the containerd image store
+	Driver     string        `json:"driver,omitempty"`
+	Cgroup     string        `json:"cgroup,omitempty"`
+	RootDir    string        `json:"root_dir,omitempty"`
+	Security   []string      `json:"security,omitempty"` // names: apparmor, seccomp, userns, rootless...
+	LogDriver  string        `json:"log_driver,omitempty"`
 	// LogOpts are daemon.json's log-opts; LogOptsKnown false when the
 	// file could not be read (a missing file is known: none).
 	LogOpts      map[string]string `json:"log_opts,omitempty"`
