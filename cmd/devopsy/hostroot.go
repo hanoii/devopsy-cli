@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -32,6 +33,8 @@ type hostRun struct {
 	Args   []string
 	// Stderr is where the run's stderr goes, devopsy's own when nil.
 	Stderr io.Writer
+	// Docker is the docker client run, "docker" when empty: the door names the real one.
+	Docker string
 }
 
 // dockerArgs is docker's command line for r.
@@ -66,10 +69,27 @@ func (r hostRun) dockerArgs() []string {
 // run readies the util image, then runs r, its stdout into stdout and its stderr devopsy's:
 // an error readying the image comes as it is, and a failed run as failed words it.
 func (r hostRun) run(stdout io.Writer, failed func(error) error) error {
-	if err := ensureUtilImage(context.Background()); err != nil {
+	if err := ensureUtilImageWith(context.Background(), cmp.Or(r.Docker, "docker")); err != nil {
 		return err
 	}
-	c := exec.Command("docker", r.dockerArgs()...)
+	return r.runReady(context.Background(), stdout, failed)
+}
+
+// errNoUtilImage is runIfReady's when the util image is not there.
+var errNoUtilImage = errors.New(remote.UtilImage + " is not here")
+
+// runIfReady runs r only when the util image is there already, never building it, ended with
+// ctx: for what must cost a command little (a release's read).
+func (r hostRun) runIfReady(ctx context.Context, stdout io.Writer, failed func(error) error) error {
+	if exec.CommandContext(ctx, cmp.Or(r.Docker, "docker"), "image", "inspect", "-f", "{{.Id}}", remote.UtilImage).Run() != nil {
+		return errNoUtilImage
+	}
+	return r.runReady(ctx, stdout, failed)
+}
+
+// runReady runs r, the util image there.
+func (r hostRun) runReady(ctx context.Context, stdout io.Writer, failed func(error) error) error {
+	c := exec.CommandContext(ctx, cmp.Or(r.Docker, "docker"), r.dockerArgs()...)
 	c.Stdout, c.Stderr = stdout, cmp.Or[io.Writer](r.Stderr, os.Stderr)
 	if err := c.Run(); err != nil {
 		return failed(err)

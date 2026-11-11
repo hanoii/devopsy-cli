@@ -28,6 +28,11 @@ func TestHostRunArgs(t *testing.T) {
 		{"firewall read", firewallRun("read it", false),
 			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host:ro", remote.UtilImage,
 				"chroot", "/host", "/bin/sh", "-c", "read it"}},
+		// The chains' read every check makes, the door's for a project user too: devopsy's
+		// script, nothing of a caller's.
+		{"firewall chains", firewallReadRun("/usr/bin/docker"),
+			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host:ro", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", remote.FirewallRead}},
 		{"firewall load", firewallRun("load it", true),
 			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host", remote.UtilImage,
 				"chroot", "/host", "/bin/sh", "-c", "load it"}},

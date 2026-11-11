@@ -21,8 +21,9 @@ func srvRoot(t *testing.T, script string) (string, int) {
 // answer), on the server's real iptables: a container's request to a metadata address is
 // dropped, TCP's and UDP's, its DNS there (port 53, both) let through, and the chain is the
 // containers' alone, IPv6's too where the server has it; loaded again, it keeps another
-// tool's rule in raw's PREROUTING and one jump of its own; then what firewall: metadata: allow
-// runs takes it out, and the container reaches the address again. The lane's servers have no
+// tool's rule in raw's PREROUTING and one jump of its own; a wipe shows in --server-info and
+// the loader run again puts it back; then what firewall: metadata: allow runs takes it out,
+// and the container reaches the address again. The lane's servers have no
 // systemd, which --server-setup needs, so the test runs devopsy's own scripts, as its root
 // run does.
 func TestServerFirewallWithoutADoor(t *testing.T) {
@@ -107,6 +108,24 @@ docker run -d --name srvfw-md --network host busybox:1.37 sh -c 'mkdir -p /w && 
 		t.Errorf("loaded again (%d):\n%s", code, out)
 	}
 	srvRoot(t, "iptables -t raw -D PREROUTING "+other)
+	// A wipe, which nothing loads back between a boot and an install: --server-info, as the
+	// deploy user, reads the chains as root and says W0001 with what is missing; the loader
+	// run again puts it back, and it says nothing.
+	info := func() string {
+		t.Helper()
+		out, _ := op(t, "/", "devopsy @devopsy@server: --server-info 2>&1")
+		return out
+	}
+	srvRoot(t, "iptables -t raw -D PREROUTING -j "+remote.FirewallContainerChain)
+	if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, "nothing in PREROUTING jumps to "+remote.FirewallContainerChain) {
+		t.Errorf("--server-info, the firewall wiped:\n%s", out)
+	}
+	if out, code := srvRoot(t, remote.FirewallScript); code != 0 {
+		t.Fatalf("the loader run again (%d): %s", code, out)
+	}
+	if out := info(); strings.Contains(out, "W0001") {
+		t.Errorf("--server-info, the firewall loaded again:\n%s", out)
+	}
 
 	// firewall: metadata: allow: devopsy's pieces and the chain go, and the address answers.
 	if out, code := srvRoot(t, remote.FirewallRemove()); code != 0 || !strings.Contains(out, "removed "+remote.FirewallScript) {

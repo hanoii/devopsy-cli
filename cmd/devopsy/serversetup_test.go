@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
@@ -1220,7 +1221,7 @@ func TestServerSetupFirewallLoadedAgainAfterItsUnitFailed(t *testing.T) {
 	}
 	write(t, restore, good, 0o755)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 0 || !strings.Contains(out, "devopsy's firewall is not loaded as devopsy loads it (devopsy-firewall.service: exit-code)") ||
+	if code != 0 || !strings.Contains(out, "W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, "devopsy-firewall.service: exit-code") ||
 		!strings.Contains(out, "loaded devopsy's firewall") || strings.Contains(out, "did not hold") {
 		t.Errorf("loaded again after its unit failed (%d):\n%s", code, out)
 	}
@@ -1393,7 +1394,7 @@ func TestServerSetupPutsTheFirewallsBootLinkBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if to, err := os.Readlink(filepath.Join(host, remote.FirewallUnitLink)); code != 0 || !strings.Contains(out, "devopsy's firewall is not loaded as devopsy loads it") || err != nil || to != remote.FirewallUnit {
+	if to, err := os.Readlink(filepath.Join(host, remote.FirewallUnitLink)); code != 0 || !strings.Contains(out, "W0001: the server's firewall is not loaded as devopsy loads it") || err != nil || to != remote.FirewallUnit {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -1435,7 +1436,7 @@ func TestServerInfoSeesAWipedFirewall(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
-	if !strings.Contains(out, "metadata firewall: devopsy's firewall is not loaded as devopsy loads it\n") || !strings.Contains(out, "iptables: nothing in PREROUTING jumps to "+remote.FirewallContainerChain) ||
+	if !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\n") || !strings.Contains(out, "iptables: nothing in PREROUTING jumps to "+remote.FirewallContainerChain) ||
 		!strings.Contains(out, "$ devopsy @devopsy@one: --server-setup") {
 		t.Errorf("wiped:\n%s", out)
 	}
@@ -1461,7 +1462,7 @@ func TestServerSetupRetiresTheFirewallsTimer(t *testing.T) {
 	if err := os.Symlink(timer, filepath.Join(host, link)); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "metadata firewall: devopsy's firewall is not loaded as devopsy loads it") {
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") {
 		t.Errorf("a retired timer there, --server-info:\n%s", out)
 	}
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
@@ -1473,5 +1474,87 @@ func TestServerSetupRetiresTheFirewallsTimer(t *testing.T) {
 	write(t, filepath.Join(host, timer), "[Timer]\nOnCalendar=daily\n", 0o644)
 	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); readString(filepath.Join(host, timer)) != "[Timer]\nOnCalendar=daily\n" {
 		t.Errorf("an admin's timer at its path (%d):\n%s", code, out)
+	}
+}
+
+// A release says W0001 when the firewall the mark says is loaded is not as devopsy loads it,
+// with --server-setup as the fix, and goes on; it says nothing when the firewall is right, and
+// costs nothing where nothing is marked loaded or the util image is not there (no root run),
+// nor when the read fails (a debug line).
+func TestServerReadyWarnsOfAWipedFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ready := func(extra ...string) (string, string) {
+		t.Helper()
+		s.logs()
+		out, code := s.run(extra, remote.ServerReadyFlag, "one:")
+		docker, _ := s.logs()
+		if code != 0 {
+			t.Errorf("--server-ready failed (%d):\n%s", code, out)
+		}
+		return out, docker
+	}
+	if out, docker := ready(); strings.Contains(docker, "chroot /host") || out != "" {
+		t.Errorf("nothing marked loaded: a root run, or words:\n%s\n%s", out, docker)
+	}
+	firewallLoaded(t, host, false)
+	if out, docker := ready(); !strings.Contains(docker, "chroot /host") || out != "" {
+		t.Errorf("loaded and right:\n%s\n%s", out, docker)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := ready(); out != "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @one: --server-setup\n" {
+		t.Errorf("wiped:\n%s", out)
+	}
+	if out, docker := ready("FAKE_UTIL_MISSING=1"); strings.Contains(docker, "chroot /host") || strings.Contains(docker, "build ") || out != "" {
+		t.Errorf("no util image: a root run, a build, or words:\n%s\n%s", out, docker)
+	}
+	write(t, filepath.Join(host, "docker-down"), "", 0o644)
+	if out, _ := ready(); out != "" {
+		t.Errorf("the read failing:\n%s", out)
+	}
+	if out, _ := ready("DEVOPSY_VERBOSE=1"); !strings.Contains(out, "debug: the firewall not checked") {
+		t.Errorf("the read failing, at -v:\n%s", out)
+	}
+}
+
+// A project user's release asks the door whether the firewall is right and, told it is not,
+// says W0001 for the server's admin, with no fix it could take; any other answer, a refusal or
+// a door past its wait, says nothing but a debug line.
+func TestDoorFirewallWarnsForTheAdmin(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		answer string
+		err    error
+		want   string
+	}{
+		"right":   {firewallRight, nil, ""},
+		"wrong":   {firewallWrong, nil, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | report W0001 to the server's admin\n"},
+		"unknown": {firewallUnknown, nil, "devopsy: debug: the firewall not told: unknown\n"},
+		"refused": {"", errors.New("exit status 2"), "devopsy: debug: the firewall not asked: exit status 2\n"},
+	} {
+		var b strings.Builder
+		l := report.New(&b, false, 1)
+		warnDoorFirewallTo(l, func() (string, error) { return c.answer, c.err })
+		if b.String() != c.want {
+			t.Errorf("%s: %q, want %q", name, b.String(), c.want)
+		}
+	}
+}
+
+// A release's upload says W0001 of a firewall marked loaded whose chains are not as devopsy
+// loads it (none here: the fake server has no iptables), and releases all the same.
+func TestReleaseWarnsOfAWipedFirewall(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	host := t.TempDir()
+	write(t, filepath.Join(host, remote.FirewallMark), remote.FirewallContainers+"\n", 0o644)
+	out, code := s.run([]string{remote.HostRootEnv + "=" + host}, "@prod", "--release")
+	if code != 0 || !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @") {
+		t.Errorf("(%d):\n%s", code, out)
 	}
 }

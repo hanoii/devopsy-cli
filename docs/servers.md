@@ -133,7 +133,8 @@ root through devopsy's util image, since the deploy user cannot read
 iptables. Nothing loads it again between a boot and the next install, so
 a reload of the server's own firewall or an `iptables -F`, which drops
 it, shows there as the firewall not loaded as devopsy loads it, and the
-next `--server-setup` loads it again. The apply loads it through
+next `--server-setup` loads it again; a release says it too, by its code
+`W0001` ([Codes](codes.md)). The apply loads it through
 `devopsy-firewall.service`, the loader run directly only where systemd
 does not answer, then reads the chains back as root. One load runs at a
 time, by a lock in a directory of root's that no other user enters.

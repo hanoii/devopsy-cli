@@ -221,11 +221,11 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallInSync, Door: true}
 			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}, nil)
-		}, "", "metadata firewall: devopsy's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --server-setup"},
+		}, "", "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --server-setup"},
 		{"setup firewall failed", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallReload, Unit: "exit-code"}
-		}, "", "devopsy's firewall is not loaded as devopsy loads it (devopsy-firewall.service: exit-code)|devopsy @vm1: --server-setup"},
+		}, "", "W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy-firewall.service: exit-code|devopsy @vm1: --server-setup"},
 		{"setup root", func(i *remote.ServerInfo) { i.Setup = setUp(setup.RootMake) }, "", "the release root /home/devopsy is missing: releases refuse it|devopsy @vm1: --server-setup"},
 		{"setup refusal", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")

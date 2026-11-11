@@ -38,7 +38,9 @@
 - Without a door the Docker drop-in is not put: it serves the daemon's cgroup jump, while the containers' chain goes by interface, and its jump, inserted first, stays first through Docker's start, which appends its own rules to raw's PREROUTING.
 - `--upgrade` only loads the firewall again as the kind loaded (`setup.FirewallState.Upgrade`): a first load, the door's chains added to the containers' alone and a removal for `allow` change what the server's apps reach, so they are `--server-setup`'s, shown and confirmed (`--yes` confirms).
 - Each firewall state is worded once (`firewallLine`), for `--server-setup`'s differences, `--server-info` and what `--upgrade` leaves.
-- No release refuses or warns for the metadata firewall.
+- A release warns of one thing of the setup's, the metadata firewall not as devopsy loads it (`warnReleaseFirewall`, `report.FirewallNotLoaded`), never refusing: with no timer, nothing else heals or shows a wipe at the one moment an operator reads the output before putting something live.
+- The release's read is the one `--server-info` makes (`firewallChains`), only where the mark says a firewall is loaded, only with the util image there (never built), within `firewallReadWait`, a failure a debug line: it costs a release little and never fails it.
+- A project user's release asks the door (its `firewall` request, `warnDoorFirewall`), which answers right, wrong or unknown from the deploy user's own read, and says W0001 for the admin; on a server with project users a wipe is seen in the deploy user's releases, the project users' and `--server-info`.
 - A run raises a live socket buffer only when lower, never lowering it; one that cannot be raised fails the second check, naming the reboot that loads the file.
 - The sysctl file sets 7500000 at each boot, over an earlier file's higher value: a higher one belongs in a file sorting after `90-devopsy-net.conf`.
 

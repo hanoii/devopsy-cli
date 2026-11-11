@@ -315,33 +315,6 @@ func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 	return fact
 }
 
-// readChains reads devopsy's firewall's chains as root where it is loaded, and judges them
-// into fw (setup.FirewallFact.Chains), so a wipe the files and the mark cannot show (a reload
-// of the server's own firewall, an iptables -F) reads "to load again", for --server-setup's
-// facts and apply and for --server-info alike; it returns the read, "" when none was made.
-// None loaded, no root run.
-func readChains(fw *setup.FirewallFact) string {
-	if fw == nil || fw.Loaded == setup.NoFirewall {
-		return ""
-	}
-	read, err := doorHostRead(remote.FirewallRead, false)
-	if err != nil {
-		fw.Chains(nil, err)
-		return ""
-	}
-	fw.Chains(firewallChainsWrong(read, fw.Door))
-	return read
-}
-
-// firewallChainsWrong is the one judgment of a root read of the chains (remote.FirewallRead),
-// for the door's firewall or the containers' alone: what is not as devopsy loads it.
-func firewallChainsWrong(read string, door bool) ([]string, error) {
-	if door {
-		return remote.FirewallWrong(read)
-	}
-	return remote.ContainersFirewallWrong(read), nil
-}
-
 // devopsysAt says whether the host's file at p is one of the firewall's devopsy wrote, by its
 // header.
 func devopsysAt(h setupHost, p string) bool {
@@ -960,8 +933,10 @@ func waitRestart(before string, h setupHost, outside []string) error {
 
 // runServerReady is remote.ServerReadyFlag, the upload's first step on the server: what every
 // release needs of it, by stats and path lookups alone, said with its fix (ref the server as
-// the address named it). A project user checks nothing: its tree is --project-users add's,
-// and its Docker the door.
+// the address named it), then the firewall, a warning only (warnReleaseFirewall), the one
+// word on the setup a release says, since nothing else shows a wipe. A project user checks
+// nothing (its tree is --project-users add's, and its Docker the door) but the firewall,
+// which it asks the door (warnDoorFirewall).
 func runServerReady(args []string) int {
 	if len(args) != 1 {
 		return fail("usage: devopsy " + remote.ServerReadyFlag + " <server>")
@@ -979,6 +954,11 @@ func runServerReady(args []string) int {
 	}
 	if len(errs) > 0 {
 		return 1
+	}
+	if projectUser {
+		warnDoorFirewall(askDoorFirewall)
+	} else {
+		warnReleaseFirewall(setupHost{root: os.Getenv(remote.HostRootEnv)}, args[0])
 	}
 	return 0
 }

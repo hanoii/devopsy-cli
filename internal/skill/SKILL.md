@@ -255,7 +255,9 @@ what `config.yaml` sets.
   (`firewall: metadata: allow` in the deploy user's config turns it off,
   refused where `door:` is set or the door's firewall is loaded; `--yes`
   loads or removes it too). A release refuses, before uploading, a server whose release
-  root is missing or root's, or that lacks `tar` or `flock`. Once set up,
+  root is missing or root's, or that lacks `tar` or `flock`, and warns
+  `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
+  loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
   and `--server-info` warns of what is not devopsy's.
 - A server older than the operator's devopsy refuses before anything

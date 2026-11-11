@@ -990,8 +990,22 @@ func runDoor(args []string) int {
 		}
 	case "sync-key":
 		return side.syncKey(args[1:])
+	case "firewall":
+		if len(args) == 1 {
+			return side.firewall()
+		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
+}
+
+// firewall answers whether the server's firewall is loaded as devopsy loads it, for a project
+// user's release (warnDoorFirewall): the deploy user's own read as root (firewallAnswer, the
+// one a deploy user's release makes), a fixed script, no argument of the caller's and none of
+// its environment, through the real client. It answers right, wrong or unknown, nothing more:
+// what is wrong is the admin's to read (--server-info).
+func (s *doorSide) firewall() int {
+	fmt.Println(firewallAnswer(setupHost{}, s.real))
+	return 0
 }
 
 // syncKey is --sync-key for the caller: its sync keys (remote.DoorSyncKeysFile), never its

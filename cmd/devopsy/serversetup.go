@@ -255,7 +255,7 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
 	if fw := f.Firewall; fw != nil && fw.State.Changes() {
-		entry(remote.StatusWarning, firewallItem, append([]string{firewallLine(fw)}, fw.Wrong...)...)
+		entry(remote.StatusWarning, firewallItem, firewallLines(fw)...)
 	}
 	if fw := f.Firewall; fw != nil && fw.Unread != "" {
 		entry(remote.StatusInfo, firewallItem, "its chains could not be read as root: "+fw.Unread)
@@ -276,9 +276,22 @@ func volumeHint(f setup.Facts) []string {
 	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
 }
 
-// firewallLine is what every command says of a metadata firewall whose state changes it
+// firewallLines are what every command says of a metadata firewall whose state changes it
 // (setup.FirewallState.Changes): --server-setup's differences, --server-info's warning, and
-// what --upgrade leaves to --server-setup.
+// what --upgrade leaves to --server-setup; one to load again is said by its code
+// (report.FirewallNotLoaded), the unit's failure and the chains' findings its details.
+func firewallLines(fw *setup.FirewallFact) []string {
+	if fw.State == setup.FirewallReload {
+		lines := []string{report.FirewallNotLoaded.Msg()}
+		if fw.Unit != "" {
+			lines = append(lines, "devopsy-firewall.service: "+fw.Unit)
+		}
+		return append(lines, fw.Wrong...)
+	}
+	return []string{firewallLine(fw)}
+}
+
+// firewallLine is firewallLines' one line for a state other than to load again.
 func firewallLine(fw *setup.FirewallFact) string {
 	switch fw.State {
 	case setup.FirewallLoad:
@@ -292,9 +305,5 @@ func firewallLine(fw *setup.FirewallFact) string {
 	case setup.FirewallRemove:
 		return "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services"
 	}
-	line := "devopsy's firewall is not loaded as devopsy loads it"
-	if fw.Unit != "" {
-		line += " (devopsy-firewall.service: " + fw.Unit + ")"
-	}
-	return line
+	return ""
 }

@@ -311,6 +311,15 @@ a missing root or one root owns the deploy user's ([Servers](servers.md)).
 A project user's release checks neither: its tree is
 `--project-users add`'s.
 
+Where devopsy's firewall is loaded, the upload also reads its chains as
+root, when devopsy's util image is there already and within a few
+seconds, and warns `W0001` when they are not as devopsy loads it (a
+reload of the server's own firewall, an `iptables -F`), with
+`--server-setup` as the fix ([Codes](codes.md)); the release goes on. A
+project user's release asks the door, and says `W0001` with a line to
+pass it on to the server's admin. A read that cannot be made, or that
+fails, says nothing.
+
 A release says how much it uploads, shows the upload's progress on one
 line while it runs (at a terminal only), then its id, size and time,
 which the release log keeps. The server names the release by the

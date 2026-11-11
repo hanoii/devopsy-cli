@@ -239,6 +239,18 @@ metadata firewall line, with `--server-setup` as the fix, when:
 It also warns of a TCP listener open beyond loopback, other than
 sshd's and the ports Docker publishes, since containers reach it.
 
+A project user's release asks the door whether the firewall is loaded
+as devopsy loads it, and when it is not, says a line for the server's
+admin with a code to pass on ([Codes](codes.md)):
+
+```
+devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it
+devopsy: | report W0001 to the server's admin
+```
+
+The release goes on. The door answers only that, from the deploy
+user's own read of the chains as root.
+
 ## What a compose file may hold
 
 A project user's compose file is an ordinary one, within these rules.

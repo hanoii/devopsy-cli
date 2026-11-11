@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // A project user with no Docker socket, on a real kernel, Docker and sudo: what no unit
@@ -237,7 +239,9 @@ func TestDoorProjectsLife(t *testing.T) {
 	if out, code := doorAs(t, "devopsy-doorlife", "/usr/bin/docker ps"); code == 0 || !strings.Contains(out, "permission denied") {
 		t.Fatalf("the daemon lets a project user in (%d): %s", code, out)
 	}
-	release("a first release", "--release")
+	if out := release("a first release", "--release"); strings.Contains(out, "W0001") {
+		t.Errorf("a first release, the firewall loaded as devopsy loads it, said:\n%s", out)
+	}
 	if out, code := doorAs(t, "devopsy-doorlife", "cd ~/doorlife/prod/current/.devopsy && COMPOSE_PROJECT_NAME=doorlife-prod docker compose ps -q web"); code != 0 || strings.TrimSpace(out) == "" {
 		t.Fatalf("its compose (%d): %s", code, out)
 	}
@@ -257,7 +261,19 @@ func TestDoorProjectsLife(t *testing.T) {
 		t.Errorf("the deploy user reads a project's tree: %s", out)
 	}
 	op(t, dir, "echo '# again' >>.devopsy/compose.yaml")
-	release("a second release", "--release")
+	// A wipe of the firewall (an iptables -F of raw's PREROUTING): the project user's release,
+	// told by the door, says W0001 for the server's admin, and releases; the loader run again
+	// puts it back.
+	t.Cleanup(func() { doorRoot(t, remote.FirewallScript) })
+	if out, code := doorRoot(t, "iptables -t raw -D PREROUTING -j "+remote.FirewallContainerChain); code != 0 {
+		t.Fatalf("the wipe (%d): %s", code, out)
+	}
+	if out := release("a second release", "--release"); !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | report W0001 to the server's admin\n") {
+		t.Errorf("a release beside a wiped firewall:\n%s", out)
+	}
+	if out, code := doorRoot(t, remote.FirewallScript); code != 0 {
+		t.Fatalf("the firewall loaded again (%d): %s", code, out)
+	}
 	release("a rollback", "--rollback --yes")
 	// --status lists a service with no container: compose config, as the
 	// project user, needs no door.
@@ -1511,8 +1527,9 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 		t.Errorf("a door project's container read the metadata service: %s", out)
 	}
 
-	// What --server-info says of the host's rules, and add or the boot's loader putting them
-	// back: a project user then reaches nothing again.
+	// What --server-info says of the host's rules, in the setup's firewall line with
+	// --server-setup as the fix, and add or the boot's loader putting them back: a project
+	// user then reaches nothing again.
 	info := func() string {
 		t.Helper()
 		out, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
@@ -1531,7 +1548,7 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 		if got := reaches("devopsy-doorfwo"); len(got) == 0 {
 			t.Errorf("%s: the control: a project user reaches nothing with the rules broken", c.name)
 		}
-		if out := info(); !strings.Contains(out, c.says) || !strings.Contains(out, "devopsy @devopsy@doorsrv: --project-users add ") {
+		if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, c.says) || !strings.Contains(out, "devopsy @devopsy@doorsrv: --server-setup") {
 			t.Errorf("%s: --server-info:\n%s", c.name, out)
 		}
 		if c.put == "boot" {
