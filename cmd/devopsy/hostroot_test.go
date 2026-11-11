@@ -30,6 +30,11 @@ func TestHostRunArgs(t *testing.T) {
 		{"firewall load", firewallRun("load it", true),
 			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host", remote.UtilImage,
 				"chroot", "/host", "/bin/sh", "-c", "load it"}},
+		// The setup's root run: the host's network and NET_ADMIN for sysctl, its pids for
+		// systemctl, which refuses a peer it cannot see.
+		{"setup", setupRun("", "1000:1000"),
+			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cap-add", "NET_ADMIN", "-v", "/:/host", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", remote.SetupRootScript, "sh", "", "1000:1000"}},
 		{"unconfined, read-only, no network", hostRun{Unconfined: true, Script: "s", Args: []string{"a"}},
 			[]string{"run", "--rm", "--network", "none", "--security-opt", "apparmor=unconfined", "-v", "/:/host:ro", remote.UtilImage,
 				"chroot", "/host", "/bin/sh", "-c", "s", "sh", "a"}},

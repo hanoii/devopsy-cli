@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -355,6 +356,12 @@ func TestReleaseRootCheck(t *testing.T) {
 			t.Errorf("%s: %q, %+v", c.root, action, refusal)
 		}
 	}
+	// Root's: given by --server-setup, never refused; a plain user's test alone can say so.
+	if os.Getuid() != 0 {
+		if action, refusal := releaseRootCheck("/usr", os.Getuid()); action != setup.RootGive || refusal != nil {
+			t.Errorf("/usr: %q, %+v", action, refusal)
+		}
+	}
 	// Another user's: refused, by its name.
 	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || !strings.Contains(refusal.Message, "is ") {
 		t.Errorf("another user's: %+v", refusal)
@@ -659,5 +666,71 @@ func TestServerSetupRestartCutsItsOwnRun(t *testing.T) {
 	out, code := s.run([]string{"FAKE_RESTART_CUTS=1"}, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 0 || !strings.Contains(out, "Docker restarted, with daemon.json's values") || readString(filepath.Join(host, "invocation")) != "inv2\n" {
 		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A project user's release checks nothing of the server: its tree is --project-users add's,
+// and its Docker the door's.
+func TestServerReadySkipsAProjectUser(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing")
+	if errs := serverReady(missing, "devopsy@vm1:", true); len(errs) != 0 {
+		t.Errorf("a project user: %v", errs)
+	}
+	if errs := serverReady(missing, "devopsy@vm1:", false); len(errs) == 0 {
+		t.Error("the deploy user: nothing refused")
+	}
+}
+
+// --project-users add refuses, before anything else and before it changes anything, a release
+// root that is not the deploy user's directory, a project user's tree going there.
+func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	root := filepath.Join(t.TempDir(), "missing")
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
+	c := exec.Command(binary, remote.ProjectUsersFlag, "add", "shop")
+	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=/usr/bin:/bin"}
+	out, _ := c.CombinedOutput()
+	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made") || fileExists(root) {
+		t.Errorf("(%d):\n%s", c.ProcessState.ExitCode(), out)
+	}
+}
+
+// The apply waits for another holding its lock, saying so and how long it took, and goes on
+// once it is free.
+func TestServerSetupApplyWaitsForAnother(t *testing.T) {
+	t.Parallel()
+	s, _ := setupServer(t)
+	lockPath := setup.LockPath(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile))
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	outFile := filepath.Join(t.TempDir(), "out")
+	f, err := os.Create(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	c := exec.Command(binary, remote.ServerSetupFlag, "apply")
+	c.Dir, c.Env, c.Stdout, c.Stderr = s.project, s.env, f, f
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for start := time.Now(); !strings.Contains(readString(outFile), "waiting for another --server-setup, up to 10 minutes"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			t.Fatalf("no wait said:\n%s", readString(outFile))
+		}
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Wait(); err != nil || !strings.Contains(readString(outFile), "done waiting for another --server-setup (") {
+		t.Errorf("%v:\n%s", err, readString(outFile))
 	}
 }

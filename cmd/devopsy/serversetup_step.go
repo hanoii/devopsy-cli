@@ -633,9 +633,15 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string
 		return ""
 	}
 	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	run := hostRun{Write: true, Network: true, PID: true, NetAdmin: true, Script: remote.SetupRootScript,
-		Args: []string{h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation}, Stderr: quietQueued{q}}
+	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation)
+	run.Stderr = quietQueued{q}
 	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %v", err) })
+}
+
+// setupRun is remote.SetupRootScript's root run with its arguments: the host's network and
+// NET_ADMIN for sysctl, its pid namespace for systemctl, writing the host's files.
+func setupRun(args ...string) hostRun {
+	return hostRun{Write: true, Network: true, PID: true, NetAdmin: true, Script: remote.SetupRootScript, Args: args}
 }
 
 // queuedLines is the root run's stdout, which says when Docker's restart is queued.
@@ -737,15 +743,13 @@ func runServerReady(args []string) int {
 		return fail("usage: devopsy " + remote.ServerReadyFlag + " <server>")
 	}
 	u, err := user.Current()
-	if err == nil && inDoorGroup(u.Username) {
-		return 0
-	}
+	projectUser := err == nil && inDoorGroup(u.Username)
 	r, err := remote.ReleaseSettings()
-	if err != nil {
+	if err != nil && !projectUser {
 		report.Fail(fmt.Errorf("%w: nothing released", err))
 		return 1
 	}
-	errs := serverReady(r.Root, args[0])
+	errs := serverReady(r.Root, args[0], projectUser)
 	for _, err := range errs {
 		report.Fail(err)
 	}
@@ -755,8 +759,13 @@ func runServerReady(args []string) int {
 	return 0
 }
 
-// serverReady is what refuses a release on this server: the tools, the release root.
-func serverReady(root, ref string) []error {
+// serverReady is what refuses a release on this server: the tools, the release root; nothing
+// for a project user (projectUser), whose tree --project-users add made and whose Docker is
+// the door.
+func serverReady(root, ref string, projectUser bool) []error {
+	if projectUser {
+		return nil
+	}
 	var errs []error
 	if t := toolsRefusal(); t != nil {
 		errs = append(errs, &report.Failure{Msg: t.Message + ": nothing released", Remedies: fixWords(t.Fix)})

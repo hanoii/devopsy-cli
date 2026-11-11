@@ -88,11 +88,17 @@ func runUpgrade(args []string, color bool) int {
 // (remote.ServerSetupFlag apply --upgrade), which asks nothing, restarts nothing and exits 0
 // whatever fails; else it returns 0.
 func serverApply(exe string) int {
-	if !upgradeApplies(version, setup.RecordPath(remote.UserConfigFile()), fileExists) {
+	return applyAfterUpgrade(report.Default(), exe, upgradeApplies(version, setup.RecordPath(remote.UserConfigFile()), fileExists))
+}
+
+// applyAfterUpgrade replaces devopsy with exe's apply in upgrade mode when applies, saying
+// through log, as a warning, why it could not; it returns 0 either way: the upgrade is done.
+func applyAfterUpgrade(log *report.Logger, exe string, applies bool) int {
+	if !applies {
 		return 0
 	}
 	err := syscall.Exec(exe, []string{exe, remote.ServerSetupFlag, "apply", "--upgrade"}, os.Environ())
-	report.Say(report.WarnLevel, "the server's setup was not applied: "+err.Error(), nil, report.Fix("run --server-setup for this server"))
+	log.Say(report.WarnLevel, "the server's setup was not applied: "+err.Error(), nil, report.Fix("run --server-setup for this server"))
 	return 0
 }
 
