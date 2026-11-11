@@ -1290,7 +1290,7 @@ func startLeftDown(cwd string, names []string) (down []string) {
 			start = append(start, s)
 		}
 	}
-	fix := report.Fix("", "devopsy @"+targetAddress(cwd)+" up -d")
+	fix := offer(report.Fix, "", sessionHint(cwd).On("up -d"), "start them with an up on this environment")
 	if len(again) > 0 {
 		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
 			report.Say(report.WarnLevel, "docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", nil, fix)
@@ -2263,7 +2263,7 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	}
 	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
 	unlock()
-	report.Say(report.InfoLevel, "imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", nil, report.Hint("to restore it:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+id))
+	report.Say(report.InfoLevel, "imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", nil, offer(report.Hint, "to restore it:", sessionHint(cwd).Releasing("--snapshots restore "+id), "to restore it, --snapshots restore on this environment"))
 	return nil
 }
 
@@ -2341,7 +2341,8 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 		return nil
 	}
 	return &report.Failure{Msg: "snapshot " + filepath.Base(snap) + " does not fit the current release's labels: nothing restored", Details: bad,
-		Remedies: []report.Remedy{report.Fix("restore it whole, its code included:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+filepath.Base(snap))}}
+		Remedies: []report.Remedy{offer(report.Fix, "restore it whole, its code included:", sessionHint(cwd).Releasing("--snapshots restore "+filepath.Base(snap)),
+			"restore it whole, its code included, with --snapshots restore on this environment")}}
 }
 
 // snapshotRestoreData writes snap's data into the environment, for the
@@ -2547,11 +2548,12 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		}
 		// The same restore again, its env too (review: a --no-code
 		// restore's hint was a full one when copied).
-		again := " --snapshots restore " + id + " --with-env"
+		again := "--snapshots restore " + id + " --with-env"
 		if noCode {
-			again = " --snapshots restore " + id + " --no-code --with-env"
+			again = "--snapshots restore " + id + " --no-code --with-env"
 		}
-		report.Say(report.WarnLevel, "the snapshot's shared/.env differs from the environment's"+in+": kept as it is", nil, report.Hint("--with-env brings it back too:", "devopsy @"+targetAddress(cwd)+again))
+		report.Say(report.WarnLevel, "the snapshot's shared/.env differs from the environment's"+in+": kept as it is", nil,
+			offer(report.Hint, "--with-env brings it back too:", sessionHint(cwd).Releasing(again), "--with-env brings it back too, on this environment's restore"))
 	}
 	// It lands under the variables it leaves (its labels read with the
 	// snapshot's, --with-env, moved in place above): its history comes back
@@ -2653,7 +2655,11 @@ func (l *lenientWriter) Write(p []byte) (int, error) {
 // restoreRemedies are a restore mark's ways out, as commands that work
 // copied (the environment's address).
 func restoreRemedies(cwd, id string) []report.Remedy {
-	return remote.RestoreFixes(targetAddress(cwd), id, projectVar(cwd, "DEVOPSY_PARENT") != "")
+	h := sessionHint(cwd)
+	if h.Hint == "" {
+		return []report.Remedy{report.Fix("restore it again, its data alone (--no-code) or another snapshot, with --snapshots on this environment")}
+	}
+	return remote.RestoreFixes(h.Hint, id, projectVar(cwd, "DEVOPSY_PARENT") != "")
 }
 
 // snapshotRestored completes a restore once its run step went through:

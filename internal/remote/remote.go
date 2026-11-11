@@ -1682,6 +1682,10 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if tty {
 		ttyFlag = "-t"
 	}
+	// The script's needs, read from the script alone: the lines added below are values, the
+	// operator's command among them, never a script's own words.
+	needs := needsLine(script, alsoNeeds(ctx)...)
+	script = sessionExports(t) + script
 	if Color {
 		script = ColorEnv + "=1; export " + ColorEnv + "\n" + script
 	}
@@ -1692,7 +1696,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		// Exported: the server's own devopsy calls check the same way.
 		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
-	script = WithNeeds(script, alsoNeeds(ctx)...)
+	script = needs + script
 	// extra first: ssh keeps the first value, so a session's own option
 	// (--shell-host --root's -l root) wins over SSHOptions.
 	args := append(append(append(extra[:len(extra):len(extra)], SSHOptions()...), ttyFlag), SSHArgs(t.Host)...)

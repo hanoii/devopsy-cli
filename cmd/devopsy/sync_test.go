@@ -585,8 +585,9 @@ case "$opts" in *HostKeyAlias=devopsy-sync-*)
   [ -n "$forced" ] || { echo "Permission denied (publickey)." >&2; exit 255; }
   export SSH_ORIGINAL_COMMAND="$s"
   s=$forced
-  # sshd's clean environment: none of the parent's sync variables.
-  for v in $(env | grep -E '^(DEVOPSY_(INTERNAL_)?(SYNC|HEARTBEAT)_[A-Z_]*|COMPOSE_PROJECT_NAME)=' | cut -d= -f1); do unset "$v"; done
+  # sshd's clean environment: none of the parent's sync variables, nor what its session
+  # carries for its hints.
+  for v in $(env | grep -E '^(DEVOPSY_(INTERNAL_)?(SYNC|HEARTBEAT)_[A-Z_]*|DEVOPSY_INTERNAL_(COMMAND|ADDRESS|HINT_ADDRESS)|COMPOSE_PROJECT_NAME)=' | cut -d= -f1); do unset "$v"; done
   ;;
 esac
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac

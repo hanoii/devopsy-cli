@@ -92,7 +92,7 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 		fixes := []report.Remedy{report.Fix("raise " + DataVersionLabel + " to the image's version, when it is newer than the data's (one variable for the image and the label keeps them together)")}
 		if w.rollback {
 			fixes = []report.Remedy{
-				report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")),
+				s.fix("fix forward: a release, which never takes the data back", "--release"),
 				s.snapshotFix(refusals)}
 		}
 		flag := w.flag
@@ -101,7 +101,7 @@ func (s *Set) judge(js []judged, w checkWords, target string, quiet bool) ([]str
 		}
 		// What it accepted too: a line naming only the rest would be refused
 		// on these (review: copied lines took turns, none going through).
-		fixes = append(fixes, report.Fix("knowing its data takes it, accept it, its data's history starting over from it:", s.again(flag, append(forced, refusedSvcs...))+w.input))
+		fixes = append(fixes, s.fix("knowing its data takes it, accept it, its data's history starting over from it:", again(flag, append(forced, refusedSvcs...))+w.input))
 		s.sayAll(report.ErrorLevel, w.what+": "+w.nothing, refused, fixes...)
 		return nil, ErrRefused
 	}
@@ -150,9 +150,9 @@ func (s *Set) snapshotFix(refusals []judged) report.Remedy {
 		}
 	}
 	if newest != "" {
-		return report.Fix("restore the newest snapshot of the data from before the change, with its code:", s.cmd("--snapshots restore "+newest))
+		return s.fix("restore the newest snapshot of the data from before the change, with its code:", "--snapshots restore "+newest)
 	}
-	return report.Fix("restore a snapshot from before the change, with its code:", s.cmd("--snapshots"))
+	return s.fix("restore a snapshot from before the change, with its code:", "--snapshots")
 }
 
 // SnapshotManifest is a snapshot's manifest (remote's), read for the
@@ -375,16 +375,16 @@ func (s *Set) now() time.Time {
 // sanitize keeps a value on one listing column.
 func sanitize(v string) string { return strings.Join(strings.Fields(v), "_") }
 
-// again is the command that runs it again accepting svcs: devopsy
-// @<address> <flag> --accept-image <svcs>.
-func (s *Set) again(flag string, svcs []string) string {
-	return s.cmd(flag + " --accept-image " + strings.Join(svcs, ","))
+// again is the arguments that run it again accepting svcs: <flag> --accept-image <svcs>.
+func again(flag string, svcs []string) string {
+	return flag + " --accept-image " + strings.Join(svcs, ",")
 }
 
-// cmd is devopsy @<address> <args>, or args alone without an address.
-func (s *Set) cmd(args string) string {
+// fix is a fix offering devopsy @<address> <args> under text, or, without an address, text
+// naming args in words: never args alone as a command, which copied fails.
+func (s *Set) fix(text, args string) report.Remedy {
 	if s.Address != "" {
-		return "devopsy @" + s.Address + " " + args
+		return report.Fix(text, "devopsy @"+s.Address+" "+args)
 	}
-	return args
+	return report.Fix(strings.TrimSuffix(text, ":") + " (" + args + " on this environment)")
 }

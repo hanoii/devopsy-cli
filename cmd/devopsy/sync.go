@@ -1049,7 +1049,7 @@ func runUtilImage() int {
 func syncEnv(flag string) (toDir, toProject string, err error) {
 	toDir, toProject = os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv)
 	if toDir == "" || toProject == "" {
-		return "", "", &report.Failure{Msg: flag + " only runs in a sync's push, on the parent's server", Remedies: []report.Remedy{report.Hint("a sync runs it:", "devopsy @<child> --sync")}}
+		return "", "", &report.Failure{Msg: flag + " only runs in a sync's push, on the parent's server", Remedies: []report.Remedy{report.Hint("a sync runs it (--sync on the child)")}}
 	}
 	return toDir, toProject, nil
 }
@@ -1776,6 +1776,7 @@ func childSSHArgs(to string, req syncRequest, option string, extra ...string) []
 	if b, err := strconv.Atoi(os.Getenv(remote.HeartbeatEnv)); err == nil {
 		req.Beat = b
 	}
+	req.Command = remote.Command
 	data, _ := json.Marshal(req)
 	trace(append([]string{"ssh"}, append(args, to, string(data))...))
 	return append(args, to, string(data))
@@ -2614,12 +2615,12 @@ func daemonListing(ctx context.Context, id string) (*exec.Cmd, error) {
 }
 
 // cleanEnvKeys are what the child's devopsy gets of the parent's
-// environment on the same server: the machine's, and the sync's addresses
-// and arguments and SyncWatchEnv (for the child's import), never the
-// project's. The
+// environment on the same server: the machine's, the sync's addresses
+// and arguments, SyncWatchEnv (for the child's import) and the operator's
+// command, passed on, never the project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.CommandEnv + `|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
 // childInheritEnv is the child's pending inherited variables' file
 // (remote.InheritPendingEnv), from the child's directory the push knows:
@@ -2643,7 +2644,20 @@ func cleanEnv(projectName string) []string {
 	if k, v := childInheritEnv(); k != "" {
 		env = append(env, k+"="+v)
 	}
+	for k, v := range childAddress(os.Getenv(remote.SyncToTargetEnv), projectName) {
+		env = append(env, k+"="+v)
+	}
 	return append(env, "COMPOSE_PROJECT_NAME="+projectName)
+}
+
+// childAddress is the child's address for its devopsy's hints (remote.AddressEnv,
+// HintAddressEnv), the one the push has for it, to: the session the push runs in is the
+// parent's, and its address would name the parent. name is the child's compose name.
+func childAddress(to, name string) map[string]string {
+	if !remote.IsAddress(to) {
+		return nil
+	}
+	return map[string]string{remote.AddressEnv: to, remote.HintAddressEnv: to, remote.EnvironmentEnv: name}
 }
 
 // runSyncExec implements the hidden --sync-exec <args>...: devopsy args
@@ -2907,7 +2921,7 @@ func childPrepare(p place, services []cli.SyncService, set []cli.Stopped, env []
 	// --reset, whose wipe removes it. Which entries the copy replaces
 	// is the parent's to say: one there is refused too, said.
 	if os.Getenv(remote.SyncResetEnv) == "" {
-		if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied", remote.ResetFix(cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>"))); err != nil {
+		if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied", offer(report.Fix, "start it over from its parent (all its data goes, its shared/.env stays):", remote.Session{Address: os.Getenv(remote.SyncToTargetEnv)}.On("--reset"), "start it over from its parent with --reset on the child (all its data goes, its shared/.env stays)")); err != nil {
 			return failErr(err)
 		}
 	}

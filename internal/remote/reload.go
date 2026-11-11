@@ -51,7 +51,7 @@ export ` + TargetPendingEnv + `="$rl_pending"
 ` + call("--missing-vars") + ` || ` + refuse + `
 ` + call("--check-names") + ` "$base" || ` + refuse + `
 ` + call("--check-mounts") + ` || ` + refuse + `
-` + call("--check-images", HintAddress(t)) + ` || ` + refuse + `
+` + call("--check-images") + ` || ` + refuse + `
 if [ -n "${watch_pid:-}" ]; then
 ` + waitBeat(`{ rm -f "$rl_pending"; devopsy --say error "the session ended: nothing reloaded"; exit 1; }`) + `fi
 trap '' INT TERM HUP PIPE
@@ -74,11 +74,11 @@ exit "$rs"
 // another image than it fetched (--check-images): a sync's holder, a
 // --no-code restore. env is variables for the check alone (the pending
 // files standing in for what the step will read); nothing without run.
-func checkImages(t *Target, projectName string, run bool, env, nothing string, flags ...string) string {
+func checkImages(projectName string, run bool, env, nothing string, flags ...string) string {
 	if !run {
 		return ""
 	}
-	return `(cd "$base/current" && ` + env + devopsyCall(projectName, append(append([]string{"--check-images"}, flags...), HintAddress(t)), false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
+	return `(cd "$base/current" && ` + env + devopsyCall(projectName, append([]string{"--check-images"}, flags...), false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
 `
 }
 

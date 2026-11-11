@@ -259,7 +259,7 @@ export ` + RestoreByEnv + `=` + Quote(r.By)
 		again += " --with-env"
 	}
 	s += `[ -z "${` + ImagesAcceptEnv + `:-}" ] || export ` + ImagesAcceptEnv + `
-` + checkImages(t, projectName, true, env, "nothing restored", "--restore", r.Snapshot, "--again", again)
+` + checkImages(projectName, true, env, "nothing restored", "--restore", r.Snapshot, "--again", again)
 	// With release snapshots on, the data it replaces first, as a
 	// release's: what it stops stays down for the data step, and anything
 	// that ends this before it starts them again (rd_unsnap).

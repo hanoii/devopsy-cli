@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -357,10 +358,12 @@ func destroyData(cwd string, step []string, color bool) int {
 	// said, with the way to finish it.
 	again := "devopsy --destroy"
 	if cli.InRelease(projectDir) {
-		again = "devopsy @" + targetAddress(root) + " --destroy"
+		// The command the operator ran, else this one on its environment.
+		h := sessionHint(root)
+		again = cmp.Or(h.Command, h.Releasing("--destroy"))
 	}
 	half := func(msg string) int {
-		report.Say(report.ErrorLevel, msg+": the destroy stopped halfway, its containers and volumes perhaps gone", nil, report.Fix("", again))
+		report.Say(report.ErrorLevel, msg+": the destroy stopped halfway, its containers and volumes perhaps gone", nil, offer(report.Fix, "", again, "run --destroy on this environment again"))
 		return 1
 	}
 	if err := composeDownProject(ctx, root, errOut, false, "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {

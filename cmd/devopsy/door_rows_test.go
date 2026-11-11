@@ -21,6 +21,8 @@ import (
 )
 
 // A caller's PATH would choose the docker the door runs, and its HOME the config it obeys.
+// What the caller's session carries for its hints (the door's sudo keeps it) is read before
+// the environment is cleared, so the door's remedies have it and nothing it starts sees it.
 //
 // Not parallel: it clears the environment.
 func TestDoorEnvironmentIsItsOwn(t *testing.T) {
@@ -35,12 +37,16 @@ func TestDoorEnvironmentIsItsOwn(t *testing.T) {
 	for k, v := range map[string]string{
 		"PATH": "/tmp/evil", "HOME": "/tmp/evil", "DOCKER_HOST": "tcp://evil", "DOCKER_CONFIG": "/tmp/evil",
 		"XDG_CONFIG_HOME": "/tmp/evil", "COMPOSE_FILE": "/tmp/evil", "BUILDKIT_HOST": "tcp://evil", "LD_PRELOAD": "/tmp/evil",
+		remote.CommandEnv: "devopsy @box restart web", remote.AddressEnv: "box", remote.HintAddressEnv: "devopsy@vm1:prod",
 	} {
 		os.Setenv(k, v)
 	}
-	home, err := doorEnvironment()
+	home, asked, err := doorEnvironment()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := (remote.Session{Command: "devopsy @box restart web", Address: "box", Hint: "devopsy@vm1:prod"}); asked != want {
+		t.Errorf("the session read %+v, want %+v", asked, want)
 	}
 	u, err := user.Current()
 	if err != nil {

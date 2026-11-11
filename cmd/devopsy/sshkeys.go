@@ -326,16 +326,6 @@ func runSSHKeysGenerate(args []string, color bool) int {
 // targetRef is how the user named the target, for usage lines and
 // hints of commands that need no checkout (--status, --log, --vars): its
 // alias, else its resolved address. A hint to release, roll back or sync
-// is remote.HintAddress's: an alias only with source:.
-func targetRef(t *remote.Target) string {
-	switch {
-	case t.Alias != "":
-		return t.Alias
-	case t.Name == "":
-		// A server named alone, as typed back: <host>:.
-		return remote.ServerRef(t)
-	}
-	// Resolved, so a hint works when copied (an instance, a server from
-	// variables).
-	return cmp.Or(t.Address, t.Name)
-}
+// is remote.HintAddress's: an alias only with source:. The same as every
+// session carries for its server's hints (remote.TypedAddress).
+func targetRef(t *remote.Target) string { return remote.TypedAddress(t) }

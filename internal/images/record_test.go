@@ -317,3 +317,17 @@ func TestModeFromRecord(t *testing.T) {
 		t.Errorf("after the rollback app runs %s, want sha256:b1, by its bookmark\n%s", id, out.String())
 	}
 }
+
+// A fix offers its command by the environment's address, and without one names its
+// arguments in words: never the arguments alone as a command, which copied fails.
+func TestFixNeedsAnAddressForACommand(t *testing.T) {
+	t.Parallel()
+	on := (&Set{Address: "vm1:prod"}).fix("a release builds it:", "--release")
+	if on.Text != "a release builds it:" || len(on.Cmds) != 1 || on.Cmds[0] != "devopsy @vm1:prod --release" {
+		t.Errorf("with an address: %+v", on)
+	}
+	none := (&Set{}).fix("a release builds it:", "--release")
+	if none.Text != "a release builds it (--release on this environment)" || len(none.Cmds) != 0 {
+		t.Errorf("without an address: %+v", none)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -71,7 +72,7 @@ func ParseServer(server string) (dest, port string, ok bool) {
 	default:
 		host, port, hasPort = strings.Cut(rest, ":")
 	}
-	if host == "" || strings.HasPrefix(user, "-") || strings.HasPrefix(host, "-") ||
+	if host == "" || strings.HasPrefix(user, "-") || strings.HasPrefix(host, "-") || hasControl(rest) ||
 		strings.ContainsAny(user, "[]/:"+shellSpecial) || strings.ContainsAny(host, "[]/"+shellSpecial) || hasPort && !validPort(port) {
 		return "", "", false
 	}
@@ -85,6 +86,12 @@ func ParseServer(server string) (dest, port string, ok bool) {
 // shellSpecial are the characters no user or host holds, which a shell
 // would read in a hint or a script.
 const shellSpecial = " \t'\"`$\\;&|<>(){}*?!#~,="
+
+// hasControl says whether s holds a control character, which no user, host or command to
+// copy holds: a line said of it would be cut or redrawn at it.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
+}
 
 func isIPv6(s string) bool {
 	a, err := netip.ParseAddr(s)

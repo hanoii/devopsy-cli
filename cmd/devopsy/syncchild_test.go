@@ -121,7 +121,7 @@ func TestSyncKinds(t *testing.T) {
 	// The child a project user, the parent not: a first release refuses
 	// before uploading.
 	out, code := s.run(append(across, "FAKE_PROJECT_HOST=two"), "@devopsy@two:dev", "--release")
-	if code == 0 || !strings.Contains(out, "the child's user is a project user and the parent's is not") || !strings.Contains(out, "--export <service> | devopsy @<child> --import <service>") || strings.Contains(out, "uploaded") {
+	if code == 0 || !strings.Contains(out, "the child's user is a project user and the parent's is not") || !strings.Contains(out, "the parent's --export of it piped into the child's --import") || strings.Contains(out, "uploaded") {
 		t.Fatalf("a release, a project user's child (%d):\n%s", code, out)
 	}
 	if out, code := s.run(across, "@devopsy@two:dev", "--release"); code != 0 {

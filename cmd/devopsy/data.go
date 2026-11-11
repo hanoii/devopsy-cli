@@ -1516,11 +1516,12 @@ func (r importRun) complete(down func() error) int {
 				report.Error(stopErr.Error())
 			}
 			return failErr(fmt.Errorf("the import of %s completed, but %w: what it stopped stays down, and the mark until an import of %s completes", r.name, err, r.name),
-				report.Fix("once that is fixed (the registry, Docker), accept the data and start them:", "devopsy @"+targetAddress(r.cwd)+" "+cli.ImportFlag+" "+r.name+" --resolved"))
+				offer(report.Fix, "once that is fixed (the registry, Docker), accept the data and start them:", sessionHint(r.cwd).On(cli.ImportFlag+" "+r.name+" --resolved"),
+					"once that is fixed (the registry, Docker), accept the data and start them with "+cli.ImportFlag+"'s --resolved on this environment"))
 		}
 	}
 	if err := restoreServices(r.cwd, r.services, restoreOpts{recreate: r.imgs != nil, written: []string{r.name}}); err != nil {
-		return failErr(&report.Failure{Msg: err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does", Remedies: []report.Remedy{report.Fix("start them:", "devopsy @"+targetAddress(r.cwd)+" "+cli.ImportFlag+" "+r.name+" --resolved")}})
+		return failErr(&report.Failure{Msg: err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does", Remedies: []report.Remedy{offer(report.Fix, "start them:", sessionHint(r.cwd).On(cli.ImportFlag+" "+r.name+" --resolved"), "start them with "+cli.ImportFlag+"'s --resolved on this environment")}})
 	}
 	if r.imgs != nil {
 		// What runs on the data now, for whatever reads its history next
@@ -1548,7 +1549,7 @@ func copyImages(cwd string) (*images.Set, error) {
 	if err != nil {
 		return nil, err
 	}
-	set.Address, set.Accept = targetAddress(cwd), acceptedImages()
+	set.Address, set.Accept = sessionHint(cwd).Hint, acceptedImages()
 	return set, nil
 }
 
@@ -1611,7 +1612,7 @@ func (r importRun) failed(cause error) int {
 		}
 		return failErr(&report.Failure{Msg: "the import of " + r.name + " did not complete: its data may be partial, and " + what, Remedies: fixes})
 	}
-	report.Say(report.ErrorLevel, "the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", nil, remote.SeeHint(targetAddress(r.cwd), "the ways out", "--status"))
+	report.Say(report.ErrorLevel, "the import of "+r.name+" did not complete: its data may be partial, and "+what+": nothing runs on it until an import of "+r.name+" completes", nil, seeHint(sessionHint(r.cwd), "the ways out", "--status"))
 	return 1
 }
 
@@ -1654,7 +1655,7 @@ func runResolved(cwd, name string) int {
 	case m.IsRestore():
 		return failErr(&report.Failure{Msg: "the restore of snapshot " + m.From + " did not complete: --resolved is for imports: nothing resolved", Remedies: restoreRemedies(cwd, m.From)})
 	case !m.IsImport():
-		return failErr(&report.Failure{Msg: "this environment's data is from a sync that did not complete, and only a sync completes it: nothing resolved", Remedies: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetAddress(cwd)+" --sync")}})
+		return failErr(&report.Failure{Msg: "this environment's data is from a sync that did not complete, and only a sync completes it: nothing resolved", Remedies: []report.Remedy{offer(report.Fix, "sync it:", sessionHint(cwd).Releasing("--sync"), "sync it with --sync on this environment")}})
 	case m.From != name:
 		return fail("the import that did not complete is " + m.From + "'s, not " + name + "'s: nothing resolved")
 	}
@@ -1667,7 +1668,10 @@ func runResolved(cwd, name string) int {
 		return fail(err.Error())
 	}
 	removeSpools(base, name)
-	again := report.Fix("fix what does not start, then run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved")
+	// The command the operator ran, else this one on its environment.
+	hint := sessionHint(cwd)
+	rerun := cmp.Or(hint.Command, hint.On(cli.ImportFlag+" "+name+" --resolved"))
+	again := offer(report.Fix, "fix what does not start, then run it again:", rerun, "fix what does not start, then run it again")
 	// What an mnt import may have extracted goes to its owners first, as
 	// a complete import does: a tar made anywhere carries its maker's
 	// owners, and the services would start on them.
@@ -1686,7 +1690,7 @@ func runResolved(cwd, name string) int {
 	// imported data).
 	if err := resolvedLanding(cwd, base, name, services, since); err != nil {
 		return failErr(fmt.Errorf("%s's imported data did not land, as %w: the mark stays, and what the import kept down stays down", name, err),
-			report.Fix("once that is fixed (the registry, Docker), run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
+			offer(report.Fix, "once that is fixed (the registry, Docker), run it again:", rerun, "once that is fixed (the registry, Docker), run it again"))
 	}
 	// Made again where devopsy's compose file gives a service another
 	// image than its container's (another activation's container, a hold
@@ -1837,10 +1841,30 @@ func composeName(cwd string) string {
 	return cmp.Or(projectVar(cwd, "COMPOSE_PROJECT_NAME"), "local")
 }
 
-// targetAddress is the address of the release at cwd, for a hint on a
-// server (its devopsy-target.env's DEVOPSY_TARGET), else <target>.
-func targetAddress(cwd string) string {
-	return cmp.Or(projectVar(cwd, "DEVOPSY_TARGET"), "<target>")
+// sessionHint is how a hint said on a server names the environment at cwd and the
+// command the operator ran: the session's (remote.SessionFrom) when it is on that
+// environment, else the release's DEVOPSY_TARGET for both forms of the address, else none
+// (remote.Session.In). It only ever names a command in a hint: nothing decides or acts by it.
+func sessionHint(cwd string) remote.Session {
+	dir, _ := cli.FindProjectDir(cwd)
+	return remote.SessionFrom(os.Getenv).In(remote.ReleaseNames(dir))
+}
+
+// seeHint is remote.SeeHint by h's address, else in words.
+func seeHint(h remote.Session, what, flag string) report.Remedy {
+	if h.Address == "" {
+		return report.Hint("see " + what + " with " + flag + " on this environment")
+	}
+	return remote.SeeHint(h.Address, what, flag)
+}
+
+// offer is kind (report.Fix or report.Hint) offering cmd under text, or words alone when
+// there is no command (no address known): never a placeholder, which copied fails.
+func offer(kind func(string, ...string) report.Remedy, text, cmd, words string) report.Remedy {
+	if cmd == "" {
+		return kind(words)
+	}
+	return kind(text, cmd)
 }
 
 // projectVar is key in the environment devopsy computes for the project
