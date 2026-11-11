@@ -47,6 +47,9 @@ type setupRead struct {
 	exists     bool
 	states     []setup.PartState
 	invocation string
+	// flags are the arguments docker.service starts dockerd with, but --config-file, and
+	// flagKeys the daemon.json keys of devopsy's parts they set.
+	flags, flagKeys []string
 	// fileVisible is what Docker shows once it takes the file; running what it shows now.
 	fileVisible, running setup.Visible
 }
@@ -143,7 +146,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	f.Refusals = append(f.Refusals, refusals...)
 	rd.docker = len(refusals) == 0
 	f.Running, f.LiveRestore, rd.running = info.running, hd.facts.Running.LiveRestore, hd.facts.Running
-	rd.invocation = info.invocation
+	rd.invocation, rd.flags, rd.flagKeys = info.invocation, info.flags, info.flagKeys
 
 	recordPath := setup.RecordPath(remote.UserConfigFile())
 	rd.record, rd.exists, err = setup.ReadRecord(recordPath)
@@ -158,12 +161,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		f.DaemonError = why
 	} else {
 		rd.daemon, rd.fileVisible = d, visible
-		// What Docker runs with, when it answered, tells a part set outside the file.
-		var running *setup.Visible
-		if rd.docker {
-			running = &rd.running
-		}
-		rd.states = setup.Judge(rd.daemon, rd.record, running)
+		rd.states = setup.Judge(rd.daemon, rd.record, rd.flagKeys)
 		for _, s := range rd.states {
 			f.Parts = append(f.Parts, setup.FactOf(s))
 		}
@@ -287,6 +285,8 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 type dockerSetup struct {
 	running    int
 	invocation string
+	// flags and flagKeys are setupRead's.
+	flags, flagKeys []string
 }
 
 // setupDocker reads Docker as the setup needs it, from docker info as read (d), and refuses
@@ -315,6 +315,23 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 	host, _ := os.Hostname()
 	if slices.Contains(d.Security, "rootless") || d.Name != host {
 		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
+	}
+	// The daemon's own flags, as docker.service starts it next: a key one sets is never put
+	// beside it, and a config file of its own is not daemon.json.
+	argv := setup.DaemonCommand(systemctlShow("ExecStart"))
+	keys, config := setup.DaemonFlags(argv)
+	if config != "" && filepath.Clean(config) != setup.DaemonFile {
+		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "docker.service starts dockerd with --config-file " + config + ": " + setup.DaemonFile + " is not what this Docker reads"})
+	}
+	ds.flagKeys = keys
+	for i := 1; i < len(argv); i++ {
+		switch {
+		case argv[i] == "--config-file":
+			i++
+		case strings.HasPrefix(argv[i], "--config-file="):
+		default:
+			ds.flags = append(ds.flags, argv[i])
+		}
 	}
 	ds.invocation = systemctlShow("InvocationID")
 	if ids, err := exec.Command("docker", "ps", "-q").Output(); err == nil {
@@ -513,7 +530,7 @@ func applySetup(h setupHost, a setupApply) int {
 		if restart {
 			after = "restart"
 		}
-		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, &out)
+		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, rd.flags, &out)
 		// The restart may take the run's container down before its script says so: a new
 		// InvocationID says it went.
 		queued = restart && (hasLine(out.String(), remote.SetupQueued) || err != nil && before != "" && systemctlShow("InvocationID") != before)
@@ -538,7 +555,7 @@ func applySetup(h setupHost, a setupApply) int {
 		} else {
 			report.Fail(err, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
 			var marked bytes.Buffer
-			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, &marked) == nil {
+			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, rd.flags, &marked) == nil {
 				sayRootLines(marked.String(), nil, f.Root)
 			}
 			return 1
@@ -624,7 +641,7 @@ func fixWords(fix string) []report.Remedy {
 // rootSetupRun runs remote.SetupRootScript as root on the host: the host's network and
 // NET_ADMIN for the live buffers (sysctl), its pid namespace for systemctl (systemd refuses a
 // peer it cannot see), writing the host's files.
-func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation string, out *bytes.Buffer) error {
+func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation string, flags []string, out *bytes.Buffer) error {
 	q := &queuedLines{out: out}
 	flag := func(b bool) string {
 		if b {
@@ -633,7 +650,7 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string
 		return ""
 	}
 	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation)
+	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"))
 	run.Stderr = quietQueued{q}
 	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %v", err) })
 }

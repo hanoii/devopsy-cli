@@ -14,9 +14,9 @@ const (
 	Devopsys
 	// Changed: anything else, someone's value devopsy never puts over unasked.
 	Changed
-	// Outside: the file sets none of the part, and Docker runs with a value of its own for
-	// it, set outside daemon.json (docker.service's flags, say): left by every command, with
-	// no question, since dockerd refuses to start on a value both in a flag and in the file.
+	// Outside: a flag of the daemon's sets a key of the part (SetByFlags): left by every
+	// command, with no question, since dockerd refuses to start on a key both in a flag and in
+	// the file.
 	Outside
 )
 
@@ -31,14 +31,14 @@ type Entry struct {
 	Kept    string `yaml:"kept,omitempty"`
 }
 
-// StateOf is a part's state, the rules taken in order; outside says Docker runs with a value
-// of the part's that is not its default (Visible.Sets).
+// StateOf is a part's state, the rules taken in order; outside says a flag of the daemon's
+// sets a key of the part.
 func StateOf(o, w string, r Entry, outside bool) State {
 	switch {
+	case outside:
+		return Outside
 	case o == w:
 		return InSync
-	case o == "{}" && outside:
-		return Outside
 	case r.Kept != "" && o == r.Kept:
 		return Kept
 	case r.Applied != "" && o == r.Applied, r == Entry{} && o == "{}":
@@ -55,19 +55,19 @@ type PartState struct {
 	State    State
 }
 
-// Judge is every part devopsy wants, as d and the record have it and Docker runs (running,
-// nil when Docker did not answer), in Parts' order.
-func Judge(d Daemon, r Record, running *Visible) []PartState {
+// Judge is every part devopsy wants, as d and the record have it and the daemon's flags set
+// (flagKeys, DaemonFlags' keys), in Parts' order.
+func Judge(d Daemon, r Record, flagKeys []string) []PartState {
 	out := make([]PartState, 0, len(Parts))
 	for _, p := range Parts {
 		s := PartState{Part: p, Observed: d.Observed(p), Entry: r.Daemon[p.Name]}
-		s.State = StateOf(s.Observed, p.Want, s.Entry, running != nil && running.Sets(p.Name))
+		s.State = StateOf(s.Observed, p.Want, s.Entry, SetByFlags(p, flagKeys))
 		out = append(out, s)
 	}
 	return out
 }
 
-// OutsideParts are the names of the parts in states that are set outside daemon.json.
+// OutsideParts are the names of the parts in states that the daemon's flags set.
 func OutsideParts(states []PartState) []string {
 	var out []string
 	for _, s := range states {

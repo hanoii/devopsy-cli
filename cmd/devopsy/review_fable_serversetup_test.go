@@ -41,37 +41,6 @@ esac
 	}
 }
 
-// Bug: a log driver set by docker.service's own flags, with log-opts in daemon.json, reads as
-// pending for ever: the logs part is not {} in the file, so it is never set outside it, and
-// the file's driver (none, so json-file) never equals the one Docker runs with. --yes then
-// restarts Docker at every run with no container running, for nothing Docker has to take,
-// and the restart is never confirmed.
-func TestServerSetupLogDriverOutsideWithOptsInTheFile(t *testing.T) {
-	t.Parallel()
-	s, host := setupServer(t)
-	name, err := os.Hostname()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pools := `[{"base":"172.16.0.0/12","size":24},{"base":"192.168.0.0/16","size":24}]`
-	write(t, filepath.Join(host, setup.DaemonFile), `{"log-opts":{"max-size":"10m"},"live-restore":true,"default-address-pools":`+pools+`}`, 0o644)
-	info := `{"Name":"` + name + `","LoggingDriver":"journald","LiveRestoreEnabled":true,"DockerRootDir":"/var/lib/docker","DefaultAddressPools":[{"Base":"172.16.0.0/12","Size":24},{"Base":"192.168.0.0/16","Size":24}]}`
-	write(t, filepath.Join(host, "docker-info.json"), info, 0o644)
-	write(t, filepath.Join(host, "docker-info.after"), info, 0o644)
-	out, code := s.run([]string{remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 0 || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart --no-block") {
-		t.Errorf("Docker restarted for a driver its own flags set (%d):\n%s", code, out)
-	}
-	out, _ = s.run(nil, remote.ServerSetupFlag, "facts")
-	var f setup.Facts
-	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &f); err != nil {
-		t.Fatalf("%v:\n%s", err, out)
-	}
-	if f.Pending {
-		t.Errorf("pending with nothing in daemon.json for Docker to take:\n%s", out)
-	}
-}
-
 // Bug: resolveRoot drops a .. by the text before it follows the link ahead of it, so a root,
 // or a link's target, that goes up from a link names another directory than the system's own
 // resolution: the root made and the mounts drop-in are then for a path no release uses.

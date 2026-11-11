@@ -52,12 +52,17 @@ const (
 // flag raised. Its arguments, in order: the host root, the deploy user's uid:gid, 1 to make
 // or give the root, the root, daemon.json's text, the sysctl file's, the drop-in's (each ""
 // to leave it), 1 to raise the buffers, restart (now) or mark (the marker and flag whatever
-// changed; "" marks only when daemon.json changed), the InvocationID for the marker.
+// changed; "" marks only when daemon.json changed), the InvocationID for the marker, and the
+// flags docker.service starts dockerd with, one a line, which dockerd's check takes too.
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}
-` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1), saying only what it refuses.
-validate='out=$(dockerd --validate --config-file "$1" 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }'
+dockerd_flags=${11:-}
+export dockerd_flags
+` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1) with the flags docker.service starts it with (one
+# a line), as Docker starts on it: saying only what it refuses.
+validate='set -f; IFS="
+"; out=$(dockerd --validate --config-file "$1" $dockerd_flags 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }'
 changed=
 if [ -n "$give" ]; then
   p=$root

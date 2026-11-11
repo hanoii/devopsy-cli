@@ -46,6 +46,8 @@ echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
+  # The unit's command, as a test writes it in execstart.
+  "show -p ExecStart --value docker.service") [ ! -f "$h/execstart" ] || cat "$h/execstart" ;;
   # FAKE_RESTART_STUCK: a restart queued that never comes. FAKE_RESTART_CUTS: the restart
   # takes the root run's container down before its script says it is queued.
   "restart --no-block docker.service") [ -n "${FAKE_RESTART_STUCK:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; }
@@ -150,6 +152,15 @@ func TestServerSetupRefuses(t *testing.T) {
 	out, code = s.run([]string{"FAKE_PROJECT_HOST=one"}, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy is a project user, and the server's setup is its deploy user's") || !strings.Contains(out, "@one: --server-setup") {
 		t.Errorf("as a project user (%d):\n%s", code, out)
+	}
+	// docker.service starts dockerd on a config file of its own: daemon.json is not what it
+	// reads, so nothing is set up.
+	write(t, filepath.Join(host, "execstart"), "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd --config-file /srv/docker.json ; ignore_errors=no }\n", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || !strings.Contains(out, "docker.service starts dockerd with --config-file /srv/docker.json: /etc/docker/daemon.json is not what this Docker reads") || fileExists(filepath.Join(host, setup.DaemonFile)) {
+		t.Errorf("another config file (%d):\n%s", code, out)
+	}
+	if err := os.Remove(filepath.Join(host, "execstart")); err != nil {
+		t.Fatal(err)
 	}
 	// systemd not the host's init: refused before anything, with what it needs.
 	if err := os.RemoveAll(filepath.Join(host, "run", "systemd")); err != nil {
@@ -594,13 +605,13 @@ func TestServerSetupDropsAKeptEntryBackInSync(t *testing.T) {
 	}
 }
 
-// A part Docker runs with from outside daemon.json (docker.service's own flags) is left by
-// every command with no question: never put, which would keep Docker from starting on a
-// value both in a flag and in the file, said as set outside daemon.json, and no cause of a
-// restart.
+// A part a flag of docker.service's sets is left by every command with no question: never put,
+// which would keep Docker from starting on a key both in a flag and in the file, said as set
+// outside daemon.json, and no cause of a restart.
 func TestServerSetupLeavesAPartSetOutsideTheFile(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
+	write(t, filepath.Join(host, "execstart"), "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --live-restore ; ignore_errors=no }\n", 0o644)
 	daemon := filepath.Join(host, setup.DaemonFile)
 	const text = `{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"},"default-address-pools":[{"base":"172.16.0.0/12","size":24},{"base":"192.168.0.0/16","size":24}]}`
 	write(t, daemon, text, 0o644)
@@ -732,5 +743,91 @@ func TestServerSetupApplyWaitsForAnother(t *testing.T) {
 	}
 	if err := c.Wait(); err != nil || !strings.Contains(readString(outFile), "done waiting for another --server-setup (") {
 		t.Errorf("%v:\n%s", err, readString(outFile))
+	}
+}
+
+// stoppingSystemctl replaces setupServer's systemctl with one whose restart, as systemd does it,
+// stops Docker first and starts it later: the restart takes the root run's container down
+// (FAKE_RESTART_CUTS), and docker.service's InvocationID stays the old one until the new
+// daemon starts, which this fake makes the second read of it after the cut. extra is more
+// case arms, for properties a test needs.
+func stoppingSystemctl(t *testing.T, s *syncSetup, extra string) {
+	t.Helper()
+	write(t, filepath.Join(filepath.Dir(s.root), "bin", "systemctl"), `#!/bin/sh
+h=$DEVOPSY_INTERNAL_HOST_ROOT
+echo "systemctl $*" >>"$h/systemctl.log"
+case "$*" in
+  "show -p ActiveState --value docker.service") echo active ;;
+  "show -p InvocationID --value docker.service")
+    if [ -e "$h/restarting" ]; then
+      n=$(($(cat "$h/reads" 2>/dev/null || echo 0) + 1)); echo "$n" >"$h/reads"
+      [ "$n" -lt 2 ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; rm -f "$h/restarting"; }
+    fi
+    cat "$h/invocation" ;;
+  "restart --no-block docker.service")
+    if [ -n "${FAKE_RESTART_CUTS:-}" ]; then : >"$h/restarting"; kill -KILL "$PPID"; exit 0; fi
+    echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json" ;;
+`+extra+`
+esac
+`, 0o755)
+}
+
+// A part half in daemon.json and half in docker.service's flags (log-opts in the file, the log
+// driver a flag's) is the flags': never pending, so --server-setup --yes never restarts Docker
+// for values a restart never brings, and raises no restart flag.
+func TestServerSetupPartHalfInFlagsIsNotPending(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	stoppingSystemctl(t, s, `  "show -p ExecStart --value docker.service") echo "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --log-driver=journald ; ignore_errors=no }" ;;`)
+	const text = `{"log-opts":{"tag":"web"},"live-restore":true,"default-address-pools":[{"base":"172.16.0.0/12","size":24},{"base":"192.168.0.0/16","size":24}]}`
+	write(t, filepath.Join(host, setup.DaemonFile), text, 0o644)
+	name, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Docker has taken the file, its log driver journald from docker.service's --log-driver.
+	info := `{"Name":"` + name + `","LoggingDriver":"journald","LiveRestoreEnabled":true,"DockerRootDir":"/var/lib/docker","DefaultAddressPools":[{"Base":"172.16.0.0/12","Size":24},{"Base":"192.168.0.0/16","Size":24}]}`
+	write(t, filepath.Join(host, "docker-info.json"), info, 0o644)
+	write(t, filepath.Join(host, "docker-info.after"), info, 0o644)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--keep", "logs="+setup.Digest(`{"log-opts":{"tag":"web"}}`)); code != 0 {
+		t.Fatalf("the keep (%d):\n%s", code, out)
+	}
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &f); err != nil || code != 0 {
+		t.Fatalf("facts (%d, %v):\n%s", code, err, out)
+	}
+	if f.Pending {
+		t.Errorf("pending, though Docker took the file: %+v", f.Parts)
+	}
+	out, code = s.run([]string{remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart --no-block") || fileExists(filepath.Join(host, remote.RebootRequired)) {
+		t.Errorf("Docker restarted for nothing (%d):\n%s", code, out)
+	}
+}
+
+// log-opts set by docker.service's flags (--log-opt), which docker info never shows, is the
+// flags': the logs part is never put beside it, which would keep Docker from starting on a
+// directive both in a flag and in the file. The fake dockerd refuses as the real one does when
+// given the service's flags, which the setup reads from the unit (ExecStart).
+func TestServerSetupLogOptsSetByAFlagNeverPut(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	stoppingSystemctl(t, s, `  "show -p ExecStart --value docker.service") echo "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock --log-opt max-size=10m ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }" ;;
+  "show -p MainPID --value docker.service") echo 4242 ;;`)
+	write(t, filepath.Join(host, "proc", "4242", "cmdline"), "/usr/bin/dockerd\x00-H\x00fd://\x00--containerd=/run/containerd/containerd.sock\x00--log-opt\x00max-size=10m\x00", 0o644)
+	write(t, filepath.Join(filepath.Dir(s.root), "bin", "dockerd"), `#!/bin/sh
+flag= file=
+for a; do case $a in --log-opt|--log-opt=*) flag=1 ;; esac; done
+while [ $# -gt 0 ]; do [ "$1" != --config-file ] || file=$2; shift; done
+if [ -n "$flag" ] && grep -q '"log-opts"' "$file"; then
+  echo "unable to configure the Docker daemon with file $file: the following directives are specified both as a flag and in the configuration file: log-opts" >&2
+  exit 1
+fi
+echo 'configuration OK'
+`, 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if strings.Contains(readString(filepath.Join(host, setup.DaemonFile)), `"log-opts"`) {
+		t.Errorf("log-opts put in daemon.json while docker.service sets --log-opt (%d):\n%s\ndaemon.json:\n%s", code, out, readString(filepath.Join(host, setup.DaemonFile)))
 	}
 }

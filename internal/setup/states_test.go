@@ -27,12 +27,12 @@ func TestStateOf(t *testing.T) {
 		{"applied, then changed", o, Entry{Applied: a}, false, Changed},
 		{"kept, then changed again", o, Entry{Kept: k}, false, Changed},
 		{"kept, then removed", "{}", Entry{Kept: k}, false, Changed},
-		// Set outside daemon.json: the file holds none of it, and Docker runs with a value
-		// of its own; any value of the file's is the file's.
-		{"none in the file, Docker's own value", "{}", Entry{}, true, Outside},
-		{"none in the file after an apply, Docker's own value", "{}", Entry{Applied: a}, true, Outside},
-		{"a value in the file, whatever Docker runs", o, Entry{}, true, Changed},
-		{"devopsy's value in the file", w, Entry{}, true, InSync},
+		// A flag of the daemon's sets a key of the part: the flags' part, whatever the file
+		// holds of it.
+		{"a flag's, none in the file", "{}", Entry{}, true, Outside},
+		{"a flag's, after an apply", "{}", Entry{Applied: a}, true, Outside},
+		{"a flag's, the rest in the file", o, Entry{}, true, Outside},
+		{"a flag's, devopsy's value in the file", w, Entry{Applied: w}, true, Outside},
 	} {
 		if got := StateOf(c.o, w, c.r, c.outside); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
@@ -110,26 +110,59 @@ func TestJudge(t *testing.T) {
 	if want := []State{InSync, Devopsys, Changed}; !reflect.DeepEqual(got, want) {
 		t.Errorf("states %v, want %v", got, want)
 	}
-	// Docker running with live-restore from a flag of docker.service's: the file's missing
-	// part is set outside it, no difference between the file and Docker, and no put.
-	running := Visible{LogDriver: "local", LiveRestore: true, Pools: []Pool{{"10.200.0.0/16", 24}}}
-	states := Judge(d, Record{}, &running)
-	if states[1].State != Outside || !reflect.DeepEqual(OutsideParts(states), []string{"live-restore"}) {
-		t.Errorf("with Docker's own live-restore: %+v", states)
+	// docker.service's flags set live-restore, and log-opts with the file's log driver: both
+	// parts the flags', neither put, no difference between the file and Docker.
+	states := Judge(d, Record{}, []string{"live-restore", "log-opts"})
+	if states[0].State != Outside || states[1].State != Outside || !reflect.DeepEqual(OutsideParts(states), []string{"logs", "live-restore"}) {
+		t.Errorf("with the daemon's flags: %+v", states)
 	}
 	file, _ := d.Visible()
+	running := Visible{LogDriver: "journald", LiveRestore: true, Pools: []Pool{{"10.200.0.0/16", 24}}}
 	if Pending("", "inv", file.Except(OutsideParts(states)), running.Except(OutsideParts(states))) {
-		t.Error("pending on a part set outside daemon.json")
+		t.Error("pending on parts the daemon's flags set")
 	}
 	if f := FactOf(states[1]); f.Puts || f.Records || f.State != Outside {
-		t.Errorf("an outside part's facts: %+v", f)
+		t.Errorf("a flag's part's facts: %+v", f)
 	}
 	if f := FactOf(Judge(d, Record{}, nil)[1]); !f.Puts || !f.Records {
 		t.Errorf("a part of devopsy's facts: %+v", f)
 	}
-	for part, sets := range map[string]bool{"logs": true, "live-restore": true, "default-address-pools": true} {
-		if running.Sets(part) != sets || (Visible{LogDriver: "json-file"}).Sets(part) {
-			t.Errorf("Sets(%s)", part)
+}
+
+// The daemon's command is the unit's own, as systemctl shows it, its last command's arguments,
+// and what its flags set is the keys of devopsy's parts, whatever their values (Docker's
+// defaults included, which docker info cannot tell from none), and the config file it reads.
+func TestDaemonFlags(t *testing.T) {
+	t.Parallel()
+	show := "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock --log-opt max-size=10m --live-restore=false ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+	argv := DaemonCommand(show)
+	if want := []string{"/usr/bin/dockerd", "-H", "fd://", "--containerd=/run/containerd/containerd.sock", "--log-opt", "max-size=10m", "--live-restore=false"}; !reflect.DeepEqual(argv, want) {
+		t.Fatalf("DaemonCommand: %q", argv)
+	}
+	keys, config := DaemonFlags(argv)
+	if !reflect.DeepEqual(keys, []string{"log-opts", "live-restore"}) || config != "" {
+		t.Errorf("DaemonFlags: %q, %q", keys, config)
+	}
+	for _, c := range []struct {
+		argv   []string
+		keys   []string
+		config string
+	}{
+		{[]string{"dockerd", "--log-driver=json-file", "--default-address-pool", "base=10.0.0.0/8,size=24", "--default-address-pool=base=10.1.0.0/16,size=24"}, []string{"log-driver", "default-address-pools"}, ""},
+		{[]string{"dockerd", "--config-file", "/srv/docker.json"}, nil, "/srv/docker.json"},
+		{[]string{"dockerd", "--config-file=/srv/docker.json", "--live-restore"}, []string{"live-restore"}, "/srv/docker.json"},
+		{[]string{"dockerd"}, nil, ""},
+		{nil, nil, ""},
+	} {
+		if keys, config := DaemonFlags(c.argv); !reflect.DeepEqual(keys, c.keys) || config != c.config {
+			t.Errorf("DaemonFlags(%q) = %q, %q", c.argv, keys, config)
 		}
+	}
+	// Two commands (a drop-in's after the unit's): the last.
+	if got := DaemonCommand("{ path=/a ; argv[]=/a --x ; }\n{ path=/b ; argv[]=/b --y ; }"); !reflect.DeepEqual(got, []string{"/b", "--y"}) {
+		t.Errorf("the last command: %q", got)
+	}
+	if got := DaemonCommand(""); got != nil {
+		t.Errorf("no command: %q", got)
 	}
 }

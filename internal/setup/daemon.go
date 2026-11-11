@@ -193,22 +193,8 @@ func (v Visible) Equal(o Visible) bool {
 		slices.Equal(v.Pools, o.Pools)
 }
 
-// Sets says whether v holds a value of the part named other than Docker's own default (the
-// json-file driver, no live-restore, no pools of a file's).
-func (v Visible) Sets(part string) bool {
-	switch part {
-	case "logs":
-		return v.LogDriver != "" && v.LogDriver != "json-file"
-	case "live-restore":
-		return v.LiveRestore
-	case "default-address-pools":
-		return len(v.Pools) > 0
-	}
-	return false
-}
-
-// Except is v with the named parts' values Docker's defaults: what is set outside
-// daemon.json is no difference between the file and Docker.
+// Except is v with the named parts' values Docker's defaults: what the daemon's flags set is
+// no difference between the file and Docker.
 func (v Visible) Except(parts []string) Visible {
 	for _, p := range parts {
 		switch p {

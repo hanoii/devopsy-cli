@@ -87,9 +87,10 @@ other key stays as it is (a proxy's `proxies`, for example), and the file
 keeps its mode and owner. A part someone else set is asked about, keep
 (Enter) or replace; a value kept is not asked again while it stays the
 same. To go back to devopsy's value, write it in `daemon.json` or remove
-the keys and answer replace. A part Docker runs with from outside the
-file (a flag of `docker.service`'s) is left as it is and said: putting it
-in the file too would keep Docker from starting. A `daemon.json` Docker
+the keys and answer replace. A part one of whose keys `docker.service`'s
+own flags set is left as it is and said, never asked about: putting it
+in the file too would keep Docker from starting. If `docker.service`
+starts Docker with another `--config-file`, `--server-setup` refuses. A `daemon.json` Docker
 would refuse (not a JSON object, a value of the wrong type) is refused,
 and never rewritten.
 
