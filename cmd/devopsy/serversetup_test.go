@@ -244,14 +244,22 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade", "--restart"); code == 0 {
 		t.Errorf("--upgrade with a restart (%d):\n%s", code, out)
 	}
+	// A clean apply notes the devopsy that made it, a changed part left being no failure.
+	if r, _, _ := setup.ReadRecord(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)); r.Version != binaryVersion(t) {
+		t.Errorf("the record's version after a clean apply: %q", r.Version)
+	}
 	// What fails is a warning naming --server-setup, and the upgrade ends with 0: its binary
-	// is in place.
+	// is in place; a failed apply notes no version, so the next --upgrade applies again.
+	write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), "daemon.json: {}\n", 0o600)
 	if err := os.RemoveAll(filepath.Join(host, "run", "systemd")); err != nil {
 		t.Fatal(err)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || !strings.Contains(out, "devopsy: warning: Docker: systemd is not this host's init") ||
 		!strings.Contains(out, "devopsy: warning: nothing changed\n") || !strings.Contains(out, "run --server-setup for this server") {
 		t.Errorf("--upgrade on a failure (%d):\n%s", code, out)
+	}
+	if r, _, _ := setup.ReadRecord(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)); r.Version != "" {
+		t.Errorf("a version noted after a failed apply: %q", r.Version)
 	}
 }
 
@@ -693,7 +701,6 @@ func TestServerSetupRestartNotConfirmed(t *testing.T) {
 	}
 }
 
-
 // A project user's release checks nothing of the server: its tree is --project-users add's,
 // and its Docker the door's.
 func TestServerReadySkipsAProjectUser(t *testing.T) {
@@ -985,4 +992,15 @@ func TestServerSetupApplyFailsWhatDidNotHold(t *testing.T) {
 		!strings.Contains(out, "put /etc/sysctl.d/90-devopsy-net.conf") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
+}
+
+// binaryVersion is the test binary's devopsy version, as --version says it.
+func binaryVersion(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command(binary, "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(out), "\n")
+	return strings.TrimPrefix(first, "devopsy ")
 }

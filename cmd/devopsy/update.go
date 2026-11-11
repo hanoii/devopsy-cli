@@ -83,12 +83,14 @@ func runUpgrade(args []string, color bool) int {
 	return serverApply(exe)
 }
 
-// serverApply ends an upgrade: on a server devopsy set up (upgradeApplies), devopsy replaces
+// serverApply ends an upgrade: on a server devopsy set up, once per version (upgradeApplies),
+// devopsy replaces
 // itself with exe, the binary now in place, applying the server's setup in upgrade mode
 // (remote.ServerSetupFlag apply --upgrade), which asks nothing, restarts nothing and exits 0
 // whatever fails; else it returns 0.
 func serverApply(exe string) int {
-	return applyAfterUpgrade(report.Default(), exe, upgradeApplies(version, setup.RecordPath(remote.UserConfigFile()), fileExists))
+	r, exists, _ := setup.ReadRecord(setup.RecordPath(remote.UserConfigFile()))
+	return applyAfterUpgrade(report.Default(), exe, upgradeApplies(version, r.Version, exists))
 }
 
 // applyAfterUpgrade replaces devopsy with exe's apply in upgrade mode when applies, saying
@@ -103,9 +105,11 @@ func applyAfterUpgrade(log *report.Logger, exe string, applies bool) int {
 }
 
 // upgradeApplies says whether an upgrade applies the server's setup: a release build, on a
-// server whose record is there (a server is one --server-setup set up, with no other sign).
-func upgradeApplies(version, record string, exists func(string) bool) bool {
-	return update.IsRelease(version) && record != "" && exists(record)
+// server whose record is there (a server is one --server-setup set up, with no other sign),
+// once per devopsy version (recorded, the record's, "" for none): an up-to-date server applied
+// already is left alone, and one whose last apply failed is taken again.
+func upgradeApplies(version, recorded string, exists bool) bool {
+	return update.IsRelease(version) && exists && recorded != version
 }
 
 // upgradeCheck is the hidden flag of the background check.

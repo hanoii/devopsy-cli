@@ -252,8 +252,8 @@ what `config.yaml` sets.
   socket buffers, the release root, and Docker waiting at boot for its
   mounts. A release refuses, before uploading, a server whose release
   root is missing or root's, or that lacks `tar` or `flock`. Once set up,
-  `--upgrade` applies the setup again, asking nothing, and `--server-info`
-  warns of what is not devopsy's.
+  `--upgrade` applies the setup once per devopsy version, asking nothing,
+  and `--server-info` warns of what is not devopsy's.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
 

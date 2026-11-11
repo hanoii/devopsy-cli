@@ -75,24 +75,25 @@ func TestNoWorkingDirectory(t *testing.T) {
 	}
 }
 
-// An upgrade applies the server's setup only from a release build, on a server whose record
-// is there: a laptop, a server never set up and a development build apply nothing.
+// An upgrade applies the server's setup once per devopsy version, from a release build, on a
+// server whose record is there: another version's record (or one with none) is applied, the
+// same version's left alone, and a laptop, a server never set up and a development build
+// apply nothing.
 func TestUpgradeApplies(t *testing.T) {
 	t.Parallel()
-	there := func(string) bool { return true }
-	gone := func(string) bool { return false }
 	for _, c := range []struct {
-		version, record string
-		exists          func(string) bool
-		want            bool
+		version, recorded string
+		exists            bool
+		want              bool
 	}{
-		{"0.60.0", "/home/devopsy/.config/devopsy/server.yaml", there, true},
-		{"0.60.0", "/home/devopsy/.config/devopsy/server.yaml", gone, false},
-		{"0.60.0", "", there, false},
-		{"dev", "/home/devopsy/.config/devopsy/server.yaml", there, false},
+		{"0.65.0", "0.64.0", true, true},
+		{"0.65.0", "", true, true},
+		{"0.65.0", "0.65.0", true, false},
+		{"0.65.0", "", false, false},
+		{"dev", "0.64.0", true, false},
 	} {
-		if got := upgradeApplies(c.version, c.record, c.exists); got != c.want {
-			t.Errorf("%s, %q: %v", c.version, c.record, got)
+		if got := upgradeApplies(c.version, c.recorded, c.exists); got != c.want {
+			t.Errorf("%s, recorded %q, there %v: %v", c.version, c.recorded, c.exists, got)
 		}
 	}
 }

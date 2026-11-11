@@ -621,6 +621,14 @@ func applySetup(h setupHost, a setupApply) int {
 	if len(left) > 0 {
 		return failed("what was applied did not hold", left...)
 	}
+	// An apply with no failure notes the devopsy that made it, which --upgrade applies once.
+	if again.record.Version != version {
+		r := again.record
+		r.Version = version
+		if err := setup.WriteRecord(record, r); err != nil {
+			return failed(err.Error())
+		}
+	}
 	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
 		report.Info("Docker has yet to take daemon.json: it does at its next restart")
 	}

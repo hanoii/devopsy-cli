@@ -45,20 +45,28 @@ const recordHeader = `# Written by devopsy (--server-setup, --upgrade): what it 
 // Record is what devopsy applied or the admin kept, per daemon.json part by its name. An
 // entry of a part devopsy no longer wants stays as it was read.
 type Record struct {
-	Daemon map[string]Entry
+	// Version is the devopsy that last applied here with no failure, "" for none recorded.
+	Version string
+	Daemon  map[string]Entry
 }
 
-// recordDaemonKey is the record's key for daemon.json's parts.
-const recordDaemonKey = "daemon.json"
+// The record's keys: daemon.json's parts, and the devopsy that last applied here.
+const (
+	recordDaemonKey  = "daemon.json"
+	recordVersionKey = "devopsy"
+)
 
 // ParseRecord reads a record's text. An entry with both applied and kept is an error.
 func ParseRecord(data []byte) (Record, error) {
-	var doc map[string]map[string]Entry
+	var doc struct {
+		Version string           `yaml:"devopsy"`
+		Daemon  map[string]Entry `yaml:"daemon.json"`
+	}
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return Record{}, err
 	}
-	r := Record{Daemon: map[string]Entry{}}
-	for name, e := range doc[recordDaemonKey] {
+	r := Record{Version: doc.Version, Daemon: map[string]Entry{}}
+	for name, e := range doc.Daemon {
 		if e.Applied != "" && e.Kept != "" {
 			return Record{}, fmt.Errorf("%s: %s: both applied and kept", recordDaemonKey, name)
 		}
@@ -69,8 +77,8 @@ func ParseRecord(data []byte) (Record, error) {
 	return r, nil
 }
 
-// Marshal is r's text: the header, then each part's entry, Parts' order first, values
-// single-quoted so they read back as the exact text.
+// Marshal is r's text: the header, the devopsy that last applied, then each part's entry,
+// Parts' order first, values single-quoted so they read back as the exact text.
 func (r Record) Marshal() ([]byte, error) {
 	var names []string
 	for _, p := range Parts {
@@ -98,7 +106,11 @@ func (r Record) Marshal() ([]byte, error) {
 		parts.Content = append(parts.Content, scalar(name, 0), &yaml.Node{Kind: yaml.MappingNode,
 			Content: []*yaml.Node{scalar(key, 0), scalar(value, yaml.SingleQuotedStyle)}})
 	}
-	doc := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{scalar(recordDaemonKey, 0), parts}}
+	doc := &yaml.Node{Kind: yaml.MappingNode}
+	if r.Version != "" {
+		doc.Content = append(doc.Content, scalar(recordVersionKey, 0), scalar(r.Version, 0))
+	}
+	doc.Content = append(doc.Content, scalar(recordDaemonKey, 0), parts)
 	var b bytes.Buffer
 	b.WriteString(recordHeader)
 	enc := yaml.NewEncoder(&b)
@@ -170,7 +182,7 @@ func WriteRecord(path string, r Record) error {
 
 // Set is r with part's entry set to e, for a decision's record.
 func (r Record) Set(part string, e Entry) Record {
-	out := Record{Daemon: make(map[string]Entry, len(r.Daemon)+1)}
+	out := Record{Version: r.Version, Daemon: make(map[string]Entry, len(r.Daemon)+1)}
 	for k, v := range r.Daemon {
 		out.Daemon[k] = v
 	}

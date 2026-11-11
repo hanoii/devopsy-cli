@@ -1023,9 +1023,9 @@ caller's environment, then .devopsy/.env).
 
 Replaces the server's devopsy with the latest release, or vX.Y.Z, as the
 deploy user, who owns it. devopsy --upgrade does the same locally. On a
-server --server-setup set up, the new devopsy then applies the setup,
-asking nothing: it leaves each value someone else set, and never
-restarts Docker.
+server --server-setup set up, the devopsy now there applies the setup
+once per version, asking nothing: it leaves each value someone else set,
+and never restarts Docker.
 `,
 	"--server-info": `Usage: devopsy [@<server>] --server-info [--json]
 

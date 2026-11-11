@@ -121,10 +121,10 @@ own, it lists the volumes it could be on, with their size and free
 space: `releases: root: <mount point>` in the deploy user's
 `config.yaml`, before the first release, puts releases there.
 
-A second run changes nothing. What `--server-setup` applied, and the
-values kept, are recorded in `server.yaml` beside the deploy user's
-`config.yaml`: devopsy's record, never edited by hand. Its first run
-writes it.
+A second run changes nothing. What `--server-setup` applied, the values
+kept, and the devopsy that last applied with no failure are recorded in
+`server.yaml` beside the deploy user's `config.yaml`: devopsy's record,
+never edited by hand. Its first run writes it.
 
 ## `--server-info`
 
@@ -202,12 +202,18 @@ A sync across servers checks the child's devopsy against the parent's
 the same way, before the parent stops anything.
 
 On a server `--server-setup` set up (its `server.yaml` there), `--upgrade`
-then applies the setup with the new devopsy, asking nothing: it puts
+applies the setup once per devopsy version, when the record names
+another devopsy than the one now there (just installed, or the latest
+already, its last apply having failed), asking nothing: it puts
 devopsy's values where they are devopsy's (a part new in this devopsy
 included), leaves and says each value someone else set, and never
 restarts Docker. When it changes `daemon.json` it says Docker takes it at
 its next restart and raises `/run/reboot-required`. What fails is a
-warning naming `--server-setup`; the upgrade itself has succeeded.
+warning naming `--server-setup`, and the next `--upgrade` applies again;
+the upgrade itself has succeeded. On a server whose devopsy applied
+already, `--upgrade` changes nothing there: what someone changed since
+(a drop-in removed, a file edited) is `--server-setup`'s to put back,
+and `--server-info` warns of it.
 
 `DEVOPSY_PROTOCOL_CHECK=warn` turns that stop into a warning and goes on,
 at your own risk. It is for a local build ahead of the servers, when what
