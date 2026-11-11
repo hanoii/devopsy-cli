@@ -117,6 +117,10 @@ docker run -d --name srvfw-md --network host busybox:1.37 sh -c 'mkdir -p /w && 
 		return out
 	}
 	srvRoot(t, "iptables -t raw -D PREROUTING -j "+remote.FirewallContainerChain)
+	// --server-info builds no util image (only an apply does): the deploy user's is made first.
+	if out, code := srv(t, "devopsy "+remote.UtilImageFlag); code != 0 {
+		t.Fatalf("the util image (%d): %s", code, out)
+	}
 	if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, "nothing in PREROUTING jumps to "+remote.FirewallContainerChain) {
 		t.Errorf("--server-info, the firewall wiped:\n%s", out)
 	}
