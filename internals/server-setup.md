@@ -22,7 +22,8 @@
 
 - `daemon.json` is three parts, each the sub-object of its keys (`setup.Parts`), compared in canonical JSON (`setup.Canonical`): spacing and key order never read as a change.
 - The merge keeps every other key as the file has it (`json.RawMessage`), puts the file only when the canonical form differs, and leaves a part devopsy stops wanting in the file; the merged file gets no header.
-- A part's state comes from its observed value, the want and the record, by `setup.StateOf`'s rules in order, and what each command does with each state is `PartState.Upgrade` and `PartState.Setup`: one function each, never a second judgment.
+- A part's state comes from its observed value, the want, the record and what Docker runs with, by `setup.StateOf`'s rules in order, and what each command does with each state is `PartState.Upgrade` and `PartState.Setup`, which the facts carry (`setup.FactOf`), and what each shows `setup.ShowSetup` and `ShowInfo`: never a second judgment.
+- A part the file does not set while Docker runs with a value of it other than Docker's default is set outside daemon.json (`setup.Outside`, docker.service's flags): left by every command with no question, said, no cause of pending, since dockerd refuses to start on a value both in a flag and in the file.
 - A value someone else set is never put over unasked: `--server-setup` asks keep or replace, Enter and `--yes` keeping it.
 - An answer acts only while the part still holds the value whose sha256 it names (`setup.Digest`): a part changed between the sessions is left unrecorded, said, and asked at the next run.
 - `server.yaml`, beside `remote.UserConfigFile()`, is devopsy's record alone, never config, never in the schema, mode 0600, written by rename, its entries canonical JSON as quoted strings, so a comparison is exact text.

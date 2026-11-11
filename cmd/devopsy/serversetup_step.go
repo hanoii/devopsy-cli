@@ -149,7 +149,12 @@ func readSetup(h setupHost) (setupRead, error) {
 		// A file Docker would refuse is judged no further: none of its parts is put.
 		f.DaemonError = setup.DaemonFile + ": " + err.Error()
 	} else {
-		rd.states = setup.Judge(rd.daemon, rd.record, nil)
+		// What Docker runs with, when it answered, tells a part set outside the file.
+		var running *setup.Visible
+		if rd.docker {
+			running = &rd.running
+		}
+		rd.states = setup.Judge(rd.daemon, rd.record, running)
 		for _, s := range rd.states {
 			f.Parts = append(f.Parts, setup.FactOf(s))
 		}
@@ -170,7 +175,8 @@ func readSetup(h setupHost) (setupRead, error) {
 		f.Files = append(f.Files, setup.FileFact{Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: string(have) == text})
 	}
 	marker, _ := os.ReadFile(h.path(setup.RestartMarker))
-	f.Pending = rd.docker && f.DaemonError == "" && setup.Pending(string(marker), rd.invocation, rd.fileVisible, rd.running)
+	outside := setup.OutsideParts(rd.states)
+	f.Pending = rd.docker && f.DaemonError == "" && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
 
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), info.rootDir) {
@@ -493,7 +499,7 @@ func applySetup(h setupHost, a setupApply) int {
 		sayRootLines(out.String(), putNames, f.Root)
 	}
 	if hasLine(out.String(), remote.SetupQueued) {
-		err := waitRestart(rd.invocation, h)
+		err := waitRestart(rd.invocation, h, setup.OutsideParts(rd.states))
 		if err == nil {
 			report.Info("Docker restarted, with daemon.json's values")
 		} else {
@@ -656,8 +662,9 @@ func sayRootLines(out string, parts []string, root string) {
 }
 
 // waitRestart waits, bounded and said, until Docker's restart is confirmed: docker.service's
-// InvocationID no longer before, and docker info showing daemon.json's values.
-func waitRestart(before string, h setupHost) error {
+// InvocationID no longer before, and docker info showing daemon.json's values, but for the
+// parts set outside it.
+func waitRestart(before string, h setupHost, outside []string) error {
 	return (boundedWait{what: "Docker's restart", bound: restartWait, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) {
 		if id := systemctlShow("InvocationID"); id == "" || id == before {
 			return false, nil
@@ -676,7 +683,7 @@ func waitRestart(before string, h setupHost) error {
 			return false, err
 		}
 		want, err := d.Visible()
-		return err == nil && want.Equal(running), err
+		return err == nil && want.Except(outside).Equal(running.Except(outside)), err
 	})
 }
 

@@ -582,3 +582,25 @@ func TestServerSetupDropsAKeptEntryBackInSync(t *testing.T) {
 		}
 	}
 }
+
+// A part Docker runs with from outside daemon.json (docker.service's own flags) is left by
+// every command with no question: never put, which would keep Docker from starting on a
+// value both in a flag and in the file, said as set outside daemon.json, and no cause of a
+// restart.
+func TestServerSetupLeavesAPartSetOutsideTheFile(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	daemon := filepath.Join(host, setup.DaemonFile)
+	const text = `{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"},"default-address-pools":[{"base":"172.16.0.0/12","size":24},{"base":"192.168.0.0/16","size":24}]}`
+	write(t, daemon, text, 0o644)
+	dockerTook(t, host, `[{"Base":"172.16.0.0/12","Size":24},{"Base":"192.168.0.0/16","Size":24}]`)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || readString(daemon) != text || strings.Contains(out, "live-restore") {
+		t.Errorf("--upgrade (%d), the file %s:\n%s", code, readString(daemon), out)
+	}
+	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || readString(daemon) != text || !strings.Contains(out, "live-restore: set outside daemon.json") || strings.Contains(out, "has yet to take") ||
+		strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") {
+		t.Errorf("--server-setup --yes (%d), the file %s:\n%s", code, readString(daemon), out)
+	}
+}
