@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,12 +90,12 @@ func runServerSetupStep(args []string) int {
 		}
 		return applySetup(h, a)
 	}
-	return fail("usage: devopsy " + remote.ServerSetupFlag + " facts | apply [--keep <part>=<sha256>]... [--replace <part>=<sha256>]... [--restart | --restart-idle] [--upgrade] [--said]")
+	return fail("usage: devopsy " + remote.ServerSetupFlag + " facts | apply [--keep <part>=<sha256>]... [--replace <part>=<sha256>]... [--restart | --restart-idle] [--upgrade] [--said=<id>,...]")
 }
 
 // setupApply is what an apply was asked: the answers by part, a restart now (idle: only
 // with no container running), upgrade mode, and said, the refusals said already (by
-// --server-setup's first session: a refusal is said once per run). A restart asked is a
+// --server-setup's first session, by their IDs: a refusal is said once per run). A restart asked is a
 // condition the apply judges under its locks, never a decision taken from the first
 // session's facts.
 type setupApply struct {
@@ -101,7 +103,9 @@ type setupApply struct {
 	restart bool
 	idle    bool
 	upgrade bool
-	said    bool
+	// said are the IDs of the refusals the first session said (--said=<id>,...), nil when
+	// none was (--upgrade, an apply run alone).
+	said []string
 }
 
 func parseApply(args []string) (setupApply, error) {
@@ -115,7 +119,7 @@ func parseApply(args []string) (setupApply, error) {
 		case "--upgrade":
 			a.upgrade = true
 		case "--said":
-			a.said = true
+			a.said = []string{}
 		case "--keep", "--replace":
 			if i+1 >= len(args) {
 				return a, errors.New(args[i] + " needs <part>=<sha256>")
@@ -127,6 +131,18 @@ func parseApply(args []string) (setupApply, error) {
 			a.answers[part] = setup.Answer{Replace: args[i] == "--replace", Digest: sum}
 			i++
 		default:
+			if ids, ok := strings.CutPrefix(args[i], "--said="); ok {
+				a.said = []string{}
+				for id := range strings.SplitSeq(ids, ",") {
+					if _, err := hex.DecodeString(id); err != nil || id == "" && ids != "" {
+						return a, errors.New("--said takes refusals' IDs, not " + ids)
+					}
+					if id != "" {
+						a.said = append(a.said, id)
+					}
+				}
+				continue
+			}
 			return a, errors.New("apply takes no " + args[i])
 		}
 	}
@@ -194,9 +210,6 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
 		f.Files = append(f.Files, setup.FileFact{Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: string(have) == text})
 	}
-	marker, _ := os.ReadFile(h.path(setup.RestartMarker))
-	outside := setup.OutsideParts(rd.states)
-	f.Pending = len(refusals) == 0 && f.DaemonError == "" && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
 
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
@@ -220,6 +233,11 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		}
 		f.Refusals = append(f.Refusals, setup.Refusal{Item: firewallItem, Message: msg, Fix: "take firewall: metadata: allow out of " + remote.UserConfigFile()})
 	}
+	// Pending, by what a restart needs: Docker this host's, its restart's step going (a
+	// refusal that stops nothing, Docker's plugins, hides nothing).
+	marker, _ := os.ReadFile(h.path(setup.RestartMarker))
+	outside := setup.OutsideParts(rd.states)
+	f.Pending = rd.docker && f.Goes(setup.StepRestart) && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
 	return rd, nil
 }
 
@@ -456,15 +474,17 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 	if !d.Buildx {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: fix, Stops: setup.RefusalPlugins})
 	}
+	// Whether Docker is this host's, judged with or without systemd, so its refusal and fix
+	// are said beside one of systemd's.
+	if !dockerHere(d) {
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
+	}
 	if _, err := os.Stat(h.path("/run/systemd/system")); err != nil {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "systemd is not this host's init, which --server-setup restarts Docker with"})
 		return ds, refusals
 	}
 	if state := systemctlShow("ActiveState"); state != "active" {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix})
-	}
-	if !dockerHere(d) {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
 	}
 	// The daemon's own flags, as docker.service starts it next: a key one sets is never put
 	// beside it, and a config file of its own is not daemon.json.
@@ -592,22 +612,23 @@ func applySetup(h setupHost, a setupApply) int {
 	if err != nil {
 		return failed(err.Error())
 	}
-	readChains(rd.facts.Firewall, rd.docker, true)
 	f := rd.facts
 	// A refusal stops only the steps that need what it refuses (setup.Facts.Goes), each said
 	// once per run with its fix (here, unless the first session said it), the others applied;
 	// the apply then fails, a warning under --upgrade.
 	refused = len(f.Refused()) > 0
-	if !a.said {
-		sayRefusals(f, sayLevel(a.upgrade))
-	}
+	sayRefusals(f, sayLevel(a.upgrade), a.said)
 	if a.upgrade && f.RootAction != "" {
 		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}
-	// Every step is a root run: with none going (Docker refused), nothing goes at all.
+	// Every step is a root run: with none going (Docker refused), nothing goes at all, no
+	// image built and no chains read for it, said as the first session says it.
 	if f.NoneGoes() {
-		return failed("nothing changed")
+		return failed(cmp.Or(refusedLine(f), "nothing changed"))
 	}
+	// The chains read as root (an apply may build the util image), so a wipe reads to load
+	// again.
+	readChains(f.Firewall, rd.docker, true)
 
 	// The parts' decisions, by the states read under the lock, only where they go.
 	var put []setup.Part
@@ -722,12 +743,14 @@ func applySetup(h setupHost, a setupApply) int {
 		if restart {
 			after = "restart"
 		}
-		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, rd.flags, &out)
+		token := runToken()
+		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, token, rd.flags, &out)
 		// A restart asked may take the run's container down before its words reach here: the
-		// marker the run wrote for it says it was asked, and the bounded wait tells whether it
-		// came.
+		// marker this run wrote for it, by its token (an older run's, pending, never), says it
+		// was asked, and the bounded wait tells whether it came. A run that ended on its own
+		// exit (a put refused, 4, or not written, 5) was never cut by a restart.
 		marker, _ := os.ReadFile(h.path(setup.RestartMarker))
-		asked := restart && (hasLine(out.String(), remote.SetupAsked) || before != "" && strings.TrimSpace(string(marker)) == before)
+		asked := restart && !scriptExit(err) && (hasLine(out.String(), remote.SetupAsked) || before != "" && strings.TrimSpace(string(marker)) == before+" "+token)
 		queued = asked && !hasLine(out.String(), remote.SetupNoSystem)
 		sayRootLines(out.String(), putNames, f.Root)
 		if err != nil && !asked {
@@ -774,14 +797,18 @@ func applySetup(h setupHost, a setupApply) int {
 			said.Remedies = append(said.Remedies, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
 			var marked bytes.Buffer
 			failures++
-			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, rd.flags, &marked) == nil {
+			switch err := rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, "", rd.flags, &marked); {
+			case err == nil:
 				report.Fail(said)
 				sayRootLines(marked.String(), nil, f.Root)
-			} else {
+			case dockerInfo().Error != "":
 				said.Details = []string{"Docker does not answer, so nothing was flagged for a reboot: it takes daemon.json whenever it starts again"}
 				report.Fail(said)
 				// Docker down, no root run goes: the firewall waits for the next run, said.
 				dockerDown = true
+			default:
+				said.Details = []string{"nothing was flagged for a reboot: " + err.Error()}
+				report.Fail(said)
 			}
 		}
 	}
@@ -851,8 +878,8 @@ func applySetup(h setupHost, a setupApply) int {
 	if dropinText != "" && !queued {
 		report.Info("Docker waits for the release root's mounts from its next start on")
 	}
-	if line := refusedLine(f); line != "" && !a.upgrade {
-		report.Error(line)
+	if line := refusedLine(f); line != "" {
+		report.Say(sayLevel(a.upgrade), line, nil)
 	}
 	return end()
 }
@@ -899,7 +926,7 @@ func fixWords(fix string) []report.Remedy {
 
 // rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,
 // the docker client's own dropped once the restart is queued.
-func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation string, flags []string, out *bytes.Buffer) error {
+func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation, token string, flags []string, out *bytes.Buffer) error {
 	q := &queuedLines{out: out}
 	flag := func(b bool) string {
 		if b {
@@ -908,9 +935,23 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string
 		return ""
 	}
 	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"))
+	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"), token)
 	run.Stderr = quietQueued{q}
-	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %v", err) })
+	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %w", err) })
+}
+
+// runToken is a root run's own token, which a restart's marker carries after the id.
+func runToken() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// scriptExit says whether err is the setup's root script's own exit (a put refused, 4; one
+// not written, 5), which no restart cuts.
+func scriptExit(err error) bool {
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && (ee.ExitCode() == 4 || ee.ExitCode() == 5)
 }
 
 // setupRun is remote.SetupRootScript's root run with its arguments: the host's network and

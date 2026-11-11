@@ -28,5 +28,9 @@ named on a line of its own:
 - its unit's boot link is gone, so no boot loads it;
 - a timer an older install put is still there.
 
-A release sees only the first two: it reads the chains, and the mark, and
-nothing else of the setup.
+A release sees two of them: chains not as devopsy loads them, read as root
+by the kind its mark says, and a last load that failed. A mark of the
+other kind, the files, the boot link and the timer are for `--server-info`
+and `--server-setup`, which judge the setup against what is wanted. A
+release reads the chains only through this host's Docker, never another
+host's (`DOCKER_HOST`, a context).

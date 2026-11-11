@@ -329,9 +329,12 @@ func containerdRoot(d remote.DockerFacts) string {
 }
 
 // dockerInfo is what docker info says, alone.
-func dockerInfo() remote.DockerFacts {
+func dockerInfo() remote.DockerFacts { return dockerInfoWith(context.Background(), "docker") }
+
+// dockerInfoWith is dockerInfo through docker, within ctx.
+func dockerInfoWith(ctx context.Context, docker string) remote.DockerFacts {
 	var d remote.DockerFacts
-	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
+	out, err := exec.CommandContext(ctx, docker, "info", "--format", "{{json .}}").Output()
 	if err != nil {
 		d.Error = "docker info: " + cmdError(err)
 	} else if err := parseDockerInfo(out, &d); err != nil {
@@ -1323,9 +1326,10 @@ func sortedKeysOf[V any](m map[string]V) []string {
 // devopsy set it up and what refuses releases there, then its items (setupItems), each not
 // devopsy's fixed by --server-setup on ref (in words locally, ref "").
 func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
-	fix := report.Fix("", "devopsy @"+ref+" --server-setup")
-	if ref == "" {
-		fix = report.Fix("run --server-setup for this server, as its deploy user")
+	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
+	// With every step refused, --server-setup applies nothing: the way out is the refusal's.
+	if f.NoneGoes() {
+		fix = report.Fix("fix what refuses every step of the setup first, then run --server-setup")
 	}
 	var es []remote.StatusEntry
 	line := func(level, msg string, fixes ...report.Remedy) {

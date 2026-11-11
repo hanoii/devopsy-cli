@@ -35,6 +35,10 @@ type hostRun struct {
 	Stderr io.Writer
 	// Docker is the docker client run, "docker" when empty: the door names the real one.
 	Docker string
+	// Here: run only through a Docker that is this host's (dockerHere), asked once the image
+	// is there (runIfReady): a release's and the door's read, which the setup's refusals do
+	// not guard.
+	Here bool
 }
 
 // dockerArgs is docker's command line for r.
@@ -78,14 +82,21 @@ func (r hostRun) run(stdout io.Writer, failed func(error) error) error {
 	return r.runReady(context.Background(), stdout, failed)
 }
 
-// errNoUtilImage is runIfReady's when the util image is not there.
-var errNoUtilImage = errors.New(remote.UtilImage + " is not here")
+// errNoUtilImage is runIfReady's when the util image is not there, errNotThisHost when the
+// Docker is not this host's (Here).
+var (
+	errNoUtilImage = errors.New(remote.UtilImage + " is not here")
+	errNotThisHost = errors.New("the Docker devopsy reaches is not this host's")
+)
 
 // runIfReady runs r only when the util image is there already, never building it, ended with
 // ctx: for what must cost a command little (a release's read).
 func (r hostRun) runIfReady(ctx context.Context, stdout io.Writer, failed func(error) error) error {
 	if exec.CommandContext(ctx, cmp.Or(r.Docker, "docker"), "image", "inspect", "-f", "{{.Id}}", remote.UtilImage).Run() != nil {
 		return errNoUtilImage
+	}
+	if r.Here && !dockerHere(dockerInfoWith(ctx, cmp.Or(r.Docker, "docker"))) {
+		return errNotThisHost
 	}
 	return r.runReady(ctx, stdout, failed)
 }

@@ -96,7 +96,10 @@ put that fails, by its check or its write, ends its root run there, with
 what came before it put; `daemon.json` goes last of the puts, and what
 follows the run (the firewall) still goes. A restart not confirmed in
 time leaves the firewall to go when Docker answers, and names it as not
-applied when Docker does not.
+applied when Docker does not. A step a refusal stops whose change it
+cannot tell (beside a `daemon.json` it cannot judge, or a root a unit
+file cannot hold) counts as not applied, and `--upgrade` says what it
+did not apply too, as a warning.
 
 What it keeps as devopsy wants it:
 
@@ -217,7 +220,8 @@ fix:
   and each item of the setup that is not devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
   mounts drop-in, the metadata firewall, `W0001`) or that Docker has not
-  taken yet, each fixed by `--server-setup`;
+  taken yet, each fixed by `--server-setup`, or, where the setup refuses
+  every step, by what it refuses first;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which

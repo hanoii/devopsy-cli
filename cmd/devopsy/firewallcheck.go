@@ -131,7 +131,10 @@ func releaseFirewall(h setupHost, docker string, allow, door bool, wait time.Dur
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
-	_, wrong, err := firewallJudged(ctx, firewallReadRun(docker, remote.FirewallChainsRead), mark == remote.FirewallDoor, false)
+	// Only through this host's Docker: another host's would read another machine's chains.
+	run := firewallReadRun(docker, remote.FirewallChainsRead)
+	run.Here = true
+	_, wrong, err := firewallJudged(ctx, run, mark == remote.FirewallDoor, false)
 	if err != nil {
 		return false, err
 	}

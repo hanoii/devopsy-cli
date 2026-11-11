@@ -1532,9 +1532,10 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 		t.Errorf("a door project's container read the metadata service: %s", out)
 	}
 
-	// What --server-info says of the host's rules, in the setup's firewall line with
-	// --server-setup as the fix, and add or the boot's loader putting them back: a project
-	// user then reaches nothing again.
+	// What --server-info says of the host's rules, in the setup's firewall line, and add or the
+	// boot's loader putting them back: a project user then reaches nothing again. This server
+	// has no systemd, which refuses every step of the setup, so the fix offered is the
+	// refusal's, never a --server-setup that would change nothing.
 	info := func() string {
 		t.Helper()
 		out, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
@@ -1553,7 +1554,7 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 		if got := reaches("devopsy-doorfwo"); len(got) == 0 {
 			t.Errorf("%s: the control: a project user reaches nothing with the rules broken", c.name)
 		}
-		if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, c.says) || !strings.Contains(out, "devopsy @devopsy@doorsrv: --server-setup") {
+		if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, c.says) || !strings.Contains(out, "fix what refuses every step of the setup first, then run --server-setup") || strings.Contains(out, "devopsy @devopsy@doorsrv: --server-setup") {
 			t.Errorf("%s: --server-info:\n%s", c.name, out)
 		}
 		if c.put == "boot" {

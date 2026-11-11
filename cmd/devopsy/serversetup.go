@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -59,7 +60,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	// what it refuses (setup.Facts.Goes), the rest applied.
 	es := setupEntries(f)
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
-	sayRefusals(f, report.ErrorLevel)
+	said := sayRefusals(f, report.ErrorLevel, nil)
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
 	if err == errDeclined {
@@ -81,8 +82,8 @@ func runServerSetup(t *remote.Target, args []string) int {
 		}
 		return 0
 	}
-	// The refusals were said here: the apply says them no more.
-	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply", "--said"}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
+	// The refusals said here, by their identities: the apply says only one new since.
+	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply", "--said=" + strings.Join(said, ",")}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
 		return failErr(err)
 	}
@@ -315,16 +316,22 @@ func firewallLine(fw *setup.FirewallFact) string {
 }
 
 // sayRefusals says f's refusals at level, each with its fix, a daemon.json devopsy cannot
-// judge among them: once per run, by the first session or by an apply run alone.
-func sayRefusals(f setup.Facts, level report.Level) {
-	for _, r := range f.Refusals {
+// judge among them, but those said already (by their setup.Refusal.ID): each once per run, by
+// the first session or by its apply when new since. It returns the IDs of every refusal f has.
+func sayRefusals(f setup.Facts, level report.Level, said []string) []string {
+	var ids []string
+	for _, r := range f.AllRefusals() {
+		ids = append(ids, r.ID())
+		if slices.Contains(said, r.ID()) {
+			continue
+		}
 		msg, fixes := refusalWords(r)
+		if r.Item == setup.RefusalDaemon && r.Message == f.DaemonError {
+			msg, fixes = daemonWords(f.DaemonError)
+		}
 		report.Say(level, msg, nil, fixes...)
 	}
-	if f.DaemonError != "" {
-		msg, fixes := daemonWords(f.DaemonError)
-		report.Say(level, msg, nil, fixes...)
-	}
+	return ids
 }
 
 // refusedLine names what f's refusals stop that had a change to make (setup.Facts.Stopped),

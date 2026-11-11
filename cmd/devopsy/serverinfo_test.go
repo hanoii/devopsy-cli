@@ -477,8 +477,9 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		// The server's clock, taken last and compared on arrival.
 		"clock not synchronized, ",
 		"$ timedatectl timesync-status",
-		// The setup as --server-setup judges it, with its fixes.
-		"setup         never set up by devopsy: --upgrade applies nothing here\n              to fix it:\n              $ devopsy @devopsy@one: --server-setup\n",
+		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
+		// step, so --server-setup is offered only past that refusal.
+		"setup         never set up by devopsy: --upgrade applies nothing here\n              to fix it:\n              fix what refuses every step of the setup first, then run --server-setup\n",
 		"              Docker: systemd is not this host's init",
 		"              daemon.json: logs: none, devopsy's",
 	} {

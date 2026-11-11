@@ -52,10 +52,30 @@ func TestChangesCountsTheStepsThatGo(t *testing.T) {
 		t.Error("a part to put, its record broken: changes")
 	}
 	fw := Facts{DaemonError: "x", Firewall: &FirewallFact{State: FirewallReload}}
-	if !fw.Changes() || !slices.Equal(fw.Changing(), []Step{StepParts, StepFirewall}) || !slices.Equal(fw.Stopped(), []string{string(StepParts)}) {
+	if !fw.Changes() || !slices.Equal(fw.Changing(), []Step{StepParts, StepRestart, StepFirewall}) || !slices.Equal(fw.Stopped(), []string{string(StepParts), string(StepRestart)}) {
 		t.Errorf("a firewall to load beside daemon.json unjudged: %v, stopped %v", fw.Changing(), fw.Stopped())
 	}
 	if (Facts{}).NoneGoes() || !(Facts{Refusals: []Refusal{{Item: RefusalDocker}}}).NoneGoes() {
 		t.Error("NoneGoes")
 	}
 }
+
+// A step a refusal stops whose difference the facts cannot hold counts as a change stopped:
+// the mounts drop-in beside a root no unit file holds (no file judged), the release root
+// beside its own refusal; one whose difference is known and none counts as nothing.
+func TestChangingCountsWhatARefusalHides(t *testing.T) {
+	t.Parallel()
+	mounts := Facts{Refusals: []Refusal{{Item: RefusalRoot, Stops: RefusalMountsPath}}, Files: []FileFact{{Item: ItemBuffers, InSync: true}}}
+	if !slices.Equal(mounts.Stopped(), []string{string(StepMounts)}) {
+		t.Errorf("a root no unit holds: %v", mounts.Stopped())
+	}
+	root := Facts{Refusals: []Refusal{{Item: RefusalRoot}}, Files: []FileFact{{Item: ItemMounts, InSync: true}}}
+	if !slices.Equal(root.Stopped(), []string{string(StepRoot)}) {
+		t.Errorf("a root refused: %v", root.Stopped())
+	}
+	tools := Facts{Refusals: []Refusal{{Item: RefusalTools, Stops: RefusalFlock}}, Firewall: &FirewallFact{State: FirewallInSync}, Files: []FileFact{{Item: ItemMounts, InSync: true}}}
+	if len(tools.Stopped()) != 0 {
+		t.Errorf("flock missing, the firewall in sync: %v", tools.Stopped())
+	}
+}
+

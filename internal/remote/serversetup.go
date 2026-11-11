@@ -54,11 +54,13 @@ const (
 // root, the deploy user's uid:gid, 1 to make or give the root, the root, daemon.json's text,
 // the sysctl file's, the drop-in's (each "" to leave it), 1 to raise the buffers, restart
 // (now) or mark (the marker and flag, whatever changed; "" marks only when daemon.json
-// changed), the InvocationID for the marker, and the unit's dockerd flags, one a line.
+// changed), the InvocationID for the marker, the unit's dockerd flags, one a line, and the
+// run's own token, which a restart's marker carries after the id: the id is what pending
+// compares, the token which run asked the restart.
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}
-dockerd_flags=${11:-}
+dockerd_flags=${11:-} token=${12:-}
 export dockerd_flags
 ` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1) with the flags docker.service starts it with (one
 # a line), as Docker starts on it: saying only what it refuses.
@@ -114,7 +116,7 @@ case $after in
     # The marker first, with the InvocationID read before the run: a restart that comes ends
     # it by its new id, and one that does not leaves Docker pending, whatever reaches the
     # caller of a run the restart cuts.
-    printf '%s\n' "$id" >"$host_root` + setup.RestartMarker + `"
+    printf '%s\n' "$id${token:+ $token}" >"$host_root` + setup.RestartMarker + `"
     echo ` + SetupAsked + `
     # The unit's start counter cleared: docker.service allows a few starts a minute
     # (StartLimitBurst), a fresh server's install and restarts by hand count, and a restart an

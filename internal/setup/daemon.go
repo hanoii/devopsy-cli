@@ -251,7 +251,9 @@ func InfoVisible(info []byte) (Visible, error) {
 }
 
 // RestartMarker holds docker.service's InvocationID from just before a daemon.json put
-// that Docker has not taken yet; /run empties at a boot.
+// that Docker has not taken yet, and after it, for a restart asked, the token of the run that
+// asked it (an older marker has none: pending, never asked by a run now); /run empties at a
+// boot.
 const RestartMarker = "/run/devopsy-docker-restart"
 
 // Pending reports whether Docker has yet to take daemon.json: the marker's id is still
@@ -259,7 +261,7 @@ const RestartMarker = "/run/devopsy-docker-restart"
 // than the file's. log-opts, which docker info never shows, is pending by the marker
 // alone. An empty marker is none.
 func Pending(marker, invocation string, file, running Visible) bool {
-	marker = strings.TrimSpace(marker)
+	marker, _, _ = strings.Cut(strings.TrimSpace(marker), " ")
 	if marker != "" && marker == strings.TrimSpace(invocation) {
 		return true
 	}

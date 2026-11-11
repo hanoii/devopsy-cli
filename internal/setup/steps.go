@@ -2,6 +2,8 @@ package setup
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 )
 
@@ -107,29 +109,55 @@ func (f Facts) Stopped() []string {
 	return words
 }
 
-// Changing is what of each step an apply would change, unasked: the steps with a change to
-// make, whether they go or not.
+// Changing is the steps an apply would change, unasked, whether they go or not: those with a
+// change to make, and those a refusal stops whose difference f cannot hold (a daemon.json
+// devopsy cannot judge, a release root refused or one no unit file holds), counted as a change
+// stopped so the refusal's line names them and --upgrade notes no version.
 func (f Facts) Changing() []Step {
 	var steps []Step
 	for _, s := range Steps {
-		var changes bool
-		switch s {
-		case StepRoot:
-			changes = f.RootAction != ""
-		case StepBuffers:
-			changes = slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemBuffers && !x.InSync }) || slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
-		case StepMounts:
-			changes = slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemMounts && !x.InSync })
-		case StepParts:
-			// A daemon.json devopsy cannot judge has its parts unknown: counted as a change,
-			// which its refusal stops.
-			changes = f.DaemonError != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts })
-		case StepFirewall:
-			changes = f.Firewall != nil && f.Firewall.State.Changes()
-		}
-		if changes {
+		if changes, known := f.change(s); changes || !known && !f.Goes(s) {
 			steps = append(steps, s)
 		}
 	}
 	return steps
 }
+
+// change is whether step s has a change to make, and known whether f holds what decides it.
+func (f Facts) change(s Step) (changes, known bool) {
+	parts := slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts })
+	switch s {
+	case StepRoot:
+		return f.RootAction != "", f.RootAction != "" || !slices.Contains(f.Refused(), RefusalRoot)
+	case StepBuffers:
+		return slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemBuffers && !x.InSync }) || slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low }), true
+	case StepMounts:
+		return slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemMounts && !x.InSync }), slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemMounts })
+	case StepParts:
+		return parts, f.DaemonError == ""
+	case StepRestart:
+		// A restart for what Docker has yet to take, or for the parts to put.
+		return f.Pending || parts, f.DaemonError == ""
+	case StepFirewall:
+		return f.Firewall != nil && f.Firewall.State.Changes(), true
+	}
+	return false, true
+}
+
+// ID is a refusal's identity, its item's and message's digest: what --server-setup's first
+// session says it said, so its apply says only a refusal new since. Hex, nothing a shell reads.
+func (r Refusal) ID() string {
+	sum := sha256.Sum256([]byte(r.Item + "\x00" + r.Message))
+	return hex.EncodeToString(sum[:6])
+}
+
+// AllRefusals are f's refusals, a daemon.json devopsy cannot judge among them as one of
+// RefusalDaemon's, each once.
+func (f Facts) AllRefusals() []Refusal {
+	rs := slices.Clone(f.Refusals)
+	if f.DaemonError != "" {
+		rs = append(rs, Refusal{Item: RefusalDaemon, Message: f.DaemonError})
+	}
+	return rs
+}
+

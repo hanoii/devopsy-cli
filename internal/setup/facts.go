@@ -115,9 +115,9 @@ func (f Facts) Records() bool {
 }
 
 // Changes says whether an apply would change the host with no answer asked: a step with a
-// change to make (Changing) that goes (Goes).
+// change to make (Changing) that goes (Goes), Docker's restart aside, which is asked apart.
 func (f Facts) Changes() bool {
-	return slices.ContainsFunc(f.Changing(), f.Goes)
+	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
 // Hint says whether the volume hint goes with f: candidates, none of them the root's, and
