@@ -84,6 +84,9 @@ func TestSetupRootScript(t *testing.T) {
 	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
 		t.Errorf("the root not made: %v", err)
 	}
+	if fi, err := os.Stat(filepath.Join(host, setup.DaemonFile)); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Errorf("a daemon.json made: %v, %v", fi.Mode(), err)
+	}
 	if read(setup.DaemonFile) != daemon || read(setup.SysctlFile) != setup.SysctlText() || read(setup.MountsDropIn) != dropin {
 		t.Errorf("the files:\n%s\n%s\n%s", read(setup.DaemonFile), read(setup.SysctlFile), read(setup.MountsDropIn))
 	}
@@ -134,5 +137,33 @@ func TestSetupRootScript(t *testing.T) {
 	out, code = run([]string{"FAKE_SYSTEMCTL_FAILS=1"}, host, owner, "", root, "", "", "", "", "restart", "inv-2")
 	if code != 0 || !strings.Contains(out, "systemctl could not restart Docker") || !strings.Contains(out, "nosystemctl\nmarked\n") || read(setup.RestartMarker) != "inv-2\n" {
 		t.Errorf("systemctl refused (%d):\n%s", code, out)
+	}
+}
+
+// The merge keeps daemon.json as its admin has it but for devopsy's parts, its mode and owner
+// included: a file closed to others (a proxy's credentials in its proxies) stays closed, and
+// only a file devopsy makes gets 644, root's.
+func TestSetupRootScriptKeepsTheDaemonFilesMode(t *testing.T) {
+	t.Parallel()
+	host, bin := setupHostRoot(t)
+	file := filepath.Join(host, setup.DaemonFile)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(`{"proxies": {"http-proxy": "http://user:secret@proxy.example.com:3128"}}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	merged := "{\n  \"live-restore\": true,\n  \"proxies\": {\n    \"http-proxy\": \"http://user:secret@proxy.example.com:3128\"\n  }\n}\n"
+	c := exec.Command("sh", "-c", SetupRootScript, "sh", host, "0:0", "", filepath.Join(host, "srv"), merged, "", "", "", "", "inv-1")
+	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls"))
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	fi, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o640 {
+		t.Errorf("daemon.json was 640 and is %o after the merge", got)
 	}
 }

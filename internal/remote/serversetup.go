@@ -61,7 +61,7 @@ if [ -n "$give" ]; then
 fi
 if [ -n "$daemon" ]; then
   mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
-  if put "$host_root` + setup.DaemonFile + `" 644 'out=$(dockerd --validate --config-file "$1" 2>&1) || { printf "%s\n" "$out"; exit 1; }' "$daemon"; then
+  if put "$host_root` + setup.DaemonFile + `" keep:644 'out=$(dockerd --validate --config-file "$1" 2>&1) || { printf "%s\n" "$out"; exit 1; }' "$daemon"; then
     changed=1
     echo "` + SetupPut + ` ` + setup.DaemonFile + `"
   fi
