@@ -386,13 +386,14 @@ echo "# dockerd-cgroup $(ls -di "$cgroot$cg" 2>/dev/null | awk '{ print $1 }') $
 // (firewallWrong, DoorListeners).
 const firewallListenersLine = `echo "# listeners"`
 
-// firewallTablesRead prints each family's tables for FirewallRead.
+// firewallTablesRead prints each family's tables for FirewallRead, a table iptables cannot
+// print read as empty, which the judgment says is missing, never the read's failure.
 func firewallTablesRead() string {
 	var s string
 	for _, f := range firewallFamilies {
 		read := ""
 		for _, t := range []string{"filter", "raw"} {
-			read += `echo "# ` + f.cmd + " " + t + `"; ` + f.cmd + " -w " + xtablesWait + " -t " + t + " -S\n"
+			read += `echo "# ` + f.cmd + " " + t + `"; ` + f.cmd + " -w " + xtablesWait + " -t " + t + " -S || :\n"
 		}
 		s += familyGuard(f, read, `echo "# `+f.cmd+` off"`+"\n")
 	}
