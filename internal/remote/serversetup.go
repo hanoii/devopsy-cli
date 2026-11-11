@@ -18,6 +18,9 @@ const ServerSetupFlag = "--server-setup-step"
 // flock), checked by stats and path lookups alone.
 const ServerReadyFlag = "--server-ready"
 
+// RestartWaitEnv bounds the wait for Docker's restart, in seconds, for tests.
+const RestartWaitEnv = "DEVOPSY_INTERNAL_RESTART_WAIT"
+
 // HostRootEnv roots every path the server's setup reads and writes on the host ("" for /),
 // for tests: the facts read there, and the root script gets it as its first argument.
 const HostRootEnv = "DEVOPSY_INTERNAL_HOST_ROOT"

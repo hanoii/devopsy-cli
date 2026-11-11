@@ -22,13 +22,17 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/setup"
 )
 
-// restartWait bounds the wait for Docker's restart to be confirmed.
+// restartWait bounds the wait for Docker's restart to be confirmed, unless
+// remote.RestartWaitEnv says otherwise.
 const restartWait = 2 * time.Minute
 
 // setupHost is the host as the server's setup reads and writes it: the system's files (/etc,
 // /proc, /run, /sys) under root (remote.HostRootEnv, "" for the host's own), for tests; the
-// release root is a path of its own.
-type setupHost struct{ root string }
+// release root is a path of its own. restartWait bounds the wait for Docker's restart.
+type setupHost struct {
+	root        string
+	restartWait time.Duration
+}
 
 func (h setupHost) path(p string) string { return h.root + p }
 
@@ -50,7 +54,10 @@ type setupRead struct {
 // runServerSetupStep is remote.ServerSetupFlag on a server, as the deploy user: facts prints
 // the setup's facts as JSON, apply applies them.
 func runServerSetupStep(args []string) int {
-	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
+	h := setupHost{root: os.Getenv(remote.HostRootEnv), restartWait: restartWait}
+	if n, err := strconv.Atoi(os.Getenv(remote.RestartWaitEnv)); err == nil && n > 0 {
+		h.restartWait = time.Duration(n) * time.Second
+	}
 	if len(args) == 1 && args[0] == "facts" {
 		rd, err := readSetup(h)
 		if err != nil {
@@ -349,8 +356,8 @@ func systemctlShow(property string) string {
 }
 
 // applySetup applies the server's setup, in order: under the apply lock, the required checks
-// and the states read again, the release locks for a restart, one root run, the restart's
-// wait, the record, the checks again, then what it did and what waits. In upgrade mode a
+// and the states read again, the release locks for a restart, one root run, the record, the
+// restart's wait, the checks again, then what it did and what waits. In upgrade mode a
 // failure is a warning, a changed part is left unasked, and nothing restarts.
 func applySetup(h setupHost, a setupApply) int {
 	failed := func(msg string, details ...string) int {
@@ -512,6 +519,15 @@ func applySetup(h setupHost, a setupApply) int {
 		}
 		sayRootLines(out.String(), putNames, f.Root)
 	}
+	// The record follows the file, whatever the restart does next.
+	if recorded || (!rd.exists && !a.upgrade) {
+		if err := setup.WriteRecord(record, next); err != nil {
+			return failed(err.Error())
+		}
+		if !rd.exists {
+			report.Info("this server is set up by devopsy now: its record is " + record)
+		}
+	}
 	if hasLine(out.String(), remote.SetupQueued) {
 		err := waitRestart(rd.invocation, h, setup.OutsideParts(rd.states))
 		if err == nil {
@@ -523,15 +539,6 @@ func applySetup(h setupHost, a setupApply) int {
 				sayRootLines(marked.String(), nil, f.Root)
 			}
 			return 1
-		}
-	}
-
-	if recorded || (!rd.exists && !a.upgrade) {
-		if err := setup.WriteRecord(record, next); err != nil {
-			return failed(err.Error())
-		}
-		if !rd.exists {
-			report.Info("this server is set up by devopsy now: its record is " + record)
 		}
 	}
 
@@ -679,7 +686,7 @@ func sayRootLines(out string, parts []string, root string) {
 // InvocationID no longer before, and docker info showing daemon.json's values, but for the
 // parts set outside it.
 func waitRestart(before string, h setupHost, outside []string) error {
-	return (boundedWait{what: "Docker's restart", bound: restartWait, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) {
+	return (boundedWait{what: "Docker's restart", bound: h.restartWait, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) {
 		if id := systemctlShow("InvocationID"); id == "" || id == before {
 			return false, nil
 		}

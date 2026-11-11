@@ -27,7 +27,7 @@
 - A value someone else set is never put over unasked: `--server-setup` asks keep or replace, Enter and `--yes` keeping it.
 - An answer acts only while the part still holds the value whose sha256 it names (`setup.Digest`): a part changed between the sessions is left unrecorded, said, and asked at the next run.
 - `server.yaml`, beside `remote.UserConfigFile()`, is devopsy's record alone, never config, never in the schema, mode 0600, written by rename, its entries canonical JSON as quoted strings, so a comparison is exact text.
-- The file is put first and the record written after: every state a cut leaves reads in sync, which needs no record.
+- The file is put first and the record written after, whatever the restart does next: every state a cut leaves reads in sync, which needs no record, and a restart not confirmed loses no answer.
 - A server is set up by devopsy once `server.yaml` exists; the first apply writes it even with nothing to change.
 - A `daemon.json` that is not a JSON object, or that the deploy user cannot read, refuses before anything changes, and is never rewritten.
 
@@ -46,7 +46,7 @@
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
 - The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, never by the exit of a container the restart may cut, whose client's words then go unsaid.
 - A drop-in put without a restart is followed by a `daemon-reload`, failing quietly: else systemd says at each call that `docker.service` changed on disk.
-- A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, waited for through `boundedWait`, bounded (`restartWait`); one not confirmed in time is an error naming the journal, the restart flag raised.
+- A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, waited for through `boundedWait`, bounded (`restartWait`); one not confirmed in time (`remote.RestartWaitEnv` shortens it for tests) is an error naming the journal, the restart flag raised with the `InvocationID` read before the run.
 - A change not restarted now raises the restart marker (`setup.RestartMarker`, with the `InvocationID` read before the run) and the system's flag, through `restart_flag`, only when the run changed `daemon.json`.
 - systemctl refusing from the chroot never leads to a privileged container in the host's pid namespace (internals/door.md): the run marks the change and names the restart for the admin.
 

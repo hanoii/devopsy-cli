@@ -45,7 +45,8 @@ echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
-  "restart --no-block docker.service") echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json" ;;
+  # FAKE_RESTART_STUCK: a restart queued that never comes.
+  "restart --no-block docker.service") [ -n "${FAKE_RESTART_STUCK:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -627,5 +628,22 @@ func TestServerSetupRestartsOnlyForWhatDockerTakes(t *testing.T) {
 	}
 	if l := readString(filepath.Join(host, "systemctl.log")); strings.Contains(l, "restart --no-block") {
 		t.Errorf("Docker restarted with nothing to take:\n%s\nsystemctl:\n%s", out, l)
+	}
+}
+
+// A restart not confirmed in time is an error naming Docker's journal, the change marked for
+// the next restart with the InvocationID read before it, and the record written all the same,
+// since it follows the file whatever the restart did: a first run's record is there, and an
+// answer kept.
+func TestServerSetupRestartNotConfirmed(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run([]string{"FAKE_RESTART_STUCK=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "error: Docker's restart did not end in a second") || !strings.Contains(out, "$ journalctl -u docker.service") ||
+		readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || !strings.Contains(out, "Docker takes daemon.json at its next restart") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	if rec := readRecordOf(t, s); rec["logs"] != (setup.Entry{Applied: setup.Parts[0].Want}) {
+		t.Errorf("the record: %+v", rec)
 	}
 }
