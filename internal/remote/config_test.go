@@ -420,6 +420,26 @@ func TestReleaseSettings(t *testing.T) {
 	if _, err := ReleaseSettings(); err == nil {
 		t.Fatal("relative root")
 	}
+	// firewall: metadata: block by default, allow, nothing else, never a project's.
+	write(t, filepath.Join(home, ConfigFile), "releases:\n  keep: 2\n")
+	if r, err := ReleaseSettings(); err != nil || r.Firewall.Metadata != MetadataBlock {
+		t.Errorf("the firewall's default: %+v, %v", r.Firewall, err)
+	}
+	write(t, filepath.Join(home, ConfigFile), "firewall:\n  metadata: allow\n")
+	if r, err := ReleaseSettings(); err != nil || r.Firewall.Metadata != MetadataAllow {
+		t.Errorf("allow: %+v, %v", r.Firewall, err)
+	}
+	for conf, want := range map[string]string{"firewall:\n  metadata: open\n": `firewall: metadata: block or allow, not "open"`, "firewall:\n  ports: [80]\n": `firewall: unknown key "ports" (metadata)`} {
+		write(t, filepath.Join(home, ConfigFile), conf)
+		if _, err := ReleaseSettings(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v", conf, err)
+		}
+	}
+	project := filepath.Join(t.TempDir(), ConfigFile)
+	write(t, project, "firewall:\n  metadata: allow\n")
+	if _, err := readConfigFile(project, false); err == nil || !strings.Contains(err.Error(), "never to a project") {
+		t.Errorf("a project's firewall: %v", err)
+	}
 	// Never /: releases would sit among the system's own directories.
 	for _, root := range []string{"/", "//", "/."} {
 		write(t, filepath.Join(home, ConfigFile), "releases:\n  root: "+root+"\n")

@@ -207,4 +207,12 @@ snapshots:
   # false: no environment keeps a mirror here, whatever it asks (a take
   # goes on without one, said). Unset or true: each environment decides.
   mirror: true
+
+# This server's firewall, which devopsy @<server> --server-setup loads.
+# Never from a project.
+firewall:
+  # Containers' packets to the cloud's metadata services (169.254.0.0/16
+  # and the like), DNS there aside: block drops them, allow lets them
+  # through, only on a server with no door:. Default: block.
+  metadata: block
 `

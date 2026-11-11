@@ -9,11 +9,12 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/door"
 )
 
-// The project users' firewall is devopsy's own, one for the server, written and loaded by
-// --project-users add: a chain in filter for what the project users' processes send, jumped
-// to first from OUTPUT by their group, and one in raw for what containers send, jumped to
-// from PREROUTING, each in IPv4 and IPv6. Its rules are written as iptables -S prints them,
-// so the lines loaded are the lines compared.
+// devopsy's firewall is its own, one for the server, written and loaded by --server-setup and
+// --project-users add through one loader: a chain in raw for what containers send, jumped to
+// from PREROUTING, on every server; and with a door, chains in filter for what the project
+// users' processes, the door's and Docker's daemon send, jumped to first from OUTPUT. Each is
+// in IPv4 and IPv6, its rules written as iptables -S prints them, so the lines loaded are the
+// lines compared.
 const (
 	DoorChain              = "DEVOPSY-PROJECTS"
 	FirewallContainerChain = "DEVOPSY-CONTAINERS"
@@ -28,7 +29,22 @@ const (
 	FirewallDockerDropIn = "/etc/systemd/system/docker.service.d/devopsy-firewall.conf"
 	// DoorFirewallDaemonMark is the inode of the cgroup the daemon's jump was loaded for.
 	DoorFirewallDaemonMark = "/run/devopsy-firewall.dockerd"
+	// FirewallMark is what the loader loaded last, FirewallContainers or FirewallDoor: the
+	// deploy user, who cannot read iptables, judges the firewall by it and the unit's result.
+	FirewallMark = "/run/devopsy-firewall.loaded"
+	// FirewallMarkEnv moves FirewallMark, for tests.
+	FirewallMarkEnv = "DEVOPSY_INTERNAL_FIREWALL_MARK"
 )
+
+// What a loader loads: the containers' chain alone, or the door's chains with it.
+const (
+	FirewallContainers = "containers"
+	FirewallDoor       = "door"
+)
+
+// firewallHeader starts each file the loader's install writes, which a removal takes as
+// devopsy's.
+const firewallHeader = "# Written by devopsy: "
 
 // firewallFamily is one of iptables' families: its command, how it rejects, and the cloud
 // metadata services' addresses in it (door.Metadata4, door.Metadata6, which the door's
@@ -151,11 +167,16 @@ if [ -z "$cg" ] && pid=$(pidof -s dockerd 2>/dev/null); then
 fi
 `
 
-// firewallRestore is a family's chains for iptables-restore --noflush: declaring a chain flushes
-// it, so each loads whole, at once, and nothing else changes.
-func firewallRestore(f firewallFamily) string {
+// firewallRestore is a family's chains for iptables-restore --noflush, the door's only with
+// withDoor: declaring a chain flushes it, so each loads whole, at once, and nothing else
+// changes.
+func firewallRestore(f firewallFamily, withDoor bool) string {
 	var b strings.Builder
-	for _, t := range [][]string{{"filter", DoorChain, DoorDaemonChain, DoorRunChain}, {"raw", FirewallContainerChain}} {
+	tables := [][]string{{"raw", FirewallContainerChain}}
+	if withDoor {
+		tables = append([][]string{{"filter", DoorChain, DoorDaemonChain, DoorRunChain}}, tables...)
+	}
+	for _, t := range tables {
 		b.WriteString("*" + t[0] + "\n")
 		for _, c := range t[1:] {
 			b.WriteString(":" + c + " - [0:0]\n")
@@ -170,20 +191,30 @@ func firewallRestore(f firewallFamily) string {
 	return b.String()
 }
 
-// FirewallLoader is FirewallScript, which loads the firewall: at add, and at every
-// boot through FirewallUnit. Each jump goes in first, then any other copy of it goes, so
-// project users are never without it. IPv6 only where the kernel has it.
-func FirewallLoader() string {
+// FirewallLoader is FirewallScript, which loads the firewall: at --server-setup and add, at
+// every boot through FirewallUnit, and every few minutes through FirewallTimer. withDoor loads
+// the door's chains too, else the containers' alone. Each jump goes in first, then any other
+// copy of it goes, so nothing is ever without it. IPv6 only where the kernel has it. Once it
+// all loaded, FirewallMark says what.
+func FirewallLoader(withDoor bool) string {
+	what := FirewallContainers
+	if withDoor {
+		what = FirewallDoor
+	}
 	s := `#!/bin/sh
-# Written by devopsy (devopsy @<server> --project-users add): the project users' firewall,
-# its own chains loaded whole and jumped to first. Run at boot by devopsy-firewall.service,
-# and every few minutes by devopsy-firewall.timer.
+` + firewallHeader + `its own chains loaded whole and jumped to first
+# (` + what + `). Run at boot by devopsy-firewall.service, and every few minutes by
+# devopsy-firewall.timer.
 set -eu
-gid=$(getent group ` + DoorGroup + ` | cut -d: -f3)
+`
+	if withDoor {
+		s += `gid=$(getent group ` + DoorGroup + ` | cut -d: -f3)
 [ -n "$gid" ] || { echo "no group ` + DoorGroup + `" >&2; exit 1; }
 doorgid=$(getent group ` + DoorRunGroup + ` | cut -d: -f3)
 [ -n "$doorgid" ] || { echo "no group ` + DoorRunGroup + `" >&2; exit 1; }
-` + daemonCgroup + `# first <iptables> <table> <chain> <rule>: rule at the top of chain, and only there. The rule is
+` + daemonCgroup
+	}
+	s += `# first <iptables> <table> <chain> <rule>: rule at the top of chain, and only there. The rule is
 # as iptables -S prints it, a cgroup's path quoted: eval reads the quotes.
 first() {
   eval "\"\$1\" -t \"\$2\" -I \"\$3\" 1 $4"
@@ -191,37 +222,50 @@ first() {
     "$1" -t "$2" -D "$3" "$n"
   done
 }
-# stale <iptables>: the jumps to the daemon's chain that are not the current cgroup's go.
+`
+	if withDoor {
+		s += `# stale <iptables>: the jumps to the daemon's chain that are not the current cgroup's go.
 stale() {
   "$1" -t filter -S OUTPUT | awk -v r="-A OUTPUT -m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `" '/^-A /{n++; if ($0 ~ / -j ` + DoorDaemonChain + `$/ && $0 != r) print n}' | sort -rn | while read -r n; do
     "$1" -t filter -D OUTPUT "$n"
   done
 }
 `
+	}
 	for _, f := range firewallFamilies {
-		load := "printf '%s' " + Quote(firewallRestore(f)) + " | " + f.cmd + "-restore --noflush\n"
+		load := "printf '%s' " + Quote(firewallRestore(f, withDoor)) + " | " + f.cmd + "-restore --noflush\n"
 		for _, j := range firewallJumps("$gid", "$doorgid", "") {
-			load += "first " + f.cmd + " " + j.table + " " + j.from + ` "` + strings.ReplaceAll(j.rule, `"`, `\"`) + `"` + "\n"
+			if withDoor || j.chain == FirewallContainerChain {
+				load += "first " + f.cmd + " " + j.table + " " + j.from + ` "` + strings.ReplaceAll(j.rule, `"`, `\"`) + `"` + "\n"
+			}
 		}
-		// The daemon's jump only for a cgroup that is there: at boot this runs before Docker,
-		// and Docker's own start runs it again (FirewallDockerDropIn).
-		load += `[ -z "$cg" ] || [ "$cg" = / ] || [ ! -d "/sys/fs/cgroup$cg" ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
-		load += "stale " + f.cmd + "\n"
+		if withDoor {
+			// The daemon's jump only for a cgroup that is there: at boot this runs before
+			// Docker, and Docker's own start runs it again (FirewallDockerDropIn).
+			load += `[ -z "$cg" ] || [ "$cg" = / ] || [ ! -d "/sys/fs/cgroup$cg" ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
+			load += "stale " + f.cmd + "\n"
+		}
 		if f.cmd == "ip6tables" {
 			load = "if [ -e /proc/net/if_inet6 ]; then\n" + load + "fi\n"
 		}
 		s += load
 	}
-	// The cgroup the daemon's jump holds, for FirewallRead to tell one made again since.
-	s += `if [ -n "$cg" ] && [ "$cg" != / ] && [ -d "/sys/fs/cgroup$cg" ]; then stat -c %i "/sys/fs/cgroup$cg" >` + DoorFirewallDaemonMark + `; else rm -f ` + DoorFirewallDaemonMark + `; fi
+	if withDoor {
+		// The cgroup the daemon's jump holds, for FirewallRead to tell one made again since.
+		s += `if [ -n "$cg" ] && [ "$cg" != / ] && [ -d "/sys/fs/cgroup$cg" ]; then stat -c %i "/sys/fs/cgroup$cg" >` + DoorFirewallDaemonMark + `; else rm -f ` + DoorFirewallDaemonMark + `; fi
+`
+	}
+	s += `echo ` + what + ` >"${` + FirewallMarkEnv + `:-` + FirewallMark + `}"
 `
 	return s
 }
 
-// firewallDockerText is FirewallDockerDropIn: the loader before Docker's daemon starts,
-// its failure never Docker's.
-const firewallDockerText = `# Written by devopsy (devopsy @<server> --project-users add): devopsy's firewall loaded at
-# every start of Docker, whose cgroup systemd makes anew, which the daemon's jump binds.
+// firewallDockerText is FirewallDockerDropIn: the loader before Docker's daemon starts, its
+// failure never Docker's. Only with a door: the daemon's jump is its cgroup's, which systemd
+// makes anew at each start; the containers' chain goes by interface, and Docker's start
+// leaves raw's PREROUTING as it was.
+const firewallDockerText = `# Written by devopsy: devopsy's firewall loaded at every start of Docker, whose cgroup
+# systemd makes anew, which the daemon's jump binds.
 [Service]
 ExecStartPre=-` + FirewallScript + `
 `
@@ -229,9 +273,9 @@ ExecStartPre=-` + FirewallScript + `
 // firewallUnitText loads the firewall at boot: after what loads a whole ruleset
 // (netfilter-persistent, ufw, firewalld, all before network-pre.target), before the
 // network's services, sshd and Docker among them.
-const firewallUnitText = `# Written by devopsy (devopsy @<server> --project-users add).
+const firewallUnitText = `# Written by devopsy.
 [Unit]
-Description=devopsy's firewall for its project users
+Description=devopsy's firewall
 DefaultDependencies=no
 After=local-fs.target network-pre.target netfilter-persistent.service ufw.service firewalld.service
 Before=network.target docker.service
@@ -248,9 +292,9 @@ WantedBy=multi-user.target
 // firewallTimerText loads the firewall again every few minutes: a reload of the server's
 // own firewall (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules with
 // no word, and loading them changes nothing while they are there.
-const firewallTimerText = `# Written by devopsy (devopsy @<server> --project-users add).
+const firewallTimerText = `# Written by devopsy.
 [Unit]
-Description=devopsy's firewall for its project users, loaded again
+Description=devopsy's firewall, loaded again
 
 [Timer]
 OnBootSec=5min
@@ -275,27 +319,77 @@ echo "# sshd ports"
 sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' || :
 `
 
-// FirewallInstall is what add does for the firewall as root, chrooted into the host
-// with its network: the group, the loader and its unit when missing or different, the loader
-// run, then FirewallRead.
-func FirewallInstall() string {
-	return "set -eu\numask 022\n" + hostGroup + hostPut + "mkdir -p " + path.Dir(FirewallScript) + " /etc/systemd/system/multi-user.target.wants\n" +
-		"put " + FirewallScript + " 755 'sh -n \"$1\"' " + Quote(FirewallLoader()) + " || :\n" +
+// FirewallInstall is what --server-setup and add do for the firewall as root, chrooted into
+// the host with its network: the door's groups and the Docker drop-in only withDoor, the
+// loader and its units when missing or different, the loader run, then FirewallRead.
+func FirewallInstall(withDoor bool) string {
+	s := "set -eu\numask 022\n"
+	if withDoor {
+		s += hostGroup
+	}
+	s += hostPut + "mkdir -p " + path.Dir(FirewallScript) + " /etc/systemd/system/multi-user.target.wants\n" +
+		"put " + FirewallScript + " 755 'sh -n \"$1\"' " + Quote(FirewallLoader(withDoor)) + " || :\n" +
 		"put " + FirewallUnit + " 644 true " + Quote(firewallUnitText) + " || :\n" +
-		"put " + FirewallTimer + " 644 true " + Quote(firewallTimerText) + " || :\n" +
-		"mkdir -p " + path.Dir(FirewallDockerDropIn) + "\n" +
-		"put " + FirewallDockerDropIn + " 644 true " + Quote(firewallDockerText) + " || :\n" +
-		"ln -sfn " + FirewallUnit + " /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service\n" +
+		"put " + FirewallTimer + " 644 true " + Quote(firewallTimerText) + " || :\n"
+	if withDoor {
+		s += "mkdir -p " + path.Dir(FirewallDockerDropIn) + "\n" +
+			"put " + FirewallDockerDropIn + " 644 true " + Quote(firewallDockerText) + " || :\n"
+	}
+	return s + "ln -sfn " + FirewallUnit + " /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service\n" +
 		"mkdir -p /etc/systemd/system/timers.target.wants\n" +
 		"ln -sfn " + FirewallTimer + " /etc/systemd/system/timers.target.wants/devopsy-firewall.timer\n" +
 		FirewallScript + "\n" + FirewallRead
 }
 
-// FirewallWrong says what of the project users' firewall the host lacks, from
-// FirewallRead's output and the ids of the project users' group and the door's: a chain not exactly devopsy's, a jump
+// FirewallRemove is what --server-setup does as root for a server whose containers may reach
+// the metadata services (firewall: metadata: allow, no door): the containers' jump and chain
+// out of raw, the loader's pieces gone that are devopsy's by their header, and the mark.
+func FirewallRemove() string {
+	s := "set -eu\n"
+	for _, f := range firewallFamilies {
+		r := `while ` + f.cmd + ` -t raw -D PREROUTING -j ` + FirewallContainerChain + ` 2>/dev/null; do :; done
+if ` + f.cmd + ` -t raw -S ` + FirewallContainerChain + ` >/dev/null 2>&1; then ` + f.cmd + ` -t raw -F ` + FirewallContainerChain + ` && ` + f.cmd + ` -t raw -X ` + FirewallContainerChain + `; fi
+`
+		if f.cmd == "ip6tables" {
+			r = "if [ -e /proc/net/if_inet6 ]; then\n" + r + "fi\n"
+		}
+		s += r
+	}
+	return s + `for f in ` + FirewallScript + ` ` + FirewallUnit + ` ` + FirewallTimer + ` ` + FirewallDockerDropIn + `; do
+  if [ -f "$f" ] && head -n 2 "$f" | grep -q '^# Written by devopsy'; then rm -f "$f"; echo "removed $f"; fi
+done
+for l in /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service /etc/systemd/system/timers.target.wants/devopsy-firewall.timer; do
+  [ ! -L "$l" ] || [ -e "$l" ] || rm -f "$l"
+done
+rm -f "${` + FirewallMarkEnv + `:-` + FirewallMark + `}"
+`
+}
+
+// FirewallWrong says what of a door's firewall the host lacks, from FirewallRead's output and
+// the ids of the project users' group and the door's: a chain not exactly devopsy's, a jump
 // missing, or one behind a rule that may let a packet through (an ACCEPT, another chain's
 // jump), which only a DROP or a REJECT may be. Empty when it is all there.
 func FirewallWrong(read, gid, doorGid string) []string {
+	return firewallWrong(read, func(cgroup string) []firewallJump { return firewallJumps(gid, doorGid, cgroup) }, true)
+}
+
+// ContainersFirewallWrong is FirewallWrong for a server with no door: the containers' chain
+// and its jump alone.
+func ContainersFirewallWrong(read string) []string {
+	return firewallWrong(read, func(string) []firewallJump {
+		var only []firewallJump
+		for _, j := range firewallJumps("", "", "") {
+			if j.chain == FirewallContainerChain {
+				only = append(only, j)
+			}
+		}
+		return only
+	}, false)
+}
+
+// firewallWrong is what the host lacks of the chains jumps gives (by the daemon's cgroup),
+// the daemon's own checked with daemon.
+func firewallWrong(read string, jumps func(cgroup string) []firewallJump, daemon bool) []string {
 	tables := map[string][]string{}
 	var key, cgroup string
 	var made []string
@@ -318,12 +412,12 @@ func FirewallWrong(read, gid, doorGid string) []string {
 		}
 	}
 	var wrong []string
-	if cgroup == "" || cgroup == "/" {
+	if daemon && (cgroup == "" || cgroup == "/") {
 		wrong = append(wrong, "Docker's daemon has no cgroup of its own, so its pulls and logins for project users reach the host's loopback and metadata addresses")
 	}
 	// A cgroup there that is not the one the jump was loaded for: Docker restarted since, and
 	// the jump, binding the cgroup and printed by its path, holds nothing.
-	if len(made) == 2 && made[0] != made[1] || len(made) == 1 {
+	if daemon && (len(made) == 2 && made[0] != made[1] || len(made) == 1) {
 		wrong = append(wrong, "Docker's daemon runs in a cgroup made since the firewall loaded (a restart of Docker), which its jump does not hold")
 	}
 	for _, f := range firewallFamilies {
@@ -331,7 +425,7 @@ func FirewallWrong(read, gid, doorGid string) []string {
 			continue
 		}
 		var checked []string
-		for _, j := range firewallJumps(gid, doorGid, cgroup) {
+		for _, j := range jumps(cgroup) {
 			t, ok := tables[f.cmd+" "+j.table]
 			if !ok {
 				if !slices.Contains(checked, j.table) {

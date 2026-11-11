@@ -174,12 +174,12 @@ func TestDoorRules(t *testing.T) {
 // it jumps to them, IPv6 only where the kernel has it.
 func TestFirewallScripts(t *testing.T) {
 	t.Parallel()
-	for name, s := range map[string]string{"loader": FirewallLoader(), "install": FirewallInstall()} {
+	for name, s := range map[string]string{"loader": FirewallLoader(true), "install": FirewallInstall(true), "loader without a door": FirewallLoader(false), "install without a door": FirewallInstall(false), "removal": FirewallRemove()} {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
 			t.Errorf("%s: %v %s", name, err, out)
 		}
 	}
-	l := FirewallLoader()
+	l := FirewallLoader(true)
 	restore, jump := strings.Index(l, "| ip6tables-restore --noflush"), strings.Index(l, `first ip6tables filter OUTPUT "-m owner --gid-owner $gid --suppl-groups -j `+DoorChain+`"`)
 	if restore < 0 || jump < restore || !strings.Contains(l[:restore], "if [ -e /proc/net/if_inet6 ]; then\nprintf '%s' '*filter\n:"+DoorChain+" - [0:0]\n") {
 		t.Errorf("the loader:\n%s", l)
@@ -187,7 +187,7 @@ func TestFirewallScripts(t *testing.T) {
 	// Loaded at boot, and every few minutes after: a reload of the server's own firewall
 	// (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules silently. A
 	// service that stays active once run would never run again by its timer.
-	install := FirewallInstall()
+	install := FirewallInstall(true)
 	if !strings.Contains(install, "ln -sfn "+FirewallUnit+" /etc/systemd/system/multi-user.target.wants/") || !strings.Contains(install, "ln -sfn "+FirewallTimer+" /etc/systemd/system/timers.target.wants/") {
 		t.Errorf("the units not enabled:\n%s", install)
 	}
@@ -343,8 +343,8 @@ case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo devopsy-te
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("sh", "-c", FirewallLoader())
-	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	cmd := exec.Command("sh", "-c", FirewallLoader(true))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + filepath.Join(bin, "mark")}
 	out, err := cmd.CombinedOutput()
 	data, _ := os.ReadFile(log)
 	ran := string(data)
@@ -354,5 +354,74 @@ case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo devopsy-te
 	}
 	if !strings.Contains(ran, "ip6tables-restore --noflush\n") || !strings.Contains(ran, "ip6tables -t filter -I OUTPUT 1 -m owner --gid-owner 1001 --suppl-groups -j "+DoorChain+"\n") {
 		t.Errorf("with docker.service's cgroup not there yet, the loader loaded no IPv6 chain or jump (%v): %s\nwhat it ran:\n%s", err, out, ran)
+	}
+}
+
+// On a server with no door the loader loads the containers' chain alone, IPv4's and, where
+// the kernel has it, IPv6's, and its jump from raw's PREROUTING, with no group, no cgroup and
+// none of the door's chains; then it marks what it loaded. The removal takes the jump and the
+// chain out of raw, and the loader's pieces only where they are devopsy's by their header.
+func TestFirewallWithoutADoor(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	log, mark := filepath.Join(bin, "log"), filepath.Join(bin, "mark")
+	tables := "#!/bin/sh\necho \"$(basename \"$0\") $*\" >>" + log + "\ncase \" $* \" in *\" -D PREROUTING \"*) [ ! -e " + log + ".deleted ] || exit 1; : >" + log + ".deleted ;; esac\n"
+	restore := "#!/bin/sh\necho \"$(basename \"$0\") $* $(cat)\" >>" + log + "\n"
+	for name, body := range map[string]string{"iptables": tables, "ip6tables": tables, "iptables-restore": restore, "ip6tables-restore": restore} {
+		write(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l := FirewallLoader(false)
+	if strings.Contains(l, DoorChain) || strings.Contains(l, DoorDaemonChain) || strings.Contains(l, DoorRunChain) || strings.Contains(l, "getent") || strings.Contains(l, "systemctl") || strings.Contains(l, DoorFirewallDaemonMark) {
+		t.Errorf("the loader without a door holds the door's:\n%s", l)
+	}
+	cmd := exec.Command("sh", "-c", l)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + mark}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	ran, _ := os.ReadFile(log)
+	if !strings.Contains(string(ran), "iptables-restore --noflush *raw\n:"+FirewallContainerChain+" - [0:0]\n-A "+FirewallContainerChain+" -d 169.254.0.0/16 -i docker0 -p udp -m udp --dport 53 -j RETURN") ||
+		!strings.Contains(string(ran), "iptables -t raw -I PREROUTING 1 -j "+FirewallContainerChain+"\n") || strings.Contains(string(ran), "*filter") {
+		t.Errorf("what it ran:\n%s", ran)
+	}
+	if _, err := os.Stat("/proc/net/if_inet6"); err == nil && !strings.Contains(string(ran), "ip6tables -t raw -I PREROUTING 1 -j "+FirewallContainerChain+"\n") {
+		t.Errorf("no IPv6 jump:\n%s", ran)
+	}
+	if data, _ := os.ReadFile(mark); string(data) != FirewallContainers+"\n" {
+		t.Errorf("the mark: %q", data)
+	}
+	if data, _ := os.ReadFile(mark); FirewallLoader(true) == l || string(data) == FirewallDoor+"\n" {
+		t.Error("the loader with a door is the same")
+	}
+	// The removal's pieces: a file of devopsy's goes, the admin's own stays.
+	r := FirewallRemove()
+	if !strings.Contains(r, "-t raw -D PREROUTING -j "+FirewallContainerChain) || !strings.Contains(r, "-t raw -X "+FirewallContainerChain) || !strings.Contains(r, "grep -q '^# Written by devopsy'") {
+		t.Errorf("the removal:\n%s", r)
+	}
+}
+
+// The check without a door reads the containers' chain and its jump alone, never the door's
+// or the daemon's cgroup.
+func TestContainersFirewallWrong(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for _, f := range firewallFamilies {
+		b.WriteString("# " + f.cmd + " filter\n-P OUTPUT ACCEPT\n# " + f.cmd + " raw\n-A PREROUTING -j " + FirewallContainerChain + "\n")
+		for _, r := range firewallRules(f, FirewallContainerChain) {
+			b.WriteString("-A " + FirewallContainerChain + " " + r + "\n")
+		}
+	}
+	read := "# dockerd \n" + b.String()
+	if got := ContainersFirewallWrong(read); len(got) != 0 {
+		t.Errorf("loaded: %q", got)
+	}
+	if got := ContainersFirewallWrong(strings.Replace(read, "-A PREROUTING -j "+FirewallContainerChain+"\n", "", 1)); len(got) != 1 || !strings.Contains(got[0], "nothing in PREROUTING jumps to "+FirewallContainerChain) {
+		t.Errorf("its jump gone: %q", got)
+	}
+	if got := FirewallWrong(read, "1001", "1003"); len(got) == 0 {
+		t.Error("a door's check took the containers' chain alone")
 	}
 }

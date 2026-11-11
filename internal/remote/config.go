@@ -442,10 +442,24 @@ type Releases struct {
 	// Keep is the default for projects; MaxKeep caps any project's.
 	Keep    int `yaml:"keep"`
 	MaxKeep int `yaml:"max_keep"`
-	// Snapshots is the machine's snapshots: section (ReleaseSettings fills
-	// it in).
+	// Snapshots is the machine's snapshots: section, Firewall its firewall: section
+	// (ReleaseSettings fills them in).
 	Snapshots ServerSnapshots `yaml:"-"`
+	Firewall  ServerFirewall  `yaml:"-"`
 }
+
+// ServerFirewall is the user-level config's firewall: section, on a server: Metadata,
+// whether containers' packets to the cloud's metadata services are dropped
+// (MetadataBlock, the default) or let through (MetadataAllow).
+type ServerFirewall struct {
+	Metadata string `yaml:"metadata"`
+}
+
+// A server's firewall: metadata: values.
+const (
+	MetadataBlock = "block"
+	MetadataAllow = "allow"
+)
 
 // ServerSnapshots is the user-level config's snapshots: section, on a
 // server: where snapshots go, Root ("" for each environment's
@@ -470,6 +484,7 @@ type configFile struct {
 	public        []string
 	releases      *Releases
 	snapshots     *ServerSnapshots
+	firewall      *ServerFirewall
 	door          *Door
 	defaults      *Target
 	defaultsNulls map[string]bool
@@ -538,6 +553,22 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: door: %w", file, err)
 			}
 			f.door = d
+		case key == "firewall" && !user:
+			return nil, fmt.Errorf("%s: firewall: belongs to each server's user-level config (~/.config/devopsy/config.yaml there), never to a project", file)
+		case key == "firewall":
+			var fw ServerFirewall
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				if k := node.Content[i].Value; k != "metadata" {
+					return nil, fmt.Errorf("%s: firewall: unknown key %q (metadata)", file, k)
+				}
+			}
+			if err := node.Decode(&fw); err != nil {
+				return nil, fmt.Errorf("%s: firewall: %w", file, err)
+			}
+			if fw.Metadata != MetadataBlock && fw.Metadata != MetadataAllow && fw.Metadata != "" {
+				return nil, fmt.Errorf("%s: firewall: metadata: %s or %s, not %q", file, MetadataBlock, MetadataAllow, fw.Metadata)
+			}
+			f.firewall = &fw
 		case key == "snapshots" && !user:
 			return nil, fmt.Errorf("%s: snapshots: goes under defaults: or an environment (snapshots: {manual: ...}); root and max_keep belong to each machine's user-level config", file)
 		case key == "snapshots":
@@ -1127,6 +1158,9 @@ func ReleaseSettings() (Releases, error) {
 		if f != nil && f.snapshots != nil {
 			r.Snapshots = *f.snapshots
 		}
+		if f != nil && f.firewall != nil {
+			r.Firewall = *f.firewall
+		}
 	}
 	if r.Root == "" {
 		home, err := os.UserHomeDir()
@@ -1157,6 +1191,9 @@ func ReleaseSettings() (Releases, error) {
 	r.Keep = min(r.Keep, r.MaxKeep)
 	if r.Snapshots.MaxKeep == 0 {
 		r.Snapshots.MaxKeep = DefaultKeep
+	}
+	if r.Firewall.Metadata == "" {
+		r.Firewall.Metadata = MetadataBlock
 	}
 	if sr := r.Snapshots.Root; sr != "" {
 		if strings.HasPrefix(sr, "~/") || sr == "~" {
