@@ -1277,7 +1277,7 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 }
 
 // A restart or a start says which services' containers bind another copy of a read-only part
-// of the release than a start would seal now, and offers up -d, which makes them again: each
+// of the release than a start would seal now, and offers a release, which makes them again: each
 // container keeps the sealed copy it was made with. The release is read and hashed as a seal
 // reads it (the same content is no warning), keeping no copy; only the services the verb names
 // are compared, only in containers of the file's compose name; no other verb says it; and a
@@ -1340,7 +1340,7 @@ esac
 		for _, s := range services {
 			lines = append(lines, "devopsy: | "+s+": ./config")
 		}
-		return strings.Join(append(lines, "devopsy: | to fix it:", "devopsy: | $ docker compose up -d "+strings.Join(services, " ")), "\n") + "\n"
+		return strings.Join(append(lines, "devopsy: | to fix it:", "devopsy: | "+sealedFix), "\n") + "\n"
 	}
 	if out := run("restart"); strings.Contains(out, "devopsy: warning: ") {
 		t.Errorf("a restart on the copy the release seals warned:\n%s", out)

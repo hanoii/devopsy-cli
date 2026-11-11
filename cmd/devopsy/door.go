@@ -377,7 +377,7 @@ func (s *doorSide) warnSealed(file map[string]any, argv []string, dir string) {
 	containers := s.policy.ServiceContainers(s, strings.Fields(string(out)), name)
 	mounts := map[string]map[string]string{}
 	sums := map[string]string{}
-	var differ, services []string
+	var differ []string
 	for _, b := range binds {
 		for _, id := range containers[b.Service] {
 			if _, ok := mounts[id]; !ok {
@@ -397,9 +397,6 @@ func (s *doorSide) warnSealed(file map[string]any, argv []string, dir string) {
 			}
 			if held != sum {
 				differ = append(differ, b.Service+": "+shownIn(dir, b.Source))
-				if !slices.Contains(services, b.Service) {
-					services = append(services, b.Service)
-				}
 				break
 			}
 		}
@@ -408,8 +405,12 @@ func (s *doorSide) warnSealed(file map[string]any, argv []string, dir string) {
 		return
 	}
 	report.Say(report.WarnLevel, "what these containers bind read-only differs from the release's: "+argv[0]+" keeps the copy each was made with",
-		differ, report.Fix("", "docker compose up -d "+strings.Join(services, " ")))
+		differ, report.Fix(sealedFix))
 }
+
+// sealedFix is the way out warnSealed offers, in words: the door knows no address to name a
+// command by, and one of compose's, shown locally in a session, would run on the local project.
+const sealedFix = "release again, with any change made in the checkout: a release makes these containers again"
 
 // releaseHash is the hash a seal of path would name its copy by, read as a seal reads it
 // (sealRead) and keeping no copy, or nothing when it cannot be read.

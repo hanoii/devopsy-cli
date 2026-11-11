@@ -402,15 +402,15 @@ first.
 A read-only bind of a path in the release (`./config:/etc/app:ro`) is a
 copy the door made when compose made the container. The container keeps
 that copy for as long as it exists, so a file changed in place in the
-release shows in it only once compose makes the container again:
+release does not show in it, after a restart either.
 
-```sh
-docker compose up -d
-```
+Make the change in the checkout and release it: a release makes its
+containers again, each with a copy of its own files.
 
-Locally, that is `devopsy @prod up -d`. Compose makes again each
-container whose copy is no longer the release's, and leaves the others
-running.
+A file changed in place on the server shows once compose makes the
+container again, there with `docker compose up -d`, which makes again
+each container whose copy is no longer the release's and leaves the
+others running. The next release replaces that file with the checkout's.
 
 `restart` and `start` keep each container's copy. Before they run, they
 warn of the services whose copy differs from what the release holds now,
@@ -420,7 +420,7 @@ which is also the case for a container made from an older release:
 devopsy: warning: what these containers bind read-only differs from the release's: restart keeps the copy each was made with
 devopsy: | web: ./config
 devopsy: | to fix it:
-devopsy: | $ docker compose up -d web
+devopsy: | release again, with any change made in the checkout: a release makes these containers again
 ```
 
 A bind of `./mnt/<name>` is no copy: what is written there shows at
