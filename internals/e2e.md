@@ -8,6 +8,7 @@ Code: `e2e/` (`main_test.go` holds the lanes, the containers and the helpers; `D
 - The suite runs locally with any Docker, on GitHub on demand and nightly when `main` moved since the last run that passed (`e2e.yml`); the release workflow does not run it.
 - `E2E_BEAT` (default 1) is passed as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`, so quiet times and the sessions' keepalive keep their order; `E2E_BEAT=5` runs everything with the real timeouts, and one test always does.
 - The test server's deploy user has `/bin/sh` (dash) as login shell, stricter than devopsy-server's bash.
+- `e2e/daemon.json` carries `--server-setup`'s want for `daemon.json` (`setup.Parts`): a want changed changes it too, as the e2e servers have no systemd to apply it.
 - The deploy user's home, where the releases go, is a tmpfs (`entrypoint`), so nothing clones by reflinks there on any host; a test of reflinks mounts an XFS loop device of its own below it (`TestSnapshotReflinkE2E`, `TestSyncReflinkE2E`), and one of their absence an ext4 (`TestSyncReflinkExt4E2E`).
 - Servers pull through a mirror of Docker Hub (`startMirror`, the volume `devopsy-e2e-mirror` its cache), so four lanes cost Docker Hub no more than one.
 - Lanes (`E2E_LANES`, default 4; `runLanes`) run the tests at once: each a network, an operator and a server (a second one when a test asks), each test a process of its own on the first lane free, the slowest first by its last time (`timesFile`, in the user's cache directory); within a lane they run one at a time, and `resetLane` undoes between them what a test may leave.

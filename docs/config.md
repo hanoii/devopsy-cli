@@ -200,7 +200,7 @@ Release settings belong to the server, in its deploy user's
 
 ```yaml
 releases:
-  root: /srv     # where releases live; default: the deploy user's home
+  root: /srv     # where releases live, never /; default: the deploy user's home
   keep: 2        # default for its projects (5)
   max_keep: 5    # no project keeps more (5)
 snapshots:
@@ -209,12 +209,21 @@ snapshots:
   mirror: false        # no environment keeps a mirror here, whatever it asks (default: each decides)
 ```
 
+The release root must be a directory of the deploy user's: a release
+refuses one that is missing or root's, as `/srv` is on a new server, until
+`devopsy @<server> --server-setup` makes it or gives it to the deploy
+user, and one another user owns or that is no directory until it is moved
+aside ([Servers](servers.md#--server-setup)).
+
 To move a server's release root:
 
 1. stop each environment (`devopsy down` in its `current`);
-2. `mv` the projects' directories under the new root;
+2. `mv` the projects' directories under the new root, a directory of the
+   deploy user's;
 3. change `root:`;
-4. start each environment again (its `deploy`, or a release).
+4. run `--server-setup` again, which makes Docker wait at boot for the
+   new root's mounts instead of the old one's;
+5. start each environment again (its `deploy`, or a release).
 
 Containers keep the paths their bind mounts had, so they must be created
 again; everything inside the directories is linked relatively.

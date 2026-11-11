@@ -64,11 +64,12 @@ server, as its deploy user, the server named with that user. Steps as
 root run through devopsy's util image, so the deploy user needs no sudo:
 the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
-`flock`, Docker answering with its compose and buildx plugins as the
-host's `docker.service`, and a release root that is a directory of the
-deploy user's (`releases: root` in the deploy user's `config.yaml`, else
-its home), never `/`. It installs none of them: devopsy-server's
-`setup.sh` does.
+`flock` and Docker answering with its compose and buildx plugins as the
+host's `docker.service`. It installs none of them: devopsy-server's
+`setup.sh` does. The release root (`releases: root` in the deploy user's
+`config.yaml`, else its home, never `/`) it makes when missing and gives
+to the deploy user when root owns it; one another user owns, or that is
+no directory, it refuses.
 
 What it keeps as devopsy wants it:
 
@@ -82,25 +83,32 @@ What it keeps as devopsy wants it:
 | Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
-other key stays as it is (a proxy's `proxies`, for example). A part
-someone else set is asked about, keep (Enter) or replace; a value kept is
-not asked again while it stays the same. To go back to devopsy's value,
-write it in `daemon.json` or remove the keys and answer replace. A
-`daemon.json` that is not a JSON object is refused, and never rewritten.
+other key stays as it is (a proxy's `proxies`, for example), and the file
+keeps its mode and owner. A part someone else set is asked about, keep
+(Enter) or replace; a value kept is not asked again while it stays the
+same. To go back to devopsy's value, write it in `daemon.json` or remove
+the keys and answer replace. A part Docker runs with from outside the
+file (a flag of `docker.service`'s) is left as it is and said: putting it
+in the file too would keep Docker from starting. A `daemon.json` Docker
+would refuse (not a JSON object, a value of the wrong type) is refused,
+and never rewritten.
 
 Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
 restart it now when the run changes the file or Docker has not taken it
-yet. A restart cuts every docker command under way, and stops every
-container unless Docker keeps them (`live-restore`); it is refused while
-a release runs in one of the deploy user's environments, or while
+yet, and restarts it only if that is still so once it holds its lock. A
+restart cuts every docker command under way, and stops every container
+unless Docker keeps them (`live-restore`); it is refused while a release
+runs in one of the deploy user's environments, or while
 `dockerd --validate` refuses `daemon.json` (Docker would not start
-again), and waits up to two minutes for Docker to come back. Not restarted now, Docker takes the
-file at its next restart, and `/run/reboot-required` is raised for a
-reboot that takes it (devopsy-server's `DEVOPSY_AUTO_REBOOT_TIME`).
+again), and
+waits up to two minutes for Docker to come back. Not restarted now,
+Docker takes the file at its next restart, and `/run/reboot-required` is
+raised for a reboot that takes it (devopsy-server's
+`DEVOPSY_AUTO_REBOOT_TIME`).
 
 `--yes` asks nothing: it keeps every value someone else set, and restarts
-Docker only when no container runs, so a new server gets devopsy's
-address pools before its first release makes networks. Without a
+Docker only when no container runs as it applies, so a new server gets
+devopsy's address pools before its first release makes networks. Without a
 terminal it needs `--yes`.
 
 While the release root holds no project and is not on a volume of its
@@ -172,9 +180,10 @@ volumes the release root could be on, while it holds no project and is
 not on one, and the memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
-It exits 3 when it warned, so CI can run it as a check. `--json` prints
-the facts and the same lines as JSON on stdout, each with its fixes and
-hints (`remedies`), for scripts and agents.
+It exits 3 when it warned, so CI can run it as a check: on a server never
+set up by `--server-setup`, it always does. `--json` prints the facts and
+the same lines as JSON on stdout, each with its fixes and hints
+(`remedies`), for scripts and agents.
 
 ## The server's devopsy
 

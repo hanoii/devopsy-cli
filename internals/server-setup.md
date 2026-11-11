@@ -12,16 +12,18 @@
 - After an apply every item's check runs again, and what was applied and does not read in sync is an error naming the item.
 - A file devopsy writes whole sits at a path of its own and starts with `setup.Header`; devopsy writes or removes no other file, and none until its want is retired.
 - The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused by `remote.ReleaseSettings` in every command.
-- The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts, the upload's `--server-ready` (stats and path lookups only, never Docker) and `--project-users add` (before it changes anything) all call.
+- The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts, the upload's `--server-ready` (stats and path lookups only, never Docker) and `--project-users add` (its first check) all call.
+- The tools are one list, `serverTools`, the required ones marked: the setup's refusal reads it, and `--server-info` says each tool from it once.
+- The release root has one form, its links followed by what they say as far as its parts are there, the rest as written (`resolveRoot`): a root behind a link, made or not, its volume mounted or not, gives one want.
 - The release root is made when missing and given to the deploy user only when root owns it, never recursively; another user's, or one that is no directory, refuses.
-- The mounts drop-in's want comes from the release root alone, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
+- The mounts drop-in's want comes from the release root alone, in its one form, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.
 - A live socket buffer is raised only when lower, never lowered; one that cannot be raised fails the second check, naming the reboot that loads the file.
 
 ## `daemon.json` and the record
 
 - `daemon.json` is three parts, each the sub-object of its keys (`setup.Parts`), compared in canonical JSON (`setup.Canonical`): spacing and key order never read as a change.
-- The merge keeps every other key as the file has it (`json.RawMessage`), puts the file only when the canonical form differs, and leaves a part devopsy stops wanting in the file; the merged file gets no header.
+- The merge keeps every other key as the file has it (`json.RawMessage`), puts the file only when the canonical form differs, and leaves a part devopsy stops wanting in the file; the merged file gets no header and keeps its mode and owner (`hostPut`'s `keep:`), 644 root's only for a file devopsy makes.
 - A part's state comes from its observed value, the want, the record and what Docker runs with, by `setup.StateOf`'s rules in order, and what each command does with each state is `PartState.Upgrade` and `PartState.Setup`, which the facts carry (`setup.FactOf`), and what each shows `setup.ShowSetup` and `ShowInfo`: never a second judgment.
 - A part the file does not set while Docker runs with a value of it other than Docker's default is set outside daemon.json (`setup.Outside`, docker.service's flags): left by every command with no question, said, no cause of pending, since dockerd refuses to start on a value both in a flag and in the file.
 - A value someone else set is never put over unasked: `--server-setup` asks keep or replace, Enter and `--yes` keeping it.
@@ -29,7 +31,8 @@
 - `server.yaml`, beside `remote.UserConfigFile()`, is devopsy's record alone, never config, never in the schema, mode 0600, written by rename, its entries canonical JSON as quoted strings, so a comparison is exact text.
 - The file is put first and the record written after, whatever the restart does next: every state a cut leaves reads in sync, which needs no record, and a restart not confirmed loses no answer.
 - A server is set up by devopsy once `server.yaml` exists; the first apply writes it even with nothing to change.
-- A `daemon.json` that is not a JSON object, or that the deploy user cannot read, refuses before anything changes, and is never rewritten.
+- A `daemon.json` devopsy cannot judge (not a JSON object, a value of the wrong type, unreadable by the deploy user) has none of its parts judged (`judgeDaemon`): `--server-setup` refuses, `--upgrade` warns, and no command rewrites it.
+- Docker's facts and `daemon.json` are read once for `--server-info`'s facts and the setup's (`readHostDocker`), and each fact is worded once for every command (`refusalWords`, `daemonWords`, `rootWords`).
 
 ## Root on the host
 
@@ -42,12 +45,12 @@
 ## Restarting Docker
 
 - `--server-setup` offers a restart when the run changes `daemon.json` or Docker has yet to take it (`setup.Pending`), and the operator passes its answer as a condition (`--restart`, `--yes`'s `--restart-idle`, only with no container running): the apply judges it under its locks, restarting only when this run put `daemon.json` or something is pending then, else saying why not.
-- A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up; project users' trees are not covered, and the run says so.
+- A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up, walking only the deploy user's own projects (`deployEnvBases`, `ownProjects`, `--server-info`'s filter): a project user's tree is never walked or locked, being that user's to change, and the run says its releases are not covered.
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
-- The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, never by the exit of a container the restart may cut, whose client's words then go unsaid.
+- The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, or by a new `InvocationID` when the run failed without it, never by the exit of a container the restart may cut, whose client's words then go unsaid.
 - A drop-in put without a restart is followed by a `daemon-reload`, failing quietly: else systemd says at each call that `docker.service` changed on disk.
-- A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, waited for through `boundedWait`, bounded (`restartWait`); one not confirmed in time (`remote.RestartWaitEnv` shortens it for tests) is an error naming the journal, the restart flag raised with the `InvocationID` read before the run.
-- A change not restarted now raises the restart marker (`setup.RestartMarker`, with the `InvocationID` read before the run) and the system's flag, through `restart_flag`, only when the run changed `daemon.json`.
+- A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, those set outside it aside, waited for through `boundedWait`, bounded (`restartWait`); one not confirmed in time (`remote.RestartWaitEnv` shortens it for tests) is an error naming the journal, the restart flag raised with the `InvocationID` read before the run.
+- A change not restarted now raises the restart marker (`setup.RestartMarker`, with the `InvocationID` read just before the run, the one source of it) and the system's flag, through `restart_flag`, only when the run changed `daemon.json`.
 - systemctl refusing from the chroot never leads to a privileged container in the host's pid namespace (internals/door.md): the run marks the change and names the restart for the admin.
 
 ## Sessions

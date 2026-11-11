@@ -1070,25 +1070,28 @@ Examples:
 Sets up the server for devopsy, as its deploy user, the server named with
 its user (@devopsy@vm1:): root's steps go through devopsy's util image.
 It refuses first when the server lacks what every release needs (tar,
-flock, Docker with compose and buildx under systemd as docker.service,
-a release root that is a directory of the deploy user's) and says why.
+flock, Docker with compose and buildx under systemd as docker.service)
+and says why, and when the release root is another user's or no
+directory.
 
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
                         root's (releases: root in the deploy user's
-                        config.yaml, else its home)
+                        config.yaml, else its home, never /)
   daemon.json           rotated logs (log-driver local), live-restore,
                         and /24 address pools, merged in: every other key
                         stays. A value someone else set is asked about,
                         keep (Enter) or replace; a kept one is not asked
-                        again while it stays as it is
+                        again while it stays as it is; one set outside
+                        the file (docker.service's flags) is left
   socket buffers        /etc/sysctl.d/90-devopsy-net.conf, and the live
                         values raised to 7.5 MB when lower
   mounts drop-in        Docker waits at boot for the release root's
                         mounts (a docker.service.d drop-in)
 
 Docker takes daemon.json when it restarts: it asks to restart it now,
-which cuts every docker command under way, and stops every container
+and does if Docker still has it to take once it holds its lock, which
+cuts every docker command under way, and stops every container
 when Docker does not keep them through it (live-restore). A restart
 waits for no release in the deploy user's environments, and is refused
 while one runs. Else /run/reboot-required is raised for the next reboot.

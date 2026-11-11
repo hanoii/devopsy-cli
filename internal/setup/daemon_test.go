@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -213,4 +214,20 @@ func mustDaemon(t *testing.T, text string) Daemon {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// The end-to-end servers' daemon.json holds devopsy's want for every part: they have no
+// systemd to apply it, so a want changed changes that file too.
+func TestE2EDaemonHoldsTheWant(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../e2e/daemon.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := mustDaemon(t, string(data))
+	for _, p := range Parts {
+		if got := d.Observed(p); got != p.Want {
+			t.Errorf("e2e/daemon.json's %s is %s, devopsy wants %s", p.Name, got, p.Want)
+		}
+	}
 }
