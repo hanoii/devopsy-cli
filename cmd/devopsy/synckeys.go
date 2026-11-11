@@ -133,7 +133,7 @@ func lockedKeys(file string, edit func([]string) ([]string, error)) error {
 	}
 	defer lock.Close()
 	// A minute, as the --ssh-keys scripts wait for the same lock.
-	if err := (lockWaiting{what: "another edit of " + file, bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
+	if err := (boundedWait{what: "another edit of " + file, bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
 		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return false, nil

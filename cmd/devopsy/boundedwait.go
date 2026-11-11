@@ -10,34 +10,36 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// lockWaitBound is how long a lock taken in Go is waited for unless its wait says otherwise,
-// as long as the scripts' lockWait waits.
-const lockWaitBound = 10 * time.Minute
+// waitBound is how long a wait goes on unless it says otherwise, as long as the scripts'
+// lockWait waits.
+const waitBound = 10 * time.Minute
 
-// lockWaitEvery is how often a lock waited for is tried again.
-const lockWaitEvery = 100 * time.Millisecond
+// waitEvery is how often a wait tries again.
+const waitEvery = 100 * time.Millisecond
 
-// lockWaiting is a wait for a lock taken in Go, said as the scripts' lockWait says theirs:
-// "waiting for <what>, up to <bound>" once it has to wait, "done waiting for <what>" with the
-// time it took once the lock is held, "<what> did not end in <bound>" when the bound ends it.
+// boundedWait is a wait in Go, announced and bounded, for a lock or anything that ends (a
+// restart), said as the scripts' lockWait says theirs: "waiting for <what>, up to <bound>"
+// once it has to wait, "done waiting for <what>" with the time it took once it ended, "<what>
+// did not end in <bound>" when the bound ends it.
 // held, for a what that is the thing locked rather than what holds it, names the holder in
 // the first line and makes the last "<what> still held by <held> after <bound>". A zero
-// bound is lockWaitBound, a zero every lockWaitEvery.
-type lockWaiting struct {
+// bound is waitBound, a zero every waitEvery.
+type boundedWait struct {
 	what, held   string
 	bound, every time.Duration
 }
 
-// wait takes a lock through try, which says whether it got it: at once, saying nothing, else
+// wait goes through try, which says whether what is waited for is done (a lock taken): at
+// once, saying nothing, else
 // trying again every so often, saying so through log, until it gets it or the bound or
 // ctx ends the wait, as an error. An error of try's ends it as it is.
-func (w lockWaiting) wait(ctx context.Context, log *report.Logger, try func() (bool, error)) error {
+func (w boundedWait) wait(ctx context.Context, log *report.Logger, try func() (bool, error)) error {
 	if ok, err := try(); err != nil || ok {
 		return err
 	}
 	bound := w.bound
 	if bound == 0 {
-		bound = lockWaitBound
+		bound = waitBound
 	}
 	start := "waiting for " + w.what
 	if w.held != "" {
@@ -45,7 +47,7 @@ func (w lockWaiting) wait(ctx context.Context, log *report.Logger, try func() (b
 	}
 	timer := log.Start(start + ", up to " + boundWords(bound))
 	deadline := time.Now().Add(bound)
-	tick := time.NewTicker(cmp.Or(w.every, lockWaitEvery))
+	tick := time.NewTicker(cmp.Or(w.every, waitEvery))
 	defer tick.Stop()
 	for {
 		select {
@@ -68,7 +70,7 @@ func (w lockWaiting) wait(ctx context.Context, log *report.Logger, try func() (b
 }
 
 // ended is the error of a wait the bound, or its context, ended.
-func (w lockWaiting) ended(bound time.Duration) error {
+func (w boundedWait) ended(bound time.Duration) error {
 	if w.held != "" {
 		return errors.New(w.what + " still held by " + w.held + " after " + boundWords(bound))
 	}

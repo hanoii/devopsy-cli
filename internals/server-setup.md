@@ -45,13 +45,13 @@
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
 - The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, never by the exit of a container the restart may cut, whose client's words then go unsaid.
 - A drop-in put without a restart is followed by a `daemon-reload`, failing quietly: else systemd says at each call that `docker.service` changed on disk.
-- A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, waited for through `lockWaiting`, bounded (`restartWait`); one not confirmed in time is an error naming the journal, the restart flag raised.
+- A restart is done once `docker.service`'s `InvocationID` changed and `docker info` shows the file's values, waited for through `boundedWait`, bounded (`restartWait`); one not confirmed in time is an error naming the journal, the restart flag raised.
 - A change not restarted now raises the restart marker (`setup.RestartMarker`, with the `InvocationID` read before the run) and the system's flag, through `restart_flag`, only when the run changed `daemon.json`.
 - systemctl refusing from the chroot never leads to a privileged container in the host's pid namespace (internals/door.md): the run marks the change and names the restart for the admin.
 
 ## Sessions
 
-- `--server-setup` is two sessions as the deploy user: `facts`, read-only, no lock, no util image, carrying the apply's needs (`WithAlsoNeeds`) so an older server refuses before anything; then `apply`, under the apply lock (`setup.LockFile`, `lockWaiting`), whenever there is something to put, an answer to record, a restart, or no record yet.
+- `--server-setup` is two sessions as the deploy user: `facts`, read-only, no lock, no util image, carrying the apply's needs (`WithAlsoNeeds`) so an older server refuses before anything; then `apply`, under the apply lock (`setup.LockFile`, `boundedWait`), whenever there is something to put, an answer to record, a restart, or no record yet.
 - A project user is refused through `askedAsProjectUser`, the same exit as `--ssh-keys --for`, and `refuseProjectUser` names the deploy user's address.
 - Declining saves nothing; `--yes` goes through the same two sessions, and without a terminal a question fails naming `--yes`.
 - `apply --upgrade` asks nothing and restarts nothing: a changed part is left and said, a missing release root said and never made, every failure a warning, exit 0.

@@ -335,7 +335,7 @@ func applySetup(h setupHost, a setupApply) int {
 		return failed(err.Error())
 	}
 	defer lock.Close()
-	if err := (lockWaiting{what: "another --server-setup"}).wait(context.Background(), report.Default(), flockNow(lock, syscall.LOCK_EX)); err != nil {
+	if err := (boundedWait{what: "another --server-setup"}).wait(context.Background(), report.Default(), flockNow(lock, syscall.LOCK_EX)); err != nil {
 		return failed(err.Error())
 	}
 
@@ -534,7 +534,7 @@ func fixWords(fix string) []report.Remedy {
 	return []report.Remedy{report.Fix(fix)}
 }
 
-// flockNow tries f's lock (how, syscall.LOCK_EX or LOCK_SH) without waiting, for lockWaiting.
+// flockNow tries f's lock (how, syscall.LOCK_EX or LOCK_SH) without waiting, for boundedWait.
 func flockNow(f *os.File, how int) func() (bool, error) {
 	return func() (bool, error) {
 		err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
@@ -644,7 +644,7 @@ func sayRootLines(out string, parts []string, root string) {
 // waitRestart waits, bounded and said, until Docker's restart is confirmed: docker.service's
 // InvocationID no longer before, and docker info showing daemon.json's values.
 func waitRestart(before string, h setupHost) error {
-	return (lockWaiting{what: "Docker's restart", bound: restartWait, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) {
+	return (boundedWait{what: "Docker's restart", bound: restartWait, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) {
 		if id := systemctlShow("InvocationID"); id == "" || id == before {
 			return false, nil
 		}

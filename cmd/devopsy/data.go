@@ -522,9 +522,9 @@ func localServices(cwd string) ([]images.Service, error) {
 // as a sync's img sync-check and sync-done do, for an import's check and
 // take-over of the export's history of its data, and a restore's pulls
 // and bookmarks: a removal elsewhere, which takes it exclusively, then
-// never runs between them. Waits up to 10 minutes, saying so (lockWaiting).
+// never runs between them. Waits up to 10 minutes, saying so (boundedWait).
 func imagesShared(ctx context.Context) (unlock func(), err error) {
-	err = lockWaiting{what: "the server's images", held: "a removal"}.wait(ctx, report.Default(), func() (bool, error) {
+	err = boundedWait{what: "the server's images", held: "a removal"}.wait(ctx, report.Default(), func() (bool, error) {
 		u, ok, err := imagesLockNow(syscall.LOCK_SH)
 		unlock = u
 		return ok, err
