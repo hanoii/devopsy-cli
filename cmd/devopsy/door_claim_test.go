@@ -720,12 +720,17 @@ func TestDoorKeepsNothingOfAUserWithNoKey(t *testing.T) {
 			t.Errorf("%s: a record is there: %q", name, got)
 		}
 	}
-	// The control: with a key, both are written.
+	// The control: with a key, the keys file as the request found it, both are written.
 	write(t, keys, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o600)
+	at, err := os.Stat(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side.keysAt = at
 	if err := side.record("sha256:" + strings.Repeat("ab", 32)); err != nil {
 		t.Errorf("the control: the record (%v)", err)
 	}
-	if _, err := (&doorSide{policy: side.policy, keysFile: keys}).writeLogins(config); err != nil {
+	if _, err := (&doorSide{policy: side.policy, keysFile: keys, keysAt: at}).writeLogins(config); err != nil {
 		t.Errorf("the control: the logins (%v)", err)
 	}
 }

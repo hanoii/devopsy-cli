@@ -428,7 +428,15 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 		if !mountTarget.MatchString(m.target) || (strings.HasPrefix(placed[i], "/") && !mountSource.MatchString(placed[i])) {
 			return nil, refuse("docker run: a mount it cannot hand on: %s", m.target)
 		}
-		if m.volumeFlag {
+		// A host path goes as a bind Docker never makes when it is missing (--mount, where -v
+		// would make an empty directory of root's there); a named volume as it came.
+		if m.volumeFlag && strings.HasPrefix(placed[i], "/") {
+			v := "type=bind,source=" + placed[i] + ",target=" + mounts[i].target
+			if m.readOnly {
+				v += ",readonly"
+			}
+			out = append(out, "--mount", v)
+		} else if m.volumeFlag {
 			v := placed[i] + ":" + mounts[i].target
 			if m.readOnly {
 				v += ":ro"

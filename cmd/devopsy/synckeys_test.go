@@ -103,6 +103,7 @@ func TestDoorSyncKeys(t *testing.T) {
 	if err := os.WriteFile(keys, []byte("ssh-ed25519 "+blob+" admin@laptop\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	side.keysFile = keys
 	if side.keysAt, err = os.Stat(keys); err != nil {
 		t.Fatal(err)
 	}

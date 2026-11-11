@@ -475,7 +475,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	if strings.Contains(joined, tree) {
 		t.Errorf("a root container holds the tree: %s", joined)
 	}
-	for _, want := range []string{"/space/work/in/stream:/in/stream:ro", "/space/mnt/shop-prod/data:/mnt/data", "--network none", "--cap-drop MKNOD", "--security-opt no-new-privileges", "--read-only", "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m"} {
+	for _, want := range []string{"--mount type=bind,source=/space/work/in/stream,target=/in/stream,readonly", "--mount type=bind,source=/space/mnt/shop-prod/data,target=/mnt/data", "--network none", "--cap-drop MKNOD", "--security-opt no-new-privileges", "--read-only", "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("no %q in %s", want, joined)
 		}
@@ -710,8 +710,8 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 		want string
 		file bool
 	}{
-		{"a local entry", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, "/space/mnt/shop-dev/data:/dst/data", false},
-		{"a local file", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--inplace", "/src/app.ini", "/dst/"}, "/space/mnt/shop-dev/app.ini:/dst/app.ini", true},
+		{"a local entry", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, "type=bind,source=/space/mnt/shop-dev/data,target=/dst/data", false},
+		{"a local file", []string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--inplace", "/src/app.ini", "/dst/"}, "type=bind,source=/space/mnt/shop-dev/app.ini,target=/dst/app.ini", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

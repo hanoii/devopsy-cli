@@ -116,6 +116,14 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(errors.New("no docker"))); code == 0 {
 		t.Error("a kill that failed passes")
 	}
+	if !fileExists(remote.DoorEndingFile("devopsy-shop")) {
+		t.Error("a kill that failed left no mark of the end pending")
+	}
+	// Asked again, its entry gone, the marked end completes and its mark goes.
+	ended = nil
+	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" || fileExists(remote.DoorEndingFile("devopsy-shop")) {
+		t.Errorf("a removal asked again after a failed end (exit %d) ended %q, its mark there %v", code, ended, fileExists(remote.DoorEndingFile("devopsy-shop")))
+	}
 	ended = nil
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code == 0 || len(ended) != 0 {
 		t.Errorf("no such user (exit %d) ended %q", code, ended)
@@ -259,6 +267,7 @@ func TestNoSyncKeyAddedPastTheEnd(t *testing.T) {
 	if !remote.KeysLeft(keys) {
 		t.Fatal("no key left")
 	}
+	side.keysFile = keys
 	if side.keysAt, err = os.Stat(keys); err != nil {
 		t.Fatal(err)
 	}

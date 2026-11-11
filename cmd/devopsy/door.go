@@ -255,13 +255,21 @@ func carriesLabel(file map[string]any, prefix string) bool {
 	return false
 }
 
-// Real implements door.Paths.
+// Real implements door.Paths: the project user's answer of where path ends, which is that
+// user's word (its read is its own process, to trace), so taken only absolute and clean: a
+// `..` read lexically (filepath.Dir, a prefix) would mean another place to the kernel through
+// a link the user made, and every caller (an entry's parent, a bind, a build's context) would
+// believe it otherwise.
 func (s *doorSide) Real(path string) (string, error) {
 	out, err := doorAnswer(s.read("real", path), maxPath, doorReadWait)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve %s", path)
 	}
-	return strings.TrimSpace(string(out)), nil
+	real := strings.TrimSuffix(string(out), "\n")
+	if !filepath.IsAbs(real) || filepath.Clean(real) != real {
+		return "", fmt.Errorf("cannot resolve %s: its answer is no clean path", path)
+	}
+	return real, nil
 }
 
 // noLink refuses a copy that came out a link: a path of the deploy user's, which
@@ -808,15 +816,11 @@ func runDoor(args []string) int {
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
 	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
-	if !remote.KeysLeft(remote.DoorKeysFile(doorWho)) {
-		return doorRefused(errors.New("refused: " + doorWho + " has no key left"))
-	}
-	// A key's removal whose end of the user's processes did not complete: what that key left
-	// running gets nothing from the door until it does (remote.DoorEndingFile).
-	if _, err := os.Lstat(remote.DoorEndingFile(doorWho)); err == nil {
-		return doorRefused(errors.New("refused: a key of " + doorWho + "'s was removed and the end of its processes did not complete: its keys' next edit or listing completes it"))
-	}
 	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho)}
+	// With no key left, or an end pending: what a removed key left running gets nothing.
+	if err := side.stillAsked(); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
 	if len(args) == 0 {
 		return doorRefused(errors.New("refused: no request"))
 	}
@@ -876,17 +880,35 @@ func (s *doorSide) syncKey(args []string) int {
 	// A user's end drops its sync keys and makes its keys file anew under this lock
 	// (endProjectUser): a request begun before it, past its sudo, which no end reaches, finds
 	// that file changed and adds none.
-	still := func() error {
-		now, err := os.Stat(remote.DoorKeysFile(s.policy.User))
-		if err != nil || s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
-			return errors.New(s.policy.User + "'s keys changed during this request")
-		}
-		return nil
-	}
-	if err := editSyncKeys(remote.DoorSyncKeysFile(s.policy.User), selfPath(), args, time.Now(), still); err != nil {
+	if err := editSyncKeys(remote.DoorSyncKeysFile(s.policy.User), selfPath(), args, time.Now(), s.stillAsked); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
 	}
 	return 0
+}
+
+// stillAsked says whether the request's user is still as the request found it: its keys file
+// the same (keysAt), a key left in it, no end of its processes pending (remote.DoorEndingFile).
+// A user's end renews its keys file and kills its processes, never the door's, which are the
+// deploy user's: a request begun before, past its sudo (one parked on a registry's copy for
+// days), finds the file changed, and acts no further. Every request asks before it acts on the
+// user's behalf: before Docker or compose runs, before what the door keeps for the user is
+// written (whileAUser), before a sync key goes in. A key added meanwhile renews the file too,
+// so such a request is refused and asked again.
+func (s *doorSide) stillAsked() error {
+	if s.keysFile == "" {
+		return nil
+	}
+	now, err := os.Stat(s.keysFile)
+	if err != nil || !remote.KeysLeft(s.keysFile) {
+		return errors.New(s.policy.User + " has no key left")
+	}
+	if s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
+		return errors.New(s.policy.User + "'s keys changed during this request: ask again")
+	}
+	if _, err := os.Lstat(remote.DoorEndingFile(s.policy.User)); err == nil {
+		return errors.New("a removal's end of " + s.policy.User + "'s processes did not complete: the next listing or edit of its keys completes it")
+	}
+	return nil
 }
 
 // spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a
@@ -1321,6 +1343,9 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 	}
 	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
+	if err := s.stillAsked(); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
 	err = execDecided(s.real, append(cmd, argv...), env)
 	return doorRefused(err)
 }
@@ -1401,6 +1426,9 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	// and every parent, and a down by name runs with none.
 	if err := os.Chdir("/"); err != nil {
 		return doorRefused(err)
+	}
+	if err := s.stillAsked(); err != nil {
+		return doorRefused(fmt.Errorf("refused: %w", err))
 	}
 	err = execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), env)
 	return doorRefused(err)
@@ -1742,6 +1770,11 @@ func (s *doorSide) request(config string, argv []string) int {
 			if a.Docker[i] == ref && a.Docker[i-1] != "--format" && a.Docker[i-1] != "-f" {
 				a.Docker[i] = images.ByDigest(ref, digest)
 			}
+		}
+	}
+	if a.Stream != nil || len(a.Docker) > 0 {
+		if err := s.stillAsked(); err != nil {
+			return refused(fmt.Errorf("refused: %w", err))
 		}
 	}
 	if a.Stream != nil {

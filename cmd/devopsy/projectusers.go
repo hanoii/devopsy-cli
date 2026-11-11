@@ -91,6 +91,14 @@ func listProjectUsers(d *remote.Door) int {
 			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, len(remote.ParseAuthorizedKeys(string(data))))
 		}
 	}
+	// An end a key's or a user's removal began and did not see through (remote.DoorEndingFile),
+	// the user listed or not: the door answers it nothing until it completes.
+	pending, _ := filepath.Glob(remote.DoorEndingFile("*"))
+	for _, f := range pending {
+		who := strings.TrimSuffix(filepath.Base(f), ".ending")
+		report.Warn(who+": the end of its processes a removal began did not complete, and the door answers it nothing until it does",
+			"a listing or an edit of its keys completes it, as a removal asked again does")
+	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
 	}
@@ -327,13 +335,28 @@ func removeKept(space, project, who string) error {
 // removeProjectUser takes who's entry and keys, then ends its processes (end): the door
 // answers it no more first, so nothing it runs meanwhile gets a new call through.
 func removeProjectUser(d *remote.Door, project, who, entry string, end func(who string) error) int {
+	ending := remote.DoorEndingFile(who)
 	if _, err := os.Stat(entry); err != nil {
+		// A removal before whose end did not complete (its mark): asked again, it ends the user
+		// and goes on with what was left, the rest being gone already.
+		if _, err := os.Lstat(ending); err == nil {
+			return finishRemoval(d, project, who, end)
+		}
 		if d != nil {
 			if _, ok := d.Users[who]; ok {
 				return fail(who + " is under door: users: in " + remote.UserConfigFile() + ": remove it there")
 			}
 		}
 		return fail("no project user for " + project + " here")
+	}
+	// Its end is marked before anything goes (remote.DoorEndingFile): a failure or a cut
+	// session past here leaves the mark, which a removal asked again, or the next edit or
+	// listing of the user's keys, settles, the door answering the user nothing meanwhile.
+	if err := os.MkdirAll(filepath.Dir(ending), 0o700); err != nil {
+		return failErr(err)
+	}
+	if err := os.WriteFile(ending, nil, 0o600); err != nil {
+		return failErr(err)
 	}
 	if err := os.Remove(entry); err != nil {
 		return failErr(err)
@@ -343,10 +366,18 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	if err := lockedKeys(remote.DoorKeysFile(who), func([]string) ([]string, error) { return nil, nil }); err != nil {
 		return failErr(err)
 	}
+	return finishRemoval(d, project, who, end)
+}
+
+// finishRemoval ends who's processes (end), clears the end's mark, and removes what the door
+// kept for it: the part of a removal that a failure lets it ask again.
+func finishRemoval(d *remote.Door, project, who string, end func(who string) error) int {
 	// It ends before anything else may fail: what it left running must not outlive a removal
 	// that stopped halfway.
 	if err := endProjectUser(who, end); err != nil {
-		return fail("removed " + who + "'s entry and keys, but " + err.Error())
+		report.Fail(errors.New("removed "+who+"'s entry and keys, but "+err.Error()),
+			report.Fix("ask for the removal again once that is fixed: the end is marked, and the door answers "+who+" nothing meanwhile"))
+		return 1
 	}
 	// What the door kept for it: its registry logins and the record of the images it claimed,
 	// under the record's lock (doorSide.whileAUser), so a door request past its sudo before
@@ -355,6 +386,9 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 		if err := removeKept(d.Space, project, who); err != nil {
 			return failErr(err)
 		}
+	}
+	if err := os.Remove(remote.DoorEndingFile(who)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return failErr(err)
 	}
 	stays := "its Unix user, home and tree stay"
 	if _, err := user.Lookup(who); err != nil {

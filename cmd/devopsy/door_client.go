@@ -283,6 +283,9 @@ loop:
 			}
 			global = append(global, a, args[i+1])
 			i += 2
+		case a == "-h" || a == "--help":
+			// Compose's own help, which no daemon is behind.
+			return doorExec(real, append([]string{"compose"}, args...))
 		case strings.HasPrefix(a, "-"):
 			name, value, valued := strings.Cut(a, "=")
 			switch {

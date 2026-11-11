@@ -82,7 +82,11 @@ name or a path resolved again later is one nobody checked:
 - A bind mount's source is a real path the door made in `<space>`, not a
   path in the project's tree, where the project user could swap a link
   between the check and the start. Read-only files from a release are
-  copied into `<space>` first.
+  copied into `<space>` first, at each start (`up`, `create`, `run`): a
+  container sees them as they were then, so a file edited in place in a
+  release shows after `docker compose up -d`, never after a restart. A
+  bind of a directory inside an entry (`./mnt/data/sub`) needs that
+  directory made first: Docker makes no missing source.
 - The rendered file reaches compose as an open file with no name on
   disk.
 

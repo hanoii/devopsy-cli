@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
-	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -575,7 +574,7 @@ func (s *doorSide) lockedRecord(edit func([]string) []string) error {
 }
 
 // whileAUser runs write, what the door keeps for its user (its logins, its record), under the
-// record's lock and only while the user has a key (keysFile): --project-users remove empties
+// record's lock and only while the user is as the request found it (stillAsked): --project-users remove empties
 // its keys, then takes that lock to remove what was kept, so a request past its sudo before
 // the removal writes none of it back after.
 func (s *doorSide) whileAUser(write func() error) error {
@@ -591,8 +590,8 @@ func (s *doorSide) whileAUser(write func() error) error {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
-	if s.keysFile != "" && !remote.KeysLeft(s.keysFile) {
-		return errors.New("refused: " + s.policy.User + " has no key left")
+	if err := s.stillAsked(); err != nil {
+		return fmt.Errorf("refused: %w", err)
 	}
 	return write()
 }

@@ -275,6 +275,19 @@ func TestCheckFilePinsBinds(t *testing.T) {
 	if len(paths.sealed) != 1 || paths.sealed[0] != confReal {
 		t.Errorf("sealed %v, want its real path", paths.sealed)
 	}
+	// A verb that makes no container seals nothing (a read, an extract and a hash for none),
+	// its paths checked all the same; one that does seals as up does.
+	for verb, seals := range map[string]bool{"ps": false, "logs": false, "exec": false, "down": false, "pull": false, "create": true, "run": true} {
+		paths := &fakePaths{links: map[string]string{through: entry, conf: confReal}}
+		file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[
+		  {"type":"bind","source":"`+conf+`","target":"/c","read_only":true}]`)+`}}`)
+		if errs := CheckFile(file, testPolicy, verb, paths); len(errs) != 0 {
+			t.Fatalf("%s: %v", verb, errs)
+		}
+		if got := len(paths.sealed) == 1; got != seals {
+			t.Errorf("%s sealed %v", verb, paths.sealed)
+		}
+	}
 	// shared/mnt swapped for a link to another's entries.
 	paths = &fakePaths{links: map[string]string{through: "/space/mnt/other-prod/data"}}
 	file = parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"`+through+`","target":"/d"}]`)+`}}`)

@@ -445,7 +445,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		}
 		switch t, _ := v["type"].(string); t {
 		case "bind":
-			checkBind(svc, name, v, p, paths, fail)
+			checkBind(svc, name, v, p, paths, startsContainers(verb), fail)
 			// Docker never makes a bind's source: the door makes what it binds (an entry, a
 			// sealed copy) before compose runs, so a source gone in the meantime (a sealed copy
 			// pruned as another environment chose it) fails the start, never binds an empty
@@ -605,11 +605,19 @@ func checkAliases(file map[string]any, svc string, s map[string]any, p Policy, f
 	}
 }
 
+// startsContainers says whether verb makes containers (up, create, run), the only verbs whose
+// file's binds the daemon binds.
+func startsContainers(verb string) bool {
+	return verb == "up" || verb == "create" || verb == "run"
+}
+
 // checkBind allows an entry of this compose name, or a read-only part of the
 // project's tree, and leaves in the file a path with no part the project user
 // can change: the daemon resolves a bind at each start, so a link swapped in
-// later would otherwise take a restart anywhere.
-func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail func(string, ...any)) {
+// later would otherwise take a restart anywhere. The read-only part is sealed only when
+// the verb makes containers (seal): any other binds nothing, and a copy for it would be a
+// read, an extract and a hash for nothing; its path is checked all the same.
+func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, seal bool, fail func(string, ...any)) {
 	src, _ := v["source"].(string)
 	real, err := paths.Real(src)
 	if err != nil {
@@ -626,6 +634,10 @@ func checkBind(svc, name string, v map[string]any, p Policy, paths Paths, fail f
 		return
 	}
 	if p.InTree(real) && truthy(v["read_only"]) {
+		if !seal {
+			v["source"] = real
+			return
+		}
 		sealed, err := paths.Seal(real)
 		if err != nil {
 			fail("%s: sealing %s: %v", svc, src, err)
