@@ -209,6 +209,20 @@ func TestHostPut(t *testing.T) {
 		t.Errorf("a first piece its check refuses: exit %d", code)
 	}
 	holds("a first piece its check refuses", "")
+	// A move that fails (a full disk, a read-only file system) inside an if is the run's
+	// failure, never the same text.
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(bin, "mv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c = exec.Command("sh", "-c", "set -eu\n"+hostPut+`if put "$1" 640 true "$2"; then echo put; else echo same; fi`, "sh", f, "rule three\n")
+	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	moved, _ := c.CombinedOutput()
+	if code := c.ProcessState.ExitCode(); code != 5 || !strings.Contains(string(moved), "could not be written") || strings.Contains(string(moved), "same") {
+		t.Errorf("a move that fails (%d): %s", code, moved)
+	}
+	holds("a move that failed", "")
 }
 
 // add refuses a host whose sshd would not take its drop-in for the project user: a sshd_config
