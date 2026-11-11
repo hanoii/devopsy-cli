@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 func TestUpgradeCommand(t *testing.T) {
@@ -68,5 +72,43 @@ func TestNoWorkingDirectory(t *testing.T) {
 		if out, err := run(args); err != nil {
 			t.Errorf("devopsy %s: %v\n%s", args, err, out)
 		}
+	}
+}
+
+// An upgrade applies the server's setup once per devopsy version, from a release build, on a
+// server whose record is there: another version's record (or one with none) is applied, the
+// same version's left alone, and a laptop, a server never set up and a development build
+// apply nothing.
+func TestUpgradeApplies(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		version, recorded string
+		exists            bool
+		want              bool
+	}{
+		{"0.65.0", "0.64.0", true, true},
+		{"0.65.0", "", true, true},
+		{"0.65.0", "0.65.0", true, false},
+		{"0.65.0", "", false, false},
+		{"dev", "0.64.0", true, false},
+	} {
+		if got := upgradeApplies(c.version, c.recorded, c.exists); got != c.want {
+			t.Errorf("%s, recorded %q, there %v: %v", c.version, c.recorded, c.exists, got)
+		}
+	}
+}
+
+// An upgrade whose apply cannot start (its binary gone, say) warns, naming --server-setup, and
+// exits 0: the upgrade itself is done.
+func TestApplyAfterUpgradeFails(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	if code := applyAfterUpgrade(report.New(&out, false, 0), filepath.Join(t.TempDir(), "gone"), true); code != 0 ||
+		!strings.Contains(out.String(), "devopsy: warning: the server's setup was not applied: ") || !strings.Contains(out.String(), "run --server-setup for this server") {
+		t.Errorf("(%d):\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := applyAfterUpgrade(report.New(&out, false, 0), "/nonexistent", false); code != 0 || out.Len() != 0 {
+		t.Errorf("not set up (%d):\n%s", code, out.String())
 	}
 }

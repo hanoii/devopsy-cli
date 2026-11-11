@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runSyncKey is the hidden --sync-key (remote.SyncKeyFlag) add <id> <base> <to> <reset|->
@@ -130,12 +132,11 @@ func lockedKeys(file string, edit func([]string) ([]string, error)) error {
 		return err
 	}
 	defer lock.Close()
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
-			break
-		} else if !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
-			return fmt.Errorf("another edit of %s did not end in a minute", file)
-		}
+	// A minute, as the --ssh-keys scripts wait for the same lock.
+	if err := (boundedWait{what: "another edit of " + file, bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
+		return tryFlock(lock, syscall.LOCK_EX)
+	}); err != nil {
+		return err
 	}
 	data, err := os.ReadFile(file)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

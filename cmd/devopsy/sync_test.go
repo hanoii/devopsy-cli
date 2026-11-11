@@ -194,6 +194,23 @@ vols="$DOCKER_LOG.vol"
 # client is killed.
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
+  # A root run on the host (hostRun): its chrooted script run here, on the test's host root
+  # (remote.HostRootEnv) as the script's first argument already says.
+  "run --rm --network "*" -v /:/host"*" chroot /host /bin/sh -c "*)
+    [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+    while [ "$1" != -c ]; do shift; done
+    script=$2; shift 2
+    # FAKE_CUT_AFTER_ROOT: the devopsy that ran it killed outright once it is done.
+    [ -n "${FAKE_CUT_AFTER_ROOT:-}" ] || exec sh -c "$script" "$@"
+    sh -c "$script" "$@"; kill -KILL "$PPID"; exit 137 ;;
+  # docker info: the host root's docker-info.json, when a test writes one.
+  "info --format {{json .}}")
+    [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+    [ ! -f "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json" ] || cat "$DEVOPSY_INTERNAL_HOST_ROOT/docker-info.json" ;;
+  # Compose's version, as the setup's Docker check reads it (FAKE_NO_COMPOSE: none).
+  "compose version --short") [ -n "${FAKE_NO_COMPOSE:-}" ] || echo 5.5.0 ;;
+  # FAKE_RUNNING: the ids of the containers running.
+  "ps -q") for c in ${FAKE_RUNNING:-}; do echo "$c"; done ;;
   *" config --format json")
     # FAIL_CONFIG: this project's compose config fails.
     [ "${FAIL_CONFIG:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || { echo "no such file: compose.yaml" >&2; exit 1; }
@@ -675,6 +692,10 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	t.Cleanup(s.waitReleaseTars)
 	home := filepath.Join(tmp, "home")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\n", 0o644)
+	// The release root is there, as --server-setup leaves it: an upload refuses one missing.
+	if err := os.Mkdir(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	s.dot = filepath.Join(s.project, ".devopsy")
 	write(t, filepath.Join(s.dot, "compose.yaml"), "services:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)

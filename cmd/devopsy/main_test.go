@@ -813,6 +813,15 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("before failure touched the server: %v", err)
 	}
 
+	// The upload refuses a release root that is not the deploy user's yet, before it takes a
+	// lock or makes anything there, naming --server-setup.
+	missing, settings := filepath.Join(tmp, "srv", "releases"), t.TempDir()
+	write(t, filepath.Join(settings, "config.yaml"), "releases:\n  root: "+missing+"\n", 0o644)
+	if out, code := run([]string{"DEVOPSY_HOME=" + settings}, "@prod", "--release"); code == 0 || !strings.Contains(out, "devopsy: error: the release root "+missing+" is missing: nothing released\n") ||
+		!strings.Contains(out, "$ devopsy @devopsy@server: --server-setup\n") || strings.Contains(out, "deploy --fast") || fileExists(filepath.Dir(missing)) {
+		t.Fatalf("a missing release root (%d):\n%s", code, out)
+	}
+
 	// prepare generates SECRET; NEEDED is missing: listed, nothing live.
 	out, code := run(nil, "@prod", "--release")
 	if code == 0 || !strings.Contains(out, "NEEDED  set it per environment") || strings.Contains(out, "SECRET ") || !strings.Contains(out, "devopsy @devopsy@server:prod --vars set") || current() != "" || strings.Contains(out, "deploy --fast") {

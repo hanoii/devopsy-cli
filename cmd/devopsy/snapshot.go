@@ -1075,7 +1075,7 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 	// it stays, never waited for.
 	if d, err := os.Open(dir); err == nil {
 		defer d.Close()
-		if err := syscall.Flock(int(d.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if ok, _ := tryFlock(d, syscall.LOCK_EX); !ok {
 			return errors.New("snapshot " + filepath.Base(dir) + " is being exported: it stays")
 		}
 	}
@@ -1132,7 +1132,10 @@ func snapshotList(p snapshotPaths) {
 	// file of a take killed outright.
 	busy := false
 	if f, err := os.OpenFile(filepath.Join(p.base, remote.SnapshotLockFile), os.O_RDONLY, 0); err == nil {
-		busy = fileExists(filepath.Join(p.base, remote.SnapshotHoldingFile)) && syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) != nil
+		if fileExists(filepath.Join(p.base, remote.SnapshotHoldingFile)) {
+			free, _ := tryFlock(f, syscall.LOCK_SH)
+			busy = !free
+		}
 		f.Close()
 	}
 	var lines []string

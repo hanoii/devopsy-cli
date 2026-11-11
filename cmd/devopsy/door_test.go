@@ -79,7 +79,7 @@ func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 var doorVerbs = map[string]string{
 	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
-	"buildx": "--context-hash, local", "info": "--server-info, the admin's", "system": "--server-info, the admin's",
+	"buildx": "--context-hash, local; --server-setup, the deploy user's", "info": "--server-info and --server-setup, the admin's", "system": "--server-info, the admin's",
 	"builder": "a hint to the admin", "not": "a message",
 }
 

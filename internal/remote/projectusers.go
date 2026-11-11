@@ -110,15 +110,44 @@ var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system 
 	"getent group " + DoorRunGroup + " >/dev/null || groupadd --system " + DoorRunGroup + "\n"
 
 // hostPut is put <file> <mode> <check> <content>: content into file when it differs, checked
-// before it lands, failing otherwise when it changed nothing. Never in a pipeline, whose
-// subshell an exit would leave alone.
+// before it lands, failing otherwise when it changed nothing. A mode keep:<mode> keeps the
+// file as its admin has it: a link stays, the file it names written; its own mode and owner,
+// <mode> (root's) only for a file it makes. Never in a pipeline, whose subshell an exit would
+// leave alone.
 var hostPut = `put() {
-  tmp=$(mktemp "$1.XXXXXX")
+  pf=$1
+  case $2 in
+    keep:*)
+      pn=0
+      while [ -L "$pf" ] && [ "$pn" -lt 40 ]; do
+        pl=$(readlink "$pf")
+        case $pl in /*) pf=$pl ;; *) pf=$(dirname "$pf")/$pl ;; esac
+        pn=$((pn + 1))
+      done ;;
+  esac
+  tmp=$(mktemp "$pf.XXXXXX")
+  case $2 in
+    keep:*) if [ -e "$pf" ]; then cp -p "$pf" "$tmp"; else chmod "${2#keep:}" "$tmp"; fi ;;
+    *) chmod "$2" "$tmp" ;;
+  esac
   printf '%s' "$4" >"$tmp"
-  chmod "$2" "$tmp"
-  if cmp -s "$tmp" "$1" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  if cmp -s "$tmp" "$pf" 2>/dev/null; then rm -f "$tmp"; return 1; fi
   if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
-  mv -f "$tmp" "$1"
+  mv -f "$tmp" "$pf"
+}
+`
+
+// RebootRequired is the system's restart flag, which unattended-upgrades takes at its reboot
+// time (devopsy-server's DEVOPSY_AUTO_REBOOT_TIME), its .pkgs naming what asked for it.
+const RebootRequired = "/run/reboot-required"
+
+// hostRestartFlag is restart_flag <marker> [<content>]: the marker of what waits for a
+// restart, empty or holding content, and the system's restart flag raised with devopsy in its
+// .pkgs, once. Its paths are under $host_root, unset on the host itself.
+var hostRestartFlag = `restart_flag() {
+  if [ $# -gt 1 ]; then printf '%s\n' "$2" >"${host_root:-}$1"; else touch "${host_root:-}$1"; fi
+  touch "${host_root:-}` + RebootRequired + `"
+  grep -qx devopsy "${host_root:-}` + RebootRequired + `.pkgs" 2>/dev/null || echo devopsy >>"${host_root:-}` + RebootRequired + `.pkgs"
 }
 `
 
@@ -176,7 +205,7 @@ group=` + DoorGroup + `
 done
 (set -- "$user" "$tree"
 ` + doorUserCheck + doorTreeCheck + `)
-` + hostPut + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
+` + hostPut + hostRestartFlag + `# A project user's docker is devopsy, which asks the door; the deploy user's goes through it to
 # Docker. A real docker there would put the project users on the socket.
 if [ ! -L ` + DoorDockerLink + ` ] && [ -e ` + DoorDockerLink + ` ]; then
   ` + echoLine(report.ErrorLevel, DoorDockerLink+" is a real docker: project users would reach the socket through it") + `
@@ -197,8 +226,7 @@ if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
     ` + echoLine(report.ErrorLevel, "sshd refused "+DoorSSHDropIn+": put back as it was") + `
     exit 4
   fi
-  touch ` + DoorRebootMarker + ` /run/reboot-required
-  grep -qx devopsy /run/reboot-required.pkgs 2>/dev/null || echo devopsy >>/run/reboot-required.pkgs
+  restart_flag ` + DoorRebootMarker + `
   echo reboot
 fi
 made=

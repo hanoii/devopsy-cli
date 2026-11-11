@@ -1022,7 +1022,10 @@ caller's environment, then .devopsy/.env).
 	"--upgrade": `Usage: devopsy @<server> --upgrade [vX.Y.Z]
 
 Replaces the server's devopsy with the latest release, or vX.Y.Z, as the
-deploy user, who owns it. devopsy --upgrade does the same locally.
+deploy user, who owns it. devopsy --upgrade does the same locally. On a
+server --server-setup set up, the devopsy now there applies the setup
+once per version, asking nothing: it leaves each value someone else set,
+and never restarts Docker.
 `,
 	"--server-info": `Usage: devopsy [@<server>] --server-info [--json]
 
@@ -1031,7 +1034,8 @@ for no lock, or without a server the Linux server it runs on (in
 --shell-host): its devopsy and release settings, the system (memory,
 load, uptime, the memory the kernel keeps for Kexec HandOver and kdump,
 whether its clock is synchronized and how far it is from the local one),
-Docker (image store, security options, logs), the filesystems of the
+Docker (image store, security options, logs), its setup as
+--server-setup judges it, the filesystems of the
 release root, Docker's and containerd's data, the snapshot root and /
 (free space, reflinks on the release root), the roles projects hold and
 what they export, and every environment under the release root with its
@@ -1041,7 +1045,8 @@ What needs attention is a warning under what it is about, with its fix:
 an older devopsy, a reboot the system asks for, memory Kexec HandOver
 keeps as CMA (the kernel's own allocations can run out with memory
 free), a clock out of sync, a kernel with AppArmor and no
-apparmor_parser (no container starts), logs without a size limit, a disk
+apparmor_parser (no container starts), logs without a size limit, a
+server never set up by devopsy or an item of its setup not devopsy's, a disk
 90% full or with less than 5 GB free, no reflinks, a snapshot root on
 the release root's filesystem, a tool the server needs missing, a role
 held twice, and an environment whose first release failed, cut off past
@@ -1059,6 +1064,48 @@ Options:
 Examples:
   devopsy @vm1 --server-info
   devopsy @vm1 --server-info --json
+`,
+	"--server-setup": `Usage: devopsy @<server> --server-setup [--yes]
+
+Sets up the server for devopsy, as its deploy user, the server named with
+its user (@devopsy@vm1:): root's steps go through devopsy's util image.
+It refuses first when the server lacks what every release needs (tar,
+flock, Docker with compose and buildx under systemd as docker.service)
+and says why, and when the release root is another user's or no
+directory.
+
+Then it shows what is not as devopsy wants it, and asks:
+  the release root      made when missing, given to the deploy user when
+                        root's and empty (releases: root in the deploy
+                        user's config.yaml, else its home, never /)
+  daemon.json           rotated logs (log-driver local), live-restore,
+                        and /24 address pools, merged in: every other key
+                        stays. A value someone else set is asked about,
+                        keep (Enter) or replace; a kept one is not asked
+                        again while it stays as it is; one set outside
+                        the file (docker.service's flags) is left
+  socket buffers        /etc/sysctl.d/90-devopsy-net.conf, which sets
+                        7.5 MB at each boot, and the live values raised
+                        to it when lower, never lowered
+  mounts drop-in        Docker waits at boot for the release root's
+                        mounts (a docker.service.d drop-in)
+
+Docker takes daemon.json when it restarts: it asks to restart it now,
+and does if Docker still has it to take once it holds its lock, which
+cuts every docker command under way, and stops every container
+when Docker does not keep them through it (live-restore). A restart
+waits for no release in the deploy user's environments, and is refused
+while one runs. Else /run/reboot-required is raised for the next reboot.
+A second run changes nothing. What it applied is recorded in server.yaml
+beside the deploy user's config.yaml, which marks the server set up.
+
+Options:
+  --yes   ask nothing: keep every value someone changed, and restart
+          Docker only when no container runs
+
+Examples:
+  devopsy @devopsy@vm1: --server-setup
+  devopsy @devopsy@vm1: --server-setup --yes
 `,
 	"--ssh-config": `Usage: devopsy @<server> --ssh-config
 

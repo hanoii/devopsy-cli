@@ -39,7 +39,7 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--environments`, `--vars-project` and `--upgrade` (`--environments` and
+`--server-setup`, `--environments`, `--vars-project` and `--upgrade` (`--environments` and
 `--vars-project` with the checkout's project, or an alias's).
 
 They take `@<server>` alone, or any target, whose server they use, with
@@ -54,7 +54,79 @@ devopsy @vm1 --ssh-keys          # vm1's deploy user's keys, from anywhere
 devopsy @prod --ssh-keys         # prod's server's, in the project
 devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 devopsy @vm1 --server-info       # what the server is, and what needs attention
+devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
 ```
+
+## `--server-setup`
+
+`devopsy @devopsy@vm1: --server-setup` sets up what devopsy needs of a
+server, as its deploy user, the server named with that user. Steps as
+root run through devopsy's util image, so the deploy user needs no sudo:
+the docker group can do as much already. It needs systemd, and checks
+first, refusing with what is missing, that the server has `tar` and
+`flock` and Docker answering with its compose and buildx plugins as the
+host's `docker.service`. It installs none of them: devopsy-server's
+`setup.sh` does. The release root (`releases: root` in the deploy user's
+`config.yaml`, else its home, never `/`, a link to it included) it makes
+when missing, and gives to the deploy user when root owns it and it is
+empty (a fresh volume's `lost+found` aside); one root owns that holds
+files (a system directory), one another user owns, or one that is no
+directory, it refuses.
+
+What it keeps as devopsy wants it:
+
+| Item | devopsy's value |
+|---|---|
+| The release root | made when missing, given to the deploy user when root owns it and it is empty |
+| `daemon.json`'s logs | `"log-driver": "local"`, `"log-opts": {"max-size": "20m", "max-file": "5"}` |
+| `daemon.json`'s `live-restore` | `true` |
+| `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
+| Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it) |
+| Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
+
+It shows what is not devopsy's, then asks. `daemon.json` is merged: every
+other key stays as it is (a proxy's `proxies`, for example), and the file
+keeps its mode and owner, a link to it staying a link. A part someone else set is asked about, keep
+(Enter) or replace; a value kept is not asked again while it stays the
+same. To go back to devopsy's value, write it in `daemon.json` or remove
+the keys and answer replace. A part one of whose keys `docker.service`'s
+own flags set is left as it is and said, never asked about: putting it
+in the file too would keep Docker from starting. If `docker.service`
+starts Docker with another `--config-file`, `--server-setup` refuses. A `daemon.json` Docker
+would refuse (not a JSON object, a value of the wrong type) is refused,
+and never rewritten.
+
+Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
+restart it now when the run changes the file or Docker has not taken it
+yet, and restarts it only if that is still so once it holds its lock. A
+restart cuts every docker command under way, and stops every container
+unless Docker keeps them (`live-restore`); it is refused while a release
+runs in one of the deploy user's environments, or while
+`dockerd --validate`, given `docker.service`'s own flags, refuses
+`daemon.json` (Docker would not start again), and
+waits up to two minutes for Docker to come back (it clears the unit's
+start counter first, so recent starts by hand do not count against it,
+and a start systemd refuses ends the wait at once, with the commands
+that start Docker again): not back by then is an error, `/run/reboot-required` raised for a reboot that takes the file
+when Docker still answers, and said when it does not. Not restarted now,
+Docker takes the file at its next restart, and `/run/reboot-required` is
+raised for a reboot that takes it (devopsy-server's
+`DEVOPSY_AUTO_REBOOT_TIME`).
+
+`--yes` asks nothing: it keeps every value someone else set, and restarts
+Docker only when no container runs as it applies, so a new server gets
+devopsy's address pools before its first release makes networks. Without a
+terminal it needs `--yes`.
+
+While the release root holds no project and is not on a volume of its
+own, it lists the volumes it could be on, with their size and free
+space: `releases: root: <mount point>` in the deploy user's
+`config.yaml`, before the first release, puts releases there.
+
+A second run changes nothing. What `--server-setup` applied, the values
+kept, and the devopsy that last applied with no failure are recorded in
+`server.yaml` beside the deploy user's `config.yaml`: devopsy's record,
+never edited by hand. Its first run writes it.
 
 ## `--server-info`
 
@@ -67,6 +139,8 @@ in `--shell-host`; anywhere else it refuses. It reports:
   kdump, and whether its clock is synchronized and how far it is from the
   local one;
 - Docker: its image store, security options and logs;
+- its setup as `--server-setup` judges it: whether devopsy set it up,
+  where its record is, and the values someone else set that were kept;
 - the filesystems of the release root, Docker's and containerd's data,
   the snapshot root and `/`: free space, and whether the release root
   makes reflinks;
@@ -85,7 +159,13 @@ fix:
 - a clock out of sync;
 - a kernel with AppArmor and no `apparmor_parser`, on which no container
   starts;
-- Docker logs that grow without a limit;
+- Docker logs that grow without a limit, on a server whose devopsy does
+  not judge its setup yet;
+- a server never set up by devopsy, on which `--upgrade` applies nothing,
+  and each item of the setup that is not devopsy's (a release root
+  releases refuse, a part of `daemon.json`, the socket buffers, the
+  mounts drop-in) or that Docker has not taken yet, each fixed by
+  `--server-setup`;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
@@ -102,13 +182,15 @@ fix:
   restarting, paused, dead, unhealthy, or exited on an error of their
   own (a stop's codes excepted), each as `--status` says it.
 
-A sync or a snapshot under way is reported as information. So is the
-memory kdump keeps, with how to free it
+A sync or a snapshot under way is reported as information. So are the
+volumes the release root could be on, while it holds no project and is
+not on one, and the memory kdump keeps, with how to free it
 (devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
 
-It exits 3 when it warned, so CI can run it as a check. `--json` prints
-the facts and the same lines as JSON on stdout, each with its fixes and
-hints (`remedies`), for scripts and agents.
+It exits 3 when it warned, so CI can run it as a check: on a server never
+set up by `--server-setup`, it always does. `--json` prints the facts and
+the same lines as JSON on stdout, each with its fixes and hints
+(`remedies`), for scripts and agents.
 
 ## The server's devopsy
 
@@ -120,6 +202,20 @@ changes, says what is missing, and says to run `devopsy @<target>
 --upgrade`, which always works. Commands that need nothing new still run.
 A sync across servers checks the child's devopsy against the parent's
 the same way, before the parent stops anything.
+
+On a server `--server-setup` set up (its `server.yaml` there), `--upgrade`
+applies the setup once per devopsy version, when the record names
+another devopsy than the one now there (just installed, or the latest
+already, its last apply having failed), asking nothing: it puts
+devopsy's values where they are devopsy's (a part new in this devopsy
+included), leaves and says each value someone else set, and never
+restarts Docker. When it changes `daemon.json` it says Docker takes it at
+its next restart and raises `/run/reboot-required`. What fails is a
+warning naming `--server-setup`, and the next `--upgrade` applies again;
+the upgrade itself has succeeded. On a server whose devopsy applied
+already, `--upgrade` changes nothing there: what someone changed since
+(a drop-in removed, a file edited) is `--server-setup`'s to put back,
+and `--server-info` warns of it.
 
 `DEVOPSY_PROTOCOL_CHECK=warn` turns that stop into a warning and goes on,
 at your own risk. It is for a local build ahead of the servers, when what

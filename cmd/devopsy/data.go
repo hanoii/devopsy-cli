@@ -522,26 +522,14 @@ func localServices(cwd string) ([]images.Service, error) {
 // as a sync's img sync-check and sync-done do, for an import's check and
 // take-over of the export's history of its data, and a restore's pulls
 // and bookmarks: a removal elsewhere, which takes it exclusively, then
-// never runs between them. Waits up to 10 minutes, saying so.
+// never runs between them. Waits up to 10 minutes, saying so (boundedWait).
 func imagesShared(ctx context.Context) (unlock func(), err error) {
-	deadline := time.Now().Add(10 * time.Minute)
-	var timer *report.Timer
-	for {
-		unlock, ok, err := imagesLockNow(syscall.LOCK_SH)
-		if err != nil || ok {
-			if timer != nil && ok {
-				timer.Stop("done waiting for the server's images")
-			}
-			return unlock, err
-		}
-		if timer == nil {
-			timer = report.Start("waiting for the server's images, held by a removal, up to 10 minutes")
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return nil, errors.New("the server's images are still held after 10 minutes")
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
+	err = boundedWait{what: "the server's images", held: "a removal"}.wait(ctx, report.Default(), func() (bool, error) {
+		u, ok, err := imagesLockNow(syscall.LOCK_SH)
+		unlock = u
+		return ok, err
+	})
+	return unlock, err
 }
 
 // imagesLockNow takes the server's image lock (imagesLockPath) shared
@@ -557,12 +545,12 @@ func imagesLockNow(how int) (unlock func(), ok bool, err error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("the server's image lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB); err != nil {
+	if ok, err := tryFlock(f, how); !ok {
 		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, false, nil
+		if err != nil {
+			return nil, false, fmt.Errorf("the server's image lock: %w", err)
 		}
-		return nil, false, fmt.Errorf("the server's image lock: %w", err)
+		return nil, false, nil
 	}
 	return func() { f.Close() }, true, nil
 }

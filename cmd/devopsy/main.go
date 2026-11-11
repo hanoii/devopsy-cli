@@ -149,6 +149,11 @@ func run() int {
 				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
 				return 0
 			}
+		case "--server-setup":
+			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--server-setup"]))
+				return 0
+			}
 		case "--ssh-keys":
 			// Its help needs no target; the rest does (below).
 			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
@@ -163,6 +168,10 @@ func run() int {
 			return runServerFacts()
 		case remote.ProjectUsersFlag:
 			return runProjectUsersStep(args[1:])
+		case remote.ServerSetupFlag:
+			return runServerSetupStep(args[1:])
+		case remote.ServerReadyFlag:
+			return runServerReady(args[1:])
 		case remote.SyncKeyFlag:
 			return runSyncKey(args[1:])
 		case remote.SyncChildFlag:

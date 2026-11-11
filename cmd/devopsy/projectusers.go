@@ -191,6 +191,15 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 			report.Fix("ask for the removal again, which finishes it, or list the user's keys if only a key was being removed, then add it"))
 		return 1
 	}
+	// The release root a project user's tree goes in, as every release needs it.
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return failErr(err)
+	}
+	if err := releaseRootReady(r.Root, "no project user made", ""); err != nil {
+		report.Fail(err)
+		return 1
+	}
 	if err := spaceGuarded(d.Space); err != nil {
 		report.Fail(err, spaceFix(d.Space))
 		return 1
@@ -205,10 +214,6 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	}
 	if u, ok := d.Users[who]; ok && u.Project != project {
 		return fail(who + " is " + u.Project + "'s already")
-	}
-	r, err := remote.ReleaseSettings()
-	if err != nil {
-		return failErr(err)
 	}
 	projects := serverProjects(doorProjects(d), r.Root)
 	if why := projectNameClash(project, projects); why != "" {
@@ -257,11 +262,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Info("closed to project users the deploy user's projects in " + r.Root + ": " + strings.Join(closed, ", "))
 	}
 	var out bytes.Buffer
-	c := exec.Command("docker", "run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,
-		"chroot", "/host", "/bin/sh", "-c", remote.DoorHostScript(me.Username, devopsyPath()), "sh", who, tree, root)
-	c.Stdout, c.Stderr = &out, os.Stderr
-	if err := c.Run(); err != nil {
-		return fail("making " + who + " failed: " + err.Error())
+	if err := addUserRun(me.Username, devopsyPath(), who, tree, root).run(&out, func(err error) error {
+		return errors.New("making " + who + " failed: " + err.Error())
+	}); err != nil {
+		return fail(err.Error())
 	}
 	if _, ok := d.Users[who]; !ok {
 		body := "project: " + project + "\n"

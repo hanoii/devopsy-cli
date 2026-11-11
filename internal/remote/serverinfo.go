@@ -1,5 +1,7 @@
 package remote
 
+import "github.com/hanoii/devopsy-cli/internal/setup"
+
 // ServerFactsFlag is the hidden flag behind --server-info: run by its
 // session on the server, it prints the server's facts as one JSON
 // document (ServerInfo), which the operator's devopsy formats and judges.
@@ -27,7 +29,7 @@ type ServerInfo struct {
 	SwapTotal    int64   `json:"swap_total"`
 	Load         string  `json:"load,omitempty"`
 	Uptime       float64 `json:"uptime,omitempty"`
-	// RebootRequired: /var/run/reboot-required is there, with the
+	// RebootRequired: the system's restart flag (the constant RebootRequired) is there, with the
 	// packages its .pkgs file names.
 	RebootRequired bool     `json:"reboot_required,omitempty"`
 	RebootPackages []string `json:"reboot_packages,omitempty"`
@@ -51,6 +53,9 @@ type ServerInfo struct {
 	CrashKernel int64 `json:"crash_kernel,omitempty"`
 
 	Docker DockerFacts `json:"docker"`
+	// Setup is the server's setup as --server-setup judges it, nil from a devopsy older than
+	// it.
+	Setup *setup.Facts `json:"setup,omitempty"`
 	// Door is the server's door, nil on a server with none (ServerDoor).
 	Door  *DoorFacts `json:"door,omitempty"`
 	Disks []Disk     `json:"disks"`
@@ -65,15 +70,19 @@ type ServerInfo struct {
 // version and the daemon's configuration file.
 type DockerFacts struct {
 	// Error is why docker info said nothing.
-	Error      string   `json:"error,omitempty"`
-	Version    string   `json:"version,omitempty"`
-	Compose    string   `json:"compose,omitempty"`
-	Containerd bool     `json:"containerd"` // the containerd image store
-	Driver     string   `json:"driver,omitempty"`
-	Cgroup     string   `json:"cgroup,omitempty"`
-	RootDir    string   `json:"root_dir,omitempty"`
-	Security   []string `json:"security,omitempty"` // names: apparmor, seccomp, userns, rootless...
-	LogDriver  string   `json:"log_driver,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Version string `json:"version,omitempty"`
+	Compose string `json:"compose,omitempty"`
+	Buildx  bool   `json:"buildx"`
+	// Name is the daemon's host name; Running what of daemon.json it runs with.
+	Name       string        `json:"name,omitempty"`
+	Running    setup.Visible `json:"running"`
+	Containerd bool          `json:"containerd"` // the containerd image store
+	Driver     string        `json:"driver,omitempty"`
+	Cgroup     string        `json:"cgroup,omitempty"`
+	RootDir    string        `json:"root_dir,omitempty"`
+	Security   []string      `json:"security,omitempty"` // names: apparmor, seccomp, userns, rootless...
+	LogDriver  string        `json:"log_driver,omitempty"`
 	// LogOpts are daemon.json's log-opts; LogOptsKnown false when the
 	// file could not be read (a missing file is known: none).
 	LogOpts      map[string]string `json:"log_opts,omitempty"`

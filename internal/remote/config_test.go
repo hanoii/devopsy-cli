@@ -420,6 +420,13 @@ func TestReleaseSettings(t *testing.T) {
 	if _, err := ReleaseSettings(); err == nil {
 		t.Fatal("relative root")
 	}
+	// Never /: releases would sit among the system's own directories.
+	for _, root := range []string{"/", "//", "/."} {
+		write(t, filepath.Join(home, ConfigFile), "releases:\n  root: "+root+"\n")
+		if _, err := ReleaseSettings(); err == nil || !strings.Contains(err.Error(), "must not be /") {
+			t.Errorf("root %s: %v", root, err)
+		}
+	}
 	// snapshots: where they go (each environment's own by default) and
 	// the cap on any environment's manual keep.
 	write(t, filepath.Join(home, ConfigFile), "snapshots:\n  root: ~/backups\n  max_keep: 8\n")

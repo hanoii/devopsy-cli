@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -65,13 +64,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	asked := func(script string, in io.Reader, out *bytes.Buffer) (int, error) {
 		code, err := remote.SSH(t, script, in, out, false)
 		if err == nil && user != "" && code == remote.AskedAsProjectUser {
-			deploy := cmp.Or(strings.TrimSpace(out.String()), "<deploy user>")
-			login, host, ok := strings.Cut(t.Host, "@")
-			if !ok {
-				login, host = "this login", t.Host
-			}
-			report.Fail(errors.New(login+" is a project user, and a project user's keys are its deploy user's to edit"),
-				report.Fix("ask as the deploy user:", "devopsy @"+deploy+"@"+host+": --ssh-keys --for "+project+" "+strings.Join(append([]string{action}, words...), " ")))
+			refuseProjectUser(t, out.String(), "a project user's keys are its deploy user's to edit", "--ssh-keys --for "+project+" "+strings.Join(append([]string{action}, words...), " "))
 			return 0, errSaid
 		}
 		return code, err
@@ -329,3 +322,19 @@ func runSSHKeysGenerate(args []string, color bool) int {
 // is remote.HintAddress's: an alias only with source:. The same as every
 // session carries for its server's hints (remote.TypedAddress).
 func targetRef(t *remote.Target) string { return remote.TypedAddress(t) }
+
+// refuseProjectUser says a session asked as a project user (remote.AskedAsProjectUser, the
+// deploy user's name in out) was refused, why, with the command again as the deploy user:
+// only the server knows that user's name, and the host is the one typed.
+func refuseProjectUser(t *remote.Target, out, why, command string) {
+	deploy := strings.TrimSpace(out)
+	if deploy == "" {
+		deploy = "<deploy user>"
+	}
+	login, host, ok := strings.Cut(t.Host, "@")
+	if !ok {
+		login, host = "this login", t.Host
+	}
+	report.Fail(errors.New(login+" is a project user, and "+why),
+		report.Fix("ask as the deploy user:", "devopsy @"+deploy+"@"+host+": "+command))
+}

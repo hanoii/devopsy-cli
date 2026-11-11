@@ -1145,6 +1145,9 @@ func ReleaseSettings() (Releases, error) {
 	if !filepath.IsAbs(r.Root) {
 		return r, fmt.Errorf("releases: root must be an absolute directory: %s", r.Root)
 	}
+	if filepath.Clean(r.Root) == "/" {
+		return r, errors.New("releases: root must not be /: releases would sit among the system's own directories")
+	}
 	if r.MaxKeep == 0 {
 		r.MaxKeep = DefaultKeep
 	}

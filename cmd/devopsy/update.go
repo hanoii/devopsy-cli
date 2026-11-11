@@ -14,7 +14,9 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
@@ -52,7 +54,7 @@ func runUpgrade(args []string, color bool) int {
 		update.Remember(update.CacheFile(), tag)
 		if !update.Newer(tag, version) {
 			report.Info(fmt.Sprintf("devopsy %s is the latest release", version))
-			return 0
+			return serverApply(exe)
 		}
 	}
 
@@ -78,7 +80,36 @@ func runUpgrade(args []string, color bool) int {
 	} else {
 		report.Info(fmt.Sprintf("devopsy changed from %s to %s (%s)", version, v, exe))
 	}
+	return serverApply(exe)
+}
+
+// serverApply ends an upgrade: on a server devopsy set up, once per version (upgradeApplies),
+// devopsy replaces
+// itself with exe, the binary now in place, applying the server's setup in upgrade mode
+// (remote.ServerSetupFlag apply --upgrade), which asks nothing, restarts nothing and exits 0
+// whatever fails; else it returns 0.
+func serverApply(exe string) int {
+	r, exists, _ := setup.ReadRecord(setup.RecordPath(remote.UserConfigFile()))
+	return applyAfterUpgrade(report.Default(), exe, upgradeApplies(version, r.Version, exists))
+}
+
+// applyAfterUpgrade replaces devopsy with exe's apply in upgrade mode when applies, saying
+// through log, as a warning, why it could not; it returns 0 either way: the upgrade is done.
+func applyAfterUpgrade(log *report.Logger, exe string, applies bool) int {
+	if !applies {
+		return 0
+	}
+	err := syscall.Exec(exe, []string{exe, remote.ServerSetupFlag, "apply", "--upgrade"}, os.Environ())
+	log.Say(report.WarnLevel, "the server's setup was not applied: "+err.Error(), nil, report.Fix("run --server-setup for this server"))
 	return 0
+}
+
+// upgradeApplies says whether an upgrade applies the server's setup: a release build, on a
+// server whose record is there (a server is one --server-setup set up, with no other sign),
+// once per devopsy version (recorded, the record's, "" for none): an up-to-date server applied
+// already is left alone, and one whose last apply failed is taken again.
+func upgradeApplies(version, recorded string, exists bool) bool {
+	return update.IsRelease(version) && exists && recorded != version
 }
 
 // upgradeCheck is the hidden flag of the background check.

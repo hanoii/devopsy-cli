@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +24,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
@@ -40,14 +40,18 @@ const (
 )
 
 // serverTools are the tools a server needs beyond Docker and devopsy
-// (internals/releases.md), with what goes without each.
-var serverTools = []struct{ name, without string }{
-	{"tar", "no release can be uploaded"},
-	{"flock", "nothing that changes an environment runs"},
-	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it"},
-	{"script", "builds and pulls show no live progress"},
-	{"mkfifo", "no sync runs"},
-	{"tail", "only the traps protect a release after its switch (a tail that answers --version)"},
+// (internals/releases.md), with what goes without each; a release refuses a server without
+// a required one (toolsRefusal), and the others degrade.
+var serverTools = []struct {
+	name, without string
+	required      bool
+}{
+	{"tar", "no release can be uploaded", true},
+	{"flock", "nothing that changes an environment runs", true},
+	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it", false},
+	{"script", "builds and pulls show no live progress", false},
+	{"mkfifo", "no sync runs", false},
+	{"tail", "only the traps protect a release after its switch (a tail that answers --version)", false},
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
@@ -110,27 +114,17 @@ func doorFirewallWrong(read string) ([]string, error) {
 	return remote.DoorFirewallWrong(read, g.Gid, d.Gid), nil
 }
 
-// doorHostRead runs script as root on the host with its network, its processes and its
-// cgroups, through the util image (writing the host's files when write), and returns what it
-// prints: the firewall finds Docker's daemon and names its cgroup as the host has them. With
-// SYS_PTRACE, which a host hiding other users' processes (/proc's hidepid) asks of a root
-// without every capability of the process it looks at, dockerd's.
+// doorHostRead runs script as root on the host for the project users' firewall (firewallRun,
+// writing the host's files when write), and returns what it prints.
 func doorHostRead(script string, write bool) (string, error) {
-	if err := ensureUtilImage(context.Background()); err != nil {
+	var out bytes.Buffer
+	err := firewallRun(script, write).run(&out, func(err error) error {
+		return fmt.Errorf("the project users' firewall: %v", err)
+	})
+	if err != nil {
 		return "", err
 	}
-	bind := "/:/host:ro"
-	if write {
-		bind = "/:/host"
-	}
-	c := exec.Command("docker", "run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", bind, remote.UtilImage,
-		"chroot", "/host", "/bin/sh", "-c", script)
-	c.Stderr = os.Stderr
-	out, err := c.Output()
-	if err != nil {
-		return "", fmt.Errorf("the project users' firewall: %v", err)
-	}
-	return string(out), nil
+	return out.String(), nil
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
@@ -166,7 +160,12 @@ func serverFacts() (remote.ServerInfo, error) {
 		Arch: runtime.GOARCH, CPUs: runtime.NumCPU(),
 	}
 	systemFacts(&info)
-	info.Docker = dockerFacts()
+	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
+	hd := readHostDocker(h)
+	info.Docker = hd.facts
+	if rd, err := readSetup(h, hd); err == nil {
+		info.Setup = &rd.facts
+	}
 	info.Door = doorFacts()
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
@@ -218,9 +217,9 @@ func systemFacts(info *remote.ServerInfo) {
 			info.Uptime, _ = strconv.ParseFloat(f[0], 64)
 		}
 	}
-	if _, err := os.Stat("/var/run/reboot-required"); err == nil {
+	if _, err := os.Stat(remote.RebootRequired); err == nil {
 		info.RebootRequired = true
-		if data, err := os.ReadFile("/var/run/reboot-required.pkgs"); err == nil {
+		if data, err := os.ReadFile(remote.RebootRequired + ".pkgs"); err == nil {
 			for _, p := range strings.Fields(string(data)) {
 				if !slices.Contains(info.RebootPackages, p) {
 					info.RebootPackages = append(info.RebootPackages, p)
@@ -307,27 +306,42 @@ func zoneCMA(data string) int64 {
 	return pages
 }
 
-// dockerFacts asks docker info, docker compose version and reads the
-// daemon's configuration file.
-func dockerFacts() remote.DockerFacts {
-	d := dockerInfo()
+// hostDocker is the host's Docker as devopsy reads it once, for --server-info's facts and the
+// setup's: docker info, its compose and buildx, and daemon.json as the file holds it
+// (daemonErr why it could not be read; a missing file is none).
+type hostDocker struct {
+	facts     remote.DockerFacts
+	daemon    []byte
+	daemonErr error
+}
+
+// readHostDocker asks docker info and its plugins, and reads the daemon's configuration file,
+// its log-opts as --server-info shows them.
+func readHostDocker(h setupHost) hostDocker {
+	hd := hostDocker{facts: dockerInfo()}
 	if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
-		d.Compose = strings.TrimSpace(string(out))
+		hd.facts.Compose = strings.TrimSpace(string(out))
 	}
-	data, err := os.ReadFile("/etc/docker/daemon.json")
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		d.LogOptsKnown = true
-	case err == nil:
+	hd.facts.Buildx = exec.Command("docker", "buildx", "version").Run() == nil
+	hd.daemon, hd.daemonErr = readDaemonFile(h)
+	if hd.daemonErr == nil {
 		var conf struct {
-			LogDriver string            `json:"log-driver"`
-			LogOpts   map[string]string `json:"log-opts"`
+			LogOpts map[string]string `json:"log-opts"`
 		}
-		if json.Unmarshal(data, &conf) == nil {
-			d.LogOptsKnown, d.LogOpts = true, conf.LogOpts
+		if len(bytes.TrimSpace(hd.daemon)) == 0 || json.Unmarshal(hd.daemon, &conf) == nil {
+			hd.facts.LogOptsKnown, hd.facts.LogOpts = true, conf.LogOpts
 		}
 	}
-	return d
+	return hd
+}
+
+// readDaemonFile is the host's daemon.json, nil with no error when there is none.
+func readDaemonFile(h setupHost) ([]byte, error) {
+	data, err := os.ReadFile(h.path(setup.DaemonFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return data, err
 }
 
 // containerdRoot is where d's images and layers are when it uses the
@@ -365,6 +379,7 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 		HTTPProxy       string `json:"HttpProxy"`
 		HTTPSProxy      string `json:"HttpsProxy"`
 		ServerErrors    []string
+		Name            string
 	}
 	if err := json.Unmarshal(out, &info); err != nil {
 		return err
@@ -372,7 +387,11 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 	if len(info.ServerErrors) > 0 {
 		return errors.New(strings.Join(info.ServerErrors, "; "))
 	}
-	d.Version, d.Driver, d.RootDir, d.LogDriver = info.ServerVersion, info.Driver, info.DockerRootDir, info.LoggingDriver
+	running, err := setup.InfoVisible(out)
+	if err != nil {
+		return err
+	}
+	d.Version, d.Driver, d.RootDir, d.LogDriver, d.Name, d.Running = info.ServerVersion, info.Driver, info.DockerRootDir, info.LoggingDriver, info.Name, running
 	if info.CgroupVersion != "" {
 		d.Cgroup = "v" + info.CgroupVersion
 	}
@@ -539,10 +558,8 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 // Unix user and tree), or one the door's list names by another spelling.
 func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment, owned func(path string) bool) []remote.Environment {
 	var envs []remote.Environment
-	for _, p := range envDirs(root) {
-		if _, ok := trees[p]; !ok && owned(p) {
-			envs = append(envs, projectEnvironments(root, p)...)
-		}
+	for _, p := range ownProjects(root, trees, owned) {
+		envs = append(envs, projectEnvironments(root, p)...)
 	}
 	// A project user's tree, in the release root or elsewhere (by default its own home).
 	for _, tree := range slices.Sorted(maps.Keys(trees)) {
@@ -553,6 +570,28 @@ func environments(root string, trees map[string]string, readTree func(user, tree
 		envs = append(envs, got...)
 	}
 	return envs
+}
+
+// ownProjects are the project directories in root the deploy user walks: none of a project
+// user's tree (trees, by its path) and none it does not own (owned), whose files another user
+// may change.
+func ownProjects(root string, trees map[string]string, owned func(path string) bool) []string {
+	var out []string
+	for _, p := range envDirs(root) {
+		if _, ok := trees[p]; !ok && owned(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// deployEnvBases are the deploy user's environments' directories in root (ownProjects).
+func deployEnvBases(root string) []string {
+	var out []string
+	for _, p := range ownProjects(root, doorTrees(root), ownedByMe) {
+		out = append(out, envBases(p)...)
+	}
+	return out
 }
 
 // ownedByMe says whether path, links resolved, is this user's own.
@@ -585,29 +624,36 @@ func envDirs(dir string) []string {
 // projectEnvironments are the environments of the project at p under root.
 func projectEnvironments(root, p string) []remote.Environment {
 	var envs []remote.Environment
-	isEnv := func(dir string) bool {
-		fi, err := os.Stat(filepath.Join(dir, "releases"))
-		return err == nil && fi.IsDir()
-	}
-	add := func(dir string) {
+	for _, dir := range envBases(p) {
 		rel, _ := filepath.Rel(root, dir)
 		cmd := exec.Command("sh", "-c", remote.EnvStatus)
 		cmd.Env = append(os.Environ(), "base="+dir)
 		out, _ := cmd.Output()
 		envs = append(envs, remote.Environment{Path: filepath.ToSlash(rel), Status: string(out)})
 	}
+	return envs
+}
+
+// envBases are the directories of the project at p's environments, [<instance>/]<environment>
+// (a directory with releases/).
+func envBases(p string) []string {
+	var out []string
+	isEnv := func(dir string) bool {
+		fi, err := os.Stat(filepath.Join(dir, "releases"))
+		return err == nil && fi.IsDir()
+	}
 	for _, e := range envDirs(p) {
 		if isEnv(e) {
-			add(e)
+			out = append(out, e)
 			continue
 		}
 		for _, i := range envDirs(e) {
 			if isEnv(i) {
-				add(i)
+				out = append(out, i)
 			}
 		}
 	}
-	return envs
+	return out
 }
 
 // doorTrees are the project users' trees under root, each to its user.
@@ -960,13 +1006,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			logs += " (daemon.json unreadable)"
 		}
 		more(logs)
-		if d.LogDriver == "json-file" && d.LogOptsKnown && d.LogOpts["max-size"] == "" {
+		// The setup's logs part covers it where it was judged, and stays silent on a value kept.
+		judged := info.Setup != nil && info.Setup.DaemonError == ""
+		if !judged && d.LogDriver == "json-file" && d.LogOptsKnown && d.LogOpts["max-size"] == "" {
 			warn("containers' logs grow without a limit (json-file without max-size) until the disk is full",
 				report.Fix(`"log-opts": {"max-size": "20m", "max-file": "5"} in /etc/docker/daemon.json, then restart Docker, as root: containers created after it get it`))
 		}
 		if d.Proxy != "" {
 			more("proxy " + d.Proxy)
 		}
+	}
+
+	// The server's setup, as --server-setup judges it.
+	if info.Setup != nil {
+		es = append(es, setupInfoEntries(*info.Setup, ref)...)
 	}
 
 	// The disks.
@@ -1287,4 +1340,38 @@ func sortedKeysOf[V any](m map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// setupInfoEntries are --server-info's lines on the server's setup (f): under setup, whether
+// devopsy set it up and what refuses releases there, then its items (setupItems), each not
+// devopsy's fixed by --server-setup on ref (in words locally, ref "").
+func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
+	fix := report.Fix("", "devopsy @"+ref+" --server-setup")
+	if ref == "" {
+		fix = report.Fix("run --server-setup for this server, as its deploy user")
+	}
+	var es []remote.StatusEntry
+	line := func(level, msg string, fixes ...report.Remedy) {
+		es = append(es, remote.StatusEntry{Level: level, Key: "setup", Lines: []string{msg}, Remedies: fixes})
+	}
+	if f.Record == "" {
+		line(remote.StatusWarning, "never set up by devopsy: --upgrade applies nothing here", fix)
+	} else {
+		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
+	}
+	for _, r := range f.Refusals {
+		// The tools are said once, with the others the server needs (serverTools).
+		if r.Item != toolsItem {
+			msg, fixes := refusalWords(r)
+			line(remote.StatusWarning, msg, fixes...)
+		}
+	}
+	if f.RootAction != "" {
+		line(remote.StatusWarning, rootWords(f.Root, f.RootAction)+": releases refuse it", fix)
+	}
+	if f.DaemonError != "" {
+		msg, fixes := daemonWords(f.DaemonError)
+		line(remote.StatusWarning, msg, fixes...)
+	}
+	return append(es, setupItems(f, setup.ShowInfo, &fix, "setup")...)
 }

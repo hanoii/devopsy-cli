@@ -45,8 +45,8 @@ func TestDoorHostScript(t *testing.T) {
 		// The door's entrance for a project user, never over a real docker.
 		"ln -sfn '/opt/bin/devopsy' /usr/local/bin/docker",
 		"/usr/local/bin/docker is a real docker",
-		// sshd takes the drop-in at a reboot, which empties /run.
-		"touch /run/devopsy-door-reboot /run/reboot-required",
+		// sshd takes the drop-in at a reboot, which empties /run (hostRestartFlag).
+		"restart_flag /run/devopsy-door-reboot\n", hostRestartFlag,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("no %q", want)
@@ -68,6 +68,37 @@ func TestDoorHostScript(t *testing.T) {
 			t.Errorf("%q comes too early, or is not there (%d, after %d)", step, i, last)
 		}
 		last = max(last, i)
+	}
+}
+
+// The restart flag marks what waits for a restart, empty or holding what it is given, and
+// raises the system's flag with devopsy in its .pkgs once, keeping the packages there.
+func TestHostRestartFlag(t *testing.T) {
+	t.Parallel()
+	if out, err := exec.Command("sh", "-n", "-c", hostRestartFlag).CombinedOutput(); err != nil {
+		t.Fatalf("sh -n: %v\n%s", err, out)
+	}
+	host := t.TempDir()
+	if err := os.Mkdir(filepath.Join(host, "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := filepath.Join(host, RebootRequired+".pkgs")
+	if err := os.WriteFile(pkgs, []byte("linux-image-amd64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("sh", "-c", "set -eu\n"+hostRestartFlag+`restart_flag /run/door-mark
+restart_flag /run/docker-mark "$1"
+restart_flag /run/docker-mark "$1"`, "sh", "id-1")
+	c.Env = append(os.Environ(), "host_root="+host)
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for file, want := range map[string]string{
+		"/run/door-mark": "", "/run/docker-mark": "id-1\n", RebootRequired: "", RebootRequired + ".pkgs": "linux-image-amd64\ndevopsy\n",
+	} {
+		if data, err := os.ReadFile(filepath.Join(host, file)); err != nil || string(data) != want {
+			t.Errorf("%s holds %q (%v), want %q", file, data, err, want)
+		}
 	}
 }
 
