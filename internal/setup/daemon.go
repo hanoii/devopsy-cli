@@ -193,6 +193,36 @@ func (v Visible) Equal(o Visible) bool {
 		slices.Equal(v.Pools, o.Pools)
 }
 
+// Sets says whether v holds a value of the part named other than Docker's own default (the
+// json-file driver, no live-restore, no pools of a file's).
+func (v Visible) Sets(part string) bool {
+	switch part {
+	case "logs":
+		return v.LogDriver != "" && v.LogDriver != "json-file"
+	case "live-restore":
+		return v.LiveRestore
+	case "default-address-pools":
+		return len(v.Pools) > 0
+	}
+	return false
+}
+
+// Except is v with the named parts' values Docker's defaults: what is set outside
+// daemon.json is no difference between the file and Docker.
+func (v Visible) Except(parts []string) Visible {
+	for _, p := range parts {
+		switch p {
+		case "logs":
+			v.LogDriver = "json-file"
+		case "live-restore":
+			v.LiveRestore = false
+		case "default-address-pools":
+			v.Pools = nil
+		}
+	}
+	return v
+}
+
 // Visible is what Docker shows once it takes d: a missing key is Docker's default
 // (json-file, no live-restore, no pools of the file's). A value of the wrong type is an
 // error, as dockerd refuses it.

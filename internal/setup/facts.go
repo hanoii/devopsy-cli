@@ -50,13 +50,22 @@ type Refusal struct {
 	Fix     string `json:"fix,omitempty"`
 }
 
-// PartFact is one daemon.json part as the server judged it.
+// PartFact is one daemon.json part as the server judged it, with what an apply would do
+// with it unasked (PartState.Setup with no answer): put devopsy's value, or record.
 type PartFact struct {
 	Name     string `json:"name"`
 	State    State  `json:"state"`
 	Observed string `json:"observed"`
 	Kept     string `json:"kept,omitempty"`
 	Want     string `json:"want"`
+	Puts     bool   `json:"puts,omitempty"`
+	Records  bool   `json:"records,omitempty"`
+}
+
+// FactOf is s as the facts carry it.
+func FactOf(s PartState) PartFact {
+	d := s.Setup(Answer{})
+	return PartFact{Name: s.Part.Name, State: s.State, Observed: s.Observed, Kept: s.Entry.Kept, Want: s.Part.Want, Puts: d.Put, Records: d.Record != nil}
 }
 
 // FileFact is a file devopsy writes whole: in sync when it holds its text exactly.
@@ -84,7 +93,7 @@ func (s State) MarshalText() ([]byte, error) { return []byte(s.String()), nil }
 
 // UnmarshalText reads a State as MarshalText writes it.
 func (s *State) UnmarshalText(b []byte) error {
-	for st := InSync; st <= Changed; st++ {
+	for st := InSync; st <= Outside; st++ {
 		if st.String() == string(b) {
 			*s = st
 			return nil
@@ -93,10 +102,10 @@ func (s *State) UnmarshalText(b []byte) error {
 	return fmt.Errorf("no part state %q", b)
 }
 
-// Changes says whether an apply would change something with no answer asked: a part of
-// devopsy's, a file, a live buffer, or the root.
+// Changes says whether an apply would change something with no answer asked: a part to put
+// or to record, a file, a live buffer, or the root.
 func (f Facts) Changes() bool {
-	return f.RootAction != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.State == Devopsys }) ||
+	return f.RootAction != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts || p.Records }) ||
 		slices.ContainsFunc(f.Files, func(x FileFact) bool { return !x.InSync }) ||
 		slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
 }

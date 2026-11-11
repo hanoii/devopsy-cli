@@ -14,10 +14,14 @@ const (
 	Devopsys
 	// Changed: anything else, someone's value devopsy never puts over unasked.
 	Changed
+	// Outside: the file sets none of the part, and Docker runs with a value of its own for
+	// it, set outside daemon.json (docker.service's flags, say): left by every command, with
+	// no question, since dockerd refuses to start on a value both in a flag and in the file.
+	Outside
 )
 
 func (s State) String() string {
-	return [...]string{"in sync", "kept", "devopsy's", "changed"}[s]
+	return [...]string{"in sync", "kept", "devopsy's", "changed", "set outside daemon.json"}[s]
 }
 
 // Entry is a part's entry in the record: what devopsy applied, or what the admin kept,
@@ -27,11 +31,14 @@ type Entry struct {
 	Kept    string `yaml:"kept,omitempty"`
 }
 
-// StateOf is a part's state, the rules taken in order.
-func StateOf(o, w string, r Entry) State {
+// StateOf is a part's state, the rules taken in order; outside says Docker runs with a value
+// of the part's that is not its default (Visible.Sets).
+func StateOf(o, w string, r Entry, outside bool) State {
 	switch {
 	case o == w:
 		return InSync
+	case o == "{}" && outside:
+		return Outside
 	case r.Kept != "" && o == r.Kept:
 		return Kept
 	case r.Applied != "" && o == r.Applied, r == Entry{} && o == "{}":
@@ -48,13 +55,25 @@ type PartState struct {
 	State    State
 }
 
-// Judge is every part devopsy wants, as d and the record have it, in Parts' order.
-func Judge(d Daemon, r Record) []PartState {
+// Judge is every part devopsy wants, as d and the record have it and Docker runs (running,
+// nil when Docker did not answer), in Parts' order.
+func Judge(d Daemon, r Record, running *Visible) []PartState {
 	out := make([]PartState, 0, len(Parts))
 	for _, p := range Parts {
 		s := PartState{Part: p, Observed: d.Observed(p), Entry: r.Daemon[p.Name]}
-		s.State = StateOf(s.Observed, p.Want, s.Entry)
+		s.State = StateOf(s.Observed, p.Want, s.Entry, running != nil && running.Sets(p.Name))
 		out = append(out, s)
+	}
+	return out
+}
+
+// OutsideParts are the names of the parts in states that are set outside daemon.json.
+func OutsideParts(states []PartState) []string {
+	var out []string
+	for _, s := range states {
+		if s.State == Outside {
+			out = append(out, s.Part.Name)
+		}
 	}
 	return out
 }
@@ -76,7 +95,7 @@ type Answer struct {
 }
 
 // Upgrade is what --upgrade does with p, which nobody is asked about: devopsy's value
-// is put, a changed one left.
+// is put, a changed one left; one set outside daemon.json is nobody's to touch here.
 func (p PartState) Upgrade() Decision {
 	switch p.State {
 	case InSync:
@@ -128,17 +147,16 @@ const (
 	ShowKept
 	Difference
 	Question
+	// ShowOutside: said as set outside daemon.json, never warned or asked.
+	ShowOutside
 )
 
 // ShowInfo is how --server-info shows a part in state s.
 func ShowInfo(s State) Show {
-	switch s {
-	case Kept:
-		return ShowKept
-	case Devopsys, Changed:
+	if s == Changed {
 		return Difference
 	}
-	return Silent
+	return ShowSetup(s)
 }
 
 // ShowSetup is how --server-setup shows a part in state s before it asks.
@@ -150,6 +168,8 @@ func ShowSetup(s State) Show {
 		return Difference
 	case Changed:
 		return Question
+	case Outside:
+		return ShowOutside
 	}
 	return Silent
 }

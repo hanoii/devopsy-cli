@@ -116,7 +116,7 @@ func TestCutBeforeRecord(t *testing.T) {
 		if before.r != (Entry{}) {
 			r = r.Set(pools.Name, before.r)
 		}
-		for _, s := range Judge(mustDaemon(t, string(out)), r) {
+		for _, s := range Judge(mustDaemon(t, string(out)), r, nil) {
 			if s.Part.Name == pools.Name && s.State != InSync {
 				t.Errorf("%s: after the cut %s, want in sync", before.name, s.State)
 			}
