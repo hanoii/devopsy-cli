@@ -38,16 +38,19 @@ import (
 // anything of the deploy user's. The project user's side is door_client.go.
 
 // doorEnvironment leaves only what this user is, whatever sudo was set to keep: a
-// caller's PATH would choose the docker this runs, and its HOME the config it obeys.
-func doorEnvironment() (home string, err error) {
+// caller's PATH would choose the docker this runs, and its HOME the config it obeys. What the
+// caller's session carries for its hints (the door's sudo keeps it, remote.SessionFrom
+// checks it) is read first and returned, so nothing the door starts sees it.
+func doorEnvironment() (home string, asked remote.Session, err error) {
+	asked = remote.SessionFrom(os.Getenv)
 	u, err := user.Current()
 	if err != nil {
-		return "", err
+		return "", remote.Session{}, err
 	}
 	os.Clearenv()
 	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	os.Setenv("HOME", u.HomeDir)
-	return u.HomeDir, nil
+	return u.HomeDir, asked, nil
 }
 
 // doorGroupHeld refuses a door not running under remote.DoorRunGroup, its effective group, by
@@ -96,7 +99,7 @@ func runDoorRead(args []string) int {
 	if len(args) < 2 {
 		return 2
 	}
-	if _, err := doorEnvironment(); err != nil {
+	if _, _, err := doorEnvironment(); err != nil {
 		return 1
 	}
 	path := args[1]
@@ -206,6 +209,9 @@ type doorSide struct {
 	// onFetch, when set, is said when a claim goes past its skip to fetch (the pull verb's
 	// progress).
 	onFetch func()
+	// asked is what the caller's session carries (doorEnvironment), for the commands its
+	// remedies offer alone: never in a refusal's log, never a decision.
+	asked remote.Session
 }
 
 // memo is a value a door process reads once, its answer (an error included) kept for the
@@ -405,12 +411,13 @@ func (s *doorSide) warnSealed(file map[string]any, argv []string, dir string) {
 		return
 	}
 	report.Say(report.WarnLevel, "what these containers bind read-only differs from the release's: "+argv[0]+" keeps the copy each was made with",
-		differ, report.Fix(sealedFix))
+		differ, offer(report.Fix, sealedFix+":", s.asked.Releasing("--release"), sealedFix))
 }
 
-// sealedFix is the way out warnSealed offers, in words: the door knows no address to name a
-// command by, and one of compose's, shown locally in a session, would run on the local project.
-const sealedFix = "release again, with any change made in the checkout: a release makes these containers again"
+// sealedFix is the way out warnSealed offers: a release of the environment by the caller's
+// session's address, else in words, never one of compose's commands, which, shown locally in a
+// session, would run on the local project.
+const sealedFix = "release again, with any change made in the checkout, which makes these containers again"
 
 // releaseHash is the hash a seal of path would name its copy by, read as a seal reads it
 // (sealRead) and keeping no copy, or nothing when it cannot be read.
@@ -895,7 +902,7 @@ func runDoor(args []string) int {
 		return 2
 	}
 	doorWho = os.Getenv("SUDO_USER")
-	home, err := doorEnvironment()
+	home, asked, err := doorEnvironment()
 	if err != nil {
 		return doorRefused(err)
 	}
@@ -935,7 +942,7 @@ func runDoor(args []string) int {
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
 	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho)}
+	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
 	// With no key left, or an end pending: what a removed key left running gets nothing.
 	if err := side.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))

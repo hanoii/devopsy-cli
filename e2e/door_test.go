@@ -2629,8 +2629,9 @@ func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
 	}
 }
 
-// A project user's sudo to the door keeps none of its variables, whatever the server's sudoers
-// keeps for everyone (here an admin's GODEBUG): Go's runtime reads GODEBUG before the door
+// A project user's sudo to the door keeps none of its variables but what a session carries for
+// its hints (TestDoorRestartOffersTheRelease), whatever the server's sudoers keeps for everyone
+// (here an admin's GODEBUG): Go's runtime reads GODEBUG before the door
 // clears its environment, and inittrace makes it print a line before main. Nor does sudo take
 // one on its command line, nor keep one for the door's read as the project user. The control:
 // root's sudo keeps it.
@@ -2655,6 +2656,27 @@ func TestDoorSudoKeepsNoVariable(t *testing.T) {
 	// through /proc.
 	if out, _ := doorAs(t, "devopsy", "GODEBUG=inittrace=1 sudo -n -u "+user+" /usr/local/bin/devopsy --door-read isdir / 2>&1"); strings.Contains(out, "init runtime") {
 		t.Errorf("a read as the project user kept the deploy user's GODEBUG:\n%s", out)
+	}
+}
+
+// The door's sudo keeps what a session carries for its hints, by name: a restart over a file
+// changed in place in the release warns of the copy its container keeps and offers the release
+// by the environment's address, which only the session brings to the door.
+func TestDoorRestartOffersTheRelease(t *testing.T) {
+	dir := doorProject(t, "doorseal", `services:
+  web:
+`+doorService+`    command: [sleep, infinity]
+    volumes: [./conf:/c:ro]
+`, map[string]string{".devopsy/conf/f": "one\n"})
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+	if out, code := doorAs(t, "devopsy-doorseal", "echo two >~/doorseal/prod/current/.devopsy/conf/f"); code != 0 {
+		t.Fatalf("a file changed in place (%d): %s", code, out)
+	}
+	out, code := op(t, dir, "devopsy @prod restart web 2>&1")
+	if want := "keeps the copy each was made with\ndevopsy: | web: ./.devopsy/conf\ndevopsy: | to fix it:\ndevopsy: | release again, with any change made in the checkout, which makes these containers again:\ndevopsy: | $ devopsy @devopsy-doorseal@doorsrv:prod --release\n"; code != 0 || !strings.Contains(out, want) {
+		t.Errorf("a restart (%d), want:\n%s\ngot:\n%s", code, want, out)
 	}
 }
 

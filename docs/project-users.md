@@ -417,14 +417,19 @@ others running. The next release replaces that file with the checkout's.
 
 `restart` and `start` keep each container's copy. Before they run, they
 warn of the services whose copy differs from what the release holds now,
-which is also the case for a container made from an older release:
+which is also the case for a container made from an older release, and
+offer a release of the environment:
 
 ```
 devopsy: warning: what these containers bind read-only differs from the release's: restart keeps the copy each was made with
 devopsy: | web: ./config
 devopsy: | to fix it:
-devopsy: | release again, with any change made in the checkout: a release makes these containers again
+devopsy: | release again, with any change made in the checkout, which makes these containers again:
+devopsy: | $ devopsy @devopsy-shop@vm1:prod --release
 ```
+
+A door that an older devopsy set up on the server says the same in words,
+without the command.
 
 A bind of `./mnt/<name>` is no copy: what is written there shows at
 once.

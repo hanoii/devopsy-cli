@@ -50,6 +50,10 @@ func doorDropIn(deploy string) string {
 		"\tPermitTunnel no\n"
 }
 
+// doorKept are the variables the door's sudo rule keeps: what a session carries for the hints
+// the door says (SessionFrom), the operator's command and the session's address.
+var doorKept = []string{CommandEnv, AddressEnv, HintAddressEnv}
+
 // doorKeysCommand is the root-owned script sshd runs, since it refuses a command root does
 // not own, and the binary is the deploy user's so that it upgrades itself.
 func doorKeysCommand(devopsy string) string {
@@ -61,12 +65,14 @@ func doorKeysCommand(devopsy string) string {
 // project's tree as that project's user. Neither sudo keeps a variable of its caller's,
 // whatever the server's sudoers keeps for others: Go's runtime reads some (GODEBUG) before the
 // door clears its environment, and a read runs as the project user, who reads its
-// environment through /proc. The Defaults are the command's, which
-// sudo applies after every user's, group's and run-as user's, wherever those are written.
+// environment through /proc. The door's keeps only what a session carries for its hints
+// (doorKept), by name, which the door reads, checks and clears before anything else. The
+// Defaults are the command's, which sudo applies after every user's, group's and run-as
+// user's, wherever those are written.
 func doorSudoers(deploy, devopsy string) string {
 	return "# Written by devopsy (devopsy @<server> --project-users add): the door's rules.\n" +
 		"Cmnd_Alias DEVOPSY_DOOR = " + devopsy + " --door *\n" +
-		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, !setenv\n" +
+		"Defaults!DEVOPSY_DOOR env_reset, !env_keep, env_keep = \"" + strings.Join(doorKept, " ") + "\", !setenv\n" +
 		"%" + DoorGroup + " ALL=(" + deploy + " : " + DoorRunGroup + ") NOPASSWD: DEVOPSY_DOOR\n" +
 		"Cmnd_Alias DEVOPSY_DOOR_READ = " + devopsy + " --door-read *\n" +
 		"Defaults!DEVOPSY_DOOR_READ env_reset, !env_keep, !setenv\n" +

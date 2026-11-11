@@ -1281,8 +1281,10 @@ func TestDoorComposeHandsThePinnedFile(t *testing.T) {
 // container keeps the sealed copy it was made with. The release is read and hashed as a seal
 // reads it (the same content is no warning), keeping no copy; only the services the verb names
 // are compared, only in containers of the file's compose name; no other verb says it; and a
-// compare that fails loses only the warning, never the verb. In a helper process
-// (doorComposeHelper), since the door execs compose, here the fake docker.
+// compare that fails loses only the warning, never the verb. The release is offered as a
+// command by the address the caller's session carries, in words without one or with one that
+// is no address, and what the session carries never reaches the refusals' log. In a helper
+// process (doorComposeHelper), since the door execs compose, here the fake docker.
 func TestDoorWarnsOfACopyARestartKeeps(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1303,16 +1305,21 @@ esac
 	svc := `{"user":"10001:10001","security_opt":["no-new-privileges"],"volumes":[{"type":"bind","source":"` +
 		filepath.Join(code, "config") + `","target":"/etc/app","read_only":true}]}`
 	file := `{"name":"shop-prod","services":{"web":` + svc + `,"worker":` + svc + `}}`
-	run := func(verb string) string {
+	runWith := func(verb string, session ...string) (string, error) {
 		t.Helper()
 		c := exec.Command(os.Args[0], "-test.run", "^$")
-		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "DEVOPSY_TEST_DOOR_FILE="+file,
-			"DEVOPSY_TEST_DOOR_DIR="+code, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		c.Env = append(append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB="+verb, "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_DIR="+code, "DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH")), session...)
 		out, err := c.CombinedOutput()
-		if err != nil || !strings.Contains(string(out), "ARGS: compose ") {
+		return string(out), err
+	}
+	run := func(verb string, session ...string) string {
+		t.Helper()
+		out, err := runWith(verb, session...)
+		if err != nil || !strings.Contains(out, "ARGS: compose ") {
 			t.Fatalf("%s: compose did not run (%v):\n%s", verb, err, out)
 		}
-		return string(out)
+		return out
 	}
 	// The copy an up seals, which its containers are made with.
 	var got struct {
@@ -1353,6 +1360,22 @@ esac
 	}
 	if out := run("restart -t 5 web"); !strings.Contains(out, warning("restart", "web")) {
 		t.Errorf("restart of web alone, want:\n%s\ngot:\n%s", warning("restart", "web"), out)
+	}
+	session := []string{remote.CommandEnv + "=devopsy @box restart", remote.AddressEnv + "=box", remote.HintAddressEnv + "=devopsy@vm1:prod"}
+	offered := strings.Replace(warning("restart", "web", "worker"), "devopsy: | "+sealedFix+"\n", "devopsy: | "+sealedFix+":\ndevopsy: | $ devopsy @devopsy@vm1:prod --release\n", 1)
+	if out := run("restart", session...); !strings.Contains(out, offered) {
+		t.Errorf("restart in a session, want:\n%s\ngot:\n%s", offered, out)
+	}
+	forged := []string{remote.AddressEnv + "=box", remote.HintAddressEnv + "=vm1;reboot:prod"}
+	if out := run("restart", forged...); !strings.Contains(out, warning("restart", "web", "worker")) {
+		t.Errorf("restart with an address that is none, want:\n%s\ngot:\n%s", warning("restart", "web", "worker"), out)
+	}
+	// A refusal, its session's values never logged.
+	if out, err := runWith("exec -u 0 web sh", session...); err == nil || strings.Contains(out, "ARGS: compose ") {
+		t.Fatalf("exec as root ran (%v):\n%s", err, out)
+	}
+	if log := readString(filepath.Join(dir, "refused.log")); log == "" || strings.Contains(log, "box") || strings.Contains(log, "vm1") {
+		t.Errorf("the refusals' log holds what the session carries, or nothing:\n%s", log)
 	}
 	if out := run("stop"); strings.Contains(out, "devopsy: warning: ") {
 		t.Errorf("stop warned:\n%s", out)
@@ -1587,6 +1610,8 @@ func doorComposeHelper(dir string) {
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
 		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
+		// As runDoor reads it from what its sudo kept (doorEnvironment).
+		asked: remote.SessionFrom(os.Getenv),
 	}
 	side.policy.Images = claimedImages(side.policy.ImagesFile())
 	// A work directory the request made before (TestDoorClaimCutBySignalLeavesNoWork).
