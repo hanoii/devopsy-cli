@@ -284,6 +284,13 @@ Docker 29 uses by default on a fresh install, and buildx 0.33.0 or
 later. `add` refuses a server without them. The commands below address
 the server by its deploy user, `devopsy@vm1`.
 
+Every user's processes should be hidden from the others too: a process's
+command line names projects and paths, and a devopsy session's is its
+whole script, the operator's command in it. devopsy-server's setup does
+it; on a server set up otherwise, mount `/proc` as its [Other users'
+processes](https://github.com/hanoii/devopsy-server/blob/main/docs/things-to-know.md#other-users-processes)
+says, the deploy user in the group that sees them all.
+
 A server set up earlier on Docker's classic image store can be moved to
 the containerd one, at a cost: no image and no container shows on the
 containerd store (volumes and networks stay), so every environment needs

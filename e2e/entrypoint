@@ -10,6 +10,9 @@ if [ "${1:-server}" = server ]; then
   cp -rT /etc/skel /home/devopsy
   install -d -m 700 /home/devopsy/.ssh
   chown -R devopsy:devopsy /home/devopsy
+  # Every user sees only its own processes, the deploy user all of them,
+  # as devopsy-server mounts /proc: a project user reads no other's.
+  mount -o remount,hidepid=invisible,gid="$(getent group devopsy-proc | cut -d: -f3)" /proc
   dockerd >/var/log/dockerd.log 2>&1 &
   # Port 2222 too: a server with a port, reached by its address
   # (TestSyncAcrossServers' child).

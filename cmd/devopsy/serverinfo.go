@@ -112,7 +112,9 @@ func doorFirewallWrong(read string) ([]string, error) {
 
 // doorHostRead runs script as root on the host with its network, its processes and its
 // cgroups, through the util image (writing the host's files when write), and returns what it
-// prints: the firewall finds Docker's daemon and names its cgroup as the host has them.
+// prints: the firewall finds Docker's daemon and names its cgroup as the host has them. With
+// SYS_PTRACE, which a host hiding other users' processes (/proc's hidepid) asks of a root
+// without every capability of the process it looks at, dockerd's.
 func doorHostRead(script string, write bool) (string, error) {
 	if err := ensureUtilImage(context.Background()); err != nil {
 		return "", err
@@ -121,7 +123,7 @@ func doorHostRead(script string, write bool) (string, error) {
 	if write {
 		bind = "/:/host"
 	}
-	c := exec.Command("docker", "run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "-v", bind, remote.UtilImage,
+	c := exec.Command("docker", "run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", bind, remote.UtilImage,
 		"chroot", "/host", "/bin/sh", "-c", script)
 	c.Stderr = os.Stderr
 	out, err := c.Output()

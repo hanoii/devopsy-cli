@@ -1,6 +1,8 @@
 # A devopsy server for the end-to-end tests, as devopsy-server sets one
 # up: Debian 13, Docker from docker.com with buildx (BuildKit), sshd,
-# util-linux, the deploy user in the docker group; xfsprogs and e2fsprogs
+# util-linux, the deploy user in the docker group, every user's processes
+# hidden from the others but the devopsy-proc group's (the entrypoint's
+# /proc); xfsprogs and e2fsprogs
 # for tests of reflinks on an XFS loop device, and of their absence on an
 # ext4 one; sudo, acl and rsync for a project user's door (door_test.go). Run privileged with a
 # volume on /var/lib/docker; its own dockerd starts with it. The operator runs the
@@ -20,7 +22,8 @@ RUN apt-get update -q \
  && apt-get update -q \
  && apt-get install -yq --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
  && rm -rf /var/lib/apt/lists/* \
- && useradd -m -s /bin/sh -G docker devopsy \
+ && groupadd --system devopsy-proc \
+ && useradd -m -s /bin/sh -G docker,devopsy-proc devopsy \
  && install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh \
  && mkdir -p /run/sshd
 # devopsy-server's: /24 address pools, without which the suite's
