@@ -66,7 +66,10 @@ func renewKeys(file string) error {
 // runEndProjectUser is the hidden remote.EndProjectUserFlag, as the deploy user once a key of
 // the project user's is gone (remote.KeysRemoveScript). A Unix user gone already runs nothing,
 // and its sync keys still go.
-func runEndProjectUser(args []string) int {
+func runEndProjectUser(args []string) int { return endProjectUserWith(args, endUser) }
+
+// endProjectUserWith is runEndProjectUser, its user's processes ended by end.
+func endProjectUserWith(args []string, end func(string) error) int {
 	if len(args) != 1 || !projectUserName(args[0]) {
 		return fail("usage: devopsy " + remote.EndProjectUserFlag + " <project user>")
 	}
@@ -75,7 +78,7 @@ func runEndProjectUser(args []string) int {
 	if _, err := user.Lookup(args[0]); err == nil && !inDoorGroup(args[0]) {
 		return fail(args[0] + " is no project user here: it is not in " + remote.DoorGroup)
 	}
-	if err := endProjectUser(args[0], endUser); err != nil {
+	if err := endProjectUser(args[0], end); err != nil {
 		return fail("the key is removed, but " + args[0] + ": " + err.Error())
 	}
 	if err := finishPendingRemoval(args[0]); err != nil {
@@ -87,7 +90,8 @@ func runEndProjectUser(args []string) int {
 
 // finishPendingRemoval does what a removal of who's left (remote.DoorRemovingFile) once its
 // end is done, as the end flag runs for keysSettle, whose script emptied the keys under their
-// lock: what the door kept for the project goes, then both marks. Nothing with no such mark.
+// lock: what the door kept for the project goes, then its entry and both marks. Nothing with
+// no such mark.
 func finishPendingRemoval(who string) error {
 	data, err := os.ReadFile(remote.DoorRemovingFile(who))
 	if errors.Is(err, os.ErrNotExist) {
@@ -106,7 +110,10 @@ func finishPendingRemoval(who string) error {
 			return err
 		}
 	}
-	for _, f := range []string{remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
+	// Its entry too, which a removal cut after its marks leaves: the user is no project user
+	// once its removal is done, whichever way it was finished.
+	entry := filepath.Join(remote.DoorDir(), "users", who+".yaml")
+	for _, f := range []string{entry, remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

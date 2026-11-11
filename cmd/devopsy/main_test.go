@@ -34,6 +34,19 @@ func TestMain(m *testing.M) {
 	if args := os.Getenv("DEVOPSY_TEST_DOOR_LOGIN"); args != "" {
 		os.Exit(doorLogin(strings.Fields(args))) // TestDoorLoginIsSavedUnchecked
 	}
+	// The end flag as a keys script runs it, the user's processes ended by a fake that says so
+	// in DEVOPSY_TEST_ENDED (TestRemovalCuts).
+	if ended := os.Getenv("DEVOPSY_TEST_ENDED"); ended != "" && len(os.Args) == 3 && os.Args[1] == remote.EndProjectUserFlag {
+		os.Exit(endProjectUserWith(os.Args[2:], func(who string) error {
+			f, err := os.OpenFile(ended, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = f.WriteString(who + "\n")
+			return err
+		}))
+	}
 	if os.Getenv("DEVOPSY_TEST_EXEC_DECIDED") != "" {
 		// TestDoorGivesWhatItExecsItsStops: as runDoor, then the exec.
 		holdStops()
