@@ -151,7 +151,7 @@ func readSetup(h setupHost) (setupRead, error) {
 	} else {
 		rd.states = setup.Judge(rd.daemon, rd.record, nil)
 		for _, s := range rd.states {
-			f.Parts = append(f.Parts, setup.PartFact{Name: s.Part.Name, State: s.State, Observed: s.Observed, Kept: s.Entry.Kept, Want: s.Part.Want})
+			f.Parts = append(f.Parts, setup.FactOf(s))
 		}
 	}
 

@@ -1352,5 +1352,5 @@ func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
 	if f.DaemonError != "" {
 		line(remote.StatusWarning, f.DaemonError, report.Fix("make it a JSON object Docker reads"))
 	}
-	return append(es, setupItems(f, &fix, "setup")...)
+	return append(es, setupItems(f, setup.ShowInfo, &fix, "setup")...)
 }

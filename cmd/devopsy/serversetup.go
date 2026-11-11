@@ -99,15 +99,13 @@ type setupAsker interface {
 // planSetup is what --server-setup asks and what its apply is then given: each changed part
 // kept or replaced (kept with yes), the rest confirmed once, then the restart, which yes
 // takes only when no container runs. run says whether there is an apply at all: something to
-// put, an answer to record, a restart, or no record yet, which the first apply writes.
+// put or record, an answer, a restart, or no record yet, which the first apply writes.
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
 	for _, p := range f.Parts {
-		switch p.State {
-		case setup.Devopsys:
-			daemon = true
-		case setup.Changed:
+		daemon = daemon || p.Puts
+		if setup.ShowSetup(p.State) == setup.Question {
 			replace := false
 			if !yes {
 				if replace, err = ask.replace(p); err != nil {
@@ -153,7 +151,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	if restart {
 		args = append(args, "--restart")
 	}
-	return args, changes || answers || restart || f.Record == "", nil
+	return args, changes || f.Records() || answers || restart || f.Record == "", nil
 }
 
 // terminalAsker asks at the terminal, and fails without one, naming --yes.
@@ -192,14 +190,15 @@ func setupEntries(f setup.Facts) []remote.StatusEntry {
 	case setup.RootGive:
 		root.Lines[0] += ": root's, given to the deploy user"
 	}
-	return append([]remote.StatusEntry{root}, setupItems(f, nil, "")...)
+	return append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, "")...)
 }
 
-// setupItems are the setup's tunable items as --server-setup and --server-info show them:
-// what is not devopsy's one warning per item with fix (none when nil), each kept part a line,
+// setupItems are the setup's tunable items as --server-setup and --server-info show them, each
+// part as show says (setup.ShowSetup, setup.ShowInfo): what is not devopsy's one warning per
+// item with fix (none when nil), each kept part and each set outside daemon.json a line,
 // pending a warning, the volume hint a line. Each is under its item's key, or under key with
 // the item's name first when key is not "".
-func setupItems(f setup.Facts, fix *report.Remedy, key string) []remote.StatusEntry {
+func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Remedy, key string) []remote.StatusEntry {
 	var es []remote.StatusEntry
 	entry := func(level, item string, lines ...string) {
 		if len(lines) == 0 {
@@ -220,23 +219,26 @@ func setupItems(f setup.Facts, fix *report.Remedy, key string) []remote.StatusEn
 		}
 		return v
 	}
-	var differ, kept []string
+	var differ, said []string
 	for _, p := range f.Parts {
-		switch p.State {
-		case setup.Devopsys:
-			differ = append(differ, p.Name+": "+none(p.Observed)+", devopsy's "+p.Want)
-		case setup.Changed:
-			whose := ", someone else's; devopsy's "
-			if p.Observed == "{}" {
-				whose = ", removed by someone; devopsy's "
-			}
+		whose := ", devopsy's "
+		switch {
+		case p.State == setup.Changed && p.Observed == "{}":
+			whose = ", removed by someone; devopsy's "
+		case p.State == setup.Changed:
+			whose = ", someone else's; devopsy's "
+		}
+		switch show(p.State) {
+		case setup.Difference, setup.Question:
 			differ = append(differ, p.Name+": "+none(p.Observed)+whose+p.Want)
-		case setup.Kept:
-			kept = append(kept, p.Name+": "+none(p.Observed)+", kept by the admin")
+		case setup.ShowKept:
+			said = append(said, p.Name+": "+none(p.Observed)+", kept by the admin")
+		case setup.ShowOutside:
+			said = append(said, p.Name+": set outside daemon.json (docker.service's own settings), left as it is")
 		}
 	}
 	entry(remote.StatusWarning, "daemon.json", differ...)
-	entry(remote.StatusInfo, "daemon.json", kept...)
+	entry(remote.StatusInfo, "daemon.json", said...)
 	for _, x := range f.Files {
 		var lines []string
 		if !x.InSync {

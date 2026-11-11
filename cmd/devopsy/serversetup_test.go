@@ -270,11 +270,17 @@ func TestPlanSetup(t *testing.T) {
 		f := setup.Facts{Root: "/srv", Record: record, Running: running, Pending: pending,
 			Files: []setup.FileFact{{Item: setup.ItemBuffers, InSync: true}}}
 		for i, st := range states {
-			o := "{}"
-			if st == setup.Changed {
-				o = other
+			// Each part as the server judges it, its decisions the model's (setup.FactOf).
+			s := setup.PartState{Part: setup.Parts[i], Observed: "{}", State: st}
+			switch st {
+			case setup.Changed:
+				s.Observed = other
+			case setup.InSync:
+				s.Observed, s.Entry = s.Part.Want, setup.Entry{Applied: s.Part.Want}
+			case setup.Kept:
+				s.Observed, s.Entry = other, setup.Entry{Kept: other}
 			}
-			f.Parts = append(f.Parts, setup.PartFact{Name: setup.Parts[i].Name, State: st, Observed: o, Want: setup.Parts[i].Want})
+			f.Parts = append(f.Parts, setup.FactOf(s))
 		}
 		return f
 	}
@@ -518,5 +524,61 @@ func TestServerReadyRefusesAReleaseLeavingNothing(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "flock") {
 		t.Errorf("the refused release took a lock:\n%s", docker)
+	}
+}
+
+// dockerTook writes the host root's docker info, now and after a restart, as Docker that has
+// taken a daemon.json of log driver local, live-restore and pools (Base, Size pairs as JSON):
+// nothing pending.
+func dockerTook(t *testing.T, host, pools string) {
+	t.Helper()
+	name, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := `{"Name":"` + name + `","LoggingDriver":"local","LiveRestoreEnabled":true,"DockerRootDir":"/var/lib/docker","DefaultAddressPools":` + pools + `}`
+	write(t, filepath.Join(host, "docker-info.json"), info, 0o644)
+	write(t, filepath.Join(host, "docker-info.after"), info, 0o644)
+}
+
+// A kept value the admin brings back to devopsy's is recorded as devopsy's again, by an apply
+// the facts' own decisions open (no host change, a record's), so the kept value written again
+// later is changed, asked again, never silently kept.
+func TestServerSetupDropsAKeptEntryBackInSync(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	daemon := filepath.Join(host, setup.DaemonFile)
+	withPools := func(pools string) string {
+		return `{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"},"live-restore":true,"default-address-pools":` + pools + `}`
+	}
+	kept := `[{"base":"10.200.0.0/16","size":24}]`
+	want := `[{"base":"172.16.0.0/12","size":24},{"base":"192.168.0.0/16","size":24}]`
+	keptInfo := `[{"Base":"10.200.0.0/16","Size":24}]`
+	wantInfo := `[{"Base":"172.16.0.0/12","Size":24},{"Base":"192.168.0.0/16","Size":24}]`
+
+	// The admin's pools, kept.
+	write(t, daemon, withPools(kept), 0o644)
+	dockerTook(t, host, keptInfo)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--keep", "default-address-pools="+setup.Digest(`{"default-address-pools":`+kept+`}`)); code != 0 {
+		t.Fatalf("the keep (%d):\n%s", code, out)
+	}
+	// The admin writes devopsy's pools, Docker takes them, and --server-setup runs.
+	write(t, daemon, withPools(want), 0o644)
+	dockerTook(t, host, wantInfo)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 {
+		t.Fatalf("in sync (%d):\n%s", code, out)
+	}
+	// The admin's pools again: a kept value changed again, asked again.
+	write(t, daemon, withPools(kept), 0o644)
+	dockerTook(t, host, keptInfo)
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &f); err != nil || code != 0 {
+		t.Fatalf("facts (%d, %v):\n%s", code, err, out)
+	}
+	for _, p := range f.Parts {
+		if p.Name == "default-address-pools" && p.State != setup.Changed {
+			t.Errorf("pools read %s, not changed: the record still says %+v", p.State, readRecordOf(t, s)["default-address-pools"])
+		}
 	}
 }

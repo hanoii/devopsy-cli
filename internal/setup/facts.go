@@ -102,10 +102,16 @@ func (s *State) UnmarshalText(b []byte) error {
 	return fmt.Errorf("no part state %q", b)
 }
 
-// Changes says whether an apply would change something with no answer asked: a part to put
-// or to record, a file, a live buffer, or the root.
+// Records says whether an apply would change the record with no answer asked (a part in sync
+// whose entry says otherwise, say), the host left as it is.
+func (f Facts) Records() bool {
+	return slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Records })
+}
+
+// Changes says whether an apply would change the host with no answer asked: a part to put, a
+// file, a live buffer, or the root.
 func (f Facts) Changes() bool {
-	return f.RootAction != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts || p.Records }) ||
+	return f.RootAction != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
 		slices.ContainsFunc(f.Files, func(x FileFact) bool { return !x.InSync }) ||
 		slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
 }
