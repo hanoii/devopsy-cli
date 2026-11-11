@@ -574,29 +574,36 @@ func envDirs(dir string) []string {
 // projectEnvironments are the environments of the project at p under root.
 func projectEnvironments(root, p string) []remote.Environment {
 	var envs []remote.Environment
-	isEnv := func(dir string) bool {
-		fi, err := os.Stat(filepath.Join(dir, "releases"))
-		return err == nil && fi.IsDir()
-	}
-	add := func(dir string) {
+	for _, dir := range envBases(p) {
 		rel, _ := filepath.Rel(root, dir)
 		cmd := exec.Command("sh", "-c", remote.EnvStatus)
 		cmd.Env = append(os.Environ(), "base="+dir)
 		out, _ := cmd.Output()
 		envs = append(envs, remote.Environment{Path: filepath.ToSlash(rel), Status: string(out)})
 	}
+	return envs
+}
+
+// envBases are the directories of the project at p's environments, [<instance>/]<environment>
+// (a directory with releases/).
+func envBases(p string) []string {
+	var out []string
+	isEnv := func(dir string) bool {
+		fi, err := os.Stat(filepath.Join(dir, "releases"))
+		return err == nil && fi.IsDir()
+	}
 	for _, e := range envDirs(p) {
 		if isEnv(e) {
-			add(e)
+			out = append(out, e)
 			continue
 		}
 		for _, i := range envDirs(e) {
 			if isEnv(i) {
-				add(i)
+				out = append(out, i)
 			}
 		}
 	}
-	return envs
+	return out
 }
 
 // doorTrees are the project users' trees under root, each to its user.
