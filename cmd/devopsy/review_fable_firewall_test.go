@@ -84,3 +84,24 @@ func TestServerInfoFirewallToLoadAsTheDoorsWasRead(t *testing.T) {
 		t.Errorf("a read that answered, said unread:\n%s", out)
 	}
 }
+
+// --server-setup's facts session is read-only and builds no util image (internals/
+// server-setup.md, Sessions), on a server whose firewall is loaded too: its read of the chains
+// as root runs only with the image there, as a release's does.
+//
+// Bug: the facts' read readies the util image as an apply does, so the read-only session
+// builds it where it is missing, and builds it again where it is over a week old.
+func TestServerSetupFactsBuildNoUtilImage(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	for name, env := range map[string]string{"missing": "FAKE_UTIL_MISSING=1", "over a week old": "FAKE_UTIL_CREATED=2020-01-01T00:00:00Z"} {
+		s.logs()
+		if out, code := s.run([]string{env}, remote.ServerSetupFlag, "facts"); code != 0 {
+			t.Fatalf("%s: facts (%d):\n%s", name, code, out)
+		}
+		if docker, _ := s.logs(); strings.Contains(docker, "build ") {
+			t.Errorf("the util image %s: the facts session built it", name)
+		}
+	}
+}
