@@ -404,3 +404,22 @@ func TestServerReady(t *testing.T) {
 		}
 	}
 }
+
+// A daemon.json devopsy cannot judge (a value of the wrong type, which Docker refuses too) is
+// never rewritten, by any command: --upgrade's apply warns and leaves it, --server-setup's
+// refuses.
+func TestServerSetupLeavesADaemonItCannotJudge(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	daemon := filepath.Join(host, setup.DaemonFile)
+	const text = `{"live-restore": "yes"}`
+	write(t, daemon, text, 0o644)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || readString(daemon) != text || !strings.Contains(out, "warning: "+setup.DaemonFile+": live-restore") {
+		t.Errorf("--upgrade (%d), the file %s:\n%s", code, readString(daemon), out)
+	}
+	out, code = s.run(nil, remote.ServerSetupFlag, "apply")
+	if code != 1 || readString(daemon) != text {
+		t.Errorf("--server-setup (%d), the file %s:\n%s", code, readString(daemon), out)
+	}
+}

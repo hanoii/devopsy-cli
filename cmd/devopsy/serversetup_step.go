@@ -152,13 +152,13 @@ func readSetup(h setupHost) (setupRead, error) {
 		f.DaemonError = setup.DaemonFile + ": " + err.Error()
 	} else if rd.daemon, err = setup.ParseDaemon(data); err != nil {
 		f.DaemonError = setup.DaemonFile + ": " + err.Error()
+	} else if rd.fileVisible, err = rd.daemon.Visible(); err != nil {
+		// A file Docker would refuse is judged no further: none of its parts is put.
+		f.DaemonError = setup.DaemonFile + ": " + err.Error()
 	} else {
 		rd.states = setup.Judge(rd.daemon, rd.record, nil)
 		for _, s := range rd.states {
 			f.Parts = append(f.Parts, setup.PartFact{Name: s.Part.Name, State: s.State, Observed: s.Observed, Kept: s.Entry.Kept, Want: s.Part.Want})
-		}
-		if rd.fileVisible, err = rd.daemon.Visible(); err != nil {
-			f.DaemonError = setup.DaemonFile + ": " + err.Error()
 		}
 	}
 
