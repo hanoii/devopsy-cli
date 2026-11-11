@@ -176,8 +176,10 @@ background and says when there is one. It does not check in CI or in what
 devopsy runs on servers, and `DEVOPSY_NO_UPDATE_CHECK=1` turns the check
 off.
 
-To run a checkout's code instead, symlink `scripts/devopsy` into your `PATH`
-(it rebuilds on every run, instantly when nothing changed; needs Go).
+To run a checkout's code beside the release, symlink `scripts/devopsy` into
+your `PATH` as `devopsy-dev` (it rebuilds on every run, instantly when
+nothing changed; needs Go). What it runs that calls `devopsy` runs the same
+build.
 
 ### Compose's help
 

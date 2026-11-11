@@ -1,14 +1,20 @@
 #!/bin/sh
 # Runs devopsy built from this checkout, so it is always the repository's
-# code, uncommitted changes included. Symlink it into your PATH:
+# code, uncommitted changes included. Symlink it into your PATH under a name
+# of its own, beside the released devopsy:
 #
-#   ln -s "$PWD/scripts/devopsy" ~/.local/bin/devopsy
+#   ln -s "$PWD/scripts/devopsy" ~/.local/bin/devopsy-dev
 #
-# Go's build cache makes the build instant when nothing changed. Needs Go.
+# The build directory goes first in PATH, so whatever this run starts that
+# calls devopsy by name (a project command, a release step) runs the same
+# build. Go's build cache makes the build instant when nothing changed.
+# Needs Go.
 set -eu
 self=$(readlink -f "$0")
 repo=$(cd "$(dirname "$self")/.." && pwd)
 bin=${XDG_CACHE_HOME:-$HOME/.cache}/devopsy-dev/devopsy
 version=$(git -C "$repo" describe --tags --always --dirty 2>/dev/null || echo dev)
 (cd "$repo" && go build -ldflags "-X main.version=$version" -o "$bin" ./cmd/devopsy)
+PATH=$(dirname "$bin"):$PATH
+export PATH
 exec "$bin" "$@"
