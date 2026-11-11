@@ -101,9 +101,10 @@ func TestReloadBuildArgument(t *testing.T) {
 		t.Fatalf("an unchanged build (%d):\n%s", code, out)
 	}
 	s.logs()
-	s.labels("FAKE_APP_BUILD=1\nFAKE_APP_UID=10002")
+	// A value of letters: digits also show in a release id, by its time.
+	s.labels("FAKE_APP_BUILD=1\nFAKE_APP_UID=other-uid")
 	out, code := s.run(nil, "@prod", "--reload")
-	if docker, _ := s.logs(); code == 0 || !strings.Contains(out, "app's build changed since the release built its image: APP_UID") || strings.Contains(out, "10002") || strings.Contains(docker, " up ") {
+	if docker, _ := s.logs(); code == 0 || !strings.Contains(out, "app's build changed since the release built its image: APP_UID") || strings.Contains(out, "other-uid") || strings.Contains(docker, " up ") {
 		t.Errorf("APP_UID changed (%d):\n%s\ndocker:\n%s", code, out, docker)
 	}
 }
