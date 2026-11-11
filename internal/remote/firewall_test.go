@@ -191,6 +191,10 @@ func TestFirewallScripts(t *testing.T) {
 	if !strings.Contains(install, "ln -sfn "+FirewallUnit+` "$host_root/etc/systemd/system/multi-user.target.wants/`) || !strings.Contains(install, "ln -sfn "+FirewallTimer+` "$host_root/etc/systemd/system/timers.target.wants/`) {
 		t.Errorf("the units not enabled:\n%s", install)
 	}
+	// The timer runs at once where systemctl reaches systemd, its failure no install's.
+	if !strings.Contains(install, "SYSTEMD_IGNORE_CHROOT=1 systemctl start devopsy-firewall.timer; } >/dev/null 2>&1 || :") {
+		t.Errorf("the timer not started:\n%s", install)
+	}
 	if strings.Contains(firewallUnitText, "RemainAfterExit") || !strings.Contains(firewallTimerText, "OnUnitInactiveSec=") {
 		t.Errorf("the units:\n%s\n%s", firewallUnitText, firewallTimerText)
 	}
@@ -398,7 +402,7 @@ func TestFirewallWithoutADoor(t *testing.T) {
 	}
 	// The removal's pieces: a file of devopsy's goes, the admin's own stays.
 	r := FirewallRemove()
-	if !strings.Contains(r, "-t raw -D PREROUTING -j "+FirewallContainerChain) || !strings.Contains(r, "-t raw -X "+FirewallContainerChain) || !strings.Contains(r, "grep -q '^# Written by devopsy'") {
+	if !strings.Contains(r, "systemctl stop devopsy-firewall.timer") || !strings.Contains(r, "-t raw -D PREROUTING -j "+FirewallContainerChain) || !strings.Contains(r, "-t raw -X "+FirewallContainerChain) || !strings.Contains(r, "grep -q '^# Written by devopsy'") {
 		t.Errorf("the removal:\n%s", r)
 	}
 }

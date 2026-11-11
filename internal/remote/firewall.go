@@ -349,6 +349,9 @@ func FirewallInstall(withDoor bool) string {
 	return s + "ln -sfn " + FirewallUnit + ` "$host_root/etc/systemd/system/multi-user.target.wants/devopsy-firewall.service"` + "\n" +
 		`mkdir -p "$host_root/etc/systemd/system/timers.target.wants"` + "\n" +
 		"ln -sfn " + FirewallTimer + ` "$host_root/etc/systemd/system/timers.target.wants/devopsy-firewall.timer"` + "\n" +
+		// The timer at once, where systemctl reaches systemd from the chroot (the run has the
+		// host's pids), else from the next boot.
+		`{ SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload && SYSTEMD_IGNORE_CHROOT=1 systemctl start devopsy-firewall.timer; } >/dev/null 2>&1 || :` + "\n" +
 		`"$host_root"` + FirewallScript + "\n" + FirewallRead
 }
 
@@ -367,13 +370,16 @@ if ` + f.cmd + ` -t raw -S ` + FirewallContainerChain + ` >/dev/null 2>&1; then 
 		}
 		s += r
 	}
-	return s + `for f in ` + FirewallScript + ` ` + FirewallUnit + ` ` + FirewallTimer + ` ` + FirewallDockerDropIn + `; do
+	// The timer stopped first, where systemctl reaches systemd, else it starts a unit gone.
+	return s + `SYSTEMD_IGNORE_CHROOT=1 systemctl stop devopsy-firewall.timer >/dev/null 2>&1 || :
+for f in ` + FirewallScript + ` ` + FirewallUnit + ` ` + FirewallTimer + ` ` + FirewallDockerDropIn + `; do
   if [ -f "$host_root$f" ] && head -n 2 "$host_root$f" | grep -q '^# Written by devopsy'; then rm -f "$host_root$f"; echo "removed $f"; fi
 done
 for l in /etc/systemd/system/multi-user.target.wants/devopsy-firewall.service /etc/systemd/system/timers.target.wants/devopsy-firewall.timer; do
   [ ! -L "$host_root$l" ] || [ -e "$host_root$l" ] || rm -f "$host_root$l"
 done
 rm -f "${` + FirewallMarkEnv + `:-` + FirewallMark + `}"
+SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload >/dev/null 2>&1 || :
 `
 }
 
