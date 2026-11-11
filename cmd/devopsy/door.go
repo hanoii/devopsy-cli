@@ -1010,7 +1010,8 @@ func (s *doorSide) answer(args []string, rendered map[string]any, renderErr erro
 // its environment, through the real client. It answers right, wrong or unknown, nothing more:
 // what is wrong is the admin's to read (--server-info).
 func (s *doorSide) firewall() int {
-	fmt.Println(firewallAnswer(setupHost{}, s.real, firewallAllowed()))
+	allow, door := firewallAllowed()
+	fmt.Println(firewallAnswer(setupHost{}, s.real, allow, door))
 	return 0
 }
 

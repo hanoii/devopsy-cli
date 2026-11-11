@@ -126,23 +126,21 @@ func serverFacts() (remote.ServerInfo, error) {
 	// an install's even where the setup cannot be read; a project user's, whose server's setup
 	// is its admin's and whose docker is the door, none of it nor of Docker but what the door
 	// tells (projectUserFacts): the door would refuse Docker's reads and log each.
-	u, err := user.Current()
-	projectUser := err == nil && inDoorGroup(u.Username)
-	var fw *setup.FirewallFact
-	var hd hostDocker
-	if ownsSetup(projectUser) {
-		hd = readHostDocker(h)
-	}
-	info.Docker = hd.facts
-	if !ownsSetup(projectUser) {
+	read := ""
+	if asProjectUser() {
 		info.Docker.Door = true
 		projectUserFacts(&info, askDoorFirewall)
-	} else if rd, err := readSetup(h, hd); err == nil {
-		info.Setup, fw = &rd.facts, rd.facts.Firewall
-	} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
-		fw = &setup.FirewallFact{Loaded: kind}
+	} else {
+		hd := readHostDocker(h)
+		info.Docker = hd.facts
+		if rd, err := readSetup(h, hd); err == nil {
+			info.Setup = &rd.facts
+			read = readChains(rd.facts.Firewall, rd.docker, false)
+		} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
+			_, refusals := setupDocker(h, hd.facts)
+			read = readChains(&setup.FirewallFact{Loaded: kind}, !dockerRefused(refusals), false)
+		}
 	}
-	read := readChains(fw, projectUser, false)
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {

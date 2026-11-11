@@ -2,12 +2,12 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -59,14 +59,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	// what it refuses (setup.Facts.Goes), the rest applied.
 	es := setupEntries(f)
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
-	for _, r := range f.Refusals {
-		msg, fixes := refusalWords(r)
-		report.Say(report.ErrorLevel, msg, nil, fixes...)
-	}
-	if f.DaemonError != "" {
-		msg, fixes := daemonWords(f.DaemonError)
-		report.Say(report.ErrorLevel, msg, nil, fixes...)
-	}
+	sayRefusals(f, report.ErrorLevel)
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
 	if err == errDeclined {
@@ -78,11 +71,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	}
 	if !run {
 		if refused {
-			if words := stepWords(f); len(words) > 0 {
-				report.Error("nothing applied: " + strings.Join(words, ", ") + " refused")
-			} else {
-				report.Error("nothing changed")
-			}
+			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
 			return 1
 		}
 		if f.Pending {
@@ -92,7 +81,8 @@ func runServerSetup(t *remote.Target, args []string) int {
 		}
 		return 0
 	}
-	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply"}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
+	// The refusals were said here: the apply says them no more.
+	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply", "--said"}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
 		return failErr(err)
 	}
@@ -113,7 +103,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	daemon := false
 	answers := false
 	// Every step a root run: with none going (Docker refused), nothing goes at all.
-	if !slices.ContainsFunc(setup.Steps, f.Goes) {
+	if f.NoneGoes() {
 		return nil, false, nil
 	}
 	parts := f.Parts
@@ -140,8 +130,8 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	changes := f.Changes() || daemon
 	if changes && !yes {
 		var not []string
-		if len(f.Refused()) > 0 {
-			not = []string{"not applied, refused: " + strings.Join(stepWords(f), ", ")}
+		if line := refusedLine(f); line != "" {
+			not = []string{line}
 		}
 		ok, err := ask.confirm("apply these?", not...)
 		if err != nil {
@@ -272,7 +262,8 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 	if f.Pending {
 		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
-	if fw := f.Firewall; fw != nil && fw.State.Changes() {
+	// A refused allow leaves the door's firewall as it is: its chains, read, said as without it.
+	if fw := f.Firewall; fw != nil && (fw.State.Changes() || fw.State == setup.FirewallRefused && len(fw.Wrong) > 0) {
 		entry(remote.StatusWarning, firewallItem, firewallLines(fw)...)
 	}
 	if fw := f.Firewall; fw != nil && fw.Unread != "" {
@@ -321,4 +312,27 @@ func firewallLine(fw *setup.FirewallFact) string {
 		return "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services"
 	}
 	return report.FirewallNotLoaded.Msg()
+}
+
+// sayRefusals says f's refusals at level, each with its fix, a daemon.json devopsy cannot
+// judge among them: once per run, by the first session or by an apply run alone.
+func sayRefusals(f setup.Facts, level report.Level) {
+	for _, r := range f.Refusals {
+		msg, fixes := refusalWords(r)
+		report.Say(level, msg, nil, fixes...)
+	}
+	if f.DaemonError != "" {
+		msg, fixes := daemonWords(f.DaemonError)
+		report.Say(level, msg, nil, fixes...)
+	}
+}
+
+// refusedLine names what f's refusals stop that had a change to make (setup.Facts.Stopped),
+// "" when nothing: the first session's question, a run with nothing to apply and an apply's
+// end say it.
+func refusedLine(f setup.Facts) string {
+	if words := f.Stopped(); len(words) > 0 {
+		return "not applied, refused: " + strings.Join(words, ", ")
+	}
+	return ""
 }

@@ -50,6 +50,10 @@ type Refusal struct {
 	Item    string `json:"item"`
 	Message string `json:"message"`
 	Fix     string `json:"fix,omitempty"`
+	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
+	// one item may stop less than that item's others (Docker's plugins, its unit's config
+	// file).
+	Stops string `json:"stops,omitempty"`
 }
 
 // PartFact is one daemon.json part as the server judged it, with what an apply would do

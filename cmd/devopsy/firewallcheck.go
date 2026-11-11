@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/user"
 	"strings"
 	"time"
 
@@ -65,15 +66,19 @@ func firewallChainsWrong(read string, door bool) ([]string, error) {
 	return remote.ContainersFirewallWrong(read), nil
 }
 
-// ownsSetup says whether the server's setup is this user's to judge: never a project user's,
-// whose server's setup is its admin's, nothing in it that user's to act on, and whose docker
-// is the door, which would refuse a root run and log it.
-func ownsSetup(projectUser bool) bool { return !projectUser }
+// asProjectUser says whether this devopsy runs as a project user, whose server's setup is its
+// admin's, nothing in it that user's to act on, and whose docker is the door, which would
+// refuse a root run, and Docker's reads, and log each.
+func asProjectUser() bool {
+	u, err := user.Current()
+	return err == nil && inDoorGroup(u.Username)
+}
 
-// readsChains says whether this devopsy reads fw's chains as root: where devopsy's firewall
-// is installed, by a user whose setup it is (ownsSetup).
-func readsChains(fw *setup.FirewallFact, projectUser bool) bool {
-	return fw != nil && fw.Loaded != setup.NoFirewall && ownsSetup(projectUser)
+// readsChains says whether the chains are read as root: where devopsy's firewall is installed
+// and the Docker devopsy reaches is this host's (docker, no refusal of it as not this host's,
+// whose root container would read another machine).
+func readsChains(fw *setup.FirewallFact, docker bool) bool {
+	return fw != nil && fw.Loaded != setup.NoFirewall && docker
 }
 
 // projectUserFacts is a project user's --server-info's part of the setup: the door's answer
@@ -84,13 +89,13 @@ func projectUserFacts(info *remote.ServerInfo, ask func() (string, error)) {
 	}
 }
 
-// readChains reads devopsy's firewall's chains as root where readsChains says, and judges them
-// by the kind loaded into fw (setup.FirewallFact.Chains), so a wipe the files and the mark
-// cannot show reads "to load again", for --server-setup's facts and apply and for
-// --server-info alike; build readies the util image, as only an apply may, else with none
-// the chains are unread. It returns the read, "" when none was made.
-func readChains(fw *setup.FirewallFact, projectUser, build bool) string {
-	if !readsChains(fw, projectUser) {
+// readChains reads devopsy's firewall's chains as root where readsChains says (docker, the
+// Docker this host's), and judges them by the kind loaded into fw (setup.FirewallFact.Chains),
+// so a wipe the files and the mark cannot show reads "to load again", for --server-setup's
+// facts and apply and for --server-info alike; build readies the util image, as only an apply
+// may, else with none the chains are unread. It returns the read, "" when none was made.
+func readChains(fw *setup.FirewallFact, docker, build bool) string {
+	if !readsChains(fw, docker) {
 		return ""
 	}
 	read, wrong, err := firewallJudged(context.Background(), firewallReadRun("docker", remote.FirewallRead), fw.Loaded == setup.DoorFirewall, build)
@@ -105,25 +110,26 @@ var (
 )
 
 // releaseFirewall says, for a release, whether devopsy's firewall installed here is loaded as
-// devopsy loads it, by what the facts judge by stats (firewallHere): not installed, or allowed
-// (allow, firewall: metadata: allow in the deploy user's config, its removal waiting), no
-// answer; installed with no mark, its last load failed, wrong with
-// no Docker call; marked, its chains read as root by the kind the mark says and judged. It
-// must cost a release little and never fail it: no util image (never built), a read that
-// fails or outlasts firewallReadWait, each an error and no answer. docker is the client the
-// read runs (the door's real one).
-func releaseFirewall(h setupHost, docker string, allow bool) (bool, error) {
-	if allow {
-		return false, errAllowed
-	}
+// devopsy loads it, by what the facts judge by stats (firewallHere): not installed, or its
+// removal waiting (allow, firewall: metadata: allow in the deploy user's config, where the
+// door's is not wanted, door saying door: is set), no answer; installed with no mark, its
+// last load failed, wrong with no Docker call; marked, its chains read as root by the kind the
+// mark says and judged. It must cost a release little and never fail it: no util image (never
+// built), a read that fails or outlasts wait (firewallReadWait), each an error and no answer.
+// docker is the client the read runs (the door's real one).
+func releaseFirewall(h setupHost, docker string, allow, door bool, wait time.Duration) (bool, error) {
 	kind, mark := firewallHere(h)
 	switch {
 	case kind == setup.NoFirewall:
 		return false, errNotInstalled
+	case allow && !setup.FirewallWantsDoor(door, kind):
+		// A removal waits; allow where the door's is wanted is refused, and the firewall
+		// stays, judged as without it.
+		return false, errAllowed
 	case mark == "":
 		return false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), firewallReadWait)
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	_, wrong, err := firewallJudged(ctx, firewallReadRun(docker, remote.FirewallChainsRead), mark == remote.FirewallDoor, false)
 	if err != nil {
@@ -134,9 +140,10 @@ func releaseFirewall(h setupHost, docker string, allow bool) (bool, error) {
 
 // firewallAllowed says whether the deploy user's config allows the metadata services
 // (firewall: metadata: allow): a config that does not load allows nothing.
-func firewallAllowed() bool {
+func firewallAllowed() (allow, door bool) {
 	r, err := remote.ReleaseSettings()
-	return err == nil && r.Firewall.Metadata == remote.MetadataAllow
+	d, _ := remote.ServerDoor()
+	return err == nil && r.Firewall.Metadata == remote.MetadataAllow, d != nil
 }
 
 // setupFix is the fix that runs --server-setup on the server ref names, its text before the
@@ -152,7 +159,8 @@ func setupFix(ref, text, words string) report.Remedy {
 // W0001 with --server-setup as the fix (ref the server as the session names it), nothing when
 // it is right, and a debug line when it could not be told.
 func warnReleaseFirewall(h setupHost, ref string) {
-	right, err := releaseFirewall(h, "docker", firewallAllowed())
+	allow, door := firewallAllowed()
+	right, err := releaseFirewall(h, "docker", allow, door, firewallReadWait)
 	switch {
 	case err != nil:
 		report.Debug("the firewall not checked: " + err.Error())
@@ -171,8 +179,8 @@ const (
 
 // firewallAnswer is the door's answer to "firewall", from releaseFirewall through docker, the
 // real client: right, wrong, or unknown when it could not be told, whatever failed.
-func firewallAnswer(h setupHost, docker string, allow bool) string {
-	right, err := releaseFirewall(h, docker, allow)
+func firewallAnswer(h setupHost, docker string, allow, door bool) string {
+	right, err := releaseFirewall(h, docker, allow, door, firewallReadWait)
 	switch {
 	case err != nil:
 		return firewallUnknown

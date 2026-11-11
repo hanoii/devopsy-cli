@@ -1,15 +1,34 @@
 package setup
 
-import "slices"
+import (
+	"cmp"
+	"slices"
+)
 
-// The items a refusal names (Refusal.Item), the required ones and two of the tunables'.
+// What a refusal stops (Refusal.Stops, else its Item), each stopping the steps that need it
+// (stepNeeds).
 const (
-	RefusalTools  = "tools"
+	// RefusalTools is the tools' refusal's item; it stops by the tool missing (RefusalFlock,
+	// RefusalTar).
+	RefusalTools = "tools"
+	// RefusalDocker: Docker not answering, not this host's, no systemd, its unit inactive.
 	RefusalDocker = "Docker"
-	RefusalRoot   = "release root"
+	// RefusalRoot: the release root refused (another user's, a file, /).
+	RefusalRoot = "release root"
+	// RefusalRecord: the record unreadable.
 	RefusalRecord = "record"
-	// RefusalDaemon stands for a daemon.json devopsy cannot judge (Facts.DaemonError).
+	// RefusalDaemon: daemon.json devopsy cannot judge (Facts.DaemonError), or not what Docker
+	// reads (its unit's --config-file).
 	RefusalDaemon = "daemon.json"
+	// RefusalPlugins: Docker without its compose or buildx plugin, which releases need and no
+	// step of the setup does.
+	RefusalPlugins = "plugins"
+	// RefusalFlock: no flock, which the firewall's loader takes its lock with.
+	RefusalFlock = "flock"
+	// RefusalTar: no tar, which releases need and no step of the setup does.
+	RefusalTar = "tar"
+	// RefusalMountsPath: a release root a unit file cannot hold, which the mounts drop-in names.
+	RefusalMountsPath = "mounts path"
 )
 
 // Step is one of an apply's steps, each applied or not apart from the others.
@@ -27,27 +46,29 @@ const (
 // Steps are an apply's steps, in the order it takes them.
 var Steps = []Step{StepRoot, StepBuffers, StepMounts, StepParts, StepRestart, StepFirewall}
 
-// stepNeeds is what each step needs, by the items whose refusal stops it: every step is a root
-// run, so Docker (its daemon, its util image) stops them all; daemon.json devopsy cannot judge
-// stops its parts and a restart for them, and so does a broken record, which keeps the parts'
-// entries; the release root refused stops its making and the mounts drop-in that names it;
-// the firewall's loader takes its lock with flock (the tools), and its own refusal (allow
-// where the door's is wanted) stops it alone.
+// stepNeeds is what each step needs, by what a refusal stops: every step is a root run, so
+// Docker refused (not answering, not this host's) stops them all; daemon.json devopsy cannot
+// judge or Docker does not read stops its parts and a restart for them, and so does a broken
+// record, which keeps the parts' entries; the release root refused stops its making and the
+// mounts drop-in that names it, a root a unit file cannot hold the drop-in alone; the
+// firewall's loader takes its lock with flock, the one tool a step runs (the apply's own locks
+// are devopsy's), and its own refusal (allow where the door's is wanted) stops it alone.
+// Docker's plugins and tar stop no step: releases need them.
 var stepNeeds = map[Step][]string{
 	StepRoot:     {RefusalDocker, RefusalRoot},
 	StepBuffers:  {RefusalDocker},
-	StepMounts:   {RefusalDocker, RefusalRoot},
+	StepMounts:   {RefusalDocker, RefusalRoot, RefusalMountsPath},
 	StepParts:    {RefusalDocker, RefusalDaemon, RefusalRecord},
 	StepRestart:  {RefusalDocker, RefusalDaemon, RefusalRecord},
-	StepFirewall: {RefusalDocker, RefusalTools, FirewallItemName},
+	StepFirewall: {RefusalDocker, RefusalFlock, FirewallItemName},
 }
 
 // Refused is every item that refuses in f, a daemon.json devopsy cannot judge among them.
 func (f Facts) Refused() []string {
 	var items []string
 	for _, r := range f.Refusals {
-		if !slices.Contains(items, r.Item) {
-			items = append(items, r.Item)
+		if item := cmp.Or(r.Stops, r.Item); !slices.Contains(items, item) {
+			items = append(items, item)
 		}
 	}
 	if f.DaemonError != "" {
@@ -70,6 +91,22 @@ func (f Facts) Blocks(s Step) []string {
 // Goes says whether step s goes in f: none of what it needs refuses.
 func (f Facts) Goes(s Step) bool { return len(f.Blocks(s)) == 0 }
 
+// NoneGoes says whether no step goes in f (Docker refused): nothing is applied at all.
+func (f Facts) NoneGoes() bool { return !slices.ContainsFunc(Steps, f.Goes) }
+
+// Stopped is what f's refusals stop of the steps with a change to make, by name, "" for
+// nothing: the words of the first session's question, of a run with nothing to apply, and of
+// an apply's end.
+func (f Facts) Stopped() []string {
+	var words []string
+	for _, s := range f.Changing() {
+		if !f.Goes(s) {
+			words = append(words, string(s))
+		}
+	}
+	return words
+}
+
 // Changing is what of each step an apply would change, unasked: the steps with a change to
 // make, whether they go or not.
 func (f Facts) Changing() []Step {
@@ -84,7 +121,9 @@ func (f Facts) Changing() []Step {
 		case StepMounts:
 			changes = slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemMounts && !x.InSync })
 		case StepParts:
-			changes = slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts })
+			// A daemon.json devopsy cannot judge has its parts unknown: counted as a change,
+			// which its refusal stops.
+			changes = f.DaemonError != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts })
 		case StepFirewall:
 			changes = f.Firewall != nil && f.Firewall.State.Changes()
 		}

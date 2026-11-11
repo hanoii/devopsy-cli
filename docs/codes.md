@@ -21,7 +21,9 @@ named on a line of its own:
 
 - the firewall's chains are not as devopsy loads them (a reload of the
   server's own firewall, an `iptables -F`), read as root;
-- its last load failed, so no load is marked in `/run`;
+- its last load failed, so no load is marked in `/run`, or the mark says
+  the other kind's (the containers' chain alone where the door's is
+  wanted);
 - one of its files is missing, not devopsy's, or of another mode;
 - its unit's boot link is gone, so no boot loads it;
 - a timer an older install put is still there.

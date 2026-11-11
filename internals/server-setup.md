@@ -1,14 +1,19 @@
 # Server setup
 
-`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`).
+`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`). User docs: `docs/servers.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
 
 ## Items
 
 - An item is a want, a check and, for what devopsy sets, an apply: the required ones (the release root, `tar` and `flock`, Docker) refuse what depends on them before anything changes, and the tunables (`daemon.json`'s parts, the socket buffers, the mounts drop-in, the metadata firewall) are applied.
-- A refusal stops only the steps that need what it refuses (`setup.Facts.Goes`, a step naming its needs in `stepNeeds`), each said with its fix, the others applied, and the run fails (a warning under `--upgrade`): a setup's items are independent settings.
+- A refusal stops only the steps that need what it refuses (`setup.Facts.Goes`, a step naming its needs in `stepNeeds`, a refusal what it stops by `Refusal.Stops`), the others applied, and the run fails (a warning under `--upgrade`): a setup's items are independent settings.
+- A refusal is said once per run with its fix (`sayRefusals`): by the first session, the apply it runs taking `--said`; by an apply run alone (`--upgrade`).
+- Docker refused as not answering, not this host's, without systemd or its unit inactive stops every root run, a chains' read and a build of the util image among them (`dockerRefused`, `readsChains`); its unit's `--config-file` stops `daemon.json`'s parts and a restart; its plugins stop nothing.
+- What a refusal stopped of a change is said by one line (`refusedLine`, `setup.Facts.Stopped`), in the first session's question, a run with nothing to apply and an apply's end; a `daemon.json` devopsy cannot judge counts its parts as a change it stopped.
 - With no step going (Docker refused), nothing is applied, the record not made.
-- The first session shows the differences and the refusals together, its question covering what goes and naming what a refusal stops (`stepWords`); with nothing to apply it ends there, failing.
-- A failure of one step's apply goes on to the next independent one: the root run puts in order, `daemon.json` last, and a put that fails ends that run with what came before put, the record keeping no part that did not go in; the firewall's run follows.
+- The first session shows the differences and the refusals together, its question covering what goes and naming what a refusal stops (`refusedLine`); with nothing to apply it ends there, failing.
+- A failure of one step's apply goes on to the next independent one: the root run puts in order, `daemon.json` last, and a put that fails, by its check (exit 4) or its write (exit 5), ends that run with what came before put, the record keeping no part that did not go in and the answers asked again; the firewall's run follows.
+- A restart not confirmed in time leaves the firewall's step to go when Docker answers (the run raising the reboot flag went), and fails naming it when Docker does not.
+- The mounts drop-in's put is followed by a daemon-reload whatever comes after it, and the apply says Docker waits for the mounts by whether a restart was queued.
 - The check after the apply judges only what went; a refused step is no "what was applied did not hold".
 - devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).
@@ -103,4 +108,4 @@
 - `--upgrade` applies once per devopsy version (`upgradeApplies`), when the record's `devopsy:` line, written by an apply that ended with no failure and no change a refusal stopped, names another version or none; drift on a server applied already is `--server-setup`'s.
 - `--server-setup` and `--upgrade`'s apply are one path, the level of what they say and the exit the only differences.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.
-- A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`ownsSetup`, which `readsChains` asks too): the server's setup is its admin's, and the door would refuse Docker's reads and log each; it asks the door's `firewall` request instead and shows W0001 for the admin on wrong (`projectUserFacts`).
+- A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`asProjectUser`): the server's setup is its admin's, and the door would refuse Docker's reads and log each; it asks the door's `firewall` request instead and shows W0001 for the admin on wrong (`projectUserFacts`).

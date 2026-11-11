@@ -75,16 +75,28 @@ directory, it refuses.
 
 A refusal stops only what needs what it refuses, and `--server-setup`
 applies the rest, says what it did not apply and why, and exits 1:
-Docker not answering, or under another init than systemd, stops every
-item, each run as root through Docker; a `daemon.json` devopsy cannot
-judge, or a record it cannot read, stops `daemon.json`'s parts and a
-restart of Docker; a release root refused stops its making and the
-mounts drop-in that names it; a missing `flock`, which the firewall's
-loader takes its lock with, stops the metadata firewall. It shows the
-differences and the refusals together, and its question covers what it
-will apply, naming what it will not. A put that fails ends its root run
-there, with what came before it put; `daemon.json` goes last of the
-puts, and what follows the run (the firewall) still goes.
+
+- Docker not answering, not this host's (rootless, or another host's
+  through `DOCKER_HOST`), under another init than systemd, or its unit
+  inactive: every item, each run as root through Docker;
+- `docker.service` starting Docker with another `--config-file`, a
+  `daemon.json` devopsy cannot judge, or a record it cannot read:
+  `daemon.json`'s parts and a restart of Docker;
+- a release root refused (another user's, a file, `/`): its making and
+  the mounts drop-in that names it; one a unit file cannot hold: the
+  drop-in alone;
+- a missing `flock`, which the firewall's loader takes its lock with:
+  the metadata firewall;
+- Docker without its compose or buildx plugin, or a missing `tar`, which
+  releases need: nothing of the setup, said all the same.
+
+It shows the differences and the refusals together, each refusal once,
+and its question covers what it will apply, naming what it will not. A
+put that fails, by its check or its write, ends its root run there, with
+what came before it put; `daemon.json` goes last of the puts, and what
+follows the run (the firewall) still goes. A restart not confirmed in
+time leaves the firewall to go when Docker answers, and names it as not
+applied when Docker does not.
 
 What it keeps as devopsy wants it:
 

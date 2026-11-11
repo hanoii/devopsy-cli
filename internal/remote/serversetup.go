@@ -85,9 +85,10 @@ if [ -n "$dropin" ]; then
   mkdir -p "$host_root` + path.Dir(setup.MountsDropIn) + `"
   if put "$host_root` + setup.MountsDropIn + `" 644 true "$dropin"; then
     echo "` + SetupPut + ` ` + setup.MountsDropIn + `"
-    # systemd's view of docker.service, so it never says a drop-in changed on disk; a
-    # restart reloads anyway, and a reload refused waits for the next boot.
-    [ "$after" = restart ] || SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
+    # systemd's view of docker.service, so it never says a drop-in changed on disk, whatever
+    # follows (a restart the daemon.json put after it may stop); a reload refused waits for
+    # the next boot.
+    SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
   fi
 fi
 # daemon.json last of the puts: its check (dockerd's) is the one that refuses, and a put it
