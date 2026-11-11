@@ -1069,10 +1069,10 @@ Examples:
 
 Sets up the server for devopsy, as its deploy user, the server named with
 its user (@devopsy@vm1:): root's steps go through devopsy's util image.
-It refuses first when the server lacks what every release needs (tar,
-flock, Docker with compose and buildx under systemd as docker.service)
-and says why, and when the release root is another user's or no
-directory.
+It refuses what the server lacks (tar, flock, Docker with compose and
+buildx under systemd as docker.service, a release root of the deploy
+user's) and says why; a refusal stops only what needs it, the rest
+applied, and the run then exits 1.
 
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when

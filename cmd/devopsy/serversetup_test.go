@@ -333,8 +333,8 @@ func (a *scripted) replace(p setup.PartFact) (bool, error) {
 	return a.replaces[p.Name], nil
 }
 
-func (a *scripted) confirm(q string, _ ...string) (bool, error) {
-	a.asked = append(a.asked, q)
+func (a *scripted) confirm(q string, details ...string) (bool, error) {
+	a.asked = append(a.asked, strings.Join(append([]string{q}, details...), " | "))
 	if len(a.confirms) == 0 {
 		return false, errors.New("asked too often")
 	}
@@ -1283,22 +1283,23 @@ func TestServerSetupUpgradeKeepsTheFirewallsKind(t *testing.T) {
 	}
 }
 
-// firewall: metadata: allow where the door's firewall is wanted is refused before anything
-// changes: with door: in the config, its project users' containers never reach a metadata
-// service; with the door's loaded and door: gone, devopsy never takes a door's firewall off.
-// Under --upgrade the refusal is a warning, and the door's firewall stays.
+// firewall: metadata: allow where the door's firewall is wanted is refused, the firewall
+// left as it is, the rest of the setup applied and the run failing: with door: in the
+// config, its project users' containers never reach a metadata service; with the door's
+// loaded and door: gone, devopsy never takes a door's firewall off. Under --upgrade the
+// refusal is a warning, and the door's firewall stays.
 func TestServerSetupRefusesAllowWithADoor(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
 	setupConfig(t, s, "firewall:\n  metadata: allow\ndoor:\n  space: $HOME/space\n")
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server with door: in its config") || fileExists(filepath.Join(host, setup.DaemonFile)) {
+	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server with door: in its config") || !fileExists(filepath.Join(host, setup.DaemonFile)) || fileExists(filepath.Join(host, remote.FirewallScript)) {
 		t.Errorf("with door: (%d):\n%s", code, out)
 	}
 	setupConfig(t, s, "firewall:\n  metadata: allow\n")
 	firewallLoaded(t, host, true)
 	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server where the door's firewall is loaded: devopsy never takes a door's firewall off a server") || fileExists(filepath.Join(host, setup.DaemonFile)) {
+	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server where the door's firewall is loaded: devopsy never takes a door's firewall off a server") || readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallDoor+"\n" {
 		t.Errorf("the door's loaded, door: gone (%d):\n%s", code, out)
 	}
 	out, code = s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
@@ -1820,5 +1821,89 @@ func TestFirewallSaysWhatDiffers(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q:\n%s", want, out)
 		}
+	}
+}
+
+// A refusal of one item stops only what needs it: a daemon.json devopsy cannot judge (an
+// admin's array) stops its parts and a restart, and --server-setup still loads the door's
+// firewall, W0001's one fix, says both, and fails. The first session's differences show the
+// firewall's W0001 line beside the refusal.
+func TestServerSetupLoadsTheFirewallBesideARefusal(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, true)
+	jumps := filepath.Join(host, "fw.iptables.jumps")
+	if err := os.Remove(jumps); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if data, err := os.ReadFile(jumps); code != 1 || err != nil || !strings.Contains(string(data), remote.DoorChain) || !strings.Contains(out, "metadata firewall  W0001: the server's firewall is not loaded as devopsy loads it") ||
+		!strings.Contains(out, "devopsy leaves the file as it is") || !strings.Contains(out, "loaded devopsy's firewall") || readString(filepath.Join(host, setup.DaemonFile)) != "[]\n" {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A release root refused (a file there) stops its making and the mounts drop-in that names
+// it, never the buffers or the firewall, which go, the run failing with what it did not apply.
+func TestServerSetupAppliesBesideARefusedRoot(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	write(t, s.root, "a file\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, remote.FirewallScript)) ||
+		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "not applied, refused: "+string(setup.StepMounts)) {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// Docker not answering stops every step, each a root run: nothing is applied, and the run
+// fails.
+func TestServerSetupAppliesNothingWithDockerDown(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	write(t, filepath.Join(host, "docker-down"), "", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(filepath.Join(host, remote.FirewallScript)) || fileExists(s.root) || !strings.Contains(out, "Docker's daemon does not answer") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A put that fails (dockerd refusing daemon.json, the root run's last put) leaves the puts
+// before it applied and said, the firewall after it applied, the record keeping none of the
+// parts that did not go in, and the run failing.
+func TestServerSetupGoesOnPastAFailedPut(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	write(t, filepath.Join(filepath.Dir(host), "bin", "dockerd"), "#!/bin/sh\necho 'invalid' >&2\nexit 1\n", 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, setup.MountsDropIn)) || fileExists(filepath.Join(host, setup.DaemonFile)) ||
+		!strings.Contains(out, "loaded devopsy's firewall") || !strings.Contains(out, "did not pass its check") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	for name, e := range readRecordOf(t, s) {
+		if e.Applied != "" {
+			t.Errorf("%s recorded applied, its put failed", name)
+		}
+	}
+}
+
+// The first session's confirmation covers what goes and names what a refusal stops; with
+// nothing going (Docker refused), it asks nothing and runs nothing.
+func TestPlanSetupNamesWhatIsRefused(t *testing.T) {
+	t.Parallel()
+	f := setup.Facts{DaemonError: "not a JSON object", Firewall: &setup.FirewallFact{State: setup.FirewallLoad}, Parts: []setup.PartFact{{Name: "logs", Puts: true}}}
+	ask := &scripted{confirms: []bool{true}}
+	_, run, err := planSetup(f, false, ask)
+	if err != nil || !run || len(ask.asked) != 1 || ask.asked[0] != "apply these? | not applied, refused: "+string(setup.StepParts) {
+		t.Errorf("run %v (%v), asked %q", run, err, ask.asked)
+	}
+	f.Refusals = []setup.Refusal{{Item: setup.RefusalDocker}}
+	ask = &scripted{}
+	if _, run, err := planSetup(f, false, ask); err != nil || run || len(ask.asked) != 0 {
+		t.Errorf("Docker refused: run %v (%v), asked %q", run, err, ask.asked)
 	}
 }

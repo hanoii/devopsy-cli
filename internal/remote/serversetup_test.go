@@ -93,7 +93,7 @@ func TestSetupRootScript(t *testing.T) {
 	if read(setup.RestartMarker) != "inv-1\n" || read(RebootRequired+".pkgs") != "devopsy\n" {
 		t.Errorf("the marker %q, the flag's packages %q", read(setup.RestartMarker), read(RebootRequired+".pkgs"))
 	}
-	if c := read("calls"); !strings.Contains(c, "dockerd --validate --config-file ") || !strings.Contains(c, "sysctl -qw net.core.rmem_max=7500000") || !strings.HasSuffix(c, "1 systemctl daemon-reload\n") || strings.Contains(c, "restart") {
+	if c := read("calls"); !strings.Contains(c, "dockerd --validate --config-file ") || !strings.Contains(c, "sysctl -qw net.core.rmem_max=7500000") || !strings.Contains(c, "1 systemctl daemon-reload\n") || strings.Index(c, "daemon-reload") > strings.Index(c, "dockerd --validate") || strings.Contains(c, "restart") {
 		t.Errorf("calls:\n%s", c)
 	}
 
@@ -109,6 +109,14 @@ func TestSetupRootScript(t *testing.T) {
 	refused := []string{host, owner, "", root, "{\"bad\": 1}\n", "", "", "", "", "inv-1"}
 	if out, code := run([]string{"FAKE_DOCKERD_REFUSES=1"}, refused...); code != 4 || !strings.Contains(out, "did not pass its check") || read(setup.DaemonFile) != daemon || read(setup.RestartMarker) != "" {
 		t.Errorf("a refused daemon.json (%d):\n%s\nthe file: %s", code, out, read(setup.DaemonFile))
+	}
+	// Beside the other puts: daemon.json last, its refusal ends the run with the others put.
+	if err := os.Remove(filepath.Join(host, setup.SysctlFile)); err != nil {
+		t.Fatal(err)
+	}
+	beside := []string{host, owner, "", root, "{\"bad\": 1}\n", setup.SysctlText(), "", "", "", "inv-1"}
+	if out, code := run([]string{"FAKE_DOCKERD_REFUSES=1"}, beside...); code != 4 || !strings.Contains(out, "put "+setup.SysctlFile+"\n") || read(setup.SysctlFile) != setup.SysctlText() || read(setup.DaemonFile) != daemon {
+		t.Errorf("a refused daemon.json beside the sysctl file (%d):\n%s", code, out)
 	}
 
 	// A restart: the marker written first with the id read before it, the unit's start

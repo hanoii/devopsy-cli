@@ -5,6 +5,11 @@
 ## Items
 
 - An item is a want, a check and, for what devopsy sets, an apply: the required ones (the release root, `tar` and `flock`, Docker) refuse what depends on them before anything changes, and the tunables (`daemon.json`'s parts, the socket buffers, the mounts drop-in, the metadata firewall) are applied.
+- A refusal stops only the steps that need what it refuses (`setup.Facts.Goes`, a step naming its needs in `stepNeeds`), each said with its fix, the others applied, and the run fails (a warning under `--upgrade`): a setup's items are independent settings.
+- With no step going (Docker refused), nothing is applied, the record not made.
+- The first session shows the differences and the refusals together, its question covering what goes and naming what a refusal stops (`stepWords`); with nothing to apply it ends there, failing.
+- A failure of one step's apply goes on to the next independent one: the root run puts in order, `daemon.json` last, and a put that fails ends that run with what came before put, the record keeping no part that did not go in; the firewall's run follows.
+- The check after the apply judges only what went; a refused step is no "what was applied did not hold".
 - devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).
 - Every state comes from the server's devopsy, which applies it (`readSetup`, `setup.Facts`); the operator only words them and asks.
@@ -62,7 +67,7 @@
 - `server.yaml`, beside `remote.UserConfigFile()`, is devopsy's record alone, never config, never in the schema, mode 0600, written by rename, its entries canonical JSON as quoted strings, so a comparison is exact text.
 - The file is put first and the record written after, whatever the restart does next: every state a cut leaves reads in sync, which needs no record, and a restart not confirmed loses no answer.
 - A server is set up by devopsy once `server.yaml` exists; the first apply writes it even with nothing to change.
-- A `daemon.json` devopsy cannot judge (not a JSON object, a value of the wrong type, unreadable by the deploy user) has none of its parts judged (`judgeDaemon`): `--server-setup` refuses, `--upgrade` warns, and no command rewrites it.
+- A `daemon.json` devopsy cannot judge (not a JSON object, a value of the wrong type, unreadable by the deploy user) has none of its parts judged (`judgeDaemon`): `--server-setup` refuses its parts and a restart, `--upgrade` warns, and no command rewrites it.
 - Docker's facts and `daemon.json` are read once for `--server-info`'s facts and the setup's (`readHostDocker`), and each fact is worded once for every command (`refusalWords`, `daemonWords`, `rootWords`).
 
 ## Root on the host
@@ -71,7 +76,7 @@
 - An apply is one root run of `SetupRootScript`, its arguments what to put, the root to make or give, the buffers to raise, and the restart or the marker; it prints a line per change, which the server's devopsy words.
 - That run has the host's network and `NET_ADMIN`, for `sysctl`, and its pid namespace, for `systemctl`: systemd refuses a peer it cannot see. Docker's own AppArmor profile, `docker-default`, refuses neither.
 - The root script's system paths sit under its host root argument, "" on a host (`remote.HostRootEnv` in tests), so its tests run it on a temporary directory; the release root is passed as the host names it.
-- `daemon.json` is put through `hostPut` with `dockerd --validate` as its check: a refused file leaves the one there.
+- `daemon.json` is put through `hostPut` with `dockerd --validate` as its check, last of the root run's puts: a refused file leaves the one there, and the puts before it stand.
 
 ## Restarting Docker
 
@@ -95,5 +100,6 @@
 - Declining saves nothing; `--yes` goes through the same two sessions, and without a terminal a question fails naming `--yes`.
 - `apply --upgrade` asks nothing and restarts nothing: a changed part is left and said, a missing release root said and never made, every failure a warning, exit 0.
 - A server is one whose `server.yaml` exists, from its first `--server-setup` on, with no other sign: only there does `--upgrade` apply (`serverApply`), and `--server-info` warns where it is missing.
-- `--upgrade` applies once per devopsy version (`upgradeApplies`), when the record's `devopsy:` line, written by an apply that ended with no failure, names another version or none; drift on a server applied already is `--server-setup`'s.
+- `--upgrade` applies once per devopsy version (`upgradeApplies`), when the record's `devopsy:` line, written by an apply that ended with no failure and no change a refusal stopped, names another version or none; drift on a server applied already is `--server-setup`'s.
+- `--server-setup` and `--upgrade`'s apply are one path, the level of what they say and the exit the only differences.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.

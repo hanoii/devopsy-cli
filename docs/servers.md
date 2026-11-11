@@ -73,6 +73,19 @@ empty (a fresh volume's `lost+found` aside); one root owns that holds
 files (a system directory), one another user owns, or one that is no
 directory, it refuses.
 
+A refusal stops only what needs what it refuses, and `--server-setup`
+applies the rest, says what it did not apply and why, and exits 1:
+Docker not answering, or under another init than systemd, stops every
+item, each run as root through Docker; a `daemon.json` devopsy cannot
+judge, or a record it cannot read, stops `daemon.json`'s parts and a
+restart of Docker; a release root refused stops its making and the
+mounts drop-in that names it; a missing `flock`, which the firewall's
+loader takes its lock with, stops the metadata firewall. It shows the
+differences and the refusals together, and its question covers what it
+will apply, naming what it will not. A put that fails ends its root run
+there, with what came before it put; `daemon.json` goes last of the
+puts, and what follows the run (the firewall) still goes.
+
 What it keeps as devopsy wants it:
 
 | Item | devopsy's value |

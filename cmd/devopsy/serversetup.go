@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -54,22 +55,19 @@ func runServerSetup(t *remote.Target, args []string) int {
 	if err := json.Unmarshal(out.Bytes(), &f); err != nil {
 		return fail("the server's setup facts: " + err.Error())
 	}
-	if len(f.Refusals) > 0 {
-		for _, r := range f.Refusals {
-			msg, fixes := refusalWords(r)
-			report.Say(report.ErrorLevel, msg, nil, fixes...)
-		}
-		report.Error("nothing changed")
-		return 1
+	// The differences and the refusals together: a refusal stops only the steps that need
+	// what it refuses (setup.Facts.Goes), the rest applied.
+	es := setupEntries(f)
+	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
+	for _, r := range f.Refusals {
+		msg, fixes := refusalWords(r)
+		report.Say(report.ErrorLevel, msg, nil, fixes...)
 	}
 	if f.DaemonError != "" {
 		msg, fixes := daemonWords(f.DaemonError)
 		report.Say(report.ErrorLevel, msg, nil, fixes...)
-		report.Error("nothing changed")
-		return 1
 	}
-	es := setupEntries(f)
-	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
+	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
 	if err == errDeclined {
 		report.Error("nothing changed")
@@ -79,6 +77,14 @@ func runServerSetup(t *remote.Target, args []string) int {
 		return failErr(err)
 	}
 	if !run {
+		if refused {
+			if words := stepWords(f); len(words) > 0 {
+				report.Error("nothing applied: " + strings.Join(words, ", ") + " refused")
+			} else {
+				report.Error("nothing changed")
+			}
+			return 1
+		}
 		if f.Pending {
 			report.Info("nothing to change: Docker takes daemon.json at its next restart")
 		} else {
@@ -106,7 +112,15 @@ type setupAsker interface {
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
-	for _, p := range f.Parts {
+	// Every step a root run: with none going (Docker refused), nothing goes at all.
+	if !slices.ContainsFunc(setup.Steps, f.Goes) {
+		return nil, false, nil
+	}
+	parts := f.Parts
+	if !f.Goes(setup.StepParts) {
+		parts = nil
+	}
+	for _, p := range parts {
 		daemon = daemon || p.Puts
 		if setup.ShowSetup(p.State) == setup.Question {
 			replace := false
@@ -125,7 +139,11 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	}
 	changes := f.Changes() || daemon
 	if changes && !yes {
-		ok, err := ask.confirm("apply these?")
+		var not []string
+		if len(f.Refused()) > 0 {
+			not = []string{"not applied, refused: " + strings.Join(stepWords(f), ", ")}
+		}
+		ok, err := ask.confirm("apply these?", not...)
 		if err != nil {
 			return nil, false, err
 		}
@@ -134,7 +152,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 		}
 	}
 	restart := false
-	if daemon || f.Pending {
+	if (daemon || f.Pending) && f.Goes(setup.StepRestart) {
 		cut := "it cuts every docker command under way"
 		if f.Running > 0 && !f.LiveRestore {
 			cut += fmt.Sprintf(" and stops every container (%d running), Docker keeping none through its restart", f.Running)

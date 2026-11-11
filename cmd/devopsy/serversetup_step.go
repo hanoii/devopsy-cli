@@ -158,7 +158,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	recordPath := setup.RecordPath(remote.UserConfigFile())
 	rd.record, rd.exists, err = setup.ReadRecord(recordPath)
 	if err != nil {
-		f.Refusals = append(f.Refusals, setup.Refusal{Item: "record", Message: err.Error(), Fix: "remove it: devopsy writes it again at the next --server-setup"})
+		f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalRecord, Message: err.Error(), Fix: "remove it: devopsy writes it again at the next --server-setup"})
 	}
 	if rd.exists {
 		f.Record = recordPath
@@ -183,7 +183,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		f.Buffers = append(f.Buffers, setup.BufferFact{Key: k, Live: n, Low: err != nil || !ok})
 	}
 	if text, err := setup.MountsDropInText(f.Root); err != nil {
-		f.Refusals = append(f.Refusals, setup.Refusal{Item: "release root", Message: "releases: root " + err.Error(), Fix: "set releases: root in " + remote.UserConfigFile() + " to a path with none"})
+		f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalRoot, Message: "releases: root " + err.Error(), Fix: "set releases: root in " + remote.UserConfigFile() + " to a path with none"})
 	} else {
 		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
 		f.Files = append(f.Files, setup.FileFact{Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: string(have) == text})
@@ -354,7 +354,7 @@ func devopsysAt(h setupHost, p string) bool {
 }
 
 // toolsItem is the tools' required item's name.
-const toolsItem = "tools"
+const toolsItem = setup.RefusalTools
 
 // toolsRefusal is the tools' required item: the required ones of serverTools in PATH, nil
 // when they are.
@@ -382,7 +382,7 @@ func toolsRefusalOf(missing []string) *setup.Refusal {
 // (setup.RootMake, setup.RootGive); anything else refuses: not a directory, or another user's.
 func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	refuse := func(msg string) (string, *setup.Refusal) {
-		return "", &setup.Refusal{Item: "release root", Message: msg, Fix: "set releases: root in " + remote.UserConfigFile() + " to a directory of the deploy user's, or move this one aside"}
+		return "", &setup.Refusal{Item: setup.RefusalRoot, Message: msg, Fix: "set releases: root in " + remote.UserConfigFile() + " to a directory of the deploy user's, or move this one aside"}
 	}
 	if resolveRoot(root) == "/" {
 		return refuse("the release root " + root + " is /, through a link: releases would sit among the system's own directories")
@@ -428,32 +428,32 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 	var ds dockerSetup
 	fix := "install Docker, with its compose and buildx plugins, and start it: devopsy-server's setup.sh does"
 	if d.Error != "" {
-		return ds, []setup.Refusal{{Item: "Docker", Message: "Docker's daemon does not answer: " + d.Error, Fix: fix}}
+		return ds, []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: fix}}
 	}
 	var refusals []setup.Refusal
 	if d.Compose == "" {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "Docker has no compose plugin", Fix: fix})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: fix})
 	}
 	if !d.Buildx {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "Docker has no buildx plugin", Fix: fix})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: fix})
 	}
 	if _, err := os.Stat(h.path("/run/systemd/system")); err != nil {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "systemd is not this host's init, which --server-setup restarts Docker with"})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "systemd is not this host's init, which --server-setup restarts Docker with"})
 		return ds, refusals
 	}
 	if state := systemctlShow("ActiveState"); state != "active" {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix})
 	}
 	host, _ := os.Hostname()
 	if slices.Contains(d.Security, "rootless") || d.Name != host {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
 	}
 	// The daemon's own flags, as docker.service starts it next: a key one sets is never put
 	// beside it, and a config file of its own is not daemon.json.
 	argv := setup.DaemonCommand(systemctlShow("ExecStart"))
 	keys, config := setup.DaemonFlags(argv)
 	if config != "" && filepath.Clean(config) != setup.DaemonFile {
-		refusals = append(refusals, setup.Refusal{Item: "Docker", Message: "docker.service starts dockerd with --config-file " + config + ": " + setup.DaemonFile + " is not what this Docker reads"})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service starts dockerd with --config-file " + config + ": " + setup.DaemonFile + " is not what this Docker reads"})
 	}
 	ds.flagKeys = keys
 	for i := 1; i < len(argv); i++ {
@@ -562,36 +562,53 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	readChains(rd.facts.Firewall, false, true)
 	f := rd.facts
-	// A required item refuses the apply; under --upgrade each is a warning, and only
-	// Docker's (no root run without it) or a broken record stops it.
+	// A refusal stops only the steps that need what it refuses (setup.Facts.Goes), each said
+	// with its fix, the others applied; the apply then fails, a warning under --upgrade.
+	// refused counts them, and failures what failed of what went.
+	refused := len(f.Refused()) > 0
+	failures := 0
+	fail := func(msg string, details ...string) {
+		failures++
+		if a.upgrade {
+			report.Say(report.WarnLevel, msg, details, report.Fix("run --server-setup for this server"))
+			return
+		}
+		report.Error(msg, details...)
+	}
 	for _, r := range f.Refusals {
 		msg, fixes := refusalWords(r)
 		report.Say(sayLevel(a.upgrade), msg, nil, fixes...)
 	}
-	stop := len(f.Refusals) > 0
-	if a.upgrade {
-		stop = !rd.docker || slices.ContainsFunc(f.Refusals, func(r setup.Refusal) bool { return r.Item == "record" })
-	}
-	if stop {
-		return failed("nothing changed")
+	if f.DaemonError != "" {
+		msg, fixes := daemonWords(f.DaemonError)
+		report.Say(sayLevel(a.upgrade), msg, nil, fixes...)
 	}
 	if a.upgrade && f.RootAction != "" {
 		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}
-	if f.DaemonError != "" {
-		msg, fixes := daemonWords(f.DaemonError)
-		report.Say(sayLevel(a.upgrade), msg, nil, fixes...)
-		if !a.upgrade {
-			return failed("nothing changed")
+	// Every step is a root run: with none going (Docker refused), nothing goes at all.
+	if !slices.ContainsFunc(setup.Steps, f.Goes) {
+		return failed("nothing changed")
+	}
+	// end is the apply's exit once it went as far as it could: 1 for a refusal or a
+	// failure, 0 under --upgrade, whose every word is a warning.
+	end := func() int {
+		if (refused || failures > 0) && !a.upgrade {
+			return 1
 		}
+		return 0
 	}
 
-	// The parts' decisions, by the states read under the lock.
+	// The parts' decisions, by the states read under the lock, only where they go.
 	var put []setup.Part
 	var putNames []string
 	next := rd.record
 	recorded := false
-	for _, s := range rd.states {
+	states := rd.states
+	if !f.Goes(setup.StepParts) {
+		states = nil
+	}
+	for _, s := range states {
 		var d setup.Decision
 		if a.upgrade {
 			d = s.Upgrade()
@@ -625,10 +642,11 @@ func applySetup(h setupHost, a setupApply) int {
 	var daemonText []byte
 	if len(put) > 0 {
 		out, changed, err := rd.daemon.Merge(put)
-		if err != nil {
-			return failed(err.Error())
-		}
-		if changed {
+		switch {
+		case err != nil:
+			fail(err.Error())
+			put, putNames, next, recorded = nil, nil, rd.record, false
+		case changed:
 			daemonText = out
 		}
 	}
@@ -637,17 +655,17 @@ func applySetup(h setupHost, a setupApply) int {
 		return i >= 0 && !f.Files[i].InSync
 	}
 	sysctlText, dropinText := "", ""
-	if file(setup.ItemBuffers) {
+	if file(setup.ItemBuffers) && f.Goes(setup.StepBuffers) {
 		sysctlText = setup.SysctlText()
 	}
-	if file(setup.ItemMounts) {
+	if file(setup.ItemMounts) && f.Goes(setup.StepMounts) {
 		dropinText, _ = setup.MountsDropInText(f.Root)
 	}
-	raise := slices.ContainsFunc(f.Buffers, func(b setup.BufferFact) bool { return b.Low })
-	give := !a.upgrade && f.RootAction != ""
+	raise := f.Goes(setup.StepBuffers) && slices.ContainsFunc(f.Buffers, func(b setup.BufferFact) bool { return b.Low })
+	give := !a.upgrade && f.RootAction != "" && f.Goes(setup.StepRoot)
 	// A restart only for what Docker has to take, as read under the lock: daemon.json put by
 	// this run, or a change it has not taken yet.
-	restart := a.restart && (len(daemonText) > 0 || f.Pending)
+	restart := a.restart && f.Goes(setup.StepRestart) && (len(daemonText) > 0 || f.Pending)
 	switch {
 	case a.restart && !restart:
 		report.Info("Docker is not restarted: it has nothing new to take from daemon.json")
@@ -668,7 +686,7 @@ func applySetup(h setupHost, a setupApply) int {
 		for _, base := range deployEnvBases(f.Root) {
 			l, err := os.OpenFile(filepath.Join(base, ".lock"), os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
-				return failed(err.Error())
+				return failed(err.Error() + ": nothing changed")
 			}
 			held = append(held, l)
 			if ok, _ := tryFlock(l, syscall.LOCK_EX); !ok {
@@ -701,15 +719,27 @@ func applySetup(h setupHost, a setupApply) int {
 		queued = asked && !hasLine(out.String(), remote.SetupNoSystem)
 		sayRootLines(out.String(), putNames, f.Root)
 		if err != nil && !asked {
-			return failed(err.Error())
+			// The run puts in order and stops at a failed put, daemon.json's last: what it
+			// said it did went in; what failed is said, and the next steps go on.
+			fail(err.Error())
+			if !hasLine(out.String(), remote.SetupPut+" "+setup.DaemonFile) {
+				put, putNames, daemonText, next, recorded = nil, nil, nil, rd.record, false
+			}
+			if !hasLine(out.String(), remote.SetupPut+" "+setup.SysctlFile) {
+				sysctlText = ""
+			}
+			if !hasLine(out.String(), remote.SetupPut+" "+setup.MountsDropIn) {
+				dropinText = ""
+			}
+			raise, give = raise && hasRaised(out.String()), give && (hasLine(out.String(), remote.SetupMade+" "+f.Root) || hasLine(out.String(), remote.SetupGave+" "+f.Root))
 		}
 	}
-	// The record follows the file, whatever the restart does next.
-	if recorded || (!rd.exists && !a.upgrade) {
+	// The record follows the file, whatever the restart does next; none over a record
+	// devopsy could not read, which it says to remove.
+	if (recorded || (!rd.exists && !a.upgrade)) && !slices.Contains(f.Refused(), setup.RefusalRecord) {
 		if err := setup.WriteRecord(record, next); err != nil {
-			return failed(err.Error())
-		}
-		if !rd.exists {
+			fail(err.Error())
+		} else if !rd.exists {
 			report.Info("this server is set up by devopsy now: its record is " + record)
 		}
 	}
@@ -735,6 +765,7 @@ func applySetup(h setupHost, a setupApply) int {
 				said.Details = []string{"Docker does not answer, so nothing was flagged for a reboot: it takes daemon.json whenever it starts again"}
 				report.Fail(said)
 			}
+			// Docker down, no root run goes: the firewall waits for the next run.
 			return 1
 		}
 	}
@@ -742,21 +773,21 @@ func applySetup(h setupHost, a setupApply) int {
 	// The metadata firewall, by the firewall's own root run, as its state says; --upgrade
 	// only loads again the kind loaded (setup.FirewallState.Upgrade).
 	fwRan := false
-	if fw := f.Firewall; fw != nil && fw.State.Changes() {
+	if fw := f.Firewall; fw != nil && fw.State.Changes() && f.Goes(setup.StepFirewall) {
 		if a.upgrade && !fw.State.Upgrade() {
 			report.Warn("--upgrade leaves the metadata firewall to --server-setup: " + firewallLine(fw))
+		} else if err := applyFirewall(h, fw); err != nil {
+			fail(err.Error(), report.Details(err)...)
 		} else {
-			if err := applyFirewall(h, fw); err != nil {
-				return failed(err.Error(), report.Details(err)...)
-			}
 			fwRan = true
 		}
 	}
 
-	// The checks again: what was applied must read in sync now.
+	// The checks again: what was applied must read in sync now, a refused step's left aside.
 	again, err := readSetup(h, readHostDocker(h))
 	if err != nil {
-		return failed(err.Error())
+		fail(err.Error())
+		return end()
 	}
 	var left []string
 	for _, p := range again.facts.Parts {
@@ -785,14 +816,15 @@ func applySetup(h setupHost, a setupApply) int {
 		left = append(left, why)
 	}
 	if len(left) > 0 {
-		return failed("what was applied did not hold", left...)
+		fail("what was applied did not hold", left...)
 	}
-	// An apply with no failure notes the devopsy that made it, which --upgrade applies once.
-	if again.record.Version != version {
+	// An apply with no failure notes the devopsy that made it, which --upgrade applies once:
+	// one a refusal stopped a change of is applied again.
+	if again.record.Version != version && failures == 0 && len(stepWords(f)) == 0 && !slices.Contains(f.Refused(), setup.RefusalRecord) {
 		r := again.record
 		r.Version = version
 		if err := setup.WriteRecord(record, r); err != nil {
-			return failed(err.Error())
+			fail(err.Error())
 		}
 	}
 	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
@@ -801,7 +833,27 @@ func applySetup(h setupHost, a setupApply) int {
 	if dropinText != "" && !restart {
 		report.Info("Docker waits for the release root's mounts from its next start on")
 	}
-	return 0
+	if words := stepWords(f); refused && !a.upgrade && len(words) > 0 {
+		report.Error("not applied, refused: " + strings.Join(words, ", "))
+	}
+	return end()
+}
+
+// stepWords are the steps f's refusals stop that had a change to make, by name, for the end
+// of an apply and the first session's confirmation.
+func stepWords(f setup.Facts) []string {
+	var words []string
+	for _, s := range f.Changing() {
+		if !f.Goes(s) {
+			words = append(words, string(s))
+		}
+	}
+	return words
+}
+
+// hasRaised says whether a root run's output raised a live buffer.
+func hasRaised(out string) bool {
+	return slices.ContainsFunc(strings.Split(out, "\n"), func(l string) bool { return strings.HasPrefix(l, remote.SetupRaised+" ") })
 }
 
 // refusalWords is how every command says a refusal of the setup's: its item and message, its

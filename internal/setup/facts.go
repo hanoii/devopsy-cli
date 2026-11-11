@@ -110,12 +110,10 @@ func (f Facts) Records() bool {
 	return slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Records })
 }
 
-// Changes says whether an apply would change the host with no answer asked: a part to put, a
-// file, a live buffer, or the root.
+// Changes says whether an apply would change the host with no answer asked: a step with a
+// change to make (Changing) that goes (Goes).
 func (f Facts) Changes() bool {
-	return f.RootAction != "" || f.Firewall != nil && f.Firewall.State.Changes() || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
-		slices.ContainsFunc(f.Files, func(x FileFact) bool { return !x.InSync }) ||
-		slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
+	return slices.ContainsFunc(f.Changing(), f.Goes)
 }
 
 // Hint says whether the volume hint goes with f: candidates, none of them the root's, and

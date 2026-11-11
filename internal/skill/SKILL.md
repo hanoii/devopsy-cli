@@ -247,7 +247,7 @@ what `config.yaml` sets.
   line that checks the same locally. A custom domain is a CNAME to the
   environment's wildcard URL.
 - A new server is set up for devopsy as its deploy user with
-  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing):
+  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing; a refusal stops only what needs it, the rest applied, exit 1):
   Docker's `daemon.json` (rotated logs, live-restore, address pools),
   socket buffers, the release root, Docker waiting at boot for its
   mounts, and containers on Docker's bridges kept off the cloud's

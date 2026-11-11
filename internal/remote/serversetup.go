@@ -44,10 +44,11 @@ const (
 )
 
 // SetupRootScript is what an apply runs as root on the host, through the util image chrooted
-// into it (the system's files under $host_root, the release root as given): each file put only
-// when it differs and passes its check, daemon.json's by dockerd itself with the unit's flags;
-// the live buffers raised only when lower; the release root made and given to the deploy
-// user; then Docker restarted (the marker written first, on a daemon.json dockerd takes,
+// into it (the system's files under $host_root, the release root as given), in this order:
+// the release root made and given to the deploy user; the sysctl file, the live buffers
+// raised only when lower, the mounts drop-in; daemon.json, by dockerd's own check with the
+// unit's flags, last, since a put its check refuses ends the run; each file put only when it
+// differs and passes its check; then Docker restarted (the marker written first, on a daemon.json dockerd takes,
 // daemon-reload, the restart queued with --no-block), or, when daemon.json changed, the
 // marker written and the system's restart flag raised. Its arguments, in order: the host
 // root, the deploy user's uid:gid, 1 to make or give the root, the root, daemon.json's text,
@@ -69,13 +70,6 @@ if [ -n "$give" ]; then
   if [ ! -e "$p" ]; then install -d -m 755 "$p"; echo "` + SetupMade + ` $root"; fi
   if [ -n "$(find -H "$p" -maxdepth 0 -user 0)" ]; then chown "$owner" "$p"; echo "` + SetupGave + ` $root"; fi
 fi
-if [ -n "$daemon" ]; then
-  mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
-  if put "$host_root` + setup.DaemonFile + `" keep:644 "$validate" "$daemon"; then
-    changed=1
-    echo "` + SetupPut + ` ` + setup.DaemonFile + `"
-  fi
-fi
 if [ -n "$sysctl" ]; then
   mkdir -p "$host_root` + path.Dir(setup.SysctlFile) + `"
   if put "$host_root` + setup.SysctlFile + `" 644 true "$sysctl"; then echo "` + SetupPut + ` ` + setup.SysctlFile + `"; fi
@@ -94,6 +88,15 @@ if [ -n "$dropin" ]; then
     # systemd's view of docker.service, so it never says a drop-in changed on disk; a
     # restart reloads anyway, and a reload refused waits for the next boot.
     [ "$after" = restart ] || SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
+  fi
+fi
+# daemon.json last of the puts: its check (dockerd's) is the one that refuses, and a put it
+# refuses ends the run with what came before put.
+if [ -n "$daemon" ]; then
+  mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
+  if put "$host_root` + setup.DaemonFile + `" keep:644 "$validate" "$daemon"; then
+    changed=1
+    echo "` + SetupPut + ` ` + setup.DaemonFile + `"
   fi
 fi
 mark() {
