@@ -122,18 +122,26 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
-	hd := readHostDocker(h)
-	info.Docker = hd.facts
 	// The firewall's chains read as root, for the setup's judgment and the door's listeners,
-	// an install's even where the setup cannot be read; never as a project user.
+	// an install's even where the setup cannot be read; a project user's, whose server's setup
+	// is its admin's and whose docker is the door, none of it nor of Docker: the door would
+	// refuse Docker's reads and log each.
+	u, err := user.Current()
+	projectUser := err == nil && inDoorGroup(u.Username)
 	var fw *setup.FirewallFact
-	if rd, err := readSetup(h, hd); err == nil {
+	var hd hostDocker
+	if ownsSetup(projectUser) {
+		hd = readHostDocker(h)
+	}
+	info.Docker = hd.facts
+	if !ownsSetup(projectUser) {
+		info.Docker.Door = true
+	} else if rd, err := readSetup(h, hd); err == nil {
 		info.Setup, fw = &rd.facts, rd.facts.Firewall
 	} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
 		fw = &setup.FirewallFact{Loaded: kind}
 	}
-	u, err := user.Current()
-	read := readChains(fw, err == nil && inDoorGroup(u.Username), false)
+	read := readChains(fw, projectUser, false)
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
@@ -926,10 +934,13 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// Docker.
 	d := info.Docker
-	if d.Error != "" {
+	switch {
+	case d.Door:
+		row("docker", "the server's admin's, through the door")
+	case d.Error != "":
 		key = "docker"
 		warn("Docker did not answer: " + d.Error)
-	} else {
+	default:
 		parts := []string{d.Version}
 		if d.Compose != "" {
 			parts = append(parts, "compose "+d.Compose)

@@ -65,11 +65,15 @@ func firewallChainsWrong(read string, door bool) ([]string, error) {
 	return remote.ContainersFirewallWrong(read), nil
 }
 
+// ownsSetup says whether the server's setup is this user's to judge: never a project user's,
+// whose server's setup is its admin's, nothing in it that user's to act on, and whose docker
+// is the door, which would refuse a root run and log it.
+func ownsSetup(projectUser bool) bool { return !projectUser }
+
 // readsChains says whether this devopsy reads fw's chains as root: where devopsy's firewall
-// is installed, never as a project user, whose docker is the door, which would refuse the root
-// run and log it.
+// is installed, by a user whose setup it is (ownsSetup).
 func readsChains(fw *setup.FirewallFact, projectUser bool) bool {
-	return fw != nil && fw.Loaded != setup.NoFirewall && !projectUser
+	return fw != nil && fw.Loaded != setup.NoFirewall && ownsSetup(projectUser)
 }
 
 // readChains reads devopsy's firewall's chains as root where readsChains says, and judges them

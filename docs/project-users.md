@@ -253,7 +253,10 @@ devopsy: | report W0001 to the server's admin
 ```
 
 The release goes on. The door answers only that, from the deploy
-user's own read of the chains as root.
+user's own read of the chains as root. That `--server-info` shows no
+setup of the server's, its admin's to judge, and reads nothing of
+Docker, which the door answers for: its system, disks, roles and
+environments.
 
 ## What a compose file may hold
 

@@ -1769,12 +1769,13 @@ func TestDoorFirewallWithNoRuleIsSilent(t *testing.T) {
 	}
 }
 
-// --server-info as a project user makes no root read: its docker is the door, which would
-// refuse it and log the refusal. Its --server-info then says nothing of the firewall.
-func TestProjectUserReadsNoChains(t *testing.T) {
+// The server's setup is its admin's, never a project user's: as a project user --server-info
+// gathers no setup facts and makes no root read (its docker is the door, which would refuse
+// it and log the refusal).
+func TestProjectUserGetsNoSetup(t *testing.T) {
 	t.Parallel()
 	fw := &setup.FirewallFact{Loaded: setup.ContainersFirewall}
-	if readsChains(fw, true) || !readsChains(fw, false) || readsChains(&setup.FirewallFact{}, false) || readsChains(nil, false) {
+	if ownsSetup(true) || !ownsSetup(false) || readsChains(fw, true) || !readsChains(fw, false) || readsChains(&setup.FirewallFact{}, false) || readsChains(nil, false) {
 		t.Error("the decision")
 	}
 }

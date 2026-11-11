@@ -261,15 +261,19 @@ func TestDoorProjectsLife(t *testing.T) {
 		t.Errorf("the deploy user reads a project's tree: %s", out)
 	}
 	op(t, dir, "echo '# again' >>.devopsy/compose.yaml")
-	// A wipe of the firewall (an iptables -F of raw's PREROUTING): the project user's release,
-	// told by the door, says W0001 for the server's admin, and releases; the loader run again
-	// puts it back.
+	// A wipe of the firewall (an iptables -F of raw's PREROUTING): the project user's release
+	// and --server-info, told by the door, say W0001 for the server's admin, and it releases;
+	// the loader run again puts it back.
 	t.Cleanup(func() { doorRoot(t, remote.FirewallScript) })
 	if out, code := doorRoot(t, "iptables -t raw -D PREROUTING -j "+remote.FirewallContainerChain); code != 0 {
 		t.Fatalf("the wipe (%d): %s", code, out)
 	}
 	if out := release("a second release", "--release"); !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | report W0001 to the server's admin\n") {
 		t.Errorf("a release beside a wiped firewall:\n%s", out)
+	}
+	// Its --server-info shows no setup of the admin's.
+	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); strings.Contains(out, "\nsetup ") || strings.Contains(out, "--server-setup") {
+		t.Errorf("a project user's --server-info beside a wiped firewall:\n%s", out)
 	}
 	if out, code := doorRoot(t, remote.FirewallScript); code != 0 {
 		t.Fatalf("the firewall loaded again (%d): %s", code, out)

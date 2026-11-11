@@ -54,7 +54,7 @@ type ServerInfo struct {
 
 	Docker DockerFacts `json:"docker"`
 	// Setup is the server's setup as --server-setup judges it, nil from a devopsy older than
-	// it.
+	// it and for a project user, whose server's setup is its admin's.
 	Setup *setup.Facts `json:"setup,omitempty"`
 	// Door is the server's door, nil on a server with none (ServerDoor).
 	Door  *DoorFacts `json:"door,omitempty"`
@@ -70,7 +70,10 @@ type ServerInfo struct {
 // version and the daemon's configuration file.
 type DockerFacts struct {
 	// Error is why docker info said nothing.
-	Error   string `json:"error,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Door: read by a project user, whose docker is the door, which answers no docker info:
+	// nothing of Docker is read.
+	Door    bool   `json:"door,omitempty"`
 	Version string `json:"version,omitempty"`
 	Compose string `json:"compose,omitempty"`
 	Buildx  bool   `json:"buildx"`

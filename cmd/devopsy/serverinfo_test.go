@@ -277,6 +277,13 @@ func TestServerInfoReport(t *testing.T) {
 		t.Errorf("clock ahead: %+v\n%s", warnings, out)
 	}
 
+	// A project user's: Docker is the door's to answer, read not at all and no warning.
+	infoDoor := healthy()
+	infoDoor.Docker, infoDoor.Setup = remote.DockerFacts{Door: true}, nil
+	if out, warnings := serverInfoSays(infoDoor, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "docker        the server's admin's, through the door") {
+		t.Errorf("a project user's docker: %+v\n%s", warnings, out)
+	}
+
 	// What kdump keeps is a note, never a warning: crash dumps are a
 	// choice.
 	info := healthy()
