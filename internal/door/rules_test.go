@@ -692,3 +692,13 @@ func TestCheckFileBindsNoSourceDockerMakes(t *testing.T) {
 		}
 	}
 }
+
+// A bind is an entry itself, never a directory inside one (`./mnt/data/sub`): the project
+// user writes inside an entry, so such a path has a part it can change.
+func TestCheckFileRefusesABindInsideAnEntry(t *testing.T) {
+	t.Parallel()
+	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/data/sub","target":"/d"}]`)+`}}`)
+	if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); !anyHolds(errs, "a host path") {
+		t.Errorf("a bind of a directory inside an entry: %v", errs)
+	}
+}

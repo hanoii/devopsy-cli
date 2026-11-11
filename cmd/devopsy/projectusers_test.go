@@ -362,3 +362,111 @@ func TestPendingRemovalFinishesWhatItKept(t *testing.T) {
 		}
 	}
 }
+
+// A --project-users remove cut before its keys went is finished by a removal asked again,
+// its keys included: sshd takes keys from the file alone, so a removal that said them removed
+// and left them would let the removed user log in.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
+func TestRemovalAskedAgainTakesTheKeys(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	entry := filepath.Join(t.TempDir(), "devopsy-shop.yaml")
+	keys := remote.DoorKeysFile("devopsy-shop")
+	// As a first removal cut before its keys' write left it: its marks, the entry gone, the keys.
+	write(t, keys, removedUserKey, 0o600)
+	write(t, remote.DoorRemovingFile("devopsy-shop"), "shop\n", 0o600)
+	write(t, remote.DoorEndingFile("devopsy-shop"), "", 0o600)
+	if code := removeProjectUser(&remote.Door{Space: t.TempDir()}, "shop", "devopsy-shop", entry, func(string) error { return nil }); code != 0 {
+		t.Fatalf("a removal asked again: exit %d", code)
+	}
+	if remote.KeysLeft(keys) {
+		t.Error("a removal asked again said the user's keys removed, and they are there: sshd still takes them")
+	}
+}
+
+// A user under door: users: in the config is told to be removed there, even with a key's
+// removal's end pending: that mark is the key's, never a removal's, which writes one of its
+// own (remote.DoorRemovingFile), so the removal takes nothing of the user's for its own.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
+func TestRemovalOfAConfigUserWithAKeysEndPending(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	entry := filepath.Join(t.TempDir(), "devopsy-shop.yaml")
+	space := t.TempDir()
+	record := filepath.Join(space, "images", "devopsy-shop")
+	write(t, record, "sha256:1\n", 0o600)
+	write(t, record+".lock", "", 0o600)
+	write(t, remote.DoorKeysFile("devopsy-shop"), removedUserKey, 0o600)
+	// A key's removal whose end failed (KeysRemoveScript's mark).
+	write(t, remote.DoorEndingFile("devopsy-shop"), "", 0o600)
+	d := &remote.Door{Space: space, Users: map[string]remote.DoorUser{"devopsy-shop": {Project: "shop"}}}
+	code := removeProjectUser(d, "shop", "devopsy-shop", entry, func(string) error { return nil })
+	if code == 0 {
+		t.Error("a user the config names, with an end pending, was said removed: its entry is the config's, and stays")
+	}
+	if !fileExists(record) {
+		t.Error("its claimed images' record went, and the user stays the door's")
+	}
+}
+
+// A removal whose end failed and that a listing of the user's keys then settles takes what
+// the door kept for the project too (its logins, its record of claimed images): asked again,
+// the removal would find nothing left to do, and a project added again by the name would
+// inherit them.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
+func TestRemovalSettledByAKeysListingTakesWhatWasKept(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	who := "devopsy-shop"
+	entry := filepath.Join(t.TempDir(), who+".yaml")
+	write(t, entry, "project: shop\n", 0o600)
+	write(t, remote.DoorKeysFile(who), removedUserKey, 0o600)
+	space := t.TempDir()
+	logins, record := filepath.Join(space, "logins", "shop", "config.json"), filepath.Join(space, "images", who)
+	write(t, logins, `{"auths":{"registry.example.com":{"auth":"dXNlcjpzZWNyZXQ="}}}`+"\n", 0o600)
+	write(t, record, "sha256:0123\n", 0o600)
+	d := &remote.Door{Space: space}
+	if code := removeProjectUser(d, "shop", who, entry, func(string) error { return errors.New("no docker") }); code == 0 {
+		t.Fatal("a remove whose end failed passes")
+	}
+	// The admin follows the listing's warning: a listing of the user's keys settles the end.
+	if err := endProjectUser(who, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(remote.DoorEndingFile(who)); err != nil {
+		t.Fatal(err)
+	}
+	_ = removeProjectUser(d, "shop", who, entry, func(string) error { return nil })
+	if fileExists(logins) || fileExists(record) {
+		t.Errorf("a removal whose end a keys listing settled keeps its logins (%v) and its claimed images' record (%v), and asked again it removes neither", fileExists(logins), fileExists(record))
+	}
+}
+
+// A key's removal completing clears its own mark only, never a user's removal's: the user's
+// removal, cut before its keys went, is still finished by a removal asked again, its keys
+// emptied, which sshd would otherwise take.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
+func TestKeysRemovalLeavesAUsersRemovalMark(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	who := "devopsy-shop"
+	entry := filepath.Join(t.TempDir(), who+".yaml")
+	keys := remote.DoorKeysFile(who)
+	kept := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM1Ehq6Bkq8p5W7iKjX1pXJ7ZcP9C0P1bQz2y3x4w5v6 dev@laptop\n"
+	// As the user's removal, cut before its keys' write, left it: its marks, no entry, the keys.
+	write(t, keys, removedUserKey+kept, 0o600)
+	write(t, remote.DoorRemovingFile(who), "shop\n", 0o600)
+	write(t, remote.DoorEndingFile(who), "", 0o600)
+	// The key's removal that held the lock completes: its key gone, the mark cleared.
+	write(t, keys, kept, 0o600)
+	if err := os.Remove(remote.DoorEndingFile(who)); err != nil {
+		t.Fatal(err)
+	}
+	_ = removeProjectUser(&remote.Door{Space: t.TempDir()}, "shop", who, entry, func(string) error { return nil })
+	if remote.KeysLeft(keys) {
+		t.Error("a user's removal whose mark a key's removal cleared leaves its keys, which sshd takes, and asked again it does not empty them")
+	}
+}
+
+// removedUserKey is a project user's key, for the tests of its removal.
+const removedUserKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n"

@@ -955,3 +955,23 @@ func TestDecideActsOnTheContainerItRead(t *testing.T) {
 		}
 	}
 }
+
+// A claim takes only a name of Docker's (images.IsReference): buildx's imagetools reads
+// `oci-layout://<path>:<tag>` as a local layout as the deploy user, so a pull, an inspect or a
+// tag's source naming one is refused before anything runs.
+func TestClaimableTakesOnlyADockerReference(t *testing.T) {
+	t.Parallel()
+	layout := "oci-layout:///srv/space/work/blog-123/layout:claim"
+	if err := testPolicy.Claimable(layout); err == nil {
+		t.Errorf("Claimable takes %s", layout)
+	}
+	for _, argv := range [][]string{
+		{"pull", "-q", layout},
+		{"image", "inspect", layout},
+		{"tag", layout, "busybox:devopsy-shop-prod-20240101000000"},
+	} {
+		if a, err := decide(t, argv...); err == nil {
+			t.Errorf("%q: not refused, claims %q", argv, a.Claims)
+		}
+	}
+}

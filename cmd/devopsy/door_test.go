@@ -1665,3 +1665,39 @@ func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
 		t.Errorf("the claim recorded no %s: %q", amd, readString(side.policy.ImagesFile()))
 	}
 }
+
+// The door makes an entry only from a clean answer of where a bind's source ends (Real): the
+// project user's read is its own process, and an answer through a link in its own entry and
+// `..` twice reads to filepath.Dir as its own mnt while the kernel resolves another project's,
+// which the door would make and give the user.
+//
+// Not parallel: it sets PATH (doorFakes).
+func TestDoorEntriesBelieveOnlyACleanAnswer(t *testing.T) {
+	acl, _ := doorFakes(t)
+	root := t.TempDir()
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(root, "space")}}
+	mnt := side.policy.Mnt("shop-prod")
+	entry := filepath.Join(mnt, "data")
+	if err := os.MkdirAll(entry, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// In its entry, which it writes: a link to the entry itself.
+	if err := os.Symlink(".", filepath.Join(entry, "l")); err != nil {
+		t.Fatal(err)
+	}
+	binds := func(source string) map[string]any {
+		return map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"volumes": []any{
+			map[string]any{"type": "bind", "source": source, "target": "/x"},
+		}}}}
+	}
+	// The control: an entry of its own mnt is made (the fake's read answers the path asked).
+	if side.entries(binds(filepath.Join(mnt, "files"))); !fileExists(filepath.Join(mnt, "files")) {
+		t.Fatal("the control: an entry of its mnt was not made")
+	}
+	// The answer its user forged: another project's mnt, to the kernel.
+	theirs := filepath.Join(side.policy.Space, "mnt", "blog-staging")
+	side.entries(binds(entry + "/l/../../blog-staging"))
+	if fileExists(theirs) {
+		t.Errorf("the door made %s, another project's mnt, and gave it to devopsy-shop:\n%s", theirs, readString(acl))
+	}
+}

@@ -734,3 +734,78 @@ func TestDoorKeepsNothingOfAUserWithNoKey(t *testing.T) {
 		t.Errorf("the control: the logins (%v)", err)
 	}
 }
+
+// A claim hands buildx only a name of Docker's (Claimable, which claim runs for every
+// caller): an `oci-layout://<path>:<tag>` name, which imagetools would read as a local layout
+// as the deploy user, and make when it is not there, never reaches it.
+func TestDoorClaimReadsNoLocalLayout(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	layout := "oci-layout://" + filepath.Join(dir, "space", "work", "blog-123", "layout") + ":claim"
+	_, _, _ = side.claim(layout, filepath.Join(dir, "none.json"))
+	if c := readString(filepath.Join(dir, "calls")); strings.Contains(c, "imagetools inspect --raw oci-layout://") {
+		t.Errorf("the deploy user's buildx was asked to read a local layout:\n%s", c)
+	}
+}
+
+// A start held on its registry's copy (a registry that serves the manifest and stalls a
+// blob) acts no further once a key's removal ended the user meanwhile (stillAsked): the end
+// renews the keys file and reaches none of the door's processes, the deploy user's, so the
+// request, which found the old file, records and pins nothing and execs no compose.
+func TestDoorClaimStopsAtTheUsersEnd(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	image := "registry.example.com/shop/web"
+	fakeManifest(t, dir, plainManifest("web"), image+":1")
+	// Its registry holds the copy until the test lets it go.
+	write(t, filepath.Join(dir, "slowcopy"), "", 0o644)
+	keys := filepath.Join(dir, "keys")
+	leaked := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g ci\n"
+	kept := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPkVz0SeYpQpDNG2uM1BtNSy2LkZ2w3gYBGsgWAIEtxd laptop\n"
+	write(t, keys, leaked+kept, 0o600)
+	at, err := os.Stat(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake,
+		env: []string{"PATH=" + os.Getenv("PATH")}, keysFile: keys, keysAt: at}
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image + ":1"}}}
+	// What compose's up runs before the door execs compose (doorSide.compose).
+	started := make(chan error, 1)
+	go func() { started <- side.checkImageLabels(file, filepath.Join(dir, "none.json")) }()
+	for deadline := time.Now().Add(startWait); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(dir, "copying")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the copy never started:\n%s", readString(filepath.Join(dir, "calls")))
+		}
+	}
+	// The leaked key's removal, as KeysRemoveScript and endProjectUser leave the keys: the kept
+	// key alone, under a new inode. The end's kill reaches none of the door's processes.
+	write(t, keys, kept, 0o600)
+	if err := renewKeys(keys); err != nil {
+		t.Fatal(err)
+	}
+	if now, err := os.Stat(keys); err != nil || os.SameFile(now, at) {
+		t.Fatalf("the control: the keys file is the one the request found (%v)", err)
+	}
+	// The registry lets the copy go.
+	pid, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(dir, "child"))))
+	if pid <= 0 || syscall.Kill(pid, syscall.SIGKILL) != nil {
+		t.Fatalf("the control: no copy to let go (%d)", pid)
+	}
+	select {
+	case err := <-started:
+		if err == nil {
+			svc := file["services"].(map[string]any)["web"].(map[string]any)
+			t.Errorf("a start parked on its registry went on after a key's removal ended the user: compose would run %v, the image recorded as the project's (%q)",
+				svc["image"], strings.TrimSpace(readString(side.policy.ImagesFile())))
+		}
+	case <-time.After(startWait):
+		t.Fatal("the start never ended")
+	}
+}
