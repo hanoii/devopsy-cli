@@ -1568,11 +1568,11 @@ func (s *doorSide) builder() ([]string, error) {
 
 // ensureBuilder makes the project's builder when it is not there as it should be (builder).
 func (s *doorSide) ensureBuilder() ([]string, error) {
-	name := "devopsy-" + s.policy.Project
+	name := door.BuilderOf(s.policy.Project)
 	// Its network is its own: on Docker's default bridge, which every container shares, a
 	// build step is a member of it, and reaches another project's builder and what its build
 	// listens on.
-	network := name + "-build"
+	network := door.BuilderNetworkOf(s.policy.Project)
 	// No git of the deploy user's in a context a project user wrote: buildx's client asks git
 	// about the context it builds, and a sealed copy is the deploy user's own, so git trusts
 	// the repository config the project user put in it, which can name a program (a promisor
@@ -1661,7 +1661,7 @@ func (s *doorSide) writeLogins(config string) (string, error) {
 			}
 		}
 	}
-	dir := filepath.Join(s.policy.Space, "logins", s.policy.Project)
+	dir := door.LoginsDirOf(s.policy.Space, s.policy.Project)
 	return dir, s.whileAUser(func() error { return writeAuths(dir, auths) })
 }
 

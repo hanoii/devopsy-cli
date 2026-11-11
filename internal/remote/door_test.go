@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"go.yaml.in/yaml/v3"
 )
 
 // A project user's entry is a file of its own beside the config, which devopsy writes and
@@ -51,5 +52,22 @@ func TestServerDoorReadsUserEntries(t *testing.T) {
 	write(ConfigFile, "door:\n  space: /space\n")
 	if _, err := ServerDoor(); err == nil || !strings.Contains(err.Error(), "unknown key") {
 		t.Errorf("an entry with a key nobody knows: %v", err)
+	}
+}
+
+// A project user's entry names it for its project (door.UserOf): every name of the user's (its
+// keys, its builder, its logins) comes from the project, so an entry named otherwise is refused
+// where it is read, never served halfway.
+func TestDoorUserIsNamedForItsProject(t *testing.T) {
+	t.Parallel()
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte("project: shop\n"), &n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeDoorUser("devopsy-shop", *n.Content[0]); err != nil {
+		t.Errorf("the control: %v", err)
+	}
+	if _, err := decodeDoorUser("alice", *n.Content[0]); err == nil || !strings.Contains(err.Error(), "named for its project, devopsy-shop") {
+		t.Errorf("an entry named otherwise: %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -42,7 +43,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 				return fail(usage)
 			}
 			i++
-			project, user = args[i], remote.DoorUserOf(args[i])
+			project, user = args[i], door.UserOf(args[i])
 		default:
 			if strings.HasPrefix(a, "-") && a != "-" {
 				return fail(usage)

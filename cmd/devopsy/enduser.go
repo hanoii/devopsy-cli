@@ -102,7 +102,7 @@ func endUser(who string) error {
 }
 
 // endBuilder removes the project user who's builder and its network, which the door makes anew
-// at the next build (doorSide.builder, both named after the user): what a removed key built is
+// at the next build (doorSide.builder, both named from its project, door.BuilderOf): what a removed key built is
 // in its caches (cache mounts, layers), which a later build of the owner's would trust.
 func endBuilder(who string) error {
 	d, err := remote.ServerDoor()
@@ -115,13 +115,14 @@ func endBuilder(who string) error {
 		c.Env = env
 		return c
 	}
-	if docker("buildx", "inspect", who).Run() == nil {
-		if out, err := docker("buildx", "rm", who).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder %s: %w: %s", who, err, strings.TrimSpace(string(out)))
+	builder, network := door.BuilderOf(door.ProjectOfUser(who)), door.BuilderNetworkOf(door.ProjectOfUser(who))
+	if docker("buildx", "inspect", builder).Run() == nil {
+		if out, err := docker("buildx", "rm", builder).CombinedOutput(); err != nil {
+			return fmt.Errorf("its builder %s: %w: %s", builder, err, strings.TrimSpace(string(out)))
 		}
 	}
-	if docker("network", "inspect", who+"-build").Run() == nil {
-		if out, err := docker("network", "rm", who+"-build").CombinedOutput(); err != nil {
+	if docker("network", "inspect", network).Run() == nil {
+		if out, err := docker("network", "rm", network).CombinedOutput(); err != nil {
 			return fmt.Errorf("its builder's network: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
@@ -204,6 +205,6 @@ func processesOf(uid int) []int {
 
 // projectUserName says whether name is a project user's, devopsy-<project>.
 func projectUserName(name string) bool {
-	project, ok := strings.CutPrefix(name, remote.DoorUserOf(""))
-	return ok && remote.ValidName(project)
+	project := door.ProjectOfUser(name)
+	return project != "" && remote.ValidName(project)
 }

@@ -68,7 +68,7 @@ func runProjectUsersStep(args []string) int {
 		return 1
 	}
 	project := args[1]
-	who := remote.DoorUserOf(project)
+	who := door.UserOf(project)
 	entry := filepath.Join(remote.DoorDir(), "users", who+".yaml")
 	if args[0] == "remove" {
 		return removeProjectUser(d, project, who, entry, endUser)
@@ -305,14 +305,15 @@ func closeDeployProjects(root, space string, uid int) ([]string, error) {
 	return closed, nil
 }
 
-// removeKept removes what the door kept for who, project's user, in space: its logins, its
-// record of claimed images, and the record's lock last, under that lock.
-func removeKept(space, project, who string) error {
-	images := filepath.Join(space, "images")
-	lock, err := os.OpenFile(filepath.Join(images, who+".lock"), os.O_CREATE|os.O_WRONLY, 0o600)
+// removeKept removes what the door kept for project's user in space (door.LoginsDirOf,
+// door.ImagesFileOf): its logins, its record of claimed images, and the record's lock last,
+// under that lock.
+func removeKept(space, project string) error {
+	record := door.ImagesFileOf(space, project)
+	lock, err := os.OpenFile(record+".lock", os.O_CREATE|os.O_WRONLY, 0o600)
 	if errors.Is(err, os.ErrNotExist) {
 		// No record was ever written, so no lock: only its logins, if any.
-		return os.RemoveAll(filepath.Join(space, "logins", project))
+		return os.RemoveAll(door.LoginsDirOf(space, project))
 	}
 	if err != nil {
 		return err
@@ -321,11 +322,11 @@ func removeKept(space, project, who string) error {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(filepath.Join(space, "logins", project)); err != nil {
+	if err := os.RemoveAll(door.LoginsDirOf(space, project)); err != nil {
 		return err
 	}
-	for _, f := range []string{who, who + ".lock"} {
-		if err := os.Remove(filepath.Join(images, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, f := range []string{record, record + ".lock"} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
@@ -383,7 +384,7 @@ func finishRemoval(d *remote.Door, project, who string, end func(who string) err
 	// under the record's lock (doorSide.whileAUser), so a door request past its sudo before
 	// the removal, which writes them only while the user has a key, brings neither back.
 	if d != nil && d.Space != "" {
-		if err := removeKept(d.Space, project, who); err != nil {
+		if err := removeKept(d.Space, project); err != nil {
 			return failErr(err)
 		}
 	}

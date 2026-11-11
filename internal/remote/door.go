@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -102,6 +103,11 @@ func decodeDoorUser(name string, n yaml.Node) (DoorUser, error) {
 	if !nameRe.MatchString(u.Project) {
 		return DoorUser{}, fmt.Errorf("%s: project: lowercase letters, digits and -", name)
 	}
+	// Every name of the user's comes from its project (door.UserOf): one named otherwise
+	// would have keys, a builder and logins nothing finds by its name.
+	if name != door.UserOf(u.Project) {
+		return DoorUser{}, fmt.Errorf("%s: a project user is named for its project, %s", name, door.UserOf(u.Project))
+	}
 	return u, nil
 }
 
@@ -160,10 +166,6 @@ func ServerDoor() (*Door, error) {
 	}
 	return d, nil
 }
-
-// DoorUserOf is a project's user: devopsy-<project>, the name sudo's rules and sshd's Match
-// know it by, through its group.
-func DoorUserOf(project string) string { return "devopsy-" + project }
 
 // DoorSettingsOf reads what the deploy user's own config says of a project user.
 func DoorSettingsOf(who string) (DoorUser, error) {

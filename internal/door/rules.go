@@ -48,7 +48,7 @@ type Policy struct {
 
 // ImagesFile is the door's record of a project user's claimed images, one id a line, in
 // its space: the deploy user's, never the project user's to write.
-func (p Policy) ImagesFile() string { return filepath.Join(p.Space, "images", p.User) }
+func (p Policy) ImagesFile() string { return ImagesFileOf(p.Space, p.Project) }
 
 // OwnName says whether a compose name is this project's (<project>-...), and
 // no other project's whose name extends this one's.
