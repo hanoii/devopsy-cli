@@ -126,8 +126,7 @@ func TestServerInfoReport(t *testing.T) {
 	}{
 		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "older than the local 0.54.0|devopsy @vm1: --upgrade"},
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "needs a reboot (for linux-image-amd64)|reboot it"},
-		// The door: a space that takes setuid, sshd waiting for a reboot, its firewall, which
-		// add loads again, named for one of its projects.
+		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
 		}, "", "the door refuses every request|/space /space none bind,nosuid,nodev 0 0"},
@@ -136,10 +135,6 @@ func TestServerInfoReport(t *testing.T) {
 		{"door docker", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Docker: "Docker runs the classic image store, and project users need its containerd image store (io.containerd.snapshotter.v1)"}
 		}, "", "the door refuses every image a project user does not build|move Docker to its containerd image store"},
-		{"door firewall", func(i *remote.ServerInfo) {
-			i.Door = &remote.DoorFacts{Space: "/space", Project: "blog", FirewallWrong: []string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}}
-		}, "",
-			"keeps them off\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --project-users add blog"},
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
@@ -220,6 +215,13 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
 		}, "", "metadata firewall: containers reach the cloud's metadata services|devopsy @vm1: --server-setup"},
+		// The firewall's chains, read as root, not as devopsy loads them (a wipe): one line, its
+		// files and mark in sync or not, the door's or the containers' alike.
+		{"setup firewall wiped", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallInSync, Door: true}
+			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}, nil)
+		}, "", "metadata firewall: devopsy's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --server-setup"},
 		{"setup firewall failed", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallReload, Unit: "exit-code"}

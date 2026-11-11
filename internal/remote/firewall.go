@@ -30,8 +30,12 @@ const (
 	// own cgroup: a cgroup's rule binds the cgroup there when it goes in, never its path, and
 	// systemd makes docker.service's anew at every start.
 	FirewallDockerDropIn = "/etc/systemd/system/docker.service.d/devopsy-firewall.conf"
-	// DoorFirewallDaemonMark is the inode of the cgroup the daemon's jump was loaded for.
+	// DoorFirewallDaemonMark is the inode of the cgroup the daemon's jump was loaded for,
+	// beside FirewallMark.
 	DoorFirewallDaemonMark = "/run/devopsy-firewall.dockerd"
+	// FirewallCgroupRootEnv moves where the loader and the read find cgroups (/sys/fs/cgroup),
+	// for tests.
+	FirewallCgroupRootEnv = "DEVOPSY_INTERNAL_CGROUP_ROOT"
 	// FirewallMark is what the last load that went in loaded, FirewallContainers or
 	// FirewallDoor, written by rename once it did and removed when a load fails: a load
 	// under way leaves the last one's, so through a change of kind it says the old kind until
@@ -59,8 +63,7 @@ const xtablesWait = "10"
 // start of Docker, an install): another waits for the one under way to end, a minute at most,
 // then goes on over what it left; past the minute it fails. A failure of flock's own is said
 // as such.
-var firewallLock = `mark=${` + FirewallMarkEnv + `:-` + FirewallMark + `}
-lockdir=${mark%/*}/` + path.Base(FirewallLockDir) + `
+var firewallLock = firewallMarkSh + `lockdir=${mark%/*}/` + path.Base(FirewallLockDir) + `
 mkdir -p "$lockdir"
 chmod 700 "$lockdir"
 exec 9>"$lockdir/lock"
@@ -69,6 +72,12 @@ flock -w "${` + FirewallWaitEnv + `:-60}" 9 || {
   if [ "$rc" -eq 1 ]; then echo "another load of devopsy's firewall held $lockdir/lock for ${` + FirewallWaitEnv + `:-60} s" >&2; else echo "flock could not take $lockdir/lock (exit $rc)" >&2; fi
   exit 1
 }
+`
+
+// firewallMarkSh sets, in a script on the host, $mark to FirewallMark's path and $dmark to
+// DoorFirewallDaemonMark's beside it.
+var firewallMarkSh = `mark=${` + FirewallMarkEnv + `:-` + FirewallMark + `}
+dmark=${mark%/*}/` + path.Base(DoorFirewallDaemonMark) + `
 `
 
 // What a loader loads: the containers' chain alone, or the door's chains with it.
@@ -220,8 +229,10 @@ func firewallJumps(withDoor bool, gid, doorGid, cgroup string) []firewallJump {
 }
 
 // daemonCgroup sets $cg, in a script on the host, to Docker's daemon's cgroup: docker.service's
-// under systemd (even before it starts, as at boot), else the running dockerd's.
-const daemonCgroup = `cg=$(systemctl show -p ControlGroup --value docker.service 2>/dev/null || :)
+// under systemd (even before it starts, as at boot), else the running dockerd's; and $cgroot
+// to where cgroups are.
+const daemonCgroup = `cgroot=${` + FirewallCgroupRootEnv + `:-/sys/fs/cgroup}
+cg=$(systemctl show -p ControlGroup --value docker.service 2>/dev/null || :)
 if [ -z "$cg" ] && systemctl cat docker.service >/dev/null 2>&1; then
   cg=/$(systemctl show -p Slice --value docker.service 2>/dev/null || echo system.slice)/docker.service
 fi
@@ -308,14 +319,14 @@ stale() {
 		if withDoor {
 			// The daemon's jump only for a cgroup that is there: at boot this runs before
 			// Docker, and Docker's own start runs it again (FirewallDockerDropIn).
-			load += `[ -z "$cg" ] || [ "$cg" = / ] || [ ! -d "/sys/fs/cgroup$cg" ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
+			load += `[ -z "$cg" ] || [ "$cg" = / ] || [ ! -d "$cgroot$cg" ] || first ` + f.cmd + ` filter OUTPUT "-m cgroup --path \"$cg\" -j ` + DoorDaemonChain + `"` + "\n"
 			load += "stale " + f.cmd + "\n"
 		}
 		s += familyGuard(f, load, "")
 	}
 	if withDoor {
 		// The cgroup the daemon's jump holds, for FirewallRead to tell one made again since.
-		s += `if [ -n "$cg" ] && [ "$cg" != / ] && [ -d "/sys/fs/cgroup$cg" ]; then stat -c %i "/sys/fs/cgroup$cg" >` + DoorFirewallDaemonMark + `; else rm -f ` + DoorFirewallDaemonMark + `; fi
+		s += `if [ -n "$cg" ] && [ "$cg" != / ] && [ -d "$cgroot$cg" ]; then ls -di "$cgroot$cg" | awk '{ print $1 }' >"$dmark"; else rm -f "$dmark"; fi
 `
 	}
 	s += `echo ` + what + ` >"$mark.new"
@@ -357,9 +368,9 @@ WantedBy=multi-user.target
 // door's as the loader reads them, then each family's tables as iptables -S does, a
 // "# <iptables> <table>" line before each, or "# ip6tables off" where the kernel has no IPv6;
 // then the host's TCP listeners and sshd's ports, for DoorListeners.
-var FirewallRead = daemonCgroup + `echo "# groups $(getent group ` + DoorGroup + ` | cut -d: -f3) $(getent group ` + DoorRunGroup + ` | cut -d: -f3)"
+var FirewallRead = firewallMarkSh + daemonCgroup + `echo "# groups $(getent group ` + DoorGroup + ` | cut -d: -f3) $(getent group ` + DoorRunGroup + ` | cut -d: -f3)"
 echo "# dockerd $cg"
-echo "# dockerd-cgroup $(stat -c %i "/sys/fs/cgroup$cg" 2>/dev/null || :) $(cat ` + DoorFirewallDaemonMark + ` 2>/dev/null || :)"
+echo "# dockerd-cgroup $(ls -di "$cgroot$cg" 2>/dev/null | awk '{ print $1 }') $(cat "$dmark" 2>/dev/null || :)"
 ` + firewallTablesRead() + `echo "# listeners"
 ss -Htlnp 2>/dev/null || :
 echo "# sshd ports"

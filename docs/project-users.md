@@ -227,15 +227,17 @@ config and no door's firewall loaded, the same loader and unit load
 `DEVOPSY-CONTAINERS` alone. Syncs between servers work with the firewall
 loaded.
 
-`--server-info` checks the firewall and warns when:
+`--server-info` reads the chains as root and warns, in its setup's
+metadata firewall line, with `--server-setup` as the fix, when:
 
 - a chain is not devopsy's, nothing jumps to it, or a rule ahead of
-  devopsy's jump lets packets through, which `--project-users add`
-  fixes by loading the chains again;
+  devopsy's jump lets packets through (a reload of the server's own
+  firewall, an `iptables -F`);
 - Docker's daemon is in no cgroup of its own, so nothing covers it, or
-  in one made since the firewall loaded, which its rule does not hold;
-- a TCP listener is open beyond loopback, other than sshd's and the
-  ports Docker publishes, since containers reach it.
+  in one made since the firewall loaded, which its rule does not hold.
+
+It also warns of a TCP listener open beyond loopback, other than
+sshd's and the ports Docker publishes, since containers reach it.
 
 ## What a compose file may hold
 

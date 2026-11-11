@@ -48,6 +48,8 @@ echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
+  # docker.service's cgroup, there under the host root's cgroups (remote.FirewallCgroupRootEnv).
+  "show -p ControlGroup --value docker.service") echo /system.slice/docker.service ;;
   # The unit's state while a restart is waited for, as a test writes it (state, result).
   "show -p ActiveState,Result,InvocationID docker.service")
     echo "ActiveState=$(cat "$h/state" 2>/dev/null || echo active)"
@@ -83,7 +85,8 @@ case $op in
   -D) case $1 in [0-9]*) exit 0 ;; esac; r="$t $c $*"; grep -qxF "$r" "$s.jumps" || exit 1; grep -vxF "$r" "$s.jumps" >"$s.new" || :; mv "$s.new" "$s.jumps" ;;
   -S)
     rules() { [ ! -e "$s.chain" ] || awk -v t="$t" -v c="${1:-}" '/^\*/ { in_t = substr($0, 2) == t } in_t && /^-A / && (c == "" || $2 == c)' "$s.chain"; }
-    jumps() { awk -v t="$t" -v c="${1:-}" '$1 == t && (c == "" || $2 == c) { $1 = "-A"; print }' "$s.jumps"; }
+    # A cgroup's path printed quoted, as iptables -S prints it.
+    jumps() { awk -v t="$t" -v c="${1:-}" '$1 == t && (c == "" || $2 == c) { $1 = "-A"; print }' "$s.jumps" | sed 's/--path \([^ ]*\)/--path "\1"/'; }
     case ${c:-} in
       PREROUTING|OUTPUT) echo "-P $c ACCEPT"; jumps "$c" ;;
       "") echo "-P PREROUTING ACCEPT"; jumps; rules ;;
@@ -102,7 +105,8 @@ esac
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(bin, "sysctl"), "#!/bin/sh\nk=${2%%=*}\necho \"${2#*=}\" >\"$DEVOPSY_INTERNAL_HOST_ROOT/proc/sys/$(echo \"$k\" | tr . /)\"\n", 0o755)
-	s.env = append(s.env, remote.HostRootEnv+"="+host, remote.FirewallMarkEnv+"="+filepath.Join(host, remote.FirewallMark))
+	write(t, filepath.Join(host, "sys", "fs", "cgroup", "system.slice", "docker.service", ".keep"), "", 0o644)
+	s.env = append(s.env, remote.HostRootEnv+"="+host, remote.FirewallMarkEnv+"="+filepath.Join(host, remote.FirewallMark), remote.FirewallCgroupRootEnv+"="+filepath.Join(host, "sys", "fs", "cgroup"))
 	return s, host
 }
 
@@ -1082,9 +1086,21 @@ func TestServerSetupRestartRefusedBySystemd(t *testing.T) {
 }
 
 // firewallLoaded makes host's firewall as devopsy's install leaves it, with a door's chains
-// too (door) or not: its pieces, in their modes, the unit's boot link and the mark.
+// too (door) or not: its pieces, in their modes, the unit's boot link, the door's groups,
+// and its loader run on setupServer's fake iptables, which leaves the mark.
 func firewallLoaded(t *testing.T, host string, door bool) {
 	t.Helper()
+	defer func() {
+		if door {
+			write(t, filepath.Join(host, "etc", "group"), remote.DoorGroup+":x:1001:\n"+remote.DoorRunGroup+":x:1002:\n", 0o644)
+		}
+		load := exec.Command(filepath.Join(host, remote.FirewallScript))
+		load.Env = []string{"PATH=" + filepath.Join(filepath.Dir(host), "bin") + ":/usr/bin:/bin", remote.HostRootEnv + "=" + host, remote.FirewallMarkEnv + "=" + filepath.Join(host, remote.FirewallMark),
+			remote.FirewallCgroupRootEnv + "=" + filepath.Join(host, "sys", "fs", "cgroup")}
+		if out, err := load.CombinedOutput(); err != nil {
+			t.Fatalf("the loader: %v: %s", err, out)
+		}
+	}()
 	for p, f := range remote.FirewallFiles(door) {
 		write(t, filepath.Join(host, p), f.Text, f.Mode)
 	}
@@ -1293,9 +1309,9 @@ func TestServerSetupRefusesAllowWithADoor(t *testing.T) {
 
 // --server-setup on a server with door: and no firewall makes the door's first load: its
 // differences say the door's chains load too, and its apply makes the door's groups, writes
-// the door's loader and Docker's drop-in, loads it by its unit and marks it the door's. The
-// daemon's cgroup is the host's, which a test cannot give the loader, so the check after
-// says that alone, and nothing else is missing.
+// the door's loader and Docker's drop-in, loads it by its unit and marks it the door's, and
+// the check after reads it as devopsy loads it, the daemon's jump on docker.service's cgroup
+// included.
 func TestServerSetupMakesADoorsFirstFirewallLoad(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
@@ -1314,11 +1330,7 @@ func TestServerSetupMakesADoorsFirstFirewallLoad(t *testing.T) {
 		readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallDoor+"\n" || !strings.Contains(jumps, "-j "+remote.DoorChain) || !strings.Contains(jumps, "-j "+remote.FirewallContainerChain) {
 		t.Errorf("loaded otherwise, groups %q, jumps:\n%s", g, jumps)
 	}
-	_, after, _ := strings.Cut(out, "error: the firewall did not load as devopsy's\n")
-	wrong := strings.Split(strings.TrimSpace(after), "\n")
-	if code != 1 || after == "" || slices.ContainsFunc(wrong, func(l string) bool {
-		return !strings.HasPrefix(l, "devopsy: | ") || !strings.Contains(l, remote.DoorDaemonChain) && !strings.Contains(l, "Docker's daemon")
-	}) {
+	if code != 0 || strings.Contains(out, "did not load") {
 		t.Errorf("the check after (%d):\n%s", code, out)
 	}
 }
@@ -1387,19 +1399,48 @@ func TestServerSetupPutsTheFirewallsBootLinkBack(t *testing.T) {
 }
 
 // --server-info, as the deploy user, on a server whose door: is gone and whose door's firewall
-// is loaded: the firewall is the door's and in sync, with no warning, since devopsy never
-// takes a door's firewall off a server.
-func TestServerInfoKeepsADoorsFirewallInSync(t *testing.T) {
+// is loaded: the firewall is the door's, its chains read as root and judged as the door's, in
+// sync with no word; the loader is left the door's.
+func TestServerInfoKeepsADoorsFirewall(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
 	firewallLoaded(t, host, true)
-	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 {
-		t.Fatalf("the setup (%d):\n%s", code, out)
-	}
 	out, code := s.run(nil, "@devopsy@one:", "--server-info")
-	// Its exit is the fake server's warnings' (tools it lacks), none the firewall's.
-	if !strings.Contains(out, "setup         by devopsy") || strings.Contains(out, "metadata firewall") || readString(filepath.Join(host, remote.FirewallScript)) != remote.FirewallFiles(true)[remote.FirewallScript].Text {
+	if strings.Contains(out, "metadata firewall") || !strings.Contains(readString(s.log), "chroot /host") ||
+		readString(filepath.Join(host, remote.FirewallScript)) != remote.FirewallFiles(true)[remote.FirewallScript].Text {
 		t.Errorf("(%d):\n%s", code, out)
+	}
+	// The control: the door's chain gone, the same read says so in the firewall's one line.
+	write(t, filepath.Join(host, "fw.iptables.jumps"), "raw PREROUTING -j "+remote.FirewallContainerChain+"\n", 0o644)
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); strings.Count(out, "metadata firewall") != 1 || !strings.Contains(out, "nothing in OUTPUT jumps to "+remote.DoorChain) {
+		t.Errorf("the door's jumps gone:\n%s", out)
+	}
+}
+
+// --server-info reads the chains as root wherever devopsy's firewall is loaded, and warns of
+// a wipe (a reload of the server's own firewall, an iptables -F) in the firewall's one line,
+// its files and mark in sync; the next --server-setup loads it again. Where none is loaded,
+// no root run.
+func TestServerInfoSeesAWipedFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); strings.Contains(readString(s.log), "chroot /host") {
+		t.Errorf("a root run with no firewall loaded:\n%s", out)
+	}
+	firewallLoaded(t, host, false)
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); strings.Contains(out, "metadata firewall") {
+		t.Errorf("loaded and right:\n%s", out)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
+	if !strings.Contains(out, "metadata firewall: devopsy's firewall is not loaded as devopsy loads it\n") || !strings.Contains(out, "iptables: nothing in PREROUTING jumps to "+remote.FirewallContainerChain) ||
+		!strings.Contains(out, "$ devopsy @devopsy@one: --server-setup") {
+		t.Errorf("wiped:\n%s", out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "loaded devopsy's firewall") {
+		t.Errorf("--server-setup after a wipe (%d):\n%s", code, out)
 	}
 }
 
@@ -1434,4 +1475,3 @@ func TestServerSetupRetiresTheFirewallsTimer(t *testing.T) {
 		t.Errorf("an admin's timer at its path (%d):\n%s", code, out)
 	}
 }
-

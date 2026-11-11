@@ -125,13 +125,18 @@ chains with it, and a server whose loader is already the door's keeps
 it, `door:` gone or not: devopsy never takes a door's firewall off a
 server. `firewall: metadata: allow` there turns the firewall off for the
 server, removed by the next `--server-setup`; it is refused where
-`door:` is set or the door's firewall is loaded. The deploy user cannot
-read iptables: what `--server-setup` and `--server-info` show of it
-comes from its files, its boot link, and the mark the last load that
-went in leaves in `/run`, none after a load failed. The apply loads it
-through `devopsy-firewall.service`, the loader run directly only where
-systemd does not answer, then reads the chains back as root. One load runs at a time, by a lock in a directory of root's
-that no other user enters.
+`door:` is set or the door's firewall is loaded. What `--server-setup`
+and `--server-info` show of it comes from its files, its boot link, the
+mark the last load that went in leaves in `/run` (none after a load
+failed), and, wherever devopsy's firewall is loaded, its chains read as
+root through devopsy's util image, since the deploy user cannot read
+iptables. Nothing loads it again between a boot and the next install, so
+a reload of the server's own firewall or an `iptables -F`, which drops
+it, shows there as the firewall not loaded as devopsy loads it, and the
+next `--server-setup` loads it again. The apply loads it through
+`devopsy-firewall.service`, the loader run directly only where systemd
+does not answer, then reads the chains back as root. One load runs at a
+time, by a lock in a directory of root's that no other user enters.
 
 `--yes` asks nothing: it keeps every value someone else set, restarts
 Docker only when no container runs as it applies, and loads the

@@ -70,6 +70,7 @@ func runServerSetupStep(args []string) int {
 		if err != nil {
 			return failErr(err)
 		}
+		readChains(rd.facts.Firewall)
 		out, err := json.Marshal(rd.facts)
 		if err != nil {
 			return failErr(err)
@@ -305,13 +306,40 @@ func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 		_, unlinked := os.Lstat(h.path(l))
 		inSync = inSync && !devopsysAt(h, u) && (unlinked != nil || gone == nil)
 	}
-	fact := &setup.FirewallFact{Door: wantDoor, State: setup.JudgeFirewall(allow, door, loaded, inSync)}
+	fact := &setup.FirewallFact{Door: wantDoor, State: setup.JudgeFirewall(allow, door, loaded, inSync), Loaded: loaded}
 	if fact.State == setup.FirewallReload {
 		if result := unitShow("devopsy-firewall.service", "Result"); result != "" && result != "success" {
 			fact.Unit = result
 		}
 	}
 	return fact
+}
+
+// readChains reads devopsy's firewall's chains as root where it is loaded, and judges them
+// into fw (setup.FirewallFact.Chains), so a wipe the files and the mark cannot show (a reload
+// of the server's own firewall, an iptables -F) reads "to load again", for --server-setup's
+// facts and apply and for --server-info alike; it returns the read, "" when none was made.
+// None loaded, no root run.
+func readChains(fw *setup.FirewallFact) string {
+	if fw == nil || fw.Loaded == setup.NoFirewall {
+		return ""
+	}
+	read, err := doorHostRead(remote.FirewallRead, false)
+	if err != nil {
+		fw.Chains(nil, err)
+		return ""
+	}
+	fw.Chains(firewallChainsWrong(read, fw.Door))
+	return read
+}
+
+// firewallChainsWrong is the one judgment of a root read of the chains (remote.FirewallRead),
+// for the door's firewall or the containers' alone: what is not as devopsy loads it.
+func firewallChainsWrong(read string, door bool) ([]string, error) {
+	if door {
+		return remote.FirewallWrong(read)
+	}
+	return remote.ContainersFirewallWrong(read), nil
 }
 
 // devopsysAt says whether the host's file at p is one of the firewall's devopsy wrote, by its
@@ -528,6 +556,7 @@ func applySetup(h setupHost, a setupApply) int {
 	if err != nil {
 		return failed(err.Error())
 	}
+	readChains(rd.facts.Firewall)
 	f := rd.facts
 	// A required item refuses the apply; under --upgrade each is a warning, and only
 	// Docker's (no root run without it) or a broken record stops it.
@@ -1007,12 +1036,9 @@ func applyFirewall(h setupHost, fw *setup.FirewallFact) error {
 		report.Info("removed devopsy's firewall (firewall: metadata: allow): containers reach the cloud's metadata services")
 		return nil
 	}
-	wrong := remote.ContainersFirewallWrong(out.String())
-	if fw.Door {
-		var err error
-		if wrong, err = remote.FirewallWrong(out.String()); err != nil {
-			return err
-		}
+	wrong, err := firewallChainsWrong(out.String(), fw.Door)
+	if err != nil {
+		return err
 	}
 	if len(wrong) > 0 {
 		return &report.Failure{Msg: "the firewall did not load as devopsy's", Details: wrong}

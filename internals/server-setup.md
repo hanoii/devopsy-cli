@@ -29,7 +29,8 @@
 - The firewall's state for the deploy user, who cannot read iptables, is its files against devopsy's, modes included (`remote.FirewallFiles`), the boot's link to its unit (`remote.FirewallUnitLink`), and the mark (`remote.FirewallMark`).
 - The mark is written by rename once a load went in and removed when one fails, whoever ran it, a load under way leaving the last one's: through a change of kind it says the old kind until the new is in.
 - The unit's result is words only, never the judge: a load the unit did not run leaves it as it was.
-- The full read of the chains is root's, in the apply (`firewallRun`, the firewall's own root run) and in `--project-users add`.
+- The full read of the chains is root's (`firewallRun`, the firewall's own root run): the apply's after a load, `--project-users add`'s, and, wherever devopsy's firewall is loaded, `--server-setup`'s facts and apply and `--server-info`'s (`readChains`), none where nothing is loaded.
+- A read judges the chains once for both kinds (`firewallChainsWrong`), and chains not as devopsy loads them make a firewall in sync by its files and mark one to load again (`setup.FirewallFact.Chains`), in its one line: nothing loads it again between a boot and an install, so a wipe is shown, never healed.
 - Every load and removal holds the firewall's lock (`firewallLock`, a minute at most): a load deletes its jump's other copies by number, which another load between its read and its delete makes another rule's.
 - The lock is in a directory of root's no one else enters (`remote.FirewallLockDir`, 0700, made or closed again by each load): flock locks a file opened for reading, so a lock others could open is one they could hold.
 - Every iptables call waits for xtables' lock (`xtablesWait`), which iptables-legacy fails without.

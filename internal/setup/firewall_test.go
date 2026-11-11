@@ -2,6 +2,7 @@ package setup
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -50,5 +51,31 @@ func TestJudgeFirewall(t *testing.T) {
 	var back FirewallFact
 	if err != nil || json.Unmarshal(data, &back) != nil || back.State != FirewallLoadDoor || string(data) != `{"state":"to load as the door's"}` {
 		t.Errorf("%s, %v, %+v", data, err, back)
+	}
+}
+
+// A root read's judgment of the chains: chains not as devopsy loads them make a firewall in
+// sync by its files and mark one to load again, its findings kept for the words; another
+// state stays as it is; a read that failed changes no state and says why.
+func TestFirewallFactChains(t *testing.T) {
+	t.Parallel()
+	f := FirewallFact{State: FirewallInSync}
+	f.Chains(nil, nil)
+	if f.State != FirewallInSync || f.Wrong != nil {
+		t.Errorf("chains right: %+v", f)
+	}
+	f.Chains([]string{"iptables: nothing in PREROUTING jumps to DEVOPSY-CONTAINERS"}, nil)
+	if f.State != FirewallReload || len(f.Wrong) != 1 {
+		t.Errorf("chains wiped: %+v", f)
+	}
+	g := FirewallFact{State: FirewallRefused}
+	g.Chains([]string{"x"}, nil)
+	if g.State != FirewallRefused {
+		t.Errorf("refused, chains wiped: %+v", g)
+	}
+	h := FirewallFact{State: FirewallInSync}
+	h.Chains(nil, errors.New("Docker did not answer"))
+	if h.State != FirewallInSync || h.Unread != "Docker did not answer" {
+		t.Errorf("unread: %+v", h)
 	}
 }

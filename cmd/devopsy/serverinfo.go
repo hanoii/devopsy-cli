@@ -55,8 +55,9 @@ var serverTools = []struct {
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
-// waits for a reboot to take it, and its firewall, read as root through the util image.
-func doorFacts() *remote.DoorFacts {
+// waits for a reboot to take it, and the host's listeners from read, the root read of the
+// firewall ("" when none was made).
+func doorFacts(read string) *remote.DoorFacts {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return nil
@@ -71,19 +72,8 @@ func doorFacts() *remote.DoorFacts {
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		f.Reboot = true
 	}
-	for u := range d.Users {
-		if p := d.Users[u].Project; f.Project == "" || p < f.Project {
-			f.Project = p
-		}
-	}
-	read, err := doorHostRead(remote.FirewallRead, false)
-	if err != nil {
-		f.FirewallError = err.Error()
-		return f
-	}
-	f.Listeners = remote.DoorListeners(read)
-	if f.FirewallWrong, err = remote.FirewallWrong(read); err != nil {
-		f.FirewallError = err.Error()
+	if read != "" {
+		f.Listeners = remote.DoorListeners(read)
 	}
 	return f
 }
@@ -149,10 +139,12 @@ func serverFacts() (remote.ServerInfo, error) {
 	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
 	hd := readHostDocker(h)
 	info.Docker = hd.facts
+	read := ""
 	if rd, err := readSetup(h, hd); err == nil {
+		read = readChains(rd.facts.Firewall)
 		info.Setup = &rd.facts
 	}
-	info.Door = doorFacts()
+	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -935,13 +927,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
 				report.Fix("reboot it at a quiet time: its containers come back with Docker"))
-		}
-		switch {
-		case dr.FirewallError != "":
-			note("the project users' firewall could not be read: " + dr.FirewallError)
-		case len(dr.FirewallWrong) > 0:
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"project users reach what their firewall keeps them off"}, dr.FirewallWrong...),
-				Remedies: []report.Remedy{report.Fix("load it again, for any of its projects:", "devopsy @"+ref+" --project-users add "+cmp.Or(dr.Project, "<project>"))}})
 		}
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),

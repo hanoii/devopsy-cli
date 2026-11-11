@@ -102,14 +102,9 @@ type DoorFacts struct {
 	Users  int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
-	// FirewallWrong is what of the project users' firewall the host lacks (FirewallWrong);
-	// FirewallError why it could not be read. Project is one of its projects, which add
-	// loads the firewall again for.
-	FirewallWrong []string `json:"firewall_wrong,omitempty"`
-	FirewallError string   `json:"firewall_error,omitempty"`
-	// Listeners are the host's TCP listeners every container reaches (DoorListeners).
+	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
+	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`
-	Project   string   `json:"project,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.

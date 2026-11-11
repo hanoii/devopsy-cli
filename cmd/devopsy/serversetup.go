@@ -255,7 +255,10 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
 	if fw := f.Firewall; fw != nil && fw.State.Changes() {
-		entry(remote.StatusWarning, firewallItem, firewallLine(fw))
+		entry(remote.StatusWarning, firewallItem, append([]string{firewallLine(fw)}, fw.Wrong...)...)
+	}
+	if fw := f.Firewall; fw != nil && fw.Unread != "" {
+		entry(remote.StatusInfo, firewallItem, "its chains could not be read as root: "+fw.Unread)
 	}
 	if f.Hint() {
 		entry(remote.StatusInfo, "volumes", volumeHint(f)...)
