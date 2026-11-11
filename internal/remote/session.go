@@ -33,15 +33,23 @@ var Command string
 
 // OperatorCommand is the command a session carries: the one the session this devopsy runs
 // in carries (getenv's CommandEnv, checked as SessionFrom does), else args, this devopsy's
-// own after its name, as one command to copy (CommandOf); none when longer than its cap.
+// own after its name, as one command to copy (CommandOf); none when no session carries it
+// (carried).
 func OperatorCommand(getenv func(string) string, args []string) string {
 	if c := SessionFrom(getenv).Command; c != "" {
 		return c
 	}
-	if c := CommandOf(args); len(c) <= commandMax {
+	if c := CommandOf(args); carried(c) {
 		return c
 	}
 	return ""
+}
+
+// carried says whether c is a command a session carries: devopsy's, within its cap, and on
+// one line with no control character (an argument of several lines), since a hint offers it
+// as one line to copy.
+func carried(c string) bool {
+	return len(c) <= commandMax && strings.HasPrefix(c, "devopsy ") && !hasControl(c)
 }
 
 // Session is what a devopsy on a server knows of the session it runs in, for its hints
@@ -52,12 +60,12 @@ type Session struct {
 }
 
 // SessionFrom reads the session's values from getenv: the command only as Command writes
-// it (devopsy's, within its cap), the addresses only together and only when each parses as
+// it (carried), the addresses only together and only when each parses as
 // an environment's address within its cap. A value that does not is dropped, never an
 // error: a hint then says its way out in words.
 func SessionFrom(getenv func(string) string) Session {
 	var s Session
-	if c := getenv(CommandEnv); len(c) <= commandMax && strings.HasPrefix(c, "devopsy ") {
+	if c := getenv(CommandEnv); carried(c) {
 		s.Command = c
 	}
 	if a, h := getenv(AddressEnv), getenv(HintAddressEnv); IsAddress(a) && IsAddress(h) {
@@ -141,7 +149,7 @@ func TypedAddress(t *Target) string {
 // environment to name. Each value is one quoted word of the script, whatever it holds.
 func sessionExports(t *Target) string {
 	s := ""
-	if Command != "" && len(Command) <= commandMax {
+	if carried(Command) {
 		s += CommandEnv + "=" + Quote(Command) + "; export " + CommandEnv + "\n"
 	}
 	if t.Name != "" {

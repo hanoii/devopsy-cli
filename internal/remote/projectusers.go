@@ -50,9 +50,10 @@ func doorDropIn(deploy string) string {
 		"\tPermitTunnel no\n"
 }
 
-// doorKept are the variables the door's sudo rule keeps: what a session carries for the hints
-// the door says (SessionFrom), the operator's command and the session's address.
-var doorKept = []string{CommandEnv, AddressEnv, HintAddressEnv}
+// doorKept are the variables the door's sudo rule keeps: the session's address in its two
+// forms, for the hints the door says (SessionFrom), and not the operator's command, which
+// no hint of the door's gives.
+var doorKept = []string{AddressEnv, HintAddressEnv}
 
 // doorKeysCommand is the root-owned script sshd runs, since it refuses a command root does
 // not own, and the binary is the deploy user's so that it upgrades itself.

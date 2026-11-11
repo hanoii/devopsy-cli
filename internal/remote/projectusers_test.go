@@ -21,7 +21,7 @@ func TestDoorHostScript(t *testing.T) {
 	for _, want := range []string{
 		"Cmnd_Alias DEVOPSY_DOOR = /opt/bin/devopsy --door *",
 		// The session's hints alone come through the door's sudo, by name.
-		`Defaults!DEVOPSY_DOOR env_reset, !env_keep, env_keep = "DEVOPSY_INTERNAL_COMMAND DEVOPSY_INTERNAL_ADDRESS DEVOPSY_INTERNAL_HINT_ADDRESS", !setenv`,
+		`Defaults!DEVOPSY_DOOR env_reset, !env_keep, env_keep = "DEVOPSY_INTERNAL_ADDRESS DEVOPSY_INTERNAL_HINT_ADDRESS", !setenv`,
 		"%devopsy-projects ALL=(deploy : devopsy-door) NOPASSWD: DEVOPSY_DOOR",
 		"Cmnd_Alias DEVOPSY_DOOR_READ = /opt/bin/devopsy --door-read *",
 		"Defaults!DEVOPSY_DOOR_READ env_reset, !env_keep, !setenv",

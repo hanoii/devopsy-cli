@@ -234,13 +234,18 @@ const needsEnv = "devopsy_needs"
 // WithNeeds is script with its needs (Needs) in front, for the prelude's
 // check, and also's (the needs of scripts a later session will send).
 func WithNeeds(script string, also ...string) string {
+	return needsLine(script, also...) + script
+}
+
+// needsLine is the line WithNeeds puts in front of script.
+func needsLine(script string, also ...string) string {
 	needs := Needs(script)
 	for _, n := range also {
 		if !slices.Contains(needs, n) {
 			needs = append(needs, n)
 		}
 	}
-	return needsEnv + "=" + Quote(strings.Join(needs, " ")) + "\n" + script
+	return needsEnv + "=" + Quote(strings.Join(needs, " ")) + "\n"
 }
 
 type alsoNeedsKey struct{}

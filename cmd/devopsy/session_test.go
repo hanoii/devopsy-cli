@@ -50,8 +50,10 @@ func TestSessionsCarryTheCommandAndTheirAddress(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"@devopsy@[::1]:prod", "said", "a b", "it's", "x\ny", "-n", ""},
-			"command=devopsy '@devopsy@[::1]:prod' said 'a b' 'it'\\''s' 'x\ny' -n ''|address=devopsy@[::1]:prod|hint=devopsy@[::1]:prod\n"},
+		{[]string{"@devopsy@[::1]:prod", "said", "a b", "it's", "-n", ""},
+			"command=devopsy '@devopsy@[::1]:prod' said 'a b' 'it'\\''s' -n ''|address=devopsy@[::1]:prod|hint=devopsy@[::1]:prod\n"},
+		// An argument of several lines: no command carried, which a hint would offer cut.
+		{[]string{"@box", "said", "x\ny"}, "command=unset|address=box|hint=devopsy@one:prod\n"},
 		{[]string{"@box", "said"}, "command=devopsy @box said|address=box|hint=devopsy@one:prod\n"},
 		{[]string{"outer"}, "command=devopsy @prod said inner|address=devopsy@one:prod|hint=devopsy@one:prod\n"},
 	} {
