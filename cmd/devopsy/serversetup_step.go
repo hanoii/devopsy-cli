@@ -117,10 +117,7 @@ func readSetup(h setupHost) (setupRead, error) {
 		return rd, err
 	}
 	f := &rd.facts
-	f.Root = r.Root
-	if real, err := filepath.EvalSymlinks(r.Root); err == nil {
-		f.Root = real
-	}
+	f.Root = resolveRoot(r.Root)
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
 	}
@@ -184,6 +181,36 @@ func readSetup(h setupHost) (setupRead, error) {
 	}
 	f.Projects = len(deployEnvBases(f.Root)) > 0
 	return rd, nil
+}
+
+// resolveRoot is root with every link along it followed, as far as its parts are there, the
+// rest as written: one form whether the root is made yet or not, which the mounts drop-in
+// names (systemd follows no link in RequiresMountsFor). A link is followed by what it says,
+// so one to a volume not mounted, or gone, gives the same path as once it is there.
+func resolveRoot(root string) string {
+	parts := strings.Split(strings.Trim(filepath.Clean(root), "/"), "/")
+	cur := "/"
+	for i, hops := 0, 0; i < len(parts); i++ {
+		next := filepath.Join(cur, parts[i])
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return filepath.Join(append([]string{next}, parts[i+1:]...)...)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 || hops >= 40 {
+			cur = next
+			continue
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return filepath.Join(append([]string{next}, parts[i+1:]...)...)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(cur, target)
+		}
+		parts = append(strings.Split(strings.Trim(filepath.Clean(target), "/"), "/"), parts[i+1:]...)
+		cur, i, hops = "/", -1, hops+1
+	}
+	return cur
 }
 
 // toolsItem is the tools' required item's name.

@@ -447,3 +447,76 @@ func TestRestartLocksOnlyTheDeployUsersEnvironments(t *testing.T) {
 		t.Errorf("an environment in %s, which another user owns, is among those whose lock a restart takes: %s", project, base)
 	}
 }
+
+// A release root behind a link (a directory moved to a volume and linked back) and not made
+// yet is set up in one run: the root has one form, its links followed as far as it is there,
+// which the mounts drop-in names, so a second run changes nothing.
+func TestServerSetupRootBehindALink(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	tmp := filepath.Dir(s.root)
+	if err := os.Mkdir(filepath.Join(tmp, "vol"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(tmp, "vol"), filepath.Join(tmp, "data")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(tmp, "home", "config.yaml"), "releases:\n  root: "+filepath.Join(tmp, "data", "srv")+"\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || strings.Contains(out, "did not hold") {
+		t.Errorf("the first run (%d):\n%s", code, out)
+	}
+	first := readString(filepath.Join(host, setup.MountsDropIn))
+	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "nothing to change") || readString(filepath.Join(host, setup.MountsDropIn)) != first {
+		t.Errorf("a second run changed something (%d):\n%s\nthe drop-in, first:\n%s\nthen:\n%s", code, out, first, readString(filepath.Join(host, setup.MountsDropIn)))
+	}
+}
+
+// The release root's one form: every link along it followed by what it says, as far as its
+// parts are there, a link to a volume not mounted or gone included, the rest as written.
+func TestResolveRoot(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "vol", ".keep"), "", 0o644)
+	for link, target := range map[string]string{"data": filepath.Join(dir, "vol"), "rel": "vol", "gone": filepath.Join(dir, "unmounted"), "twice": "data"} {
+		if err := os.Symlink(target, filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for root, want := range map[string]string{
+		filepath.Join(dir, "data", "srv"):   filepath.Join(dir, "vol", "srv"),
+		filepath.Join(dir, "rel", "a", "b"): filepath.Join(dir, "vol", "a", "b"),
+		filepath.Join(dir, "gone", "srv"):   filepath.Join(dir, "unmounted", "srv"),
+		filepath.Join(dir, "twice"):         filepath.Join(dir, "vol"),
+		filepath.Join(dir, "new", "srv"):    filepath.Join(dir, "new", "srv"),
+		"/":                                 "/",
+	} {
+		if got := resolveRoot(root); got != want {
+			t.Errorf("resolveRoot(%s) = %s, want %s", root, got, want)
+		}
+	}
+}
+
+// A release to a server whose release root is missing is refused before its upload makes
+// anything: nothing of the root or the environment is there after it, and no lock was taken.
+func TestServerReadyRefusesAReleaseLeavingNothing(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	if err := os.Remove(s.root); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, "@prod", "--release")
+	if code == 0 || !strings.Contains(out, "the release root "+s.root+" is missing: nothing released") || !strings.Contains(out, "--server-setup") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	if fileExists(s.root) {
+		t.Errorf("the refused release made %s:\n%s", s.root, out)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "flock") {
+		t.Errorf("the refused release took a lock:\n%s", docker)
+	}
+}

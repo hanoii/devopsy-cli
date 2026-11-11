@@ -52,33 +52,6 @@ func TestReviewSetupRestartJudgedUnderTheLock(t *testing.T) {
 	}
 }
 
-// Bug: a release root under a symlinked directory fails its first --server-setup. The facts
-// before the apply judge the mounts drop-in by the root as configured (it is missing, so
-// filepath.EvalSymlinks cannot resolve it), the drop-in is put with that path, and the
-// checks after the apply resolve the root, now made, to another path: the drop-in reads as
-// not devopsy's, and the apply fails with "what was applied did not hold"; the next run puts
-// the drop-in again with the other path.
-func TestReviewSetupRootUnderLink(t *testing.T) {
-	t.Parallel()
-	s, _ := setupServer(t)
-	tmp := filepath.Dir(s.root)
-	if err := os.Mkdir(filepath.Join(tmp, "data"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(tmp, "data"), filepath.Join(tmp, "link")); err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Join(tmp, "link", "releases")
-	write(t, filepath.Join(tmp, "home", "config.yaml"), "releases:\n  root: "+root+"\n", 0o644)
-	out, code := s.run(nil, remote.ServerSetupFlag, "apply")
-	if code != 0 || strings.Contains(out, "did not hold") {
-		t.Errorf("the first apply (%d):\n%s", code, out)
-	}
-	if out, code := s.run(nil, remote.ServerSetupFlag, "apply"); code != 0 || strings.Contains(out, "put "+setup.MountsDropIn) {
-		t.Errorf("a second apply puts the drop-in again (%d):\n%s", code, out)
-	}
-}
-
 // Bug: --server-setup never drops a kept entry whose part came back to devopsy's value. The
 // states table records applied W for an in-sync part whose record says otherwise, for
 // --server-setup as for --upgrade, so that a kept value changed again is asked again; but
