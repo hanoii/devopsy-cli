@@ -152,7 +152,7 @@ func run() int {
 				return 0
 			}
 		case "--release-settings":
-			return runReleaseSettings(color)
+			return runReleaseSettings(args[1:])
 		case remote.MntReadyFlag:
 			return runMntReady(args[1:])
 		case remote.ServerFactsFlag:
@@ -222,21 +222,6 @@ func run() int {
 		}
 		if err != nil {
 			return failErr(err)
-		}
-		// The deploy user's release under a project user's names: the door would refuse
-		// that user's every compose command while it runs.
-		if !behindDoor() {
-			// A door that does not read stops the release: its names are then no one's to tell.
-			d, err := remote.ServerDoor()
-			if err != nil {
-				return failErr(err)
-			}
-			r, _ := remote.ReleaseSettings()
-			name := composeName(cwd)
-			if who := doorNameOwner(d, r.Root, name); who != "" {
-				return failErr(&report.Failure{Msg: "compose project " + name + " is under the names of project user " + who + " here: the door would refuse that user's every compose command while it runs",
-					Remedies: []report.Remedy{report.Fix("release it as that user:", "DEVOPSY_SERVER="+who+"@<server> devopsy @<target> --release")}})
-			}
 		}
 		return 0
 	}

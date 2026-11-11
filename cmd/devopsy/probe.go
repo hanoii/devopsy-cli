@@ -91,15 +91,34 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 	return 0
 }
 
-// runReleaseSettings implements the hidden --release-settings, run by the
-// release scripts on a server: the machine's releases: and snapshots:
-// settings, as
-// key=value lines, the scripts' protocol it speaks (remote.Protocol) and
-// the features it has (remote.FeaturesList).
-func runReleaseSettings(color bool) int {
+// runReleaseSettings implements the hidden --release-settings [<project> <compose name>],
+// run first by every script on a server: the machine's releases: and snapshots: settings,
+// as key=value lines, the scripts' protocol it speaks (remote.Protocol) and the features
+// it has (remote.FeaturesList). Given an environment's project and compose name, it refuses
+// the deploy user one whose name is a project user's (doorNameOwner), before the script
+// changes anything, with remote.SettingsRefusedExit: compose acts on a project by its name
+// alone, so a --destroy there takes that user's containers and volumes down.
+func runReleaseSettings(args []string) int {
+	if len(args) != 0 && len(args) != 2 {
+		report.Error("usage: devopsy --release-settings [<project> <compose name>]")
+		return 2
+	}
 	r, err := remote.ReleaseSettings()
 	if err != nil {
 		return failErr(err)
+	}
+	if len(args) == 2 && !behindDoor() {
+		// A door that does not read stops the script: its names are then no one's to tell.
+		d, err := remote.ServerDoor()
+		if err != nil {
+			failErr(err)
+			return remote.SettingsRefusedExit
+		}
+		if who := doorNameOwner(d, r.Root, args[0], args[1]); who != "" {
+			failErr(&report.Failure{Msg: "compose project " + args[1] + " is under the names of project user " + who + " here: as the deploy user, devopsy would act on that user's containers and volumes",
+				Remedies: []report.Remedy{report.Fix("address it as that user, for example:", "DEVOPSY_SERVER="+who+"@<server> devopsy @<target> --release")}})
+			return remote.SettingsRefusedExit
+		}
 	}
 	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(), remote.Protocol, remote.FeaturesList())
 	return 0

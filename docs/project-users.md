@@ -374,7 +374,10 @@ DEVOPSY_SERVER=devopsy-shop@vm1
 
 Everything else is as it is with a deploy user: `devopsy @prod
 --release`, `--rollback`, compose commands, `--export` and `--import`,
-snapshots, a child's sync, all go through the door. A sync goes between
+snapshots, a child's sync, all go through the door. Addressed through the
+deploy user instead, devopsy refuses the project's environments before
+changing anything: compose would act on the project user's containers
+and volumes, which share their names. A sync goes between
 two project users or two deploy users, never one of each, so a child on
 another server needs its project user there too ([Syncs](syncs.md#how-the-data-travels)).
 

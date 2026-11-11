@@ -14,26 +14,28 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// The deploy user's release of a compose project under a project user's names is refused
-// before its switch (--check-names): the door acts only on what it made, and would refuse
-// that user's every compose command while it runs. Names are the door's (door.Policy's
-// OwnName): a longer project's names are that project's.
+// A compose name is a project user's by the door's rule (door.Policy's OwnName): a longer
+// project's names are that project's, the target's own included, whose first release has
+// no directory yet.
 func TestDoorNameOwner(t *testing.T) {
 	t.Parallel()
 	d := &remote.Door{Users: map[string]remote.DoorUser{"devopsy-shop": {Project: "shop"}, "devopsy-shop-admin": {Project: "shop-admin"}}}
 	root := t.TempDir()
-	for name, want := range map[string]string{
-		"shop-stage":      "devopsy-shop",
-		"shop-eu-prod":    "devopsy-shop",
-		"shop-admin-prod": "devopsy-shop-admin",
-		"blog-prod":       "",
-		"shopping-prod":   "",
+	type c struct{ project, want string }
+	for name, c := range map[string]c{
+		"shop-stage":      {"shop", "devopsy-shop"},
+		"shop-eu-prod":    {"shop", "devopsy-shop"},
+		"shop-admin-prod": {"shop", "devopsy-shop-admin"},
+		"blog-prod":       {"blog", ""},
+		"shopping-prod":   {"shopping", ""},
+		// A deploy user's project shop-eu, before its first release.
+		"shop-eu-stage": {"shop-eu", ""},
 	} {
-		if got := doorNameOwner(d, root, name); got != want {
-			t.Errorf("%s: %q, want %q", name, got, want)
+		if got := doorNameOwner(d, root, c.project, name); got != c.want {
+			t.Errorf("%s of %s: %q, want %q", name, c.project, got, c.want)
 		}
 	}
-	if got := doorNameOwner(nil, root, "shop-stage"); got != "" {
+	if got := doorNameOwner(nil, root, "shop", "shop-stage"); got != "" {
 		t.Errorf("no door: %q", got)
 	}
 	// A project in the release root holds its names too, the deploy user's own: one whose
@@ -42,31 +44,49 @@ func TestDoorNameOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{"shop-eu-prod": "", "shop-eur-prod": "devopsy-shop", "shop-stage": "devopsy-shop"} {
-		if got := doorNameOwner(d, root, name); got != want {
+		if got := doorNameOwner(d, root, "shop", name); got != want {
 			t.Errorf("%s, beside the release root's shop-eu: %q, want %q", name, got, want)
 		}
 	}
 }
 
-// --check-names, the activation's check before its switch, refuses it as the deploy user, and
-// refuses too when the server's door does not read.
-func TestCheckNamesRefusesAProjectUsersNames(t *testing.T) {
+// Every script of the deploy user's on an environment whose compose name is a project
+// user's stops before it changes anything (--release-settings, the first call of every
+// one): a --destroy takes compose's project down by its name, that user's containers and
+// volumes with it, and a release would leave a directory only --destroy removes.
+func TestDeployUserLeavesAProjectUsersNames(t *testing.T) {
 	t.Parallel()
-	home, rel := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+t.TempDir()+"\ndoor:\n  space: /var/lib/devopsy-door\n", 0o644)
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	home := filepath.Join(filepath.Dir(s.root), "home")
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\ndoor:\n  space: /var/lib/devopsy-door\n", 0o644)
 	write(t, filepath.Join(home, "door", "users", "devopsy-shop.yaml"), "project: shop\n", 0o644)
-	write(t, filepath.Join(rel, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	for name, refused := range map[string]bool{"shop-stage": true, "blog-prod": false} {
-		// As the activation calls it: the release's compose project in its environment.
-		out, code := runDevopsy(t, rel, []string{"DEVOPSY_HOME=" + home, "COMPOSE_PROJECT_NAME=" + name}, "--check-names", filepath.Dir(rel))
-		if (code != 0) != refused || refused != strings.Contains(out, "is under the names of project user devopsy-shop here") {
-			t.Errorf("%s (%d):\n%s", name, code, out)
+	releases := func() int { e, _ := os.ReadDir(filepath.Join(s.root, "shop", "prod", "releases")); return len(e) }
+	before := releases()
+	for _, args := range [][]string{{"@prod", "--destroy", "--yes"}, {"@prod", "--release"}} {
+		out, code := s.run(nil, args...)
+		docker, _ := s.logs()
+		if code == 0 || !strings.Contains(out, "compose project shop-prod is under the names of project user devopsy-shop here") ||
+			strings.Contains(out, "cannot tell its release settings") || docker != "" {
+			t.Errorf("%v (%d):\n%s\n%s", args, code, out, docker)
 		}
 	}
-	// A project user's entry that does not read stops the check rather than passing it.
+	if n := releases(); n != before {
+		t.Errorf("a refused release left a release: %d, %d before", n, before)
+	}
+	// A project user's entry that does not read stops the script rather than passing it.
 	write(t, filepath.Join(home, "door", "users", "devopsy-shop.yaml"), "project: [not, a, name\n", 0o644)
-	if out, code := runDevopsy(t, rel, []string{"DEVOPSY_HOME=" + home, "COMPOSE_PROJECT_NAME=blog-prod"}, "--check-names", filepath.Dir(rel)); code == 0 {
-		t.Errorf("a door that does not read passes:\n%s", out)
+	out, code := s.run(nil, "@prod", "--destroy", "--yes")
+	if docker, _ := s.logs(); code == 0 || !strings.Contains(out, "devopsy-shop.yaml") || strings.Contains(out, "cannot tell its release settings") || docker != "" {
+		t.Errorf("a door that does not read (%d):\n%s\n%s", code, out, docker)
+	}
+	// Another project user's names leave the deploy user's alone.
+	write(t, filepath.Join(home, "door", "users", "devopsy-shop.yaml"), "project: blog\n", 0o644)
+	if err := os.Rename(filepath.Join(home, "door", "users", "devopsy-shop.yaml"), filepath.Join(home, "door", "users", "devopsy-blog.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
+		t.Errorf("--destroy beside another project user's names (%d):\n%s", code, out)
 	}
 }
 

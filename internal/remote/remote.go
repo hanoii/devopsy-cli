@@ -577,7 +577,7 @@ func basePrelude(t *Target) string {
 	// and 9) and hold them while it asks GitHub. The checks of the
 	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
-` + serverCheck(upgradeRef(t)) + `with_tty() {
+` + serverCheck(upgradeRef(t), t) + `with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
   if [ -n "${` + TTYEnv + `:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
@@ -601,15 +601,24 @@ export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
 `
 }
 
+// SettingsRefusedExit is --release-settings' exit when it refused the environment it was
+// given, having said why: the script then stops without a line of its own.
+const SettingsRefusedExit = 3
+
 // serverCheck refuses a server's devopsy older than Protocol, or lacking
 // a feature the script needs ($devopsy_needs, WithNeeds), before anything
 // else, naming @ref in the upgrade hint, and leaves its
-// --release-settings in $settings. Its lines are a plain echo: the
-// server's devopsy may lack --say.
-func serverCheck(ref string) string {
+// --release-settings in $settings, which given t's project and compose
+// name refuses one that is not the server user's to act on. Its lines are
+// a plain echo: the server's devopsy may lack --say.
+func serverCheck(ref string, t *Target) string {
 	upgrade := report.Fix("upgrade it:", "devopsy @"+ref+" --upgrade")
 	risk := report.Fix("set " + ProtocolCheckEnv + "=warn to go on at your own risk")
-	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings", upgrade) + `; exit 1; }
+	env := ""
+	if name := t.ComposeName(); name != "" {
+		env = " " + Quote(t.Project.Name) + " " + Quote(name)
+	}
+	return `settings=$(devopsy --release-settings` + env + `) || { [ $? = ` + strconv.Itoa(SettingsRefusedExit) + ` ] || ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings", upgrade) + `; exit 1; }
 server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
 if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
   if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then

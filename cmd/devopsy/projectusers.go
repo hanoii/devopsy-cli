@@ -167,13 +167,14 @@ func spaceFix(space string) report.Remedy {
 
 // doorNameOwner is the project user whose names compose project name sits under, by the
 // door's rule (door.Policy.OwnName) among the server's projects (serverProjects, root the
-// release root), "" for none or no door: the door acts only on containers it made, and
-// refuses that user's every compose command while another's are under its names.
-func doorNameOwner(d *remote.Door, root, name string) string {
+// release root, and project, the target's own, whose directory a first release has yet to
+// make), "" for none or no door: the door acts only on containers it made, and refuses
+// that user's every compose command while another's are under its names.
+func doorNameOwner(d *remote.Door, root, project, name string) string {
 	if d == nil {
 		return ""
 	}
-	projects := serverProjects(doorProjects(d), root)
+	projects := append(serverProjects(doorProjects(d), root), project)
 	for who, u := range d.Users {
 		if (door.Policy{Project: u.Project, User: who, Others: projects}).OwnName(name) {
 			return who
