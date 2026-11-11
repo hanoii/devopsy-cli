@@ -536,10 +536,8 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 // Unix user and tree), or one the door's list names by another spelling.
 func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment, owned func(path string) bool) []remote.Environment {
 	var envs []remote.Environment
-	for _, p := range envDirs(root) {
-		if _, ok := trees[p]; !ok && owned(p) {
-			envs = append(envs, projectEnvironments(root, p)...)
-		}
+	for _, p := range ownProjects(root, trees, owned) {
+		envs = append(envs, projectEnvironments(root, p)...)
 	}
 	// A project user's tree, in the release root or elsewhere (by default its own home).
 	for _, tree := range slices.Sorted(maps.Keys(trees)) {
@@ -550,6 +548,28 @@ func environments(root string, trees map[string]string, readTree func(user, tree
 		envs = append(envs, got...)
 	}
 	return envs
+}
+
+// ownProjects are the project directories in root the deploy user walks: none of a project
+// user's tree (trees, by its path) and none it does not own (owned), whose files another user
+// may change.
+func ownProjects(root string, trees map[string]string, owned func(path string) bool) []string {
+	var out []string
+	for _, p := range envDirs(root) {
+		if _, ok := trees[p]; !ok && owned(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// deployEnvBases are the deploy user's environments' directories in root (ownProjects).
+func deployEnvBases(root string) []string {
+	var out []string
+	for _, p := range ownProjects(root, doorTrees(root), ownedByMe) {
+		out = append(out, envBases(p)...)
+	}
+	return out
 }
 
 // ownedByMe says whether path, links resolved, is this user's own.

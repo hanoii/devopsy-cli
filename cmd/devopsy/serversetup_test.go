@@ -427,3 +427,23 @@ func TestServerSetupLeavesADaemonItCannotJudge(t *testing.T) {
 		t.Errorf("--server-setup (%d), the file %s:\n%s", code, readString(daemon), out)
 	}
 }
+
+// The release locks a restart takes are the deploy user's environments' alone: a project
+// directory in the release root that another user owns (a project user's tree, with releases:
+// root off the deploy user's home) is never walked, as --server-info walks none (ownProjects),
+// so no lock is made or held in a tree that user can change.
+func TestRestartLocksOnlyTheDeployUsersEnvironments(t *testing.T) {
+	t.Parallel()
+	// The test's directory, <tmp>/<test>/<n>, is an environment (<project>/<instance>/<env>)
+	// of the project <tmp>, in the root above it; <tmp> is another user's wherever tests run
+	// as a plain user in the system's /tmp.
+	base := t.TempDir()
+	project := filepath.Dir(filepath.Dir(base))
+	if ownedByMe(project) {
+		t.Skip(project + " is this user's: no directory of another user's to hold an environment")
+	}
+	write(t, filepath.Join(base, "releases", ".keep"), "", 0o644)
+	if got := deployEnvBases(filepath.Dir(project)); slices.Contains(got, base) {
+		t.Errorf("an environment in %s, which another user owns, is among those whose lock a restart takes: %s", project, base)
+	}
+}

@@ -182,12 +182,7 @@ func readSetup(h setupHost) (setupRead, error) {
 		}
 		f.Candidates = append(f.Candidates, c)
 	}
-	for _, p := range envDirs(f.Root) {
-		if len(envBases(p)) > 0 {
-			f.Projects = true
-			break
-		}
-	}
+	f.Projects = len(deployEnvBases(f.Root)) > 0
 	return rd, nil
 }
 
@@ -441,7 +436,7 @@ func applySetup(h setupHost, a setupApply) int {
 				l.Close()
 			}
 		}()
-		for _, base := range allEnvBases(f.Root) {
+		for _, base := range deployEnvBases(f.Root) {
 			l, err := os.OpenFile(filepath.Join(base, ".lock"), os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
 				return failed(err.Error())
@@ -545,14 +540,6 @@ func fixWords(fix string) []report.Remedy {
 	return []report.Remedy{report.Fix(fix)}
 }
 
-// allEnvBases are the environments' directories of every project in root.
-func allEnvBases(root string) []string {
-	var out []string
-	for _, p := range envDirs(root) {
-		out = append(out, envBases(p)...)
-	}
-	return out
-}
 
 // rootSetupRun runs remote.SetupRootScript as root on the host: the host's network and
 // NET_ADMIN for the live buffers (sysctl), its pid namespace for systemctl (systemd refuses a

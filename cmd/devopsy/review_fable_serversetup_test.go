@@ -3,34 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/setup"
 )
-
-// The release locks a restart takes are the deploy user's environments' alone: a project
-// directory in the release root that another user owns (a project user's tree, with releases:
-// root off the deploy user's home) is never walked, as --server-info walks none (ownedByMe).
-// Bug: allEnvBases walks every directory of the root, so the apply opens, creating it, a
-// .lock in a tree its project user can open to others, through whatever link that user put
-// there, and that user refuses the admin's restart by holding it.
-func TestRestartLocksOnlyOwnProjects(t *testing.T) {
-	t.Parallel()
-	// The test's directory, <tmp>/<test>/<n>, is an environment (<project>/<instance>/<env>)
-	// of the project <tmp>, in the root above it; <tmp> is another user's wherever tests run
-	// as a plain user in the system's /tmp.
-	base := t.TempDir()
-	project := filepath.Dir(filepath.Dir(base))
-	if ownedByMe(project) {
-		t.Skip(project + " is this user's: no directory of another user's to hold an environment")
-	}
-	write(t, filepath.Join(base, "releases", ".keep"), "", 0o644)
-	if got := allEnvBases(filepath.Dir(project)); slices.Contains(got, base) {
-		t.Errorf("an environment in %s, which another user owns, is among those whose lock a restart takes: %s", project, base)
-	}
-}
 
 // A release root behind a link (a directory moved to a volume and linked back) and not made
 // yet is set up in one run: the mounts drop-in's want comes from the root, and a second run
