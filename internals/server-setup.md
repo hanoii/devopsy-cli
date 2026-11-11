@@ -41,7 +41,7 @@
 
 ## Restarting Docker
 
-- `--server-setup` offers a restart when the run changes `daemon.json` or Docker has yet to take it (`setup.Pending`); `--yes` restarts only when no container runs.
+- `--server-setup` offers a restart when the run changes `daemon.json` or Docker has yet to take it (`setup.Pending`), and the operator passes its answer as a condition (`--restart`, `--yes`'s `--restart-idle`, only with no container running): the apply judges it under its locks, restarting only when this run put `daemon.json` or something is pending then, else saying why not.
 - A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up; project users' trees are not covered, and the run says so.
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
 - The restart is queued with `--no-block`, `daemon-reload` first, and the apply goes by the root script's `queued` line, never by the exit of a container the restart may cut, whose client's words then go unsaid.

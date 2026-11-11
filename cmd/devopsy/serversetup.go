@@ -97,8 +97,8 @@ type setupAsker interface {
 }
 
 // planSetup is what --server-setup asks and what its apply is then given: each changed part
-// kept or replaced (kept with yes), the rest confirmed once, then the restart, which yes
-// takes only when no container runs. run says whether there is an apply at all: something to
+// kept or replaced (kept with yes), the rest confirmed once, then the restart, which yes asks
+// for only when no container runs, as the apply finds it. run says whether there is an apply at all: something to
 // put or record, an answer, a restart, or no record yet, which the first apply writes.
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
@@ -138,18 +138,16 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 		}
 		switch {
 		case yes:
-			restart = f.Running == 0
-			if !restart {
-				report.Info("Docker is not restarted, with containers running: it takes daemon.json at its next restart")
-			}
+			// The apply judges it under its locks, with the containers running then.
+			args, restart = append(args, "--restart-idle"), true
 		default:
 			if restart, err = ask.confirm("restart Docker now? " + cut); err != nil {
 				return nil, false, err
 			}
+			if restart {
+				args = append(args, "--restart")
+			}
 		}
-	}
-	if restart {
-		args = append(args, "--restart")
 	}
 	return args, changes || f.Records() || answers || restart || f.Record == "", nil
 }

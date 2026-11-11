@@ -192,7 +192,7 @@ func TestServerSetupApplyAnswers(t *testing.T) {
 }
 
 // A restart is refused, with nothing changed, while a release holds its environment's lock.
-func TestServerSetupRestartWaitsForNoRelease(t *testing.T) {
+func TestServerSetupRestartRefusedUnderARelease(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
 	base := filepath.Join(s.root, "shop", "prod")
@@ -307,8 +307,9 @@ func TestPlanSetup(t *testing.T) {
 			[]string{"apply these?", "restart Docker now? it cuts every docker command under way and stops every container (2 running), Docker keeping none through its restart"}, nil},
 		{"pending alone", facts("/r", 0, true, setup.InSync), false, &scripted{confirms: []bool{true}}, []string{"--restart"}, true,
 			[]string{"restart Docker now? it cuts every docker command under way"}, nil},
-		{"--yes, no container", facts("", 0, false, setup.Devopsys, setup.InSync, setup.Changed), true, &scripted{}, []string{"--keep", sum, "--restart"}, true, nil, nil},
-		{"--yes, containers running", facts("/r", 1, false, setup.Devopsys), true, &scripted{}, nil, true, nil, nil},
+		// --yes passes the restart's condition, which the apply judges under its locks.
+		{"--yes, no container", facts("", 0, false, setup.Devopsys, setup.InSync, setup.Changed), true, &scripted{}, []string{"--keep", sum, "--restart-idle"}, true, nil, nil},
+		{"--yes, containers running", facts("/r", 1, false, setup.Devopsys), true, &scripted{}, []string{"--restart-idle"}, true, nil, nil},
 	} {
 		args, run, err := planSetup(c.f, c.yes, c.ask)
 		if !slices.Equal(args, c.args) || run != c.run || err != c.err || !slices.Equal(c.ask.asked, c.asked) {
@@ -602,5 +603,29 @@ func TestServerSetupLeavesAPartSetOutsideTheFile(t *testing.T) {
 	if code != 0 || readString(daemon) != text || !strings.Contains(out, "live-restore: set outside daemon.json") || strings.Contains(out, "has yet to take") ||
 		strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") {
 		t.Errorf("--server-setup --yes (%d), the file %s:\n%s", code, readString(daemon), out)
+	}
+}
+
+// A restart asked for is judged again under the apply's lock, as every put is: when the part
+// it was for changed between the sessions and is left, with nothing in daemon.json for Docker
+// to take and nothing pending, Docker is not restarted, so no command is cut for no change.
+func TestServerSetupRestartsOnlyForWhatDockerTakes(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	other := `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`
+	write(t, filepath.Join(host, setup.DaemonFile), `{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"},"live-restore":true,"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`, 0o644)
+	dockerTook(t, host, `[{"Base":"10.200.0.0/16","Size":24}]`)
+	// Asked about a value the part held at the facts session, replaced since by other.
+	stale := `{"default-address-pools":[{"base":"10.100.0.0/16","size":24}]}`
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--replace", "default-address-pools="+setup.Digest(stale), "--restart")
+	if code != 0 || !strings.Contains(out, "changed since it was asked about") {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	d, _ := setup.ParseDaemon([]byte(readString(filepath.Join(host, setup.DaemonFile))))
+	if p, _ := setup.PartNamed("default-address-pools"); d.Observed(p) != other {
+		t.Fatalf("the part left is %s", d.Observed(p))
+	}
+	if l := readString(filepath.Join(host, "systemctl.log")); strings.Contains(l, "restart --no-block") {
+		t.Errorf("Docker restarted with nothing to take:\n%s\nsystemctl:\n%s", out, l)
 	}
 }

@@ -70,13 +70,16 @@ func runServerSetupStep(args []string) int {
 		}
 		return applySetup(h, a)
 	}
-	return fail("usage: devopsy " + remote.ServerSetupFlag + " facts | apply [--keep <part>=<sha256>]... [--replace <part>=<sha256>]... [--restart] [--upgrade]")
+	return fail("usage: devopsy " + remote.ServerSetupFlag + " facts | apply [--keep <part>=<sha256>]... [--replace <part>=<sha256>]... [--restart | --restart-idle] [--upgrade]")
 }
 
-// setupApply is what an apply was asked: the answers by part, a restart now, upgrade mode.
+// setupApply is what an apply was asked: the answers by part, a restart now (idle: only
+// with no container running), upgrade mode. A restart asked is a condition the apply judges
+// under its locks, never a decision taken from the first session's facts.
 type setupApply struct {
 	answers map[string]setup.Answer
 	restart bool
+	idle    bool
 	upgrade bool
 }
 
@@ -86,6 +89,8 @@ func parseApply(args []string) (setupApply, error) {
 		switch args[i] {
 		case "--restart":
 			a.restart = true
+		case "--restart-idle":
+			a.restart, a.idle = true, true
 		case "--upgrade":
 			a.upgrade = true
 		case "--keep", "--replace":
@@ -458,7 +463,16 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	raise := slices.ContainsFunc(f.Buffers, func(b setup.BufferFact) bool { return b.Low })
 	give := !a.upgrade && f.RootAction != ""
-	restart := a.restart
+	// A restart only for what Docker has to take, as read under the lock: daemon.json put by
+	// this run, or a change it has not taken yet.
+	restart := a.restart && (len(daemonText) > 0 || f.Pending)
+	switch {
+	case a.restart && !restart:
+		report.Info("Docker is not restarted: it has nothing new to take from daemon.json")
+	case restart && a.idle && f.Running > 0:
+		restart = false
+		report.Info("Docker is not restarted, with containers running: it takes daemon.json at its next restart")
+	}
 
 	// The release locks of the deploy user's environments, held until the restart is
 	// confirmed or given up: Docker never restarts under a release.
