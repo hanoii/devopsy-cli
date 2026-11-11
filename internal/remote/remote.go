@@ -1682,6 +1682,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if tty {
 		ttyFlag = "-t"
 	}
+	script = sessionExports(t) + script
 	if Color {
 		script = ColorEnv + "=1; export " + ColorEnv + "\n" + script
 	}

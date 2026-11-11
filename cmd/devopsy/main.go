@@ -70,6 +70,10 @@ func run() int {
 		return 2
 	}
 
+	// The command as typed, for the hints said in the sessions this devopsy opens: a session's
+	// own when this one runs in one, so it stays the operator's through every hop.
+	remote.Command = remote.OperatorCommand(os.Getenv, os.Args[1:])
+
 	// -v or -vv, and --ssh-option, go before everything else, in any
 	// order. -v is passed on through DEVOPSY_VERBOSE to nested devopsy
 	// calls: project commands calling devopsy, and devopsy on servers;
