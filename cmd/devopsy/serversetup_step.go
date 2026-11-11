@@ -507,17 +507,24 @@ func applySetup(h setupHost, a setupApply) int {
 		}
 	}
 
+	// docker.service's InvocationID just before the run: the marker's, and what a restart
+	// is known by.
+	before := systemctlShow("InvocationID")
 	var out bytes.Buffer
+	queued := false
 	if len(daemonText) > 0 || sysctlText != "" || dropinText != "" || raise || give || restart {
 		after := ""
 		if restart {
 			after = "restart"
 		}
-		if err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, systemctlShow("InvocationID"), &out); err != nil && !(restart && hasLine(out.String(), remote.SetupQueued)) {
-			sayRootLines(out.String(), putNames, f.Root)
+		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, &out)
+		// The restart may take the run's container down before its script says so: a new
+		// InvocationID says it went.
+		queued = restart && (hasLine(out.String(), remote.SetupQueued) || err != nil && before != "" && systemctlShow("InvocationID") != before)
+		sayRootLines(out.String(), putNames, f.Root)
+		if err != nil && !queued {
 			return failed(err.Error())
 		}
-		sayRootLines(out.String(), putNames, f.Root)
 	}
 	// The record follows the file, whatever the restart does next.
 	if recorded || (!rd.exists && !a.upgrade) {
@@ -528,14 +535,14 @@ func applySetup(h setupHost, a setupApply) int {
 			report.Info("this server is set up by devopsy now: its record is " + record)
 		}
 	}
-	if hasLine(out.String(), remote.SetupQueued) {
-		err := waitRestart(rd.invocation, h, setup.OutsideParts(rd.states))
+	if queued {
+		err := waitRestart(before, h, setup.OutsideParts(rd.states))
 		if err == nil {
 			report.Info("Docker restarted, with daemon.json's values")
 		} else {
 			report.Fail(err, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
 			var marked bytes.Buffer
-			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", rd.invocation, &marked) == nil {
+			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, &marked) == nil {
 				sayRootLines(marked.String(), nil, f.Root)
 			}
 			return 1
@@ -569,7 +576,7 @@ func applySetup(h setupHost, a setupApply) int {
 	if len(left) > 0 {
 		return failed("what was applied did not hold", left...)
 	}
-	if again.facts.Pending && !restart && !hasLine(out.String(), remote.SetupMarked) {
+	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
 		report.Info("Docker has yet to take daemon.json: it does at its next restart")
 	}
 	if dropinText != "" && !restart {

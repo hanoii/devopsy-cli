@@ -45,8 +45,10 @@ echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
   "show -p ActiveState --value docker.service") echo active ;;
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
-  # FAKE_RESTART_STUCK: a restart queued that never comes.
-  "restart --no-block docker.service") [ -n "${FAKE_RESTART_STUCK:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
+  # FAKE_RESTART_STUCK: a restart queued that never comes. FAKE_RESTART_CUTS: the restart
+  # takes the root run's container down before its script says it is queued.
+  "restart --no-block docker.service") [ -n "${FAKE_RESTART_STUCK:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; }
+    [ -z "${FAKE_RESTART_CUTS:-}" ] || kill -KILL "$PPID" ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -645,5 +647,17 @@ func TestServerSetupRestartNotConfirmed(t *testing.T) {
 	}
 	if rec := readRecordOf(t, s); rec["logs"] != (setup.Entry{Applied: setup.Parts[0].Want}) {
 		t.Errorf("the record: %+v", rec)
+	}
+}
+
+// A restart that takes the root run's container down before its script says it is queued is
+// still a restart: the apply reads docker.service's InvocationID again, finds it changed, and
+// waits for Docker to come back rather than calling the run a failure.
+func TestServerSetupRestartCutsItsOwnRun(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run([]string{"FAKE_RESTART_CUTS=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "Docker restarted, with daemon.json's values") || readString(filepath.Join(host, "invocation")) != "inv2\n" {
+		t.Errorf("(%d):\n%s", code, out)
 	}
 }
