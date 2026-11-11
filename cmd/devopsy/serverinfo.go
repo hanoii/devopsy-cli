@@ -211,9 +211,9 @@ func systemFacts(info *remote.ServerInfo) {
 			info.Uptime, _ = strconv.ParseFloat(f[0], 64)
 		}
 	}
-	if _, err := os.Stat("/var/run/reboot-required"); err == nil {
+	if _, err := os.Stat(remote.RebootRequired); err == nil {
 		info.RebootRequired = true
-		if data, err := os.ReadFile("/var/run/reboot-required.pkgs"); err == nil {
+		if data, err := os.ReadFile(remote.RebootRequired + ".pkgs"); err == nil {
 			for _, p := range strings.Fields(string(data)) {
 				if !slices.Contains(info.RebootPackages, p) {
 					info.RebootPackages = append(info.RebootPackages, p)

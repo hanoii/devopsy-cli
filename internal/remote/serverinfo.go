@@ -29,7 +29,7 @@ type ServerInfo struct {
 	SwapTotal    int64   `json:"swap_total"`
 	Load         string  `json:"load,omitempty"`
 	Uptime       float64 `json:"uptime,omitempty"`
-	// RebootRequired: /var/run/reboot-required is there, with the
+	// RebootRequired: the system's restart flag (the constant RebootRequired) is there, with the
 	// packages its .pkgs file names.
 	RebootRequired bool     `json:"reboot_required,omitempty"`
 	RebootPackages []string `json:"reboot_packages,omitempty"`
