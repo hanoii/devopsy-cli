@@ -323,3 +323,32 @@ func TestDecideRunSaysWhatItWrites(t *testing.T) {
 		t.Errorf("a removal names %q to give back (%v)", a.Removes, err)
 	}
 }
+
+// A script form's arguments are checked where the script reads them: one with arguments has
+// `sh` for its $0, as devopsy's own pass it, so a call without it, its arguments one place
+// off and each read against another's pattern, is refused.
+func TestScriptFormChecksArgumentsWhereTheScriptReadsThem(t *testing.T) {
+	t.Parallel()
+	entry, mnt, tree := "/space/mnt/shop-prod/data", "/space/mnt/shop-prod", "/home/devopsy-shop/shop/prod"
+	p := testPolicy
+	p.UID = "50001"
+	// Controls: devopsy's own shapes pass.
+	for name, argv := range map[string][]string{
+		"snapshot tar": {"run", "-v", mnt + ":/m/mnt:ro", "-v", tree + "/snapshots/1.tmp/data:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "f.zst", "50001:50001"},
+		"import":       {"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "data"},
+	} {
+		if _, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err != nil {
+			t.Fatalf("%s, devopsy's own: %v", name, err)
+		}
+	}
+	for name, argv := range map[string][]string{
+		// $0=mnt, $1=etc (no kind of devopsy's), $2=data, $3=50001:50001 (the output's name), $4 the owner.
+		"a snapshot tar with no $0, its kind any word": {"run", "-v", mnt + ":/m/mnt:ro", "-v", tree + "/snapshots/1.tmp/data:/o", "util:1", "sh", "-c", "tar script", "mnt", "etc", "data", "50001:50001", "50001:50001"},
+		// $0=/in/t, $1=data (the stream, no /in path), $2=data/sub/deeper (the entry emptied).
+		"an import with no $0, its entry a path": {"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "/in/t", "data", "data/sub/deeper"},
+	} {
+		if a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err == nil {
+			t.Errorf("%s: taken, and run as %q", name, a.Docker)
+		}
+	}
+}

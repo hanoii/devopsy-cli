@@ -161,21 +161,26 @@ func (s *doorSide) claimCut() *claimCut {
 	go func() {
 		select {
 		case sig := <-g.ch:
-			g.mu.Lock()
-			g.cut = true
-			if g.child != nil && g.child.Process != nil {
-				_ = syscall.Kill(-g.child.Process.Pid, syscall.SIGKILL)
-			}
-			// The claim's work directories and the rest of the request's.
-			s.madeMu.Lock()
-			for _, d := range s.made {
-				s.removeWork(d)
-			}
-			os.Exit(128 + int(sig.(syscall.Signal)))
+			g.cutBy(sig)
 		case <-g.done:
 		}
 	}()
 	return g
+}
+
+// cutBy ends the door on sig: the child's group stopped, the request's work directories, the
+// claim's among them, removed, and the signal's own exit.
+func (g *claimCut) cutBy(sig os.Signal) {
+	g.mu.Lock()
+	g.cut = true
+	if g.child != nil && g.child.Process != nil {
+		_ = syscall.Kill(-g.child.Process.Pid, syscall.SIGKILL)
+	}
+	g.s.madeMu.Lock()
+	for _, d := range g.s.made {
+		g.s.removeWork(d)
+	}
+	os.Exit(128 + int(sig.(syscall.Signal)))
 }
 
 // workDir is a work directory of the door's (workDir) that goes with the claim, made under the
@@ -219,6 +224,13 @@ func (g *claimCut) runWithin(c *exec.Cmd, within time.Duration) error {
 // end stops the watch and removes the claim's work directories.
 func (g *claimCut) end() {
 	signal.Stop(g.ch)
+	// A signal that came as the claim ended, still unread (the watch might take done first):
+	// it ends the door as it would have a moment before, never lost.
+	select {
+	case sig := <-g.ch:
+		g.cutBy(sig)
+	default:
+	}
 	close(g.done)
 	g.mu.Lock()
 	defer g.mu.Unlock()

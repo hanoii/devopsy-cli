@@ -101,7 +101,7 @@ func listProjectUsers(d *remote.Door) int {
 	}
 	for _, who := range slices.Sorted(maps.Keys(pending)) {
 		report.Warn(who+": a removal it had did not complete, and the door answers it nothing until it does",
-			"a listing or an edit of its keys completes it, as a removal asked again does")
+			"a removal asked again completes it, as does a listing or an edit of its keys while its Unix user is there")
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
@@ -183,6 +183,13 @@ func doorNameOwner(d *remote.Door, root, name string) string {
 }
 
 func addProjectUser(d *remote.Door, project, who, entry string) int {
+	// A removal of the user's, or a key's removal's end, not seen through: what settles it
+	// would take what add writes now (its entry), so it goes first.
+	if fileExists(remote.DoorRemovingFile(who)) || fileExists(remote.DoorEndingFile(who)) {
+		report.Fail(errors.New("a removal of "+who+"'s did not complete, and finishing it would undo this add"),
+			report.Fix("ask for the removal again, which finishes it, or list the user's keys if only a key was being removed, then add it"))
+		return 1
+	}
 	if err := spaceGuarded(d.Space); err != nil {
 		report.Fail(err, spaceFix(d.Space))
 		return 1
@@ -351,9 +358,25 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 			}
 			return finishRemoval(d, project, who, end)
 		}
+		// A user the config names: its entry is the admin's to drop, and everything else of a
+		// removal (its keys, which sshd takes from the keys file alone, its end, what the door
+		// kept) is the door's, done here the same, so following the words below leaves nothing.
 		if d != nil {
 			if _, ok := d.Users[who]; ok {
-				return fail(who + " is under door: users: in " + remote.UserConfigFile() + ": remove it there")
+				if err := lockedKeys(keys, func([]string) ([]string, error) {
+					if err := os.WriteFile(removing, []byte(project+"\n"), 0o600); err != nil {
+						return nil, err
+					}
+					return nil, os.WriteFile(ending, nil, 0o600)
+				}); err != nil {
+					return failErr(err)
+				}
+				if code := finishRemoval(d, project, who, end); code != 0 {
+					return code
+				}
+				report.Fail(errors.New(who+"'s keys and processes are gone, and door: users: in "+remote.UserConfigFile()+" still names it"),
+					report.Fix("remove it there"))
+				return 1
 			}
 		}
 		return fail("no project user for " + project + " here")

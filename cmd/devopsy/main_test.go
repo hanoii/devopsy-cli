@@ -7,10 +7,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
@@ -46,6 +48,17 @@ func TestMain(m *testing.M) {
 			_, err = f.WriteString(who + "\n")
 			return err
 		}))
+	}
+	// A claim's guard ended with a signal already waiting (TestDoorClaimEndKeepsALateSignal).
+	if space := os.Getenv("DEVOPSY_TEST_CLAIM_END"); space != "" {
+		s := &doorSide{policy: door.Policy{Project: "shop", Space: space}}
+		g := &claimCut{s: s, ch: make(chan os.Signal, 1), done: make(chan struct{})}
+		if _, err := g.workDir(); err != nil {
+			panic(err)
+		}
+		g.ch <- syscall.SIGTERM
+		g.end()
+		os.Exit(0)
 	}
 	if os.Getenv("DEVOPSY_TEST_EXEC_DECIDED") != "" {
 		// TestDoorGivesWhatItExecsItsStops: as runDoor, then the exec.

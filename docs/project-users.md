@@ -502,10 +502,13 @@ and volumes, which `--destroy` takes first. What the door kept for it,
 its registry logins and the record of the images it claimed, goes too.
 
 If the end of its processes fails (Docker restarting, say), the removal
-says so and stays marked: the door answers the user nothing, and the
-same command run again, or a listing of the user's keys
-(`--ssh-keys --for shop`), finishes it. `--project-users` lists any
-removal left so.
+says so and stays marked: the door answers the user nothing and sshd
+takes none of its keys, and the same command run again finishes it, as
+does a listing of the user's keys (`--ssh-keys --for shop`) while its
+Unix user is there. `--project-users` lists any removal left so, and
+`--project-users add` of that project refuses until it is finished. A
+user under `door: users:` in the config is removed the same way, then
+named for its admin to drop from there.
 
 Removing a project user clears nothing a leaked key left in its home:
 delete and recreate the home too.

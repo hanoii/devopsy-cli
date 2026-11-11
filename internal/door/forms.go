@@ -112,14 +112,20 @@ func CloneDir(rest string) bool {
 func target(pattern string) *regexp.Regexp { return regexp.MustCompile(`^` + pattern + `$`) }
 
 // script matches `sh -c <text> sh <args>`, each argument of the form at its place, the
-// last repeating. A word never starts with a dash: `find "$@"` would take it as code.
+// last repeating. A script with arguments has `sh` for its $0, as devopsy's own pass it:
+// without it the first argument would be $0 and each other one place before where the script
+// reads it, so each would be checked against another's pattern. A word never starts with a
+// dash: `find "$@"` would take it as code.
 func script(text string, args ...*regexp.Regexp) func([]string) bool {
 	return func(cmd []string) bool {
 		if len(cmd) < 3 || cmd[0] != "sh" || cmd[1] != "-c" || cmd[2] != text {
 			return false
 		}
 		rest := cmd[3:]
-		if len(rest) > 0 && rest[0] == "sh" {
+		if len(rest) > 0 {
+			if rest[0] != "sh" {
+				return false
+			}
 			rest = rest[1:]
 		}
 		for i, a := range rest {

@@ -26,10 +26,24 @@ func runAuthorizedKeys(args []string) int {
 	if !projectUserName(args[0]) {
 		return 2
 	}
-	if code := printAuthorizedKeys(os.Stdout, remote.DoorKeysFile(args[0])); code != 0 {
+	return authorizedKeysOf(os.Stdout, args[0])
+}
+
+// authorizedKeysOf writes to w the keys sshd takes for the project user who.
+func authorizedKeysOf(w io.Writer, who string) int {
+	// A removal of the user's not seen through (remote.DoorRemovingFile): no key at all, its
+	// keys being what it is to lose; a key's removal's end pending (DoorEndingFile): its keys
+	// kept, none of its sync keys, which the removed key could have added and the end drops.
+	if fileExists(remote.DoorRemovingFile(who)) {
+		return 0
+	}
+	if code := printAuthorizedKeys(w, remote.DoorKeysFile(who)); code != 0 {
 		return code
 	}
-	return printAuthorizedKeys(os.Stdout, remote.DoorSyncKeysFile(args[0]))
+	if fileExists(remote.DoorEndingFile(who)) {
+		return 0
+	}
+	return printAuthorizedKeys(w, remote.DoorSyncKeysFile(who))
 }
 
 // printAuthorizedKeys writes the lines of file that parse as keys, none for no file.

@@ -809,3 +809,21 @@ func TestDoorClaimStopsAtTheUsersEnd(t *testing.T) {
 		t.Fatal("the start never ended")
 	}
 }
+
+// A signal that came as a claim ended, still unread by its watch, ends the door as it would a
+// moment before (claimCut.end): never lost, so a release cancelled at that moment goes on to
+// no compose. In a helper process (TestMain), since the door then exits.
+func TestDoorClaimEndKeepsALateSignal(t *testing.T) {
+	t.Parallel()
+	space := t.TempDir()
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_CLAIM_END="+space)
+	err := c.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 128+int(syscall.SIGTERM) {
+		t.Errorf("a claim ended with a signal waiting went on (%v)", err)
+	}
+	if work, _ := os.ReadDir(filepath.Join(space, "work")); len(work) > 0 {
+		t.Errorf("it left work: %v", work)
+	}
+}

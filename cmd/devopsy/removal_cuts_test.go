@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,7 +48,7 @@ func newRemovalCut(t *testing.T) *removalCut {
 	write(t, filepath.Join(home, remote.ConfigFile), "door:\n  space: "+c.space+"\n", 0o600)
 	write(t, c.entry, "project: shop\n", 0o600)
 	write(t, c.keys, cutRemoved+cutKept, 0o600)
-	write(t, c.syncKeys, "a sync's key\n", 0o600)
+	write(t, c.syncKeys, `restrict,command="true" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g devopsy-sync-1`+"\n", 0o600)
 	write(t, c.logins, "{}\n", 0o600)
 	write(t, c.record, "sha256:1\n", 0o600)
 	write(t, c.record+".lock", "", 0o600)
@@ -126,7 +127,9 @@ func (c *removalCut) removedLeft() []string {
 			left = append(left, name)
 		}
 	}
-	if remote.KeysLeft(c.keys) {
+	// What sshd takes, by the keys command itself.
+	var taken bytes.Buffer
+	if authorizedKeysOf(&taken, "devopsy-shop") != 0 || strings.Contains(taken.String(), "ssh-") || remote.KeysLeft(c.keys) {
 		left = append(left, "keys sshd takes")
 	}
 	if !strings.Contains(readString(c.ended), "devopsy-shop") {
@@ -161,6 +164,24 @@ func TestRemovalCuts(t *testing.T) {
 		},
 	}
 	for n := 1; n <= len(userRemovalSteps); n++ {
+		// Before anything settles it: sshd takes no key of the user's, and an add over it is
+		// refused, which settling the removal would undo.
+		t.Run(fmt.Sprintf("cut after %s, before it is settled", userRemovalSteps[n-1]), func(t *testing.T) {
+			c := newRemovalCut(t)
+			c.cutAfter(n)
+			var taken bytes.Buffer
+			if authorizedKeysOf(&taken, who) != 0 || taken.Len() > 0 {
+				t.Errorf("sshd takes %q", taken.String())
+			}
+			d, err := remote.ServerDoor()
+			if err != nil {
+				t.Fatal(err)
+			}
+			had := fileExists(c.entry)
+			if code := addProjectUser(d, "shop", who, c.entry); code == 0 || fileExists(c.entry) != had || !fileExists(c.removing) {
+				t.Errorf("an add over it (exit %d): its entry %v (was %v), its mark %v", code, fileExists(c.entry), had, fileExists(c.removing))
+			}
+		})
 		for how, settle := range settles {
 			t.Run(fmt.Sprintf("cut after %s, then %s", userRemovalSteps[n-1], how), func(t *testing.T) {
 				c := newRemovalCut(t)
@@ -180,6 +201,11 @@ func TestRemovalCuts(t *testing.T) {
 		c := newRemovalCut(t)
 		write(t, c.ending, "", 0o600)
 		write(t, c.keys, cutKept, 0o600)
+		// Meanwhile sshd takes the kept key, never a sync key the removed one could have added.
+		var taken bytes.Buffer
+		if authorizedKeysOf(&taken, who) != 0 || !strings.Contains(taken.String(), "laptop") || strings.Contains(taken.String(), "sync") {
+			t.Errorf("while its end is pending, sshd takes %q", taken.String())
+		}
 		out := c.script(remote.KeysReadScript(who), "")
 		if !strings.Contains(readString(c.ended), who) || fileExists(c.ending) || !remote.KeysLeft(c.keys) || !fileExists(c.logins) || !fileExists(c.record) || !fileExists(c.entry) {
 			t.Errorf("ended %q, its end's mark %v, a key left %v, its logins %v, its record %v, its entry %v:\n%s",
