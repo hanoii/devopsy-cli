@@ -1,0 +1,41 @@
+package main
+
+import (
+	"slices"
+	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
+)
+
+// Each root run on a host gets what it declares and nothing more: --project-users add's host
+// step writes the host's files with no network, the firewall's read and load have the host's
+// network, processes, cgroups, NET_ADMIN and SYS_PTRACE, its read only a read-only root.
+func TestHostRunArgs(t *testing.T) {
+	t.Parallel()
+	script := remote.DoorHostScript("deploy", "/opt/bin/devopsy")
+	for _, c := range []struct {
+		name string
+		run  hostRun
+		want []string
+	}{
+		{"add", addUserRun("deploy", "/opt/bin/devopsy", "devopsy-shop", "/srv/shop", "/srv"),
+			[]string{"run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", script, "sh", "devopsy-shop", "/srv/shop", "/srv"}},
+		{"add in the home", addUserRun("deploy", "/opt/bin/devopsy", "devopsy-shop", "", ""),
+			[]string{"run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", script, "sh", "devopsy-shop", "", ""}},
+		{"firewall read", firewallRun("read it", false),
+			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host:ro", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", "read it"}},
+		{"firewall load", firewallRun("load it", true),
+			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", "load it"}},
+		{"unconfined, read-only, no network", hostRun{Unconfined: true, Script: "s", Args: []string{"a"}},
+			[]string{"run", "--rm", "--network", "none", "--security-opt", "apparmor=unconfined", "-v", "/:/host:ro", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", "s", "sh", "a"}},
+	} {
+		if got := c.run.dockerArgs(); !slices.Equal(got, c.want) {
+			t.Errorf("%s:\n%q\nwant\n%q", c.name, got, c.want)
+		}
+	}
+}

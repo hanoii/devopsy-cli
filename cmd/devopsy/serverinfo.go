@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,27 +109,17 @@ func doorFirewallWrong(read string) ([]string, error) {
 	return remote.DoorFirewallWrong(read, g.Gid, d.Gid), nil
 }
 
-// doorHostRead runs script as root on the host with its network, its processes and its
-// cgroups, through the util image (writing the host's files when write), and returns what it
-// prints: the firewall finds Docker's daemon and names its cgroup as the host has them. With
-// SYS_PTRACE, which a host hiding other users' processes (/proc's hidepid) asks of a root
-// without every capability of the process it looks at, dockerd's.
+// doorHostRead runs script as root on the host for the project users' firewall (firewallRun,
+// writing the host's files when write), and returns what it prints.
 func doorHostRead(script string, write bool) (string, error) {
-	if err := ensureUtilImage(context.Background()); err != nil {
+	var out bytes.Buffer
+	err := firewallRun(script, write).run(&out, func(err error) error {
+		return fmt.Errorf("the project users' firewall: %v", err)
+	})
+	if err != nil {
 		return "", err
 	}
-	bind := "/:/host:ro"
-	if write {
-		bind = "/:/host"
-	}
-	c := exec.Command("docker", "run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", bind, remote.UtilImage,
-		"chroot", "/host", "/bin/sh", "-c", script)
-	c.Stderr = os.Stderr
-	out, err := c.Output()
-	if err != nil {
-		return "", fmt.Errorf("the project users' firewall: %v", err)
-	}
-	return string(out), nil
+	return out.String(), nil
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its

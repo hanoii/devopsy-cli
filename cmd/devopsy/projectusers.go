@@ -257,11 +257,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Info("closed to project users the deploy user's projects in " + r.Root + ": " + strings.Join(closed, ", "))
 	}
 	var out bytes.Buffer
-	c := exec.Command("docker", "run", "--rm", "--network", "none", "-v", "/:/host", remote.UtilImage,
-		"chroot", "/host", "/bin/sh", "-c", remote.DoorHostScript(me.Username, devopsyPath()), "sh", who, tree, root)
-	c.Stdout, c.Stderr = &out, os.Stderr
-	if err := c.Run(); err != nil {
-		return fail("making " + who + " failed: " + err.Error())
+	if err := addUserRun(me.Username, devopsyPath(), who, tree, root).run(&out, func(err error) error {
+		return errors.New("making " + who + " failed: " + err.Error())
+	}); err != nil {
+		return fail(err.Error())
 	}
 	if _, ok := d.Users[who]; !ok {
 		body := "project: " + project + "\n"
