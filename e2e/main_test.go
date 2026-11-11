@@ -282,7 +282,7 @@ func runLanes(n int) (int, error) {
 // deploy user's login shell, a port closed on the second server.
 func resetLane(l lane) {
 	_, _ = docker("exec", l.operator, "sh", "-c", "pkill -x devopsy; pkill -x ssh; pkill -x script; iptables -F; tc qdisc del dev eth0 root 2>/dev/null; true")
-	_, _ = docker("exec", l.server, "sh", "-c", "tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; for m in $(awk '$2 ~ \"^/home/devopsy/\" {print $2}' /proc/mounts); do umount -l \"$m\"; done; true")
+	_, _ = docker("exec", l.server, "sh", "-c", "ip link del srvfwmd0 2>/dev/null; docker rm -f srvfw-md >/dev/null 2>&1; for c in iptables ip6tables; do while $c -t raw -D PREROUTING -j DEVOPSY-CONTAINERS 2>/dev/null; do :; done; $c -t raw -F DEVOPSY-CONTAINERS 2>/dev/null && $c -t raw -X DEVOPSY-CONTAINERS 2>/dev/null; done; rm -f /usr/local/libexec/devopsy-firewall /run/devopsy-firewall.loaded; tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; for m in $(awk '$2 ~ \"^/home/devopsy/\" {print $2}' /proc/mounts); do umount -l \"$m\"; done; true")
 	_, _ = docker("exec", l.server2(), "iptables", "-F", "INPUT")
 	// The door server's mounts a test made below the door's space (TestDoorReflinks' XFS), never
 	// the space's own: none there when the lane has no door server.
