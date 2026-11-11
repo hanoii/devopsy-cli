@@ -139,3 +139,45 @@ func TestServerReadyReadsNoChainsThroughAnotherHostsDocker(t *testing.T) {
 		t.Errorf("a release's root read through another host's Docker:\n%s", docker)
 	}
 }
+
+// A restart that leaves Docker down names the firewall among what was not applied, and loads
+// nothing: TestServerSetupFirewallAfterARestartNotConfirmed takes either outcome from a
+// Docker that answers, so this side had no test.
+func TestServerSetupFirewallNotAppliedWithDockerDown(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run([]string{"FAKE_RESTART_DOWN=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "error: not applied: "+setup.FirewallItemName+", Docker not answering since its restart") || fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// --upgrade notes its version beside a refusal that stops nothing (no tar), and none beside
+// one that stops a change it had to make (no flock, the firewall to load again): the version
+// says the apply took everything, which only the second leaves undone.
+func TestUpgradeNotesItsVersionByWhatARefusalStopped(t *testing.T) {
+	t.Parallel()
+	for tool, noted := range map[string]bool{"tar": true, "flock": false} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+			s, host := setupServer(t)
+			if err := os.MkdirAll(s.root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+			write(t, record, "daemon.json: {}\n", 0o600)
+			firewallLoaded(t, host, false)
+			// The loader's mode lost: the firewall to load again, which --upgrade does.
+			if err := os.Chmod(filepath.Join(host, remote.FirewallScript), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, code := s.run([]string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), tool)}, remote.ServerSetupFlag, "apply", "--upgrade")
+			if code != 0 || !strings.Contains(out, "no "+tool+" in PATH") {
+				t.Fatalf("the control (%d):\n%s", code, out)
+			}
+			if r, _, _ := setup.ReadRecord(record); (r.Version == binaryVersion(t)) != noted {
+				t.Errorf("no %s: version %q noted, want noted %v:\n%s", tool, r.Version, noted, out)
+			}
+		})
+	}
+}
