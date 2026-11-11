@@ -105,7 +105,8 @@ restart_flag /run/docker-mark "$1"`, "sh", "id-1")
 // A host piece lands only when it is missing or differs, and only once it passed its check:
 // a sudoers file or a sshd drop-in that does not parse breaks every sudo, or every login, on
 // the server. One that is the same is left as it is, which is how add knows nothing changed
-// (no reboot asked); one refused leaves what was there, and nothing beside it.
+// (no reboot asked), and one whose mode alone differs gets its mode back; one refused leaves
+// what was there, and nothing beside it.
 func TestHostPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -150,6 +151,21 @@ func TestHostPut(t *testing.T) {
 		t.Errorf("a piece that differs (%d): %s", code, out)
 	}
 	holds("a piece that differs", "rule two\n")
+	// The same text in another mode (a loader that lost its exec bit) gets its mode back,
+	// with no check run, and says it changed; then it is the same again.
+	if err := os.Chmod(f, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := put("exit 9", "rule two\n"); code != 0 {
+		t.Errorf("the same piece in another mode (%d): %s", code, out)
+	}
+	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("its mode put back: %v (%v)", fi.Mode(), err)
+	}
+	if code, out := put("exit 9", "rule two\n"); code != 1 {
+		t.Errorf("the same piece in its mode again (%d): %s", code, out)
+	}
+	holds("a piece whose mode was put back", "rule two\n")
 	if err := os.Remove(f); err != nil {
 		t.Fatal(err)
 	}
