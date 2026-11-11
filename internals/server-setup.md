@@ -19,6 +19,13 @@
 - A root that resolves to `/`, through a link, refuses as `/` does.
 - The mounts drop-in's want comes from the release root alone, in its one form, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.
+- The metadata firewall is an item of devopsy's own (`setup.FirewallItem`, `setup.JudgeFirewall`): put back, never asked keep or replace, loaded through the door's one loader, its unit and its timer, the containers' chain alone without a door.
+- The firewall's want is `firewall: metadata:` in the deploy user's config, `block` by default, never an address: on one server the address is the provider's, so naming it would be turning the block off.
+- `allow` with a door refuses before anything changes, a project user's containers never reaching a metadata service; `allow` without one removes what devopsy put, files by their header only (`FirewallRemove`).
+- The firewall's state for the deploy user, who cannot read iptables, is its pieces against devopsy's (`remote.FirewallFiles`), the loader's mark (`remote.FirewallMark`) and its unit's result; the full read of the chains is root's, in the apply (`firewallRun`, the firewall's own root run) and in `--project-users add`.
+- Without a door the Docker drop-in is not put: it serves the daemon's cgroup jump, while the containers' chain goes by interface and Docker's start leaves raw's PREROUTING as it was.
+- An item may need its first apply confirmed (`setup.Item.ConfirmFirst`): `--upgrade` never makes the firewall's first load, which can cut a running app off from its instance's credentials, says `--server-setup` loads it, and once loaded keeps it.
+- No release refuses or warns for the metadata firewall.
 - A run raises a live socket buffer only when lower, never lowering it; one that cannot be raised fails the second check, naming the reboot that loads the file.
 - The sysctl file sets 7500000 at each boot, over an earlier file's higher value: a higher one belongs in a file sorting after `90-devopsy-net.conf`.
 

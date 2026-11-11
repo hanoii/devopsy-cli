@@ -185,9 +185,12 @@ DNS resolver.
 The metadata addresses are IPv4's link-local (`169.254.0.0/16`),
 Alibaba's and Azure's addresses outside it, and the IPv6 addresses of
 AWS, Google, OpenStack and Oracle. Containers, the deploy user's
-included, cannot reach them either: an app that takes the instance's
-credentials from them needs credentials of its own. DNS at those
-addresses still answers, since some clouds run their resolver there.
+included, cannot reach them either, on this server as on any that
+`--server-setup` set up ([Servers](servers.md#--server-setup)): an app
+that takes the instance's credentials from them needs credentials of its
+own. DNS at those addresses still answers, since some clouds run their
+resolver there. A server with project users refuses
+`firewall: metadata: allow`.
 
 Docker's daemon contacts no registry a project user names, but it still
 pulls for the deploy user, so the firewall keeps it off the host's
@@ -211,10 +214,11 @@ The rules are in four chains devopsy owns, `DEVOPSY-PROJECTS`,
 its raw table, and the server's other rules stay as they are.
 `devopsy-firewall.service` loads them at every boot, a drop-in for
 `docker.service` loads them at every start of Docker, whose daemon's
-rule holds only the cgroup it was loaded for, and from the next boot on
+rule holds only the cgroup it was loaded for, and
 `devopsy-firewall.timer` loads them every five minutes too, so a reload
 of the server's own firewall that drops them is undone within five
-minutes. Syncs between servers work with the firewall loaded.
+minutes. On a server with no project users the same loader, unit and
+timer load `DEVOPSY-CONTAINERS` alone. Syncs between servers work with the firewall loaded.
 
 `--server-info` checks the firewall and warns when:
 
