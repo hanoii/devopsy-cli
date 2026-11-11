@@ -98,7 +98,7 @@ docker run -d --name srvfw-md --network host busybox:1.37 sh -c 'mkdir -p /w && 
 	if udpGot("5353") {
 		t.Error("a container's datagram to the metadata address went through the firewall")
 	}
-	// Loaded again, as the boot's unit and the timer do, with another tool's rule in raw's
+	// Loaded again, as the boot's unit and an install do, with another tool's rule in raw's
 	// PREROUTING: the same chain, one jump, and the other rule still there.
 	other := "-s 10.9.9.9/32 -j DROP"
 	srvRoot(t, "iptables -t raw -A PREROUTING "+other)

@@ -268,16 +268,16 @@ const firewallItem = setup.FirewallItemName
 // firewallFact is the metadata firewall as the deploy user can judge it, who cannot read
 // iptables: what the server has of it (any file of devopsy's by its header, or the mark; the
 // door's where the mark or the loader says so), its files against devopsy's
-// (remote.FirewallFiles, modes included), the boot's link to its unit, and the mark the last load that went in left (remote.FirewallMark), whoever ran it. The unit's
+// (remote.FirewallFiles, modes included), the boot's link to its unit, no retired unit left
+// (remote.FirewallRetired), and the mark the last load that went in left (remote.FirewallMark), whoever ran it. The unit's
 // result is words only, for a firewall to load again: a load the unit did not run leaves it
 // as it was. The full read of the chains is root's, the apply's.
 func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 	mark, markErr := os.ReadFile(h.path(remote.FirewallMark))
 	loader, _ := os.ReadFile(h.path(remote.FirewallScript))
 	loaded := setup.NoFirewall
-	if markErr == nil || slices.ContainsFunc(slices.Collect(maps.Keys(remote.FirewallFiles(true))), func(p string) bool {
-		text, err := os.ReadFile(h.path(p))
-		return err == nil && remote.FirewallPiece(string(text))
+	if markErr == nil || slices.ContainsFunc(append(slices.Collect(maps.Keys(remote.FirewallFiles(true))), slices.Collect(maps.Keys(remote.FirewallRetired))...), func(p string) bool {
+		return devopsysAt(h, p)
 	}) {
 		loaded = setup.ContainersFirewall
 	}
@@ -298,6 +298,13 @@ func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 	// The boot's link to the unit, without which no boot loads it.
 	to, err := os.Readlink(h.path(remote.FirewallUnitLink))
 	inSync = inSync && err == nil && to == remote.FirewallUnit
+	// A retired unit an earlier install left, or the link left to it, which the next install
+	// takes as its removal does (remote.FirewallRetired).
+	for u, l := range remote.FirewallRetired {
+		_, gone := os.Stat(h.path(u))
+		_, unlinked := os.Lstat(h.path(l))
+		inSync = inSync && !devopsysAt(h, u) && (unlinked != nil || gone == nil)
+	}
 	fact := &setup.FirewallFact{Door: wantDoor, State: setup.JudgeFirewall(allow, door, loaded, inSync)}
 	if fact.State == setup.FirewallReload {
 		if result := unitShow("devopsy-firewall.service", "Result"); result != "" && result != "success" {
@@ -305,6 +312,13 @@ func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 		}
 	}
 	return fact
+}
+
+// devopsysAt says whether the host's file at p is one of the firewall's devopsy wrote, by its
+// header.
+func devopsysAt(h setupHost, p string) bool {
+	text, err := os.ReadFile(h.path(p))
+	return err == nil && remote.FirewallPiece(string(text))
 }
 
 // toolsItem is the tools' required item's name.

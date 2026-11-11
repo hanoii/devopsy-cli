@@ -219,11 +219,11 @@ The rules are in four chains devopsy owns, `DEVOPSY-PROJECTS`,
 its raw table, and the server's other rules stay as they are.
 `devopsy-firewall.service` loads them at every boot, a drop-in for
 `docker.service` loads them at every start of Docker, whose daemon's
-rule holds only the cgroup it was loaded for, and
-`devopsy-firewall.timer` loads them every five minutes too, so a reload
-of the server's own firewall that drops them is undone within five
-minutes. On a server with no `door:` in its config and no door's
-firewall loaded, the same loader, unit and timer load
+rule holds only the cgroup it was loaded for, and `--project-users add`
+and `--server-setup` load them too. Nothing loads them in between: a
+reload of the server's own firewall, or an `iptables -F`, drops them
+until one of those runs again. On a server with no `door:` in its
+config and no door's firewall loaded, the same loader and unit load
 `DEVOPSY-CONTAINERS` alone. Syncs between servers work with the firewall
 loaded.
 

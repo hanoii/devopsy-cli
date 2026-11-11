@@ -195,15 +195,14 @@ func TestFirewallScripts(t *testing.T) {
 	if restore < 0 || jump < restore || !strings.Contains(l[:restore], "if [ -e /proc/net/if_inet6 ]; then\nprintf '%s' '*filter\n:"+DoorChain+" - [0:0]\n") {
 		t.Errorf("the loader:\n%s", l)
 	}
-	// Loaded at boot, and every few minutes after: a reload of the server's own firewall
-	// (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules silently. A
-	// service that stays active once run would never run again by its timer.
+	// Loaded at boot; a unit that stayed active once run would never start again, by hand or
+	// by an install.
 	install := FirewallInstall(true)
-	if !strings.Contains(install, "ln -sfn "+FirewallUnit+` "$host_root/etc/systemd/system/multi-user.target.wants/`) || !strings.Contains(install, "ln -sfn "+FirewallTimer+` "$host_root/etc/systemd/system/timers.target.wants/`) {
-		t.Errorf("the units not enabled:\n%s", install)
+	if !strings.Contains(install, "ln -sfn "+FirewallUnit+` "$host_root`+FirewallUnitLink+`"`) {
+		t.Errorf("the unit not enabled:\n%s", install)
 	}
-	if strings.Contains(firewallUnitText, "RemainAfterExit") || !strings.Contains(firewallTimerText, "OnUnitInactiveSec=") {
-		t.Errorf("the units:\n%s\n%s", firewallUnitText, firewallTimerText)
+	if strings.Contains(firewallUnitText, "RemainAfterExit") {
+		t.Errorf("the unit:\n%s", firewallUnitText)
 	}
 	// At boot it loads after what loads a whole ruleset, which would drop it, and before the
 	// network's services, sshd and Docker among them: no project user logs in ahead of it.
@@ -614,7 +613,7 @@ func TestFirewallLoaderLockWait(t *testing.T) {
 }
 
 // A load leaves the last good mark while it runs, written by rename once it went in, and
-// none when it fails: a check made while the timer's load runs reads the firewall loaded.
+// none when it fails: a check made while another load runs reads the firewall loaded.
 func TestFirewallLoaderMarks(t *testing.T) {
 	t.Parallel()
 	bin, state := t.TempDir(), t.TempDir()
@@ -642,11 +641,11 @@ func TestFirewallLoaderMarks(t *testing.T) {
 	}
 }
 
-// A removal leaves nothing loaded, a load waiting for its lock included: it stops the timer
-// and the unit while it holds the lock, and a loader that still gets the lock after it (one
-// started by other means) finds its own file gone and loads nothing. The fake systemctl
-// starts such a loader when the timer is stopped, not stopping it with the unit, and holds the
-// removal until that loader asked for the lock.
+// A removal leaves nothing loaded, a load waiting for its lock included: it stops the unit
+// while it holds the lock, and a loader that still gets the lock after it (one started by
+// other means, by hand) finds its own file gone and loads nothing. The fake systemctl starts
+// such a loader when the unit is stopped, not stopping it, and holds the removal until that
+// loader asked for the lock.
 func TestFirewallRemovalLeavesNoLoadBehind(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -673,7 +672,7 @@ func TestFirewallRemovalLeavesNoLoadBehind(t *testing.T) {
 		"systemctl": `#!/bin/sh
 echo "systemctl $*" >>` + state + `/systemctl.log
 case "$*" in
-  "stop devopsy-firewall.timer"*)
+  "stop devopsy-firewall.service")
     # As systemd starts it: none of the removal's descriptors, its lock's among them.
     ( exec 9>&-; sh ` + loader + ` >` + state + `/loader.out 2>&1; : >` + state + `/loader.done ) &
     n=0
@@ -710,13 +709,14 @@ esac
 		t.Errorf("after a removal, a loader that waited for its lock loaded the firewall again: jump %v, chain %v, mark %v\n%s",
 			fileThere(filepath.Join(state, "fw.iptables.jump")), fileThere(filepath.Join(state, "fw.iptables.chain")), fileThere(mark), out)
 	}
-	if l := readFile(filepath.Join(state, "systemctl.log")); !strings.Contains(l, "systemctl stop devopsy-firewall.timer devopsy-firewall.service\n") {
+	if l := readFile(filepath.Join(state, "systemctl.log")); !strings.Contains(l, "systemctl stop devopsy-firewall.service\n") {
 		t.Errorf("the removal stopped no unit:\n%s", l)
 	}
 }
 
 // devopsy's header on a firewall's file reads the same in Go and in the removal's shell: on
-// its first line, or on its second after a #!, and nowhere else.
+// its first line, or on its second after a #!, and nowhere else, an older install's header
+// too.
 func TestFirewallPiece(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -726,7 +726,8 @@ func TestFirewallPiece(t *testing.T) {
 		firewallDockerText:                  true,
 		"[Unit]\n" + firewallHeader + "x\n": false,
 		"#!/bin/sh\n# The admin's own.\n" + firewallHeader + "it says further down\n": false,
-		"# Written by devopsy.\n": false,
+		"# Written by devopsy (devopsy @<server> --project-users add).\n":             true,
+		"# Written by someone.\n": false,
 		firewallHeader:            true,
 		"":                        false,
 	} {
@@ -742,11 +743,12 @@ func TestFirewallPiece(t *testing.T) {
 	}
 }
 
-// The removal, run: under the firewall's lock, the timer stopped before anything else, as it
-// would load the firewall again under the removal; the containers' jump and chain out of raw;
-// the firewall's files gone only where they carry devopsy's header (an admin's own file at
-// one of their paths stays); the timer's link left dangling gone, and so the mark; run
-// again, as after a cut, it ends with nothing left to remove and no failure.
+// The removal, run: under the firewall's lock, the unit stopped before anything else, as a run
+// of it would load the firewall again; the containers' jump and chain out of raw; the
+// firewall's files gone only where they carry devopsy's header (an admin's own file at one
+// of their paths stays); a retired timer an older install put stopped and gone, with its
+// link, and so the mark; run again, as after a cut, it ends with nothing left to remove and
+// no failure.
 func TestFirewallRemove(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -784,11 +786,13 @@ esac
 	// An admin's own unit at the unit's path, and devopsy's header further down in it.
 	admins := "[Unit]\nDescription=the admin's own\n" + firewallHeader + "it says further down\n"
 	write(t, filepath.Join(host, FirewallUnit), admins)
-	timerLink := filepath.Join(host, "/etc/systemd/system/timers.target.wants/devopsy-firewall.timer")
+	timer := "/etc/systemd/system/devopsy-firewall.timer"
+	write(t, filepath.Join(host, timer), "# Written by devopsy (devopsy @<server> --project-users add).\n[Timer]\n")
+	timerLink := filepath.Join(host, FirewallRetired[timer])
 	if err := os.MkdirAll(filepath.Dir(timerLink), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(host, FirewallTimer), timerLink); err != nil {
+	if err := os.Symlink(timer, timerLink); err != nil {
 		t.Fatal(err)
 	}
 	mark := filepath.Join(dir, "mark")
@@ -803,7 +807,10 @@ esac
 	if err != nil {
 		t.Fatalf("%v: %s\n%s", err, out, readFile(filepath.Join(dir, "log")))
 	}
-	for _, p := range []string{FirewallScript, FirewallTimer, FirewallDockerDropIn} {
+	if fileThere(filepath.Join(host, timer)) || !strings.Contains(readFile(filepath.Join(dir, "log")), "systemctl stop devopsy-firewall.timer\n") {
+		t.Error("the retired timer left, or not stopped")
+	}
+	for _, p := range []string{FirewallScript, FirewallDockerDropIn} {
 		if _, err := os.Stat(filepath.Join(host, p)); err == nil || !strings.Contains(out, "removed "+p) {
 			t.Errorf("%s left, or not said:\n%s", p, out)
 		}
@@ -812,14 +819,14 @@ esac
 		t.Errorf("the admin's own unit removed:\n%s", out)
 	}
 	if _, err := os.Lstat(timerLink); err == nil {
-		t.Error("the timer's link left dangling")
+		t.Error("the retired timer's link left")
 	}
 	if _, err := os.Stat(mark); err == nil {
 		t.Error("the mark left")
 	}
 	log := readFile(filepath.Join(dir, "log"))
-	if stop, del := strings.Index(log, "systemctl stop devopsy-firewall.timer"), strings.Index(log, "-D PREROUTING"); stop < 0 || del < stop || strings.Contains(log, "no wait") {
-		t.Errorf("the timer not stopped before the jump goes, or a call with no wait for xtables' lock:\n%s", log)
+	if stop, del := strings.Index(log, "systemctl stop devopsy-firewall.service"), strings.Index(log, "-D PREROUTING"); stop < 0 || del < stop || strings.Contains(log, "no wait") {
+		t.Errorf("the unit not stopped before the jump goes, or a call with no wait for xtables' lock:\n%s", log)
 	}
 	for _, c := range []string{"iptables", "ip6tables"} {
 		if _, err := os.Stat(filepath.Join(dir, "fw."+c+".chain")); err == nil && (c == "iptables" || fileThere("/proc/net/if_inet6")) {
@@ -836,38 +843,32 @@ func fileThere(p string) bool {
 	return err == nil
 }
 
-// The install loads by the unit and then starts the timer, failing with words of its own
-// when either does not start: the unit's result and where systemd logged why, or a timer
-// that will load the firewall again only from the next boot.
+// The install loads by the unit, failing with words of its own when it does not: the unit's
+// result and where systemd logged why.
 func TestFirewallInstallByItsUnit(t *testing.T) {
 	t.Parallel()
-	for name, c := range map[string]struct {
-		systemctl, want string
-		code            int
-	}{
-		"the unit fails": {`  "start devopsy-firewall.service") exit 1 ;;
-  "show -p Result --value devopsy-firewall.service") echo exit-code ;;`,
-			"devopsy: error: devopsy-firewall.service did not load devopsy's firewall: exit-code\ndevopsy: | what it said, as root:\ndevopsy: | $ journalctl -u devopsy-firewall.service\n", 5},
-		"the timer fails": {`  "start devopsy-firewall.timer") exit 1 ;;`,
-			"devopsy: error: devopsy-firewall.timer did not start: devopsy's firewall is loaded, and loaded again only from the next boot\ndevopsy: | what it said, as root:\ndevopsy: | $ journalctl -u devopsy-firewall.timer\n", 5},
-	} {
-		dir := t.TempDir()
-		bin, host := filepath.Join(dir, "bin"), filepath.Join(dir, "host")
-		if err := os.MkdirAll(bin, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		rawFirewallFakes(t, bin, dir, false)
-		write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\ndir="+dir+"\necho \"systemctl $*\" >>\"$dir/systemctl.log\"\ncase \"$*\" in\n"+c.systemctl+"\nesac\nexit 0\n")
-		if err := os.Chmod(filepath.Join(bin, "systemctl"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command("sh", "-c", FirewallInstall(false), "sh", host)
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + filepath.Join(dir, "mark")}
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		_ = cmd.Run()
-		if code := cmd.ProcessState.ExitCode(); code != c.code || c.want != "" && !strings.Contains(stderr.String(), c.want) {
-			t.Errorf("%s (%d): %s", name, code, stderr.String())
-		}
+	dir := t.TempDir()
+	bin, host := filepath.Join(dir, "bin"), filepath.Join(dir, "host")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rawFirewallFakes(t, bin, dir, false)
+	write(t, filepath.Join(bin, "systemctl"), `#!/bin/sh
+case "$*" in
+  "start devopsy-firewall.service") exit 1 ;;
+  "show -p Result --value devopsy-firewall.service") echo exit-code ;;
+esac
+`)
+	if err := os.Chmod(filepath.Join(bin, "systemctl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", FirewallInstall(false), "sh", host)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", FirewallMarkEnv + "=" + filepath.Join(dir, "mark")}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+	want := "devopsy: error: devopsy-firewall.service did not load devopsy's firewall: exit-code\ndevopsy: | what it said, as root:\ndevopsy: | $ journalctl -u devopsy-firewall.service\n"
+	if code := cmd.ProcessState.ExitCode(); code != 5 || !strings.Contains(stderr.String(), want) {
+		t.Errorf("(%d): %s", code, stderr.String())
 	}
 }

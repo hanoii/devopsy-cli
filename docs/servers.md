@@ -83,7 +83,7 @@ What it keeps as devopsy wants it:
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
 | Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it) |
 | Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
-| Metadata firewall | packets from containers on Docker's bridges (`docker0`, `br-*`) to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through; with `door:` in the server's config, or the door's firewall loaded already, the door's chains too ([Project users](project-users.md#the-firewall)); by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`) and every five minutes (`devopsy-firewall.timer`) |
+| Metadata firewall | packets from containers on Docker's bridges (`docker0`, `br-*`) to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through; with `door:` in the server's config, or the door's firewall loaded already, the door's chains too ([Project users](project-users.md#the-firewall)); by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`), by `--server-setup` and `--project-users add`, and with the door's at every start of Docker |
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
 other key stays as it is (a proxy's `proxies`, for example), and the file
@@ -130,8 +130,7 @@ read iptables: what `--server-setup` and `--server-info` show of it
 comes from its files, its boot link, and the mark the last load that
 went in leaves in `/run`, none after a load failed. The apply loads it
 through `devopsy-firewall.service`, the loader run directly only where
-systemd does not answer, then starts the timer and reads the chains back
-as root. One load runs at a time, by a lock in a directory of root's
+systemd does not answer, then reads the chains back as root. One load runs at a time, by a lock in a directory of root's
 that no other user enters.
 
 `--yes` asks nothing: it keeps every value someone else set, restarts

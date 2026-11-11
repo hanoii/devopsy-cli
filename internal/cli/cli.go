@@ -1091,7 +1091,7 @@ Then it shows what is not as devopsy wants it, and asks:
                         mounts (a docker.service.d drop-in)
   metadata firewall     containers on Docker's bridges kept off the cloud's
                         metadata services, DNS there aside, loaded at boot
-                        and every five minutes, the door's chains with it
+                        and by --server-setup, the door's chains with it
                         where door: is set; firewall: metadata: allow in
                         the deploy user's config.yaml removes it, refused
                         where door: is set or the door's firewall is

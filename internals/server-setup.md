@@ -20,7 +20,8 @@
 - A root that resolves to `/`, through a link, refuses as `/` does.
 - The mounts drop-in's want comes from the release root alone, in its one form, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.
-- The metadata firewall is an item of devopsy's own (`setup.JudgeFirewall`): put back, never asked keep or replace, loaded through the door's one loader, its unit and its timer, the containers' chain alone without a door.
+- The metadata firewall is an item of devopsy's own (`setup.JudgeFirewall`): put back, never asked keep or replace, loaded through the door's one loader and its unit, the containers' chain alone without a door.
+- A piece devopsy puts no more (the firewall's timer, `remote.FirewallRetired`) is retired: the install and the removal stop it and remove it by its header, the link to it with it, and the facts read one left as to load again.
 - The firewall's want is `firewall: metadata:` in the deploy user's config, `block` by default, never an address: on one server the address is the provider's, so naming it would be turning the block off.
 - The firewall's kind is the door's where `door:` is set or the door's is loaded (its mark, or a loader naming the door's chains), else the containers' alone (`setup.FirewallWantsDoor`): devopsy never takes a door's firewall off a server.
 - `allow` where the door's kind is wanted refuses before anything changes, a project user's containers never reaching a metadata service.

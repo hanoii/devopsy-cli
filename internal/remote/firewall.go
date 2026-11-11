@@ -26,7 +26,6 @@ const (
 	DoorRunChain           = "DEVOPSY-DOOR"
 	FirewallScript         = "/usr/local/libexec/devopsy-firewall"
 	FirewallUnit           = "/etc/systemd/system/devopsy-firewall.service"
-	FirewallTimer          = "/etc/systemd/system/devopsy-firewall.timer"
 	// FirewallDockerDropIn runs the loader whenever Docker starts, in docker.service's
 	// own cgroup: a cgroup's rule binds the cgroup there when it goes in, never its path, and
 	// systemd makes docker.service's anew at every start.
@@ -57,9 +56,9 @@ const xtablesWait = "10"
 // firewallLock is a firewall script's start: the mark's path in $mark, and the firewall's
 // lock, in FirewallLockDir (made root's and closed to others when it is not), held on fd 9
 // for the rest of the script, one load or removal at a time whoever runs it (the unit, its
-// timer, Docker's start, an install with no systemd): another waits for the one under way to
-// end, a minute at most, then goes on over what it left; past the minute it fails, and the
-// timer's next run loads again. A failure of flock's own is said as such.
+// start of Docker, an install): another waits for the one under way to end, a minute at most,
+// then goes on over what it left; past the minute it fails. A failure of flock's own is said
+// as such.
 var firewallLock = `mark=${` + FirewallMarkEnv + `:-` + FirewallMark + `}
 lockdir=${mark%/*}/` + path.Base(FirewallLockDir) + `
 mkdir -p "$lockdir"
@@ -79,15 +78,20 @@ const (
 )
 
 // firewallHeader starts each file the firewall's install writes whole, on its first line or,
-// after a #!, its second: a removal takes only those (FirewallPiece, firewallPieceSh).
-const firewallHeader = "# Written by devopsy: "
+// after a #!, its second. A removal takes a file there only when it starts with
+// devopsysHeader, which every header of devopsy's starts with, an older install's included
+// (FirewallPiece, firewallPieceSh).
+const (
+	firewallHeader = devopsysHeader + ": "
+	devopsysHeader = "# Written by devopsy"
+)
 
 // FirewallPiece says whether text is a file of the firewall's devopsy wrote whole, by its
 // header.
 func FirewallPiece(text string) bool {
 	first, rest, _ := strings.Cut(text, "\n")
 	second, _, _ := strings.Cut(rest, "\n")
-	return strings.HasPrefix(first, firewallHeader) || strings.HasPrefix(first, "#!") && strings.HasPrefix(second, firewallHeader)
+	return strings.HasPrefix(first, devopsysHeader) || strings.HasPrefix(first, "#!") && strings.HasPrefix(second, devopsysHeader)
 }
 
 // firewallPieceSh is FirewallPiece in a script on the host: devopsys <file> fails unless the
@@ -96,7 +100,7 @@ const firewallPieceSh = `devopsys() {
   [ -f "$1" ] || return 1
   l1= l2=
   { IFS= read -r l1 || :; IFS= read -r l2 || :; } <"$1"
-  case $l1 in "` + firewallHeader + `"*) return 0 ;; "#!"*) case $l2 in "` + firewallHeader + `"*) return 0 ;; esac ;; esac
+  case $l1 in "` + devopsysHeader + `"*) return 0 ;; "#!"*) case $l2 in "` + devopsysHeader + `"*) return 0 ;; esac ;; esac
   return 1
 }
 `
@@ -251,7 +255,8 @@ func firewallRestore(f firewallFamily, withDoor bool) string {
 }
 
 // FirewallLoader is FirewallScript, which loads the firewall: at --server-setup and add, at
-// every boot through FirewallUnit, and every few minutes through FirewallTimer. withDoor loads
+// every boot through FirewallUnit, and with a door at every start of Docker
+// (FirewallDockerDropIn). withDoor loads
 // the door's chains too, else the containers' alone. Each jump goes in first, then any other
 // copy of it goes, so nothing is ever without it. IPv6 only where the kernel has it. It holds
 // the firewall's lock throughout (firewallLock), and FirewallMark says what it loaded once it
@@ -263,8 +268,7 @@ func FirewallLoader(withDoor bool) string {
 	}
 	s := `#!/bin/sh
 ` + firewallHeader + `its own chains loaded whole and jumped to first
-# (` + what + `). Run at boot by devopsy-firewall.service, and every few minutes by
-# devopsy-firewall.timer.
+# (` + what + `). Run at boot by devopsy-firewall.service.
 set -eu
 ` + firewallLock + `# Its own file gone (a removal that held the lock it waited for), it loads nothing.
 case $0 in /*) [ -e "$0" ] || { echo "$0 is gone: devopsy's firewall was removed, nothing loaded" >&2; exit 0; } ;; esac
@@ -349,21 +353,6 @@ ExecStart=` + FirewallScript + `
 WantedBy=multi-user.target
 `
 
-// firewallTimerText loads the firewall again every few minutes: a reload of the server's
-// own firewall (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules with
-// no word, and loading them changes nothing while they are there.
-const firewallTimerText = firewallHeader + `devopsy's firewall, loaded again every few minutes.
-[Unit]
-Description=devopsy's firewall, loaded again
-
-[Timer]
-OnBootSec=5min
-OnUnitInactiveSec=5min
-
-[Install]
-WantedBy=timers.target
-`
-
 // FirewallRead prints, for FirewallWrong, the ids of the project users' group and the
 // door's as the loader reads them, then each family's tables as iptables -S does, a
 // "# <iptables> <table>" line before each, or "# ip6tables off" where the kernel has no IPv6;
@@ -406,10 +395,29 @@ func familyGuard(f firewallFamily, script, otherwise string) string {
 // FirewallUnitLink enables FirewallUnit at boot.
 const FirewallUnitLink = "/etc/systemd/system/multi-user.target.wants/devopsy-firewall.service"
 
-// FirewallLinks are the links that enable the firewall's units, each to its unit.
-var FirewallLinks = map[string]string{
-	FirewallUnitLink: FirewallUnit,
-	"/etc/systemd/system/timers.target.wants/devopsy-firewall.timer": FirewallTimer,
+// FirewallRetired are the units an earlier install put that devopsy puts no more, by path,
+// each with the link that enabled it: the install and the removal stop them and remove them
+// where they are devopsy's by their header, and the link left to one gone
+// (firewallRetireSh); the facts read one left as a firewall to load again.
+var FirewallRetired = map[string]string{
+	// The timer that loaded the firewall again every five minutes.
+	"/etc/systemd/system/devopsy-firewall.timer": "/etc/systemd/system/timers.target.wants/devopsy-firewall.timer",
+}
+
+// firewallRetireSh stops and removes, in a script on the host, the retired units that are
+// devopsy's, and the links left to them.
+func firewallRetireSh() string {
+	var s string
+	for _, u := range slices.Sorted(maps.Keys(FirewallRetired)) {
+		l := FirewallRetired[u]
+		s += `if devopsys "$host_root` + u + `"; then
+  SYSTEMD_IGNORE_CHROOT=1 systemctl stop ` + path.Base(u) + ` >/dev/null 2>&1 || :
+  rm -f "$host_root` + u + `"
+fi
+[ ! -L "$host_root` + l + `" ] || [ -e "$host_root` + u + `" ] || rm -f "$host_root` + l + `"
+`
+	}
+	return s
 }
 
 // FirewallFile is one of the files the firewall's install writes whole: its text and mode.
@@ -419,9 +427,9 @@ type FirewallFile struct {
 }
 
 // FirewallFiles are the files the firewall's install writes, by path, for withDoor: the
-// loader, its units and, with a door, the Docker drop-in.
+// loader, its unit and, with a door, the Docker drop-in.
 func FirewallFiles(withDoor bool) map[string]FirewallFile {
-	files := map[string]FirewallFile{FirewallScript: {FirewallLoader(withDoor), 0o755}, FirewallUnit: {firewallUnitText, 0o644}, FirewallTimer: {firewallTimerText, 0o644}}
+	files := map[string]FirewallFile{FirewallScript: {FirewallLoader(withDoor), 0o755}, FirewallUnit: {firewallUnitText, 0o644}}
 	if withDoor {
 		files[FirewallDockerDropIn] = FirewallFile{firewallDockerText, 0o644}
 	}
@@ -431,17 +439,18 @@ func FirewallFiles(withDoor bool) map[string]FirewallFile {
 // FirewallInstall is what --server-setup and add do for the firewall as root, chrooted into
 // the host with its network, the host's files under its first argument ("" on the host
 // itself, a test's directory): the door's groups only withDoor, FirewallFiles when missing or
-// different, the firewall loaded, its timer started, then FirewallRead.
+// different, the unit's boot link, the retired units gone (firewallRetireSh), the firewall
+// loaded, then FirewallRead.
 //
 // The load is the unit's where systemd answers from the chroot (the run has the host's pids),
-// its result then the load's own, and the timer starts after it. Where systemd does not
-// answer (no systemd), the loader runs here.
+// its result then the load's own. Where systemd does not answer (no systemd), the loader runs
+// here.
 func FirewallInstall(withDoor bool) string {
 	s := "set -eu\numask 022\nhost_root=${1:-}\n"
 	if withDoor {
 		s += hostGroup
 	}
-	s += hostPut
+	s += hostPut + firewallPieceSh
 	files := FirewallFiles(withDoor)
 	for _, p := range slices.Sorted(maps.Keys(files)) {
 		check := "true"
@@ -451,18 +460,12 @@ func FirewallInstall(withDoor bool) string {
 		s += `mkdir -p "$host_root` + path.Dir(p) + `"` + "\n" +
 			`put "$host_root` + p + `" ` + fmt.Sprintf("%o", files[p].Mode) + " " + check + " " + Quote(files[p].Text) + " || :\n"
 	}
-	for _, l := range slices.Sorted(maps.Keys(FirewallLinks)) {
-		s += `mkdir -p "$host_root` + path.Dir(l) + `"` + "\n" + "ln -sfn " + FirewallLinks[l] + ` "$host_root` + l + `"` + "\n"
-	}
+	s += `mkdir -p "$host_root` + path.Dir(FirewallUnitLink) + `"` + "\n" + "ln -sfn " + FirewallUnit + ` "$host_root` + FirewallUnitLink + `"` + "\n" + firewallRetireSh()
 	unit := report.Hint("what it said, as root:", "journalctl -u devopsy-firewall.service")
 	return s + `if SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload >/dev/null 2>&1; then
   if ! SYSTEMD_IGNORE_CHROOT=1 systemctl start devopsy-firewall.service >/dev/null 2>&1; then
     result=$(SYSTEMD_IGNORE_CHROOT=1 systemctl show -p Result --value devopsy-firewall.service 2>/dev/null || :)
     ` + echoLine(report.ErrorLevel, "devopsy-firewall.service did not load devopsy's firewall: ${result:-its result unread}", unit) + `
-    exit 5
-  fi
-  if ! SYSTEMD_IGNORE_CHROOT=1 systemctl start devopsy-firewall.timer >/dev/null 2>&1; then
-    ` + echoLine(report.ErrorLevel, "devopsy-firewall.timer did not start: devopsy's firewall is loaded, and loaded again only from the next boot", report.Hint("what it said, as root:", "journalctl -u devopsy-firewall.timer")) + `
     exit 5
   fi
 else
@@ -473,16 +476,17 @@ fi
 
 // FirewallRemove is what --server-setup does as root for a server whose containers may reach
 // the metadata services (firewall: metadata: allow, no door), the host's files under its first
-// argument as FirewallInstall's, holding the firewall's lock (firewallLock): the timer and the
-// unit stopped first, where systemctl reaches systemd, as either would load the firewall again
-// once the removal let the lock go (a loader that waited for it and finds its own file gone
-// loads nothing, for one run by other means), then the containers' jump and chain out of raw, the files of FirewallFiles that are
-// devopsy's by their header (FirewallPiece), the links left to them, and the mark. It prints
-// each file removed. A removal cut halfway is finished by the next: every step goes on from
-// what it finds.
+// argument as FirewallInstall's, holding the firewall's lock (firewallLock): the unit stopped
+// first, where systemctl reaches systemd, as a run of it waiting for the lock would load the
+// firewall again once the removal let it go (a loader that gets the lock and finds its own
+// file gone loads nothing, for one run by other means), then the containers' jump and chain
+// out of raw, the files of FirewallFiles that are devopsy's by their header (FirewallPiece),
+// the retired units (firewallRetireSh), the boot link left, and the mark. It prints each file
+// of FirewallFiles removed. A removal cut halfway is finished by the next: every step goes on
+// from what it finds.
 func FirewallRemove() string {
 	s := "set -eu\nhost_root=${1:-}\n" + firewallLock + firewallPieceSh +
-		"SYSTEMD_IGNORE_CHROOT=1 systemctl stop devopsy-firewall.timer devopsy-firewall.service >/dev/null 2>&1 || :\n"
+		"SYSTEMD_IGNORE_CHROOT=1 systemctl stop devopsy-firewall.service >/dev/null 2>&1 || :\n"
 	for _, f := range firewallFamilies {
 		c := f.cmd + " -w " + xtablesWait + " -t raw"
 		r := `while ` + c + ` -D PREROUTING -j ` + FirewallContainerChain + ` 2>/dev/null; do :; done
@@ -493,9 +497,7 @@ if ` + c + ` -S ` + FirewallContainerChain + ` >/dev/null 2>&1; then ` + c + ` -
 	return s + `for f in ` + strings.Join(slices.Sorted(maps.Keys(FirewallFiles(true))), " ") + `; do
   if devopsys "$host_root$f"; then rm -f "$host_root$f"; echo "removed $f"; fi
 done
-for l in ` + strings.Join(slices.Sorted(maps.Keys(FirewallLinks)), " ") + `; do
-  [ ! -L "$host_root$l" ] || [ -e "$host_root$l" ] || rm -f "$host_root$l"
-done
+` + firewallRetireSh() + `[ ! -L "$host_root` + FirewallUnitLink + `" ] || [ -e "$host_root` + FirewallUnit + `" ] || rm -f "$host_root` + FirewallUnitLink + `"
 rm -f "$mark"
 SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload >/dev/null 2>&1 || :
 `

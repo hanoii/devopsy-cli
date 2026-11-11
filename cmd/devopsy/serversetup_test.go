@@ -1082,19 +1082,17 @@ func TestServerSetupRestartRefusedBySystemd(t *testing.T) {
 }
 
 // firewallLoaded makes host's firewall as devopsy's install leaves it, with a door's chains
-// too (door) or not: its pieces, in their modes, the units' links and the mark.
+// too (door) or not: its pieces, in their modes, the unit's boot link and the mark.
 func firewallLoaded(t *testing.T, host string, door bool) {
 	t.Helper()
 	for p, f := range remote.FirewallFiles(door) {
 		write(t, filepath.Join(host, p), f.Text, f.Mode)
 	}
-	for l, unit := range remote.FirewallLinks {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(host, l)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(unit, filepath.Join(host, l)); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(host, remote.FirewallUnitLink)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(remote.FirewallUnit, filepath.Join(host, remote.FirewallUnitLink)); err != nil {
+		t.Fatal(err)
 	}
 
 	what := remote.FirewallContainers
@@ -1148,34 +1146,27 @@ func TestServerSetupMetadataFirewall(t *testing.T) {
 }
 
 // The install loads the firewall by its unit where systemd answers, its result then the
-// load's own, and starts the timer once the load went in. The fake systemctl notes the
-// timer's start in timer-started, and the fake iptables each insert made outside the unit or
-// after the timer's start.
-func TestServerSetupLoadsTheFirewallByItsUnitBeforeItsTimer(t *testing.T) {
+// load's own. The fake iptables notes each insert made outside the unit.
+func TestServerSetupLoadsTheFirewallByItsUnit(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
 	bin := filepath.Join(filepath.Dir(host), "bin")
-	moveAside(t, bin, "systemctl")
-	write(t, filepath.Join(bin, "systemctl"), `#!/bin/sh
-[ "$*" != "start devopsy-firewall.timer" ] || : >"$DEVOPSY_INTERNAL_HOST_ROOT/timer-started"
-exec "$(dirname "$0")/orig/systemctl" "$@"
-`, 0o755)
 	for _, c := range []string{"iptables", "ip6tables"} {
 		moveAside(t, bin, c)
 		write(t, filepath.Join(bin, c), `#!/bin/sh
 h=$DEVOPSY_INTERNAL_HOST_ROOT
 case "$*" in
-  *" -I PREROUTING 1 "*) [ -n "${FAKE_BY_UNIT:-}" ] || echo "outside the unit: $(basename "$0") $*" >>"$h/overlap"; [ ! -e "$h/timer-started" ] || echo "after the timer: $(basename "$0") $*" >>"$h/overlap" ;;
+  *" -I PREROUTING 1 "*) [ -n "${FAKE_BY_UNIT:-}" ] || echo "outside the unit: $(basename "$0") $*" >>"$h/overlap" ;;
 esac
 exec "$(dirname "$0")/orig/$(basename "$0")" "$@"
 `, 0o755)
 	}
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 0 || !fileExists(filepath.Join(host, "timer-started")) {
-		t.Fatalf("(%d), the timer started %v:\n%s", code, fileExists(filepath.Join(host, "timer-started")), out)
+	if code != 0 || !strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl start devopsy-firewall.service\n") {
+		t.Fatalf("(%d):\n%s", code, out)
 	}
 	if o := readString(filepath.Join(host, "overlap")); o != "" {
-		t.Errorf("the install loaded the firewall outside its unit, or after the timer's start:\n%s", o)
+		t.Errorf("the install loaded the firewall outside its unit:\n%s", o)
 	}
 }
 
@@ -1234,14 +1225,14 @@ func TestServerSetupUpgradeLeavesTheFirstFirewallLoad(t *testing.T) {
 		t.Errorf("not loaded (%d):\n%s", code, out)
 	}
 	firewallLoaded(t, host, false)
-	if err := os.Remove(filepath.Join(host, remote.FirewallTimer)); err != nil {
+	if err := os.Remove(filepath.Join(host, remote.FirewallUnit)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(host, remote.FirewallScript), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out, code = s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
-	if fi, err := os.Stat(filepath.Join(host, remote.FirewallScript)); code != 0 || readString(filepath.Join(host, remote.FirewallTimer)) != remote.FirewallFiles(false)[remote.FirewallTimer].Text ||
+	if fi, err := os.Stat(filepath.Join(host, remote.FirewallScript)); code != 0 || readString(filepath.Join(host, remote.FirewallUnit)) != remote.FirewallFiles(false)[remote.FirewallUnit].Text ||
 		err != nil || fi.Mode().Perm() != 0o755 || !strings.Contains(out, "loaded devopsy's firewall") || strings.Contains(out, "warning: --upgrade leaves") {
 		t.Errorf("loaded, a piece gone and the loader's mode changed (%d):\n%s", code, out)
 	}
@@ -1332,8 +1323,8 @@ func TestServerSetupMakesADoorsFirstFirewallLoad(t *testing.T) {
 	}
 }
 
-// An apply that loaded the firewall holds, whatever a load beside it does: the timer's, or
-// Docker's start, under way while the apply checks. A load under way leaves the last good
+// An apply that loaded the firewall holds, whatever a load beside it does (Docker's start, a
+// start of the unit by hand) under way while the apply checks. A load under way leaves the last good
 // mark, so the check, --server-info and --upgrade read the firewall loaded meanwhile.
 //
 // The fake systemctl runs the loader at the install's read of the chains, after its own load,
@@ -1346,34 +1337,34 @@ func TestServerSetupHoldsBesideALoadUnderWay(t *testing.T) {
 	moveAside(t, bin, "systemctl")
 	write(t, filepath.Join(bin, "systemctl"), `#!/bin/sh
 h=$DEVOPSY_INTERNAL_HOST_ROOT
-if [ "$*" = "show -p ControlGroup --value docker.service" ] && [ ! -e "$h/timers-load.began" ] && [ -e "$h/fwresult" ]; then
-  ( FAKE_TIMERS_LOAD=1 "$h`+remote.FirewallScript+`" >"$h/timers-load.out" 2>&1 </dev/null; : >"$h/timers-load.done" ) >/dev/null 2>&1 </dev/null &
+if [ "$*" = "show -p ControlGroup --value docker.service" ] && [ ! -e "$h/other-load.began" ] && [ -e "$h/fwresult" ]; then
+  ( FAKE_OTHER_LOAD=1 "$h`+remote.FirewallScript+`" >"$h/other-load.out" 2>&1 </dev/null; : >"$h/other-load.done" ) >/dev/null 2>&1 </dev/null &
   n=0
-  while [ ! -e "$h/timers-load.began" ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done
+  while [ ! -e "$h/other-load.began" ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done
 fi
 exec "$(dirname "$0")/orig/systemctl" "$@"
 `, 0o755)
 	moveAside(t, bin, "iptables-restore")
 	write(t, filepath.Join(bin, "iptables-restore"), `#!/bin/sh
 h=$DEVOPSY_INTERNAL_HOST_ROOT
-if [ -n "${FAKE_TIMERS_LOAD:-}" ]; then
-  : >"$h/timers-load.began"
+if [ -n "${FAKE_OTHER_LOAD:-}" ]; then
+  : >"$h/other-load.began"
   n=0
-  while [ ! -e "$h/timers-load.go" ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done
+  while [ ! -e "$h/other-load.go" ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done
 fi
 exec "$(dirname "$0")/orig/iptables-restore" "$@"
 `, 0o755)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	began := fileExists(filepath.Join(host, "timers-load.began"))
+	began := fileExists(filepath.Join(host, "other-load.began"))
 	// The other load goes on and ends, whatever the apply said.
-	write(t, filepath.Join(host, "timers-load.go"), "", 0o644)
-	waitFile(t, filepath.Join(host, "timers-load.done"), "the other load ending", startWait, func() string { return readString(filepath.Join(host, "timers-load.out")) })
+	write(t, filepath.Join(host, "other-load.go"), "", 0o644)
+	waitFile(t, filepath.Join(host, "other-load.done"), "the other load ending", startWait, func() string { return readString(filepath.Join(host, "other-load.out")) })
 	if !began {
 		t.Fatalf("no load ran beside the apply (%d):\n%s", code, out)
 	}
 	// The control: the apply's own load went in, and the other after it.
 	if !strings.Contains(out, "loaded devopsy's firewall") || strings.TrimSpace(readString(filepath.Join(host, remote.FirewallMark))) != remote.FirewallContainers {
-		t.Fatalf("the firewall not loaded (%d), the mark %q:\n%s\n%s", code, readString(filepath.Join(host, remote.FirewallMark)), out, readString(filepath.Join(host, "timers-load.out")))
+		t.Fatalf("the firewall not loaded (%d), the mark %q:\n%s\n%s", code, readString(filepath.Join(host, remote.FirewallMark)), out, readString(filepath.Join(host, "other-load.out")))
 	}
 	if code != 0 || strings.Contains(out, "did not hold") {
 		t.Errorf("an apply beside a load under way (%d):\n%s", code, out)
@@ -1411,3 +1402,36 @@ func TestServerInfoKeepsADoorsFirewallInSync(t *testing.T) {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
+
+// A timer an earlier install put, which loaded the firewall again every five minutes, is a
+// retired piece: its file, devopsy's by its header, or the link to it reads "to load again",
+// and the apply (--upgrade's too, which loads again the kind loaded) stops it and removes
+// both, leaving an admin's own file at that path as it is.
+func TestServerSetupRetiresTheFirewallsTimer(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	timer := "/etc/systemd/system/devopsy-firewall.timer"
+	link := "/etc/systemd/system/timers.target.wants/devopsy-firewall.timer"
+	write(t, filepath.Join(host, timer), "# Written by devopsy (devopsy @<server> --project-users add).\n[Timer]\nOnBootSec=5min\n", 0o644)
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(host, link)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(timer, filepath.Join(host, link)); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "metadata firewall: devopsy's firewall is not loaded as devopsy loads it") {
+		t.Errorf("a retired timer there, --server-info:\n%s", out)
+	}
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if _, err := os.Lstat(filepath.Join(host, link)); code != 0 || fileExists(filepath.Join(host, timer)) || err == nil ||
+		!strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl stop devopsy-firewall.timer\n") || !strings.Contains(out, "loaded devopsy's firewall") {
+		t.Errorf("the retired timer left (%d):\n%s", code, out)
+	}
+	// An admin's own file at the timer's path is no piece of devopsy's.
+	write(t, filepath.Join(host, timer), "[Timer]\nOnCalendar=daily\n", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); readString(filepath.Join(host, timer)) != "[Timer]\nOnCalendar=daily\n" {
+		t.Errorf("an admin's timer at its path (%d):\n%s", code, out)
+	}
+}
+
