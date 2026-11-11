@@ -38,6 +38,7 @@ const (
 	SetupGave     = "gave"        // gave <root>
 	SetupRaised   = "raised"      // raised <key>
 	SetupMarked   = "marked"      // the restart marker and flag raised
+	SetupAsked    = "asked"       // the marker written, Docker's restart about to be asked
 	SetupQueued   = "queued"      // Docker's restart queued
 	SetupNoSystem = "nosystemctl" // systemctl refused from the chroot: marked instead
 )
@@ -107,7 +108,11 @@ case $after in
       ` + echoLine(report.ErrorLevel, "dockerd refuses "+setup.DaemonFile+", so Docker would not start again: not restarted", report.Fix("correct the file, then run --server-setup again")) + `
       exit 4
     fi
-    rm -f "$host_root` + setup.RestartMarker + `"
+    # The marker first, with the InvocationID read before the run: a restart that comes ends
+    # it by its new id, and one that does not leaves Docker pending, whatever reaches the
+    # caller of a run the restart cuts.
+    printf '%s\n' "$id" >"$host_root` + setup.RestartMarker + `"
+    echo ` + SetupAsked + `
     if SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload && SYSTEMD_IGNORE_CHROOT=1 systemctl restart --no-block docker.service; then
       echo ` + SetupQueued + `
     else

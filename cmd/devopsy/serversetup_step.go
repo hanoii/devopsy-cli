@@ -531,11 +531,14 @@ func applySetup(h setupHost, a setupApply) int {
 			after = "restart"
 		}
 		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, rd.flags, &out)
-		// The restart may take the run's container down before its script says so: a new
-		// InvocationID says it went.
-		queued = restart && (hasLine(out.String(), remote.SetupQueued) || err != nil && before != "" && systemctlShow("InvocationID") != before)
+		// A restart asked may take the run's container down before its words reach here: the
+		// marker the run wrote for it says it was asked, and the bounded wait tells whether it
+		// came.
+		marker, _ := os.ReadFile(h.path(setup.RestartMarker))
+		asked := restart && (hasLine(out.String(), remote.SetupAsked) || before != "" && strings.TrimSpace(string(marker)) == before)
+		queued = asked && !hasLine(out.String(), remote.SetupNoSystem)
 		sayRootLines(out.String(), putNames, f.Root)
-		if err != nil && !queued {
+		if err != nil && !asked {
 			return failed(err.Error())
 		}
 	}
@@ -553,10 +556,16 @@ func applySetup(h setupHost, a setupApply) int {
 		if err == nil {
 			report.Info("Docker restarted, with daemon.json's values")
 		} else {
-			report.Fail(err, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
+			// The marker is there already; the system's restart flag goes now, by a root run
+			// that needs Docker up, and only now: raised before the restart, a restart that
+			// came would leave a reboot asked for nothing.
 			var marked bytes.Buffer
 			if rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, rd.flags, &marked) == nil {
+				report.Fail(err, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
 				sayRootLines(marked.String(), nil, f.Root)
+			} else {
+				report.Fail(&report.Failure{Msg: err.Error(), Details: []string{"Docker does not answer, so nothing was flagged for a reboot: it takes daemon.json whenever it starts again"},
+					Remedies: []report.Remedy{report.Hint("what Docker said, as root:", "journalctl -u docker.service")}})
 			}
 			return 1
 		}

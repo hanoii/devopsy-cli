@@ -197,11 +197,14 @@ case "$*" in
   # A root run on the host (hostRun): its chrooted script run here, on the test's host root
   # (remote.HostRootEnv) as the script's first argument already says.
   "run --rm --network "*" -v /:/host"*" chroot /host /bin/sh -c "*)
+    [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
     while [ "$1" != -c ]; do shift; done
     script=$2; shift 2
     exec sh -c "$script" "$@" ;;
   # docker info: the host root's docker-info.json, when a test writes one.
-  "info --format {{json .}}") [ ! -f "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json" ] || cat "$DEVOPSY_INTERNAL_HOST_ROOT/docker-info.json" ;;
+  "info --format {{json .}}")
+    [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+    [ ! -f "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json" ] || cat "$DEVOPSY_INTERNAL_HOST_ROOT/docker-info.json" ;;
   # Compose's version, as the setup's Docker check reads it (FAKE_NO_COMPOSE: none).
   "compose version --short") [ -n "${FAKE_NO_COMPOSE:-}" ] || echo 5.5.0 ;;
   # FAKE_RUNNING: the ids of the containers running.

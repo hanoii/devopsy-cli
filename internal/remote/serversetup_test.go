@@ -111,7 +111,8 @@ func TestSetupRootScript(t *testing.T) {
 		t.Errorf("a refused daemon.json (%d):\n%s\nthe file: %s", code, out, read(setup.DaemonFile))
 	}
 
-	// A restart: daemon-reload first, the restart queued, the marker gone.
+	// A restart: the marker written first with the id read before it, daemon-reload, the
+	// restart queued.
 	write := func(p, text string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(host, p), []byte(text), 0o644); err != nil {
@@ -122,7 +123,7 @@ func TestSetupRootScript(t *testing.T) {
 	changed := []string{host, owner, "", root, "{\"live-restore\": false}\n", "", "", "", "restart", "inv-1"}
 	out, code = run(nil, changed...)
 	c := read("calls")
-	if code != 0 || !strings.HasSuffix(out, "queued\n") || read(setup.RestartMarker) != "" ||
+	if code != 0 || !strings.HasSuffix(out, "asked\nqueued\n") || read(setup.RestartMarker) != "inv-1\n" ||
 		!strings.HasPrefix(c, "dockerd --validate --config-file ") || !strings.HasSuffix(c, "1 systemctl daemon-reload\n1 systemctl restart --no-block docker.service\n") {
 		t.Errorf("a restart (%d):\n%s\ncalls:\n%s", code, out, read("calls"))
 	}

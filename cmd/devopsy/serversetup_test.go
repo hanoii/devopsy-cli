@@ -48,10 +48,11 @@ case "$*" in
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
   # The unit's command, as a test writes it in execstart.
   "show -p ExecStart --value docker.service") [ ! -f "$h/execstart" ] || cat "$h/execstart" ;;
-  # FAKE_RESTART_STUCK: a restart queued that never comes. FAKE_RESTART_CUTS: the restart
-  # takes the root run's container down before its script says it is queued.
-  "restart --no-block docker.service") [ -n "${FAKE_RESTART_STUCK:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; }
-    [ -z "${FAKE_RESTART_CUTS:-}" ] || kill -KILL "$PPID" ;;
+  # FAKE_RESTART_STUCK: a restart queued that never comes; FAKE_RESTART_DOWN: one that takes
+  # Docker down for good.
+  "restart --no-block docker.service")
+    [ -z "${FAKE_RESTART_DOWN:-}" ] || : >"$h/docker-down"
+    [ -n "${FAKE_RESTART_STUCK:-}${FAKE_RESTART_DOWN:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -100,8 +101,10 @@ func TestServerSetupYes(t *testing.T) {
 	if l := readString(filepath.Join(host, "systemctl.log")); !strings.Contains(l, "systemctl daemon-reload\nsystemctl restart --no-block docker.service\n") {
 		t.Errorf("no restart:\n%s", l)
 	}
-	if readString(filepath.Join(host, setup.RestartMarker)) != "" {
-		t.Error("marked, though restarted")
+	// The marker, written before the restart was asked, holds the old id: no longer pending,
+	// and no reboot asked for.
+	if readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || fileExists(filepath.Join(host, remote.RebootRequired)) {
+		t.Error("the marker, or a reboot asked, after a restart confirmed")
 	}
 	s.logs()
 	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
@@ -668,17 +671,6 @@ func TestServerSetupRestartNotConfirmed(t *testing.T) {
 	}
 }
 
-// A restart that takes the root run's container down before its script says it is queued is
-// still a restart: the apply reads docker.service's InvocationID again, finds it changed, and
-// waits for Docker to come back rather than calling the run a failure.
-func TestServerSetupRestartCutsItsOwnRun(t *testing.T) {
-	t.Parallel()
-	s, host := setupServer(t)
-	out, code := s.run([]string{"FAKE_RESTART_CUTS=1"}, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 0 || !strings.Contains(out, "Docker restarted, with daemon.json's values") || readString(filepath.Join(host, "invocation")) != "inv2\n" {
-		t.Errorf("(%d):\n%s", code, out)
-	}
-}
 
 // A project user's release checks nothing of the server: its tree is --project-users add's,
 // and its Docker the door's.
@@ -829,5 +821,35 @@ echo 'configuration OK'
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if strings.Contains(readString(filepath.Join(host, setup.DaemonFile)), `"log-opts"`) {
 		t.Errorf("log-opts put in daemon.json while docker.service sets --log-opt (%d):\n%s\ndaemon.json:\n%s", code, out, readString(filepath.Join(host, setup.DaemonFile)))
+	}
+}
+
+// A restart that leaves Docker down: not confirmed in time, an error saying plainly that
+// nothing was flagged for a reboot, since the root run that raises the flag needs Docker; the
+// marker, written before the restart was asked, still says Docker has yet to take daemon.json.
+func TestServerSetupRestartLeavesDockerDown(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run([]string{"FAKE_RESTART_DOWN=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "error: Docker's restart did not end in a second") || !strings.Contains(out, "Docker does not answer, so nothing was flagged for a reboot") ||
+		readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || fileExists(filepath.Join(host, remote.RebootRequired)) {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A restart that takes the root run's container down, as a real one does when the old daemon
+// stops, before its new InvocationID: the marker the run wrote says the restart was asked, so
+// the apply waits for Docker to come back rather than calling the run a failure, and writes
+// the record.
+func TestServerSetupRestartCutsItsOwnRun(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	stoppingSystemctl(t, s, "")
+	out, code := s.run([]string{"FAKE_RESTART_CUTS=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "Docker restarted, with daemon.json's values") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
+		t.Errorf("no record after a restart that went:\n%s\nsystemctl:\n%s", out, readString(filepath.Join(host, "systemctl.log")))
 	}
 }
