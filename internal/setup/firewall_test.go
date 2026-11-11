@@ -5,44 +5,47 @@ import (
 	"testing"
 )
 
-// The metadata firewall's states, the rules taken in order: allow with a door refused, allow
-// removing what devopsy put, a server never loaded loading it first, one loaded as devopsy
-// loads it in sync, anything else loaded again.
+// The metadata firewall's states, the rules taken in order: allow where the door's firewall
+// is wanted (door: or the door's loaded) refused, allow removing what devopsy put, a server
+// with none loading it first, the containers' alone loaded where door: asks the door's, one
+// loaded as devopsy loads it in sync, anything else loaded again. A door's firewall loaded
+// stays the door's with door: gone.
 func TestJudgeFirewall(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name                         string
-		allow, door, applied, inSync bool
-		want                         FirewallState
+		name        string
+		allow, door bool
+		loaded      FirewallKind
+		inSync      bool
+		want        FirewallState
+		wantsDoor   bool
+		upgrade     bool
 	}{
-		{"allow with a door", true, true, true, true, FirewallRefused},
-		{"allow with a door, never loaded", true, true, false, false, FirewallRefused},
-		{"allow, devopsy's there", true, false, true, false, FirewallRemove},
-		{"allow, nothing there", true, false, false, false, FirewallInSync},
-		{"block, never loaded", false, false, false, false, FirewallLoad},
-		{"block, loaded", false, false, true, true, FirewallInSync},
-		{"block, a piece changed or a load failed", false, false, true, false, FirewallReload},
-		{"block with a door, loaded", false, true, true, true, FirewallInSync},
+		{"allow with a door", true, true, DoorFirewall, true, FirewallRefused, true, false},
+		{"allow with a door, none loaded", true, true, NoFirewall, false, FirewallRefused, true, false},
+		{"allow, the door's loaded, door: gone", true, false, DoorFirewall, true, FirewallRefused, true, false},
+		{"allow, devopsy's there", true, false, ContainersFirewall, false, FirewallRemove, false, false},
+		{"allow, nothing there", true, false, NoFirewall, false, FirewallInSync, false, false},
+		{"block, none loaded", false, false, NoFirewall, false, FirewallLoad, false, false},
+		{"block with a door, none loaded", false, true, NoFirewall, false, FirewallLoad, true, false},
+		{"block with a door, the containers' loaded", false, true, ContainersFirewall, true, FirewallLoadDoor, true, false},
+		{"block, loaded", false, false, ContainersFirewall, true, FirewallInSync, false, false},
+		{"block, a piece changed or a load failed", false, false, ContainersFirewall, false, FirewallReload, false, true},
+		{"block with a door, loaded", false, true, DoorFirewall, true, FirewallInSync, true, false},
+		{"block, the door's loaded, door: gone", false, false, DoorFirewall, true, FirewallInSync, true, false},
+		{"block, the door's loaded not as devopsy loads it, door: gone", false, false, DoorFirewall, false, FirewallReload, true, true},
 	} {
-		if got := JudgeFirewall(c.allow, c.door, c.applied, c.inSync); got != c.want {
-			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		got := JudgeFirewall(c.allow, c.door, c.loaded, c.inSync)
+		if got != c.want || FirewallWantsDoor(c.door, c.loaded) != c.wantsDoor || got.Upgrade() != c.upgrade {
+			t.Errorf("%s: %s (door's %v, --upgrade %v), want %s", c.name, got, FirewallWantsDoor(c.door, c.loaded), got.Upgrade(), c.want)
+		}
+		if got.Changes() != (got != FirewallInSync && got != FirewallRefused) {
+			t.Errorf("%s: changes %v", c.name, got.Changes())
 		}
 	}
-	data, err := json.Marshal(FirewallFact{State: FirewallLoad})
+	data, err := json.Marshal(FirewallFact{State: FirewallLoadDoor})
 	var back FirewallFact
-	if err != nil || json.Unmarshal(data, &back) != nil || back.State != FirewallLoad || string(data) != `{"state":"to load"}` {
+	if err != nil || json.Unmarshal(data, &back) != nil || back.State != FirewallLoadDoor || string(data) != `{"state":"to load as the door's"}` {
 		t.Errorf("%s, %v, %+v", data, err, back)
-	}
-}
-
-// An item whose first apply is confirmed: --upgrade applies it only once applied, so it never
-// makes the first load; another item it always applies.
-func TestItemUpgradeApplies(t *testing.T) {
-	t.Parallel()
-	if FirewallItem.UpgradeApplies(false) || !FirewallItem.UpgradeApplies(true) {
-		t.Error("the metadata firewall")
-	}
-	if !(Item{Name: "socket buffers"}).UpgradeApplies(false) {
-		t.Error("an item of devopsy's own")
 	}
 }

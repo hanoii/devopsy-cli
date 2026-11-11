@@ -160,7 +160,7 @@ type terminalAsker struct{ t *remote.Target }
 
 func (a terminalAsker) noTerminal() error {
 	return &report.Failure{Msg: "--server-setup asks first, and there is no terminal to ask at",
-		Remedies: []report.Remedy{report.Fix("add --yes, which keeps every value someone changed and restarts Docker only with no container running:", "devopsy @"+targetRef(a.t)+" --server-setup --yes")}}
+		Remedies: []report.Remedy{report.Fix("add --yes, which keeps every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says:", "devopsy @"+targetRef(a.t)+" --server-setup --yes")}}
 }
 
 func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
@@ -257,7 +257,13 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 	if fw := f.Firewall; fw != nil {
 		switch fw.State {
 		case setup.FirewallLoad:
-			entry(remote.StatusWarning, firewallItem, "containers reach the cloud's metadata services: devopsy's firewall keeps them off, DNS there aside, which cuts an app running here off from what it reads there (its instance's credentials)")
+			line := "containers reach the cloud's metadata services: devopsy's firewall keeps them off, DNS there aside, which cuts an app running here off from what it reads there (its instance's credentials)"
+			if fw.Door {
+				line += "; with door:, the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services"
+			}
+			entry(remote.StatusWarning, firewallItem, line)
+		case setup.FirewallLoadDoor:
+			entry(remote.StatusWarning, firewallItem, "door: is in this server's config, and devopsy's firewall loads the containers' chain alone: the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services")
 		case setup.FirewallReload:
 			line := "devopsy's firewall is not loaded as devopsy loads it"
 			if fw.Unit != "" {

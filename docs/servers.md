@@ -83,7 +83,7 @@ What it keeps as devopsy wants it:
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
 | Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it) |
 | Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
-| Metadata firewall | containers' packets to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through, by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`) and every five minutes (`devopsy-firewall.timer`) |
+| Metadata firewall | packets from containers on Docker's bridges (`docker0`, `br-*`) to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through; with `door:` in the server's config, the door's chains too ([Project users](project-users.md#the-firewall)); by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`) and every five minutes (`devopsy-firewall.timer`) |
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
 other key stays as it is (a proxy's `proxies`, for example), and the file
@@ -117,17 +117,27 @@ raised for a reboot that takes it (devopsy-server's
 The metadata firewall keeps an app in a container from reading its
 cloud instance's credentials, and its first load can cut an app that read
 them there off from them: `--server-setup` says so among what it shows.
-`firewall: metadata: allow` in the deploy user's `config.yaml` turns it
-off for the server, removed by the next `--server-setup`; it is refused
-on a server with project users, whose containers never reach a metadata
-service. The deploy user cannot read iptables: what `--server-setup` and
-`--server-info` show of it comes from the loader's unit and the mark it
-leaves in `/run`, and the apply reads the chains back as root.
+It covers containers on Docker's bridges, the default one (`docker0`) and
+the ones compose makes (`br-*`); a container on the host's network, on a
+macvlan or ipvlan network, or on a bridge named otherwise is not
+covered. `door:` in the deploy user's `config.yaml` loads the door's
+chains with it, and a server whose loader is already the door's keeps
+it, `door:` gone or not: devopsy never takes a door's firewall off a
+server. `firewall: metadata: allow` there turns the firewall off for the
+server, removed by the next `--server-setup`; it is refused where
+`door:` is set or the door's firewall is loaded. The deploy user cannot
+read iptables: what `--server-setup` and `--server-info` show of it
+comes from its files and the mark the last load leaves in `/run`, none
+while a load runs or after one failed. The apply loads it through
+`devopsy-firewall.service`, the loader run directly only where systemd
+does not answer, then starts the timer and reads the chains back as
+root.
 
-`--yes` asks nothing: it keeps every value someone else set, and restarts
-Docker only when no container runs as it applies, so a new server gets
-devopsy's address pools before its first release makes networks. Without a
-terminal it needs `--yes`.
+`--yes` asks nothing: it keeps every value someone else set, restarts
+Docker only when no container runs as it applies, and loads the
+metadata firewall (or removes it, for `allow`), so a new server set up
+in one command gets devopsy's address pools before its first release
+makes networks, and the firewall. Without a terminal it needs `--yes`.
 
 While the release root holds no project and is not on a volume of its
 own, it lists the volumes it could be on, with their size and free
@@ -220,9 +230,12 @@ another devopsy than the one now there (just installed, or the latest
 already, its last apply having failed), asking nothing: it puts
 devopsy's values where they are devopsy's (a part new in this devopsy
 included), leaves and says each value someone else set, and never
-restarts Docker. It never makes the metadata firewall's first load,
-which is `--server-setup`'s, and keeps it loaded once it is. When it changes `daemon.json` it says Docker takes it at
-its next restart and raises `/run/reboot-required`. What fails is a
+restarts Docker. It loads the metadata firewall again as devopsy loads
+it, the kind loaded kept, and never makes its first load, adds the
+door's chains to the containers' alone, or removes it for `allow`: each
+of those is `--server-setup`'s, and `--upgrade` says so. When it changes
+`daemon.json` it says Docker takes it at its next restart and raises
+`/run/reboot-required`. What fails is a
 warning naming `--server-setup`, and the next `--upgrade` applies again;
 the upgrade itself has succeeded. On a server whose devopsy applied
 already, `--upgrade` changes nothing there: what someone changed since

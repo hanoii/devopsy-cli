@@ -211,8 +211,10 @@ snapshots:
 # This server's firewall, which devopsy @<server> --server-setup loads.
 # Never from a project.
 firewall:
-  # Containers' packets to the cloud's metadata services (169.254.0.0/16
-  # and the like), DNS there aside: block drops them, allow lets them
-  # through, only on a server with no door:. Default: block.
+  # Packets from containers on Docker's bridges to the cloud's metadata
+  # services (169.254.0.0/16 and the like), DNS there aside: block drops
+  # them; allow lets them through, the firewall removed by the next
+  # --server-setup, and is refused where door: is set or the door's
+  # firewall is loaded. Default: block.
   metadata: block
 `

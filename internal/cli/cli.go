@@ -1089,11 +1089,13 @@ Then it shows what is not as devopsy wants it, and asks:
                         to it when lower, never lowered
   mounts drop-in        Docker waits at boot for the release root's
                         mounts (a docker.service.d drop-in)
-  metadata firewall     containers kept off the cloud's metadata services,
-                        DNS there aside, loaded at boot and every five
-                        minutes; firewall: metadata: allow in the deploy
-                        user's config.yaml removes it, refused with project
-                        users. Its first load can cut an app off from its
+  metadata firewall     containers on Docker's bridges kept off the cloud's
+                        metadata services, DNS there aside, loaded at boot
+                        and every five minutes, the door's chains with it
+                        where door: is set; firewall: metadata: allow in
+                        the deploy user's config.yaml removes it, refused
+                        where door: is set or the door's firewall is
+                        loaded. Its first load can cut an app off from its
                         instance's credentials there
 
 Docker takes daemon.json when it restarts: it asks to restart it now,
@@ -1106,8 +1108,9 @@ A second run changes nothing. What it applied is recorded in server.yaml
 beside the deploy user's config.yaml, which marks the server set up.
 
 Options:
-  --yes   ask nothing: keep every value someone changed, and restart
-          Docker only when no container runs
+  --yes   ask nothing: keep every value someone changed, restart Docker
+          only when no container runs, and load the metadata firewall
+          (or remove it, for allow)
 
 Examples:
   devopsy @devopsy@vm1: --server-setup

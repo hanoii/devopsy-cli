@@ -82,7 +82,7 @@ func doorFacts() *remote.DoorFacts {
 		return f
 	}
 	f.Listeners = remote.DoorListeners(read)
-	if f.FirewallWrong, err = doorFirewallWrong(read); err != nil {
+	if f.FirewallWrong, err = remote.FirewallWrong(read); err != nil {
 		f.FirewallError = err.Error()
 	}
 	return f
@@ -97,21 +97,7 @@ func doorFirewall(script string, write bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return doorFirewallWrong(read)
-}
-
-// doorFirewallWrong is what of the project users' firewall read lacks, by the ids of the
-// project users' group and the door's.
-func doorFirewallWrong(read string) ([]string, error) {
-	g, err := user.LookupGroup(remote.DoorGroup)
-	if err != nil {
-		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
-	}
-	d, err := user.LookupGroup(remote.DoorRunGroup)
-	if err != nil {
-		return nil, fmt.Errorf("no %s group yet", remote.DoorRunGroup)
-	}
-	return remote.FirewallWrong(read, g.Gid, d.Gid), nil
+	return remote.FirewallWrong(read)
 }
 
 // doorHostRead runs script as root on the host for the project users' firewall (firewallRun,

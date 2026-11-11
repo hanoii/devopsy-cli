@@ -113,7 +113,7 @@ func (f Facts) Records() bool {
 // Changes says whether an apply would change the host with no answer asked: a part to put, a
 // file, a live buffer, or the root.
 func (f Facts) Changes() bool {
-	return f.RootAction != "" || f.Firewall != nil && f.Firewall.State != FirewallInSync && f.Firewall.State != FirewallRefused || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
+	return f.RootAction != "" || f.Firewall != nil && f.Firewall.State.Changes() || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
 		slices.ContainsFunc(f.Files, func(x FileFact) bool { return !x.InSync }) ||
 		slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
 }

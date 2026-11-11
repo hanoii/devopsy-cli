@@ -184,13 +184,18 @@ DNS resolver.
 
 The metadata addresses are IPv4's link-local (`169.254.0.0/16`),
 Alibaba's and Azure's addresses outside it, and the IPv6 addresses of
-AWS, Google, OpenStack and Oracle. Containers, the deploy user's
-included, cannot reach them either, on this server as on any that
-`--server-setup` set up ([Servers](servers.md#--server-setup)): an app
-that takes the instance's credentials from them needs credentials of its
-own. DNS at those addresses still answers, since some clouds run their
-resolver there. A server with project users refuses
-`firewall: metadata: allow`.
+AWS, Google, OpenStack and Oracle. Containers on Docker's bridges
+(`docker0`, `br-*`), the deploy user's included, cannot reach them
+either, on this server as on any that `--server-setup` set up
+([Servers](servers.md#--server-setup)): an app that takes the
+instance's credentials from them needs credentials of its own. A
+container on the host's network, on macvlan or ipvlan, or on a bridge
+named otherwise is not covered, and a project user's compose file cannot
+ask for the host's network. DNS at those addresses still answers, since
+some clouds run their resolver there. A server with `door:` in its
+config, or with the door's firewall loaded, refuses
+`firewall: metadata: allow`, and devopsy never takes the door's firewall
+off a server.
 
 Docker's daemon contacts no registry a project user names, but it still
 pulls for the deploy user, so the firewall keeps it off the host's
@@ -217,8 +222,10 @@ its raw table, and the server's other rules stay as they are.
 rule holds only the cgroup it was loaded for, and
 `devopsy-firewall.timer` loads them every five minutes too, so a reload
 of the server's own firewall that drops them is undone within five
-minutes. On a server with no project users the same loader, unit and
-timer load `DEVOPSY-CONTAINERS` alone. Syncs between servers work with the firewall loaded.
+minutes. On a server with no `door:` in its config and no door's
+firewall loaded, the same loader, unit and timer load
+`DEVOPSY-CONTAINERS` alone. Syncs between servers work with the firewall
+loaded.
 
 `--server-info` checks the firewall and warns when:
 
