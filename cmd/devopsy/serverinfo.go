@@ -124,8 +124,8 @@ func serverFacts() (remote.ServerInfo, error) {
 	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
 	// The firewall's chains read as root, for the setup's judgment and the door's listeners,
 	// an install's even where the setup cannot be read; a project user's, whose server's setup
-	// is its admin's and whose docker is the door, none of it nor of Docker: the door would
-	// refuse Docker's reads and log each.
+	// is its admin's and whose docker is the door, none of it nor of Docker but what the door
+	// tells (projectUserFacts): the door would refuse Docker's reads and log each.
 	u, err := user.Current()
 	projectUser := err == nil && inDoorGroup(u.Username)
 	var fw *setup.FirewallFact
@@ -136,6 +136,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	info.Docker = hd.facts
 	if !ownsSetup(projectUser) {
 		info.Docker.Door = true
+		projectUserFacts(&info, askDoorFirewall)
 	} else if rd, err := readSetup(h, hd); err == nil {
 		info.Setup, fw = &rd.facts, rd.facts.Firewall
 	} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
@@ -992,6 +993,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// The server's setup, as --server-setup judges it.
 	if info.Setup != nil {
 		es = append(es, setupInfoEntries(*info.Setup, ref)...)
+	}
+	// What a project user can only pass on: by its code, no remedy it could take.
+	for _, id := range info.ForAdmin {
+		if c, ok := report.CodeOf(id); ok {
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "admin", Lines: []string{c.Msg(), c.ForAdmin()}})
+		}
 	}
 
 	// The disks.

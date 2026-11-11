@@ -56,6 +56,9 @@ type ServerInfo struct {
 	// Setup is the server's setup as --server-setup judges it, nil from a devopsy older than
 	// it and for a project user, whose server's setup is its admin's.
 	Setup *setup.Facts `json:"setup,omitempty"`
+	// ForAdmin are the codes (report.Code) of what a project user's --server-info can only
+	// pass on to the server's admin.
+	ForAdmin []string `json:"for_admin,omitempty"`
 	// Door is the server's door, nil on a server with none (ServerDoor).
 	Door  *DoorFacts `json:"door,omitempty"`
 	Disks []Disk     `json:"disks"`

@@ -76,6 +76,14 @@ func readsChains(fw *setup.FirewallFact, projectUser bool) bool {
 	return fw != nil && fw.Loaded != setup.NoFirewall && ownsSetup(projectUser)
 }
 
+// projectUserFacts is a project user's --server-info's part of the setup: the door's answer
+// to "firewall" (ask, askDoorFirewall), W0001 for the admin on wrong, nothing else.
+func projectUserFacts(info *remote.ServerInfo, ask func() (string, error)) {
+	if answer, err := ask(); err == nil && answer == firewallWrong {
+		info.ForAdmin = append(info.ForAdmin, report.FirewallNotLoaded.ID)
+	}
+}
+
 // readChains reads devopsy's firewall's chains as root where readsChains says, and judges them
 // by the kind loaded into fw (setup.FirewallFact.Chains), so a wipe the files and the mark
 // cannot show reads "to load again", for --server-setup's facts and apply and for

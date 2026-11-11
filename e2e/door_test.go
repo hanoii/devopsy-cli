@@ -271,8 +271,9 @@ func TestDoorProjectsLife(t *testing.T) {
 	if out := release("a second release", "--release"); !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | report W0001 to the server's admin\n") {
 		t.Errorf("a release beside a wiped firewall:\n%s", out)
 	}
-	// Its --server-info shows no setup of the admin's.
-	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); strings.Contains(out, "\nsetup ") || strings.Contains(out, "--server-setup") {
+	// Its --server-info says it too, with no setup of the admin's in it.
+	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); !strings.Contains(out, "W0001: the server's firewall is not loaded as devopsy loads it") ||
+		!strings.Contains(out, "report W0001 to the server's admin") || strings.Contains(out, "\nsetup ") || strings.Contains(out, "--server-setup") {
 		t.Errorf("a project user's --server-info beside a wiped firewall:\n%s", out)
 	}
 	if out, code := doorRoot(t, remote.FirewallScript); code != 0 {

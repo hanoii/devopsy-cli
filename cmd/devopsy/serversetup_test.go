@@ -1771,12 +1771,25 @@ func TestDoorFirewallWithNoRuleIsSilent(t *testing.T) {
 
 // The server's setup is its admin's, never a project user's: as a project user --server-info
 // gathers no setup facts and makes no root read (its docker is the door, which would refuse
-// it and log the refusal).
+// it and log the refusal); it asks the door whether the firewall is right instead, and on
+// wrong passes W0001 on to the admin, nothing on right or unknown.
 func TestProjectUserGetsNoSetup(t *testing.T) {
 	t.Parallel()
 	fw := &setup.FirewallFact{Loaded: setup.ContainersFirewall}
 	if ownsSetup(true) || !ownsSetup(false) || readsChains(fw, true) || !readsChains(fw, false) || readsChains(&setup.FirewallFact{}, false) || readsChains(nil, false) {
 		t.Error("the decision")
+	}
+	for answer, want := range map[string][]string{firewallWrong: {report.FirewallNotLoaded.ID}, firewallRight: nil, firewallUnknown: nil, "": nil} {
+		var info remote.ServerInfo
+		projectUserFacts(&info, func() (string, error) {
+			if answer == "" {
+				return "", errors.New("refused")
+			}
+			return answer, nil
+		})
+		if info.Setup != nil || !slices.Equal(info.ForAdmin, want) {
+			t.Errorf("%q: setup %v, for the admin %q", answer, info.Setup, info.ForAdmin)
+		}
 	}
 }
 

@@ -15,6 +15,16 @@ var FirewallNotLoaded = Code{"W0001", "the server's firewall is not loaded as de
 // Codes is the registry, every code once, which docs/codes.md lists.
 var Codes = []Code{FirewallNotLoaded}
 
+// CodeOf is the registry's code by its ID.
+func CodeOf(id string) (Code, bool) {
+	for _, c := range Codes {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return Code{}, false
+}
+
 // Msg is a coded message's first line, the same for every reader: the code, a colon, its
 // description.
 func (c Code) Msg() string { return c.ID + ": " + c.Desc }

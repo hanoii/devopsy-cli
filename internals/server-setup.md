@@ -103,4 +103,4 @@
 - `--upgrade` applies once per devopsy version (`upgradeApplies`), when the record's `devopsy:` line, written by an apply that ended with no failure and no change a refusal stopped, names another version or none; drift on a server applied already is `--server-setup`'s.
 - `--server-setup` and `--upgrade`'s apply are one path, the level of what they say and the exit the only differences.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.
-- A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`ownsSetup`, which `readsChains` asks too): the server's setup is its admin's, and the door would refuse Docker's reads and log each.
+- A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`ownsSetup`, which `readsChains` asks too): the server's setup is its admin's, and the door would refuse Docker's reads and log each; it asks the door's `firewall` request instead and shows W0001 for the admin on wrong (`projectUserFacts`).

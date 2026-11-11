@@ -252,7 +252,8 @@ devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it
 devopsy: | report W0001 to the server's admin
 ```
 
-The release goes on. The door answers only that, from the deploy
+The release goes on, and the project user's `--server-info` says the
+same line in its report. The door answers only that, from the deploy
 user's own read of the chains as root. That `--server-info` shows no
 setup of the server's, its admin's to judge, and reads nothing of
 Docker, which the door answers for: its system, disks, roles and

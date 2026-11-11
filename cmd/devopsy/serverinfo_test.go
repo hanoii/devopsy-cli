@@ -222,6 +222,11 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallInSync, Door: true}
 			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}, nil)
 		}, "", "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --server-setup"},
+		// A project user's: what it can pass on to the server's admin, by its code, no remedy.
+		{"for the admin", func(i *remote.ServerInfo) {
+			i.Setup = nil
+			i.ForAdmin = []string{report.FirewallNotLoaded.ID}
+		}, "", "W0001: the server's firewall is not loaded as devopsy loads it\nreport W0001 to the server's admin|"},
 		{"setup firewall failed", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallReload, Unit: "exit-code"}
