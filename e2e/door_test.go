@@ -1925,8 +1925,11 @@ docker run -d --name doorhostsvc-lo --network host busybox:1.37 sh -c 'mkdir -p 
 // builder. The control: the same two builds on the server's own builder see each other's.
 func TestDoorBuildersStayApart(t *testing.T) {
 	target := fmt.Sprintf("/cache-%d", time.Now().UnixNano())
+	// sharing=locked: a build waits for the mount while the builder holds it, to read its size
+	// (its garbage collection, a `docker system df`); the default, shared, takes a new, empty
+	// one then, and the control, or a leak between two projects, would read as apart.
 	dockerfile := func(name string) string {
-		return "FROM busybox:1.37\nRUN --mount=type=cache,target=" + target + " sh -c 'cat " + target + "/mark 2>/dev/null || echo none; echo " + name + " >" + target + "/mark' >/seen\n"
+		return "FROM busybox:1.37\nRUN --mount=type=cache,target=" + target + ",sharing=locked sh -c 'cat " + target + "/mark 2>/dev/null || echo none; echo " + name + " >" + target + "/mark' >/seen\n"
 	}
 	build := func(project string) string {
 		user := doorUser(t, project)
