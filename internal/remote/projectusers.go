@@ -110,10 +110,14 @@ var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system 
 	"getent group " + DoorRunGroup + " >/dev/null || groupadd --system " + DoorRunGroup + "\n"
 
 // hostPut is put <file> <mode> <check> <content>: content into file when it differs, checked
-// before it lands, failing otherwise when it changed nothing. A mode keep:<mode> keeps the
-// file as its admin has it: a link stays, the file it names written; its own mode and owner,
-// <mode> (root's) only for a file it makes. Never in a pipeline, whose subshell an exit would
-// leave alone.
+// before it lands, succeeding only then (a check that refuses ends the run with 4, a write that
+// fails with 5); when the text is the same it fails, its mode set
+// back first when only that differs and the file is no link, which no caller reads as a new
+// text (a reboot, a reload). A link with the same text stays as it is; with another, any mode
+// but keep: puts a file of devopsy's in its place. A mode keep:<mode> keeps the file as its
+// admin has it: a link stays, the file it names written; its own mode and owner, <mode>
+// (root's) only for a file it makes. Never in a pipeline, whose subshell an exit would leave
+// alone.
 var hostPut = `put() {
   pf=$1
   case $2 in
@@ -125,15 +129,24 @@ var hostPut = `put() {
         pn=$((pn + 1))
       done ;;
   esac
-  tmp=$(mktemp "$pf.XXXXXX")
+  # Called in an if, set -e holds nothing here: each step's failure (a full disk, a
+  # read-only file system) fails the run itself, never reads as the same text.
+  tmp=$(mktemp "$pf.XXXXXX") || { ` + echoLine(report.ErrorLevel, "$1 could not be written") + `; exit 5; }
   case $2 in
     keep:*) if [ -e "$pf" ]; then cp -p "$pf" "$tmp"; else chmod "${2#keep:}" "$tmp"; fi ;;
     *) chmod "$2" "$tmp" ;;
-  esac
-  printf '%s' "$4" >"$tmp"
-  if cmp -s "$tmp" "$pf" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  esac || { rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 could not be written") + `; exit 5; }
+  printf '%s' "$4" >"$tmp" || { rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 could not be written") + `; exit 5; }
+  if cmp -s "$tmp" "$pf" 2>/dev/null; then
+    rm -f "$tmp"
+    # The same text in another mode (a loader that lost its exec bit) takes the mode back, the
+    # text unchanged, reporting nothing new; a link's file keeps its mode, a file devopsy may
+    # not own.
+    case $2 in keep:*) ;; *) [ -L "$pf" ] || [ -z "$(find "$pf" -prune ! -perm "$2")" ] || chmod "$2" "$pf" ;; esac
+    return 1
+  fi
   if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
-  mv -f "$tmp" "$pf"
+  mv -f "$tmp" "$pf" || { rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 could not be written") + `; exit 5; }
 }
 `
 

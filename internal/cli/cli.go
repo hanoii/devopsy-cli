@@ -1069,10 +1069,10 @@ Examples:
 
 Sets up the server for devopsy, as its deploy user, the server named with
 its user (@devopsy@vm1:): root's steps go through devopsy's util image.
-It refuses first when the server lacks what every release needs (tar,
-flock, Docker with compose and buildx under systemd as docker.service)
-and says why, and when the release root is another user's or no
-directory.
+It refuses what the server lacks (tar, flock, Docker with compose and
+buildx under systemd as docker.service, a release root of the deploy
+user's) and says why; a refusal stops only what needs it, the rest
+applied, and the run then exits 1.
 
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
@@ -1089,6 +1089,14 @@ Then it shows what is not as devopsy wants it, and asks:
                         to it when lower, never lowered
   mounts drop-in        Docker waits at boot for the release root's
                         mounts (a docker.service.d drop-in)
+  metadata firewall     containers on Docker's bridges kept off the cloud's
+                        metadata services, DNS there aside, loaded at boot
+                        and by --server-setup, the door's chains with it
+                        where door: is set; firewall: metadata: allow in
+                        the deploy user's config.yaml removes it, refused
+                        where door: is set or the door's firewall is
+                        loaded. Its first load can cut an app off from its
+                        instance's credentials there
 
 Docker takes daemon.json when it restarts: it asks to restart it now,
 and does if Docker still has it to take once it holds its lock, which
@@ -1100,8 +1108,9 @@ A second run changes nothing. What it applied is recorded in server.yaml
 beside the deploy user's config.yaml, which marks the server set up.
 
 Options:
-  --yes   ask nothing: keep every value someone changed, and restart
-          Docker only when no container runs
+  --yes   ask nothing: keep every value someone changed, restart Docker
+          only when no container runs, and load the metadata firewall
+          (or remove it, for allow)
 
 Examples:
   devopsy @devopsy@vm1: --server-setup

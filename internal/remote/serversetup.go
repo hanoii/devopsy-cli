@@ -44,20 +44,23 @@ const (
 )
 
 // SetupRootScript is what an apply runs as root on the host, through the util image chrooted
-// into it (the system's files under $host_root, the release root as given): each file put only
-// when it differs and passes its check, daemon.json's by dockerd itself with the unit's flags;
-// the live buffers raised only when lower; the release root made and given to the deploy
-// user; then Docker restarted (the marker written first, on a daemon.json dockerd takes,
+// into it (the system's files under $host_root, the release root as given), in this order:
+// the release root made and given to the deploy user; the sysctl file, the live buffers
+// raised only when lower, the mounts drop-in; daemon.json, by dockerd's own check with the
+// unit's flags, last, since a put its check refuses ends the run; each file put only when it
+// differs and passes its check; then Docker restarted (the marker written first, on a daemon.json dockerd takes,
 // daemon-reload, the restart queued with --no-block), or, when daemon.json changed, the
 // marker written and the system's restart flag raised. Its arguments, in order: the host
 // root, the deploy user's uid:gid, 1 to make or give the root, the root, daemon.json's text,
 // the sysctl file's, the drop-in's (each "" to leave it), 1 to raise the buffers, restart
 // (now) or mark (the marker and flag, whatever changed; "" marks only when daemon.json
-// changed), the InvocationID for the marker, and the unit's dockerd flags, one a line.
+// changed), the InvocationID for the marker, the unit's dockerd flags, one a line, and the
+// run's own token, which a restart's marker carries after the id: the id is what pending
+// compares, the token which run asked the restart.
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}
-dockerd_flags=${11:-}
+dockerd_flags=${11:-} token=${12:-}
 export dockerd_flags
 ` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1) with the flags docker.service starts it with (one
 # a line), as Docker starts on it: saying only what it refuses.
@@ -68,13 +71,6 @@ if [ -n "$give" ]; then
   p=$root
   if [ ! -e "$p" ]; then install -d -m 755 "$p"; echo "` + SetupMade + ` $root"; fi
   if [ -n "$(find -H "$p" -maxdepth 0 -user 0)" ]; then chown "$owner" "$p"; echo "` + SetupGave + ` $root"; fi
-fi
-if [ -n "$daemon" ]; then
-  mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
-  if put "$host_root` + setup.DaemonFile + `" keep:644 "$validate" "$daemon"; then
-    changed=1
-    echo "` + SetupPut + ` ` + setup.DaemonFile + `"
-  fi
 fi
 if [ -n "$sysctl" ]; then
   mkdir -p "$host_root` + path.Dir(setup.SysctlFile) + `"
@@ -91,9 +87,19 @@ if [ -n "$dropin" ]; then
   mkdir -p "$host_root` + path.Dir(setup.MountsDropIn) + `"
   if put "$host_root` + setup.MountsDropIn + `" 644 true "$dropin"; then
     echo "` + SetupPut + ` ` + setup.MountsDropIn + `"
-    # systemd's view of docker.service, so it never says a drop-in changed on disk; a
-    # restart reloads anyway, and a reload refused waits for the next boot.
-    [ "$after" = restart ] || SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
+    # systemd's view of docker.service, so it never says a drop-in changed on disk, whatever
+    # follows (a restart the daemon.json put after it may stop); a reload refused waits for
+    # the next boot.
+    SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
+  fi
+fi
+# daemon.json last of the puts: its check (dockerd's) is the one that refuses, and a put it
+# refuses ends the run with what came before put.
+if [ -n "$daemon" ]; then
+  mkdir -p "$host_root` + path.Dir(setup.DaemonFile) + `"
+  if put "$host_root` + setup.DaemonFile + `" keep:644 "$validate" "$daemon"; then
+    changed=1
+    echo "` + SetupPut + ` ` + setup.DaemonFile + `"
   fi
 fi
 mark() {
@@ -110,7 +116,7 @@ case $after in
     # The marker first, with the InvocationID read before the run: a restart that comes ends
     # it by its new id, and one that does not leaves Docker pending, whatever reaches the
     # caller of a run the restart cuts.
-    printf '%s\n' "$id" >"$host_root` + setup.RestartMarker + `"
+    printf '%s\n' "$id${token:+ $token}" >"$host_root` + setup.RestartMarker + `"
     echo ` + SetupAsked + `
     # The unit's start counter cleared: docker.service allows a few starts a minute
     # (StartLimitBurst), a fresh server's install and restarts by hand count, and a restart an

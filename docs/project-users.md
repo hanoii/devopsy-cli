@@ -184,10 +184,18 @@ DNS resolver.
 
 The metadata addresses are IPv4's link-local (`169.254.0.0/16`),
 Alibaba's and Azure's addresses outside it, and the IPv6 addresses of
-AWS, Google, OpenStack and Oracle. Containers, the deploy user's
-included, cannot reach them either: an app that takes the instance's
-credentials from them needs credentials of its own. DNS at those
-addresses still answers, since some clouds run their resolver there.
+AWS, Google, OpenStack and Oracle. Containers on Docker's bridges
+(`docker0`, `br-*`), the deploy user's included, cannot reach them
+either, on this server as on any that `--server-setup` set up
+([Servers](servers.md#--server-setup)): an app that takes the
+instance's credentials from them needs credentials of its own. A
+container on the host's network, on macvlan or ipvlan, or on a bridge
+named otherwise is not covered, and a project user's compose file cannot
+ask for the host's network. DNS at those addresses still answers, since
+some clouds run their resolver there. A server with `door:` in its
+config, or with the door's firewall loaded, refuses
+`firewall: metadata: allow`, and devopsy never takes the door's firewall
+off a server.
 
 Docker's daemon contacts no registry a project user names, but it still
 pulls for the deploy user, so the firewall keeps it off the host's
@@ -211,20 +219,46 @@ The rules are in four chains devopsy owns, `DEVOPSY-PROJECTS`,
 its raw table, and the server's other rules stay as they are.
 `devopsy-firewall.service` loads them at every boot, a drop-in for
 `docker.service` loads them at every start of Docker, whose daemon's
-rule holds only the cgroup it was loaded for, and from the next boot on
-`devopsy-firewall.timer` loads them every five minutes too, so a reload
-of the server's own firewall that drops them is undone within five
-minutes. Syncs between servers work with the firewall loaded.
+rule holds only the cgroup it was loaded for, and `--project-users add`
+and `--server-setup` load them too. Nothing loads them in between: a
+reload of the server's own firewall, or an `iptables -F`, drops them
+until one of those runs again. On a server with no `door:` in its
+config and no door's firewall loaded, the same loader and unit load
+`DEVOPSY-CONTAINERS` alone. Syncs between servers work with the firewall
+loaded.
 
-`--server-info` checks the firewall and warns when:
+`--server-info` reads the chains as root and warns, in its setup's
+metadata firewall line, with `--server-setup` as the fix, when:
 
 - a chain is not devopsy's, nothing jumps to it, or a rule ahead of
-  devopsy's jump lets packets through, which `--project-users add`
-  fixes by loading the chains again;
-- Docker's daemon is in no cgroup of its own, so nothing covers it, or
-  in one made since the firewall loaded, which its rule does not hold;
-- a TCP listener is open beyond loopback, other than sshd's and the
-  ports Docker publishes, since containers reach it.
+  devopsy's jump lets packets through (a reload of the server's own
+  firewall, an `iptables -F`);
+- Docker's daemon is in no cgroup of its own, so nothing covers it,
+  which no setup repairs: Docker run as `docker.service` under systemd
+  gives it one;
+- Docker's daemon is in a cgroup made since the firewall loaded (Docker
+  restarted outside its unit), which its rule does not hold; a start of
+  Docker by its unit, or `--server-setup`, loads it again.
+
+It also warns of a TCP listener open beyond loopback, other than
+sshd's and the ports Docker publishes, since containers reach it.
+
+A project user's release asks the door whether the firewall is loaded
+as devopsy loads it, and when it is not, says a line for the server's
+admin with a code to pass on ([Codes](codes.md)):
+
+```
+devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it
+devopsy: | report W0001 to the server's admin
+```
+
+The release goes on, and the project user's `--server-info` says the
+same line in its report. The door answers only that, from the deploy
+user's own read of the chains as root. That `--server-info` shows no
+setup of the server's, its admin's to judge, and skips Docker's own
+facts (`docker info`, its compose and buildx versions), which the door
+refuses a project user: it shows its system, disks, roles and
+environments, the containers they need listed through the door.
 
 ## What a compose file may hold
 

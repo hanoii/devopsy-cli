@@ -311,6 +311,16 @@ a missing root or one root owns the deploy user's ([Servers](servers.md)).
 A project user's release checks neither: its tree is
 `--project-users add`'s.
 
+Where devopsy's firewall is installed and `firewall: metadata:` is not
+`allow`, the upload warns `W0001` with `--server-setup` as the fix
+([Codes](codes.md)) when its last load failed, or when its chains, read
+as root (only with devopsy's util image there already and through this
+host's Docker, within a few seconds), are not as devopsy loads them (a reload of the server's own
+firewall, an `iptables -F`); the release goes on. A
+project user's release asks the door, and says `W0001` with a line to
+pass it on to the server's admin. A read that cannot be made, or that
+fails, says nothing.
+
 A release says how much it uploads, shows the upload's progress on one
 line while it runs (at a terminal only), then its id, size and time,
 which the release log keeps. The server names the release by the

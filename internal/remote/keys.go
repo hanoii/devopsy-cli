@@ -287,7 +287,7 @@ const EndProjectUserFlag = "--end-project-user"
 const DoorGroup = "devopsy-projects"
 
 // DoorRunGroup is the group the door runs under, its primary one through sudo's -g: the
-// firewall covers every process the door starts on the host by it (doorJumps), so a registry
+// firewall covers every process the door starts on the host by it (firewallJumps), so a registry
 // client of compose's or buildx's, which a project's registry answers as it likes, reaches no
 // loopback or metadata address. No user is in it.
 const DoorRunGroup = "devopsy-door"

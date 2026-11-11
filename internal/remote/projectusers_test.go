@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -105,7 +106,9 @@ restart_flag /run/docker-mark "$1"`, "sh", "id-1")
 // A host piece lands only when it is missing or differs, and only once it passed its check:
 // a sudoers file or a sshd drop-in that does not parse breaks every sudo, or every login, on
 // the server. One that is the same is left as it is, which is how add knows nothing changed
-// (no reboot asked); one refused leaves what was there, and nothing beside it.
+// (no reboot asked), and one whose mode alone differs gets its mode back with nothing
+// reported (keep: leaving the admin's); one refused leaves what was there, and nothing
+// beside it.
 func TestHostPut(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -150,6 +153,56 @@ func TestHostPut(t *testing.T) {
 		t.Errorf("a piece that differs (%d): %s", code, out)
 	}
 	holds("a piece that differs", "rule two\n")
+	// The same text in another mode (a loader that lost its exec bit) gets its mode back,
+	// with no check run, and reports no new text, which callers read as a reboot or a reload.
+	if err := os.Chmod(f, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := put("exit 9", "rule two\n"); code != 1 {
+		t.Errorf("the same piece in another mode (%d): %s", code, out)
+	}
+	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("its mode put back: %v (%v)", fi.Mode(), err)
+	}
+	holds("a piece whose mode was put back", "rule two\n")
+	// A link with the same text is left as it is, the file it names keeping its mode: a file
+	// devopsy may not own.
+	target := filepath.Join(t.TempDir(), "named")
+	write(t, target, "rule two\n")
+	if err := os.Chmod(target, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("sh", "-c", "set -eu\n"+hostPut+`put "$1" 640 true "$2"`, "sh", link, "rule two\n")
+	if out, _ := c.CombinedOutput(); c.ProcessState.ExitCode() != 1 {
+		t.Errorf("a link to the same text (%d): %s", c.ProcessState.ExitCode(), out)
+	}
+	if fi, err := os.Stat(target); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the linked file's mode: %v (%v)", fi.Mode(), err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link replaced: %v (%v)", fi.Mode(), err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	// keep: leaves the mode its admin gave it.
+	if err := os.Chmod(f, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = exec.Command("sh", "-c", "set -eu\n"+hostPut+`put "$1" keep:640 true "$2"`, "sh", f, "rule two\n")
+	if out, _ := c.CombinedOutput(); c.ProcessState.ExitCode() != 1 {
+		t.Errorf("keep: on the same text (%d): %s", c.ProcessState.ExitCode(), out)
+	}
+	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("keep: changed the admin's mode: %v (%v)", fi.Mode(), err)
+	}
+	if err := os.Chmod(f, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(f); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +210,20 @@ func TestHostPut(t *testing.T) {
 		t.Errorf("a first piece its check refuses: exit %d", code)
 	}
 	holds("a first piece its check refuses", "")
+	// A move that fails (a full disk, a read-only file system) inside an if is the run's
+	// failure, never the same text.
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(bin, "mv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c = exec.Command("sh", "-c", "set -eu\n"+hostPut+`if put "$1" 640 true "$2"; then echo put; else echo same; fi`, "sh", f, "rule three\n")
+	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	moved, _ := c.CombinedOutput()
+	if code := c.ProcessState.ExitCode(); code != 5 || !strings.Contains(string(moved), "could not be written") || strings.Contains(string(moved), "same") {
+		t.Errorf("a move that fails (%d): %s", code, moved)
+	}
+	holds("a move that failed", "")
 }
 
 // add refuses a host whose sshd would not take its drop-in for the project user: a sshd_config
@@ -293,5 +360,94 @@ esac
 		if out, err := c.CombinedOutput(); (err == nil) != ok {
 			t.Errorf("%s: %v %s", who, err, out)
 		}
+	}
+}
+
+// --project-users add asks a reboot for the sshd drop-in only when sshd has a new text to
+// take: a drop-in with devopsy's text in another mode (a hardening script's 600 on
+// sshd_config.d) changes nothing sshd reads, so its mode is put back with no reboot marker,
+// no restart flag and no word that project users wait for a reboot. The script's own lines
+// for the drop-in run here, its paths moved into a directory.
+func TestDoorHostScriptAsksNoRebootForADropInsMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s := DoorHostScript("deploy", "/opt/bin/devopsy")
+	from, to := strings.Index(s, "old=$(cat "+DoorSSHDropIn), strings.Index(s, "made=\n")
+	if from < 0 || to < from {
+		t.Fatalf("the drop-in's lines not found in the host script:\n%s", s)
+	}
+	dropIn := filepath.Join(dir, "devopsy.conf")
+	lines := strings.ReplaceAll(s[from:to], DoorSSHDropIn, dropIn)
+	write(t, filepath.Join(dir, "bin", "sshd"), "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(filepath.Join(dir, "bin", "sshd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func() string {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", "set -eu\n"+hostPut+"restart_flag() { echo \"flagged $1\"; }\n"+lines)
+		cmd.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return string(out)
+	}
+	// The control: a drop-in not there is put, and a reboot asked.
+	if out := run(); !strings.Contains(out, "reboot") || !strings.Contains(out, "flagged "+DoorRebootMarker) {
+		t.Fatalf("a new drop-in asked no reboot:\n%s", out)
+	}
+	if out := run(); out != "" {
+		t.Fatalf("the same drop-in again:\n%s", out)
+	}
+	if err := os.Chmod(dropIn, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := run(); out != "" {
+		t.Errorf("the drop-in's text as devopsy's, its mode 600: a reboot asked for nothing:\n%s", out)
+	}
+}
+
+// Each piece --project-users add's host step puts ends the step when it cannot be written (a
+// full disk, a read-only file system), as each is called: put's exit 5 goes through its
+// `|| :` and its if, never read as the same text, so no step after it runs on a piece missing.
+func TestDoorHostScriptStopsAtAPieceNotWritten(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	for name, body := range map[string]string{"mv": "#!/bin/sh\nexit 1\n", "visudo": "#!/bin/sh\n", "sshd": "#!/bin/sh\n"} {
+		write(t, filepath.Join(bin, name), body)
+		if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each call from its start to its end, its quoted text across lines: put's own lines and
+	// what it is called by.
+	script := DoorHostScript("deploy", "/opt/bin/devopsy")
+	n := 0
+	for _, at := range regexp.MustCompile(`(?m)^\s*(if )?put `).FindAllStringIndex(script, -1) {
+		call := script[at[0]:]
+		cut := min(strings.Index(call+" || :\n", " || :\n"), strings.Index(call+"; then\n", "; then\n"))
+		if cut == len(call) {
+			t.Fatalf("a put called otherwise than in an if or with || : (a pipeline or $(...) keeps its exit): %.80s", call)
+		}
+		ifCall := strings.HasPrefix(strings.TrimSpace(call), "if ")
+		target, args, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(call[:cut]), "if "), " ")
+		target, args, _ = strings.Cut(args, " ")
+		n++
+		piece := `put "$1" ` + args
+		if ifCall {
+			piece = "if " + piece + "; then :; fi"
+		} else {
+			piece += " || :"
+		}
+		f := filepath.Join(t.TempDir(), filepath.Base(target))
+		c := exec.Command("sh", "-c", "set -eu\n"+hostPut+piece+"\necho after", "sh", f)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, _ := c.CombinedOutput()
+		if code := c.ProcessState.ExitCode(); code != 5 || !strings.Contains(string(out), "could not be written") || strings.Contains(string(out), "after") {
+			t.Errorf("%s, not written (%d): %s", target, code, out)
+		}
+	}
+	if n < 3 {
+		t.Errorf("%d pieces put, want the sudoers rule, the keys command and the sshd drop-in at least", n)
 	}
 }

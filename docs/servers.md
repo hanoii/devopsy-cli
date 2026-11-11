@@ -73,6 +73,34 @@ empty (a fresh volume's `lost+found` aside); one root owns that holds
 files (a system directory), one another user owns, or one that is no
 directory, it refuses.
 
+A refusal stops only what needs what it refuses, and `--server-setup`
+applies the rest, says what it did not apply and why, and exits 1:
+
+- Docker not answering, not this host's (rootless, or another host's
+  through `DOCKER_HOST`), under another init than systemd, or its unit
+  inactive: every item, each run as root through Docker;
+- `docker.service` starting Docker with another `--config-file`, a
+  `daemon.json` devopsy cannot judge, or a record it cannot read:
+  `daemon.json`'s parts and a restart of Docker;
+- a release root refused (another user's, a file, `/`): its making and
+  the mounts drop-in that names it; one a unit file cannot hold: the
+  drop-in alone;
+- a missing `flock`, which the firewall's loader takes its lock with:
+  the metadata firewall;
+- Docker without its compose or buildx plugin, or a missing `tar`, which
+  releases need: nothing of the setup, said all the same.
+
+It shows the differences and the refusals together, each refusal once,
+and its question covers what it will apply, naming what it will not. A
+put that fails, by its check or its write, ends its root run there, with
+what came before it put; `daemon.json` goes last of the puts, and what
+follows the run (the firewall) still goes. A restart not confirmed in
+time leaves the firewall to go when Docker answers, and names it as not
+applied when Docker does not. A step a refusal stops whose change it
+cannot tell (beside a `daemon.json` it cannot judge, or a root a unit
+file cannot hold) counts as not applied, and `--upgrade` says what it
+did not apply too, as a warning.
+
 What it keeps as devopsy wants it:
 
 | Item | devopsy's value |
@@ -83,6 +111,7 @@ What it keeps as devopsy wants it:
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
 | Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it) |
 | Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
+| Metadata firewall | packets from containers on Docker's bridges (`docker0`, `br-*`) to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through; with `door:` in the server's config, or the door's firewall loaded already, the door's chains too ([Project users](project-users.md#the-firewall)); by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`), by `--server-setup` and `--project-users add`, and with the door's at every start of Docker |
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
 other key stays as it is (a proxy's `proxies`, for example), and the file
@@ -113,10 +142,36 @@ Docker takes the file at its next restart, and `/run/reboot-required` is
 raised for a reboot that takes it (devopsy-server's
 `DEVOPSY_AUTO_REBOOT_TIME`).
 
-`--yes` asks nothing: it keeps every value someone else set, and restarts
-Docker only when no container runs as it applies, so a new server gets
-devopsy's address pools before its first release makes networks. Without a
-terminal it needs `--yes`.
+The metadata firewall keeps an app in a container from reading its
+cloud instance's credentials, and its first load can cut an app that read
+them there off from them: `--server-setup` says so among what it shows.
+It covers containers on Docker's bridges, the default one (`docker0`) and
+the ones compose makes (`br-*`); a container on the host's network, on a
+macvlan or ipvlan network, or on a bridge named otherwise is not
+covered. `door:` in the deploy user's `config.yaml` loads the door's
+chains with it, and a server whose loader is already the door's keeps
+it, `door:` gone or not: devopsy never takes a door's firewall off a
+server. `firewall: metadata: allow` there turns the firewall off for the
+server, removed by the next `--server-setup`; it is refused where
+`door:` is set or the door's firewall is loaded. What `--server-setup`
+and `--server-info` show of it comes from its files, its boot link, the
+mark the last load that went in leaves in `/run` (none after a load
+failed), and, wherever devopsy's firewall is loaded, its chains read as
+root through devopsy's util image, since the deploy user cannot read
+iptables. Nothing loads it again between a boot and the next install, so
+a reload of the server's own firewall or an `iptables -F`, which drops
+it, shows there as the firewall not loaded as devopsy loads it, and the
+next `--server-setup` loads it again; a release says it too, by its code
+`W0001` ([Codes](codes.md)). The apply loads it through
+`devopsy-firewall.service`, the loader run directly only where systemd
+does not answer, then reads the chains back as root. One load runs at a
+time, by a lock in a directory of root's that no other user enters.
+
+`--yes` asks nothing: it keeps every value someone else set, restarts
+Docker only when no container runs as it applies, and loads the
+metadata firewall (or removes it, for `allow`), so a new server set up
+in one command gets devopsy's address pools before its first release
+makes networks, and the firewall. Without a terminal it needs `--yes`.
 
 While the release root holds no project and is not on a volume of its
 own, it lists the volumes it could be on, with their size and free
@@ -164,8 +219,9 @@ fix:
 - a server never set up by devopsy, on which `--upgrade` applies nothing,
   and each item of the setup that is not devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
-  mounts drop-in) or that Docker has not taken yet, each fixed by
-  `--server-setup`;
+  mounts drop-in, the metadata firewall, `W0001`) or that Docker has not
+  taken yet, each fixed by `--server-setup`, or, where the setup refuses
+  every step, by what it refuses first;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
@@ -181,6 +237,12 @@ fix:
   completes), services an operation left stopped, or containers
   restarting, paused, dead, unhealthy, or exited on an error of their
   own (a stop's codes excepted), each as `--status` says it.
+
+`--json` prints the facts and the same lines for scripts and agents. Its
+fields may change before 1.0.0: the door's `firewall_wrong`,
+`firewall_error` and `project` are gone, the setup's `firewall` (its
+`state`, `differs`, `wrong` and `unread`) saying the firewall for both
+kinds.
 
 A sync or a snapshot under way is reported as information. So are the
 volumes the release root could be on, while it holds no project and is
@@ -209,8 +271,12 @@ another devopsy than the one now there (just installed, or the latest
 already, its last apply having failed), asking nothing: it puts
 devopsy's values where they are devopsy's (a part new in this devopsy
 included), leaves and says each value someone else set, and never
-restarts Docker. When it changes `daemon.json` it says Docker takes it at
-its next restart and raises `/run/reboot-required`. What fails is a
+restarts Docker. It loads the metadata firewall again as devopsy loads
+it, the kind loaded kept, and never makes its first load, adds the
+door's chains to the containers' alone, or removes it for `allow`: each
+of those is `--server-setup`'s, and `--upgrade` says so. When it changes
+`daemon.json` it says Docker takes it at its next restart and raises
+`/run/reboot-required`. What fails is a
 warning naming `--server-setup`, and the next `--upgrade` applies again;
 the upgrade itself has succeeded. On a server whose devopsy applied
 already, `--upgrade` changes nothing there: what someone changed since

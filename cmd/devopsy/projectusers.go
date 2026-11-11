@@ -245,7 +245,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		return failErr(err)
 	}
 	// The project users' firewall, loaded and checked before any project user can log in.
-	wrong, err := doorFirewall(remote.DoorFirewallInstall(), true)
+	wrong, err := doorFirewall(remote.FirewallInstall(true), true)
 	if err != nil {
 		return failErr(err)
 	}

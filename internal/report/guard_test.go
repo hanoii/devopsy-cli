@@ -20,7 +20,9 @@ import (
 func TestNothingSaysAround(t *testing.T) {
 	t.Parallel()
 	// A command's "$ " too: report lays every one out (Fix, Hint).
-	said := regexp.MustCompile(`(^|[^\\a-z])["` + "`" + `]devopsy: |\\"devopsy: |Fprint(f|ln)?\((os\.Stderr|errOut)\b|["` + "`" + `']\$ |\\"\$ `)
+	// A code anywhere, written or built (W%04d), and a coded message's line for a reader who
+	// passes it on: report builds both from the registry (Code).
+	said := regexp.MustCompile(`(^|[^\\a-z])["` + "`" + `]devopsy: |\\"devopsy: |Fprint(f|ln)?\((os\.Stderr|errOut)\b|["` + "`" + `']\$ |\\"\$ |\bW[0-9]{4}\b|W%0?4d|to the server's admin`)
 	allowed := []struct{ file, line string }{
 		// Usage, devopsy's help: printed as it is.
 		{"internal/cli/cli.go", "`devopsy: docker compose for projects"},

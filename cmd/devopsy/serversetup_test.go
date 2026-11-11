@@ -13,13 +13,16 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // setupServer is newSyncSetup's server with a host root (remote.HostRootEnv) for
 // --server-setup: systemd, Docker as this host's docker.service (docker-info.json), the live
 // buffers low, and fakes of systemctl (a restart takes docker-info.after, a new
-// InvocationID), dockerd and sysctl.
+// InvocationID; devopsy-firewall.service's start runs the loader, its result kept in fwresult
+// until the unit runs again, as systemd keeps it), dockerd, sysctl, iptables and flock.
 func setupServer(t *testing.T) (*syncSetup, string) {
 	t.Helper()
 	s := newSyncSetup(t)
@@ -44,8 +47,10 @@ func setupServer(t *testing.T) (*syncSetup, string) {
 h=$DEVOPSY_INTERNAL_HOST_ROOT
 echo "systemctl $*" >>"$h/systemctl.log"
 case "$*" in
-  "show -p ActiveState --value docker.service") echo active ;;
+  "show -p ActiveState --value docker.service") cat "$h/active-state" 2>/dev/null || echo active ;;
   "show -p InvocationID --value docker.service") cat "$h/invocation" ;;
+  # docker.service's cgroup, there under the host root's cgroups (remote.FirewallCgroupRootEnv).
+  "show -p ControlGroup --value docker.service") echo /system.slice/docker.service ;;
   # The unit's state while a restart is waited for, as a test writes it (state, result).
   "show -p ActiveState,Result,InvocationID docker.service")
     echo "ActiveState=$(cat "$h/state" 2>/dev/null || echo active)"
@@ -60,13 +65,59 @@ case "$*" in
     [ -z "${FAKE_RESTART_FAILS:-}" ] || { : >"$h/docker-down"; echo failed >"$h/state"; echo "$FAKE_RESTART_FAILS" >"$h/result"; exit 0; }
     [ -z "${FAKE_RESTART_DOWN:-}" ] || : >"$h/docker-down"
     [ -n "${FAKE_RESTART_STUCK:-}${FAKE_RESTART_DOWN:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
+`+firewallUnitFake+`
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
+	// iptables as the firewall's run uses it, its state in the host root: fw.<cmd>.chain what
+	// a restore loaded, fw.<cmd>.jumps the rules inserted in the built-in chains, as
+	// "<table> <chain> <rule>"; each call logged in iptables.log, its wait for xtables' lock
+	// aside.
+	for _, c := range []string{"iptables", "ip6tables"} {
+		write(t, filepath.Join(bin, c), `#!/bin/sh
+[ "$1" != -w ] || shift 2
+s=$DEVOPSY_INTERNAL_HOST_ROOT/fw.$(basename "$0")
+echo "$(basename "$0") $*" >>"$DEVOPSY_INTERNAL_HOST_ROOT/iptables.log"
+touch "$s.jumps"
+t=$2 op=$3 c=${4:-}
+shift $(($# < 4 ? $# : 4))
+case $op in
+  -I) shift; r="$t $c $*"; { echo "$r"; grep -vxF "$r" "$s.jumps"; } >"$s.new" || :; mv "$s.new" "$s.jumps" ;;
+  -D) r="$t $c $*"; grep -qxF "$r" "$s.jumps" || exit 1; grep -vxF "$r" "$s.jumps" >"$s.new" || :; mv "$s.new" "$s.jumps" ;;
+  -S)
+    rules() { [ ! -e "$s.chain" ] || awk -v t="$t" -v c="${1:-}" '/^\*/ { in_t = substr($0, 2) == t } in_t && /^-A / && (c == "" || $2 == c)' "$s.chain"; }
+    # A cgroup's path printed quoted, as iptables -S prints it.
+    jumps() { awk -v t="$t" -v c="${1:-}" '$1 == t && (c == "" || $2 == c) { $1 = "-A"; print }' "$s.jumps" | sed 's/--path \([^ ]*\)/--path "\1"/'; }
+    case ${c:-} in
+      PREROUTING|OUTPUT) echo "-P $c ACCEPT"; jumps "$c" ;;
+      "") echo "-P PREROUTING ACCEPT"; jumps; rules ;;
+      *) grep -q "^:$c " "$s.chain" 2>/dev/null || exit 1; rules "$c" ;;
+    esac ;;
+  -F) ;;
+  -X) rm -f "$s.chain" ;;
+esac
+`, 0o755)
+		write(t, filepath.Join(bin, c+"-restore"), "#!/bin/sh\ncat >\"$DEVOPSY_INTERNAL_HOST_ROOT/fw.$(basename \"$0\" -restore).chain\"\n", 0o755)
+	}
+	// The door's groups, in the host root's etc/group.
+	write(t, filepath.Join(bin, "getent"), "#!/bin/sh\ngrep \"^$2:\" \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null\n", 0o755)
+	write(t, filepath.Join(bin, "groupadd"), "#!/bin/sh\nmkdir -p \"$DEVOPSY_INTERNAL_HOST_ROOT/etc\"\ntouch \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\"\necho \"$2:x:$((1000 + $(wc -l <\"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null || echo 0) + 1)):\" >>\"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\"\n", 0o755)
+	if err := testfile.Flock(bin); err != nil {
+		t.Fatal(err)
+	}
 	write(t, filepath.Join(bin, "sysctl"), "#!/bin/sh\nk=${2%%=*}\necho \"${2#*=}\" >\"$DEVOPSY_INTERNAL_HOST_ROOT/proc/sys/$(echo \"$k\" | tr . /)\"\n", 0o755)
-	s.env = append(s.env, remote.HostRootEnv+"="+host)
+	write(t, filepath.Join(host, "sys", "fs", "cgroup", "system.slice", "docker.service", ".keep"), "", 0o644)
+	s.env = append(s.env, remote.HostRootEnv+"="+host, remote.FirewallMarkEnv+"="+filepath.Join(host, remote.FirewallMark), remote.FirewallCgroupRootEnv+"="+filepath.Join(host, "sys", "fs", "cgroup"))
 	return s, host
 }
+
+// firewallUnitFake is the case arms of a fake systemctl for devopsy-firewall.service: its
+// start runs the loader, as systemd's start of a oneshot does, and its
+// result stays in fwresult until it runs again.
+var firewallUnitFake = `  "show -p Result --value devopsy-firewall.service") cat "$h/fwresult" 2>/dev/null || echo success ;;
+  "start devopsy-firewall.service")
+    if FAKE_BY_UNIT=1 "$h` + remote.FirewallScript + `"; then echo success >"$h/fwresult"; else echo exit-code >"$h/fwresult"; exit 1; fi ;;
+`
 
 // The record as it is, by part.
 func readRecordOf(t *testing.T, s *syncSetup) map[string]setup.Entry {
@@ -110,8 +161,8 @@ func TestServerSetupYes(t *testing.T) {
 	}
 	// The marker, written before the restart was asked, holds the old id: no longer pending,
 	// and no reboot asked for.
-	if readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || fileExists(filepath.Join(host, remote.RebootRequired)) {
-		t.Error("the marker, or a reboot asked, after a restart confirmed")
+	if m := strings.Fields(readString(filepath.Join(host, setup.RestartMarker))); len(m) != 2 || m[0] != "inv1" || fileExists(filepath.Join(host, remote.RebootRequired)) {
+		t.Error("the marker (the old id and this run's token), or a reboot asked, after a restart confirmed")
 	}
 	s.logs()
 	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
@@ -140,7 +191,7 @@ func TestServerSetupKeepsAndMarks(t *testing.T) {
 	if rec := readRecordOf(t, s); rec["default-address-pools"] != (setup.Entry{Kept: pools}) {
 		t.Errorf("recorded %+v", rec)
 	}
-	if strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") || readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" ||
+	if strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") || markerID(host) != "inv1" ||
 		readString(filepath.Join(host, remote.RebootRequired+".pkgs")) != "devopsy\n" {
 		t.Errorf("restarted, or not marked:\n%s", readString(filepath.Join(host, "systemctl.log")))
 	}
@@ -179,6 +230,12 @@ func TestServerSetupRefuses(t *testing.T) {
 	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || !strings.Contains(out, "systemd is not this host's init") || fileExists(filepath.Join(host, setup.DaemonFile)) {
 		t.Errorf("no systemd (%d):\n%s", code, out)
 	}
+	// Beside it, a Docker of another host's is judged all the same, its fix said.
+	write(t, filepath.Join(host, "docker-info.json"), `{"Name":"elsewhere","LoggingDriver":"json-file","LiveRestoreEnabled":false,"DockerRootDir":"/var/lib/docker"}`, 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || !strings.Contains(out, "systemd is not this host's init") || !strings.Contains(out, "is not this host's docker.service (rootless, or another host's: elsewhere)") ||
+		!strings.Contains(out, "unset DOCKER_HOST and DOCKER_CONTEXT") {
+		t.Errorf("no systemd, another host's Docker (%d):\n%s", code, out)
+	}
 }
 
 // The apply acts on an answer only while the part holds the value answered about: a replace
@@ -216,6 +273,55 @@ func TestServerSetupApplyAnswers(t *testing.T) {
 	}
 }
 
+// The apply says every refusal the first session did not (--said names those it said, by
+// their identities): one new between the two sessions (Docker gone, a tool removed) is said
+// with its fix, and one already said is not said twice in the run.
+func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env  func(t *testing.T, host string) []string
+		want string
+	}{
+		"Docker down": {func(t *testing.T, host string) []string {
+			write(t, filepath.Join(host, "docker-down"), "", 0o644)
+			return nil
+		}, "Docker's daemon does not answer"},
+		"tar missing": {func(t *testing.T, host string) []string {
+			return []string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), "tar")}
+		}, "no tar in PATH"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, host := setupServer(t)
+			env := c.env(t, host)
+			// The first session read no refusal, and so said none: its apply, as it runs it.
+			out, code := s.run(env, remote.ServerSetupFlag, "apply", "--said")
+			if code != 1 || !strings.Contains(out, c.want) {
+				t.Errorf("a refusal new in the apply (%d), want %q:\n%s", code, c.want, out)
+			}
+			// Both sessions, the refusal there in each: said once.
+			if out, _ := s.run(env, "@devopsy@one:", "--server-setup", "--yes"); strings.Count(out, c.want) != 1 {
+				t.Errorf("a refusal said %d times in one run:\n%s", strings.Count(out, c.want), out)
+			}
+		})
+	}
+}
+
+// pathWithout is a PATH holding every command of bin and the test's PATH but tool, as links.
+func pathWithout(t *testing.T, bin, tool string) string {
+	t.Helper()
+	path := t.TempDir()
+	for _, dir := range append([]string{bin}, filepath.SplitList(os.Getenv("PATH"))...) {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.Name() != tool && !fileExists(filepath.Join(path, e.Name())) {
+				_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
+			}
+		}
+	}
+	return path
+}
+
 // A restart is refused, with nothing changed, while a release holds its environment's lock.
 func TestServerSetupRestartRefusedUnderARelease(t *testing.T) {
 	t.Parallel()
@@ -245,7 +351,7 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 	write(t, filepath.Join(host, setup.DaemonFile), `{"live-restore": false}`, 0o644)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
 	if code != 0 || !strings.Contains(out, "daemon.json's live-restore is someone else's value: left as it is") || !strings.Contains(out, "put "+setup.DaemonFile+": logs, default-address-pools") ||
-		!strings.Contains(out, "is missing: --server-setup makes it the deploy user's") || fileExists(s.root) || readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") {
+		!strings.Contains(out, "is missing: --server-setup makes it the deploy user's") || fileExists(s.root) || markerID(host) != "inv1" || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade", "--restart"); code == 0 {
@@ -262,7 +368,7 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || !strings.Contains(out, "devopsy: warning: Docker: systemd is not this host's init") ||
-		!strings.Contains(out, "devopsy: warning: nothing changed\n") || !strings.Contains(out, "run --server-setup for this server") {
+		!strings.Contains(out, "devopsy: warning: not applied, refused: "+string(setup.StepRoot)+", "+setup.FirewallItemName+"\n") || !strings.Contains(out, "run --server-setup for this server") {
 		t.Errorf("--upgrade on a failure (%d):\n%s", code, out)
 	}
 	if r, _, _ := setup.ReadRecord(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)); r.Version != "" {
@@ -282,8 +388,8 @@ func (a *scripted) replace(p setup.PartFact) (bool, error) {
 	return a.replaces[p.Name], nil
 }
 
-func (a *scripted) confirm(q string, _ ...string) (bool, error) {
-	a.asked = append(a.asked, q)
+func (a *scripted) confirm(q string, details ...string) (bool, error) {
+	a.asked = append(a.asked, strings.Join(append([]string{q}, details...), " | "))
 	if len(a.confirms) == 0 {
 		return false, errors.New("asked too often")
 	}
@@ -700,11 +806,79 @@ func TestServerSetupRestartNotConfirmed(t *testing.T) {
 	s, host := setupServer(t)
 	out, code := s.run([]string{"FAKE_RESTART_STUCK=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || !strings.Contains(out, "error: Docker's restart did not end in a second") || !strings.Contains(out, "$ journalctl -u docker.service") ||
-		readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || !strings.Contains(out, "Docker takes daemon.json at its next restart") {
+		markerID(host) != "inv1" || !strings.Contains(out, "Docker takes daemon.json at its next restart") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 	if rec := readRecordOf(t, s); rec["logs"] != (setup.Entry{Applied: setup.Parts[0].Want}) {
 		t.Errorf("the record: %+v", rec)
+	}
+}
+
+// A root run that ends on its own exit before its restart (dockerd refusing daemon.json, 4;
+// a put not written, 5) is no restart asked, though an earlier run's marker holds Docker's
+// InvocationID (a change pending): the marker says a restart was asked only with this run's
+// token. Its failure is said, nothing is waited for, and answers for a daemon.json it never
+// put are not recorded, to be asked again.
+func TestServerSetupAFailedRunIsNoRestartAsked(t *testing.T) {
+	t.Parallel()
+	for name, broken := range map[string]func(t *testing.T, host string){
+		"dockerd refuses the file": func(t *testing.T, host string) {
+			write(t, filepath.Join(filepath.Dir(host), "bin", "dockerd"), "#!/bin/sh\necho 'invalid' >&2\nexit 1\n", 0o755)
+		},
+		"a put not written": func(t *testing.T, host string) {
+			write(t, filepath.Join(host, setup.SysctlFile), "# someone's\n", 0o644)
+			write(t, filepath.Join(filepath.Dir(host), "bin", "mv"), "#!/bin/sh\nfor a; do case $a in *"+filepath.Base(setup.SysctlFile)+") exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n", 0o755)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, host := setupServer(t)
+			pools := `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`
+			write(t, filepath.Join(host, setup.DaemonFile), pools, 0o644)
+			// The pools kept, the rest put, Docker not restarted: the marker holds inv1.
+			if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--keep", "default-address-pools="+setup.Digest(pools)); code != 0 || readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" {
+				t.Fatalf("the first run, marked (%d):\n%s", code, out)
+			}
+			// The pools changed since, and replaced by this run's answer, which it records only
+			// with daemon.json put.
+			d, _ := setup.ParseDaemon([]byte(readString(filepath.Join(host, setup.DaemonFile))))
+			part, _ := setup.PartNamed("default-address-pools")
+			part.Want = `{"default-address-pools":[{"base":"10.100.0.0/16","size":24}]}`
+			text, _, err := d.Merge([]setup.Part{part})
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(host, setup.DaemonFile), string(text), 0o644)
+			broken(t, host)
+			out, code := s.run([]string{remote.RestartWaitEnv + "=1"}, remote.ServerSetupFlag, "apply", "--replace", "default-address-pools="+setup.Digest(part.Want), "--restart")
+			if code != 1 || !strings.Contains(out, "the setup's run as root") {
+				t.Errorf("the run's failure unsaid (%d):\n%s", code, out)
+			}
+			if strings.Contains(out, "Docker's restart did not end") || strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart --no-block") {
+				t.Errorf("a restart never asked was waited for:\n%s", out)
+			}
+			if readRecordOf(t, s)["default-address-pools"] != (setup.Entry{Kept: pools}) || !strings.Contains(out, "its answers are asked again") {
+				t.Errorf("an answer for a daemon.json never put recorded: %+v\n%s", readRecordOf(t, s), out)
+			}
+		})
+	}
+}
+
+// A restart not confirmed with Docker still answering raises the reboot flag by a root run;
+// that run failing is said as it is, never as a Docker that does not answer, and the
+// firewall's step still goes.
+func TestServerSetupRestartNotConfirmedMarkFails(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(filepath.Join(host, remote.RebootRequired+".pkgs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run([]string{"FAKE_RESTART_STUCK=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "Docker's restart did not end in a second") || !strings.Contains(out, "nothing was flagged for a reboot: ") {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "Docker does not answer") || !fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("a failed mark said as Docker down, or the firewall stopped by it:\n%s", out)
 	}
 }
 
@@ -796,7 +970,7 @@ case "$*" in
   "restart --no-block docker.service")
     if [ -n "${FAKE_RESTART_CUTS:-}" ]; then : >"$h/restarting"; kill -KILL "$PPID"; exit 0; fi
     echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json" ;;
-`+extra+`
+`+firewallUnitFake+extra+`
 esac
 `, 0o755)
 }
@@ -869,7 +1043,7 @@ func TestServerSetupRestartLeavesDockerDown(t *testing.T) {
 	s, host := setupServer(t)
 	out, code := s.run([]string{"FAKE_RESTART_DOWN=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || !strings.Contains(out, "error: Docker's restart did not end in a second") || !strings.Contains(out, "Docker does not answer, so nothing was flagged for a reboot") ||
-		readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" || fileExists(filepath.Join(host, remote.RebootRequired)) {
+		markerID(host) != "inv1" || fileExists(filepath.Join(host, remote.RebootRequired)) {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -977,10 +1151,11 @@ func TestServerSetupCutBeforeTheRecord(t *testing.T) {
 // trees are theirs, never walked or locked.
 func TestServerSetupRestartSaysProjectUsersAreNotWaitedFor(t *testing.T) {
 	t.Parallel()
-	s, _ := setupServer(t)
+	s, host := setupServer(t)
 	home := filepath.Join(filepath.Dir(s.root), "home")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
 	write(t, filepath.Join(home, "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
+	firewallLoaded(t, host, true)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--restart")
 	if code != 0 || !strings.Contains(out, "project users' releases are not waited for") {
 		t.Errorf("(%d):\n%s", code, out)
@@ -1026,10 +1201,1245 @@ func TestServerSetupRestartRefusedBySystemd(t *testing.T) {
 	}
 	if code != 1 || !strings.Contains(out, "error: Docker did not start again: start-limit-hit") || !strings.Contains(out, "$ journalctl -u docker.service") ||
 		!strings.Contains(out, "$ systemctl reset-failed docker.service\n") || !strings.Contains(out, "$ systemctl start docker\n") ||
-		readString(filepath.Join(host, setup.RestartMarker)) != "inv1\n" {
+		markerID(host) != "inv1" {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 	if !strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl reset-failed docker.service\nsystemctl daemon-reload\nsystemctl restart --no-block docker.service\n") {
 		t.Errorf("the start counter not cleared before the restart:\n%s", readString(filepath.Join(host, "systemctl.log")))
+	}
+}
+
+// markerID is the restart marker's InvocationID, what pending compares, a restart's token
+// after it aside.
+func markerID(host string) string {
+	id, _, _ := strings.Cut(strings.TrimSpace(readString(filepath.Join(host, setup.RestartMarker))), " ")
+	return id
+}
+
+// firewallLoaded makes host's firewall as devopsy's install leaves it, with a door's chains
+// too (door) or not: its pieces, in their modes, the unit's boot link, the door's groups,
+// and its loader run on setupServer's fake iptables, which leaves the mark.
+func firewallLoaded(t *testing.T, host string, door bool) {
+	t.Helper()
+	defer func() {
+		if door {
+			write(t, filepath.Join(host, "etc", "group"), remote.DoorGroup+":x:1001:\n"+remote.DoorRunGroup+":x:1002:\n", 0o644)
+		}
+		load := exec.Command(filepath.Join(host, remote.FirewallScript))
+		load.Env = []string{"PATH=" + filepath.Join(filepath.Dir(host), "bin") + ":/usr/bin:/bin", remote.HostRootEnv + "=" + host, remote.FirewallMarkEnv + "=" + filepath.Join(host, remote.FirewallMark),
+			remote.FirewallCgroupRootEnv + "=" + filepath.Join(host, "sys", "fs", "cgroup")}
+		if out, err := load.CombinedOutput(); err != nil {
+			t.Fatalf("the loader: %v: %s", err, out)
+		}
+	}()
+	for p, f := range remote.FirewallFiles(door) {
+		write(t, filepath.Join(host, p), f.Text, f.Mode)
+	}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(host, remote.FirewallUnitLink)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(remote.FirewallUnit, filepath.Join(host, remote.FirewallUnitLink)); err != nil {
+		t.Fatal(err)
+	}
+
+	what := remote.FirewallContainers
+	if door {
+		what = remote.FirewallDoor
+	}
+	write(t, filepath.Join(host, remote.FirewallMark), what+"\n", 0o644)
+}
+
+// setupConfig writes the deploy user's config on s, its release root's and more.
+func setupConfig(t *testing.T, s *syncSetup, more string) {
+	t.Helper()
+	home := filepath.Join(filepath.Dir(s.root), "home")
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\n"+strings.ReplaceAll(more, "$HOME", home), 0o644)
+}
+
+// --server-setup loads the metadata firewall on a server with no door, the containers' chain
+// alone, its first load among the differences, saying what it cuts; a second run changes
+// nothing; firewall: metadata: allow then removes what devopsy put, and a run after that
+// changes nothing either.
+func TestServerSetupMetadataFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "metadata firewall") || !strings.Contains(out, "which cuts an app running here off from what it reads there") ||
+		!strings.Contains(out, "loaded devopsy's firewall: containers kept off the cloud's metadata services") {
+		t.Fatalf("the first load (%d):\n%s", code, out)
+	}
+	for p, f := range remote.FirewallFiles(false) {
+		if fi, err := os.Stat(filepath.Join(host, p)); readString(filepath.Join(host, p)) != f.Text || err != nil || fi.Mode().Perm() != f.Mode {
+			t.Errorf("%s not devopsy's", p)
+		}
+	}
+	jump := "raw PREROUTING -j " + remote.FirewallContainerChain + "\n"
+	if fileExists(filepath.Join(host, remote.FirewallDockerDropIn)) || readString(filepath.Join(host, "fw.iptables.jumps")) != jump ||
+		strings.Contains(readString(filepath.Join(host, "fw.iptables.chain")), "*filter") || readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallContainers+"\n" {
+		t.Errorf("loaded otherwise:\n%s", readString(filepath.Join(host, "iptables.log")))
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("a second run (%d):\n%s", code, out)
+	}
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "removed devopsy's firewall (firewall: metadata: allow)") || fileExists(filepath.Join(host, remote.FirewallScript)) ||
+		readString(filepath.Join(host, "fw.iptables.jumps")) != "" || fileExists(filepath.Join(host, "fw.iptables.chain")) || fileExists(filepath.Join(host, remote.FirewallMark)) {
+		t.Errorf("allow (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("a run after allow (%d):\n%s", code, out)
+	}
+}
+
+// The install loads the firewall by its unit where systemd answers, its result then the
+// load's own. The fake iptables notes each insert made outside the unit.
+func TestServerSetupLoadsTheFirewallByItsUnit(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	bin := filepath.Join(filepath.Dir(host), "bin")
+	for _, c := range []string{"iptables", "ip6tables"} {
+		moveAside(t, bin, c)
+		write(t, filepath.Join(bin, c), `#!/bin/sh
+h=$DEVOPSY_INTERNAL_HOST_ROOT
+case "$*" in
+  *" -I PREROUTING 1 "*) [ -n "${FAKE_BY_UNIT:-}" ] || echo "outside the unit: $(basename "$0") $*" >>"$h/overlap" ;;
+esac
+exec "$(dirname "$0")/orig/$(basename "$0")" "$@"
+`, 0o755)
+	}
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl start devopsy-firewall.service\n") {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	if o := readString(filepath.Join(host, "overlap")); o != "" {
+		t.Errorf("the install loaded the firewall outside its unit:\n%s", o)
+	}
+}
+
+// moveAside moves bin's fake name into bin/orig, under the same name, for a wrapper to call:
+// setupServer's iptables keeps its state by its own name.
+func moveAside(t *testing.T, bin, name string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(bin, "orig"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(bin, name), filepath.Join(bin, "orig", name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A firewall whose unit's last load failed (its result kept, its mark gone with the load)
+// reads "to load again", the unit's result in the words; --server-setup loads it by the
+// unit, and the check after holds. The result a unit left is never the judge: one left
+// failed while a later load went through (by the loader run with no systemd) leaves the
+// firewall in sync.
+func TestServerSetupFirewallLoadedAgainAfterItsUnitFailed(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 {
+		t.Fatalf("the first load (%d):\n%s", code, out)
+	}
+	// The unit's run of the loader fails once, as at a boot whose iptables refused.
+	restore := filepath.Join(filepath.Dir(s.root), "bin", "iptables-restore")
+	good := readString(restore)
+	write(t, restore, "#!/bin/sh\nexit 1\n", 0o755)
+	unit := exec.Command(filepath.Join(filepath.Dir(s.root), "bin", "systemctl"), "start", "devopsy-firewall.service")
+	unit.Env = s.env
+	if out, err := unit.CombinedOutput(); err == nil {
+		t.Fatalf("the unit's failed load ran fine:\n%s", out)
+	}
+	write(t, restore, good, 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || !strings.Contains(out, "W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, "devopsy-firewall.service: exit-code") ||
+		!strings.Contains(out, "loaded devopsy's firewall") || strings.Contains(out, "did not hold") {
+		t.Errorf("loaded again after its unit failed (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(host, "fwresult"), "exit-code\n", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("a unit's stale result judged the firewall (%d):\n%s", code, out)
+	}
+}
+
+// --upgrade never makes the metadata firewall's first load, which can cut an app off: it
+// leaves a server without it and says --server-setup loads it; once loaded, it puts a piece
+// back as any of devopsy's own, the loader's lost exec bit too, and loads it.
+func TestServerSetupUpgradeLeavesTheFirstFirewallLoad(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "warning: --upgrade leaves the metadata firewall to --server-setup: containers reach the cloud's metadata services") || fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("not loaded (%d):\n%s", code, out)
+	}
+	firewallLoaded(t, host, false)
+	if err := os.Remove(filepath.Join(host, remote.FirewallUnit)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(host, remote.FirewallScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if fi, err := os.Stat(filepath.Join(host, remote.FirewallScript)); code != 0 || readString(filepath.Join(host, remote.FirewallUnit)) != remote.FirewallFiles(false)[remote.FirewallUnit].Text ||
+		err != nil || fi.Mode().Perm() != 0o755 || !strings.Contains(out, "loaded devopsy's firewall") || strings.Contains(out, "warning: --upgrade leaves") {
+		t.Errorf("loaded, a piece gone and the loader's mode changed (%d):\n%s", code, out)
+	}
+}
+
+// --upgrade keeps the kind of firewall loaded: a door's loader stays the door's with door:
+// gone from the config, never overwritten by the containers' alone; the containers' alone
+// is not made the door's when door: comes, nor removed for allow; each it leaves, it says,
+// with what does it.
+func TestServerSetupUpgradeKeepsTheFirewallsKind(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, true)
+	doors := remote.FirewallFiles(true)[remote.FirewallScript].Text
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || readString(filepath.Join(host, remote.FirewallScript)) != doors || strings.Contains(out, "firewall") {
+		t.Errorf("the door's loader with door: gone (%d):\n%s", code, out)
+	}
+	s2, host2 := setupServer(t)
+	firewallLoaded(t, host2, false)
+	containers := remote.FirewallFiles(false)[remote.FirewallScript].Text
+	for more, said := range map[string]string{
+		"door:\n  space: $HOME/space\n":  "door: is in this server's config, and devopsy's firewall loads the containers' chain alone",
+		"firewall:\n  metadata: allow\n": "firewall: metadata: allow, and devopsy's firewall still there",
+	} {
+		setupConfig(t, s2, more)
+		out, code := s2.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+		if code != 0 || !strings.Contains(out, "warning: --upgrade leaves the metadata firewall to --server-setup: "+said) || readString(filepath.Join(host2, remote.FirewallScript)) != containers ||
+			readString(filepath.Join(host2, remote.FirewallMark)) != remote.FirewallContainers+"\n" {
+			t.Errorf("the containers' loaded, %q (%d):\n%s", more, code, out)
+		}
+	}
+}
+
+// firewall: metadata: allow where the door's firewall is wanted is refused, the firewall
+// left as it is, the rest of the setup applied and the run failing: with door: in the
+// config, its project users' containers never reach a metadata service; with the door's
+// loaded and door: gone, devopsy never takes a door's firewall off. Under --upgrade the
+// refusal is a warning, and the door's firewall stays.
+func TestServerSetupRefusesAllowWithADoor(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	setupConfig(t, s, "firewall:\n  metadata: allow\ndoor:\n  space: $HOME/space\n")
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server with door: in its config") || !fileExists(filepath.Join(host, setup.DaemonFile)) || fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("with door: (%d):\n%s", code, out)
+	}
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	firewallLoaded(t, host, true)
+	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "metadata firewall: firewall: metadata: allow, on a server where the door's firewall is loaded: devopsy never takes a door's firewall off a server") || readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallDoor+"\n" {
+		t.Errorf("the door's loaded, door: gone (%d):\n%s", code, out)
+	}
+	out, code = s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "warning: metadata firewall: firewall: metadata: allow") || !fileExists(filepath.Join(host, remote.FirewallDockerDropIn)) ||
+		readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallDoor+"\n" {
+		t.Errorf("under --upgrade (%d):\n%s", code, out)
+	}
+}
+
+// --server-setup on a server with door: and no firewall makes the door's first load: its
+// differences say the door's chains load too, and its apply makes the door's groups, writes
+// the door's loader and Docker's drop-in, loads it by its unit and marks it the door's, and
+// the check after reads it as devopsy loads it, the daemon's jump on docker.service's cgroup
+// included.
+func TestServerSetupMakesADoorsFirstFirewallLoad(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	setupConfig(t, s, "door:\n  space: $HOME/space\n")
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if !strings.Contains(out, "with door:, the door's chains load with it") {
+		t.Errorf("the differences (%d):\n%s", code, out)
+	}
+	for p, f := range remote.FirewallFiles(true) {
+		if readString(filepath.Join(host, p)) != f.Text {
+			t.Errorf("%s not the door's", p)
+		}
+	}
+	jumps := readString(filepath.Join(host, "fw.iptables.jumps"))
+	if g := readString(filepath.Join(host, "etc", "group")); !strings.Contains(g, remote.DoorGroup+":") || !strings.Contains(g, remote.DoorRunGroup+":") ||
+		readString(filepath.Join(host, remote.FirewallMark)) != remote.FirewallDoor+"\n" || !strings.Contains(jumps, "-j "+remote.DoorChain) || !strings.Contains(jumps, "-j "+remote.FirewallContainerChain) {
+		t.Errorf("loaded otherwise, groups %q, jumps:\n%s", g, jumps)
+	}
+	if code != 0 || strings.Contains(out, "did not load") {
+		t.Errorf("the check after (%d):\n%s", code, out)
+	}
+}
+
+// An apply that loaded the firewall holds, whatever a load beside it does (Docker's start, a
+// start of the unit by hand) under way while the apply checks. A load under way leaves the last good
+// mark, so the check, --server-info and --upgrade read the firewall loaded meanwhile.
+//
+// The fake systemctl runs the loader at the install's read of the chains, after its own load,
+// as Docker's start or a start of the unit by hand would, and the install goes on once that
+// load began; the fake iptables-restore holds that load until the apply ended.
+func TestServerSetupHoldsBesideALoadUnderWay(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	bin := filepath.Join(filepath.Dir(host), "bin")
+	moveAside(t, bin, "systemctl")
+	write(t, filepath.Join(bin, "systemctl"), `#!/bin/sh
+h=$DEVOPSY_INTERNAL_HOST_ROOT
+if [ "$*" = "show -p ControlGroup --value docker.service" ] && [ ! -e "$h/other-load.began" ] && [ -e "$h/fwresult" ]; then
+  ( FAKE_OTHER_LOAD=1 "$h`+remote.FirewallScript+`" >"$h/other-load.out" 2>&1 </dev/null; : >"$h/other-load.done" ) >/dev/null 2>&1 </dev/null &
+  n=0
+  while [ ! -e "$h/other-load.began" ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done
+fi
+exec "$(dirname "$0")/orig/systemctl" "$@"
+`, 0o755)
+	moveAside(t, bin, "iptables-restore")
+	write(t, filepath.Join(bin, "iptables-restore"), `#!/bin/sh
+h=$DEVOPSY_INTERNAL_HOST_ROOT
+if [ -n "${FAKE_OTHER_LOAD:-}" ]; then
+  : >"$h/other-load.began"
+  n=0
+  while [ ! -e "$h/other-load.go" ] && [ "$n" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done
+fi
+exec "$(dirname "$0")/orig/iptables-restore" "$@"
+`, 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	began := fileExists(filepath.Join(host, "other-load.began"))
+	// The other load goes on and ends, whatever the apply said.
+	write(t, filepath.Join(host, "other-load.go"), "", 0o644)
+	waitFile(t, filepath.Join(host, "other-load.done"), "the other load ending", startWait, func() string { return readString(filepath.Join(host, "other-load.out")) })
+	if !began {
+		t.Fatalf("no load ran beside the apply (%d):\n%s", code, out)
+	}
+	// The control: the apply's own load went in, and the other after it.
+	if !strings.Contains(out, "loaded devopsy's firewall") || strings.TrimSpace(readString(filepath.Join(host, remote.FirewallMark))) != remote.FirewallContainers {
+		t.Fatalf("the firewall not loaded (%d), the mark %q:\n%s\n%s", code, readString(filepath.Join(host, remote.FirewallMark)), out, readString(filepath.Join(host, "other-load.out")))
+	}
+	if code != 0 || strings.Contains(out, "did not hold") {
+		t.Errorf("an apply beside a load under way (%d):\n%s", code, out)
+	}
+}
+
+// A firewall whose boot link to its unit went reads "to load again": no boot would load it.
+// --server-setup puts the link back.
+func TestServerSetupPutsTheFirewallsBootLinkBack(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	if err := os.Remove(filepath.Join(host, remote.FirewallUnitLink)); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if to, err := os.Readlink(filepath.Join(host, remote.FirewallUnitLink)); code != 0 || !strings.Contains(out, "W0001: the server's firewall is not loaded as devopsy loads it") || err != nil || to != remote.FirewallUnit {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// --server-info, as the deploy user, on a server whose door: is gone and whose door's firewall
+// is loaded: the firewall is the door's, its chains read as root and judged as the door's, in
+// sync with no word; the loader is left the door's.
+func TestServerInfoKeepsADoorsFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, true)
+	out, code := s.run(nil, "@devopsy@one:", "--server-info")
+	if strings.Contains(out, "metadata firewall") || !strings.Contains(readString(s.log), "chroot /host") ||
+		readString(filepath.Join(host, remote.FirewallScript)) != remote.FirewallFiles(true)[remote.FirewallScript].Text {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	// The control: the door's chain gone, the same read says so in the firewall's one line.
+	write(t, filepath.Join(host, "fw.iptables.jumps"), "raw PREROUTING -j "+remote.FirewallContainerChain+"\n", 0o644)
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); strings.Count(out, "metadata firewall") != 1 || !strings.Contains(out, "nothing in OUTPUT jumps to "+remote.DoorChain) {
+		t.Errorf("the door's jumps gone:\n%s", out)
+	}
+}
+
+// --server-info reads the chains as root wherever devopsy's firewall is loaded, and warns of
+// a wipe (a reload of the server's own firewall, an iptables -F) in the firewall's one line,
+// its files and mark in sync; the next --server-setup loads it again. Where none is loaded,
+// no root run.
+func TestServerInfoSeesAWipedFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); strings.Contains(readString(s.log), "chroot /host") {
+		t.Errorf("a root run with no firewall loaded:\n%s", out)
+	}
+	firewallLoaded(t, host, false)
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); strings.Contains(out, "metadata firewall") {
+		t.Errorf("loaded and right:\n%s", out)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
+	if !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\n") || !strings.Contains(out, "iptables: nothing in PREROUTING jumps to "+remote.FirewallContainerChain) ||
+		!strings.Contains(out, "$ devopsy @devopsy@one: --server-setup") {
+		t.Errorf("wiped:\n%s", out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "loaded devopsy's firewall") {
+		t.Errorf("--server-setup after a wipe (%d):\n%s", code, out)
+	}
+}
+
+// A timer an earlier install put, which loaded the firewall again every five minutes, is a
+// retired piece: its file, devopsy's by its header, or the link to it reads "to load again",
+// and the apply (--upgrade's too, which loads again the kind loaded) stops it and removes
+// both, leaving an admin's own file at that path as it is.
+func TestServerSetupRetiresTheFirewallsTimer(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	timer := "/etc/systemd/system/devopsy-firewall.timer"
+	link := "/etc/systemd/system/timers.target.wants/devopsy-firewall.timer"
+	write(t, filepath.Join(host, timer), "# Written by devopsy (devopsy @<server> --project-users add).\n[Timer]\nOnBootSec=5min\n", 0o644)
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(host, link)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(timer, filepath.Join(host, link)); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") {
+		t.Errorf("a retired timer there, --server-info:\n%s", out)
+	}
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if _, err := os.Lstat(filepath.Join(host, link)); code != 0 || fileExists(filepath.Join(host, timer)) || err == nil ||
+		!strings.Contains(readString(filepath.Join(host, "systemctl.log")), "systemctl stop devopsy-firewall.timer\n") || !strings.Contains(out, "loaded devopsy's firewall") {
+		t.Errorf("the retired timer left (%d):\n%s", code, out)
+	}
+	// An admin's own file at the timer's path is no piece of devopsy's.
+	write(t, filepath.Join(host, timer), "[Timer]\nOnCalendar=daily\n", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); readString(filepath.Join(host, timer)) != "[Timer]\nOnCalendar=daily\n" {
+		t.Errorf("an admin's timer at its path (%d):\n%s", code, out)
+	}
+}
+
+// A release says W0001 when the firewall the mark says is loaded is not as devopsy loads it,
+// with --server-setup as the fix, and goes on; it says nothing when the firewall is right, and
+// costs nothing where nothing is marked loaded or the util image is not there (no root run),
+// nor when the read fails (a debug line).
+func TestServerReadyWarnsOfAWipedFirewall(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ready := func(extra ...string) (string, string) {
+		t.Helper()
+		s.logs()
+		out, code := s.run(extra, remote.ServerReadyFlag, "one:")
+		docker, _ := s.logs()
+		if code != 0 {
+			t.Errorf("--server-ready failed (%d):\n%s", code, out)
+		}
+		return out, docker
+	}
+	if out, docker := ready(); strings.Contains(docker, "chroot /host") || out != "" {
+		t.Errorf("nothing marked loaded: a root run, or words:\n%s\n%s", out, docker)
+	}
+	firewallLoaded(t, host, false)
+	if out, docker := ready(); !strings.Contains(docker, "chroot /host") || out != "" {
+		t.Errorf("loaded and right:\n%s\n%s", out, docker)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := ready(); out != "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @one: --server-setup\n" {
+		t.Errorf("wiped:\n%s", out)
+	}
+	if out, docker := ready("FAKE_UTIL_MISSING=1"); strings.Contains(docker, "chroot /host") || strings.Contains(docker, "build ") || out != "" {
+		t.Errorf("no util image: a root run, a build, or words:\n%s\n%s", out, docker)
+	}
+	write(t, filepath.Join(host, "docker-down"), "", 0o644)
+	if out, _ := ready(); out != "" {
+		t.Errorf("the read failing:\n%s", out)
+	}
+	if out, _ := ready("DEVOPSY_VERBOSE=1"); !strings.Contains(out, "debug: the firewall not checked") {
+		t.Errorf("the read failing, at -v:\n%s", out)
+	}
+}
+
+// A project user's release asks the door whether the firewall is right and, told it is not,
+// says W0001 for the server's admin, with no fix it could take; any other answer, a refusal or
+// a door past its wait, says nothing but a debug line.
+func TestDoorFirewallWarnsForTheAdmin(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		answer string
+		err    error
+		want   string
+	}{
+		"right":   {firewallRight, nil, ""},
+		"wrong":   {firewallWrong, nil, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | report W0001 to the server's admin\n"},
+		"unknown": {firewallUnknown, nil, "devopsy: debug: the firewall not told: unknown\n"},
+		"refused": {"", errors.New("exit status 2"), "devopsy: debug: the firewall not asked: exit status 2\n"},
+	} {
+		var b strings.Builder
+		l := report.New(&b, false, 1)
+		warnDoorFirewallTo(l, func() (string, error) { return c.answer, c.err })
+		if b.String() != c.want {
+			t.Errorf("%s: %q, want %q", name, b.String(), c.want)
+		}
+	}
+}
+
+// A release's upload says W0001 of a firewall marked loaded whose chains, read through this
+// host's Docker, are not as devopsy loads it (none here: the fake server has no iptables), and
+// releases all the same.
+func TestReleaseWarnsOfAWipedFirewall(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	host := t.TempDir()
+	write(t, filepath.Join(host, remote.FirewallMark), remote.FirewallContainers+"\n", 0o644)
+	name, _ := os.Hostname()
+	write(t, filepath.Join(host, "docker-info.json"), `{"Name":"`+name+`"}`, 0o644)
+	out, code := s.run([]string{remote.HostRootEnv + "=" + host}, "@prod", "--release")
+	if code != 0 || !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A release's read of the chains runs the util image only as it is there, never pulled: the
+// read checks the image with an inspect and then runs it, and an image gone in between (a
+// prune, a rebuild) would be the daemon's to pull by its name, a root container with the
+// host's network on whatever answers it. Every root run holds --pull never (hostRun's
+// dockerArgs), as every util container the door runs does (internals/door.md).
+func TestReleaseFirewallReadNeverPulls(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	s.logs()
+	if out, code := s.run(nil, remote.ServerReadyFlag, "one:"); code != 0 {
+		t.Fatalf("--server-ready (%d):\n%s", code, out)
+	}
+	docker, _ := s.logs()
+	ran := false
+	for line := range strings.SplitSeq(docker, "\n") {
+		if !strings.Contains(line, "chroot /host") {
+			continue
+		}
+		ran = true
+		if !strings.Contains(line, "--pull never") {
+			t.Errorf("the read's run may pull its image: %s", line)
+		}
+	}
+	if !ran {
+		t.Fatalf("no root read:\n%s", docker)
+	}
+}
+
+// A release's read of the chains asks whether Docker is this host's before its root run: a
+// root container through another host's Docker (DOCKER_HOST, a context) would read that
+// machine's chains and judge this one's firewall by them. It reads none, and says nothing.
+func TestServerReadyReadsNoChainsThroughAnotherHostsDocker(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, "docker-info.json"), `{"Name":"elsewhere","LoggingDriver":"json-file","LiveRestoreEnabled":false,"DockerRootDir":"/var/lib/docker"}`, 0o644)
+	s.logs()
+	out, code := s.run(nil, remote.ServerReadyFlag, "one:")
+	if docker, _ := s.logs(); code != 0 || strings.Contains(docker, "chroot /host") || strings.Contains(out, "W0001") {
+		t.Errorf("a release's root read through another host's Docker (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// A release's read of the chains ends within its bound when Docker's client hangs (a daemon
+// restarting, a socket that takes the connection and answers nothing), with an error and no
+// answer: a release is never held up for it.
+func TestReleaseFirewallReadIsBounded(t *testing.T) {
+	t.Parallel()
+	host := t.TempDir()
+	write(t, filepath.Join(host, remote.FirewallMark), remote.FirewallContainers+"\n", 0o644)
+	docker := filepath.Join(t.TempDir(), "docker")
+	// The image is there, and its run never answers.
+	write(t, docker, "#!/bin/sh\ncase $1 in image) echo sha256:1; exit 0 ;; esac\nexec sleep 60\n", 0o755)
+	start := time.Now()
+	right, err := releaseFirewall(setupHost{root: host}, docker, false, false, time.Second)
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("the read held a release for %s, its bound a second", took.Round(time.Second))
+	}
+	if err == nil || right {
+		t.Errorf("a read that never answered: right %v, %v", right, err)
+	}
+}
+
+// --server-info, on a server whose config gained door: while the containers' chain alone is
+// loaded, before any project user was added (no group of the door's yet), says the door's
+// chains are to load, and judges what is loaded by the kind loaded: the containers' chain
+// read and right, nothing of a read that failed.
+func TestServerInfoJudgesTheKindLoaded(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	setupConfig(t, s, "door:\n  space: $HOME/space\n")
+	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
+	if !strings.Contains(out, "door: is in this server's config, and devopsy's firewall loads the containers' chain alone") {
+		t.Fatalf("not the state this test is for:\n%s", out)
+	}
+	if strings.Contains(out, "could not be read as root") {
+		t.Errorf("a read that answered, said unread:\n%s", out)
+	}
+}
+
+// --server-setup's facts session and --server-info are read-only and build no util image
+// (internals/server-setup.md, Sessions), on a server whose firewall is loaded too: their read
+// of the chains as root runs only with the image there, as a release's does, and with none
+// the chains are said unread, the item judged by its files and mark alone. Each case has a
+// server of its own: a build in one would leave the image the next reads.
+func TestServerSetupFactsBuildNoUtilImage(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, env string }{{"missing", "FAKE_UTIL_MISSING=1"}, {"over a week old", "FAKE_UTIL_CREATED=2020-01-01T00:00:00Z"}} {
+		name, env := c.name, c.env
+		s, host := setupServer(t)
+		firewallLoaded(t, host, false)
+		s.logs()
+		if out, code := s.run([]string{env}, remote.ServerSetupFlag, "facts"); code != 0 {
+			t.Fatalf("%s: facts (%d):\n%s", name, code, out)
+		}
+		if docker, _ := s.logs(); strings.Contains(docker, "build ") {
+			t.Errorf("the util image %s: the facts session built it", name)
+		}
+		out, _ := s.run([]string{env}, "@devopsy@one:", "--server-info")
+		if docker, _ := s.logs(); strings.Contains(docker, "build ") || name == "missing" && !strings.Contains(out, "its chains could not be read as root: "+remote.UtilImage+" is not here") {
+			t.Errorf("the util image %s, --server-info:\n%s", name, out)
+		}
+	}
+}
+
+// A release says W0001 when devopsy's firewall is installed and its last load failed (a boot
+// whose loader failed once, a start of Docker whose drop-in's load failed), with no Docker
+// call: a failed load leaves no mark, and nothing loads it again. --server-info says W0001
+// there (the control), naming the failed load.
+func TestServerReadyWarnsAfterAFailedLoad(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	// The load that failed: no mark, the jump not in.
+	for _, p := range []string{remote.FirewallMark, "fw.iptables.jumps"} {
+		if err := os.Remove(filepath.Join(host, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "W0001") || !strings.Contains(out, "no load went in since the last that failed") {
+		t.Fatalf("the control: --server-info says no W0001 of a failed load:\n%s", out)
+	}
+	s.logs()
+	out, code := s.run(nil, remote.ServerReadyFlag, "one:")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it") || strings.Contains(docker, "chroot /host") {
+		t.Errorf("a release beside a firewall whose load failed (%d):\n%q\n%s", code, out, docker)
+	}
+}
+
+// The door's answer to "firewall" is one of three words, whatever fails inside it: right for a
+// firewall read as devopsy loads it, wrong for one installed whose last load failed (no Docker
+// call) or whose chains are out, unknown for nothing installed, a removal waiting (allow), no
+// util image, a read that fails, or a door's judgment its groups cannot make yet. docker is a
+// fake whose read prints canned chains.
+func TestDoorFirewallAnswers(t *testing.T) {
+	t.Parallel()
+	right := "# groups  \n# dockerd \n# iptables filter\n# iptables raw\n-A PREROUTING -j " + remote.FirewallContainerChain + "\n" + containersChain() + "# ip6tables off\n"
+	for name, c := range map[string]struct {
+		mark, read string
+		allow      bool
+		image, run bool // the util image there; its run succeeding
+		elsewhere  bool // Docker another host's
+		want       string
+	}{
+		"right":                 {remote.FirewallContainers, right, false, true, true, false, firewallRight},
+		"chains out":            {remote.FirewallContainers, strings.Replace(right, "-A PREROUTING -j "+remote.FirewallContainerChain+"\n", "", 1), false, true, true, false, firewallWrong},
+		"a failed load":         {"", right, false, true, true, false, firewallWrong},
+		"nothing installed":     {"-", right, false, true, true, false, firewallUnknown},
+		"allowed":               {remote.FirewallContainers, right, true, true, true, false, firewallUnknown},
+		"no util image":         {remote.FirewallContainers, right, false, false, true, false, firewallUnknown},
+		"the read fails":        {remote.FirewallContainers, right, false, true, false, false, firewallUnknown},
+		"the door's, no groups": {remote.FirewallDoor, right, false, true, true, false, firewallUnknown},
+		"another host's Docker": {remote.FirewallContainers, right, false, true, true, true, firewallUnknown},
+	} {
+		hostname, _ := os.Hostname()
+		if c.elsewhere {
+			hostname = "elsewhere"
+		}
+		host, dir := t.TempDir(), t.TempDir()
+		if c.mark != "-" {
+			write(t, filepath.Join(host, remote.FirewallScript), remote.FirewallLoader(false), 0o755)
+			if c.mark != "" {
+				write(t, filepath.Join(host, remote.FirewallMark), c.mark+"\n", 0o644)
+			}
+		}
+		write(t, filepath.Join(dir, "read"), c.read, 0o644)
+		docker := filepath.Join(dir, "docker")
+		write(t, docker, `#!/bin/sh
+echo "$*" >>`+dir+`/log
+case $1 in
+  image) `+map[bool]string{true: "echo sha256:1", false: "exit 1"}[c.image]+` ;;
+  run) `+map[bool]string{true: "cat " + dir + "/read", false: "exit 1"}[c.run]+` ;;
+  info) echo '{"Name":"`+hostname+`"}' ;;
+esac
+`, 0o755)
+		got := firewallAnswer(setupHost{root: host}, docker, c.allow, false)
+		if got != c.want {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
+		}
+		if name == "a failed load" && fileExists(filepath.Join(dir, "log")) {
+			t.Errorf("%s: a docker call:\n%s", name, readString(filepath.Join(dir, "log")))
+		}
+		if c.elsewhere && strings.Contains(readString(filepath.Join(dir, "log")), "run ") {
+			t.Errorf("%s: a root run through another host's Docker:\n%s", name, readString(filepath.Join(dir, "log")))
+		}
+	}
+}
+
+// containersChain is the containers' chain as iptables -S prints it, IPv4's, as the loader
+// restores it (its first *raw block, which is IPv4's).
+func containersChain() string {
+	l := remote.FirewallLoader(false)
+	block := l[strings.Index(l, "*raw\n"):]
+	block = block[:strings.Index(block, "COMMIT")]
+	var b strings.Builder
+	for line := range strings.SplitSeq(block, "\n") {
+		if strings.HasPrefix(line, "-A ") {
+			b.WriteString(line + "\n")
+		}
+	}
+	return b.String()
+}
+
+// The door refuses "firewall" with any argument: the request has none.
+func TestDoorRefusesAFirewallWithArguments(t *testing.T) {
+	t.Parallel()
+	if code := (&doorSide{}).answer([]string{"firewall", "x"}, nil, nil); code != 2 {
+		t.Errorf("firewall x: %d", code)
+	}
+}
+
+// A project user's ask of the door, where sudo has no rule for it (an older server's), says
+// nothing but a debug line.
+//
+// Not parallel: it sets PATH, for a sudo with no rule.
+func TestDoorFirewallWithNoRuleIsSilent(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\necho 'sudo: a password is required' >&2\nexit 1\n", 0o755)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	var b strings.Builder
+	warnDoorFirewallTo(report.New(&b, false, 1), askDoorFirewall)
+	if !strings.HasPrefix(b.String(), "devopsy: debug: the firewall not asked: ") || strings.Contains(b.String(), "warning") {
+		t.Errorf("%q", b.String())
+	}
+}
+
+// The chains are read as root only where devopsy's firewall is installed and the Docker devopsy
+// reaches is this host's: through another host's, the root container would read another
+// machine.
+func TestReadsChains(t *testing.T) {
+	t.Parallel()
+	fw := &setup.FirewallFact{Loaded: setup.ContainersFirewall}
+	if !readsChains(fw, true) || readsChains(fw, false) || readsChains(&setup.FirewallFact{}, true) || readsChains(nil, true) {
+		t.Error("the decision")
+	}
+}
+
+// A project user's --server-info, which gathers none of the server's setup, asks the door
+// whether the firewall is right, and on wrong passes W0001 on to the admin, nothing on right,
+// unknown or a refusal.
+func TestProjectUserFacts(t *testing.T) {
+	t.Parallel()
+	for answer, want := range map[string][]string{firewallWrong: {report.FirewallNotLoaded.ID}, firewallRight: nil, firewallUnknown: nil, "": nil} {
+		var info remote.ServerInfo
+		projectUserFacts(&info, func() (string, error) {
+			if answer == "" {
+				return "", errors.New("refused")
+			}
+			return answer, nil
+		})
+		if !slices.Equal(info.ForAdmin, want) {
+			t.Errorf("%q: for the admin %q", answer, info.ForAdmin)
+		}
+	}
+}
+
+// With firewall: metadata: allow waiting for its removal, a release says nothing of the
+// firewall: its fix would remove it.
+func TestServerReadyIsSilentUnderAllow(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	s.logs()
+	out, code := s.run(nil, remote.ServerReadyFlag, "one:")
+	if docker, _ := s.logs(); code != 0 || out != "" || strings.Contains(docker, "chroot /host") {
+		t.Errorf("(%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// W0001 names what differs, each on a line of its own, for every state it is said for: the
+// chains' findings, and of the files a mode, a file not devopsy's, the boot link, an older
+// install's timer.
+func TestFirewallSaysWhatDiffers(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	if err := os.Chmod(filepath.Join(host, remote.FirewallScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, remote.FirewallUnit), "# Written by devopsy: an older unit\n", 0o644)
+	if err := os.Remove(filepath.Join(host, remote.FirewallUnitLink)); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, "/etc/systemd/system/devopsy-firewall.timer"), "# Written by devopsy (devopsy @<server> --project-users add).\n", 0o644)
+	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
+	for _, want := range []string{"metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it",
+		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " is not devopsy's",
+		remote.FirewallUnitLink + " does not enable " + remote.FirewallUnit, "/etc/systemd/system/devopsy-firewall.timer, an older install's, is still there"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q:\n%s", want, out)
+		}
+	}
+}
+
+// A refusal of one item stops only what needs it: a daemon.json devopsy cannot judge (an
+// admin's array) stops its parts and a restart, and --server-setup still loads the door's
+// firewall, W0001's one fix, says both, and fails. The first session's differences show the
+// firewall's W0001 line beside the refusal.
+func TestServerSetupLoadsTheFirewallBesideARefusal(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, true)
+	jumps := filepath.Join(host, "fw.iptables.jumps")
+	if err := os.Remove(jumps); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if data, err := os.ReadFile(jumps); code != 1 || err != nil || !strings.Contains(string(data), remote.DoorChain) || !strings.Contains(out, "metadata firewall  W0001: the server's firewall is not loaded as devopsy loads it") ||
+		!strings.Contains(out, "devopsy leaves the file as it is") || !strings.Contains(out, "loaded devopsy's firewall") || readString(filepath.Join(host, setup.DaemonFile)) != "[]\n" {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A release root refused (a file there) stops its making and the mounts drop-in that names
+// it, never the buffers or the firewall, which go, the run failing with what it did not apply,
+// both named.
+func TestServerSetupAppliesBesideARefusedRoot(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	write(t, s.root, "a file\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, remote.FirewallScript)) ||
+		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "not applied, refused: "+string(setup.StepRoot)+", "+string(setup.StepMounts)+"\n") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// Docker not answering stops every step, each a root run: nothing is applied, and the run
+// fails.
+func TestServerSetupAppliesNothingWithDockerDown(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	write(t, filepath.Join(host, "docker-down"), "", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(filepath.Join(host, remote.FirewallScript)) || fileExists(s.root) || !strings.Contains(out, "Docker's daemon does not answer") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A put that fails (dockerd refusing daemon.json, the root run's last put, or its move failing)
+// leaves the puts before it applied and said, the firewall after it applied, the record
+// keeping none of the parts that did not go in, and the run failing.
+func TestServerSetupGoesOnPastAFailedPut(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	write(t, filepath.Join(filepath.Dir(host), "bin", "dockerd"), "#!/bin/sh\necho 'invalid' >&2\nexit 1\n", 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, setup.MountsDropIn)) || fileExists(filepath.Join(host, setup.DaemonFile)) ||
+		!strings.Contains(out, "loaded devopsy's firewall") || !strings.Contains(out, "did not pass its check") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	for name, e := range readRecordOf(t, s) {
+		if e.Applied != "" {
+			t.Errorf("%s recorded applied, its put failed", name)
+		}
+	}
+	// A move that fails (a full disk) is the run's failure the same way, never the same text.
+	s2, host2 := setupServer(t)
+	bin := filepath.Join(filepath.Dir(host2), "bin")
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nfor a; do case $a in *daemon.json) exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n", 0o755)
+	out, code = s2.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || fileExists(filepath.Join(host2, setup.DaemonFile)) || !strings.Contains(out, setup.DaemonFile+" could not be written") || readString(filepath.Join(host2, setup.SysctlFile)) != setup.SysctlText() {
+		t.Errorf("a move that fails (%d):\n%s", code, out)
+	}
+	for name, e := range readRecordOf(t, s2) {
+		if e.Applied != "" {
+			t.Errorf("%s recorded applied, its move failed", name)
+		}
+	}
+}
+
+// A missing flock stops the firewall's load alone, the rest applied, the run failing; a
+// missing tar stops nothing of the setup, said all the same.
+func TestServerSetupToolsStopOnlyTheFirewall(t *testing.T) {
+	t.Parallel()
+	for _, tool := range []string{"flock", "tar"} {
+		s, host := setupServer(t)
+		bin := filepath.Join(filepath.Dir(host), "bin")
+		// A PATH with every tool but the one: a directory of links to the rest.
+		path := t.TempDir()
+		for _, dir := range append([]string{bin}, filepath.SplitList(os.Getenv("PATH"))...) {
+			entries, _ := os.ReadDir(dir)
+			for _, e := range entries {
+				if e.Name() != tool && !fileExists(filepath.Join(path, e.Name())) {
+					_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
+				}
+			}
+		}
+		out, code := s.run([]string{"PATH=" + path}, remote.ServerSetupFlag, "apply")
+		loaded := fileExists(filepath.Join(host, remote.FirewallScript))
+		if code != 1 || !strings.Contains(out, "no "+tool+" in PATH") || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || loaded != (tool == "tar") {
+			t.Errorf("no %s (%d), the firewall loaded %v:\n%s", tool, code, loaded, out)
+		}
+	}
+}
+
+// A record devopsy cannot read stops daemon.json's parts and a restart, never rewritten; the
+// rest is applied, and the run fails.
+func TestServerSetupAppliesBesideABrokenRecord(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+	write(t, record, "daemon.json: [not, a, map\n", 0o600)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || readString(record) != "daemon.json: [not, a, map\n" || fileExists(filepath.Join(host, setup.DaemonFile)) ||
+		readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A second run after a partial one applies what the refusal stopped once its cause is gone,
+// and the run after that changes nothing.
+func TestServerSetupSecondRunAfterAPartialOne(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	daemon := filepath.Join(host, setup.DaemonFile)
+	write(t, daemon, "[]\n", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || !fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Fatalf("the partial run (%d):\n%s", code, out)
+	}
+	if err := os.Remove(daemon); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "put "+setup.DaemonFile) {
+		t.Errorf("the second run (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("the third run (%d):\n%s", code, out)
+	}
+}
+
+// A restart not confirmed in time with Docker still answering leaves the firewall's step to
+// go: the run that raised the reboot flag went, and the firewall is loaded after it.
+// TestServerSetupFirewallNotAppliedWithDockerDown is the other side.
+func TestServerSetupFirewallAfterARestartNotConfirmed(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run([]string{"FAKE_RESTART_STUCK=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "Docker's restart did not end in a second") || !fileExists(filepath.Join(host, remote.RebootRequired)) {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(host, remote.FirewallScript)) || !strings.Contains(out, "loaded devopsy's firewall") || strings.Contains(out, "not applied") {
+		t.Errorf("the firewall not loaded beside a Docker that answers:\n%s", out)
+	}
+}
+
+// A restart that leaves Docker down names the firewall among what was not applied, and loads
+// nothing.
+func TestServerSetupFirewallNotAppliedWithDockerDown(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	out, code := s.run([]string{"FAKE_RESTART_DOWN=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "error: not applied: "+setup.FirewallItemName+", Docker not answering since its restart") || fileExists(filepath.Join(host, remote.FirewallScript)) {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
+// A refusal of Docker's that says nothing of root runs (its unit reading another config file,
+// no compose plugin) stops only what needs it (daemon.json's parts, none), the firewall and the
+// buffers applied, the run failing.
+func TestServerSetupDockerRefusalsStopOnlyTheirSteps(t *testing.T) {
+	t.Parallel()
+	for name, env := range map[string][]string{"another config file": nil, "no compose plugin": {"FAKE_NO_COMPOSE=1"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, host := setupServer(t)
+			if err := os.MkdirAll(s.root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if env == nil {
+				write(t, filepath.Join(host, "execstart"), "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd --config-file /srv/docker.json ; ignore_errors=no }\n", 0o644)
+			}
+			out, code := s.run(env, "@devopsy@one:", "--server-setup", "--yes")
+			if code != 1 {
+				t.Fatalf("(%d):\n%s", code, out)
+			}
+			if !fileExists(filepath.Join(host, remote.FirewallScript)) || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() {
+				t.Errorf("the firewall or the buffers stopped by a refusal they do not need:\n%s", out)
+			}
+		})
+	}
+}
+
+// Pending is gated on what a restart needs, never on a refusal that stops nothing: beside a
+// missing compose plugin, a daemon.json Docker has yet to take is pending, and the setup
+// restarts Docker for it.
+func TestServerSetupPendingBesideARefusalThatStopsNothing(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	// A container running: daemon.json put, Docker not restarted, its change pending.
+	if out, code := s.run([]string{"FAKE_RUNNING=c1"}, "@devopsy@one:", "--server-setup", "--yes"); code != 0 {
+		t.Fatalf("the first run (%d):\n%s", code, out)
+	}
+	pending := func(env []string) bool {
+		t.Helper()
+		out, code := s.run(env, remote.ServerSetupFlag, "facts")
+		var f setup.Facts
+		if i := strings.Index(out, "{"); code != 0 || i < 0 || json.Unmarshal([]byte(out[i:]), &f) != nil {
+			t.Fatalf("the facts (%d):\n%s", code, out)
+		}
+		return f.Pending
+	}
+	if !pending(nil) {
+		t.Fatal("the control: not pending after a change not restarted")
+	}
+	if !pending([]string{"FAKE_NO_COMPOSE=1"}) {
+		t.Error("no compose plugin, which stops nothing, hides a change Docker has yet to take")
+	}
+	s.run([]string{"FAKE_NO_COMPOSE=1"}, "@devopsy@one:", "--server-setup", "--yes")
+	if !strings.Contains(readString(filepath.Join(host, "systemctl.log")), "restart --no-block docker.service") {
+		t.Error("no compose plugin: Docker not restarted for its pending change")
+	}
+}
+
+// --upgrade where a refusal stops every step (docker.service not active) builds no util image
+// and reads no chains as root, and says what it did not apply as the first session would.
+func TestUpgradeWithEveryStepStoppedRunsNothing(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), "daemon.json: {}\n", 0o600)
+	firewallLoaded(t, host, false)
+	write(t, filepath.Join(host, "active-state"), "inactive\n", 0o644)
+	s.logs()
+	out, code := s.run([]string{"FAKE_UTIL_MISSING=1"}, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: not applied, refused: ") || !strings.Contains(out, string(setup.StepParts)+", "+string(setup.StepRestart)+"\n") {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, remote.UtilImage) {
+		t.Errorf("the util image inspected, built or run with every step stopped:\n%s", docker)
+	}
+}
+
+// The mounts drop-in put is followed by a daemon-reload whatever comes after it: a restart
+// asked, which the daemon.json put after it fails, never comes. The firewall is allowed here
+// so its own install's daemon-reload does not stand in for the drop-in's.
+func TestServerSetupReloadsBehindTheDropIn(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	write(t, filepath.Join(filepath.Dir(host), "bin", "dockerd"), "#!/bin/sh\necho 'invalid' >&2\nexit 1\n", 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !fileExists(filepath.Join(host, setup.MountsDropIn)) || fileExists(filepath.Join(host, setup.DaemonFile)) {
+		t.Fatalf("(%d):\n%s", code, out)
+	}
+	if l := readString(filepath.Join(host, "systemctl.log")); !strings.Contains(l, "daemon-reload") {
+		t.Errorf("the drop-in put, no restart and no daemon-reload:\n%s\nsystemctl:\n%s", out, l)
+	}
+}
+
+// The first session's confirmation names what a refusal stops, from the facts a server gives:
+// beside a daemon.json devopsy cannot judge, daemon.json's parts, unknown and so stopped; with
+// nothing to name it says nothing more; with nothing going (Docker refused) it asks nothing.
+func TestPlanSetupNamesWhatIsRefused(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &f); code != 0 || err != nil {
+		t.Fatalf("the facts (%d, %v):\n%s", code, err, out)
+	}
+	if f.DaemonError == "" || !f.Changes() {
+		t.Fatalf("the control: a daemon.json not judged beside changes that go: %+v", f)
+	}
+	ask := &scripted{confirms: []bool{true}}
+	if _, _, err := planSetup(f, false, ask); err != nil || len(ask.asked) != 1 {
+		t.Fatalf("%v, asked %q", err, ask.asked)
+	}
+	if ask.asked[0] != "apply these? | not applied, refused: "+string(setup.StepParts)+", "+string(setup.StepRestart) {
+		t.Errorf("the question: %q", ask.asked[0])
+	}
+	f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalDocker})
+	ask = &scripted{}
+	if _, run, err := planSetup(f, false, ask); err != nil || run || len(ask.asked) != 0 {
+		t.Errorf("Docker refused: run %v (%v), asked %q", run, err, ask.asked)
+	}
+	if refusedLine(setup.Facts{Refusals: []setup.Refusal{{Item: setup.RefusalTools, Stops: setup.RefusalTar}}}) != "" {
+		t.Error("a refusal that stops nothing named")
+	}
+}
+
+// A step a refusal stops whose change devopsy cannot compute counts as a change it stopped:
+// a daemon.json devopsy cannot judge stops its parts and the restart, a release root no unit
+// file can hold stops the mounts drop-in. --upgrade then notes no devopsy version, so it
+// applies again once the cause is gone, and says, as a warning, what it did not apply.
+func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		arrange func(t *testing.T, s *syncSetup, host string)
+		said    string
+		stopped string
+	}{
+		"daemon.json not judged": {func(t *testing.T, s *syncSetup, host string) {
+			write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
+		}, "devopsy leaves the file as it is", string(setup.StepParts) + ", " + string(setup.StepRestart)},
+		"a root no unit holds": {func(t *testing.T, s *syncSetup, host string) {
+			root := filepath.Join(filepath.Dir(s.root), "re\tleases")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(filepath.Dir(s.root), "home", "config.yaml"), "releases:\n  root: \""+strings.ReplaceAll(root, "\t", `\t`)+"\"\n", 0o644)
+		}, "a unit file cannot hold", string(setup.StepMounts)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, host := setupServer(t)
+			if err := os.MkdirAll(s.root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			c.arrange(t, s, host)
+			record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+			write(t, record, "daemon.json: {}\n", 0o600)
+			out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: not applied, refused: "+c.stopped+"\n") {
+				t.Errorf("(%d):\n%s", code, out)
+			}
+			if r, _, _ := setup.ReadRecord(record); r.Version != "" {
+				t.Errorf("a version noted (%q) by an apply whose %s a refusal stopped:\n%s", r.Version, c.stopped, out)
+			}
+		})
+	}
+}
+
+// A release warns of a door's firewall wiped whatever firewall: metadata: says: allow where
+// the door's firewall is loaded is refused, no removal waiting, so the firewall stays what
+// keeps project users' containers off the metadata services, and its wipe is said.
+// --server-info says the chains' findings beside the refusal.
+func TestServerReadyWarnsOfAWipedDoorFirewallUnderARefusedAllow(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, true)
+	setupConfig(t, s, "firewall:\n  metadata: allow\n")
+	if out, _ := s.run(nil, remote.ServerSetupFlag, "facts"); !strings.Contains(out, `"state":"refused"`) {
+		t.Fatalf("the control: allow beside a door's firewall is not refused:\n%s", out)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, remote.ServerReadyFlag, "one:")
+	if code != 0 || !strings.Contains(out, "W0001") {
+		t.Errorf("a release beside a door's firewall wiped, allow refused (%d):\n%q", code, out)
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "W0001") {
+		t.Errorf("--server-info beside a door's firewall wiped, allow refused:\n%s", out)
+	}
+}
+
+// No root run goes through a Docker the setup refuses as not this host's (another host's by
+// DOCKER_HOST, a rootless one): the facts and the apply read no chains through it, nor build
+// an image there, the root container's host being another machine.
+func TestServerSetupReadsNoChainsThroughARefusedDocker(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	firewallLoaded(t, host, false)
+	write(t, filepath.Join(host, "docker-info.json"), `{"Name":"elsewhere","LoggingDriver":"json-file","LiveRestoreEnabled":false,"DockerRootDir":"/var/lib/docker","SecurityOptions":["name=seccomp"]}`, 0o644)
+	for _, step := range []string{"facts", "apply"} {
+		s.logs()
+		out, _ := s.run(nil, remote.ServerSetupFlag, step)
+		if !strings.Contains(out, "not this host's docker.service") && step == "apply" {
+			t.Fatalf("%s: no refusal:\n%s", step, out)
+		}
+		if docker, _ := s.logs(); strings.Contains(docker, "chroot /host") {
+			t.Errorf("%s: a root run through a Docker refused as not this host's:\n%s", step, docker)
+		}
+	}
+}
+
+// A Docker the setup refuses for its init (no systemd) is still this host's: it stops the
+// setup's steps, never --server-info's read of the chains, so a wipe there shows.
+func TestServerInfoReadsChainsWithoutSystemd(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	firewallLoaded(t, host, false)
+	if err := os.RemoveAll(filepath.Join(host, "run", "systemd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(host, "fw.iptables.jumps")); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "systemd is not this host's init") || !strings.Contains(out, "nothing in PREROUTING jumps to "+remote.FirewallContainerChain) {
+		t.Errorf("no systemd, the firewall wiped:\n%s", out)
+	}
+}
+
+// --upgrade notes its version beside a refusal that stops nothing (no tar), and none beside
+// one that stops a change it had to make (no flock, the firewall to load again): the version
+// says the apply took everything, which only the second leaves undone.
+func TestUpgradeNotesItsVersionByWhatARefusalStopped(t *testing.T) {
+	t.Parallel()
+	for tool, noted := range map[string]bool{"tar": true, "flock": false} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+			s, host := setupServer(t)
+			if err := os.MkdirAll(s.root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+			write(t, record, "daemon.json: {}\n", 0o600)
+			firewallLoaded(t, host, false)
+			// The loader's mode lost: the firewall to load again, which --upgrade does.
+			if err := os.Chmod(filepath.Join(host, remote.FirewallScript), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, code := s.run([]string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), tool)}, remote.ServerSetupFlag, "apply", "--upgrade")
+			if code != 0 || !strings.Contains(out, "no "+tool+" in PATH") {
+				t.Fatalf("the control (%d):\n%s", code, out)
+			}
+			if r, _, _ := setup.ReadRecord(record); (r.Version == binaryVersion(t)) != noted {
+				t.Errorf("no %s: version %q noted, want noted %v:\n%s", tool, r.Version, noted, out)
+			}
+		})
 	}
 }

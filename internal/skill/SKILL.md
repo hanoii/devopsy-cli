@@ -247,11 +247,17 @@ what `config.yaml` sets.
   line that checks the same locally. A custom domain is a CNAME to the
   environment's wildcard URL.
 - A new server is set up for devopsy as its deploy user with
-  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing):
+  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing; a refusal stops only what needs it, the rest applied, exit 1):
   Docker's `daemon.json` (rotated logs, live-restore, address pools),
-  socket buffers, the release root, and Docker waiting at boot for its
-  mounts. A release refuses, before uploading, a server whose release
-  root is missing or root's, or that lacks `tar` or `flock`. Once set up,
+  socket buffers, the release root, Docker waiting at boot for its
+  mounts, and containers on Docker's bridges kept off the cloud's
+  metadata services, the door's chains with it where `door:` is set
+  (`firewall: metadata: allow` in the deploy user's config turns it off,
+  refused where `door:` is set or the door's firewall is loaded; `--yes`
+  loads or removes it too). A release refuses, before uploading, a server whose release
+  root is missing or root's, or that lacks `tar` or `flock`, and warns
+  `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
+  loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
   and `--server-info` warns of what is not devopsy's.
 - A server older than the operator's devopsy refuses before anything

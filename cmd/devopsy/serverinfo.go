@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,8 +56,9 @@ var serverTools = []struct {
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
-// waits for a reboot to take it, and its firewall, read as root through the util image.
-func doorFacts() *remote.DoorFacts {
+// waits for a reboot to take it, and the host's listeners from read, the root read of the
+// firewall ("" when none was made).
+func doorFacts(read string) *remote.DoorFacts {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return nil
@@ -71,60 +73,19 @@ func doorFacts() *remote.DoorFacts {
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		f.Reboot = true
 	}
-	for u := range d.Users {
-		if p := d.Users[u].Project; f.Project == "" || p < f.Project {
-			f.Project = p
-		}
-	}
-	read, err := doorHostRead(remote.DoorFirewallRead, false)
-	if err != nil {
-		f.FirewallError = err.Error()
-		return f
-	}
-	f.Listeners = remote.DoorListeners(read)
-	if f.FirewallWrong, err = doorFirewallWrong(read); err != nil {
-		f.FirewallError = err.Error()
+	if read != "" {
+		f.Listeners = remote.DoorListeners(read)
 	}
 	return f
 }
 
 // doorFirewall runs script as root on the host with its network, through the util image
 // (writing the host's files when write), and says what of the project users' firewall the
-// host lacks from what it prints (remote.DoorFirewallRead): the deploy user can neither
+// host lacks from what it prints (remote.FirewallRead): the deploy user can neither
 // read nor change it.
 func doorFirewall(script string, write bool) ([]string, error) {
-	read, err := doorHostRead(script, write)
-	if err != nil {
-		return nil, err
-	}
-	return doorFirewallWrong(read)
-}
-
-// doorFirewallWrong is what of the project users' firewall read lacks, by the ids of the
-// project users' group and the door's.
-func doorFirewallWrong(read string) ([]string, error) {
-	g, err := user.LookupGroup(remote.DoorGroup)
-	if err != nil {
-		return nil, fmt.Errorf("no %s group yet", remote.DoorGroup)
-	}
-	d, err := user.LookupGroup(remote.DoorRunGroup)
-	if err != nil {
-		return nil, fmt.Errorf("no %s group yet", remote.DoorRunGroup)
-	}
-	return remote.DoorFirewallWrong(read, g.Gid, d.Gid), nil
-}
-
-// doorHostRead runs script as root on the host for the project users' firewall (firewallRun,
-// writing the host's files when write), and returns what it prints.
-func doorHostRead(script string, write bool) (string, error) {
-	var out bytes.Buffer
-	err := firewallRun(script, write).run(&out, func(err error) error {
-		return fmt.Errorf("the project users' firewall: %v", err)
-	})
-	if err != nil {
-		return "", err
-	}
-	return out.String(), nil
+	_, wrong, err := firewallJudged(context.Background(), firewallRun(script, write), true, true)
+	return wrong, err
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
@@ -161,12 +122,25 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	systemFacts(&info)
 	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
-	hd := readHostDocker(h)
-	info.Docker = hd.facts
-	if rd, err := readSetup(h, hd); err == nil {
-		info.Setup = &rd.facts
+	// The firewall's chains read as root, for the setup's judgment and the door's listeners,
+	// an install's even where the setup cannot be read; a project user's, whose server's setup
+	// is its admin's and whose docker is the door, none of it nor of Docker but what the door
+	// tells (projectUserFacts): the door would refuse Docker's reads and log each.
+	read := ""
+	if asProjectUser() {
+		info.Docker.Door = true
+		projectUserFacts(&info, askDoorFirewall)
+	} else {
+		hd := readHostDocker(h)
+		info.Docker = hd.facts
+		if rd, err := readSetup(h, hd); err == nil {
+			info.Setup = &rd.facts
+			read = readChains(rd.facts.Firewall, rd.docker, false)
+		} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
+			read = readChains(&setup.FirewallFact{Loaded: kind}, dockerHere(hd.facts), false)
+		}
 	}
-	info.Door = doorFacts()
+	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -355,9 +329,12 @@ func containerdRoot(d remote.DockerFacts) string {
 }
 
 // dockerInfo is what docker info says, alone.
-func dockerInfo() remote.DockerFacts {
+func dockerInfo() remote.DockerFacts { return dockerInfoWith(context.Background(), "docker") }
+
+// dockerInfoWith is dockerInfo through docker, within ctx.
+func dockerInfoWith(ctx context.Context, docker string) remote.DockerFacts {
 	var d remote.DockerFacts
-	out, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
+	out, err := exec.CommandContext(ctx, docker, "info", "--format", "{{json .}}").Output()
 	if err != nil {
 		d.Error = "docker info: " + cmdError(err)
 	} else if err := parseDockerInfo(out, &d); err != nil {
@@ -950,13 +927,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
 				report.Fix("reboot it at a quiet time: its containers come back with Docker"))
 		}
-		switch {
-		case dr.FirewallError != "":
-			note("the project users' firewall could not be read: " + dr.FirewallError)
-		case len(dr.FirewallWrong) > 0:
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"project users reach what their firewall keeps them off"}, dr.FirewallWrong...),
-				Remedies: []report.Remedy{report.Fix("load it again, for any of its projects:", "devopsy @"+ref+" --project-users add "+cmp.Or(dr.Project, "<project>"))}})
-		}
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),
 				Remedies: []report.Remedy{report.Fix("make each listen on 127.0.0.1, which no container reaches")}})
@@ -965,10 +935,14 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// Docker.
 	d := info.Docker
-	if d.Error != "" {
+	switch {
+	case d.Door:
+		key = "docker"
+		more("the server's admin's, through the door")
+	case d.Error != "":
 		key = "docker"
 		warn("Docker did not answer: " + d.Error)
-	} else {
+	default:
 		parts := []string{d.Version}
 		if d.Compose != "" {
 			parts = append(parts, "compose "+d.Compose)
@@ -1020,6 +994,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// The server's setup, as --server-setup judges it.
 	if info.Setup != nil {
 		es = append(es, setupInfoEntries(*info.Setup, ref)...)
+	}
+	// What a project user can only pass on: by its code, no remedy it could take.
+	for _, id := range info.ForAdmin {
+		if c, ok := report.CodeOf(id); ok {
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "admin", Lines: []string{c.Msg(), c.ForAdmin()}})
+		}
 	}
 
 	// The disks.
@@ -1346,9 +1326,10 @@ func sortedKeysOf[V any](m map[string]V) []string {
 // devopsy set it up and what refuses releases there, then its items (setupItems), each not
 // devopsy's fixed by --server-setup on ref (in words locally, ref "").
 func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
-	fix := report.Fix("", "devopsy @"+ref+" --server-setup")
-	if ref == "" {
-		fix = report.Fix("run --server-setup for this server, as its deploy user")
+	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
+	// With every step refused, --server-setup applies nothing: the way out is the refusal's.
+	if f.NoneGoes() {
+		fix = report.Fix("fix what refuses every step of the setup first, then run --server-setup")
 	}
 	var es []remote.StatusEntry
 	line := func(level, msg string, fixes ...report.Remedy) {

@@ -54,8 +54,11 @@ type ServerInfo struct {
 
 	Docker DockerFacts `json:"docker"`
 	// Setup is the server's setup as --server-setup judges it, nil from a devopsy older than
-	// it.
+	// it and for a project user, whose server's setup is its admin's.
 	Setup *setup.Facts `json:"setup,omitempty"`
+	// ForAdmin are the codes (report.Code) of what a project user's --server-info can only
+	// pass on to the server's admin.
+	ForAdmin []string `json:"for_admin,omitempty"`
 	// Door is the server's door, nil on a server with none (ServerDoor).
 	Door  *DoorFacts `json:"door,omitempty"`
 	Disks []Disk     `json:"disks"`
@@ -70,7 +73,10 @@ type ServerInfo struct {
 // version and the daemon's configuration file.
 type DockerFacts struct {
 	// Error is why docker info said nothing.
-	Error   string `json:"error,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Door: read by a project user, whose docker is the door, which answers no docker info:
+	// nothing of Docker is read.
+	Door    bool   `json:"door,omitempty"`
 	Version string `json:"version,omitempty"`
 	Compose string `json:"compose,omitempty"`
 	Buildx  bool   `json:"buildx"`
@@ -102,14 +108,9 @@ type DoorFacts struct {
 	Users  int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
-	// FirewallWrong is what of the project users' firewall the host lacks (DoorFirewallWrong);
-	// FirewallError why it could not be read. Project is one of its projects, which add
-	// loads the firewall again for.
-	FirewallWrong []string `json:"firewall_wrong,omitempty"`
-	FirewallError string   `json:"firewall_error,omitempty"`
-	// Listeners are the host's TCP listeners every container reaches (DoorListeners).
+	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
+	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`
-	Project   string   `json:"project,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.

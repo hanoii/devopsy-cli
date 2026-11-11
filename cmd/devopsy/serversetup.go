@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -54,22 +56,12 @@ func runServerSetup(t *remote.Target, args []string) int {
 	if err := json.Unmarshal(out.Bytes(), &f); err != nil {
 		return fail("the server's setup facts: " + err.Error())
 	}
-	if len(f.Refusals) > 0 {
-		for _, r := range f.Refusals {
-			msg, fixes := refusalWords(r)
-			report.Say(report.ErrorLevel, msg, nil, fixes...)
-		}
-		report.Error("nothing changed")
-		return 1
-	}
-	if f.DaemonError != "" {
-		msg, fixes := daemonWords(f.DaemonError)
-		report.Say(report.ErrorLevel, msg, nil, fixes...)
-		report.Error("nothing changed")
-		return 1
-	}
+	// The differences and the refusals together: a refusal stops only the steps that need
+	// what it refuses (setup.Facts.Goes), the rest applied.
 	es := setupEntries(f)
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
+	said := sayRefusals(f, report.ErrorLevel, nil)
+	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
 	if err == errDeclined {
 		report.Error("nothing changed")
@@ -79,6 +71,10 @@ func runServerSetup(t *remote.Target, args []string) int {
 		return failErr(err)
 	}
 	if !run {
+		if refused {
+			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
+			return 1
+		}
 		if f.Pending {
 			report.Info("nothing to change: Docker takes daemon.json at its next restart")
 		} else {
@@ -86,7 +82,8 @@ func runServerSetup(t *remote.Target, args []string) int {
 		}
 		return 0
 	}
-	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply"}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
+	// The refusals said here, by their identities: the apply says only one new since.
+	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply", "--said=" + strings.Join(said, ",")}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
 		return failErr(err)
 	}
@@ -106,7 +103,15 @@ type setupAsker interface {
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
-	for _, p := range f.Parts {
+	// Every step a root run: with none going (Docker refused), nothing goes at all.
+	if f.NoneGoes() {
+		return nil, false, nil
+	}
+	parts := f.Parts
+	if !f.Goes(setup.StepParts) {
+		parts = nil
+	}
+	for _, p := range parts {
 		daemon = daemon || p.Puts
 		if setup.ShowSetup(p.State) == setup.Question {
 			replace := false
@@ -125,7 +130,11 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	}
 	changes := f.Changes() || daemon
 	if changes && !yes {
-		ok, err := ask.confirm("apply these?")
+		var not []string
+		if line := refusedLine(f); line != "" {
+			not = []string{line}
+		}
+		ok, err := ask.confirm("apply these?", not...)
 		if err != nil {
 			return nil, false, err
 		}
@@ -134,7 +143,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 		}
 	}
 	restart := false
-	if daemon || f.Pending {
+	if (daemon || f.Pending) && f.Goes(setup.StepRestart) {
 		cut := "it cuts every docker command under way"
 		if f.Running > 0 && !f.LiveRestore {
 			cut += fmt.Sprintf(" and stops every container (%d running), Docker keeping none through its restart", f.Running)
@@ -160,7 +169,7 @@ type terminalAsker struct{ t *remote.Target }
 
 func (a terminalAsker) noTerminal() error {
 	return &report.Failure{Msg: "--server-setup asks first, and there is no terminal to ask at",
-		Remedies: []report.Remedy{report.Fix("add --yes, which keeps every value someone changed and restarts Docker only with no container running:", "devopsy @"+targetRef(a.t)+" --server-setup --yes")}}
+		Remedies: []report.Remedy{report.Fix("add --yes, which keeps every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says:", "devopsy @"+targetRef(a.t)+" --server-setup --yes")}}
 }
 
 func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
@@ -254,6 +263,13 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 	if f.Pending {
 		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
 	}
+	// A refused allow leaves the door's firewall as it is: its chains, read, said as without it.
+	if fw := f.Firewall; fw != nil && (fw.State.Changes() || fw.State == setup.FirewallRefused && len(fw.Wrong) > 0) {
+		entry(remote.StatusWarning, firewallItem, firewallLines(fw)...)
+	}
+	if fw := f.Firewall; fw != nil && fw.Unread != "" {
+		entry(remote.StatusInfo, firewallItem, "its chains could not be read as root: "+fw.Unread)
+	}
 	if f.Hint() {
 		entry(remote.StatusInfo, "volumes", volumeHint(f)...)
 	}
@@ -268,4 +284,62 @@ func volumeHint(f setup.Facts) []string {
 		lines = append(lines, fmt.Sprintf("%s (%s on %s, %s, %s free)", c.MountPoint, c.FSType, c.Source, humanBytes(c.Size), humanBytes(c.Free)))
 	}
 	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
+}
+
+// firewallLines are what every command says of a metadata firewall whose state changes it
+// (setup.FirewallState.Changes): --server-setup's differences, --server-info's warning, and
+// what --upgrade leaves to --server-setup; one to load again is said by its code
+// (report.FirewallNotLoaded), the unit's failure and the chains' findings its details.
+func firewallLines(fw *setup.FirewallFact) []string {
+	lines := []string{firewallLine(fw)}
+	if fw.Unit != "" {
+		lines = append(lines, "devopsy-firewall.service: "+fw.Unit)
+	}
+	return append(append(lines, fw.Differs...), fw.Wrong...)
+}
+
+// firewallLine is firewallLines' first line.
+func firewallLine(fw *setup.FirewallFact) string {
+	switch fw.State {
+	case setup.FirewallLoad:
+		line := "containers reach the cloud's metadata services: devopsy's firewall keeps them off, DNS there aside, which cuts an app running here off from what it reads there (its instance's credentials)"
+		if fw.Door {
+			line += "; with door:, the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services"
+		}
+		return line
+	case setup.FirewallLoadDoor:
+		return "door: is in this server's config, and devopsy's firewall loads the containers' chain alone: the door's chains load with it, which keep project users off the host's loopback, Docker's bridges and the metadata services"
+	case setup.FirewallRemove:
+		return "firewall: metadata: allow, and devopsy's firewall still there: removed, containers then reach the cloud's metadata services"
+	}
+	return report.FirewallNotLoaded.Msg()
+}
+
+// sayRefusals says f's refusals at level, each with its fix, a daemon.json devopsy cannot
+// judge among them, but those said already (by their setup.Refusal.ID): each once per run, by
+// the first session or by its apply when new since. It returns the IDs of every refusal f has.
+func sayRefusals(f setup.Facts, level report.Level, said []string) []string {
+	var ids []string
+	for _, r := range f.AllRefusals() {
+		ids = append(ids, r.ID())
+		if slices.Contains(said, r.ID()) {
+			continue
+		}
+		msg, fixes := refusalWords(r)
+		if r.Item == setup.RefusalDaemon && r.Message == f.DaemonError {
+			msg, fixes = daemonWords(f.DaemonError)
+		}
+		report.Say(level, msg, nil, fixes...)
+	}
+	return ids
+}
+
+// refusedLine names what f's refusals stop that had a change to make (setup.Facts.Stopped),
+// "" when nothing: the first session's question, a run with nothing to apply and an apply's
+// end say it.
+func refusedLine(f setup.Facts) string {
+	if words := f.Stopped(); len(words) > 0 {
+		return "not applied, refused: " + strings.Join(words, ", ")
+	}
+	return ""
 }

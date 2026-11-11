@@ -22,6 +22,8 @@ type Facts struct {
 	// Files are the files devopsy writes whole, each in sync or not.
 	Files   []FileFact   `json:"files"`
 	Buffers []BufferFact `json:"buffers"`
+	// Firewall is the metadata firewall's, nil from a devopsy that judges none.
+	Firewall *FirewallFact `json:"firewall,omitempty"`
 	// Pending: Docker has yet to take daemon.json (Pending).
 	Pending bool `json:"pending,omitempty"`
 	// Running is how many containers run; LiveRestore whether the daemon keeps them
@@ -48,6 +50,10 @@ type Refusal struct {
 	Item    string `json:"item"`
 	Message string `json:"message"`
 	Fix     string `json:"fix,omitempty"`
+	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
+	// one item may stop less than that item's others (Docker's plugins, its unit's config
+	// file).
+	Stops string `json:"stops,omitempty"`
 }
 
 // PartFact is one daemon.json part as the server judged it, with what an apply would do
@@ -108,12 +114,10 @@ func (f Facts) Records() bool {
 	return slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Records })
 }
 
-// Changes says whether an apply would change the host with no answer asked: a part to put, a
-// file, a live buffer, or the root.
+// Changes says whether an apply would change the host with no answer asked: a step with a
+// change to make (Changing) that goes (Goes), Docker's restart aside, which is asked apart.
 func (f Facts) Changes() bool {
-	return f.RootAction != "" || slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts }) ||
-		slices.ContainsFunc(f.Files, func(x FileFact) bool { return !x.InSync }) ||
-		slices.ContainsFunc(f.Buffers, func(b BufferFact) bool { return b.Low })
+	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
 // Hint says whether the volume hint goes with f: candidates, none of them the root's, and
