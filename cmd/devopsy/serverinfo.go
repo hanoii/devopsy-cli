@@ -40,14 +40,18 @@ const (
 )
 
 // serverTools are the tools a server needs beyond Docker and devopsy
-// (internals/releases.md), with what goes without each.
-var serverTools = []struct{ name, without string }{
-	{"tar", "no release can be uploaded"},
-	{"flock", "nothing that changes an environment runs"},
-	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it"},
-	{"script", "builds and pulls show no live progress"},
-	{"mkfifo", "no sync runs"},
-	{"tail", "only the traps protect a release after its switch (a tail that answers --version)"},
+// (internals/releases.md), with what goes without each; a release refuses a server without
+// a required one (toolsRefusal), and the others degrade.
+var serverTools = []struct {
+	name, without string
+	required      bool
+}{
+	{"tar", "no release can be uploaded", true},
+	{"flock", "nothing that changes an environment runs", true},
+	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it", false},
+	{"script", "builds and pulls show no live progress", false},
+	{"mkfifo", "no sync runs", false},
+	{"tail", "only the traps protect a release after its switch (a tail that answers --version)", false},
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
@@ -1314,7 +1318,10 @@ func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
 		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
 	}
 	for _, r := range f.Refusals {
-		line(remote.StatusWarning, r.Item+": "+r.Message, fixWords(r.Fix)...)
+		// The tools are said once, with the others the server needs (serverTools).
+		if r.Item != toolsItem {
+			line(remote.StatusWarning, r.Item+": "+r.Message, fixWords(r.Fix)...)
+		}
 	}
 	switch f.RootAction {
 	case setup.RootMake:

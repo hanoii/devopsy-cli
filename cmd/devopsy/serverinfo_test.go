@@ -800,3 +800,25 @@ func setUp(rootAction string) *setup.Facts {
 	}
 	return f
 }
+
+// A tool the server lacks is said once, as --server-info says every tool it needs: the
+// setup's facts carry the required ones' refusal too, which says nothing more.
+func TestServerInfoSaysAMissingToolOnce(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	info := remote.ServerInfo{Version: "0.53.0", Protocol: remote.Protocol, Root: "/home/devopsy", NTP: "yes", Missing: []string{"tar"}}
+	info.Setup = setUp("")
+	if r := toolsRefusalOf([]string{"tar"}); r != nil {
+		info.Setup.Refusals = []setup.Refusal{*r}
+	}
+	_, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+	var tar []string
+	for _, w := range warnings {
+		if !w.note && strings.Contains(w.msg, "tar") {
+			tar = append(tar, w.msg)
+		}
+	}
+	if len(tar) != 1 {
+		t.Errorf("a missing tar warned %d times: %q", len(tar), tar)
+	}
+}

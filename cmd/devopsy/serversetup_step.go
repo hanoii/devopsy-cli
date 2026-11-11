@@ -22,10 +22,6 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/setup"
 )
 
-// setupTools are what a server needs in PATH before anything else: the upload's tar, every
-// lock's flock.
-var setupTools = []string{"tar", "flock"}
-
 // restartWait bounds the wait for Docker's restart to be confirmed.
 const restartWait = 2 * time.Minute
 
@@ -195,18 +191,27 @@ func readSetup(h setupHost) (setupRead, error) {
 	return rd, nil
 }
 
-// toolsRefusal is the tools' required item: tar and flock in PATH, nil when both are.
+// toolsItem is the tools' required item's name.
+const toolsItem = "tools"
+
+// toolsRefusal is the tools' required item: the required ones of serverTools in PATH, nil
+// when they are.
 func toolsRefusal() *setup.Refusal {
 	var missing []string
-	for _, tool := range setupTools {
-		if _, err := exec.LookPath(tool); err != nil {
-			missing = append(missing, tool)
+	for _, t := range serverTools {
+		if _, err := exec.LookPath(t.name); err != nil && t.required {
+			missing = append(missing, t.name)
 		}
 	}
+	return toolsRefusalOf(missing)
+}
+
+// toolsRefusalOf is the tools' refusal for the required tools missing, nil for none.
+func toolsRefusalOf(missing []string) *setup.Refusal {
 	if len(missing) == 0 {
 		return nil
 	}
-	return &setup.Refusal{Item: "tools", Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
+	return &setup.Refusal{Item: toolsItem, Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
 		Fix: "install them with the system's packages (tar, util-linux), or with devopsy-server's setup.sh"}
 }
 
