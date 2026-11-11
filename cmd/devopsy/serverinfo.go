@@ -937,7 +937,8 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	d := info.Docker
 	switch {
 	case d.Door:
-		row("docker", "the server's admin's, through the door")
+		key = "docker"
+		more("the server's admin's, through the door")
 	case d.Error != "":
 		key = "docker"
 		warn("Docker did not answer: " + d.Error)
