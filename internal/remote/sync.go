@@ -786,7 +786,7 @@ func KindsDiffer(parentProjectUser bool) string {
 
 // KindsFix is the way across between kinds: through the operator.
 func KindsFix() report.Remedy {
-	return report.Fix("copy a service's data through this machine instead:", "devopsy @<parent> --export <service> | devopsy @<child> --import <service>")
+	return report.Fix("copy a service's data through this machine instead, the parent's --export of it piped into the child's --import")
 }
 
 // syncFinish defines sync_finish go|abort|partial, in the child's

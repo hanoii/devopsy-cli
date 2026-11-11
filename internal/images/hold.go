@@ -355,7 +355,7 @@ func (s *Set) holdOn(o entry, h hold, src entry, from string, pulled *[]string) 
 func (s *Set) ownInstead(o entry, h hold, what string) (entry, composeHold, error) {
 	var ch composeHold
 	s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s, built by the project, is gone from this server: its release's own image runs on data it does not allow (%s)", o.Service, what, h.why),
-		nil, report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
+		nil, s.fix("fix forward: a release, which never takes the data back", "--release"))
 	return o, ch, nil
 }
 
@@ -514,8 +514,8 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 			// That image then runs on the data, so a release is judged by what
 			// it ran: a plain one refused unless its label reaches that.
 			s.sayAll(report.WarnLevel, fmt.Sprintf("%s: %s's own image of it, built by the project, is gone from this server: it stays on %s (%s), on the data as it is", e.Service, tid, heldWhat(wasHeld[e.Service]), shownData(e)),
-				nil, report.Fix("a release builds it, its label raised to the data's version:", s.cmd("--release")),
-				report.Fix("knowing its data takes the older image, accept it:", s.again("--release", []string{e.Service})))
+				nil, s.fix("a release builds it, its label raised to the data's version:", "--release"),
+				s.fix("knowing its data takes the older image, accept it:", again("--release", []string{e.Service})))
 			kept[e.Service] = composeHold{Image: imgs[e.Service], From: wasHeld[e.Service]}
 			continue
 		}
@@ -573,7 +573,7 @@ func (s *Set) unhold(rel string, e, o entry, svc Service, mode string) (entry, e
 	}
 	if _, err := s.Docker.ID(o.ID); o.ID == "" || err != nil {
 		s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s's own image of it, built by the project, is gone from this server, and the image it is held on (%s) would upgrade its data again", svc.Name, tid, shownData(e)),
-			nil, report.Fix("a release builds it:", s.cmd("--release")))
+			nil, s.fix("a release builds it:", "--release"))
 		return entry{}, ErrRefused
 	}
 	return entry{Ref: svc.Ref, ID: o.ID, Service: svc.Name, Kind: KindOwn, Build: o.Build, DataVersion: o.DataVersion, Tag: o.Tag}, nil
@@ -680,7 +680,7 @@ func (s *Set) LastHold(target, against string) error {
 	}
 	if len(unheld) > 0 {
 		s.sayAll(report.ErrorLevel, "images of "+tid+" not restored, and its data runs an image it does not allow:", unheld,
-			report.Fix("fix forward: a release, which never takes the data back", s.cmd("--release")))
+			s.fix("fix forward: a release, which never takes the data back", "--release"))
 		return ErrRefused
 	}
 	return nil

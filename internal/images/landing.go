@@ -104,8 +104,8 @@ func (l Landing) after(now func(string) []ran) func(string) []ran {
 func (s *Set) SyncLanding(data, from string) Landing {
 	return Landing{windows: parseParentData(data), all: s.Reset, first: SyncedFrom + from, words: checkWords{
 		source: "the parent's", what: "the child would run the parent's data on an image its version does not allow", nothing: "nothing changed", flag: "--sync",
-		builds: "a sync builds nothing", rebuild: report.Fix("release it with the sync, which builds its images:", s.cmd(ReleaseSync(s.Again))),
-		fetch: report.Fix("release it with the sync, which fetches them:", s.cmd(ReleaseSync(s.Again)))}}
+		builds: "a sync builds nothing", rebuild: s.fix("release it with the sync, which builds its images:", ReleaseSync(s.Again)),
+		fetch: s.fix("release it with the sync, which fetches them:", ReleaseSync(s.Again))}}
 }
 
 // ReleaseSync is the release that syncs a refused sync's fix names, from
@@ -137,11 +137,11 @@ func (s *Set) ResetLanding() Landing {
 func (s *Set) ImportLanding(data, service string) Landing {
 	l := Landing{windows: parseParentData(DataFor(data, service)), first: Imported, header: true, words: checkWords{
 		source: "the export's", what: "this environment would run the export's data on an image its version does not allow", nothing: "nothing imported", flag: "--import " + service, input: " < <export>",
-		builds: "an import builds nothing", rebuild: report.Fix("release it first, which builds its images, then import again:", s.cmd("--release")),
-		fetch: report.Fix("release it first, which fetches them, then import again:", s.cmd("--release"))}}
+		builds: "an import builds nothing", rebuild: s.fix("release it first, which builds its images, then import again:", "--release"),
+		fetch: s.fix("release it first, which fetches them, then import again:", "--release")}}
 	if s.Marked {
 		// A marked environment refuses that release: --resolved first.
-		first := report.Fix("the mark refuses a release: accept the data as it is, then release:", s.cmd("--import "+service+" --resolved"))
+		first := s.fix("the mark refuses a release: accept the data as it is, then release:", "--import "+service+" --resolved")
 		l.words.rebuild, l.words.fetch = first, first
 	}
 	if len(l.windows) == 0 {
@@ -176,8 +176,8 @@ func (s *Set) ResolvedLanding(service string, since time.Time) Landing {
 func (s *Set) RestoreLanding(data, snapshot string, services []string) Landing {
 	l := Landing{windows: parseParentData(data), first: Imported, running: true, words: checkWords{
 		source: "the snapshot's", what: "the current release would run the snapshot's data on an image its version does not allow", nothing: "nothing restored", flag: "--snapshots restore " + snapshot + " --no-code",
-		builds: "a --no-code restore builds nothing", rebuild: report.Fix("restore it with its code, which builds its images:", s.cmd(withEnvOf("--snapshots restore "+snapshot, s.Again))),
-		fetch: report.Fix("release it first, which fetches them, then restore again:", s.cmd("--release"))}}
+		builds: "a --no-code restore builds nothing", rebuild: s.fix("restore it with its code, which builds its images:", withEnvOf("--snapshots restore "+snapshot, s.Again)),
+		fetch: s.fix("release it first, which fetches them, then restore again:", "--release")}}
 	for _, svc := range services {
 		if l.windows[svc] == nil {
 			l.over = append(l.over, svc)
