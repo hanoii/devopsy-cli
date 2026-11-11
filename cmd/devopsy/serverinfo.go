@@ -76,7 +76,7 @@ func doorFacts() *remote.DoorFacts {
 			f.Project = p
 		}
 	}
-	read, err := doorHostRead(remote.DoorFirewallRead, false)
+	read, err := doorHostRead(remote.FirewallRead, false)
 	if err != nil {
 		f.FirewallError = err.Error()
 		return f
@@ -90,7 +90,7 @@ func doorFacts() *remote.DoorFacts {
 
 // doorFirewall runs script as root on the host with its network, through the util image
 // (writing the host's files when write), and says what of the project users' firewall the
-// host lacks from what it prints (remote.DoorFirewallRead): the deploy user can neither
+// host lacks from what it prints (remote.FirewallRead): the deploy user can neither
 // read nor change it.
 func doorFirewall(script string, write bool) ([]string, error) {
 	read, err := doorHostRead(script, write)
@@ -111,7 +111,7 @@ func doorFirewallWrong(read string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no %s group yet", remote.DoorRunGroup)
 	}
-	return remote.DoorFirewallWrong(read, g.Gid, d.Gid), nil
+	return remote.FirewallWrong(read, g.Gid, d.Gid), nil
 }
 
 // doorHostRead runs script as root on the host for the project users' firewall (firewallRun,

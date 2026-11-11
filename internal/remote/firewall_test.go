@@ -12,7 +12,7 @@ import (
 // testDaemonCgroup is Docker's daemon's cgroup in firewallRead, as systemd gives it.
 const testDaemonCgroup = "/system.slice/docker.service"
 
-// firewallRead is DoorFirewallRead's output for a host where the project users' firewall is
+// firewallRead is FirewallRead's output for a host where the project users' firewall is
 // loaded, gid 1001 (the door's 1003), Docker's daemon in testDaemonCgroup, with before put ahead of each jump of
 // devopsy's.
 func firewallRead(before string) string {
@@ -20,8 +20,8 @@ func firewallRead(before string) string {
 	b.WriteString("# dockerd " + testDaemonCgroup + "\n")
 	for _, f := range firewallFamilies {
 		for _, table := range []string{"filter", "raw"} {
-			var jumps []doorJump
-			for _, j := range doorJumps("1001", "1003", testDaemonCgroup) {
+			var jumps []firewallJump
+			for _, j := range firewallJumps("1001", "1003", testDaemonCgroup) {
 				if j.table == table {
 					jumps = append(jumps, j)
 				}
@@ -44,7 +44,7 @@ func firewallRead(before string) string {
 			}
 			b.WriteString("-A " + jumps[0].from + " -j ufw-before-output\n")
 			for _, c := range chains {
-				for _, r := range doorRules(f, c) {
+				for _, r := range firewallRules(f, c) {
 					b.WriteString("-A " + c + " " + r + "\n")
 				}
 			}
@@ -57,28 +57,28 @@ func firewallRead(before string) string {
 // packet reaches their jumps: a rule ahead of a jump may only drop or reject, since an
 // ACCEPT there (ufw's own chain accepting each new connection, say) or another chain's jump
 // lets a project user's packet past rules that are all there.
-func TestDoorFirewallWrong(t *testing.T) {
+func TestFirewallWrong(t *testing.T) {
 	t.Parallel()
-	if got := DoorFirewallWrong(firewallRead(""), "1001", "1003"); len(got) != 0 {
+	if got := FirewallWrong(firewallRead(""), "1001", "1003"); len(got) != 0 {
 		t.Errorf("all there: %q", got)
 	}
-	if got := DoorFirewallWrong(firewallRead("-d 10.0.0.1/32 -j DROP"), "1001", "1003"); len(got) != 0 {
+	if got := FirewallWrong(firewallRead("-d 10.0.0.1/32 -j DROP"), "1001", "1003"); len(got) != 0 {
 		t.Errorf("a DROP ahead: %q", got)
 	}
-	if got := DoorFirewallWrong(firewallRead("-o eth1 -j REJECT --reject-with icmp-port-unreachable"), "1001", "1003"); len(got) != 0 {
+	if got := FirewallWrong(firewallRead("-o eth1 -j REJECT --reject-with icmp-port-unreachable"), "1001", "1003"); len(got) != 0 {
 		t.Errorf("a REJECT ahead: %q", got)
 	}
 	for _, ahead := range []string{"-j ACCEPT", "-o lo -j ACCEPT", "-j ufw-track-output", "-j RETURN"} {
-		got := DoorFirewallWrong(firewallRead(ahead), "1001", "1003")
+		got := FirewallWrong(firewallRead(ahead), "1001", "1003")
 		if len(got) != 8 || !strings.Contains(got[0], "lets packets through before its jump to "+DoorChain+": "+ahead) {
 			t.Errorf("%q ahead of each jump: %q", ahead, got)
 		}
 	}
 	// Another group's jump is not the project users', nor the door's.
-	if got := DoorFirewallWrong(firewallRead(""), "1002", "1003"); len(got) != 2 || !strings.Contains(got[0], "OUTPUT") || !strings.Contains(got[1], "ip6tables") {
+	if got := FirewallWrong(firewallRead(""), "1002", "1003"); len(got) != 2 || !strings.Contains(got[0], "OUTPUT") || !strings.Contains(got[1], "ip6tables") {
 		t.Errorf("another group's: %q", got)
 	}
-	if got := DoorFirewallWrong(firewallRead(""), "1001", "1004"); len(got) != 2 || !strings.Contains(got[0], "jump to "+DoorRunChain) {
+	if got := FirewallWrong(firewallRead(""), "1001", "1004"); len(got) != 2 || !strings.Contains(got[0], "jump to "+DoorRunChain) {
 		t.Errorf("another group's for the door: %q", got)
 	}
 	// A rule of the chain gone, changed or added, IPv6's included.
@@ -86,14 +86,14 @@ func TestDoorFirewallWrong(t *testing.T) {
 	for name, edit := range map[string][2]string{
 		"one gone":       {"-A " + DoorChain + " -o br-+ -j REJECT --reject-with icmp6-port-unreachable\n", ""},
 		"one accepting":  {"-o docker0 -j REJECT --reject-with icmp-port-unreachable", "-o docker0 -j ACCEPT"},
-		"one added":      {"-A " + DoorContainerChain + " -d 169.254.0.0/16 -i docker0 -j DROP\n", "-A " + DoorContainerChain + " -j RETURN\n-A " + DoorContainerChain + " -d 169.254.0.0/16 -i docker0 -j DROP\n"},
-		"its jump gone":  {"-A PREROUTING -j " + DoorContainerChain + "\n", ""},
+		"one added":      {"-A " + FirewallContainerChain + " -d 169.254.0.0/16 -i docker0 -j DROP\n", "-A " + FirewallContainerChain + " -j RETURN\n-A " + FirewallContainerChain + " -d 169.254.0.0/16 -i docker0 -j DROP\n"},
+		"its jump gone":  {"-A PREROUTING -j " + FirewallContainerChain + "\n", ""},
 		"a table unread": {"# ip6tables raw\n", "# ip6tables nothing\n"},
 	} {
 		if !strings.Contains(all, edit[0]) {
 			t.Fatalf("%s: the read has no %q", name, edit[0])
 		}
-		if got := DoorFirewallWrong(strings.Replace(all, edit[0], edit[1], 1), "1001", "1003"); len(got) == 0 {
+		if got := FirewallWrong(strings.Replace(all, edit[0], edit[1], 1), "1001", "1003"); len(got) == 0 {
 			t.Errorf("%s: nothing wrong", name)
 		}
 	}
@@ -101,27 +101,27 @@ func TestDoorFirewallWrong(t *testing.T) {
 	// root's, every process's, or none found) nothing covers what it contacts for a project.
 	for _, cg := range []string{"/", ""} {
 		read := strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+cg+"\n", 1)
-		if got := DoorFirewallWrong(read, "1001", "1003"); len(got) == 0 || !strings.Contains(got[0], "Docker's daemon has no cgroup of its own") {
+		if got := FirewallWrong(read, "1001", "1003"); len(got) == 0 || !strings.Contains(got[0], "Docker's daemon has no cgroup of its own") {
 			t.Errorf("the daemon in %q: %q", cg, got)
 		}
 	}
-	if got := DoorFirewallWrong(strings.Replace(all, "-A OUTPUT -m cgroup --path \""+testDaemonCgroup+"\" -j "+DoorDaemonChain+"\n", "", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], DoorDaemonChain) {
+	if got := FirewallWrong(strings.Replace(all, "-A OUTPUT -m cgroup --path \""+testDaemonCgroup+"\" -j "+DoorDaemonChain+"\n", "", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], DoorDaemonChain) {
 		t.Errorf("the daemon's jump gone: %q", got)
 	}
 	// Docker started again since the loader ran: its cgroup another (another inode under the
 	// same path), which the daemon's jump, binding the one it was loaded for, does not hold.
-	if got := DoorFirewallWrong(strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+testDaemonCgroup+"\n# dockerd-cgroup 4242 4141\n", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], "made since the firewall loaded") {
+	if got := FirewallWrong(strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+testDaemonCgroup+"\n# dockerd-cgroup 4242 4141\n", 1), "1001", "1003"); len(got) != 1 || !strings.Contains(got[0], "made since the firewall loaded") {
 		t.Errorf("a cgroup made again: %q", got)
 	}
-	if got := DoorFirewallWrong(strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+testDaemonCgroup+"\n# dockerd-cgroup 4242 4242\n", 1), "1001", "1003"); len(got) != 0 {
+	if got := FirewallWrong(strings.Replace(all, "# dockerd "+testDaemonCgroup+"\n", "# dockerd "+testDaemonCgroup+"\n# dockerd-cgroup 4242 4242\n", 1), "1001", "1003"); len(got) != 0 {
 		t.Errorf("the cgroup the jump was loaded for: %q", got)
 	}
 	// A kernel with no IPv6 has nothing to filter there.
 	v4 := all[:strings.Index(all, "# ip6tables")] + "# ip6tables off\n"
-	if got := DoorFirewallWrong(v4, "1001", "1003"); len(got) != 0 {
+	if got := FirewallWrong(v4, "1001", "1003"); len(got) != 0 {
 		t.Errorf("no IPv6: %q", got)
 	}
-	if got := DoorFirewallWrong(all[:strings.Index(all, "# ip6tables")], "1001", "1003"); len(got) != 2 {
+	if got := FirewallWrong(all[:strings.Index(all, "# ip6tables")], "1001", "1003"); len(got) != 2 {
 		t.Errorf("IPv6 unread: %q", got)
 	}
 }
@@ -146,7 +146,7 @@ func TestDoorRules(t *testing.T) {
 			last = i
 		}
 	}
-	v4, v6 := doorRules(firewallFamilies[0], DoorChain), doorRules(firewallFamilies[1], DoorChain)
+	v4, v6 := firewallRules(firewallFamilies[0], DoorChain), firewallRules(firewallFamilies[1], DoorChain)
 	in(v4, "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
 		"-o lo -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-o lo -p tcp -m conntrack --ctorigdstport 53 -j RETURN",
 		"-d 169.254.0.0/16 -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-d 169.254.0.0/16 -p tcp -m conntrack --ctorigdstport 53 -j RETURN",
@@ -158,28 +158,28 @@ func TestDoorRules(t *testing.T) {
 		"-d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fd20:ce::254/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fe80::a9fe:a9fe/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fd00:c1::a9fe:a9fe/128 -j REJECT --reject-with icmp6-port-unreachable")
 	// Docker's daemon: the host's loopback and the metadata services, DNS aside; never the
 	// host's other addresses (a registry on this server, by its name or Docker's bridge).
-	in(doorRules(firewallFamilies[0], DoorDaemonChain), "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+	in(firewallRules(firewallFamilies[0], DoorDaemonChain), "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
 		"-d 127.0.0.0/8 -p udp -m conntrack --ctorigdstport 53 -j RETURN", "-d 127.0.0.0/8 -j REJECT --reject-with icmp-port-unreachable", "-d 169.254.0.0/16 -j REJECT --reject-with icmp-port-unreachable")
-	in(doorRules(firewallFamilies[1], DoorDaemonChain), "-d ::1/128 -p tcp -m conntrack --ctorigdstport 53 -j RETURN", "-d ::1/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable")
-	if r := doorRules(firewallFamilies[0], DoorDaemonChain); slices.ContainsFunc(r, func(s string) bool { return strings.Contains(s, "-o ") }) {
+	in(firewallRules(firewallFamilies[1], DoorDaemonChain), "-d ::1/128 -p tcp -m conntrack --ctorigdstport 53 -j RETURN", "-d ::1/128 -j REJECT --reject-with icmp6-port-unreachable", "-d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable")
+	if r := firewallRules(firewallFamilies[0], DoorDaemonChain); slices.ContainsFunc(r, func(s string) bool { return strings.Contains(s, "-o ") }) {
 		t.Errorf("the daemon's chain closes an interface: %q", r)
 	}
 	// Containers: no conntrack yet in raw, and no NAT before it, so the port asked for.
-	in(doorRules(firewallFamilies[0], DoorContainerChain), "-d 169.254.0.0/16 -i docker0 -p udp -m udp --dport 53 -j RETURN", "-d 169.254.0.0/16 -i br-+ -p tcp -m tcp --dport 53 -j RETURN",
+	in(firewallRules(firewallFamilies[0], FirewallContainerChain), "-d 169.254.0.0/16 -i docker0 -p udp -m udp --dport 53 -j RETURN", "-d 169.254.0.0/16 -i br-+ -p tcp -m tcp --dport 53 -j RETURN",
 		"-d 169.254.0.0/16 -i docker0 -j DROP", "-d 168.63.129.16/32 -i br-+ -j DROP")
-	in(doorRules(firewallFamilies[1], DoorContainerChain), "-d fe80::a9fe:a9fe/128 -i br-+ -p udp -m udp --dport 53 -j RETURN", "-d fd00:ec2::254/128 -i br-+ -j DROP", "-d fe80::a9fe:a9fe/128 -i docker0 -j DROP")
+	in(firewallRules(firewallFamilies[1], FirewallContainerChain), "-d fe80::a9fe:a9fe/128 -i br-+ -p udp -m udp --dport 53 -j RETURN", "-d fd00:ec2::254/128 -i br-+ -j DROP", "-d fe80::a9fe:a9fe/128 -i docker0 -j DROP")
 }
 
 // The loader and add's script parse, and the loader loads each family's chains whole before
 // it jumps to them, IPv6 only where the kernel has it.
-func TestDoorFirewallScripts(t *testing.T) {
+func TestFirewallScripts(t *testing.T) {
 	t.Parallel()
-	for name, s := range map[string]string{"loader": DoorFirewallLoader(), "install": DoorFirewallInstall()} {
+	for name, s := range map[string]string{"loader": FirewallLoader(), "install": FirewallInstall()} {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
 			t.Errorf("%s: %v %s", name, err, out)
 		}
 	}
-	l := DoorFirewallLoader()
+	l := FirewallLoader()
 	restore, jump := strings.Index(l, "| ip6tables-restore --noflush"), strings.Index(l, `first ip6tables filter OUTPUT "-m owner --gid-owner $gid --suppl-groups -j `+DoorChain+`"`)
 	if restore < 0 || jump < restore || !strings.Contains(l[:restore], "if [ -e /proc/net/if_inet6 ]; then\nprintf '%s' '*filter\n:"+DoorChain+" - [0:0]\n") {
 		t.Errorf("the loader:\n%s", l)
@@ -187,17 +187,17 @@ func TestDoorFirewallScripts(t *testing.T) {
 	// Loaded at boot, and every few minutes after: a reload of the server's own firewall
 	// (netfilter-persistent, firewalld) or an iptables -F drops devopsy's rules silently. A
 	// service that stays active once run would never run again by its timer.
-	install := DoorFirewallInstall()
-	if !strings.Contains(install, "ln -sfn "+DoorFirewallUnit+" /etc/systemd/system/multi-user.target.wants/") || !strings.Contains(install, "ln -sfn "+DoorFirewallTimer+" /etc/systemd/system/timers.target.wants/") {
+	install := FirewallInstall()
+	if !strings.Contains(install, "ln -sfn "+FirewallUnit+" /etc/systemd/system/multi-user.target.wants/") || !strings.Contains(install, "ln -sfn "+FirewallTimer+" /etc/systemd/system/timers.target.wants/") {
 		t.Errorf("the units not enabled:\n%s", install)
 	}
-	if strings.Contains(doorFirewallUnitText, "RemainAfterExit") || !strings.Contains(doorFirewallTimerText, "OnUnitInactiveSec=") {
-		t.Errorf("the units:\n%s\n%s", doorFirewallUnitText, doorFirewallTimerText)
+	if strings.Contains(firewallUnitText, "RemainAfterExit") || !strings.Contains(firewallTimerText, "OnUnitInactiveSec=") {
+		t.Errorf("the units:\n%s\n%s", firewallUnitText, firewallTimerText)
 	}
 	// At boot it loads after what loads a whole ruleset, which would drop it, and before the
 	// network's services, sshd and Docker among them: no project user logs in ahead of it.
 	var after, before []string
-	for _, line := range strings.Split(doorFirewallUnitText, "\n") {
+	for _, line := range strings.Split(firewallUnitText, "\n") {
 		if v, ok := strings.CutPrefix(line, "After="); ok {
 			after = strings.Fields(v)
 		}
@@ -217,17 +217,17 @@ func TestDoorFirewallScripts(t *testing.T) {
 	}
 	// add runs the loader it wrote before it reads the rules back, as the read is what it
 	// checks; and both go by the daemon's cgroup found one way.
-	if run, read := strings.LastIndex(install, "\n"+DoorFirewallScript+"\n"), strings.Index(install, `echo "# dockerd $cg"`); run < 0 || read < run {
+	if run, read := strings.LastIndex(install, "\n"+FirewallScript+"\n"), strings.Index(install, `echo "# dockerd $cg"`); run < 0 || read < run {
 		t.Errorf("the install reads the rules before it loads them:\n%s", install)
 	}
-	if !strings.Contains(l, daemonCgroup) || !strings.Contains(DoorFirewallRead, daemonCgroup) {
+	if !strings.Contains(l, daemonCgroup) || !strings.Contains(FirewallRead, daemonCgroup) {
 		t.Error("the loader and the read find the daemon's cgroup two ways")
 	}
 }
 
 // Docker's daemon's cgroup is docker.service's under systemd, before it starts too (at boot
 // the firewall loads ahead of Docker), else the running dockerd's own; with neither there is
-// none, and the daemon gets no jump (doorJumps), which --server-info then says.
+// none, and the daemon gets no jump (firewallJumps), which --server-info then says.
 func TestDaemonCgroup(t *testing.T) {
 	t.Parallel()
 	own := ""
@@ -267,7 +267,7 @@ func TestDaemonCgroup(t *testing.T) {
 		}
 	}
 	for _, cg := range []string{"", "/"} {
-		if j := doorJumps("1001", "1003", cg); slices.ContainsFunc(j, func(j doorJump) bool { return strings.Contains(j.rule, "-m cgroup") }) {
+		if j := firewallJumps("1001", "1003", cg); slices.ContainsFunc(j, func(j firewallJump) bool { return strings.Contains(j.rule, "-m cgroup") }) {
 			t.Errorf("a daemon in the cgroup %q, every process's, gets a jump: %+v", cg, j)
 		}
 	}
@@ -304,7 +304,7 @@ func TestDoorListeners(t *testing.T) {
 
 // At boot the firewall's loader runs before docker.service, whose cgroup is not there yet: it
 // loads every chain and jump, IPv6's included, and leaves the daemon's jump for Docker's own
-// start (DoorFirewallDockerDropIn), never stopping at it. The kernel takes a cgroup's rule only
+// start (FirewallDockerDropIn), never stopping at it. The kernel takes a cgroup's rule only
 // for a cgroup that is there ("RULE_INSERT failed (Invalid argument)", exit 4, on Debian 13's
 // iptables 1.8.11), and the loader runs under set -e.
 //
@@ -343,7 +343,7 @@ case "$1 ${3:-$2}" in "show ControlGroup") echo ;; "show Slice") echo devopsy-te
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("sh", "-c", DoorFirewallLoader())
+	cmd := exec.Command("sh", "-c", FirewallLoader())
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 	out, err := cmd.CombinedOutput()
 	data, _ := os.ReadFile(log)

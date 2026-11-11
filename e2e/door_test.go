@@ -1590,7 +1590,7 @@ exit 1`); code != 0 {
 // Docker's daemon in a cgroup made again under the same path, as systemd makes docker.service's
 // at every start of Docker, is no longer held by the jump loaded for the old one, which iptables
 // prints the same: --server-info says so (DoorFirewallDaemonMark), and the loader, which a
-// start of Docker runs (DoorFirewallDockerDropIn, systemd's, which this server has not), holds
+// start of Docker runs (FirewallDockerDropIn, systemd's, which this server has not), holds
 // it again. The e2e server has no systemd, so the test makes the cgroup again itself.
 func TestDoorDaemonFirewallHoldsOnceDockersCgroupIsMadeAgain(t *testing.T) {
 	doorUser(t, "doorcg")

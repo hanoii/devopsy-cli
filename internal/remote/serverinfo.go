@@ -102,7 +102,7 @@ type DoorFacts struct {
 	Users  int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
-	// FirewallWrong is what of the project users' firewall the host lacks (DoorFirewallWrong);
+	// FirewallWrong is what of the project users' firewall the host lacks (FirewallWrong);
 	// FirewallError why it could not be read. Project is one of its projects, which add
 	// loads the firewall again for.
 	FirewallWrong []string `json:"firewall_wrong,omitempty"`
