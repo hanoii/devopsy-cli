@@ -24,7 +24,7 @@
 ## `daemon.json` and the record
 
 - `daemon.json` is three parts, each the sub-object of its keys (`setup.Parts`), compared in canonical JSON (`setup.Canonical`): spacing and key order never read as a change.
-- The merge keeps every other key as the file has it (`json.RawMessage`), puts the file only when the canonical form differs, and leaves a part devopsy stops wanting in the file; the merged file gets no header and keeps its mode and owner (`hostPut`'s `keep:`), 644 root's only for a file devopsy makes.
+- The merge keeps every other key as the file has it (`json.RawMessage`), puts the file only when the canonical form differs, and leaves a part devopsy stops wanting in the file; the merged file gets no header and stays as its admin has it (`hostPut`'s `keep:`): a link stays, the file it names written, with its own mode and owner, 644 root's only for a file devopsy makes.
 - A part's state comes from its observed value, the want, the record and the daemon's flags, by `setup.StateOf`'s rules in order, and what each command does with each state is `PartState.Upgrade` and `PartState.Setup`, which the facts carry (`setup.FactOf`), and what each shows `setup.ShowSetup` and `ShowInfo`: never a second judgment.
 - The daemon's flags are a fact, read from the unit's command (`systemctl show -p ExecStart`, `setup.DaemonCommand`, `DaemonFlags`), never inferred from what docker info shows: the unit's command is what Docker starts with next, beside the file.
 - A part one of whose keys a flag sets is the flags' (`setup.Outside`), whole: never put, never asked, said, out of pending and of the restart's confirmation, since dockerd refuses to start on a key both in a flag and in the file.

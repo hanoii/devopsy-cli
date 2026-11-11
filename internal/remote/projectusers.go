@@ -111,18 +111,29 @@ var hostGroup = "getent group " + DoorGroup + " >/dev/null || groupadd --system 
 
 // hostPut is put <file> <mode> <check> <content>: content into file when it differs, checked
 // before it lands, failing otherwise when it changed nothing. A mode keep:<mode> keeps the
-// file's own mode and owner, <mode> (root's) only for a file it makes. Never in a pipeline,
-// whose subshell an exit would leave alone.
+// file as its admin has it: a link stays, the file it names written; its own mode and owner,
+// <mode> (root's) only for a file it makes. Never in a pipeline, whose subshell an exit would
+// leave alone.
 var hostPut = `put() {
-  tmp=$(mktemp "$1.XXXXXX")
+  pf=$1
   case $2 in
-    keep:*) if [ -e "$1" ]; then cp -p "$1" "$tmp"; else chmod "${2#keep:}" "$tmp"; fi ;;
+    keep:*)
+      pn=0
+      while [ -L "$pf" ] && [ "$pn" -lt 40 ]; do
+        pl=$(readlink "$pf")
+        case $pl in /*) pf=$pl ;; *) pf=$(dirname "$pf")/$pl ;; esac
+        pn=$((pn + 1))
+      done ;;
+  esac
+  tmp=$(mktemp "$pf.XXXXXX")
+  case $2 in
+    keep:*) if [ -e "$pf" ]; then cp -p "$pf" "$tmp"; else chmod "${2#keep:}" "$tmp"; fi ;;
     *) chmod "$2" "$tmp" ;;
   esac
   printf '%s' "$4" >"$tmp"
-  if cmp -s "$tmp" "$1" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  if cmp -s "$tmp" "$pf" 2>/dev/null; then rm -f "$tmp"; return 1; fi
   if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
-  mv -f "$tmp" "$1"
+  mv -f "$tmp" "$pf"
 }
 `
 

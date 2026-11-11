@@ -86,7 +86,7 @@ What it keeps as devopsy wants it:
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
 other key stays as it is (a proxy's `proxies`, for example), and the file
-keeps its mode and owner. A part someone else set is asked about, keep
+keeps its mode and owner, a link to it staying a link. A part someone else set is asked about, keep
 (Enter) or replace; a value kept is not asked again while it stays the
 same. To go back to devopsy's value, write it in `daemon.json` or remove
 the keys and answer replace. A part one of whose keys `docker.service`'s
