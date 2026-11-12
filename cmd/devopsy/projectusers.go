@@ -137,17 +137,22 @@ func projectNameClash(project string, others []string) string {
 }
 
 // serverProjects are the projects a name could clash with: the door's users' (door), and the
-// release root's, which holds every project released here, running or not.
-func serverProjects(door []string, root string) []string {
+// release root's, which holds every project released here, running or not, a link there
+// included, its disk mounted or not: its name is what holds its names. A root that does not
+// read, a missing one included, is an error, never a root with no project: a deploy
+// project's names would read as free.
+func serverProjects(door []string, root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("the release root, which holds the server's projects, does not read: %w", err)
+	}
 	ps := slices.Clone(door)
-	if entries, err := os.ReadDir(root); err == nil {
-		for _, e := range entries {
-			if e.IsDir() && projectDir(e.Name()) {
-				ps = append(ps, e.Name())
-			}
+	for _, e := range entries {
+		if (e.IsDir() || e.Type()&os.ModeSymlink != 0) && projectDir(e.Name()) {
+			ps = append(ps, e.Name())
 		}
 	}
-	return ps
+	return ps, nil
 }
 
 // doorProjects are the door's users' projects, none without a door.
@@ -175,18 +180,25 @@ func spaceFix(space string) report.Remedy {
 // door's rule (door.Policy.OwnName) among the server's projects (serverProjects, root the
 // release root, and project, the target's own, whose directory a first release has yet to
 // make), "" for none or no door: the door acts only on containers it made, and refuses
-// that user's every compose command while another's are under its names.
-func doorNameOwner(d *remote.Door, root, project, name string) string {
-	if d == nil {
-		return ""
+// that user's every compose command while another's are under its names. With no project
+// user nothing is read: the root may not be there yet (a server before its first release),
+// and nothing of it changes the answer. With one, the root is there (--project-users add
+// makes it first), and one that does not read is an error.
+func doorNameOwner(d *remote.Door, root, project, name string) (string, error) {
+	if d == nil || len(d.Users) == 0 {
+		return "", nil
 	}
-	projects := append(serverProjects(doorProjects(d), root), project)
+	projects, err := serverProjects(doorProjects(d), root)
+	if err != nil {
+		return "", err
+	}
+	projects = append(projects, project)
 	for who, u := range d.Users {
 		if (door.Policy{Project: u.Project, User: who, Others: projects}).OwnName(name) {
-			return who
+			return who, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func addProjectUser(d *remote.Door, project, who, entry string) int {
@@ -228,7 +240,11 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if u, ok := d.Users[who]; ok && u.Project != project {
 		return fail(who + " is " + u.Project + "'s already")
 	}
-	projects := serverProjects(doorProjects(d), r.Root)
+	projects, err := serverProjects(doorProjects(d), r.Root)
+	if err != nil {
+		report.Fail(fmt.Errorf("%w: no project user made", err))
+		return 1
+	}
 	if why := projectNameClash(project, projects); why != "" {
 		report.Fail(errors.New("a project "+project+" here would share compose names: "+why),
 			report.Fix("a project gone from the release root ("+r.Root+") holds its name while its directory stays, its .env kept by --destroy: removed with its last environment's --destroy --purge"))

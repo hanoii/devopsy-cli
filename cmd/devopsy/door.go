@@ -1126,29 +1126,40 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 		return door.Policy{}, err
 	}
 	ids := hostIDs(deploy, s.Users)
+	// The projects this one's names stop at: a request is refused rather than judged without
+	// them, which would take a deploy project's names for this one's.
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return door.Policy{}, err
+	}
+	others, err := otherProjects(s, r.Root)
+	if err != nil {
+		return door.Policy{}, fmt.Errorf("refused: %w", err)
+	}
 	p := door.Policy{
 		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
-		ForbiddenIDs: ids, Others: otherProjects(s),
+		ForbiddenIDs: ids, Others: others,
 	}
 	p.Images = claimedImages(p.ImagesFile())
 	return p, nil
 }
 
 // otherProjects are the server's projects but this one: what the door's users hold, and
-// what the deploy user's release root does. Names are flat, so a longer one is out of
-// this project's reach (door.Policy.OwnName).
-func otherProjects(s remote.DoorUser) []string {
-	root := ""
-	if r, err := remote.ReleaseSettings(); err == nil {
-		root = r.Root
+// what the deploy user's release root does (serverProjects, an error when it does not
+// read). Names are flat, so a longer one is out of this project's reach
+// (door.Policy.OwnName).
+func otherProjects(s remote.DoorUser, root string) ([]string, error) {
+	ps, err := serverProjects(s.Others, root)
+	if err != nil {
+		return nil, err
 	}
 	var others []string
-	for _, p := range serverProjects(s.Others, root) {
+	for _, p := range ps {
 		if p != s.Project {
 			others = append(others, p)
 		}
 	}
-	return others
+	return others, nil
 }
 
 // hostIDs are ids no container may run as: the deploy user's (deploy, from its passwd entry,

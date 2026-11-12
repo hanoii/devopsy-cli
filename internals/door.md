@@ -134,7 +134,7 @@ A project user has no Docker socket: what it finds as `docker` asks the deploy u
 - A util container's mounts sit only where devopsy's own commands look (`mountTarget`), and its sources hold nothing of `--mount`'s or `-v`'s syntax (`mountSource`).
 - `<space>/mnt/<name>` and `clones/<project>` are closed to every other user, and `sealed/<project>` to all but the deploy user, whatever modes a container gives its files.
 - Nothing stays in `<space>/work` after its container or its claim, and sealed copies go once no container holds them, an hour old (`pruneSealed`).
-- A compose name is a project's only while no other project's name extends its own, on the server's list and in its release root (`Policy.OwnName`).
+- A compose name is a project's only while no other project's name extends its own, on the server's list and in its release root, a link there included whatever it resolves to (`Policy.OwnName`, `serverProjects`); a release root that does not read, a missing one included, refuses where a project user exists, never reading as one with no project: a deploy project's names would read as the project user's.
 - A secret reaches the door and a container by name, its value on stdin: a command line shows to every user of the server.
 - The door's environment is its own (`doorEnvironment`): a caller's PATH would choose its docker, and a HOME the config it obeys.
 - The address the caller's session carries for its hints is read before the door clears its environment (`doorEnvironment`, `remote.SessionFrom`, which drops one over its cap or that parses as no address) and used only as a remedy's command (`doorSide.asked`), never in a decision or the refusals' log: its caller sets it, so a forged one reaches only that caller's own messages.

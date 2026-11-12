@@ -33,22 +33,72 @@ func TestDoorNameOwner(t *testing.T) {
 		// A deploy user's project shop-eu, before its first release.
 		"shop-eu-stage": {"shop-eu", ""},
 	} {
-		if got := doorNameOwner(d, root, c.project, name); got != c.want {
-			t.Errorf("%s of %s: %q, want %q", name, c.project, got, c.want)
+		if got, err := doorNameOwner(d, root, c.project, name); got != c.want || err != nil {
+			t.Errorf("%s of %s: %q (%v), want %q", name, c.project, got, err, c.want)
 		}
 	}
-	if got := doorNameOwner(nil, root, "shop", "shop-stage"); got != "" {
-		t.Errorf("no door: %q", got)
+	if got, err := doorNameOwner(nil, root, "shop", "shop-stage"); got != "" || err != nil {
+		t.Errorf("no door: %q (%v)", got, err)
 	}
 	// A project in the release root holds its names too, the deploy user's own: one whose
 	// name extends a project user's is not that user's.
 	if err := os.Mkdir(filepath.Join(root, "shop-eu"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{"shop-eu-prod": "", "shop-eur-prod": "devopsy-shop", "shop-stage": "devopsy-shop"} {
-		if got := doorNameOwner(d, root, "shop", name); got != want {
-			t.Errorf("%s, beside the release root's shop-eu: %q, want %q", name, got, want)
+	// So does one linked there, its disk mounted or not: its name is what holds them.
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "shop-us")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "not-mounted"), filepath.Join(root, "shop-ca")); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"shop-eu-prod": "", "shop-eur-prod": "devopsy-shop", "shop-stage": "devopsy-shop", "shop-us-prod": "", "shop-ca-prod": ""} {
+		if got, err := doorNameOwner(d, root, "shop", name); got != want || err != nil {
+			t.Errorf("%s, beside the release root's shop-eu: %q (%v), want %q", name, got, err, want)
 		}
+	}
+	// A release root it cannot read is unknown, never a root with no project: a deploy
+	// project's names would read as a project user's. A missing one too, which a project user
+	// never sees (--project-users add makes the root first); with no project user, nothing of
+	// the root changes the answer.
+	gone := filepath.Join(t.TempDir(), "gone")
+	if got, err := doorNameOwner(d, gone, "shop-eu", "shop-eu-prod"); err == nil || !strings.Contains(err.Error(), gone) {
+		t.Errorf("a missing root: %q, %v", got, err)
+	}
+	if got, err := doorNameOwner(&remote.Door{}, gone, "shop", "shop-prod"); got != "" || err != nil {
+		t.Errorf("a missing root, no project user: %q, %v", got, err)
+	}
+	if os.Getuid() != 0 {
+		if err := os.Chmod(root, 0o300); err != nil {
+			t.Fatal(err)
+		}
+		_, err := doorNameOwner(d, root, "shop-eu", "shop-eu-prod")
+		if err := os.Chmod(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err == nil || !strings.Contains(err.Error(), root) {
+			t.Errorf("an unreadable root: %v", err)
+		}
+	}
+}
+
+// The door's other projects, which a project's names stop at (door.Policy.OwnName), are the
+// door's users' and the release root's but its own: a root that does not read is an error,
+// never none.
+func TestOtherProjects(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, p := range []string{"shop", "blog"} {
+		if err := os.Mkdir(filepath.Join(root, p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := remote.DoorUser{Project: "shop", Others: []string{"shop-admin"}}
+	if got, err := otherProjects(s, root); err != nil || strings.Join(got, " ") != "shop-admin blog" {
+		t.Errorf("others: %v, %v", got, err)
+	}
+	if got, err := otherProjects(s, filepath.Join(root, "gone")); err == nil {
+		t.Errorf("a missing root: %v", got)
 	}
 }
 
