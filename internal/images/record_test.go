@@ -160,6 +160,18 @@ func TestRecordMoved(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("nothing moved, yet:\n%s", out.String())
 	}
+	// A new build of the same version is said by its digests: a version
+	// alone on both sides reads as nothing changed.
+	d.pull("mariadb:11.8", "sha256:m3")
+	d.versions["sha256:m3"] = "11.8.10"
+	r4 := e.release(appSvc, dbSvc("mariadb:11.8"), proxySvc)
+	out.Reset()
+	if err := e.set.Record(e.rel(r4), e.rel(r3)); err != nil {
+		t.Fatal(err)
+	}
+	if want := "| mariadb:11.8: 11.8.10 (sha256:m2 -> sha256:m3)\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("missing %q:\n%s", want, out.String())
+	}
 
 	// Image mode: the app is a registry's image under a fixed name.
 	i := newRecEnv(t, d, "app-stage", ModeImage, &out)

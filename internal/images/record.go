@@ -282,8 +282,9 @@ func match(old []entry, e entry) (entry, bool) {
 }
 
 // moved says, one line per service, which images changed from the
-// release before: a pulled one by version when both have one, else by
-// short digest, an own one rebuilt; and an image the project builds that
+// release before: a pulled one by version when both have one, with its
+// short digests when the version is the same, else by short digest, an
+// own one rebuilt; and an image the project builds that
 // changed under the same name in image mode (mode: the new release's),
 // which no rollback takes back.
 func (s *Set) moved(old, es []entry, mode string) {
@@ -302,7 +303,12 @@ func (s *Set) moved(old, es []entry, mode string) {
 		if familiar(o.Ref) != familiar(e.Ref) {
 			name = o.Ref + " -> " + e.Ref
 		}
-		lines = append(lines, fmt.Sprintf("%s: %s -> %s", name, shown(o), shown(e)))
+		change := shown(o) + " -> " + shown(e)
+		if shown(o) == shown(e) {
+			// A new build of the same version: its digests say it.
+			change = shown(e) + " (" + shortDigest(o) + " -> " + shortDigest(e) + ")"
+		}
+		lines = append(lines, name+": "+change)
 		if mode == ModeImage && s.builds(e) && familiar(o.Ref) == familiar(e.Ref) {
 			sameTag = append(sameTag, e.Service)
 		}
@@ -327,6 +333,11 @@ func shown(e entry) string {
 	if e.Version != "" {
 		return e.Version
 	}
+	return shortDigest(e)
+}
+
+// shortDigest is an entry's digest, else its id, short.
+func shortDigest(e entry) string {
 	d := digestOf(e.Digest)
 	if d == "" {
 		d = e.ID
