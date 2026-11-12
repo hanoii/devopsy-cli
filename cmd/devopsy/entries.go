@@ -98,10 +98,15 @@ func (t entryTable) row(key, value string) string {
 // print prints es: a key once over its entry's lines and the next
 // entries' of that key, then its remedies as report lays them out
 // (RemedyLines), a warning's lines and texts yellow, a highlight's bold,
-// each command bold.
+// each command bold. Remedies a later entry of the same key shares are
+// printed once, after the last entry holding them (sharedLater): one
+// command that fixes several lines is offered once.
 func (t entryTable) print(es []remote.StatusEntry) {
 	prev := ""
 	for i, e := range es {
+		if sharedLater(es, i) {
+			e.Remedies = nil
+		}
 		paint := func(s string) string { return s }
 		switch e.Level {
 		case remote.StatusWarning:
@@ -130,4 +135,22 @@ func (t entryTable) print(es []remote.StatusEntry) {
 		}
 		prev = e.Key
 	}
+}
+
+// sharedLater says whether an entry after es[i], under the same key with
+// no other key between, holds the same remedies as es[i].
+func sharedLater(es []remote.StatusEntry, i int) bool {
+	if len(es[i].Remedies) == 0 {
+		return false
+	}
+	lines := report.RemedyLines(es[i].Remedies)
+	for _, e := range es[i+1:] {
+		if e.Key != es[i].Key {
+			return false
+		}
+		if slices.Equal(report.RemedyLines(e.Remedies), lines) {
+			return true
+		}
+	}
+	return false
 }

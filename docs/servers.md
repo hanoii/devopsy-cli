@@ -204,7 +204,8 @@ in `--shell-host`; anywhere else it refuses. It reports:
   its containers and its state.
 
 What needs attention is a warning under the line it is about, with its
-fix:
+fix; a fix that serves several lines in a row (`--server-setup` for the
+setup's items) comes once, after the last of them:
 
 - an older devopsy;
 - a reboot the system asks for;
@@ -238,7 +239,8 @@ fix:
   restarting, paused, dead, unhealthy, or exited on an error of their
   own (a stop's codes excepted), each as `--status` says it.
 
-`--json` prints the facts and the same lines for scripts and agents. Its
+`--json` prints the facts and the same lines for scripts and agents, each
+warning with its own fix. Its
 fields may change before 1.0.0: the door's `firewall_wrong`,
 `firewall_error` and `project` are gone, the setup's `firewall` (its
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both

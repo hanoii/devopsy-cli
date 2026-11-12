@@ -338,6 +338,29 @@ func TestServerInfoReport(t *testing.T) {
 		t.Errorf("never set up, locally: %+v", warnings)
 	}
 
+	// Items one --server-setup fixes are each said, the command offered once after the last of
+	// them, each still its own warning with its fix in --json; a line with a fix of its own (a
+	// missing plugin, whose refusal stops nothing) keeps it under it.
+	info = healthy()
+	info.Setup = setUp("")
+	info.Setup.Record = ""
+	info.Setup.Files[0].InSync, info.Setup.Files[1].InSync = false, false
+	info.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
+	info.Setup.Refusals = []setup.Refusal{{Item: "Docker", Message: "Docker has no compose plugin", Fix: "install Docker's compose plugin", Stops: setup.RefusalPlugins}}
+	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+	want := "setup         never set up by devopsy: --upgrade applies nothing here\n" +
+		"              Docker: Docker has no compose plugin\n              to fix it:\n              install Docker's compose plugin\n" +
+		"              socket buffers: /etc/sysctl.d/90-devopsy-net.conf is not devopsy's\n" +
+		"              mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf is not devopsy's\n" +
+		"              metadata firewall: containers reach the cloud's metadata services"
+	if !strings.Contains(out, want) || strings.Count(out, "$ devopsy @vm1: --server-setup") != 1 ||
+		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n              to fix it:\n              $ devopsy @vm1: --server-setup\n") {
+		t.Errorf("the setup's one fix, once:\n%s", out)
+	}
+	if len(warnings) != 5 || slices.ContainsFunc(warnings, func(w said) bool { return len(w.fixes) != 1 }) {
+		t.Errorf("each warning with its own fix: %+v", warnings)
+	}
+
 	// A kernel without AppArmor is said, not warned: nothing to install.
 	info = healthy()
 	info.Docker.Security, info.AppArmor, info.AppArmorParser = []string{"seccomp"}, false, false
@@ -478,8 +501,10 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"clock not synchronized, ",
 		"$ timedatectl timesync-status",
 		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
-		// step, so --server-setup is offered only past that refusal.
-		"setup         never set up by devopsy: --upgrade applies nothing here\n              to fix it:\n              fix what refuses every step of the setup first, then run --server-setup\n",
+		// step, so --server-setup is offered only past that refusal, once after the last line
+		// it fixes.
+		"setup         never set up by devopsy: --upgrade applies nothing here\n              Docker: ",
+		"(its instance's credentials)\n              to fix it:\n              fix what refuses every step of the setup first, then run --server-setup\n",
 		"              Docker: systemd is not this host's init",
 		"              daemon.json: logs: none, devopsy's",
 	} {
