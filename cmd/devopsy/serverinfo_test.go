@@ -170,17 +170,17 @@ func TestServerInfoReport(t *testing.T) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
 		// Project users on a host that shows them every user's processes: what it exposes, and
-		// devopsy-server's setup.sh, which mounts /proc so, as the fix.
+		// the mount that hides them, as the fix.
 		{"door processes shown", func(i *remote.ServerInfo) {
 			i.Door, i.HidePID = &remote.DoorFacts{Space: "/space", Users: 2}, "off"
-		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|rerun devopsy-server's setup.sh as root: it mounts /proc with hidepid=invisible"},
+		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root (docs/project-users.md)"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
 			i.NTP, i.NTPService, i.Time = "no", "yes", now.Add(-800*time.Millisecond).UnixNano()
 		}, "", "clock is not synchronized (about 0.8 s behind local)|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
-		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it"},
+		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot"},
 		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
 		{"no compose", func(i *remote.ServerInfo) { i.Docker.Compose = "" }, "", "docker compose is missing|docker-compose-plugin"},
 		// Docker lists apparmor whenever the kernel has it, and needs
@@ -343,7 +343,7 @@ func TestServerInfoReport(t *testing.T) {
 		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 		noted := len(warnings) == 1 && warnings[0].note && len(warnings[0].fixes) == 1 && warnings[0].fixes[0].Hint &&
 			warnings[0].msg == "/proc shows every user's processes (no hidepid), which matters once the server has project users" &&
-			warnings[0].fixes[0].Text == "rerun devopsy-server's setup.sh as root: it mounts /proc with hidepid=invisible"
+			warnings[0].fixes[0].Text == "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root (docs/project-users.md)"
 		if c.note != noted || (!c.note && (len(warnings) != 0 || strings.Contains(out, "processes"))) {
 			t.Errorf("processes, %s: %+v\n%s", name, warnings, out)
 		}
@@ -362,7 +362,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.CrashKernel = 512 << 20
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 1 || !warnings[0].note || !strings.Contains(warnings[0].msg, "kdump keeps 536.9 MB of memory for its crash kernel") ||
-		!strings.Contains(fixText(warnings[0].fixes), "DEVOPSY_KDUMP=off") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
+		!strings.Contains(fixText(warnings[0].fixes), "crashkernel= taken off the kernel's command line") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
 		t.Errorf("kdump: %+v\n%s", warnings, out)
 	}
 

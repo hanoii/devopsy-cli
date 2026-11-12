@@ -416,7 +416,7 @@ func toolsRefusalOf(missing []string) *setup.Refusal {
 		stops = setup.RefusalFlock
 	}
 	return &setup.Refusal{Item: toolsItem, Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
-		Fix: "install them with the system's packages (tar, util-linux), or with devopsy-server's setup.sh", Stops: stops}
+		Fix: "install them with the system's packages (tar, util-linux)", Stops: stops}
 }
 
 // releaseRootCheck is the release root's required item: there, a directory, uid's (/ is
@@ -468,7 +468,7 @@ type dockerSetup struct {
 // that is not the host's docker.service (rootless, another host's).
 func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusal) {
 	var ds dockerSetup
-	fix := "install Docker, with its compose and buildx plugins, and start it: devopsy-server's setup.sh does"
+	fix := "install Docker, with its compose and buildx plugins, and start it"
 	if d.Error != "" {
 		return ds, []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: fix}}
 	}

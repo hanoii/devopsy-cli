@@ -133,9 +133,10 @@ func processesHidden(hidepid string) bool {
 // user's processes; "" is unknown (an older server's facts, no /proc mount), never said.
 func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
 
-// processesFix is the way out of a /proc that shows every user's processes: devopsy checks it
-// and never mounts /proc, the host's hardening being devopsy-server's setup.sh's.
-const processesFix = "rerun devopsy-server's setup.sh as root: it mounts /proc with hidepid=invisible"
+// processesFix is the way out of a /proc that shows every user's processes, the setting itself
+// and the doc with its steps, never a tool that sets it: devopsy checks it and never mounts
+// /proc, the host's hardening being its admin's.
+const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root (docs/project-users.md)"
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
 // that shows project users every other user's processes (processesShown).
@@ -961,11 +962,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
-			report.Fix("kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it, rerun as root"))
+			report.Fix("kho=off on the kernel's command line, then a reboot"))
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Hint("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
+			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot"))
 	}
 	if info.RebootRequired {
 		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
@@ -1309,7 +1310,7 @@ func reflinkFix(mirrorsOff bool) report.Remedy {
 	if mirrorsOff {
 		mirror = "the server's snapshots: {mirror: false} (its devopsy config) lifted, then " + mirror
 	}
-	return report.Fix(mirror + ", or data on XFS (a new server from devopsy-server's cloud-init.yaml)")
+	return report.Fix(mirror + ", or data on XFS")
 }
 
 // diskUse is a disk as --server-info and --status say it: value its

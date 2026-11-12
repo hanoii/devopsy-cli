@@ -283,7 +283,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		"its keys: devopsy @<deploy user>@<server>: --ssh-keys --for "+project+" add <public key file>")
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
-			"devopsy-server's DEVOPSY_AUTO_REBOOT_TIME takes it, as a kernel update (/run/reboot-required)")
+			"any reboot takes it, one the server does by itself for /run/reboot-required included")
 	}
 	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts))
 	return 0
