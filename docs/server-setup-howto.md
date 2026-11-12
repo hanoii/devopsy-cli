@@ -78,8 +78,10 @@ The tools devopsy uses
 A release needs tar and flock, and --server-setup and every release refuse a
 server without them. setsid, script, mkfifo and a tail that answers
 --version each serve a part of a release or a sync, which goes without them,
-and project users need sudo, visudo and setfacl, which --project-users add
-refuses without; --server-info and --server-setup name each one missing.
+and --server-info and --server-setup warn of each one missing. Project users
+need sudo, visudo and setfacl, which --project-users add refuses without: on
+a server with project users both warn of them too, and on one without,
+--server-info only notes them.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's

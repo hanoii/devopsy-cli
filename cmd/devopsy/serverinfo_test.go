@@ -204,8 +204,11 @@ func TestServerInfoReport(t *testing.T) {
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
 		}, "", "the snapshot root /backups is on the release root's filesystem|mount the backup volume on /backups"},
 		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|install it with the system's packages, as root:\n$ devopsy --server-setup-howto tools"},
-		// The door's tools, which only --project-users add refuses without.
-		{"missing setfacl", func(i *remote.ServerInfo) { i.Missing = []string{"setfacl"} }, "", "has no setfacl: no project user can be added|$ devopsy --server-setup-howto tools"},
+		// The door's tools, which only --project-users add refuses without, on a server with
+		// project users.
+		{"missing setfacl", func(i *remote.ServerInfo) {
+			i.Missing, i.Door = []string{"setfacl"}, &remote.DoorFacts{Space: "/space", Users: 1}
+		}, "", "has no setfacl: no project user can be added|$ devopsy --server-setup-howto tools"},
 		// Held by a restarting container too, as releases and imports see
 		// it: docker ps lists it (review).
 		{"role twice", func(i *remote.ServerInfo) {
@@ -353,6 +356,35 @@ func TestServerInfoReport(t *testing.T) {
 		}
 	}
 
+	// The door's tools missing (sudo, visudo, setfacl) on a server with no project user are a
+	// line with the tools topic as a hint, never a warning, as a /proc without hidepid is: they
+	// matter once one is added, which refuses without them. Any other tool missing is a warning.
+	for name, c := range map[string]struct {
+		door *remote.DoorFacts
+		warn bool
+	}{
+		"no door":         {nil, false},
+		"no project user": {&remote.DoorFacts{Space: "/space"}, false},
+		"a project user":  {&remote.DoorFacts{Space: "/space", Users: 1}, true},
+	} {
+		info := healthy()
+		info.Door, info.Missing = c.door, []string{"sudo", "setfacl"}
+		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+		said := len(warnings) == 2 && warnings[0].msg == "the server has no sudo: no project user can be added, nor reach Docker through the door" &&
+			strings.HasPrefix(warnings[1].msg, "the server has no setfacl: ") && strings.Count(out, howto.Command(howto.Tools)) == 1
+		for _, w := range warnings {
+			said = said && w.note != c.warn && len(w.fixes) == 1 && w.fixes[0].Hint != c.warn && slices.Equal(w.fixes[0].Cmds, []string{howto.Command(howto.Tools)})
+		}
+		if !said {
+			t.Errorf("the door's tools, %s: %+v\n%s", name, warnings, out)
+		}
+	}
+	info := healthy()
+	info.Missing = []string{"mkfifo"}
+	if _, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || warnings[0].note {
+		t.Errorf("mkfifo missing, no project user: %+v", warnings)
+	}
+
 	// A project user's: Docker is the door's to answer, read not at all and no warning.
 	infoDoor := healthy()
 	infoDoor.Docker, infoDoor.Setup = remote.DockerFacts{Door: true}, nil
@@ -362,7 +394,7 @@ func TestServerInfoReport(t *testing.T) {
 
 	// What kdump keeps is a note, never a warning: crash dumps are a
 	// choice.
-	info := healthy()
+	info = healthy()
 	info.CrashKernel = 512 << 20
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 1 || !warnings[0].note || !strings.Contains(warnings[0].msg, "kdump keeps 536.9 MB of memory for its crash kernel") ||

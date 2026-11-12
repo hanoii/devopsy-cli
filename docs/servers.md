@@ -66,14 +66,16 @@ the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
 host's `docker.service`, and warns of the other tools a server needs
-when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers `--version`, and `sudo`,
-`visudo` and `setfacl` for project users). It installs none of them:
-they are the admin's ([`--server-setup-howto`](#--server-setup-howto)).
-The release root (`releases: root` in the deploy user's `config.yaml`,
-else its home, never `/`, a link to it included) it makes when missing, and gives to the deploy user when root owns it and it is
-empty (a fresh volume's `lost+found` aside); one root owns that holds
-files (a system directory), one another user owns, or one that is no
-directory, it refuses.
+when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers
+`--version`, and on a server with project users `sudo`, `visudo` and
+`setfacl`). It installs none of them: they are the admin's
+([`--server-setup-howto`](#--server-setup-howto)). The release root
+(`releases: root` in the deploy user's `config.yaml`, else its home,
+never `/`, a link to it included) it makes when missing, and gives to
+the deploy user when root owns it and it is empty (a fresh volume's
+`lost+found` aside); one root owns that holds files (a system
+directory), one another user owns, or one that is no directory, it
+refuses.
 
 A refusal stops only what needs what it refuses, and `--server-setup`
 applies the rest, says what it did not apply and why, and exits 1:
@@ -250,8 +252,9 @@ setup's items) comes once, after the last of them:
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
-- a tool the server needs, missing, `sudo`, `visudo` and `setfacl`
-  (which only project users need) among them;
+- a tool the server needs, missing, and on a server with project users
+  a missing `sudo`, `visudo` or `setfacl` (with none yet it is a line,
+  not a warning);
 - on a server with project users, a Docker without its containerd image
   store or buildx 0.33.0, on which the door refuses every image a project
   user does not build ([project users](project-users.md));

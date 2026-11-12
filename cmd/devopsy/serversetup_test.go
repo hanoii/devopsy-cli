@@ -172,20 +172,30 @@ func TestServerSetupYes(t *testing.T) {
 	}
 }
 
-// A tool the server needs that refuses nothing (the door's setfacl, a sync's mkfifo) is warned
-// of, never refused: the setup applies, their one fix, the tools topic, after the last.
+// A tool the server needs that refuses nothing (a sync's mkfifo) is warned of, never refused:
+// the setup applies, their one fix, the tools topic, after the last. The door's (setfacl) are
+// warned of only on a server with project users, and said not at all without one:
+// --project-users add refuses without them.
 func TestServerSetupWarnsOfToolsMissing(t *testing.T) {
 	t.Parallel()
 	s, _ := setupServer(t)
 	bin := filepath.Join(filepath.Dir(s.root), "bin")
-	path := pathWithout(t, pathWithout(t, bin, "setfacl"), "mkfifo")
-	out, code := s.run([]string{"PATH=" + path}, "@devopsy@one:", "--server-setup", "--yes")
-	// setfacl is the last of serverTools: the fix follows it, and only it.
-	last := "devopsy: warning: the server has no setfacl: no project user can be added, nor given its files\n" +
+	path := "PATH=" + pathWithout(t, pathWithout(t, bin, "setfacl"), "mkfifo")
+	out, code := s.run([]string{path}, "@devopsy@one:", "--server-setup", "--yes")
+	// mkfifo is the last of serverTools missing here: the fix follows it, and only it.
+	last := "devopsy: warning: the server has no mkfifo: no sync runs\n" +
 		"devopsy: | to fix it:\ndevopsy: | install it with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
-	if code != 0 || !strings.Contains(out, "devopsy: warning: the server has no mkfifo: no sync runs\ndevopsy: warning: ") || !strings.Contains(out, last) ||
+	if code != 0 || !strings.Contains(out, last) || strings.Contains(out, "setfacl") ||
 		strings.Count(out, howto.Command(howto.Tools)) != 1 || !strings.Contains(out, "this server is set up by devopsy now") {
 		t.Errorf("tools missing (%d):\n%s", code, out)
+	}
+	// With a project user, the setup's facts name setfacl too.
+	setupConfig(t, s, "door:\n  space: $HOME/space\n")
+	write(t, filepath.Join(filepath.Dir(s.root), "home", "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
+	out, code = s.run([]string{path}, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &f); err != nil || code != 0 || !slices.Contains(f.Missing, "setfacl") || !slices.Contains(f.Missing, "mkfifo") {
+		t.Errorf("facts with a project user (%d, %v): %v\n%s", code, err, f.Missing, out)
 	}
 }
 

@@ -167,7 +167,6 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
 	}
-	f.Missing = missingTools(func(t serverTool) bool { return !t.required })
 	action, refusal := releaseRootCheck(f.Root, os.Getuid())
 	f.RootAction = action
 	if refusal != nil {
@@ -226,6 +225,10 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		return rd, err
 	}
 	rd.door = d != nil
+	// The door's tools only where the server has project users: without one they matter only
+	// to --project-users add, which refuses without them.
+	projectUsers := d != nil && len(d.Users) > 0
+	f.Missing = missingTools(func(t serverTool) bool { return !t.required && (!t.door || projectUsers) })
 	allow := r.Firewall.Metadata == remote.MetadataAllow
 	f.Firewall = firewallFact(h, allow, rd.door)
 	if f.Firewall.State == setup.FirewallRefused {

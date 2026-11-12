@@ -330,9 +330,11 @@ A server needs `sudo` and `acl` installed (`sudo`, `visudo` and
 `setfacl`), the door's directory on a mount of its own, and a current
 Docker: its containerd image store, which Docker 29 uses by default on a
 fresh install, and buildx 0.33.0 or later. `add` refuses a server without
-them before it changes anything, and `--server-info` and `--server-setup`
-warn of a missing tool. The commands below address
-the server by its deploy user, `devopsy@vm1`.
+them before it changes anything. On a server with project users,
+`--server-info` and `--server-setup` warn of a missing `sudo`, `visudo`
+or `setfacl`; on one with none yet, `--server-info` notes it without a
+warning and `--server-setup` says nothing of it. The commands below
+address the server by its deploy user, `devopsy@vm1`.
 
 Every user's processes should be hidden from the others too: a process's
 command line names projects and paths, and a devopsy session's is its

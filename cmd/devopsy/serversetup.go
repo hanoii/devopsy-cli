@@ -64,8 +64,8 @@ func runServerSetup(t *remote.Target, args []string) int {
 	// The tools missing that refuse nothing, their one fix after the last, as --server-info
 	// shares it.
 	for i, name := range f.Missing {
-		if msg, fix := toolMissingWords(name); msg != "" && i == len(f.Missing)-1 {
-			report.Say(report.WarnLevel, msg, nil, fix)
+		if msg, _ := toolMissingWords(name); msg != "" && i == len(f.Missing)-1 {
+			report.Say(report.WarnLevel, msg, nil, toolsFix)
 		} else if msg != "" {
 			report.Warn(msg)
 		}

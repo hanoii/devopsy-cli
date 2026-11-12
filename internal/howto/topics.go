@@ -53,8 +53,8 @@ var Topics = []Topic{
 		Summary: "tar, flock and the other tools devopsy uses, sudo and acl",
 		Title:   "The tools devopsy uses",
 		Why: "A release needs tar and flock, and --server-setup and every release refuse a server without them. " +
-			"setsid, script, mkfifo and a tail that answers --version each serve a part of a release or a sync, which goes without them, " +
-			"and project users need sudo, visudo and setfacl, which --project-users add refuses without; --server-info and --server-setup name each one missing.",
+			"setsid, script, mkfifo and a tail that answers --version each serve a part of a release or a sync, which goes without them, and --server-info and --server-setup warn of each one missing. " +
+			"Project users need sudo, visudo and setfacl, which --project-users add refuses without: on a server with project users both warn of them too, and on one without, --server-info only notes them.",
 		Steps: []Step{
 			{"Install their packages: tar, util-linux (flock, setsid), bsdutils (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl (setfacl).", []string{
 				`apt-get update`,

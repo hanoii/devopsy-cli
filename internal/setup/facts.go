@@ -18,7 +18,7 @@ type Facts struct {
 	// Refusals are the required items that refuse, each said with its fix.
 	Refusals []Refusal `json:"refusals,omitempty"`
 	// Missing are the tools a server needs that are not there and refuse nothing (setsid,
-	// sudo), each warned of.
+	// mkfifo), each warned of, the door's (sudo) only on a server with project users.
 	Missing []string `json:"missing,omitempty"`
 	// DaemonError is why daemon.json could not be judged (not a JSON object, unreadable):
 	// its parts are then unknown, and the file is never rewritten.

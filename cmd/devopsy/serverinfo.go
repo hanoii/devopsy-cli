@@ -100,18 +100,23 @@ func toolThere(t serverTool) bool {
 }
 
 // toolMissingWords is how --server-info and --server-setup say a tool of serverTools missing
-// (name), with the tools topic's steps as the fix; "" for a name that is none of them.
-func toolMissingWords(name string) (string, report.Remedy) {
+// (name), "" for a name that is none of them, and whether it is the door's, which matters
+// only on a server with project users.
+func toolMissingWords(name string) (msg string, door bool) {
 	for _, t := range serverTools {
 		if t.name == name {
-			return "the server has no " + t.name + ": " + t.without, toolsFix
+			return "the server has no " + t.name + ": " + t.without, t.door
 		}
 	}
-	return "", report.Remedy{}
+	return "", false
 }
 
-// toolsFix is the way out of a tool missing: its package, by the tools topic's steps.
-var toolsFix = report.Fix("install it with the system's packages, as root:", howto.Command(howto.Tools))
+// toolsFixText is the way out of a tool missing, its package, by the tools topic's steps
+// (howto.Tools): a fix where it is warned of, a hint where the door's is only noted.
+const toolsFixText = "install it with the system's packages, as root:"
+
+// toolsFix is toolsFixText as a fix.
+var toolsFix = report.Fix(toolsFixText, howto.Command(howto.Tools))
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
 // waits for a reboot to take it, and the host's listeners from read, the root read of the
@@ -1188,11 +1193,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			report.Fix("mount the backup volume on "+info.SnapshotRoot))
 	}
 
-	// Tools.
+	// Tools. The door's, with no project user, are a line to know before adding one, as a
+	// /proc without hidepid is: --project-users add refuses without them.
 	key = "tools"
+	projectUsers := info.Door != nil && info.Door.Users > 0
 	for _, name := range info.Missing {
-		if msg, fix := toolMissingWords(name); msg != "" {
-			warn(msg, fix)
+		switch msg, door := toolMissingWords(name); {
+		case msg == "":
+		case door && !projectUsers:
+			note(msg, report.Hint(toolsFixText, howto.Command(howto.Tools)))
+		default:
+			warn(msg, toolsFix)
 		}
 	}
 
