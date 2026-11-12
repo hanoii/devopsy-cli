@@ -12,6 +12,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // A compose name is a project user's by the door's rule (door.Policy's OwnName): a longer
@@ -340,6 +341,36 @@ func TestCloseDeployProjects(t *testing.T) {
 	}
 	if fi, _ := os.Stat(filepath.Join(root, "note")); fi.Mode().Perm() != 0o644 {
 		t.Errorf("a file changed: %v", fi.Mode())
+	}
+}
+
+// --project-users add, once it added a project user, warns of a host that shows that user
+// every other user's processes, in --server-info's words (processesShownWarning), once; it
+// says nothing where /proc hides them or where it cannot tell. The mounts are a file of the
+// test's, as the host root puts them, never the test machine's own /proc.
+func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
+	t.Parallel()
+	msg, detail, fix := processesShownWarning()
+	warning := strings.Join(report.Lines(report.WarnLevel, msg, []string{detail}, []report.Remedy{fix}), "\n") + "\n"
+	for _, c := range []struct {
+		name, mounts string // mounts "" writes no mounts file: another system
+		warns        bool
+	}{
+		{"shown", "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n", true},
+		{"hidden", "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n", false},
+		{"hidden, by number", "proc /proc proc rw,relatime,hidepid=2 0 0\n", false},
+		{"no /proc mount", "sysfs /sys sysfs rw 0 0\n", false},
+		{"another system", "", false},
+	} {
+		h := setupHost{root: t.TempDir()}
+		if c.mounts != "" {
+			write(t, h.path(procMounts), c.mounts, 0o644)
+		}
+		var out bytes.Buffer
+		warnProcessesShown(report.New(&out, false, 0), h.path(procMounts))
+		if want := map[bool]string{true: warning}[c.warns]; out.String() != want {
+			t.Errorf("%s: said %q, want %q", c.name, out.String(), want)
+		}
 	}
 }
 

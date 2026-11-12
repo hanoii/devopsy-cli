@@ -285,6 +285,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"devopsy-server's DEVOPSY_AUTO_REBOOT_TIME takes it, as a kernel update (/run/reboot-required)")
 	}
+	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts))
 	return 0
 }
 

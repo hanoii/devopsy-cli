@@ -111,6 +111,9 @@ type DoorFacts struct {
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
 	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`
+	// HidePID is /proc's hidepid as the kernel prints it in /proc/mounts, "off" for none, ""
+	// when unknown (no /proc mount there, a devopsy older than it).
+	HidePID string `json:"hidepid,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.

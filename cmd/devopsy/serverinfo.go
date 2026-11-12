@@ -56,14 +56,18 @@ var serverTools = []struct {
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
-// waits for a reboot to take it, and the host's listeners from read, the root read of the
-// firewall ("" when none was made).
-func doorFacts(read string) *remote.DoorFacts {
+// waits for a reboot to take it, the host's listeners from read, the root read of the
+// firewall ("" when none was made), and /proc's hidepid from the mounts file at mounts ("" reads
+// none).
+func doorFacts(read, mounts string) *remote.DoorFacts {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return nil
 	}
 	f := &remote.DoorFacts{Space: d.Space, Users: len(d.Users)}
+	if mounts != "" {
+		f.HidePID = readHidePID(mounts)
+	}
 	if err := spaceGuarded(d.Space); err != nil {
 		f.Unguarded = err.Error()
 	}
@@ -77,6 +81,78 @@ func doorFacts(read string) *remote.DoorFacts {
 		f.Listeners = remote.DoorListeners(read)
 	}
 	return f
+}
+
+// procMounts is the file a host's mounts are read from, /proc's options among them, under the
+// host root (setupHost) in tests.
+const procMounts = "/proc/mounts"
+
+// procHidePID is /proc's hidepid in mounts, a /proc/mounts text, as the kernel prints it
+// (invisible, noaccess or ptraceable since Linux 5.8, 2 or 1 before it), "off" for a /proc
+// with none, which the kernel then leaves out, and "" with no proc mount on /proc. The last
+// mount on /proc is the one a path there reaches.
+func procHidePID(mounts string) string {
+	hidepid := ""
+	for _, line := range strings.Split(mounts, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[1] != "/proc" {
+			continue
+		}
+		hidepid = ""
+		if f[2] != "proc" {
+			continue
+		}
+		hidepid = "off"
+		for _, o := range strings.Split(f[3], ",") {
+			if v, ok := strings.CutPrefix(o, "hidepid="); ok {
+				hidepid = v
+			}
+		}
+	}
+	return hidepid
+}
+
+// readHidePID is procHidePID of the mounts file at path, "" where it cannot be read (a system
+// with no /proc, macOS).
+func readHidePID(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return procHidePID(string(data))
+}
+
+// processesHidden says whether hidepid keeps a user from what other users' processes run:
+// invisible (2) and ptraceable (4) hide the processes, and noaccess (1) shows only that each is
+// there and whose, closing everything under /proc/<pid>, its command line included.
+func processesHidden(hidepid string) bool {
+	switch hidepid {
+	case "invisible", "2", "ptraceable", "4", "noaccess", "1":
+		return true
+	}
+	return false
+}
+
+// processesShown says whether hidepid, as procHidePID reads it, shows a project user every other
+// user's processes; "" is unknown (an older server's facts, no /proc mount), never said.
+func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
+
+// processesShownWarning is the one wording, in --server-info and --project-users add, of a host
+// that shows project users every other user's processes (processesShown): devopsy checks it and
+// never mounts /proc, the host's hardening being devopsy-server's setup.sh's.
+func processesShownWarning() (msg, detail string, fix report.Remedy) {
+	return "other users' processes are not hidden from project users (/proc mounted without hidepid=invisible)",
+		"a project user reads every process's command line, the deploy user's and other projects' included, and a command line can hold a secret",
+		report.Fix("/proc mounted with hidepid=invisible, its gid= a group the deploy user is in: devopsy-server's setup.sh mounts it so, rerun as root")
+}
+
+// warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
+// shows project users every other user's processes, nothing where it hides them or cannot tell.
+func warnProcessesShown(l *report.Logger, mounts string) {
+	if processesShown(readHidePID(mounts)) {
+		msg, detail, fix := processesShownWarning()
+		l.Say(report.WarnLevel, msg, []string{detail}, fix)
+	}
 }
 
 // doorFirewall runs script as root on the host with its network, through the util image
@@ -126,11 +202,12 @@ func serverFacts() (remote.ServerInfo, error) {
 	// an install's even where the setup cannot be read; a project user's, whose server's setup
 	// is its admin's and whose docker is the door, none of it nor of Docker but what the door
 	// tells (projectUserFacts): the door would refuse Docker's reads and log each.
-	read := ""
+	read, mounts := "", ""
 	if asProjectUser() {
 		info.Docker.Door = true
 		projectUserFacts(&info, askDoorFirewall)
 	} else {
+		mounts = h.path(procMounts)
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
 		if rd, err := readSetup(h, hd); err == nil {
@@ -140,7 +217,7 @@ func serverFacts() (remote.ServerInfo, error) {
 			read = readChains(&setup.FirewallFact{Loaded: kind}, dockerHere(hd.facts), false)
 		}
 	}
-	info.Door = doorFacts(read)
+	info.Door = doorFacts(read, mounts)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -933,6 +1010,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),
 				Remedies: []report.Remedy{report.Fix("make each listen on 127.0.0.1, which no container reaches")}})
+		}
+		// Only where a project user is there to read them: without one every login is the
+		// deploy user's or an admin's.
+		if dr.Users > 0 && processesShown(dr.HidePID) {
+			msg, detail, fix := processesShownWarning()
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: []report.Remedy{fix}})
 		}
 	}
 

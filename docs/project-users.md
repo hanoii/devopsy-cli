@@ -323,7 +323,12 @@ command line names projects and paths, and a devopsy session's is its
 whole script, the operator's command in it. devopsy-server's setup does
 it; on a server set up otherwise, mount `/proc` as its [Other users'
 processes](https://github.com/hanoii/devopsy-server/blob/main/docs/things-to-know.md#other-users-processes)
-says, the deploy user in the group that sees them all.
+says, the deploy user in the group that sees them all. devopsy only
+checks it: `add`, and `--server-info` on a server with project users,
+warn when `/proc` has no `hidepid` of `invisible`, `ptraceable` or
+`noaccess` (`2`, `4` or `1` on an older kernel), and go on.
+`noaccess` shows that a process is there and whose it is, never its
+command line.
 
 A server set up earlier on Docker's classic image store can be moved to
 the containerd one, at a cost: no image and no container shows on the
@@ -402,7 +407,8 @@ in that root, and says which.
 `--project-users` lists the project users, whether each Unix user is
 there, and how many keys each has. `--server-info` also checks that
 `<space>` is mounted `nosuid,nodev`, that Docker has the containerd
-image store and buildx 0.33.0, and whether sshd waits for a reboot.
+image store and buildx 0.33.0, that other users' processes are hidden
+from project users, and whether sshd waits for a reboot.
 
 ## Releasing as a project user
 

@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +53,36 @@ func TestServerFactsParsers(t *testing.T) {
 	}
 	if err := parseDockerInfo([]byte(`{"ServerErrors":["Cannot connect to the Docker daemon"]}`), &d); err == nil || !strings.Contains(err.Error(), "Cannot connect") {
 		t.Errorf("daemon down: %v", err)
+	}
+	// /proc's hidepid, as /proc/mounts prints it: the kernel's names since 5.8 and its numbers
+	// before, none printed for off; the last mount on /proc counts, never one below it (Docker
+	// mounts /proc/sys and others), and no proc mount there is unknown.
+	const mounts = "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n%s\nproc /proc/sys proc ro,nosuid,nodev,noexec,relatime 0 0\n"
+	for line, want := range map[string]string{
+		"proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0": "invisible",
+		"proc /proc proc rw,nosuid,nodev,noexec,relatime,hidepid=2,gid=990 0 0":         "2",
+		"proc /proc proc rw,relatime,gid=990,hidepid=ptraceable 0 0":                    "ptraceable",
+		"proc /proc proc rw,relatime,gid=990,hidepid=noaccess 0 0":                      "noaccess",
+		"proc /proc proc rw,relatime,hidepid=1 0 0":                                     "1",
+		"proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0":                           "off",
+		"proc /proc proc rw,hidepid=invisible 0 0\nproc /proc proc rw,relatime 0 0":     "off",
+		"proc /proc proc rw,relatime 0 0\nproc /proc proc rw,hidepid=invisible 0 0":     "invisible",
+		"tmpfs /proc tmpfs rw 0 0":                                                      "",
+		"proc /var/lib/x/proc proc rw,hidepid=off 0 0":                                  "",
+		"/dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 0":                            "",
+	} {
+		if got := procHidePID(fmt.Sprintf(mounts, line)); got != want {
+			t.Errorf("hidepid of %q: %q, want %q", line, got, want)
+		}
+	}
+	for hidepid, hidden := range map[string]bool{"invisible": true, "2": true, "ptraceable": true, "4": true, "noaccess": true, "1": true, "off": false, "0": false} {
+		if processesHidden(hidepid) != hidden || processesShown(hidepid) == hidden {
+			t.Errorf("hidepid=%s: hidden %v, shown %v", hidepid, processesHidden(hidepid), processesShown(hidepid))
+		}
+	}
+	// Another system, with no /proc (macOS): unknown, never said.
+	if got := readHidePID(filepath.Join(t.TempDir(), "proc", "mounts")); got != "" || processesShown(got) {
+		t.Errorf("no mounts file: %q", got)
 	}
 	cs := parseHostContainers([]byte("running 0 healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - null\nexited 2 - {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"))
 	if len(cs) != 3 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[0].OneOff ||
@@ -138,6 +169,11 @@ func TestServerInfoReport(t *testing.T) {
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
+		// Project users on a host that shows them every user's processes: what it exposes, and
+		// devopsy-server's setup.sh, which mounts /proc so, as the fix.
+		{"door processes shown", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Users: 2, HidePID: "off"}
+		}, "", "other users' processes are not hidden from project users (/proc mounted without hidepid=invisible)\na project user reads every process's command line, the deploy user's and other projects' included|/proc mounted with hidepid=invisible, its gid= a group the deploy user is in: devopsy-server's setup.sh mounts it so, rerun as root"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
@@ -280,6 +316,21 @@ func TestServerInfoReport(t *testing.T) {
 	info0.Time = now.Add(42 * time.Second).UnixNano()
 	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "clock synchronized, about 42 s ahead of local") {
 		t.Errorf("clock ahead: %+v\n%s", warnings, out)
+	}
+
+	// Other users' processes are said only where project users could read them: never with
+	// them hidden (a name, a number, noaccess's closed /proc/<pid>), with no project user, or
+	// unknown (an older server's facts, a project user's, which hold none).
+	for name, door := range map[string]remote.DoorFacts{
+		"hidden": {Users: 2, HidePID: "invisible"}, "hidden, by number": {Users: 2, HidePID: "2"}, "noaccess": {Users: 2, HidePID: "noaccess"},
+		"no project user": {HidePID: "off"}, "unknown": {Users: 2},
+	} {
+		info := healthy()
+		door.Space = "/space"
+		info.Door = &door
+		if out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || strings.Contains(out, "processes") {
+			t.Errorf("door, %s: %+v\n%s", name, warnings, out)
+		}
 	}
 
 	// A project user's: Docker is the door's to answer, read not at all and no warning.
