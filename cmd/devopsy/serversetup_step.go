@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -429,7 +430,7 @@ func toolsRefusalOf(missing []string) *setup.Refusal {
 		stops = setup.RefusalFlock
 	}
 	return &setup.Refusal{Item: toolsItem, Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
-		Fix: "install them with the system's packages (tar, util-linux)", Stops: stops}
+		Fix: "install them with the system's packages (tar, util-linux), as root", Howto: howto.Tools, Stops: stops}
 }
 
 // releaseRootCheck is the release root's required item: there, a directory, uid's (/ is
@@ -481,16 +482,16 @@ type dockerSetup struct {
 // that is not the host's docker.service (rootless, another host's).
 func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusal) {
 	var ds dockerSetup
-	fix := "install Docker, with its compose and buildx plugins, and start it"
+	fix := "install Docker, with its compose and buildx plugins, and start it, as root"
 	if d.Error != "" {
-		return ds, []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: fix}}
+		return ds, []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: fix, Howto: howto.Docker}}
 	}
 	var refusals []setup.Refusal
 	if d.Compose == "" {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: fix, Stops: setup.RefusalPlugins})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: fix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
 	}
 	if !d.Buildx {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: fix, Stops: setup.RefusalPlugins})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: fix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
 	}
 	// Whether Docker is this host's, judged with or without systemd, so its refusal and fix
 	// are said beside one of systemd's.
@@ -502,7 +503,7 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 		return ds, refusals
 	}
 	if state := systemctlShow("ActiveState"); state != "active" {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix, Howto: howto.Docker})
 	}
 	// The daemon's own flags, as docker.service starts it next: a key one sets is never put
 	// beside it, and a config file of its own is not daemon.json.
@@ -907,7 +908,7 @@ func applySetup(h setupHost, a setupApply) int {
 // refusalWords is how every command says a refusal of the setup's: its item and message, its
 // fix.
 func refusalWords(r setup.Refusal) (string, []report.Remedy) {
-	return r.Item + ": " + r.Message, fixWords(r.Fix)
+	return r.Item + ": " + r.Message, fixWords(r)
 }
 
 // daemonWords is how every command says a daemon.json devopsy cannot judge (why, the facts'
@@ -936,12 +937,16 @@ func sayLevel(upgrade bool) report.Level {
 	return report.ErrorLevel
 }
 
-// fixWords is a refusal's fix as a remedy, none when it has none.
-func fixWords(fix string) []report.Remedy {
-	if fix == "" {
+// fixWords is a refusal's fix as a remedy, none when it has none: its text, and the command that
+// prints its topic's steps when it has one (setup.Refusal.Howto).
+func fixWords(r setup.Refusal) []report.Remedy {
+	switch {
+	case r.Fix == "":
 		return nil
+	case r.Howto == "":
+		return []report.Remedy{report.Fix(r.Fix)}
 	}
-	return []report.Remedy{report.Fix(fix)}
+	return []report.Remedy{report.Fix(r.Fix+":", howto.Command(r.Howto))}
 }
 
 // rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,
@@ -1141,7 +1146,7 @@ func serverReady(root, ref string, projectUser bool) []error {
 	}
 	var errs []error
 	if t := toolsRefusal(); t != nil {
-		errs = append(errs, &report.Failure{Msg: t.Message + ": nothing released", Remedies: fixWords(t.Fix)})
+		errs = append(errs, &report.Failure{Msg: t.Message + ": nothing released", Remedies: fixWords(*t)})
 	}
 	if err := releaseRootReady(root, "nothing released", ref); err != nil {
 		errs = append(errs, err)
@@ -1157,7 +1162,7 @@ func releaseRootReady(root, nothing, ref string) error {
 	setUp := setupFix(ref, "set the server up:", "set the server up with --server-setup first, which makes it the deploy user's")
 	switch {
 	case refusal != nil:
-		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(refusal.Fix)}
+		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(*refusal)}
 	case action != "":
 		return &report.Failure{Msg: rootWords(root, action) + ": " + nothing, Remedies: []report.Remedy{setUp}}
 	}

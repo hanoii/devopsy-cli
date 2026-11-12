@@ -3,6 +3,8 @@ package setup
 import (
 	"fmt"
 	"slices"
+
+	"github.com/hanoii/devopsy-cli/internal/howto"
 )
 
 // Facts is what a server's devopsy finds of its setup, read-only: the required items that
@@ -57,6 +59,9 @@ type Refusal struct {
 	Item    string `json:"item"`
 	Message string `json:"message"`
 	Fix     string `json:"fix,omitempty"`
+	// Howto is the topic of devopsy --server-setup-howto that has the fix's steps, "" for none:
+	// the operator's devopsy offers its command after the fix's text (fixWords).
+	Howto howto.Name `json:"howto,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
 	// file).

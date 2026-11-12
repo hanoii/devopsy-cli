@@ -301,20 +301,21 @@ func TestServerSetupApplyAnswers(t *testing.T) {
 
 // The apply says every refusal the first session did not (--said names those it said, by
 // their identities): one new between the two sessions (Docker gone, a tool removed) is said
-// with its fix, and one already said is not said twice in the run.
+// with its fix, the command of its topic's steps after the fix's text, and one already said is
+// not said twice in the run.
 func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
-		env  func(t *testing.T, host string) []string
-		want string
+		env       func(t *testing.T, host string) []string
+		want, fix string
 	}{
 		"Docker down": {func(t *testing.T, host string) []string {
 			write(t, filepath.Join(host, "docker-down"), "", 0o644)
 			return nil
-		}, "Docker's daemon does not answer"},
+		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it, as root:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
 		"tar missing": {func(t *testing.T, host string) []string {
 			return []string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), "tar")}
-		}, "no tar in PATH"},
+		}, "no tar in PATH", "install them with the system's packages (tar, util-linux), as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -322,8 +323,8 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 			env := c.env(t, host)
 			// The first session read no refusal, and so said none: its apply, as it runs it.
 			out, code := s.run(env, remote.ServerSetupFlag, "apply", "--said")
-			if code != 1 || !strings.Contains(out, c.want) {
-				t.Errorf("a refusal new in the apply (%d), want %q:\n%s", code, c.want, out)
+			if code != 1 || !strings.Contains(out, c.want) || !strings.Contains(out, "devopsy: | "+c.fix) {
+				t.Errorf("a refusal new in the apply (%d), want %q and %q:\n%s", code, c.want, c.fix, out)
 			}
 			// Both sessions, the refusal there in each: said once.
 			if out, _ := s.run(env, "@devopsy@one:", "--server-setup", "--yes"); strings.Count(out, c.want) != 1 {

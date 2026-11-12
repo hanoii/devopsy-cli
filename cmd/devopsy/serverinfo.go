@@ -1004,8 +1004,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	more(strings.Join(hw, ", "))
 	// Memory the kernel keeps from the rest, which MemTotal leaves out
-	// (kdump's) or counts (Kexec HandOver's): devopsy-server's setup.sh
-	// frees both.
+	// (kdump's) or counts (Kexec HandOver's).
 	var kept []string
 	if info.KHOScratch > 0 {
 		kept = append(kept, humanBytes(info.KHOScratch)+" for Kexec HandOver")
@@ -1018,11 +1017,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
-			report.Fix("kho=off on the kernel's command line, then a reboot"))
+			report.Fix("kho=off on the kernel's command line, then a reboot, as root:", howto.Command(howto.KexecHandOver)))
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot"))
+			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot, as root:", howto.Command(howto.Kdump)))
 	}
 	if info.RebootRequired {
 		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
@@ -1081,7 +1080,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		if dr.Docker != "" {
 			warn(dr.Docker+": the door refuses every image a project user does not build",
-				report.Fix("move Docker to its containerd image store and a current buildx (docs/project-users.md)"))
+				doorDockerFix)
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",

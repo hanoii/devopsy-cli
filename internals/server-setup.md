@@ -121,6 +121,7 @@
 - `--server-setup-howto [<topic>]` is local and prints only, on stdout, plain: the topics without one, a topic's steps with its name; it needs no server, project or Docker, so a fix's command runs wherever it is copied.
 - A topic is one thing devopsy checks on a server and cannot set up, a `howto.Topic` in `howto.Topics`, its name a `howto.Name` constant; what one command or one package fixes, or devopsy fixes itself, has none.
 - Every fix for a topic's setting offers `howto.Command` of its constant, never the flag spelled again (`TestFlagSpelledOnce`, `TestConstantsAreTopics`).
+- A refusal of the setup names its topic in `setup.Refusal.Howto`, since it crosses the wire as JSON with its fix a string, and the operator's devopsy offers the topic's command after the fix's text (`fixWords`).
 - A topic's commands are copyable as they are: a value the admin chooses is a variable set on the step's first line with its usual value, a system's value computed, never a `<word>` to replace.
 - A topic's steps are generic for Debian and Ubuntu with systemd, say where the two differ, and leave out choices of one way to set up a server (the deploy user's making, swap, unattended upgrades); no topic names a tool that does them.
 - Each topic ends with its check: the `--server-info` line that goes away, else a command whose output shows it.

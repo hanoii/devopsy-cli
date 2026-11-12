@@ -166,7 +166,7 @@ func TestServerInfoReport(t *testing.T) {
 		// A Docker the door cannot claim with: the classic image store, an old buildx.
 		{"door docker", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Docker: "Docker runs the classic image store, and project users need its containerd image store (io.containerd.snapshotter.v1)"}
-		}, "", "the door refuses every image a project user does not build|move Docker to its containerd image store"},
+		}, "", "the door refuses every image a project user does not build|move Docker to its containerd image store and a current buildx, as root:\n$ devopsy --server-setup-howto project-users"},
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
@@ -181,7 +181,7 @@ func TestServerInfoReport(t *testing.T) {
 			i.NTP, i.NTPService, i.Time = "no", "yes", now.Add(-800*time.Millisecond).UnixNano()
 		}, "", "clock is not synchronized (about 0.8 s behind local)|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
-		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot"},
+		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot, as root:\n$ devopsy --server-setup-howto kexec-handover"},
 		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
 		{"no compose", func(i *remote.ServerInfo) { i.Docker.Compose = "" }, "", "docker compose is missing|docker-compose-plugin"},
 		// Docker lists apparmor whenever the kernel has it, and needs
@@ -366,7 +366,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.CrashKernel = 512 << 20
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 1 || !warnings[0].note || !strings.Contains(warnings[0].msg, "kdump keeps 536.9 MB of memory for its crash kernel") ||
-		!strings.Contains(fixText(warnings[0].fixes), "crashkernel= taken off the kernel's command line") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
+		!strings.Contains(fixText(warnings[0].fixes), "crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot, as root:\n$ devopsy --server-setup-howto kdump\n") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
 		t.Errorf("kdump: %+v\n%s", warnings, out)
 	}
 

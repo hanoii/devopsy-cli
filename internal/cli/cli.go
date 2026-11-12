@@ -18,6 +18,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/template"
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
@@ -1080,8 +1081,10 @@ Sets up the server for devopsy, as its deploy user, the server named with
 its user (@devopsy@vm1:): root's steps go through devopsy's util image.
 It refuses what the server lacks (tar, flock, Docker with compose and
 buildx under systemd as docker.service, a release root of the deploy
-user's) and says why; a refusal stops only what needs it, the rest
-applied, and the run then exits 1.
+user's) and says why, and warns of the other tools a server needs; a
+refusal stops only what needs it, the rest applied, and the run then
+exits 1. It installs none of them: devopsy ` + howto.Flag + ` prints
+the steps, as root, for what it checks and does not set up.
 
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
@@ -1225,7 +1228,9 @@ deploy user's devopsy through sudo, and that one checks every request, so
 a project user's leaked key reaches its project and not the server or
 the others. Asked as the deploy user, the server named with its user
 (@devopsy@vm1:). The server needs a door: space: first, a directory on a
-mount of its own with nosuid and nodev (docs/project-users.md).
+mount of its own with nosuid and nodev, sudo and acl, and Docker's
+containerd image store: devopsy ` + howto.Flag + ` prints the steps,
+as root (its project-users and tools topics).
 
   --project-users           list them: project, whether the Unix user is
                             there, how many keys
