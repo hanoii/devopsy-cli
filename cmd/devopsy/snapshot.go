@@ -297,7 +297,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		// And the release snapshots whose release is gone, as a take's
 		// pruning removes them (counts need the environment's keeps,
 		// which only a take is sent).
-		pruneGone(cwd, p, 10*time.Minute)
+		pruneGone(p, snapshotRemover(cwd, p, 10*time.Minute))
 		return code
 	case "make-release":
 		if len(args) != 3 {
@@ -393,7 +393,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		// The release current is now (the activation's or the one it went
 		// back to): what its run step left of the record is no take's.
-		pruneSnapshots(filepath.Join(p.base, "current"), p, 10*time.Minute)
+		pruneSnapshots(p, snapshotRemover(filepath.Join(p.base, "current"), p, 10*time.Minute))
 		return 0
 	case "release-record":
 		// After a release's switch (live): its snapshot's lines become
@@ -425,7 +425,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		if err := snapshotTar(cwd, p, args[1]); err != nil {
 			return fail(err.Error())
 		}
-		pruneSnapshots(cwd, p, 0)
+		pruneSnapshots(p, snapshotRemover(cwd, p, 0))
 		return 0
 	}
 	return fail("unknown " + remote.SnapshotStepFlag + " word: " + args[0])
@@ -1116,7 +1116,11 @@ func removeSnapshot(cwd string, p snapshotPaths, id string) error {
 	if !remote.ReleaseIDFormat.MatchString(id) || !fileExists(filepath.Join(dir, remote.SnapshotManifest)) {
 		return errors.New("no snapshot " + id + ": nothing removed")
 	}
-	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore && m.From == id {
+	marked, err := restoreMarked(p.base)
+	if err != nil {
+		return fmt.Errorf("%w: nothing removed", err)
+	}
+	if marked == id {
 		return &report.Failure{Msg: "the restore of snapshot " + id + " did not complete: it stays until a restore completes", Remedies: restoreRemedies(cwd, id)}
 	}
 	report.Info("removing snapshot " + id)
@@ -1328,8 +1332,8 @@ func removeIfThere(path string) error {
 // gone and the oldest past theirs (remote.SnapshotReleaseKeepEnv,
 // remote.KeepAll for every one whose release is kept), never the one a
 // restore's mark names (running that restore again is the way out of
-// it; it still counts). wait bounds a wait for the image lock.
-func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
+// it; it still counts), each by remove (snapshotRemover).
+func pruneSnapshots(p snapshotPaths, remove func(id, why string) bool) {
 	keep, _ := strconv.Atoi(os.Getenv(remote.SnapshotKeepEnv))
 	if keep < 1 {
 		keep = remote.DefaultManualSnapshots.Keep
@@ -1338,17 +1342,10 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 		report.Warn(fmt.Sprintf("keeping %d snapshots, this server's snapshots: max_keep, not %d", r.Snapshots.MaxKeep, keep))
 		keep = r.Snapshots.MaxKeep
 	}
-	marked := ""
-	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore {
-		marked = m.From
-	}
-	remove := func(id, why string) bool {
-		report.Info("removing snapshot " + id + " (" + why + ")")
-		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, id), wait); err != nil {
-			report.Warn(err.Error())
-			return false
-		}
-		return true
+	marked, err := restoreMarked(p.base)
+	if err != nil {
+		report.Warn(err.Error() + ": nothing pruned")
+		return
 	}
 	ids := manualSnapshots(p)
 	for n := len(ids); n > keep; n-- {
@@ -1365,7 +1362,7 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 	if err != nil || rkeep == 0 {
 		rkeep = remote.DefaultReleaseSnapshots.Keep
 	}
-	if !pruneGone(cwd, p, wait) {
+	if !pruneGone(p, remove) {
 		return
 	}
 	// Every one counts, a release tried again keeping its own: the one
@@ -1387,25 +1384,62 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 	}
 }
 
-// pruneGone removes, under the snapshot lock, every release snapshot
-// whose release is gone, never the one a restore's mark names; false
-// when a removal failed (said).
-func pruneGone(cwd string, p snapshotPaths, wait time.Duration) bool {
-	marked := ""
-	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore {
-		marked = m.From
+// snapshotRemover is how pruning removes a snapshot of p by its id: said
+// with why, a failure warned, false then. wait bounds a wait for the
+// image lock.
+func snapshotRemover(cwd string, p snapshotPaths, wait time.Duration) func(id, why string) bool {
+	return func(id, why string) bool {
+		report.Info("removing snapshot " + id + " (" + why + ")")
+		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, id), wait); err != nil {
+			report.Warn(err.Error())
+			return false
+		}
+		return true
+	}
+}
+
+// pruneGone removes by remove (snapshotRemover), under the snapshot
+// lock, every release snapshot whose release is gone, never the one a
+// restore's mark names; false when a removal failed (said).
+// A release that does not stat, but for not being there, is never read as
+// gone: the snapshot stays, and nothing more is pruned (false, said).
+func pruneGone(p snapshotPaths, remove func(id, why string) bool) bool {
+	marked, err := restoreMarked(p.base)
+	if err != nil {
+		report.Warn(err.Error() + ": nothing pruned")
+		return false
 	}
 	for _, rs := range releaseSnapshots(p) {
-		if rs.id == marked || fileExists(filepath.Join(p.base, "releases", rs.release)) {
+		if rs.id == marked {
 			continue
 		}
-		report.Info("removing snapshot " + rs.id + " (its release " + rs.release + " is gone)")
-		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, rs.id), wait); err != nil {
-			report.Warn(err.Error())
+		_, err := os.Lstat(filepath.Join(p.base, "releases", rs.release))
+		switch {
+		case err == nil:
+			continue
+		case !errors.Is(err, os.ErrNotExist):
+			report.Warn("snapshot "+rs.id+" stays, and nothing more is pruned: whether its release "+rs.release+" is gone does not read", err.Error())
+			return false
+		}
+		if !remove(rs.id, "its release "+rs.release+" is gone") {
 			return false
 		}
 	}
 	return true
+}
+
+// restoreMarked is the snapshot a restore's mark at base names, "" for
+// none; an error when the mark is there and does not read: it may name
+// any snapshot, the one a restore that did not complete runs again from.
+func restoreMarked(base string) (string, error) {
+	m, err := markOf(base)
+	if err != nil {
+		return "", err
+	}
+	if m.IsRestore() {
+		return m.From, nil
+	}
+	return "", nil
 }
 
 // releaseSnapshot is a release snapshot's id and the release it belongs

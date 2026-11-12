@@ -1665,13 +1665,25 @@ func clearImportMark(base, name string) {
 	}
 }
 
-// readMark is the environment's mark at base, nil without one.
+// readMark is the environment's mark at base, nil without one or when it
+// does not read (markOf).
 func readMark(base string) *remote.Incomplete {
-	data, err := os.ReadFile(filepath.Join(base, remote.SyncIncompleteFile))
-	if err != nil {
-		return nil
+	m, _ := markOf(base)
+	return m
+}
+
+// markOf is the environment's mark at base, nil without one; an error
+// when it is there and does not read.
+func markOf(base string) (*remote.Incomplete, error) {
+	path := filepath.Join(base, remote.SyncIncompleteFile)
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("the environment's mark does not read: %w", err)
 	}
-	return remote.ParseMark(string(data))
+	return remote.ParseMark(string(data)), nil
 }
 
 // runResolved implements devopsy --import <service> --resolved on a

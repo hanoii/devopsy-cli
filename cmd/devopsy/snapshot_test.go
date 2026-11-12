@@ -928,10 +928,48 @@ func TestPruneKeepsRestoreMarkedSnapshot(t *testing.T) {
 	for _, id := range ids {
 		write(t, filepath.Join(p.snaps, id, remote.SnapshotManifest), "format\t1\nkind\tmanual\n", 0o600)
 	}
-	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-25 00:00:00", ids[0], remote.IncompleteRestore, "the restore of snapshot "+ids[0]+" did not complete"), 0o644)
-	pruneSnapshots(filepath.Join(base, "current"), p, 0)
-	if !fileExists(filepath.Join(p.snaps, ids[0])) {
-		t.Errorf("the snapshot the restore's mark names (%s) was pruned; left: %v", ids[0], manualSnapshots(p))
+	mark := filepath.Join(base, remote.SyncIncompleteFile)
+	write(t, mark, remote.IncompleteLine("2026-10-25 00:00:00", ids[0], remote.IncompleteRestore, "the restore of snapshot "+ids[0]+" did not complete"), 0o644)
+	var removed []string
+	remove := func(id, why string) bool { removed = append(removed, id); return true }
+	pruneSnapshots(p, remove)
+	if !slices.Equal(removed, ids[1:2]) {
+		t.Errorf("pruned %v: the oldest past the keep but the one the restore's mark names (%s)", removed, ids[0])
+	}
+	// A mark that does not read may name any of them: none is pruned.
+	if err := os.Remove(mark); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(mark, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed = nil
+	pruneSnapshots(p, remove)
+	if len(removed) != 0 {
+		t.Errorf("with a mark that does not read, pruned %v", removed)
+	}
+	if err := removeSnapshot(filepath.Join(base, "current"), p, ids[0]); err == nil || !strings.Contains(err.Error(), "mark") || !fileExists(filepath.Join(p.snaps, ids[0])) {
+		t.Errorf("removed by hand beside a mark that does not read: %v", err)
+	}
+	// A release snapshot goes once its release is gone, never while whether it is does not
+	// read.
+	base = t.TempDir()
+	p = snapshotPaths{base: base, snaps: filepath.Join(base, "snapshots"), mirror: filepath.Join(base, "snapshots", remote.SnapshotMirror)}
+	for id, release := range map[string]string{"20261025000001": "20261024000001", "20261025000002": "20261024000002"} {
+		write(t, filepath.Join(p.snaps, id, remote.SnapshotManifest), "format\t1\nkind\trelease\nrelease\t"+release+"\n", 0o600)
+	}
+	write(t, filepath.Join(base, "releases", "20261024000002", "devopsy-target.env"), "", 0o644)
+	removed = nil
+	if !pruneGone(p, remove) || !slices.Equal(removed, []string{"20261025000001"}) {
+		t.Errorf("release snapshots pruned: %v", removed)
+	}
+	if err := os.RemoveAll(filepath.Join(base, "releases")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(base, "releases"), "not a directory\n", 0o644)
+	removed = nil
+	if pruneGone(p, remove) || len(removed) != 0 {
+		t.Errorf("with the releases not read, pruned %v", removed)
 	}
 }
 

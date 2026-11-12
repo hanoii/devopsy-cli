@@ -81,7 +81,8 @@
 ## The restore mark
 
 - A restore's mark (`remote.IncompleteRestore`, its `From` the snapshot) is branched on by every reader of marks (`markRefusal`, the restart skip, `syncBlock`, `ImportScript`, the operator's release check, the parent check, `--status`, `--export`'s warning, `--import`, and `--resolved`, which refuses it as for imports only), with `RestoreFixes`.
-- The snapshot a restore's mark names stays until the mark goes.
+- The snapshot a restore's mark names stays until the mark goes, and a mark that does not read keeps every snapshot (`restoreMarked`): pruning removes none, and `--snapshots remove` refuses.
+- A release snapshot goes only once its release is not there; a release that does not stat for another reason keeps it and stops the pruning (`pruneGone`).
 - A sync clears it only by copying every service of the snapshot, all of each: the child's list prints a `!restore` line per service from the manifest, and the push checks each with `copiesService`, refusing before it stops anything otherwise.
 - A cut copy over a restore's mark stays partial and the mark stays the restore's: a sync's copy mark over it would let the next plain sync clear it.
 - Every sync needs `restoreMarkNeed` of the parent's devopsy (`syncPreflight`), so a parent that cannot read the mark refuses before anything changes.
