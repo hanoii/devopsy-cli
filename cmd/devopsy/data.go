@@ -1495,6 +1495,10 @@ func (r importRun) write(ctx context.Context) error {
 	if err == nil && (r.onTarget || runtime.GOOS != "darwin") {
 		err = ownMnt(ctx, r.tar.mnt, ownedEntries(r.owners, r.tar.names), cname.with("-owners"))
 	}
+	// Its owned volumes' roots too, on macOS as well: volumes keep real owners there.
+	if err == nil {
+		err = ownProjectVolumes(ctx, r.cwd, cname.with("-owners"))
+	}
 	return err
 }
 

@@ -241,6 +241,17 @@ func ownVolumes(ctx context.Context, cwd, project string, owned map[string]cli.O
 	return nil
 }
 
+// ownProjectVolumes gives the roots of the project at cwd's owned volumes (ownVolumes), after
+// what writes into its data (an import, a restore, a sync's finish): a tar or a copy carries its
+// maker's owners, the root's included.
+func ownProjectVolumes(ctx context.Context, cwd string, c container) error {
+	owned, err := projectOwners(cwd)
+	if err != nil {
+		return err
+	}
+	return ownVolumes(ctx, cwd, composeName(cwd), owned.volumes, owned.services, c)
+}
+
 // ownVolume is ownVolumes' container for the volume v, as c.
 func ownVolume(ctx context.Context, c container, v cli.OwnedVolume) error {
 	if err := dockerRunFresh(ctx, c, "--network", "none", "-v", v.Name+":/vol/"+v.Key, remote.UtilImage, "sh", "-c", ownVolumeRoot, "sh", v.Key, v.Owner); err != nil {

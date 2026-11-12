@@ -367,7 +367,12 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 			mappedTo = append(mappedTo, env, project)
 		}
 	}
+	// A form that maps owners takes its uids at fixed places: a command short of them is
+	// none of devopsy's.
 	for _, i := range f.mapped {
+		if i >= len(cmd) {
+			return nil, refuse("docker run: %s: without the uids it maps owners to", f.name)
+		}
 		mappedTo = append(mappedTo, cmd[i])
 	}
 	for _, uid := range mappedTo {

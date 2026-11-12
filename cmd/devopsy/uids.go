@@ -130,9 +130,11 @@ func claimedUIDs(claims []uids.Claim) []uint32 {
 }
 
 // dirOwners are the environments of project a request's directory real, in its tree tree,
-// may be of, those claims holds: <tree>/<environment>/... and <tree>/<instance>/<environment>/...
-// (both read from the path, the same tenant's either way), never what a file's name picks.
-func dirOwners(project, tree, real string, claims []uids.Claim) []uids.Owner {
+// is of, those claims holds whose compose name is name, the file's: <tree>/<environment>/...
+// or <tree>/<instance>/<environment>/..., read from the path, never what a file's name picks
+// alone, and never a name the directory is not: a --destroy takes an environment's
+// containers down by its name, so a container on its uid under another would outlive its free.
+func dirOwners(project, tree, real, name string, claims []uids.Claim) []uids.Owner {
 	rel, ok := strings.CutPrefix(real, strings.TrimRight(tree, "/")+"/")
 	if !ok {
 		return nil
@@ -149,7 +151,7 @@ func dirOwners(project, tree, real string, claims []uids.Claim) []uids.Owner {
 	}
 	var owners []uids.Owner
 	for _, o := range candidates {
-		if slices.ContainsFunc(claims, func(c uids.Claim) bool { return c.Owner == o }) {
+		if o.ComposeName() == name && slices.ContainsFunc(claims, func(c uids.Claim) bool { return c.Owner == o }) {
 			owners = append(owners, o)
 		}
 	}
@@ -332,12 +334,12 @@ func keepAcrossExec(locks []*uids.Lock) error {
 }
 
 // startLocks takes, shared, the start locks of the environments a request's directory real
-// is of (dirOwners) and of their projects, then reads the project's claims again under them,
+// and its file's name are of (dirOwners) and of their projects, then reads the project's claims again under them,
 // for the check and the exec that follow, and the owners then: a --destroy frees a claim only
 // with its lock exclusive. When the owners changed in between (one claimed or freed
 // meanwhile), it takes them again. A side with no claims directory (a test's) takes none.
-func (s *doorSide) startLocks(real string) ([]uids.Owner, []*uids.Lock, error) {
-	owners := dirOwners(s.policy.Project, s.policy.Tree, real, s.claims)
+func (s *doorSide) startLocks(real, name string) ([]uids.Owner, []*uids.Lock, error) {
+	owners := dirOwners(s.policy.Project, s.policy.Tree, real, name, s.claims)
 	if s.uidRoot == "" {
 		return owners, nil, nil
 	}
@@ -353,7 +355,7 @@ func (s *doorSide) startLocks(real string) ([]uids.Owner, []*uids.Lock, error) {
 			return nil, nil, err
 		}
 		s.claims = claims
-		now := dirOwners(s.policy.Project, s.policy.Tree, real, claims)
+		now := dirOwners(s.policy.Project, s.policy.Tree, real, name, claims)
 		if slices.Equal(now, owners) {
 			return owners, locks, nil
 		}

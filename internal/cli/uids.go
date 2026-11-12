@@ -122,3 +122,15 @@ func ReadsUIDs(projectDir string) (bool, error) {
 	names, err := ComposeVariables(projectDir)
 	return slices.Contains(names, UIDEnv) || slices.Contains(names, ProjectUIDEnv), err
 }
+
+// LoadedUIDs are the two uids the load of the project at cwd gives (setUIDs), read with
+// nothing else of it run (no env capability).
+func LoadedUIDs(cwd string, environ []string) (env, project string, err error) {
+	p, err := loadProject(cwd, environ)
+	if err != nil {
+		return "", "", err
+	}
+	env, _ = p.env.Lookup(UIDEnv)
+	project, _ = p.env.Lookup(ProjectUIDEnv)
+	return env, project, nil
+}

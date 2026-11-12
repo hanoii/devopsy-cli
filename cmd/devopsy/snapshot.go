@@ -2481,6 +2481,12 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		}
 	}
 	set := cli.WithDependents(services, names, "restore")
+	// The environment's own uids, which the restored data takes (extractEntry), read before
+	// anything stops.
+	idmap, err := ownMap(cwd)
+	if err != nil {
+		return fail(fmt.Sprintf("this environment's own uids, which its data takes: %v: nothing restored", err))
+	}
 	_, restore, err := stopSet(cwd, set, true)
 	// Up to the mark, a failure starts again what was stopped.
 	before := func(err error) int {
@@ -2491,11 +2497,6 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	if err != nil {
 		return before(err)
-	}
-	// The environment's own uids, which the restored data takes (extractEntry).
-	idmap, err := ownMap(cwd)
-	if err != nil {
-		return before(fmt.Errorf("this environment's own uids, which its data takes: %w", err))
 	}
 	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
 		return before(err)
@@ -2535,6 +2536,9 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// What it extracted goes to its owner, as an import's does: the tar
 	// carries the owners of when it was taken, or of another server.
 	if err := ownMnt(ctx, mnt, ownedEntries(owners, m.entries), cname.with("-owners")); err != nil {
+		return stayDown(err.Error())
+	}
+	if err := ownProjectVolumes(ctx, cwd, cname.with("-owners")); err != nil {
 		return stayDown(err.Error())
 	}
 	if os.Getenv(remote.RestoreEnvEnv) != "" {

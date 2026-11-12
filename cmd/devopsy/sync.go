@@ -2039,15 +2039,15 @@ func parseChildUIDs(out string) (uids.Map, error) {
 // two uids as its load gives them (cli.UIDEnv, cli.ProjectUIDEnv; in a release the
 // server's claims, locally the plain hashes under the caller's).
 func ownMap(cwd string) (uids.Map, error) {
-	plan, err := cli.Build(cwd, []string{"--", "version"}, os.Environ())
+	envUID, projectUID, err := cli.LoadedUIDs(cwd, os.Environ())
 	if err != nil {
 		return uids.Map{}, err
 	}
-	env, err := uids.ParseUID(envValue(plan.Env, cli.UIDEnv))
+	env, err := uids.ParseUID(envUID)
 	if err != nil {
 		return uids.Map{}, fmt.Errorf("%s: %w", cli.UIDEnv, err)
 	}
-	project, err := uids.ParseUID(envValue(plan.Env, cli.ProjectUIDEnv))
+	project, err := uids.ParseUID(projectUID)
 	if err != nil {
 		return uids.Map{}, fmt.Errorf("%s: %w", cli.ProjectUIDEnv, err)
 	}
@@ -3033,6 +3033,11 @@ func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []s
 	case "go":
 		// Complete: whatever an earlier sync or import left is replaced.
 		_ = os.Remove(incomplete)
+		// The copy carried the parent's owners, its volumes' roots included: theirs back,
+		// before anything starts on them (a reset's too, after its copy).
+		if err := ownProjectVolumes(context.Background(), p.cwd, newContainer("sync", composeName(p.cwd), "finish-owners", remote.SyncTask("finish"))); err != nil {
+			code = fail(err.Error())
+		}
 		var written []string
 		for _, s := range services {
 			if s.Copy == cli.CopyVolumes {

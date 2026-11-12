@@ -1433,10 +1433,10 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	// is of, never one the file's name picks, read again under its start locks when it starts
 	// containers, which compose then holds.
 	name, _ := file["name"].(string)
-	owners := dirOwners(s.policy.Project, s.policy.Tree, real, s.claims)
+	owners := dirOwners(s.policy.Project, s.policy.Tree, real, name, s.claims)
 	var locks []*uids.Lock
 	if door.StartsContainers(argv[0]) {
-		if owners, locks, err = s.startLocks(real); err != nil {
+		if owners, locks, err = s.startLocks(real, name); err != nil {
 			return doorRefused(fmt.Errorf("refused: the start locks of %s: %w", real, err))
 		}
 	}

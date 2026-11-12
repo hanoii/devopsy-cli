@@ -19,10 +19,12 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
-// What an environment's containers may run as behind the door comes from the request's
-// directory, never the file's name: <tree>/<environment>/... or <tree>/<instance>/<environment>/...,
-// each that holds a claim (an instance admin's prod and an environment admin under prod are
-// one tenant's), with its project's uid; a directory of no claimed environment allows none.
+// What an environment's containers may run as behind the door is the claimed uid of the
+// environment both the request's directory and the file's name are of, with its project's:
+// <tree>/<environment>/... or <tree>/<instance>/<environment>/..., read from the path, whose
+// compose name the file has. A name the directory is not (another name of the project's, in
+// prod's directory) allows none: a --destroy downs by name, and a container under another
+// would outlive the free of its uid.
 func TestDirOwners(t *testing.T) {
 	t.Parallel()
 	tree := "/home/devopsy-shop/shop"
@@ -33,16 +35,21 @@ func TestDirOwners(t *testing.T) {
 		{Owner: uids.Owner{Project: "shop", Instance: "admin"}, UID: 1950000001},
 		{Owner: uids.Owner{Project: "shop"}, UID: 1900000001},
 	}
-	for real, want := range map[string][]uint32{
-		tree + "/admin/prod/current/.devopsy":       {2000000002, 1900000001, 2000000001, 1950000001},
-		tree + "/prod/releases/20260101000000/code": {2000000003, 1900000001},
-		tree + "/prod":                 {2000000003, 1900000001},
-		tree + "/pr-1/current":         nil,
-		tree:                           nil,
-		"/home/devopsy-blog/blog/prod": nil,
+	for _, c := range []struct {
+		real, name string
+		want       []uint32
+	}{
+		{tree + "/admin/prod/current/.devopsy", "shop-admin-prod", []uint32{2000000001, 1950000001}},
+		{tree + "/admin/prod/current/.devopsy", "shop-admin", []uint32{2000000002, 1900000001}},
+		{tree + "/prod/releases/20260101000000/code", "shop-prod", []uint32{2000000003, 1900000001}},
+		{tree + "/prod", "shop-prod", []uint32{2000000003, 1900000001}},
+		{tree + "/prod", "shop-other", nil},
+		{tree + "/pr-1/current", "shop-prod", nil},
+		{tree, "shop-prod", nil},
+		{"/home/devopsy-blog/blog/prod", "shop-prod", nil},
 	} {
-		if got := uidsOfOwners(claims, dirOwners("shop", tree, real, claims)); !slices.Equal(got, want) {
-			t.Errorf("%s: %v, want %v", real, got, want)
+		if got := uidsOfOwners(claims, dirOwners("shop", tree, c.real, c.name, claims)); !slices.Equal(got, c.want) {
+			t.Errorf("%s named %s: %v, want %v", c.real, c.name, got, c.want)
 		}
 	}
 }
