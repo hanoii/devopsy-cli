@@ -31,7 +31,7 @@ func profileFake(t *testing.T, s *syncSetup) {
 		t.Fatal("the fake's config changed")
 	}
 	fake = strings.Replace(fake, from, to, 1)
-	write(t, filepath.Join(filepath.Dir(s.root), "bin", "docker"), fake, 0o755)
+	s.fake("docker", fake)
 }
 
 // Bug: a copy writes every profile's data (the push's and a take's set

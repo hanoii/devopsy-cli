@@ -190,7 +190,10 @@ func (doorTestHost) IsDir(string) bool                       { return false }
 func (doorTestHost) CopyIn(p string, _ bool) (string, error) { return p, nil }
 func (doorTestHost) WorkDir() (string, error)                { return "/space/work/x", nil }
 
-// TestRunDoorRead is the project user's side, on real files.
+// TestRunDoorRead is the project user's side, on real files, as sudo runs it: the binary,
+// since its doorEnvironment clears the whole process's environment, which in this test
+// binary would leave every parallel test without TMPDIR (macOS's /tmp then gives new files
+// the group wheel, not the user's).
 func TestRunDoorRead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -198,16 +201,22 @@ func TestRunDoorRead(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code := runDoorRead([]string{"nothing-known", f}); code != 2 {
+	read := func(args ...string) int {
+		cmd := exec.Command(binary, append([]string{doorReadFlag}, args...)...)
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+		_ = cmd.Run()
+		return cmd.ProcessState.ExitCode()
+	}
+	if code := read("nothing-known", f); code != 2 {
 		t.Errorf("an unknown read: %d", code)
 	}
-	if code := runDoorRead([]string{"isdir", dir}); code != 0 {
+	if code := read("isdir", dir); code != 0 {
 		t.Errorf("isdir of a directory: %d", code)
 	}
-	if code := runDoorRead([]string{"isdir", f}); code != 1 {
+	if code := read("isdir", f); code != 1 {
 		t.Errorf("isdir of a file: %d", code)
 	}
-	if code := runDoorRead([]string{"remove", f}); code != 0 {
+	if code := read("remove", f); code != 0 {
 		t.Errorf("remove: %d", code)
 	}
 	if _, err := os.Stat(f); !os.IsNotExist(err) {

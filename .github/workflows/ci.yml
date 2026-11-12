@@ -23,8 +23,9 @@ jobs:
       # internal/remote) fail under the race detector's slowdown, not on
       # a race, so those two run without it; the rest, testing in
       # process, only with it (the same tests, nothing builds otherwise
-      # under -race).
-      - run: go test -count=1 ./cmd/devopsy ./internal/remote
+      # under -race). Those two mostly wait (on their fakes and the
+      # scripts' own polls), so 16 at once, not one per CPU.
+      - run: go test -count=1 -parallel 16 ./cmd/devopsy ./internal/remote
       - run: go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)
       - run: shellcheck -s sh install.sh
   # The operator's side runs on macOS: the same tests there (bash 3.2 and

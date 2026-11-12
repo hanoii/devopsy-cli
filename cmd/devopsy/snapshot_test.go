@@ -2013,9 +2013,10 @@ func TestReleaseSnapshotCases(t *testing.T) {
 		}
 		start := time.Now()
 		_ = cmd.Process.Signal(syscall.SIGINT)
+		base := filepath.Join(s.root, "shop", "prod")
+		goOnOnceGone(t, base, started, func() string { return readString(outFile.Name()) })
 		_ = cmd.Wait()
 		out := readString(outFile.Name())
-		base := filepath.Join(s.root, "shop", "prod")
 		for !strings.Contains(readString(s.log), "start db app") || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
 			if time.Since(start) > 15*time.Second {
 				t.Fatalf("the services not started again, or their snapshot lines left:\n%s\n%s", out, readString(filepath.Join(base, ".devopsy-sync.services")))
@@ -2334,13 +2335,13 @@ func TestRestoreNoCodeInterruptDuringReleaseSnapshot(t *testing.T) {
 			t.Fatalf("the stopped pass never started:\n%s", readString(outFile.Name()))
 		}
 	}
+	start := time.Now()
 	_ = cmd.Process.Signal(syscall.SIGINT)
+	// The tar goes on: the stopped pass ends with db and app down.
+	base := filepath.Join(s.root, "shop", "prod")
+	goOnOnceGone(t, base, started, func() string { return readString(outFile.Name()) })
 	_ = cmd.Wait()
 	out = readString(outFile.Name())
-	// The tar goes on: the stopped pass ends with db and app down.
-	write(t, started+".go", "", 0o644)
-	start := time.Now()
-	base := filepath.Join(s.root, "shop", "prod")
 	for !strings.Contains(readString(s.log), "start db app") || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
 		if time.Since(start) > 15*time.Second {
 			t.Fatalf("the services not started again, or their snapshot lines left (down: %q):\n%s\n%s\n%s", readString(s.log+".stopped.shop-prod"), out, readString(filepath.Join(base, ".devopsy-sync.services")), readString(s.log))
@@ -2350,6 +2351,25 @@ func TestRestoreNoCodeInterruptDuringReleaseSnapshot(t *testing.T) {
 	if cmd.ProcessState.ExitCode() == 0 || strings.Contains(readString(s.log), "-extract-") {
 		t.Errorf("not cancelled (%d), or the data restored:\n%s", cmd.ProcessState.ExitCode(), out)
 	}
+}
+
+// goOnOnceGone lets the fake's held tars go on (FAKE_SLOW_TAR's started)
+// once the watcher in base took the session for gone (its armed file
+// .fired, before its signal): the stopped pass completes its tars whatever
+// the session does, so the operation is cancelled whenever the signal
+// lands; held, each tar waits for the fake's own bound, 20 seconds, and the
+// operator's devopsy with it.
+func goOnOnceGone(t *testing.T, base, started string, out func() string) {
+	t.Helper()
+	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
+		if fired, _ := filepath.Glob(filepath.Join(base, ".devopsy-watch.*.fired")); len(fired) > 0 {
+			break
+		}
+		if time.Since(start) > startWait {
+			t.Fatalf("the watcher never took the session for gone:\n%s", out())
+		}
+	}
+	write(t, started+".go", "", 0o644)
 }
 
 // A release snapshot's detached tar killed outright (a reboot) leaves

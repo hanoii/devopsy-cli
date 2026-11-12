@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -76,9 +78,19 @@ func TestMain(m *testing.M) {
 	if out, err := build.CombinedOutput(); err != nil {
 		panic(string(out))
 	}
+	// Every test shares the process's environment: one that changes it (code that clears or
+	// sets it, run in process) changes what every parallel test after it sees, t.TempDir's
+	// TMPDIR included, so the run fails, whatever passed.
+	environ := os.Environ()
 	code := m.Run()
-	if bin, err := fakeBinOnce(); err == nil {
-		_ = os.Chmod(bin, 0o755) // read-only, so RemoveAll could not empty it
+	if now := os.Environ(); !slices.Equal(now, environ) {
+		fmt.Fprintf(os.Stderr, "the tests left the environment changed:\nbefore: %q\nafter: %q\n", environ, now)
+		code = 1
+	}
+	for _, once := range []func() (string, error){fakeBinOnce, syncBinOnce} {
+		if bin, err := once(); err == nil {
+			_ = os.Chmod(bin, 0o755) // read-only, so RemoveAll could not empty it
+		}
 	}
 	os.RemoveAll(dir)
 	os.Exit(code)

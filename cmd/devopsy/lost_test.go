@@ -519,16 +519,19 @@ func TestStatusCutNotCurrent(t *testing.T) {
 // directory stays for good: --destroy again, which the lost session's
 // message names to finish it, finds nothing at <base> and leaves it, and
 // --environments lists it as an environment (its releases/ is there).
-// Staged by hand: the move itself.
+// Staged by hand: the move itself, by a pid no process has (past Linux's
+// and macOS's highest), since one alive is a --destroy still removing it,
+// and a fixed small pid is, now and then, one of the test run's own
+// processes.
 func TestDestroyCutLeavesMovedBase(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
-	moved := filepath.Join(s.root, "shop", "prod.rm.4242")
+	moved := filepath.Join(s.root, "shop", "prod.rm.2147483646")
 	if err := os.Rename(filepath.Join(s.root, "shop", "prod"), moved); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := s.run(nil, "@devopsy@one:", "--environments"); code != 0 || strings.Contains(out, "prod.rm.4242") {
+	if out, code := s.run(nil, "@devopsy@one:", "--environments"); code != 0 || strings.Contains(out, ".rm.") {
 		t.Errorf("--environments (%d) lists what a cut destroy left:\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 || fileExists(moved) {
