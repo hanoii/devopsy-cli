@@ -127,7 +127,7 @@ var Topics = []Topic{
 				`apt-get update`,
 				`apt-get install -y --only-upgrade docker-buildx-plugin`,
 			}},
-			{"Skip this step where Docker is on its containerd image store already, as a Docker 29 installed fresh is: the first command then shows io.containerd.snapshotter.v1 as its driver type, where the classic store shows overlay2 as its driver. " +
+			{"Skip this step where Docker is on its containerd image store already, as a Docker 29 installed fresh is: the first command then shows io.containerd.snapshotter.v1 as its driver type, and the classic store shows no driver type. " +
 				"Moving a Docker off the classic store restarts it, which stops every container, and no container or image of the classic store shows on the containerd one (volumes and networks stay): " +
 				"every environment then needs a release to make its containers again, a rollback finds none of the images held for it, and the classic store keeps its disk until it is removed. " +
 				"To move it, turn on its daemon's containerd-snapshotter feature in /etc/docker/daemon.json and restart Docker (https://docs.docker.com/engine/storage/containerd/); where jq fails, nothing is written and nothing restarts:", []string{
