@@ -326,67 +326,40 @@ The door names what it refuses, and logs each refusal in
 
 ## Setting up a server
 
-A server needs `sudo` and `acl` installed, the door's directory on a
-mount of its own, and a current Docker: its containerd image store, which
-Docker 29 uses by default on a fresh install, and buildx 0.33.0 or
-later. `add` refuses a server without them. The commands below address
-the server by its deploy user, `devopsy@vm1`.
+A server needs `sudo` and `acl` installed (`sudo`, `visudo` and
+`setfacl`), the door's directory on a mount of its own, and a current
+Docker: its containerd image store, which Docker 29 uses by default on a
+fresh install, and buildx 0.33.0 or later. `add` refuses a server without
+them before it changes anything. On a server with project users,
+`--server-info` and `--server-setup` warn of a missing `sudo`, `visudo`
+or `setfacl`; on one with none yet, `--server-info` notes it without a
+warning and `--server-setup` says nothing of it. The commands below
+address the server by its deploy user, `devopsy@vm1`.
 
 Every user's processes should be hidden from the others too: a process's
 command line names projects and paths, and a devopsy session's is its
-whole script, the operator's command in it. To hide them, as root:
+whole script, the operator's command in it. `devopsy
+--server-setup-howto processes` prints the steps that hide them ([Server
+setup how-to](server-setup-howto.md#processes)). devopsy only checks it:
+`add`, and `--server-info` on a server with project users, warn when
+`/proc` has no `hidepid` of `invisible`, `ptraceable` or `noaccess`
+(`2`, `4` or `1` on an older kernel), and go on; on a server with none
+yet, `--server-info` says it without a warning. `noaccess` shows that a
+process is there and whose it is, never its command line.
 
-- make a group that sees every process, and add the deploy user to it:
-  it is root through Docker already;
-- mount `/proc` with `hidepid=invisible,gid=<that group's id>`, with a
-  line in `/etc/fstab` so it holds after a reboot and a remount for now
-  (`mount -o remount,hidepid=invisible,gid=<id> /proc`);
-- give polkit the group (`SupplementaryGroups=` in a drop-in of
-  `polkit.service`, then its restart), since it reads its callers'
-  processes.
+1. Set the server up for project users, as root: `devopsy
+   --server-setup-howto project-users` and `devopsy --server-setup-howto
+   tools` print the steps ([Server setup
+   how-to](server-setup-howto.md#project-users)).
 
-devopsy-server's setup does all three ([Other users'
-processes](https://github.com/hanoii/devopsy-server/blob/main/docs/things-to-know.md#other-users-processes)).
-devopsy only checks it: `add`, and `--server-info` on a server with project users,
-warn when `/proc` has no `hidepid` of `invisible`, `ptraceable` or
-`noaccess` (`2`, `4` or `1` on an older kernel), and go on; on a server
-with none yet, `--server-info` says it without a warning.
-`noaccess` shows that a process is there and whose it is, never its
-command line.
-
-A server set up earlier on Docker's classic image store can be moved to
-the containerd one, at a cost: no image and no container shows on the
-containerd store (volumes and networks stay), so every environment needs
-a release or a restart to make its containers again, a build-mode hold
-on an older image cannot come back, and the classic store keeps its disk
-until it is removed. A data root holding classic images stays on the
-classic store until its daemon is told otherwise.
-
-1. Make the door's directory, as root, and mount it on itself with
-   `nosuid` and `nodev`, in `/etc/fstab`:
-
-   ```sh
-   install -d -o devopsy -m 755 /var/lib/devopsy-door
-   echo '/var/lib/devopsy-door /var/lib/devopsy-door none bind,nosuid,nodev 0 0' >>/etc/fstab
-   mount /var/lib/devopsy-door
-   ```
-
-2. Name it in the deploy user's config, `~/.config/devopsy/config.yaml`,
-   beside its [release settings](config.md#release-settings):
-
-   ```yaml
-   door:
-     space: /var/lib/devopsy-door
-   ```
-
-3. Add the project user and its keys, locally:
+2. Add the project user and its keys, locally:
 
    ```sh
    devopsy @devopsy@vm1: --project-users add shop
    devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
    ```
 
-4. Reboot the server after the first `add`. sshd takes devopsy's part of
+3. Reboot the server after the first `add`. sshd takes devopsy's part of
    its configuration at the next boot, and until then no project user
    logs in; `--project-users` says so.
 

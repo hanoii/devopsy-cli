@@ -65,13 +65,17 @@ root run through devopsy's util image, so the deploy user needs no sudo:
 the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
-host's `docker.service`. It installs none of them: devopsy-server's
-`setup.sh` does. The release root (`releases: root` in the deploy user's
-`config.yaml`, else its home, never `/`, a link to it included) it makes
-when missing, and gives to the deploy user when root owns it and it is
-empty (a fresh volume's `lost+found` aside); one root owns that holds
-files (a system directory), one another user owns, or one that is no
-directory, it refuses.
+host's `docker.service`, and warns of the other tools a server needs
+when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers
+`--version`, and on a server with project users `sudo`, `visudo` and
+`setfacl`). It installs none of them: they are the admin's
+([`--server-setup-howto`](#--server-setup-howto)). The release root
+(`releases: root` in the deploy user's `config.yaml`, else its home,
+never `/`, a link to it included) it makes when missing, and gives to
+the deploy user when root owns it and it is empty (a fresh volume's
+`lost+found` aside); one root owns that holds files (a system
+directory), one another user owns, or one that is no directory, it
+refuses.
 
 A refusal stops only what needs what it refuses, and `--server-setup`
 applies the rest, says what it did not apply and why, and exits 1:
@@ -184,6 +188,18 @@ kept, and the devopsy that last applied with no failure are recorded in
 `server.yaml` beside the deploy user's `config.yaml`: devopsy's record,
 never edited by hand. Its first run writes it.
 
+## `--server-setup-howto`
+
+What devopsy checks on a server and does not set up itself (Docker, the
+tools, `/proc`'s `hidepid`, what project users need, the kernel's
+command line) is the server admin's, as root. `devopsy
+--server-setup-howto` lists the topics, and `devopsy
+--server-setup-howto <topic>` prints one's steps and how to check them,
+the command every such fix offers; it runs anywhere, needing no server
+or project. [Server setup how-to](server-setup-howto.md) shows the same
+text. devopsy-server's `setup.sh` is one way to do these steps on Debian
+13 and Ubuntu 26.04.
+
 ## `--server-info`
 
 `--server-info` reads the server in one session that changes nothing and
@@ -215,8 +231,10 @@ setup's items) comes once, after the last of them:
   packages asking, devopsy among them when its setup or its door did);
 - memory Kexec HandOver keeps as CMA. Only movable pages may use it, so
   the kernel's allocations can run out while memory is free. `kho=off`
-  frees it, and devopsy-server's `setup.sh` adds it;
+  frees it ([`kexec-handover`](server-setup-howto.md#kexec-handover));
 - a clock out of sync;
+- Docker not answering, or without its compose or buildx plugin, said
+  under Docker and not again under the setup;
 - a kernel with AppArmor and no `apparmor_parser`, on which no container
   starts;
 - Docker logs that grow without a limit, on a server whose devopsy does
@@ -237,7 +255,9 @@ setup's items) comes once, after the last of them:
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
-- a tool the server needs, missing;
+- a tool the server needs, missing, and on a server with project users
+  a missing `sudo`, `visudo` or `setfacl` (with none yet it is a line,
+  not a warning);
 - on a server with project users, a Docker without its containerd image
   store or buildx 0.33.0, on which the door refuses every image a project
   user does not build ([project users](project-users.md));
@@ -266,7 +286,7 @@ kinds.
 A sync or a snapshot under way is reported as information. So are the
 volumes the release root could be on, while it holds no project and is
 not on one, and the memory kdump keeps, with how to free it
-(devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
+([`kdump`](server-setup-howto.md#kdump)), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check: on a server never
 set up by `--server-setup`, it always does. `--json` prints the facts and

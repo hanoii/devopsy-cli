@@ -1,6 +1,6 @@
 # Server setup
 
-`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`). User docs: `docs/servers.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
+`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`), `internal/howto/` (`--server-setup-howto`'s topics) and `cmd/devopsy/howto.go`. User docs: `docs/servers.md`, `docs/server-setup-howto.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
 
 ## Items
 
@@ -17,7 +17,7 @@
 - The mounts drop-in's put is followed by a daemon-reload whatever comes after it, and with no restart queued the apply says Docker starts only once the root's filesystem is mounted, with a detail that nothing is asked of the operator.
 - What the apply leaves for later (the drop-in, a `daemon.json` for Docker's next restart) says what happened and whether the operator has anything to do (`pendingWords`).
 - The check after the apply judges only what went; a refused step is no "what was applied did not hold".
-- devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
+- devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are the admin's, and what devopsy checks of them has a topic of `--server-setup-howto`.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).
 - Every state comes from the server's devopsy, which applies it (`readSetup`, `setup.Facts`); the operator only words them and asks.
 - Every item is idempotent: a second run in a row changes nothing and restarts nothing.
@@ -25,8 +25,8 @@
 - A file the setup writes whole sits at a path of its own and starts with `setup.Header`, the firewall's aside; devopsy writes or removes no other file, and none until its want is retired.
 - The firewall's files, which `--project-users add` writes too, start with `firewallHeader` instead, which says neither command, checked by one test in Go and the removal's shell (`FirewallPiece`, `firewallPieceSh`).
 - The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused by `remote.ReleaseSettings` in every command.
-- The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts, the upload's `--server-ready` (stats and path lookups, then the firewall's read where one is marked, never building the util image) and `--project-users add` (its first check) all call.
-- The tools are one list, `serverTools`, the required ones marked: the setup's refusal reads it, and `--server-info` says each tool from it once.
+- The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts and the upload's `--server-ready` (stats and path lookups, then the firewall's read where one is marked, never building the util image) both call; `--project-users add` checks the door's tools first, then the release root (`releaseRootReady`).
+- The tools are one list, `serverTools`, the required ones marked, the door's too (`sudo`, `visudo`, `setfacl`), and every lookup of them is one function with a filter (`missingTools`): the setup's refusal and a release's check read the required ones, `--server-setup` warns of the others missing (`setup.Facts.Missing`), the door's only on a server with project users, `--server-info` says each one missing once, as a warning but for the door's on a server with no project user, a line with the tools topic as its hint as a `/proc` without hidepid is, and `--project-users add` refuses first without the door's (`doorTool`), which refuse no release.
 - The release root has one form, its links followed by what they say as far as its parts are there, each `..` walked from where the part before it led, the rest as written (`resolveRoot`): a root behind a link, made or not, its volume mounted or not, gives one want.
 - The release root is made when missing and given to the deploy user only when root owns it and it is empty, a filesystem's own `lost+found` aside (`emptyDir`), never recursively: a root-owned directory with files is a system's (`/var`, `/opt`), and refuses, as another user's or one that is no directory does.
 - A root that resolves to `/`, through a link, refuses as `/` does.
@@ -115,3 +115,14 @@
 - `--server-setup` and `--upgrade`'s apply are one path, the level of what they say and the exit the only differences.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.
 - A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`asProjectUser`): the server's setup is its admin's, and the door would refuse Docker's reads and log each; it asks the door's `firewall` request instead and shows W0001 for the admin on wrong (`projectUserFacts`).
+
+## --server-setup-howto
+
+- `--server-setup-howto [<topic>]` is local and prints only, on stdout, plain: the topics without one, a topic's steps with its name; it needs no server, project or Docker, so a fix's command runs wherever it is copied.
+- A topic is one thing devopsy checks on a server and cannot set up, a `howto.Topic` in `howto.Topics`, its name a `howto.Name` constant; what one command or one package fixes, or devopsy fixes itself, has none.
+- Every fix for a topic's setting offers `howto.Command` of its constant, never the flag spelled again (`TestFlagSpelledOnce`, `TestConstantsAreTopics`).
+- A refusal of the setup names its topic in `setup.Refusal.Howto`, since it crosses the wire as JSON with its fix a string, and the operator's devopsy offers the topic's command after the fix's text (`fixWords`).
+- A topic's commands are copyable as they are: a value the admin chooses is a variable set on the step's first line with its usual value, a system's value computed, never a `<word>` to replace.
+- A topic's steps are generic for Debian and Ubuntu with systemd, say where the two differ, and leave out choices of one way to set up a server (the deploy user's making, swap, unattended upgrades); no topic names a tool that does them.
+- Each topic ends with its check: the `--server-info` line that goes away, else a command whose output shows it.
+- `docs/server-setup-howto.md` shows each topic, under `## <name>`, in a fenced block equal to what the flag prints (`TestDocsPage`): a change to a topic changes the page in the same commit.

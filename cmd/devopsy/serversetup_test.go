@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -171,6 +172,40 @@ func TestServerSetupYes(t *testing.T) {
 	}
 }
 
+// A tool the server needs that refuses nothing (a sync's mkfifo) is warned of, never refused:
+// the setup applies, their one fix, the tools topic, after the last. The door's (setfacl) are
+// warned of only on a server with project users, and said not at all without one:
+// --project-users add refuses without them.
+func TestServerSetupWarnsOfToolsMissing(t *testing.T) {
+	t.Parallel()
+	s, _ := setupServer(t)
+	bin := filepath.Join(filepath.Dir(s.root), "bin")
+	path := "PATH=" + pathWithout(t, bin, "setfacl", "mkfifo")
+	out, code := s.run([]string{path}, "@devopsy@one:", "--server-setup", "--yes")
+	// mkfifo is the last of serverTools missing here: the fix follows it, and only it.
+	last := "devopsy: warning: the server has no mkfifo: no sync runs\n" +
+		"devopsy: | to fix it:\ndevopsy: | install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
+	if code != 0 || !strings.Contains(out, last) || strings.Contains(out, "setfacl") ||
+		strings.Count(out, howto.Command(howto.Tools)) != 1 || !strings.Contains(out, "this server is set up by devopsy now") {
+		t.Errorf("tools missing (%d):\n%s", code, out)
+	}
+	// With tar missing too, its refusal and the warnings share the fix: the tools topic is
+	// offered once, after the last of them.
+	out, code = s.run([]string{"PATH=" + pathWithout(t, bin, "tar", "mkfifo")}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "devopsy: error: tools: no tar in PATH, which every release needs\n") || !strings.Contains(out, last) ||
+		strings.Count(out, howto.Command(howto.Tools)) != 1 {
+		t.Errorf("tar and mkfifo missing (%d):\n%s", code, out)
+	}
+	// With a project user, the setup's facts name setfacl too.
+	setupConfig(t, s, "door:\n  space: $HOME/space\n")
+	write(t, filepath.Join(filepath.Dir(s.root), "home", "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
+	out, code = s.run([]string{path}, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &f); err != nil || code != 0 || !slices.Contains(f.Missing, "setfacl") || !slices.Contains(f.Missing, "mkfifo") {
+		t.Errorf("facts with a project user (%d, %v): %v\n%s", code, err, f.Missing, out)
+	}
+}
+
 // pendingRebootSaid is what follows a daemon.json Docker has yet to take, the system's restart
 // flag raised: what does it, and the restart sooner.
 const pendingRebootSaid = "devopsy: | nothing is lost by waiting: the reboot the server needs (/run/reboot-required) does it\ndevopsy: | to restart Docker sooner, run --server-setup for this server\n"
@@ -283,20 +318,21 @@ func TestServerSetupApplyAnswers(t *testing.T) {
 
 // The apply says every refusal the first session did not (--said names those it said, by
 // their identities): one new between the two sessions (Docker gone, a tool removed) is said
-// with its fix, and one already said is not said twice in the run.
+// with its fix, the command of its topic's steps after the fix's text, and one already said is
+// not said twice in the run.
 func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
-		env  func(t *testing.T, host string) []string
-		want string
+		env       func(t *testing.T, host string) []string
+		want, fix string
 	}{
 		"Docker down": {func(t *testing.T, host string) []string {
 			write(t, filepath.Join(host, "docker-down"), "", 0o644)
 			return nil
-		}, "Docker's daemon does not answer"},
+		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it, as root:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
 		"tar missing": {func(t *testing.T, host string) []string {
 			return []string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), "tar")}
-		}, "no tar in PATH"},
+		}, "no tar in PATH", "install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -304,8 +340,8 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 			env := c.env(t, host)
 			// The first session read no refusal, and so said none: its apply, as it runs it.
 			out, code := s.run(env, remote.ServerSetupFlag, "apply", "--said")
-			if code != 1 || !strings.Contains(out, c.want) {
-				t.Errorf("a refusal new in the apply (%d), want %q:\n%s", code, c.want, out)
+			if code != 1 || !strings.Contains(out, c.want) || !strings.Contains(out, "devopsy: | "+c.fix) {
+				t.Errorf("a refusal new in the apply (%d), want %q and %q:\n%s", code, c.want, c.fix, out)
 			}
 			// Both sessions, the refusal there in each: said once.
 			if out, _ := s.run(env, "@devopsy@one:", "--server-setup", "--yes"); strings.Count(out, c.want) != 1 {
@@ -315,14 +351,14 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 	}
 }
 
-// pathWithout is a PATH holding every command of bin and the test's PATH but tool, as links.
-func pathWithout(t *testing.T, bin, tool string) string {
+// pathWithout is a PATH holding every command of bin and the test's PATH but tools, as links.
+func pathWithout(t *testing.T, bin string, tools ...string) string {
 	t.Helper()
 	path := t.TempDir()
 	for _, dir := range append([]string{bin}, filepath.SplitList(os.Getenv("PATH"))...) {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
-			if e.Name() != tool && !fileExists(filepath.Join(path, e.Name())) {
+			if !slices.Contains(tools, e.Name()) && !fileExists(filepath.Join(path, e.Name())) {
 				_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
 			}
 		}
@@ -910,8 +946,13 @@ func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(t.TempDir(), "missing")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
+	// The door's tools there, which add refuses without first.
+	tools := t.TempDir()
+	for _, name := range []string{"sudo", "visudo", "setfacl"} {
+		write(t, filepath.Join(tools, name), "#!/bin/sh\n", 0o755)
+	}
 	c := exec.Command(binary, remote.ProjectUsersFlag, "add", "shop")
-	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=/usr/bin:/bin"}
+	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
 	out, _ := c.CombinedOutput()
 	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made") || fileExists(root) {
 		t.Errorf("(%d):\n%s", c.ProcessState.ExitCode(), out)
@@ -2104,16 +2145,7 @@ func TestServerSetupToolsStopOnlyTheFirewall(t *testing.T) {
 	for _, tool := range []string{"flock", "tar"} {
 		s, host := setupServer(t)
 		bin := filepath.Join(filepath.Dir(host), "bin")
-		// A PATH with every tool but the one: a directory of links to the rest.
-		path := t.TempDir()
-		for _, dir := range append([]string{bin}, filepath.SplitList(os.Getenv("PATH"))...) {
-			entries, _ := os.ReadDir(dir)
-			for _, e := range entries {
-				if e.Name() != tool && !fileExists(filepath.Join(path, e.Name())) {
-					_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
-				}
-			}
-		}
+		path := pathWithout(t, bin, tool)
 		out, code := s.run([]string{"PATH=" + path}, remote.ServerSetupFlag, "apply")
 		loaded := fileExists(filepath.Join(host, remote.FirewallScript))
 		if code != 1 || !strings.Contains(out, "no "+tool+" in PATH") || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || loaded != (tool == "tar") {

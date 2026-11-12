@@ -19,6 +19,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/complete"
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/uids"
@@ -146,6 +147,8 @@ func run() int {
 			return runProbe(args[1:], color)
 		case "--ssh-keys-generate":
 			return runSSHKeysGenerate(args[1:], color)
+		case howto.Flag:
+			return runHowto(args[1:], os.Stdout)
 		case "--project-users":
 			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
 				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -42,18 +43,82 @@ const (
 
 // serverTools are the tools a server needs beyond Docker and devopsy
 // (internals/releases.md), with what goes without each; a release refuses a server without
-// a required one (toolsRefusal), and the others degrade.
-var serverTools = []struct {
+// a required one (toolsRefusal), and the others degrade. The door's (door) are project users',
+// which --project-users add refuses without; an sbin one is looked for in /usr/sbin and /sbin
+// too, outside a deploy user's PATH. Every lookup of them is missingTools.
+var serverTools = []serverTool{
+	{name: "tar", without: "no release can be uploaded", required: true},
+	{name: "flock", without: "nothing that changes an environment runs", required: true},
+	{name: "setsid", without: "the run step runs plainly, and a fetch's live progress shows only before it"},
+	{name: "script", without: "builds and pulls show no live progress"},
+	{name: "mkfifo", without: "no sync runs"},
+	{name: "tail", without: "only the traps protect a release after its switch (a tail that answers --version)"},
+	{name: "sudo", without: "no project user can be added, nor reach Docker through the door", door: true},
+	{name: "visudo", without: "no project user can be added: the door's sudo rules are checked with it", door: true, sbin: true},
+	{name: "setfacl", without: "no project user can be added, nor given its files", door: true},
+}
+
+// serverTool is one of serverTools: its name, what goes without it, whether a release refuses
+// without it, whether project users need it, whether it lives in sbin.
+type serverTool struct {
 	name, without string
 	required      bool
-}{
-	{"tar", "no release can be uploaded", true},
-	{"flock", "nothing that changes an environment runs", true},
-	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it", false},
-	{"script", "builds and pulls show no live progress", false},
-	{"mkfifo", "no sync runs", false},
-	{"tail", "only the traps protect a release after its switch (a tail that answers --version)", false},
+	door, sbin    bool
 }
+
+// Which tools a lookup takes (missingTools): all of them, the required ones, the door's.
+func anyTool(serverTool) bool        { return true }
+func requiredTool(t serverTool) bool { return t.required }
+func doorTool(t serverTool) bool     { return t.door }
+
+// missingTools are the tools of serverTools that which takes and that are not there, in
+// order: one not in PATH, nor in /usr/sbin or /sbin for an sbin one, and a tail that does not
+// answer --version, as the scripts tell (followOutput: GNU's, or uutils').
+func missingTools(which func(serverTool) bool) []string {
+	var out []string
+	for _, t := range serverTools {
+		if which(t) && !toolThere(t) {
+			out = append(out, t.name)
+		}
+	}
+	return out
+}
+
+// toolThere says whether t is there, as missingTools looks.
+func toolThere(t serverTool) bool {
+	if _, err := exec.LookPath(t.name); err == nil {
+		return t.name != "tail" || exec.Command("tail", "--version").Run() == nil
+	}
+	if t.sbin {
+		for _, dir := range []string{"/usr/sbin", "/sbin"} {
+			if fi, err := os.Stat(filepath.Join(dir, t.name)); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// toolMissingWords is how --server-info and --server-setup say a tool of serverTools missing
+// (name), "" for a name that is none of them, and whether it is the door's, which matters
+// only on a server with project users.
+func toolMissingWords(name string) (msg string, door bool) {
+	for _, t := range serverTools {
+		if t.name == name {
+			return "the server has no " + t.name + ": " + t.without, t.door
+		}
+	}
+	return "", false
+}
+
+// toolsFixText is the way out of a tool missing, its package, by the tools topic's steps
+// (howto.Tools): the tools' refusal's fix (fixWords), a missing one's where it is warned of,
+// a hint where the door's is only noted. The refusal's and the warnings' are one text, so a
+// run says it once after the last of them (sharedLater).
+const toolsFixText = "install what is missing with the system's packages, as root"
+
+// toolsFix is toolsFixText as a fix, as fixWords words the tools' refusal's.
+var toolsFix = report.Fix(toolsFixText+":", howto.Command(howto.Tools))
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
 // waits for a reboot to take it, and the host's listeners from read, the root read of the
@@ -134,23 +199,23 @@ func processesHidden(hidepid string) bool {
 func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
 
 // processesFix is the way out of a /proc that shows every user's processes, the setting itself
-// and the doc with its steps, never a tool that sets it: devopsy checks it and never mounts
-// /proc, the host's hardening being its admin's.
-const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root (docs/project-users.md)"
+// with the command that prints its steps, never a tool that sets it: devopsy checks it and never
+// mounts /proc, the host's hardening being its admin's.
+const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root:"
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
 // that shows project users every other user's processes (processesShown).
 func processesShownWarning() (msg, detail string, fix report.Remedy) {
 	return "/proc shows project users every other user's processes (no hidepid)",
 		"their command lines can hold a secret",
-		report.Fix(processesFix)
+		report.Fix(processesFix, howto.Command(howto.Processes))
 }
 
 // processesShownNote is the same on a server with no project user, where it only matters once
 // one is added.
 func processesShownNote() (msg string, hint report.Remedy) {
 	return "/proc shows every user's processes (no hidepid), which matters once the server has project users",
-		report.Hint(processesFix)
+		report.Hint(processesFix, howto.Command(howto.Processes))
 }
 
 // warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
@@ -226,14 +291,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
-	for _, t := range serverTools {
-		if _, err := exec.LookPath(t.name); err != nil {
-			info.Missing = append(info.Missing, t.name)
-		} else if t.name == "tail" && exec.Command("tail", "--version").Run() != nil {
-			// As the scripts tell (followOutput): GNU's, or uutils'.
-			info.Missing = append(info.Missing, "tail")
-		}
-	}
+	info.Missing = missingTools(anyTool)
 	info.Containers = hostContainers()
 	trees := doorTrees(info.Root)
 	for _, who := range trees {
@@ -948,8 +1006,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	more(strings.Join(hw, ", "))
 	// Memory the kernel keeps from the rest, which MemTotal leaves out
-	// (kdump's) or counts (Kexec HandOver's): devopsy-server's setup.sh
-	// frees both.
+	// (kdump's) or counts (Kexec HandOver's).
 	var kept []string
 	if info.KHOScratch > 0 {
 		kept = append(kept, humanBytes(info.KHOScratch)+" for Kexec HandOver")
@@ -962,11 +1019,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
-			report.Fix("kho=off on the kernel's command line, then a reboot"))
+			report.Fix("kho=off on the kernel's command line, then a reboot, as root:", howto.Command(howto.KexecHandOver)))
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot"))
+			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot, as root:", howto.Command(howto.Kdump)))
 	}
 	if info.RebootRequired {
 		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
@@ -1025,7 +1082,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		if dr.Docker != "" {
 			warn(dr.Docker+": the door refuses every image a project user does not build",
-				report.Fix("move Docker to its containerd image store and a current buildx (docs/project-users.md)"))
+				doorDockerFix)
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
@@ -1037,15 +1094,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 
-	// Docker.
+	// Docker, and what the setup refuses of what it answers (dockerAnswers), said here only.
 	d := info.Docker
+	sayDocker := func() {
+		for _, r := range dockerAnswers(d) {
+			warn(r.Message, fixWords(r)...)
+		}
+	}
 	switch {
 	case d.Door:
 		key = "docker"
 		more("the server's admin's, through the door")
 	case d.Error != "":
 		key = "docker"
-		warn("Docker did not answer: " + d.Error)
+		sayDocker()
 	default:
 		parts := []string{d.Version}
 		if d.Compose != "" {
@@ -1060,9 +1122,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			parts = append(parts, "cgroup "+d.Cgroup)
 		}
 		row("docker", strings.Join(parts, ", "))
-		if d.Compose == "" {
-			warn("docker compose is missing", report.Fix("install the docker-compose-plugin package, as root"))
-		}
+		sayDocker()
 		// Docker lists apparmor whenever the kernel has it, and then loads
 		// its profile with apparmor_parser: without it no container
 		// starts ("the docker-default profile could not be loaded").
@@ -1097,7 +1157,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// The server's setup, as --server-setup judges it.
 	if info.Setup != nil {
-		es = append(es, setupInfoEntries(*info.Setup, ref)...)
+		es = append(es, setupInfoEntries(*info.Setup, d, ref)...)
 	}
 	// What a project user can only pass on: by its code, no remedy it could take.
 	for _, id := range info.ForAdmin {
@@ -1138,11 +1198,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			report.Fix("mount the backup volume on "+info.SnapshotRoot))
 	}
 
-	// Tools.
+	// Tools. The door's, with no project user, are a line to know before adding one, as a
+	// /proc without hidepid is: --project-users add refuses without them.
 	key = "tools"
-	for _, t := range serverTools {
-		if slices.Contains(info.Missing, t.name) {
-			warn("the server has no " + t.name + ": " + t.without)
+	projectUsers := info.Door != nil && info.Door.Users > 0
+	for _, name := range info.Missing {
+		switch msg, door := toolMissingWords(name); {
+		case msg == "":
+		case door && !projectUsers:
+			note(msg, report.Hint(toolsFixText+":", howto.Command(howto.Tools)))
+		default:
+			warn(msg, toolsFix)
 		}
 	}
 
@@ -1447,8 +1513,9 @@ func sortedKeysOf[V any](m map[string]V) []string {
 
 // setupInfoEntries are --server-info's lines on the server's setup (f): under setup, whether
 // devopsy set it up and what refuses releases there, then its items (setupItems), each not
-// devopsy's fixed by --server-setup on ref (in words locally, ref "").
-func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
+// devopsy's fixed by --server-setup on ref (in words locally, ref ""). What Docker (d) answers
+// itself is said under docker (dockerAnswers), and the tools under tools, never again here.
+func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.StatusEntry {
 	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
 	// With every step refused, --server-setup applies nothing: the way out is the refusal's.
 	if f.NoneGoes() {
@@ -1463,9 +1530,13 @@ func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
 	} else {
 		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
 	}
+	var docker []string
+	for _, r := range dockerAnswers(d) {
+		docker = append(docker, r.ID())
+	}
 	for _, r := range f.Refusals {
 		// The tools are said once, with the others the server needs (serverTools).
-		if r.Item != toolsItem {
+		if r.Item != toolsItem && !slices.Contains(docker, r.ID()) {
 			msg, fixes := refusalWords(r)
 			line(remote.StatusWarning, msg, fixes...)
 		}

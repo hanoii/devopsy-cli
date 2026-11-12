@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
@@ -91,6 +92,10 @@ func TestComplete(t *testing.T) {
 		{[]string{"--env", ""}, []string{"--show"}, nil, DirectiveNoFileComp},
 		{[]string{"--status", ""}, []string{"--json"}, nil, DirectiveNoFileComp},
 		{[]string{"--server-info", ""}, []string{"--json"}, nil, DirectiveNoFileComp},
+		{[]string{"--server-setup-howto", ""}, howto.Names(), nil, DirectiveNoFileComp},
+		{[]string{"--server-setup-howto", "k"}, []string{"kexec-handover", "kdump"}, nil, DirectiveNoFileComp},
+		{[]string{"--server-setup-howto", "processes", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"--server-setup-howto", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
 		// Commands by scope: local ones here, target ones after @.
 		{[]string{"im"}, []string{"image"}, []string{"im"}, DirectiveNoFileComp},

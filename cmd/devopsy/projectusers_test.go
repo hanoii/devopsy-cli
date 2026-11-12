@@ -11,6 +11,7 @@ import (
 	"bytes"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -465,5 +466,34 @@ func TestRemovalOfAConfigUserLeavesNoKeys(t *testing.T) {
 	if remote.KeysLeft(keys) || strings.Contains(printed.String(), "AAAA") || fileExists(syncKeys) || len(ended) == 0 {
 		t.Errorf("a config user removed as devopsy says (exit %d): sshd still takes its key %v, its sync keys there %v, its processes ended %q",
 			code, strings.Contains(printed.String(), "AAAA"), fileExists(syncKeys), ended)
+	}
+}
+
+// --project-users add refuses a server without sudo, visudo or setfacl first, before anything
+// changes, naming what is missing and the tools topic: past that point a missing visudo fails
+// the sudo rules' check, and a missing setfacl a bare exec, halfway through.
+func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	space := t.TempDir()
+	write(t, filepath.Join(home, remote.ConfigFile), "door:\n  space: "+space+"\n", 0o600)
+	// A PATH with no sudo and no setfacl; visudo may still be found in sbin.
+	out, code := runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + t.TempDir()}, remote.ProjectUsersFlag, "add", "shop")
+	if code != 1 || !strings.Contains(out, "devopsy: error: no sudo or ") || !strings.Contains(out, " on this server, which project users need: no project user made\n") ||
+		!strings.Contains(out, "$ "+howto.Command(howto.Tools)+"\n") {
+		t.Errorf("add without the door's tools (%d):\n%s", code, out)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 1 {
+		t.Errorf("add without the door's tools changed its config's directory: %v", entries)
+	}
+}
+
+// --project-users add on a server with no door names the setting and the project-users topic,
+// whose steps make the door's directory and its config.
+func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
+	t.Parallel()
+	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
+	if code != 1 || !strings.Contains(out, "this server has no door: no door: space: in ") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
+		t.Errorf("add with no door (%d):\n%s", code, out)
 	}
 }
