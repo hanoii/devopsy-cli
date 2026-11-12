@@ -99,3 +99,24 @@ func TestUIDsLocal(t *testing.T) {
 		t.Errorf("the caller's uid overridden locally: %s", got)
 	}
 }
+
+// A project whose compose files read either uid needs a server that gives them; the
+// override counts, a variable named alike does not.
+func TestReadsUIDs(t *testing.T) {
+	t.Parallel()
+	for compose, want := range map[string]bool{
+		"services:\n  web:\n    image: x\n    user: \"${DEVOPSY_UID:?}:${DEVOPSY_UID:?}\"\n":            true,
+		"services:\n  web:\n    image: x\n    build: {context: ., args: {UID: $DEVOPSY_PROJECT_UID}}\n": true,
+		"services:\n  web:\n    image: x\n    user: \"${DEVOPSY_UIDS:-1}:1\"\n":                         false,
+		minimalCompose: false,
+	} {
+		root := project(t, "shop", map[string]string{"compose.yaml": compose})
+		if got, err := ReadsUIDs(filepath.Join(root, ProjectDirName)); err != nil || got != want {
+			t.Errorf("%q: %v %v, want %v", compose, got, err, want)
+		}
+	}
+	root := project(t, "shop", map[string]string{"compose.yaml": minimalCompose, "compose.override.yaml": "services:\n  web:\n    user: \"${DEVOPSY_UID:?}:${DEVOPSY_UID:?}\"\n"})
+	if got, err := ReadsUIDs(filepath.Join(root, ProjectDirName)); err != nil || !got {
+		t.Errorf("the override's: %v %v", got, err)
+	}
+}

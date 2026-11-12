@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
+	"go.yaml.in/yaml/v3"
 )
 
 // The uids devopsy gives an environment's containers, for its compose files to read
@@ -113,4 +115,27 @@ func (p *loadedProject) defaultVar(k, v, from string) {
 		p.env.defs[k] = append(p.env.defs[k], EnvDef{Kind: EnvDevopsy, Source: from, Value: v})
 	}
 	p.env.Mark(k)
+}
+
+// ReadsUIDs says whether the compose files of the project at projectDir read either uid
+// variable: a release of it then needs a server's devopsy that gives them (remote.UIDsFeature).
+func ReadsUIDs(projectDir string) (bool, error) {
+	for _, file := range composeFiles(projectDir) {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return false, err
+		}
+		var dict map[string]any
+		if err := yaml.Unmarshal(data, &dict); err != nil {
+			return false, fmt.Errorf("%s: %v", file, err)
+		}
+		vars := template.ExtractVariables(dict, nil)
+		if _, ok := vars[UIDEnv]; ok {
+			return true, nil
+		}
+		if _, ok := vars[ProjectUIDEnv]; ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }

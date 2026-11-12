@@ -128,6 +128,17 @@ var namedFeatures = []struct {
 	{SayRemediesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `\b[^\n]* (` + SayFixFlag + `|` + SayHintFlag + `) "`)},
 }
 
+// UIDsFeature is the server's devopsy giving every release's load its uids
+// (DEVOPSY_UID, DEVOPSY_PROJECT_UID) from its claims. No script calls it:
+// a release needs it when its compose files read either (WithAlsoNeeded),
+// since an older server leaves them unset and compose refuses after the
+// upload.
+const UIDsFeature = "uids"
+
+// projectFeatures are named features a release needs for what its project
+// reads, never found in a script's text.
+var projectFeatures = []string{UIDsFeature}
+
 // SayRemediesFeature is the named feature of --say --fix and --hint.
 const SayRemediesFeature = "say-remedies"
 
@@ -183,7 +194,7 @@ var flagUse = regexp.MustCompile(`devopsy[ '\\]{1,8}--([a-z][a-z-]*)`)
 // FeaturesList is the features this devopsy has, space-separated, for
 // --release-settings.
 func FeaturesList() string {
-	names := append([]string{}, featureFlags...)
+	names := append(append([]string{}, featureFlags...), projectFeatures...)
 	for _, f := range namedFeatures {
 		if !slices.Contains(names, f.Name) {
 			names = append(names, f.Name)
@@ -261,6 +272,12 @@ func WithAlsoNeeds(ctx context.Context, scripts ...string) context.Context {
 		needs = append(needs, Needs(s)...)
 	}
 	return context.WithValue(ctx, alsoNeedsKey{}, needs)
+}
+
+// WithAlsoNeeded adds features by name to what SSHStreams checks in this
+// session (WithAlsoNeeds), for what a release's project needs (projectFeatures).
+func WithAlsoNeeded(ctx context.Context, names ...string) context.Context {
+	return context.WithValue(ctx, alsoNeedsKey{}, append(slices.Clone(alsoNeeds(ctx)), names...))
 }
 
 func alsoNeeds(ctx context.Context) []string {
