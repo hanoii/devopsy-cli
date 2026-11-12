@@ -268,8 +268,9 @@ what `config.yaml` sets.
   and `--server-info` warns of what is not devopsy's.
 - What devopsy checks on a server and does not set up (Docker, the tools,
   `/proc`'s `hidepid`, what project users need, the kernel's command line)
-  is the server admin's, as root: `devopsy --server-setup-howto [<topic>]`
-  prints the topics, or one's steps, the command every such fix offers.
+  is the server admin's, as root: `devopsy --server-setup-howto [<topic>|--all]`
+  prints the topics, one's steps or all of them, as Markdown, the command
+  every such fix offers.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
 

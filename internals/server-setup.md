@@ -125,4 +125,5 @@
 - A topic's commands are copyable as they are: a value the admin chooses is a variable set on the step's first line with its usual value, a system's value computed, never a `<word>` to replace.
 - A topic's steps are generic for Debian and Ubuntu with systemd, say where the two differ, and leave out choices of one way to set up a server (the deploy user's making, swap, unattended upgrades); no topic names a tool that does them.
 - Each topic ends with its check: the `--server-info` line that goes away, else a command whose output shows it.
-- `docs/server-setup-howto.md` shows each topic, under `## <name>`, in a fenced block equal to what the flag prints (`TestDocsPage`): a change to a topic changes the page in the same commit.
+- What the flag prints is Markdown that reads as it is (a heading, paragraphs, a numbered list, commands in fenced blocks), with no markup in a topic's sentences: it is read raw in a terminal more often than rendered.
+- `--all` in place of a topic prints every topic under one title with a table of contents (`howto.All`), each a section named as its topic, and `docs/server-setup-howto.md` is that output whole (`TestDocsPage`): a change to a topic changes the page in the same commit.

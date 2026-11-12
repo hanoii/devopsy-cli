@@ -98,7 +98,7 @@ var Flags = []FlagGroup{
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},
-		{Name: howto.Flag, Args: "[<topic>]", Scope: Local, Desc: "the steps, as root, for what devopsy\nchecks on a server and cannot set up"},
+		{Name: howto.Flag, Args: "[<topic>|--all]", Scope: Local, Desc: "the steps, as root, for what devopsy\nchecks on a server and cannot set up"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
 	}},
 	{"Setup and tools", []Flag{

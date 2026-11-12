@@ -67,52 +67,91 @@ const width = 76
 // reader is told: where and as whom they run, who the deploy user is, where a value is set.
 const asRoot = "Run each step as root on the server, Debian or Ubuntu with systemd. The deploy user is the Unix user devopsy logs in as, which must exist. A step's first line sets the values to change, if it has any (for example user=devopsy)."
 
-// cmdIndent is how far a step's commands sit, under its text: indented, never after "$ ",
-// which is how devopsy offers a command in what it says (report.Remedy).
-const cmdIndent = "      "
+// stepIndent is how far a step's text sits after its number, and its commands' block with
+// it, which Markdown then reads as part of the step. The text is Markdown that reads well as
+// it is (a heading, paragraphs, a numbered list, fenced commands), so a renderer shows it
+// too; a command is in a fenced block, never after "$ ", which is how devopsy offers one in
+// what it says (report.Remedy).
+const stepIndent = "   "
 
-// List is what the flag prints without a topic: each topic's name and summary, aligned.
-func List() string {
+// fence opens and closes a block of commands.
+const fence = "```"
+
+// AllFlag is the argument that prints every topic.
+const AllFlag = "--all"
+
+// listIntro opens the list of topics.
+const listIntro = "What devopsy checks on a server and cannot set up itself, step by step, as root. Each topic prints with devopsy " + Flag + " followed by its name, and all of them with " + AllFlag + ":"
+
+// rows are the topics' names and summaries, aligned, each name between before and after.
+func rows(before, after string) string {
 	var b strings.Builder
-	b.WriteString(wrap("What devopsy checks on a server and cannot set up itself, step by step, as root. Each topic prints with devopsy "+Flag+" followed by its name:", "", ""))
-	b.WriteString("\n")
 	longest := 0
 	for _, t := range Topics {
 		longest = max(longest, len(t.Name))
 	}
 	for _, t := range Topics {
-		b.WriteString("  " + string(t.Name) + strings.Repeat(" ", longest-len(t.Name)+2) + t.Summary + "\n")
+		b.WriteString(before + string(t.Name) + after + strings.Repeat(" ", longest-len(t.Name)+1) + t.Summary + "\n")
 	}
 	return b.String()
 }
 
-// Text is the topic as the flag prints it: its title, why, the steps numbered with their
-// commands under them, then the check.
-func (t Topic) Text() string {
+// List is what the flag prints without a topic: each topic's name and summary, aligned, a
+// Markdown list.
+func List() string { return wrap(listIntro, "", "") + "\n" + rows("- `", "`") }
+
+// Help is the list as the flag's help shows it, laid out as help is: an entry starts with
+// two spaces.
+func Help() string { return wrap(listIntro, "", "") + "\n" + rows("  ", " ") }
+
+// allIntro opens every topic printed together, which is the docs page.
+const allIntro = "What devopsy checks on a server and does not set up itself, step by step, for the server's admin. `devopsy " + Flag + "` lists the topics, `devopsy " + Flag + " <topic>` prints one, and `devopsy " + Flag + " " + AllFlag + "` all of them, which is this page. Every fix devopsy offers for one of them names its command. It runs anywhere, needing no server, project or Docker."
+
+// All is every topic under one title, with a table of contents: what the flag prints with
+// AllFlag, and docs/server-setup-howto.md whole. Each topic is a section named as the topic
+// is, so a link to the page's #<name> holds, its title on the section's first line.
+func All() string {
 	var b strings.Builder
-	b.WriteString(t.Title + "\n\n")
+	b.WriteString("# Server setup how-to\n\n" + wrap(allIntro, "", "") + "\n")
+	for _, t := range Topics {
+		b.WriteString("- [" + string(t.Name) + "](#" + string(t.Name) + "): " + t.Summary + "\n")
+	}
+	for _, t := range Topics {
+		b.WriteString("\n## " + string(t.Name) + "\n\n" + t.Title + "\n\n" + t.Body())
+	}
+	return b.String()
+}
+
+// Text is the topic as the flag prints it: its title as a heading, then its Body.
+func (t Topic) Text() string { return "# " + t.Title + "\n\n" + t.Body() }
+
+// Body is the topic under its title, as the docs page shows it under the topic's own
+// heading: why, the steps numbered with their commands under them, then the check.
+func (t Topic) Body() string {
+	var b strings.Builder
 	b.WriteString(wrap(t.Why, "", "") + "\n")
 	b.WriteString(wrap(asRoot, "", "") + "\n")
 	for i, s := range t.Steps {
-		num := strconv.Itoa(i+1) + ". "
-		b.WriteString(wrap(s.Text, num, strings.Repeat(" ", len(num))))
-		writeCmds(&b, s.Cmds)
+		b.WriteString(wrap(s.Text, strconv.Itoa(i+1)+". ", stepIndent))
+		writeCmds(&b, s.Cmds, stepIndent)
 		b.WriteString("\n")
 	}
 	b.WriteString(wrap("To check it: "+t.Check.Text, "", ""))
-	writeCmds(&b, t.Check.Cmds)
+	writeCmds(&b, t.Check.Cmds, "")
 	return b.String()
 }
 
-// writeCmds writes cmds under a step's text, a blank line before them.
-func writeCmds(b *strings.Builder, cmds []string) {
+// writeCmds writes cmds under a step's text, in a fenced block indented as the text is, a
+// blank line before it.
+func writeCmds(b *strings.Builder, cmds []string, indent string) {
 	if len(cmds) == 0 {
 		return
 	}
-	b.WriteString("\n")
+	b.WriteString("\n" + indent + fence + "sh\n")
 	for _, c := range cmds {
-		b.WriteString(cmdIndent + c + "\n")
+		b.WriteString(indent + c + "\n")
 	}
+	b.WriteString(indent + fence + "\n")
 }
 
 // wrap breaks s into lines of width at most, at spaces, the first starting with first and the

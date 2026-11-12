@@ -37,14 +37,17 @@ func TestServerSetupHowto(t *testing.T) {
 	if out, errs, code := run(string(howto.Processes)); code != 0 || out != topic.Text() || errs != "" {
 		t.Errorf("a topic (%d):\n%s\n%s", code, out, errs)
 	}
-	if out, _, code := run("--help"); code != 0 || !strings.HasPrefix(out, "Usage: devopsy "+howto.Flag+" [<topic>]\n") || !strings.Contains(out, howto.List()) {
+	if out, errs, code := run(howto.AllFlag); code != 0 || out != howto.All() || errs != "" {
+		t.Errorf("all (%d):\n%s\n%s", code, out, errs)
+	}
+	if out, _, code := run("--help"); code != 0 || !strings.HasPrefix(out, "Usage: devopsy "+howto.Flag+" [<topic>|--all]\n") || !strings.Contains(out, howto.Help()) {
 		t.Errorf("help (%d):\n%s", code, out)
 	}
 	out, errs, code := run("proceses")
 	if code != 1 || out != "" || !strings.Contains(errs, "devopsy: error: no topic proceses (did you mean processes?)") || !strings.Contains(errs, "$ devopsy "+howto.Flag+"\n") {
 		t.Errorf("an unknown topic (%d):\n%s\n%s", code, out, errs)
 	}
-	if out, errs, code := run(string(howto.Processes), "more"); code != 1 || out != "" || !strings.Contains(errs, "usage: devopsy "+howto.Flag+" [<topic>]") {
+	if out, errs, code := run(string(howto.Processes), "more"); code != 1 || out != "" || !strings.Contains(errs, "usage: devopsy "+howto.Flag+" [<topic>|--all]") {
 		t.Errorf("two topics (%d):\n%s\n%s", code, out, errs)
 	}
 }

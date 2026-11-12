@@ -116,49 +116,43 @@ func TestFlagSpelledOnce(t *testing.T) {
 	}
 }
 
-// docs/server-setup-howto.md shows each topic, under ## and its name, as the flag prints it, in
-// the section's first fenced block, and no topic the registry lacks: the page and the binary say
-// the same steps.
+// docs/server-setup-howto.md is what the flag prints with --all, whole: the page and the
+// binary never say a topic two ways, and a change to a topic changes the page in the same
+// commit (go run ./cmd/devopsy --server-setup-howto --all > docs/server-setup-howto.md).
 func TestDocsPage(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile(docsPage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	shown := map[string]string{}
-	name, block, in := "", "", false
-	for _, line := range strings.Split(string(data), "\n") {
-		switch {
-		case in && line == "```":
-			if _, done := shown[name]; !done {
-				shown[name] = block
-			}
-			in = false
-		case in:
-			block += line + "\n"
-		case strings.HasPrefix(line, "## "):
-			name = strings.TrimPrefix(line, "## ")
-			if _, ok := Find(name); !ok {
-				t.Errorf("%s has a section for %q, which the registry lacks", docsPage, name)
-			}
-		case strings.HasPrefix(line, "```") && name != "":
-			block, in = "", true
-		}
+	if string(data) != All() {
+		t.Errorf("%s is not what %s %s prints", docsPage, Flag, AllFlag)
+	}
+}
+
+// Every topic together: one title, a table of contents linking each topic's section, named
+// as the topic is so a link to the page's #<name> holds, then each topic's title and body.
+func TestAll(t *testing.T) {
+	t.Parallel()
+	all := All()
+	if !strings.HasPrefix(all, "# Server setup how-to\n\n") || strings.Count(all, "\n# ") != 0 {
+		t.Errorf("not one title:\n%s", all)
 	}
 	for _, tp := range Topics {
-		got, ok := shown[string(tp.Name)]
-		if !ok {
-			t.Errorf("%s has no section for %s", docsPage, tp.Name)
-		} else if got != tp.Text() {
-			t.Errorf("%s shows %s otherwise than the flag prints it:\n%s", docsPage, tp.Name, tp.Text())
+		n := string(tp.Name)
+		if !strings.Contains(all, "\n- ["+n+"](#"+n+"): "+tp.Summary+"\n") {
+			t.Errorf("%s is not in the table of contents", n)
+		}
+		if !strings.Contains(all, "\n## "+n+"\n\n"+tp.Title+"\n\n"+tp.Body()) {
+			t.Errorf("%s has no section with its title and body", n)
 		}
 	}
 }
 
-// A topic in the terminal: its title, why, the steps numbered, each command indented
-// under its step as it is, the check last; its words within 80 columns. Its opening says what
-// the docs page tells its reader: as root on the server, who the deploy user is, where a value
-// to change is set.
+// A topic as the flag prints it, Markdown that reads plainly: its title a heading, why, the
+// steps numbered, each step's commands as they are in a fenced block under it, the check
+// last; its words within 80 columns. Its opening says where and as whom the steps run, who
+// the deploy user is, and where a value to change is set.
 func TestText(t *testing.T) {
 	t.Parallel()
 	for _, words := range []string{"as root on the server", "Debian or Ubuntu with systemd", "The deploy user is the Unix user devopsy logs in as", "first line sets the values to change", "user=devopsy"} {
@@ -168,7 +162,7 @@ func TestText(t *testing.T) {
 	}
 	for _, tp := range Topics {
 		text := tp.Text()
-		if !strings.HasPrefix(text, tp.Title+"\n\n") || !strings.Contains(text, wrap(asRoot, "", "")) || !strings.Contains(text, "\nTo check it: ") {
+		if !strings.HasPrefix(text, "# "+tp.Title+"\n\n") || !strings.Contains(text, wrap(asRoot, "", "")) || !strings.Contains(text, "\nTo check it: ") {
 			t.Errorf("%s:\n%s", tp.Name, text)
 		}
 		var cmds []string
@@ -176,32 +170,47 @@ func TestText(t *testing.T) {
 			cmds = append(cmds, s.Cmds...)
 		}
 		for _, c := range cmds {
-			if !strings.Contains(text, "\n"+cmdIndent+c+"\n") {
+			if !strings.Contains(text, "\n"+stepIndent+c+"\n") && !strings.Contains(text, "\n"+c+"\n") {
 				t.Errorf("%s: %q not on a line of its own", tp.Name, c)
 			}
+		}
+		if n := strings.Count(text, fence); n%2 != 0 || n != 2*blocks(tp) {
+			t.Errorf("%s: %d fences for %d blocks of commands", tp.Name, n, blocks(tp))
 		}
 		for i := range tp.Steps {
 			if !strings.Contains(text, "\n"+strconv.Itoa(i+1)+". ") {
 				t.Errorf("%s: no step %d", tp.Name, i+1)
 			}
 		}
+		in := false
 		for _, l := range strings.Split(text, "\n") {
-			if strings.HasPrefix(l, cmdIndent) {
-				continue
-			}
-			if len(l) > 80 {
+			if strings.HasPrefix(strings.TrimSpace(l), fence) {
+				in = !in
+			} else if !in && len(l) > 80 {
 				t.Errorf("%s: %q", tp.Name, l)
 			}
 		}
 	}
 }
 
-// The list names every topic with its summary, aligned, and the command that prints one.
+// The list names every topic with its summary, aligned, a Markdown list, and the command
+// that prints one, and all.
+// blocks counts a topic's steps that have commands, the check among them.
+func blocks(tp Topic) int {
+	n := 0
+	for _, s := range append(slices.Clone(tp.Steps), tp.Check) {
+		if len(s.Cmds) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 func TestList(t *testing.T) {
 	t.Parallel()
 	list := List()
 	for _, tp := range Topics {
-		if !regexp.MustCompile(`\n  ` + regexp.QuoteMeta(string(tp.Name)) + ` +` + regexp.QuoteMeta(tp.Summary) + `\n`).MatchString(list) {
+		if !regexp.MustCompile("\n- `" + regexp.QuoteMeta(string(tp.Name)) + "` +" + regexp.QuoteMeta(tp.Summary) + `\n`).MatchString(list) {
 			t.Errorf("%s missing:\n%s", tp.Name, list)
 		}
 	}
@@ -210,7 +219,7 @@ func TestList(t *testing.T) {
 			t.Errorf("over 80 columns: %q", l)
 		}
 	}
-	if !strings.Contains(list, "devopsy "+Flag) {
+	if !strings.Contains(list, "devopsy "+Flag) || !strings.Contains(list, AllFlag) {
 		t.Errorf("the list does not say how to print a topic:\n%s", list)
 	}
 	if got := Command(Processes); got != "devopsy --server-setup-howto processes" {

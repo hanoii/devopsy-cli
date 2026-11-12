@@ -95,7 +95,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"--server-setup-howto", ""}, howto.Names(), nil, DirectiveNoFileComp},
 		{[]string{"--server-setup-howto", "k"}, []string{"kexec-handover", "kdump"}, nil, DirectiveNoFileComp},
 		{[]string{"--server-setup-howto", "processes", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"--server-setup-howto", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"--server-setup-howto", "-"}, []string{"--all", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
 		// Commands by scope: local ones here, target ones after @.
 		{[]string{"im"}, []string{"image"}, []string{"im"}, DirectiveNoFileComp},

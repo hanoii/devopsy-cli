@@ -134,7 +134,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
 		case len(words) == 2 && strings.HasPrefix(cur, "-"):
-			r.Candidates = []Candidate{{"--help", "how", GroupDevopsy}}
+			r.Candidates = []Candidate{{howto.AllFlag, "every topic, with a table of contents", GroupDevopsy}, {"--help", "how", GroupDevopsy}}
 		case len(words) == 2:
 			for _, t := range howto.Topics {
 				r.Candidates = append(r.Candidates, Candidate{string(t.Name), t.Summary, GroupDevopsy})

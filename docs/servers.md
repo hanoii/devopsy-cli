@@ -196,8 +196,10 @@ command line) is the server admin's, as root. `devopsy
 --server-setup-howto` lists the topics, and `devopsy
 --server-setup-howto <topic>` prints one's steps and how to check them,
 the command every such fix offers; it runs anywhere, needing no server
-or project. [Server setup how-to](server-setup-howto.md) shows the same
-text. devopsy-server's `setup.sh` is one way to do these steps on Debian
+or project. `--all` in place of a topic prints every topic with a table
+of contents, which is the [Server setup how-to](server-setup-howto.md)
+page. The text is Markdown that reads as it is, so a renderer shows it
+too (for example `devopsy --server-setup-howto docker | glow -`). devopsy-server's `setup.sh` is one way to do these steps on Debian
 13 and Ubuntu 26.04.
 
 ## `--server-info`
