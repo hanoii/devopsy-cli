@@ -75,10 +75,11 @@ A `volumes` copy:
 
 - A sync copies the entries with rsync (`rsync -a --no-D --delete
   --numeric-ids --modify-window=-1`, times compared to the nanosecond).
-  The child's copy then equals the parent's, with its owners and modes,
-  except that an entry the child owns gets the child's owner (Owners,
-  below). `--export` and `--import` move them as a tar. Both run
-  as root in `devopsy.internal/util`.
+  The child's copy then equals the parent's, with its modes, and its
+  owners but devopsy's own uids, which take the child's ([Owners in
+  copies](#owners-in-copies)), and an entry the child owns, which gets
+  the child's owner (Owners, below). `--export` and `--import` move them
+  as a tar. Both run as root in `devopsy.internal/util`.
 - Device nodes, FIFOs and sockets are never copied, nor given to an
   owner. As root, rsync and tar would make them on the server, where a
   block device given to the app's UID is its raw disk.
@@ -91,8 +92,10 @@ A `volumes` copy:
   services' containers, stopped, so the options never show on a command
   line. In a tar, a volume sits at the top level
   under its key, beside the entries.
-- A volume keeps the owners it is copied with (its image's users);
-  `devopsy.mnt.owner` only owns entries of `mnt`.
+- A volume keeps the owners it is copied with (its image's users), but
+  devopsy's own uids, which take the receiving side's ([Owners in
+  copies](#owners-in-copies)); `devopsy.mnt.owner` owns only its root
+  (Owners, below).
 - On a service with data, devopsy refuses an `external:` volume and one
   with a fixed `name:` (another project's, or every environment's), and
   a volume key named like an entry of `mnt` that a service with data
@@ -250,6 +253,34 @@ sharing a mount, would each claim it.
 Two services with different owners on one entry are refused. A service
 without the label may write an owned entry (a tool sharing it).
 
+The label also owns the named volumes the service mounts writable, their
+root alone: devopsy makes such a volume when it is missing and gives its
+root to the owner, and what the service writes there is the service's
+own. Docker fills an empty volume from the image when a container first
+mounts it, and gives its root the owner of the image's directory there,
+so every service's mount of an owned volume takes `nocopy`, read-only
+mounts and services without the label included:
+
+```yaml
+services:
+  database:
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
+    volumes: ["dbdata:/var/lib/mysql:nocopy"]
+    labels:
+      devopsy.mnt.owner: user
+volumes:
+  dbdata: {}
+```
+
+The long syntax says it as `volume: {nocopy: true}`. A mount of an owned
+volume without it is refused, before a release goes live and locally
+before a start. What the image ships at that path is not copied into the
+volume then; a database makes its own. An owned volume that is
+`external:` or has a fixed `name:` is refused (another project's, or
+every environment's), and so are two services with different owners on
+one volume. A volume whose driver refuses the chown (a share's may) fails
+the step that gives it.
+
 devopsy gives the entries away as root in `devopsy.internal/util`, without a
 network and never following a symbolic link. Each entry is done in a
 container that mounts that entry alone, so a directory the app swaps for
@@ -265,8 +296,10 @@ Where owners are applied:
   (0755) and given to its owner, then every owned entry is scanned whole,
   so what devopsy did not write (an upload by hand, data from before the
   label) gets its owner too. A file a running service removes meanwhile
-  is no failure. A failure fails the release as its run step would, and
-  the previous one comes back.
+  is no failure. Each owned named volume, made first when missing, has
+  its root given again, which also mends one Docker made before. A
+  failure fails the release as its run step would, and the previous one
+  comes back.
   - In a rollback or a restart, labels that cannot be read (names from
     before a change, a compose error) are only a warning and nothing is
     given away: a rollback never fails for its release's labels.
@@ -279,7 +312,7 @@ Where owners are applied:
 - An `--import` of a `volumes` service: what it extracted goes to its
   owner before the import completes; locally on macOS, nothing, since
   Docker Desktop's file sharing may refuse the chown.
-- A reset, once it has emptied `mnt`.
+- A reset, once it has emptied `mnt`, its owned volumes' roots too.
 - Locally, before `up`, `start`, `restart`, `run`, `create`, `watch` and
   `scale`, but not with compose's `--dry-run`. A `--dry-run` after
   `run`'s service belongs to the container's command, and that run does
@@ -288,11 +321,15 @@ Where owners are applied:
   scanned whole; one whose directory is its owner's is never scanned,
   since this runs before every such command. On macOS, Docker Desktop
   and OrbStack let any container user write the Mac's files, so only the
-  directories are made.
+  directories are made. An owned named volume is made when missing and
+  its root given, on macOS as on Linux: a volume is Docker's own, and
+  nothing fakes its owners.
   - Labels that cannot be read are only a warning: the command goes on,
     and compose says what is wrong with its files. So is an owned entry
     that is a symbolic link (an entry shared between worktrees): it is
-    left as it is, and Docker mounts what it points to.
+    left as it is, and Docker mounts what it points to. A mount of an
+    owned volume without `nocopy` stops the command: the start would
+    fill the volume and leave its root the image's.
   - The labels come from the project's compose files (`compose.yaml` and
     its override), never from a file a command adds with `-f`, nor from
     `COMPOSE_FILE`, which compose ignores for every devopsy command since
@@ -302,6 +339,31 @@ Where owners are applied:
 
 A `custom` import writes as the service's own user. Owners persist
 through restarts and reboots.
+
+### Owners in copies
+
+Data copied from another environment carries that environment's uids
+([uids](servers.md#uids)), which no container of the receiving one runs
+as. The receiving side of every copy, a sync by rsync or by reflinks, an
+`--import` and a snapshot's restore, gives each file owned by an
+environment's uid (2,000,000,000 to 2,099,999,999) its own
+`DEVOPSY_UID`, and each one owned by a project's (1,900,000,000 to
+1,999,999,999) its own `DEVOPSY_PROJECT_UID`, the group the same way and
+apart from the owner. Every other owner stays as it is: root, an image's
+own users, anything below those ranges. The range alone says the kind,
+so nothing of the sending side's numbers is carried, a tar made by hand
+or by an older devopsy is mapped alike, and data left on an old uid
+takes the right one at its next copy.
+
+- A sync's rsync maps them as it writes (`--usermap` and `--groupmap`);
+  an entry the child owns gets the child's owner instead (`--chown`).
+- A clone by reflinks, an import's extraction and a restore's are
+  mapped right after, in the same container (`find` and `chown -h`),
+  only the files whose owner differs: `chown` clears a setuid or setgid
+  bit on a file it changes. A restore of the environment's own data
+  takes one pass over it, changing nothing.
+- Locally on macOS an import maps its volumes, not its entries: Docker
+  Desktop and OrbStack show bind mounts' files as any owner.
 
 ## The mounts check
 
@@ -317,9 +379,13 @@ with nothing changed, for:
 - Data copied as `volumes` (`devopsy.data=true`, the default copy) on a
   service that mounts no entry of `mnt` and no named volume, or whose
   `devopsy.data.exclude` leaves all of them out; and `devopsy.mnt.owner`
-  on a service that mounts no entry of `mnt` writable. A sync would copy
-  nothing of it, and a child's first release would go live on empty data.
-- One entry written by services with different owners.
+  on a service that mounts no entry of `mnt` or named volume writable. A
+  sync would copy nothing of it, and a child's first release would go
+  live on empty data.
+- One entry, or one named volume, written by services with different
+  owners.
+- A mount of an owned named volume without `nocopy`, and an owned volume
+  that is `external:` or has a fixed `name:` (Owners, above).
 - `./mnt` whole as a data or owned entry, refused wherever labels are
   read: it would carry every other service's data and give them one
   owner. Mounted writable by any other service it is refused too: that

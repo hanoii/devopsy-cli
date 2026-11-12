@@ -17,6 +17,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -29,6 +30,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"golang.org/x/sys/unix"
 )
 
@@ -187,9 +189,14 @@ func doorReadRun(c *exec.Cmd, output bool) int {
 // doorSide is the deploy user's side of one request.
 type doorSide struct {
 	policy door.Policy
-	real   string
-	env    []string
-	vets   []remote.DoorVet
+	// claims are the project's uid claims (projectClaims), read once per request, again under
+	// a start's locks: what its containers may run as (uidsOf) and its data's owners may be
+	// (Policy.ProjectUIDs). uidRoot is the release root they are under.
+	claims  []uids.Claim
+	uidRoot string
+	real    string
+	env     []string
+	vets    []remote.DoorVet
 	// made are this request's work directories, so that a refusal, or a claim cut by a
 	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
 	made   []string
@@ -877,6 +884,7 @@ func doorKnown() door.Known {
 		Image:        remote.UtilImage,
 		Dockerfile:   strings.Join(remote.UtilDockerfile, "\n") + "\n",
 		Owners:       ownEntry,
+		VolumeOwner:  ownVolumeRoot,
 		Export:       exportTarScript,
 		Import:       emptyAndExtract,
 		ReflinkProbe: reflinkProbeScript,
@@ -942,7 +950,16 @@ func runDoor(args []string) int {
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
 	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
+	releases, err := remote.ReleaseSettings()
+	if err != nil {
+		return doorRefused(err)
+	}
+	claims, err := projectClaims(claimsStore(releases.Root), policy.Project)
+	if err != nil {
+		return doorRefused(fmt.Errorf("refused: the project's uid claims: %w", err))
+	}
+	policy.ProjectUIDs = claimedUIDs(claims)
+	side := &doorSide{policy: policy, claims: claims, uidRoot: releases.Root, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
 	// With no key left, or an end pending: what a removed key left running gets nothing.
 	if err := side.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
@@ -999,6 +1016,14 @@ func (s *doorSide) answer(args []string, rendered map[string]any, renderErr erro
 	case "firewall":
 		if len(args) == 1 {
 			return s.firewall()
+		}
+	case "uids":
+		if len(args) == 2 {
+			return s.uids(args[1])
+		}
+	case "free":
+		if len(args) == 2 {
+			return s.free(args[1])
 		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
@@ -1401,6 +1426,22 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
 	// A claim's copy is a work directory too, which a door killed mid-start leaves.
 	s.sweepWork()
+	real, err := s.Real(dir)
+	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
+		return doorRefused(errors.New("refused: not this project's directory: " + dir))
+	}
+	// What its containers may run as: the claims of the environment the request's directory
+	// is of, never one the file's name picks, read again under its start locks when it starts
+	// containers, which compose then holds.
+	name, _ := file["name"].(string)
+	owners := dirOwners(s.policy.Project, s.policy.Tree, real, name, s.claims)
+	var locks []*uids.Lock
+	if door.StartsContainers(argv[0]) {
+		if owners, locks, err = s.startLocks(real, name); err != nil {
+			return doorRefused(fmt.Errorf("refused: the start locks of %s: %w", real, err))
+		}
+	}
+	s.policy.UIDs = uidsOfOwners(s.claims, owners)
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
@@ -1415,11 +1456,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 		return doorRefused(errors.New("refused: " + strings.Join(words, ", ")))
 	}
-	real, err := s.Real(dir)
-	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
-		return doorRefused(errors.New("refused: not this project's directory: " + dir))
-	}
-	name, _ := file["name"].(string)
 	if argv[0] == "pull" {
 		return s.pull(config, file, profiles, dir, argv)
 	}
@@ -1499,7 +1535,12 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err := s.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
 	}
+	if err := keepAcrossExec(locks); err != nil {
+		return doorRefused(err)
+	}
 	err = execDecided(s.real, append(cmd, argv...), env)
+	// The locks' descriptors stay open up to the exec (main's KeepAlive says why).
+	runtime.KeepAlive(locks)
 	return doorRefused(err)
 }
 
@@ -1561,30 +1602,42 @@ func (s *doorSide) composeKnowsServiceContexts(env []string) error {
 // downProject takes this project's compose name down by that name alone, no file to
 // check: compose finds what it holds by its own label (composeDownProject).
 func (s *doorSide) downProject(name string, flags []string) int {
-	if !s.policy.OwnName(name) {
-		return doorRefused(errors.New("refused: not this project's name: " + name))
-	}
-	argv := append([]string{"down"}, flags...)
-	if err := s.policy.CheckVerb(argv); err != nil {
-		return doorRefused(err)
-	}
-	if err := s.foreign(); err != nil {
-		return doorRefused(err)
-	}
-	env, err := s.composeEnv("", false)
+	argv, env, err := s.checkedDown(name, flags)
 	if err != nil {
 		return doorRefused(err)
 	}
-	// From /, which holds no compose file of anyone's: compose looks for one in its directory
-	// and every parent, and a down by name runs with none.
+	err = execDecided(s.real, argv, env)
+	return doorRefused(err)
+}
+
+// checkedDown is a down of this project's compose name by that name alone, checked: the name
+// the project's own (OwnName), its flags a down's, no container under it the door did not
+// make (foreign), the caller still asking; its command line (docker first) and environment,
+// for a run from /, which holds no compose file of anyone's: compose looks for one in its
+// directory and every parent, and a down by name runs with none. One check for the request
+// and for a --destroy's free.
+func (s *doorSide) checkedDown(name string, flags []string) ([]string, []string, error) {
+	if !s.policy.OwnName(name) {
+		return nil, nil, errors.New("refused: not this project's name: " + name)
+	}
+	argv := append([]string{"down"}, flags...)
+	if err := s.policy.CheckVerb(argv); err != nil {
+		return nil, nil, err
+	}
+	if err := s.foreign(); err != nil {
+		return nil, nil, err
+	}
+	env, err := s.composeEnv("", false)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := os.Chdir("/"); err != nil {
-		return doorRefused(err)
+		return nil, nil, err
 	}
 	if err := s.stillAsked(); err != nil {
-		return doorRefused(fmt.Errorf("refused: %w", err))
+		return nil, nil, fmt.Errorf("refused: %w", err)
 	}
-	err = execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), env)
-	return doorRefused(err)
+	return append([]string{"docker", "compose", "-p", name}, argv...), env, nil
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a

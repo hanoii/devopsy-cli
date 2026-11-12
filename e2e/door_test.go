@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // A project user with no Docker socket, on a real kernel, Docker and sudo: what no unit
@@ -214,8 +216,28 @@ func doorProject(t *testing.T, name, compose string, more map[string]string) str
 }
 
 // doorService is a service the rules take.
+// doorClaim claims project's environment env on the lane's door server, as a load of its
+// release does, for a test that asks the door by hand with no release: its uid, the plain
+// hash's (no other owner holds that slot there), and its project's claim beside it.
+func doorClaim(t *testing.T, project, env string) string {
+	t.Helper()
+	o, err := uids.EnvOwner(project, "", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := "/home/devopsy/" + cli.UIDsDir
+	script := "set -e; install -d -o devopsy -g devopsy -m 700 " + dir
+	for _, c := range []uids.Owner{o, o.ProjectOf()} {
+		script += fmt.Sprintf("; [ -L %[1]s/%[2]s ] || { ln -s %[3]d %[1]s/%[2]s && chown -h devopsy:devopsy %[1]s/%[2]s; }", dir, c.String(), c.Plain())
+	}
+	if out, code := doorRoot(t, script); code != 0 {
+		t.Fatalf("claiming %s (%d): %s", o, code, out)
+	}
+	return strconv.FormatUint(uint64(o.Plain()), 10)
+}
+
 const doorService = `    image: busybox:1.37
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
 `
 
@@ -226,7 +248,7 @@ func TestDoorProjectsLife(t *testing.T) {
   web:
 `+doorService+`    command: [sleep, infinity]
     volumes: [./mnt/data:/d, ./conf:/c:ro]
-    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any}
+    labels: {devopsy.mnt.owner: user, devopsy.data: "true", devopsy.data.version: any}
 `, map[string]string{".devopsy/conf/f": "settings\n"})
 	release := func(what, args string) string {
 		t.Helper()
@@ -242,7 +264,8 @@ func TestDoorProjectsLife(t *testing.T) {
 	if out := release("a first release", "--release"); strings.Contains(out, "W0001") {
 		t.Errorf("a first release, the firewall loaded as devopsy loads it, said:\n%s", out)
 	}
-	if out, code := doorAs(t, "devopsy-doorlife", "cd ~/doorlife/prod/current/.devopsy && COMPOSE_PROJECT_NAME=doorlife-prod docker compose ps -q web"); code != 0 || strings.TrimSpace(out) == "" {
+	// A plain compose, which has none of devopsy's variables, given the release's uid.
+	if out, code := doorAs(t, "devopsy-doorlife", "cd ~/doorlife/prod/current/.devopsy && DEVOPSY_UID="+doorClaim(t, "doorlife", "prod")+" COMPOSE_PROJECT_NAME=doorlife-prod docker compose ps -q web"); code != 0 || strings.TrimSpace(out) == "" {
 		t.Fatalf("its compose (%d): %s", code, out)
 	}
 	if out, _ := doorRoot(t, "readlink /home/devopsy-doorlife/doorlife/prod/shared/mnt"); strings.TrimSpace(out) != doorSpace+"/mnt/doorlife-prod" {
@@ -347,7 +370,7 @@ func TestDoorBuildModeLife(t *testing.T) {
   web:
     build: .
     image: doorbuild-shared:1
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sleep, infinity]
 `, map[string]string{
@@ -566,8 +589,8 @@ func TestDoorKeyRemovalTakesTheBuildCache(t *testing.T) {
 mkdir -p ~/doorcache/prod/b && cd ~/doorcache/prod/b
 cat >Dockerfile <<'D'
 ` + dockerfile + `D
-printf 'services:\n  app:\n    build: .\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n' >compose.yaml
-COMPOSE_PROJECT_NAME=doorcache-prod docker compose build -q`
+printf 'services:\n  app:\n    build: .\n    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"\n    security_opt: [no-new-privileges]\n' >compose.yaml
+DEVOPSY_UID=` + doorClaim(t, "doorcache", "prod") + ` COMPOSE_PROJECT_NAME=doorcache-prod docker compose build -q`
 		if out, code := doorAs(t, user, script); code != 0 {
 			t.Fatalf("a build (%d):\n%s", code, out)
 		}
@@ -766,7 +789,7 @@ func TestDoorMountStopsWhatCrosses(t *testing.T) {
 	doorUser(t, "doormntv")
 	dir := doorProject(t, "doormnt", `services:
   web:
-`+doorService+`    labels: {devopsy.mnt.owner: "10001:10001"}
+`+doorService+`    labels: {devopsy.mnt.owner: user}
     volumes: [./mnt/data:/d]
     command: sh -c 'until [ -e /d/c0 ]; do sleep 0.1; done; cp /d/c0 /d/cat; chmod 6755 /d/cat; sleep 100000'
 `, nil)
@@ -812,14 +835,16 @@ tar -C /tmp/t -cf `+base+`/.devopsy-sync.stream.evil data
 chown `+user+` `+base+`/.devopsy-sync.stream.evil`); code != 0 {
 		t.Fatal(out)
 	}
-	// devopsy's own import, as a caller would send it, with the tar's checks skipped.
+	// devopsy's own import, as a caller would send it, with the tar's checks skipped, its
+	// map to the environment's own uid.
+	uid := uidOf(t, doorRoot, "doormnt-prod-web-1", uids.EnvDomain)
 	if out, code := doorAs(t, user, `set -u
 script=$(printf '%sx' `+quote(importScript)+`)
 script=${script%x}
 docker run --rm --name devopsy-import-doormnt-prod-1 --label devopsy.env=doormnt-prod --label devopsy.task=import --network none \
   --mount type=bind,source=`+entry+`,target=/mnt/data \
   --mount type=bind,source=`+base+`/.devopsy-sync.stream.evil,target=/in/evil,readonly \
-  devopsy.internal/util:5 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
+  devopsy.internal/util:5 sh -c "$script" sh /in/evil data `+uid+` `+uid+` data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
 		t.Fatalf("devopsy's own import, asked directly (%d): %s", code, out)
 	}
 	asRootID := func() string {
@@ -843,9 +868,7 @@ docker run --rm --name devopsy-import-doormnt-prod-1 --label devopsy.env=doormnt
 
 // importScript is emptyAndExtract, as a caller would have to send it: a change there breaks
 // this test's request first, with a refusal that says so.
-const importScript = `set -eu
-set -o pipefail
-src=$1 e=$2; shift 2
+var importScript = "set -eu\nset -o pipefail\n" + uids.MapScript + `src=$1 e=$2 ue=$3 up=$4; shift 4
 if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
   find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 fi
@@ -854,8 +877,9 @@ case $src in
     # What tar leaves unread past its end blocks (a tar of large records)
     # is drained: zstd killed by SIGPIPE would fail the pipe.
     zstd -dcq -- "$src" | { s=0; tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" || s=$?; cat >/dev/null; exit "$s"; } ;;
-  *) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+  *) tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
 esac
+map_owners "/mnt/$e" "$ue" "$up"
 `
 
 // What another project's user reaches, with a control that its own does and that there is
@@ -1002,7 +1026,7 @@ printf 'services:\n  web:\n    image: busybox:1.37\n    command: [sleep, infinit
 mkdir -p ~/`+project+`/prod/x
 cd ~/`+project+`/prod/x
 printf '%s' `+quote(compose)+` >compose.yaml
-docker compose exec -T web sh -c 'id -u; head -n 1 /hostetc/shadow' 2>&1`)
+DEVOPSY_UID=`+doorClaim(t, project, "prod")+` docker compose exec -T web sh -c 'id -u; head -n 1 /hostetc/shadow' 2>&1`)
 	if code == 0 || strings.Contains(got, "root:") || !strings.Contains(got, "the door did not make") {
 		t.Errorf("the project user's compose beside the deploy user's container (%d):\n%s", code, got)
 	}
@@ -1014,7 +1038,7 @@ func TestDoorLabelsFromAnImageAndTheVet(t *testing.T) {
 	dir := doorProject(t, "doorlabel", `services:
   web:
     build: {context: ./own}
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: sleep 100000
 `, map[string]string{
@@ -1052,7 +1076,7 @@ func TestDoorRegistryLogins(t *testing.T) {
 	dir := doorProject(t, "doorreg", `services:
   web:
     image: `+reg+`/private/app:1
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: sleep 100000
 `, nil)
@@ -1103,7 +1127,7 @@ chmod 755 "$d/cli-plugins/docker-compose" "$HOME/planted/docker-compose" "$HOME/
 auth=$(sed -n 's/.*"auth": *"\([^"]*\)".*/\1/p' "$HOME/.docker/config.json" | head -n 1)
 printf '{"auths":{"REG":{"auth":"%s"}},"cliPluginsExtraDirs":["%s"],"credsStore":"evil","credHelpers":{"REG":"evil"}}' "$auth" "$HOME/planted" >"$d/config.json"
 cat >/tmp/doorreg.json <<'J'
-{"name":"doorreg-prod","services":{"web":{"image":"REG/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
+{"name":"doorreg-prod","services":{"web":{"image":"REG/private/app:1","user":"` + doorClaim(t, "doorreg", "prod") + `:` + doorClaim(t, "doorreg", "prod") + `","security_opt":["no-new-privileges"]}}}
 J
 cp /tmp/doorreg.json /tmp/doorreg-take.json
 sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose "$d/config.json" /tmp/doorreg-take.json '' "$HOME/doorreg/prod/current" pull
@@ -1122,7 +1146,7 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose "$d/con
 	}
 	doorRoot(t, "docker image rm -f "+reg+"/private/app:1")
 	other := `cat >/tmp/doorregv.json <<'J'
-{"name":"doorregv-prod","services":{"web":{"image":"REG/private/app:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}
+{"name":"doorregv-prod","services":{"web":{"image":"REG/private/app:1","user":"` + doorClaim(t, "doorregv", "prod") + `:` + doorClaim(t, "doorregv", "prod") + `","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorregv/prod
 sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorregv.json '' ~/doorregv/prod pull 2>&1`
@@ -1332,7 +1356,7 @@ for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+
 	dir := doorProject(t, "doornodaemon", `services:
   web:
     image: `+reg+`/app:1
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sleep, infinity]
 `, nil)
@@ -1416,7 +1440,7 @@ exit 1`); code != 0 {
 	dir := doorProject(t, "doortokenb", `services:
   web:
     build: .
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sleep, infinity]
 `, map[string]string{
@@ -1463,7 +1487,7 @@ exit 1`)
 	reached("a claim's read", out)
 	// Compose's pull and a start, Docker's daemon pulling for them before the claims came
 	// through the door's client alone.
-	out, _ = doorAs(t, user, `mkdir -p ~/doortoken/prod && cd ~/doortoken/prod && printf 'services:\n  web:\n    image: `+reg2+`/x:1\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n' >compose.yaml && COMPOSE_PROJECT_NAME=doortoken-prod docker compose pull 2>&1; COMPOSE_PROJECT_NAME=doortoken-prod docker compose up -d 2>&1`)
+	out, _ = doorAs(t, user, `mkdir -p ~/doortoken/prod && cd ~/doortoken/prod && printf 'services:\n  web:\n    image: `+reg2+`/x:1\n    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"\n    security_opt: [no-new-privileges]\n' >compose.yaml && export DEVOPSY_UID=`+doorClaim(t, "doortoken", "prod")+` && COMPOSE_PROJECT_NAME=doortoken-prod docker compose pull 2>&1; COMPOSE_PROJECT_NAME=doortoken-prod docker compose up -d 2>&1`)
 	reached("a pull or a start", out)
 	// The control: the daemon's own pull follows the realm there.
 	doorRoot(t, "timeout 30 docker pull "+reg2+"/x:1 >/dev/null 2>&1; true")
@@ -1482,7 +1506,7 @@ exit 1`)
 // on the child the project user's sshd) and to its own server at another address.
 func TestDoorFirewall(t *testing.T) {
 	web := `    image: busybox:1.37
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sh, -c, "mkdir -p /tmp/w && echo hello-from-web >/tmp/w/index.html && exec httpd -f -p 8080 -h /tmp/w"]
 `
@@ -1898,7 +1922,7 @@ echo "entry $(ls /home/devopsy/.config/devopsy/door/users/ 2>/dev/null | grep -c
 // --server-info names the others, with that fix.
 func TestDoorHostServices(t *testing.T) {
 	web := `    image: busybox:1.37
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sleep, "3600"]
 `
@@ -1960,8 +1984,8 @@ func TestDoorBuildersStayApart(t *testing.T) {
 mkdir -p ~/%[1]s/prod/b && cd ~/%[1]s/prod/b
 cat >Dockerfile <<'D'
 %[2]sD
-printf 'services:\n  app:\n    build: .\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n' >compose.yaml
-COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, project, dockerfile(project))
+printf 'services:\n  app:\n    build: .\n    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"\n    security_opt: [no-new-privileges]\n' >compose.yaml
+DEVOPSY_UID=%[3]s COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, project, dockerfile(project), doorClaim(t, project, "prod"))
 		if out, code := doorAs(t, user, script); code != 0 {
 			t.Fatalf("%s's build (%d):\n%s", project, code, out)
 		}
@@ -2072,8 +2096,8 @@ func TestDoorSyncAcrossDoorServers(t *testing.T) {
 	dir := doorProject(t, "doorpair", `services:
   web:
 `+doorService+`    command: [sleep, infinity]
-    volumes: [./mnt/data:/d, db:/v]
-    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any}
+    volumes: [./mnt/data:/d, "db:/v:nocopy"]
+    labels: {devopsy.mnt.owner: user, devopsy.data: "true", devopsy.data.version: any}
 volumes:
   db: {}
 `, map[string]string{
@@ -2176,7 +2200,7 @@ func TestDoorRefusesBeforeTheSwitch(t *testing.T) {
 	}
 	// A tag its registry does not have fails the fetch's pull, the door's own claim, before the
 	// switch too.
-	op(t, dir, `printf 'services:\n  web:\n    image: busybox:0.0.0-nosuch\n    user: "10001:10001"\n    security_opt: [no-new-privileges]\n    command: [sleep, infinity]\n' >.devopsy/compose.yaml`)
+	op(t, dir, `printf 'services:\n  web:\n    image: busybox:0.0.0-nosuch\n    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"\n    security_opt: [no-new-privileges]\n    command: [sleep, infinity]\n' >.devopsy/compose.yaml`)
 	if out, code := op(t, dir, "devopsy @prod --release"); code == 0 || started() != before || strings.Contains(out, "restart") {
 		t.Errorf("a missing tag (%d), the live container started at %s:\n%s", code, started(), out)
 	}
@@ -2295,7 +2319,7 @@ func TestDoorReleaseCutOff(t *testing.T) {
 // child's entry, whose files are another uid's, is the project user's to read and never to
 // replace. (The deploy user's own: TestSyncReflinkE2E, TestSnapshotReflinkE2E.)
 func TestDoorReflinks(t *testing.T) {
-	data := `    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any`
+	data := `    labels: {devopsy.mnt.owner: user, devopsy.data: "true", devopsy.data.version: any`
 	dir := doorProject(t, "doorxfs", `services:
   db:
 `+doorService+`    command: [sleep, infinity]
@@ -2324,7 +2348,7 @@ func TestDoorReflinks(t *testing.T) {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
 	// The services' own files, as they would write them.
-	if out, code := doorRoot(t, "cd "+binds["prod"]+" && dd if=/dev/urandom of=files/a.bin bs=1M count=60 2>/dev/null && dd if=/dev/urandom of=db/table bs=1M count=3 2>/dev/null && chown 10001:10001 files/a.bin db/table"); code != 0 {
+	if out, code := doorRoot(t, "cd "+binds["prod"]+" && dd if=/dev/urandom of=files/a.bin bs=1M count=60 2>/dev/null && dd if=/dev/urandom of=db/table bs=1M count=3 2>/dev/null && chown "+doorClaim(t, "doorxfs", "prod")+":"+doorClaim(t, "doorxfs", "prod")+" files/a.bin db/table"); code != 0 {
 		t.Fatalf("writing the data (%d): %s\n%s", code, out, doorEntries(t, "doorxfs-prod"))
 	}
 	used := func() int {
@@ -2397,8 +2421,8 @@ func TestDoorDataFlows(t *testing.T) {
 	dir := doorProject(t, "doorflow", `services:
   web:
 `+doorService+`    command: [sleep, infinity]
-    volumes: [./mnt/data:/d, ./mnt/settings.ini:/etc/settings.ini, db:/v]
-    labels: {devopsy.mnt.owner: "10001:10001", devopsy.data: "true", devopsy.data.version: any, devopsy.shell: "true", devopsy.shell.user: "10001:10001"}
+    volumes: [./mnt/data:/d, ./mnt/settings.ini:/etc/settings.ini, "db:/v:nocopy"]
+    labels: {devopsy.mnt.owner: user, devopsy.data: "true", devopsy.data.version: any, devopsy.shell: "true", devopsy.shell.user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"}
 volumes:
   db: {}
 `, map[string]string{
@@ -2426,7 +2450,7 @@ volumes:
 	if out, _ := doorRoot(t, "cat "+mnt+"/data/seeded/f"); !strings.Contains(out, "seed") {
 		t.Errorf("the step's write in its entry: %s", out)
 	}
-	if out := check("--shell with a command", "devopsy @prod --shell -- id"); !strings.Contains(out, "uid=10001") {
+	if out := check("--shell with a command", "devopsy @prod --shell -- id"); !strings.Contains(out, "uid="+doorClaim(t, "doorflow", "prod")+" ") {
 		t.Errorf("--shell runs as %s", out)
 	}
 	log := "/tmp/doorflow-shell.log"
@@ -2441,7 +2465,7 @@ volumes:
 	check("--status", "devopsy @prod --status")
 	check("--releases", "devopsy @prod --releases")
 	check("--debug imports", "devopsy @prod --debug imports")
-	// The volume is root's inside, so its data comes by an import; the entry is 10001's.
+	// The volume is root's inside, so its data comes by an import; the entry is its uid's.
 	volume := func(what, value string) {
 		t.Helper()
 		must(what, `rm -rf /tmp/vt && mkdir -p /tmp/vt/data /tmp/vt/db && echo dat-`+value+` >/tmp/vt/data/f && echo `+value+` >/tmp/vt/db/f && tar -C /tmp/vt -cf /tmp/vt.tar data db && devopsy @prod --import web --yes </tmp/vt.tar`)
@@ -2599,7 +2623,7 @@ docker exec doorholdp-reg sh -c 'for f in $(find /var/lib/registry -path "*/blob
 	doorRoot(t, "docker image rm "+hold+" >/dev/null 2>&1; true")
 	// Compose's pull verb: no claim.
 	compose := `cat >/tmp/doorholdp.json <<'J'
-{"name":"doorholdp-prod","services":{"web":{"image":"HOLD","user":"10001:10001","security_opt":["no-new-privileges"]}}}
+{"name":"doorholdp-prod","services":{"web":{"image":"HOLD","user":"` + doorClaim(t, "doorholdp", "prod") + `:` + doorClaim(t, "doorholdp", "prod") + `","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorholdp/prod
 sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorholdp.json '' ~/doorholdp/prod pull 2>&1`
@@ -2618,7 +2642,7 @@ func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
 		return `services:
   base:
     build: {context: ., dockerfile: base.Dockerfile}
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sleep, infinity]
   app:
@@ -2627,7 +2651,7 @@ func TestDoorBuildOnAnotherServicesBuild(t *testing.T) {
       dockerfile: app.Dockerfile
       additional_contexts:
         shop-base: "` + context + `"
-    user: "10001:10001"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
     command: [sleep, infinity]
 `

@@ -73,7 +73,9 @@ func ensureVolumes(ctx context.Context, cwd, project string, vols []cli.Volume, 
 		if len(v.Opts) > 0 {
 			var mounts []string
 			for _, s := range services {
-				if slices.ContainsFunc(s.Volumes, func(x cli.Volume) bool { return x.Key == v.Key }) {
+				// Its mounts, never s.Volumes, which leaves out what devopsy.data.exclude
+				// names: an owned volume excluded from copies is made all the same.
+				if slices.ContainsFunc(s.VolumeMounts, func(m cli.VolumeMount) bool { return m.Key == v.Key }) {
 					mounts = append(mounts, s.Name)
 				}
 			}

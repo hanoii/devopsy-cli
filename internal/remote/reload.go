@@ -60,7 +60,7 @@ trap '' INT TERM HUP PIPE
 out="$rel/` + ServerLogFile + `"
 ` + followOutput + `mv -f "$rl_pending" "$rel/` + TargetEnvFile + `"
 unset ` + TargetPendingEnv + `
-` + call("--mnt-owners") + ` || { devopsy --say error "giving the entries of mnt to their owners failed: the reload step does not run" ` + sayRemedies(LogHint(HintAddress(t))) + `; exit 1; }
+` + call("--mnt-owners") + ` || { devopsy --say error "giving the entries of mnt and the named volumes to their owners failed: the reload step does not run" ` + sayRemedies(LogHint(HintAddress(t))) + `; exit 1; }
 rs=0
 with_tty ` + Quote(call("--release-steps", "reload", "run")) + ` || rs=$?
 img ran "$base" "$rel" || true

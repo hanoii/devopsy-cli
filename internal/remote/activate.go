@@ -620,7 +620,7 @@ func (a *activation) restartPrevious() string {
 `
 	// Its entries of mnt to their owners, by its own labels: the new
 	// release's may have given them to others.
-	s += `    (cd "$base/current" && ` + devopsyCall(a.project, []string{"--mnt-owners", "restored"}, false) + `) || devopsy --say error "giving the entries of mnt to their owners failed ($?): restarting ${prev#releases/} anyway"
+	s += `    (cd "$base/current" && ` + devopsyCall(a.project, []string{"--mnt-owners", "restored"}, false) + `) || devopsy --say error "giving the entries of mnt and the named volumes to their owners failed ($?): restarting ${prev#releases/} anyway"
 `
 	// No bind source of it may lead out of its entry through a link in
 	// the data as the failed release left it (a sync's copy, a restore's):
@@ -656,7 +656,7 @@ func (a *activation) runStretch() string {
 	if a.rollback {
 		ownersArgs = append(ownersArgs, "restored")
 	}
-	owners := `(cd "$base/current" && ` + devopsyCall(a.project, ownersArgs, false) + `) || { status=$?; failed="giving the entries of mnt to their owners"; }
+	owners := `(cd "$base/current" && ` + devopsyCall(a.project, ownersArgs, false) + `) || { status=$?; failed="giving the entries of mnt and the named volumes to their owners"; }
 `
 	s += "status=0\nfailed=run\n"
 	if a.sync != nil {

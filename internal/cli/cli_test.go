@@ -17,13 +17,17 @@ import (
 
 // project creates dir/<name>/.devopsy with the given files (path: content)
 // and returns dir/<name>. Paths ending in "*" are written executable,
-// without the star. A "target.env" makes it a release: the root is then
-// dir/<name>/code, the file its devopsy-target.env beside it.
+// without the star. A "target.env" makes it a release, where a server keeps
+// one: the root is then <release root>/<project>/[<instance>/]<environment>/
+// releases/1/code, the file its devopsy-target.env beside it, given the
+// target's lines a release writes (project name, environment prod) unless it
+// has its own.
 func project(t *testing.T, name string, files map[string]string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), name)
 	if env, ok := files["target.env"]; ok {
-		root = filepath.Join(root, remote.CodeDir)
+		env, base := releaseTarget(env, name)
+		root = filepath.Join(filepath.Dir(root), "srv", base, "releases", "1", remote.CodeDir)
 		write(t, releaseTargetEnv(root), env)
 	}
 	for path, content := range files {
@@ -44,6 +48,21 @@ func project(t *testing.T, name string, files map[string]string) string {
 		}
 	}
 	return root
+}
+
+// releaseTarget is env with the target's lines a release writes added where it
+// has none (DEVOPSY_PROJECT name, DEVOPSY_ENVIRONMENT prod), and the release's
+// base under the release root they name.
+func releaseTarget(env, name string) (string, string) {
+	lines, _ := dotenv.UnmarshalWithLookup(env, nil)
+	for _, kv := range [][2]string{{"DEVOPSY_ENVIRONMENT", "prod"}, {"DEVOPSY_PROJECT", name}} {
+		k, v := kv[0], kv[1]
+		if _, ok := lines[k]; !ok {
+			lines[k] = v
+			env = DotenvLine(k, v) + "\n" + env
+		}
+	}
+	return env, filepath.Join(lines["DEVOPSY_PROJECT"], lines["DEVOPSY_INSTANCE"], lines["DEVOPSY_ENVIRONMENT"])
 }
 
 // releaseTargetEnv is the target env file of the release whose code/ is
@@ -319,7 +338,8 @@ func TestBuildCustomCommand(t *testing.T) {
 // it from the devopsy that read it, in DEVOPSY_COMMAND_TARGET.
 func TestBuildCommandRun(t *testing.T) {
 	t.Parallel()
-	root := project(t, remote.CodeDir, map[string]string{
+	root := project(t, "shop", map[string]string{
+		"target.env":       "",
 		"compose.yaml":     minimalCompose,
 		"commands/image*":  "#!/bin/sh\n## Run: local\n",
 		"commands/deploy*": "#!/bin/sh\n## Run: Target\n",
@@ -330,6 +350,10 @@ func TestBuildCommandRun(t *testing.T) {
 		"commands/odd*":    "#!/bin/sh\n## Needs: server\n",
 	})
 	release := releaseTargetEnv(root)
+	lines, err := os.ReadFile(release)
+	if err != nil {
+		t.Fatal(err)
+	}
 	addressed := []string{commandTargetInternal + "=vm1:prod", CommandTargetEnv + "=stale"}
 	for _, c := range []struct {
 		release bool
@@ -355,7 +379,7 @@ func TestBuildCommandRun(t *testing.T) {
 		{true, nil, "image", "image runs only on your machine (## Run: local in ", ""},
 	} {
 		if c.release {
-			if err := os.WriteFile(release, nil, 0o644); err != nil {
+			if err := os.WriteFile(release, lines, 0o644); err != nil {
 				t.Fatal(err)
 			}
 		} else {
@@ -497,7 +521,7 @@ func TestBuildProjectName(t *testing.T) {
 		// The config's project, over compose's name:.
 		{map[string]string{"compose.yaml": "name: other\n" + minimalCompose, "config.yaml": "project: shop\n"}, nil, "shop"},
 		// A release's target.env, over the config's project.
-		{map[string]string{"compose.yaml": minimalCompose, "config.yaml": "project: shop\n", "target.env": "COMPOSE_PROJECT_NAME='shop-prod'\n"}, nil, "shop-prod"},
+		{map[string]string{"compose.yaml": minimalCompose, "config.yaml": "project: shop\n", "target.env": "COMPOSE_PROJECT_NAME='shop-prod'\nDEVOPSY_PROJECT='shop'\n"}, nil, "shop-prod"},
 		// The caller wins.
 		{map[string]string{"compose.yaml": minimalCompose, "config.yaml": "project: shop\n"}, []string{"COMPOSE_PROJECT_NAME=mine"}, "mine"},
 	}
@@ -794,11 +818,8 @@ func TestDotenvLineRoundTrip(t *testing.T) {
 // own file instead.
 func TestReleaseComposeFile(t *testing.T) {
 	t.Parallel()
-	rel := filepath.Join(t.TempDir(), "releases", "1")
-	dir := filepath.Join(rel, "code", ".devopsy")
-	write(t, filepath.Join(dir, "compose.yaml"), "services: {}\n")
-	write(t, filepath.Join(dir, "compose.override.yaml"), "services: {}\n")
-	write(t, filepath.Join(rel, "devopsy-target.env"), "")
+	code := project(t, "shop", map[string]string{"target.env": "", "compose.yaml": "services: {}\n", "compose.override.yaml": "services: {}\n"})
+	rel := filepath.Dir(code)
 	write(t, filepath.Join(rel, images.ComposeFile), "services: {}\n")
 	files := func(environ ...string) []string {
 		t.Helper()

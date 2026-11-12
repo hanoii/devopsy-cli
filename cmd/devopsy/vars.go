@@ -17,6 +17,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // runVars handles `devopsy @target --vars ...`: the target's variables file,
@@ -71,6 +72,9 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 	for _, k := range args {
 		if !remote.VarNameRe.MatchString(k) {
 			return fail(fmt.Sprintf("%q is not a variable name (values never go in arguments: set reads them from your environment, a prompt or stdin)", k))
+		}
+		if err := uids.Reserved(k); err != nil && action == "set" {
+			return fail(err.Error())
 		}
 	}
 

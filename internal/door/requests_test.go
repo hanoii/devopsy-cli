@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // fakeDaemon holds containers by name and id, each with its labels.
@@ -85,7 +87,7 @@ func (h *fakeHost) WorkDir() (string, error) {
 }
 
 var testKnown = Known{
-	Image: "util:1", Dockerfile: "FROM alpine\n", Owners: "own script", Export: "export script", Import: "import script",
+	Image: "util:1", Dockerfile: "FROM alpine\n", Owners: "own script", VolumeOwner: "volume owner script", Export: "export script", Import: "import script",
 	ReflinkProbe: "probe", SnapshotTar: "tar script", Space: "space script", Share: "share script",
 	Daemon: "daemon script", Restore: "restore script", Receive: "receive script", RsyncCopy: []string{"rsync", "-a"}, Clone: CloneScriptForm,
 }
@@ -371,12 +373,12 @@ func TestDecideAllows(t *testing.T) {
 		{"run", "--rm", "--name", "devopsy-owners-shop-prod-1", "--label", "devopsy.env=shop-prod", "--label", "devopsy.task=owners", "--network", "none",
 			"--mount", "type=bind,source=" + entry + ",target=/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "10001:10001"},
 		{"run", "--mount", "type=bind,source=" + entry + ",target=/x/data,readonly", "-v", "shop-prod_db:/x/db:ro", "util:1", "sh", "-c", "export script", "sh", "data", "db"},
-		{"run", "--network", "none", "--mount", "type=bind,source=" + entry + ",target=/mnt/data", "--mount", "type=bind,source=/home/devopsy-shop/shop/prod/t.tar,target=/in/t.tar,readonly", "util:1", "sh", "-c", "import script", "sh", "/in/t.tar", "data", "data", "./data/x"},
+		{"run", "--network", "none", "--mount", "type=bind,source=" + entry + ",target=/mnt/data", "--mount", "type=bind,source=/home/devopsy-shop/shop/prod/t.tar,target=/in/t.tar,readonly", "util:1", "sh", "-c", "import script", "sh", "/in/t.tar", "data", "10001", "10001", "data", "./data/x"},
 		{"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", "/home/devopsy-shop/shop/prod/snapshots/1.tmp/data:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "mnt.data.tar.zst", "1:2"},
-		{"run", "--mount", "type=bind,source=" + entry + ",target=/s,readonly", "--mount", "type=bind,source=/space/mnt/shop-dev/data,target=/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"},
+		{"run", "--mount", "type=bind,source=" + entry + ",target=/s,readonly", "--mount", "type=bind,source=/space/mnt/shop-dev/data,target=/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d", "10001", "10001"},
 		{"run", "-v", "/space/mnt/shop-prod:/m:ro", "-v", "shop-prod_db:/v/db:ro", "util:1", "du", "-sk", "/m/data", "/v/db"},
 		{"run", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"},
-		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown=1:1", "/src/data/", "/dst/data/"},
+		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown=10001:10001", "/src/data/", "/dst/data/"},
 		receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"),
 		{"run", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-v", "/space/mnt/shop-prod:/mnt:ro", "util:1", "sh", "-c", "daemon script"},
 		{"run", "-v", "/space/clones/shop/abc/mnt:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"},
@@ -398,6 +400,17 @@ func TestDecideRunChownHeldAsAnOwner(t *testing.T) {
 		if (err != nil) != refused {
 			t.Errorf("--chown=%s: %v, refused %v", owner, err, refused)
 		}
+	}
+	// An rsync's maps (uids.Map.RsyncArgs) are owners it gives too, each of their targets.
+	for m, refused := range map[uids.Map]bool{{Env: 10001, Project: 10001}: false, {Env: 0, Project: 10001}: true, {Env: 10001, Project: 1000}: true, {Env: 50001, Project: 10001}: true} {
+		_, err := decide(t, append(append([]string{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a"}, m.RsyncArgs()...), "/src/data/", "/dst/data/")...)
+		if (err != nil) != refused {
+			t.Errorf("maps to %+v: %v, refused %v", m, err, refused)
+		}
+	}
+	// A map of other ranges is no word of devopsy's.
+	if _, err := decide(t, "run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--usermap=0-4294967294:10001", "/src/data/", "/dst/data/"); err == nil {
+		t.Errorf("a map of every uid passed")
 	}
 	tree := "/home/devopsy-shop/shop/prod/snapshots/1.tmp/data"
 	p := testPolicy
@@ -467,7 +480,7 @@ func TestDecideRunKeepsRootOffTheTree(t *testing.T) {
 	tree := "/home/devopsy-shop/shop/prod"
 	host := &fakeHost{}
 	a, err := Decide([]string{"run", "-v", tree + "/stream:/in/stream:ro", "-v", "/space/mnt/shop-prod/data:/mnt/data",
-		"util:1", "sh", "-c", "import script", "sh", "/in/stream", "data", "data"}, testPolicy, testDaemon, host, testKnown)
+		"util:1", "sh", "-c", "import script", "sh", "/in/stream", "data", "10001", "10001", "data"}, testPolicy, testDaemon, host, testKnown)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +632,7 @@ func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 // A read-only copy goes after its container: nothing stays in the door's space.
 func TestDecideRunCleansUp(t *testing.T) {
 	t.Parallel()
-	a, err := decide(t, "run", "-v", "/home/devopsy-shop/shop/prod/stream:/in/stream:ro", "-v", "/space/mnt/shop-prod/data:/mnt/data", "util:1", "sh", "-c", "import script", "sh", "/in/stream", "data", "data")
+	a, err := decide(t, "run", "-v", "/home/devopsy-shop/shop/prod/stream:/in/stream:ro", "-v", "/space/mnt/shop-prod/data:/mnt/data", "util:1", "sh", "-c", "import script", "sh", "/in/stream", "data", "10001", "10001", "data")
 	if err != nil || !slices.Equal(a.Cleanup, []string{"/space/work/in"}) {
 		t.Errorf("%+v, %v", a, err)
 	}

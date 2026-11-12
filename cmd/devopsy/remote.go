@@ -466,6 +466,14 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 	// (the child's current), and a release that does not sync runs on a
 	// server lacking them.
 	early := remote.WithAlsoNeeds(context.Background(), remote.ActivateScript(t, "0", false, projectName, phases, nil))
+	// A project whose compose files read a uid needs a server that gives them.
+	readsUIDs, err := cli.ReadsUIDs(projectDir)
+	if err != nil {
+		return failErr(err)
+	}
+	if readsUIDs {
+		early = remote.WithAlsoNeeded(early, remote.UIDsFeature)
+	}
 
 	// A role taken by another compose project on the server fails before
 	// anything is uploaded (--prepare-release checks it again, under the
@@ -665,6 +673,9 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		syncOpts = &remote.SyncOptions{}
 	}
 	upSession := remote.WithAlsoNeeds(remote.WithGate(remote.WithoutInterrupt(upCtx)), remote.ActivateScript(t, "0", false, projectName, phases, syncOpts))
+	if readsUIDs {
+		upSession = remote.WithAlsoNeeded(upSession, remote.UIDsFeature)
+	}
 	code, err := remote.SSHStreams(upSession, t, nil, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
 	id := strings.TrimSpace(idOut.String())
 	pr.Close()

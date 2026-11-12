@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // The util containers a project user may ask for: root on the host's files, so each is
@@ -42,6 +44,9 @@ type form struct {
 	conf bool
 	// narrow, for an rsync, is the one entry it writes, out of the mnt it asked for.
 	narrow func(cmd []string) (entry string, file bool, ok bool)
+	// mapped are the places in its command of the uids its owners are mapped to (a
+	// uids.MapScript's two arguments), each checked as an owner it gives.
+	mapped []int
 }
 
 var (
@@ -53,6 +58,7 @@ var (
 	// leading dash, which `find "$@"` and rsync would take for a flag.
 	Word      = regexp.MustCompile(`^` + word + `$`)
 	ownerArg  = regexp.MustCompile(`^\d+:\d+$`)
+	uidArg    = regexp.MustCompile(`^\d+$`)
 	kindDir   = regexp.MustCompile(`^(mnt|volumes)$`)
 	tarMember = regexp.MustCompile(`^(\./)?` + word + `(/` + word + `)*/?$`)
 	inPath    = regexp.MustCompile(`^/in/` + word + `$`)
@@ -153,7 +159,7 @@ func rsyncArgs(cmd []string, known Known) (src, dst string, ok bool) {
 	}
 	var rest []string
 	for _, a := range cmd[len(known.RsyncCopy):] {
-		if a != "--inplace" && !chownFlag.MatchString(a) {
+		if _, _, mapped := uids.ParseRsyncMap(a); a != "--inplace" && !chownFlag.MatchString(a) && !mapped {
 			rest = append(rest, a)
 		}
 	}
@@ -174,9 +180,12 @@ func forms(known Known) []form {
 	return []form{
 		{name: "owners", matches: script(known.Owners, Word, ownerArg),
 			mounts: []mountRule{{target(`/mnt/` + word), false, []sourceKind{kindEntry}}}},
+		// A named volume's root to its owner: the volume alone, at a path the image lacks.
+		{name: "volume owner", matches: script(known.VolumeOwner, Word, ownerArg),
+			mounts: []mountRule{{target(`/vol/` + word), false, []sourceKind{kindVolume}}}},
 		{name: "export", matches: script(known.Export, Word),
 			mounts: []mountRule{{target(`/x/` + word), true, copied}}},
-		{name: "import", matches: script(known.Import, inPath, Word, tarMember),
+		{name: "import", matches: script(known.Import, inPath, Word, uidArg, uidArg, tarMember), mapped: []int{6, 7},
 			mounts: []mountRule{{target(`/mnt/` + word), false, entryOrVolume}, {target(`/in/` + word), true, []sourceKind{kindTreeIn, kindClone}}}},
 		{name: "probe", matches: script(known.ReflinkProbe, probePath),
 			mounts: []mountRule{
@@ -223,8 +232,8 @@ func forms(known Known) []form {
 			return slices.Equal(cmd, []string{"find", "/mnt", "-mindepth", "1", "-delete"})
 		}, mounts: []mountRule{{target(`/mnt`), false, []sourceKind{kindMnt}}}},
 		{name: "share", matches: func(cmd []string) bool {
-			return slices.Equal(cmd, []string{"sh", "-c", known.Share, "sh", "/s", "/d"})
-		}, mounts: []mountRule{{target(`/s`), true, copied}, {target(`/d`), false, entryOrVolume}}},
+			return len(cmd) == 8 && slices.Equal(cmd[:6], []string{"sh", "-c", known.Share, "sh", "/s", "/d"}) && uidArg.MatchString(cmd[6]) && uidArg.MatchString(cmd[7])
+		}, mapped: []int{6, 7}, mounts: []mountRule{{target(`/s`), true, copied}, {target(`/d`), false, entryOrVolume}}},
 		// An entry's copy on this server: one entry rw, whatever mnt it named, so what it
 		// copies cannot leave a link where a bind's source goes by.
 		{name: "rsync", matches: func(cmd []string) bool {
@@ -350,6 +359,27 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 	// service's user, whom userRefused holds to an id no container of the host's is (never
 	// root's or devopsy's own); a snapshot tar's goes to the project user, who collects it,
 	// and is that user's uid alone. Nothing reads such an owner as trust today.
+	// The uids a copy maps owners to are owners it gives, as --chown's: an rsync's maps
+	// (uids.Map.RsyncArgs) and a map script's arguments.
+	var mappedTo []string
+	for _, a := range cmd {
+		if env, project, ok := uids.ParseRsyncMap(a); ok {
+			mappedTo = append(mappedTo, env, project)
+		}
+	}
+	// A form that maps owners takes its uids at fixed places: a command short of them is
+	// none of devopsy's.
+	for _, i := range f.mapped {
+		if i >= len(cmd) {
+			return nil, refuse("docker run: %s: without the uids it maps owners to", f.name)
+		}
+		mappedTo = append(mappedTo, cmd[i])
+	}
+	for _, uid := range mappedTo {
+		if why := p.userRefused(uid+":"+uid, p.ProjectUIDs); why != "" {
+			return nil, refuse("docker run: %s: an owner it maps to: %s", f.name, why)
+		}
+	}
 	for _, a := range cmd {
 		owner, chown := strings.CutPrefix(a, "--chown=")
 		if !chown && !ownerArg.MatchString(a) || chown && !ownerArg.MatchString(owner) {
@@ -362,7 +392,7 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 			}
 			continue
 		}
-		if why := p.userRefused(owner); why != "" {
+		if why := p.userRefused(owner, p.ProjectUIDs); why != "" {
 			return nil, refuse("docker run: %s: an owner: %s", f.name, why)
 		}
 	}

@@ -85,6 +85,15 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 			return err
 		}
 	}
+	// A start under the release lock too holds its start locks: a --destroy frees a claim
+	// after its own release lock has gone with the environment's directory.
+	if plan.StartsUIDs && !behindDoor() {
+		locks, err := holdStartLocks(plan)
+		if err != nil {
+			return err
+		}
+		defer closeLocks(locks)
+	}
 	return runCompose(ctx, plan.Args, plan.Env, "", stdout, detach)
 }
 

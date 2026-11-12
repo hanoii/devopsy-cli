@@ -930,7 +930,7 @@ exit 0
 	// The owners failing after the switch: no sync (nothing stopped,
 	// no marker), back to the previous release.
 	_, errOut, err = run(root, "21", "go\n", "FAIL_OWNERS=6")
-	if err == nil || current(root) != "releases/1/code" || strings.Contains(errOut, SyncMarker) || !strings.Contains(errOut, "giving the entries of mnt to their owners failed (6), current is back to 1") {
+	if err == nil || current(root) != "releases/1/code" || strings.Contains(errOut, SyncMarker) || !strings.Contains(errOut, "giving the entries of mnt and the named volumes to their owners failed (6), current is back to 1") {
 		t.Fatalf("failed owners (%v), current %q:\n%s", err, current(root), errOut)
 	}
 	if got := calls(root); strings.Contains(got, "--sync-services") || strings.Contains(got, "deploy from") {
@@ -1532,7 +1532,7 @@ exit 0
 
 	// Giving mnt's entries to their owners fails: a failed run step,
 	// never run, and the previous release back, its own owners first.
-	if out, err := release("32", "FAIL_OWNERS=32"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "giving the entries of mnt to their owners failed (5), current is back to 1") {
+	if out, err := release("32", "FAIL_OWNERS=32"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "giving the entries of mnt and the named volumes to their owners failed (5), current is back to 1") {
 		t.Fatalf("failed owners (%v), current %q:\n%s", err, current(), out)
 	}
 	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n") {
@@ -1747,6 +1747,21 @@ exit 0
 	out, err := run(DestroyScript(target("b"), ""), "FAKE_IN_USE=registry/app:def", "TAG=ghi")
 	if err != nil || !strings.Contains(out, "registry/app:def stays: conflict: a container uses registry/app:def") || exists("app/b/prod") {
 		t.Errorf("destroy b (%v):\n%s", err, out)
+	}
+	// Its uid claim goes last, after the removal; and with nothing left of the environment,
+	// as a cut destroy leaves it, the next one frees it still.
+	freed := "--free-uids " + filepath.Join(root, "app", "b", "prod") + "\n"
+	if calls := readFile(filepath.Join(root, "calls")); !strings.HasSuffix(calls, freed) {
+		t.Errorf("destroy b's last call is not its claim's free:\n%s", calls)
+	}
+	if err := os.Remove(filepath.Join(root, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(DestroyScript(target("b"), ""), "TAG=ghi"); err != nil || !strings.Contains(out, "nothing at") {
+		t.Errorf("destroy of nothing (%v):\n%s", err, out)
+	}
+	if calls := readFile(filepath.Join(root, "calls")); !strings.Contains(calls, freed) {
+		t.Errorf("a destroy finding nothing does not free the claim:\n%s", calls)
 	}
 
 	if !strings.Contains(out, "fetch of release 4 was interrupted") {

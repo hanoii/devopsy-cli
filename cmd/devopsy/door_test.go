@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"golang.org/x/sys/unix"
 )
 
@@ -30,7 +32,7 @@ import (
 // a project user's door must take, or its release fails at runtime.
 var utilScripts = map[string]string{
 	"exportTarScript": exportTarScript, "reflinkProbeScript": reflinkProbeScript, "snapshotTarScript": snapshotTarScript,
-	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
+	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "ownVolumeRoot": ownVolumeRoot, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
 	"rsyncDaemonScript": rsyncDaemonScript, "restoreStreamScript": restoreStreamScript, "receiveScript": receiveScript,
 }
 
@@ -39,7 +41,7 @@ var utilScripts = map[string]string{
 func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 	t.Parallel()
 	known := doorKnown()
-	scripts := []string{known.Owners, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
+	scripts := []string{known.Owners, known.VolumeOwner, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
 	for name, script := range utilScripts {
 		if !slices.Contains(scripts, script) {
 			t.Errorf("%s is not in doorKnown", name)
@@ -161,16 +163,16 @@ func TestDoorTakesComputedForms(t *testing.T) {
 	if script := cloneScript(d); !door.CloneScriptForm(script) {
 		t.Errorf("the door does not take devopsy's own clone:\n%s", script)
 	}
-	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{2000000123, 1900000123}}
 	daemon := []string{"run", "--rm", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + rsyncdConf([]string{"storage", "app.ini"}, []string{"app.ini"}, []string{"db"}),
 		"-v", "/space/mnt/shop-prod:/mnt:ro", "-v", "shop-prod_db:/vol/db:ro", remote.UtilImage, "sh", "-c", rsyncDaemonScript}
 	if _, err := door.Decide(daemon, p, nil, doorTestHost{}, doorKnown()); err != nil {
 		t.Errorf("the door does not take devopsy's own rsync daemon: %v", err)
 	}
-	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "1:2"}}}
+	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "2000000123:2000000123"}}}
 	c := newContainer("sync", "shop-dev", "1.abcdef-receive", remote.SyncTask("1.abcdef"))
 	for _, r := range []syncReceive{{Entry: "storage"}, {Entry: "app.ini", File: true}, {Volume: "db"}} {
-		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev", false)
+		plan, err := planReceive(&r, child, uids.Map{Env: 2000000123, Project: 1900000123}, "/space/mnt/shop-dev", "shop-dev", false)
 		if err != nil {
 			t.Fatalf("%+v: %v", r, err)
 		}
@@ -572,26 +574,45 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 	clone := space + "/clones/shop/abc/1"
 	tree := "/home/devopsy-shop/shop/prod"
 	// The caller is this user, as devopsy runs as the project user: its tar gives it its own ids.
-	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop"}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{10001, 2000000123, 1900000123}}
+	m := uids.Map{Env: 2000000123, Project: 1900000123}
 	c := newContainer("export", "shop-prod", "1", remote.TaskExport)
 	ctx := context.Background()
 	d := dataSet{mnt: mnt, entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
 	inClone := d.in(clone)
-	for name, run := range map[string]func(){
+	runs := map[string]func(){
 		"du":                 func() { _, _ = duData(ctx, c, d) },
 		"du of a clone":      func() { _, _ = duData(ctx, c, inClone) },
 		"probe":              func() { reflinks(ctx, c, clone, d) },
 		"clone":              func() { _ = cloneData(ctx, c, clone, d) },
 		"rsync an entry":     func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false) },
-		"rsync with owners":  func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false, "--chown=1:2") },
+		"rsync with owners":  func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false, "--chown=10001:10001") },
 		"rsync a file":       func() { _ = rsyncEntry(ctx, c, mnt, dev, "app.ini", true) },
 		"rsync from a clone": func() { _ = rsyncEntry(ctx, c, inClone.mnt, dev, "storage", false) },
 		"rsync a volume":     func() { _ = rsyncVolume(ctx, c, "shop-prod_db:/src/db:ro", "shop-dev_db:/dst/db", "db") },
+		"rsync mapped":       func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false, m.RsyncArgs()...) },
+		"rsync a volume mapped": func() {
+			_ = rsyncVolume(ctx, c, "shop-prod_db:/src/db:ro", "shop-dev_db:/dst/db", "db", m.RsyncArgs()...)
+		},
+		"an extraction into a volume": func() {
+			_ = extractEntry(ctx, tree, mnt, tree+"/t.tar", tarEntry{name: "db", forms: []string{"db"}, volume: &cli.Volume{Key: "db", Name: "shop-prod_db"}}, c, "shop-prod", nil, m)
+		},
 		"a tar": func() {
 			_ = tarInto(ctx, c, tree+"/snapshots/1.tmp/data/mnt.storage.tar.zst", []string{"-v", clone + ":/m:ro"}, "mnt", "storage")
 		},
-		"a share": func() { shareInto(ctx, c, mnt+"/storage", dev+"/storage", "mnt/storage") },
-	} {
+		"a share": func() { shareInto(ctx, c, mnt+"/storage", dev+"/storage", "mnt/storage", m) },
+		"a volume's root": func() {
+			_ = ownVolume(ctx, c, cli.OwnedVolume{Volume: cli.Volume{Key: "db", Name: "shop-prod_db"}, Owner: "10001:10001"})
+		},
+	}
+	// An entry's extraction maps its owners on Linux, where the door runs: locally on macOS
+	// it maps none (extractEntry).
+	if runtime.GOOS != "darwin" {
+		runs["an extraction"] = func() {
+			_ = extractEntry(ctx, tree, mnt, tree+"/t.tar", tarEntry{name: "storage", forms: []string{"storage"}}, c, "shop-prod", nil, m)
+		}
+	}
+	for name, run := range runs {
 		if err := os.Remove(logged); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
@@ -659,7 +680,7 @@ esac
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	side := &doorSide{policy: door.Policy{Project: "shop"}, real: docker}
+	side := &doorSide{policy: door.Policy{Project: "shop", UIDs: []uint32{10001}}, claims: testShopClaims, real: docker}
 	file := func(svc string) map[string]any {
 		f := map[string]any{"name": "shop-prod", "services": map[string]any{svc: map[string]any{
 			"build": map[string]any{"context": "."}, "image": "mongo-express:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"}}}}
@@ -1618,6 +1639,7 @@ func doorComposeHelper(dir string) {
 	doorLog = os.Getenv("DEVOPSY_TEST_DOOR_LOG")
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
+		claims: testShopClaims,
 		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
 		// As runDoor reads it from what its sudo kept (doorEnvironment).
 		asked: remote.SessionFrom(os.Getenv),
@@ -1645,7 +1667,8 @@ func doorComposeHelper(dir string) {
 			panic(err)
 		}
 	}
-	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, os.Getenv("DEVOPSY_TEST_DOOR_PROFILES"), cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), dir), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
+	// Its prod's directory, whose claim the side holds (testShopClaims), unless a test says.
+	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, os.Getenv("DEVOPSY_TEST_DOOR_PROFILES"), cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), filepath.Join(dir, "prod")), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
 }
 
 // The door's clone and mark take only a clone's directory or a take's in it (door.CloneDir):
@@ -1837,4 +1860,11 @@ func TestDoorEntriesBelieveOnlyACleanAnswer(t *testing.T) {
 	if fileExists(theirs) {
 		t.Errorf("the door made %s, another project's mnt, and gave it to devopsy-shop:\n%s", theirs, readString(acl))
 	}
+}
+
+// testShopClaims are claims the door tests' project holds: its prod on 10001, the uid their
+// compose files run as.
+var testShopClaims = []uids.Claim{
+	{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 10001},
+	{Owner: uids.Owner{Project: "shop"}, UID: 10001},
 }

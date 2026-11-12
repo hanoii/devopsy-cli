@@ -159,8 +159,11 @@ steps, else its `release:` steps. In order:
    point to now, and the snapshot's builds from its bookmarks;
 3. every service with data and its dependents stop;
 4. each entry and volume is emptied and extracted, with its history of the
-   images that ran on it. Nothing is checked and `--accept-image` plays no
-   part, as the data and its version come back together;
+   images that ran on it, its files on devopsy's uids given this
+   environment's ([Owners in copies](data.md#owners-in-copies)), so a
+   snapshot from another environment or server comes back on its own.
+   Nothing is checked and `--accept-image` plays no part, as the data and
+   its version come back together;
 5. the switch, and the run step.
 
 The restored release's `devopsy-target.env` keeps this server's lines

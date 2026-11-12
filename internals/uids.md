@@ -1,0 +1,35 @@
+# Container uids
+
+Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `internal/cli/uids.go` (the variables as a project loads), `cmd/devopsy/uids.go` (the claims as the deploy user, the door's `uids` request).
+
+- Containers of different owners never share a uid: a process escaped from one reaches another's environment, root and signals through `/proc` with the same uid and gid alone.
+- An owner is named by its parts joined with `:` (`env:<project>[:<instance>]:<environment>`, `project:<project>[:<instance>]`, `Owner.String`), never by its compose name: compose names are flat, so two owners would share one name.
+- Every part is checked as the config takes it, the environment lowercase (`Owner.check`), before it names a file.
+- Each domain has a range of its own (`ranges`), inside the block systemd's table of uids leaves unused, so a tenant's own names never hash into a bare project's range.
+- An owner's hashed slot is FNV-1a-64 of its name into its range (`Owner.Plain`), pinned by `TestPlainIsPinned`: a change moves every uid an image baked or a server claimed.
+- A claim is a symlink named for its owner whose target is the uid (`Store.Lookup`), keyed by owner so a probed uid never moves when the slot it was pushed from is freed.
+- A claim is made only under the claims directory's lock, after reading again, taking the hashed slot or the next free one going round, never a slot `Taken` names or any entry points at, a name that is no claim included (`Claim.Target`).
+- A project holds at most `MaxClaims` claims in a domain: a tenant makes environments freely, and a first claim reads its domain's.
+- Start locks live in `locks/` under the claims directory, never beside a claim: an environment may be named like a lock file.
+- A start lock is opened close-on-exec, read-write, and cleared only right before the exec (`Lock.KeepAcrossExec`), so nothing started before it holds the lock.
+- A start lock is checked against its path after it is taken and taken again on the file there now: a free removes the file while it holds it.
+- A claim is freed only with its owner's start lock held exclusive (`Store.Free`), which removes the lock's file too.
+- Only the server's devopsy computes a uid, at every load of a release (`setUIDs` in `internal/cli/uids.go`), setting `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID` over every layer and the caller's value, and stores them nowhere: a restore would bring another environment's back.
+- A release's owner is read from where it is (`releaseOwners`), its target lines checked against its place under the release root, never from a variable a `.env` could set.
+- The claims directory is the configured release root's whenever the release, as reached, is under it, never one under a disk a project directory links to: one directory per server keeps every uid one owner's.
+- A project user's devopsy asks the door's `uids` request, whose answer is the two numbers alone (`askDoorUIDs`); the door reads the owner from the path in the caller's tree (`ownerAt`).
+- Locally the uids are the plain hashes, under the caller's and the `.env`'s, the project's from `config.yaml`'s `project:` alone (`CommittedName`) so it matches every server's.
+- `--vars set` and a config's `env:` refuse the two names (`uids.Reserved`).
+- A release whose compose files read either variable needs the server's `uids` feature (`cli.ReadsUIDs`, `remote.WithAlsoNeeded`), checked in its first session and its upload's: an older server leaves them unset, and compose would refuse after the upload.
+- Every start of containers in a release holds both start locks shared, the environment's and its project's, from before it reads the claims again until compose ends (`holdStartLocks` for the deploy user, `doorSide.startLocks` for the door's `up`, `create` and `run`), and fails when a claim changed since the load: a free between the load and the start would leave a container on a freed uid.
+- A start devopsy runs as a child (`composeRun`: a release's steps, `ensureVolumes`) holds the start locks too, for as long as the child runs: a `--destroy` frees a claim after its release lock went with the environment's directory.
+- A claim is freed only by a `--destroy`'s last step (`--free-uids <environment directory>`, `freeUIDs`, the door's `free`), once the environment's directory is gone, checked again under the lock, after the removal and in its "nothing at" branch too, so a rerun finishes a cut one: under the start lock exclusive it takes the compose name down once more, through the door's own checked down for a project user (`checkedDown`, shared with its `down` request), then frees the claim; then the project's, its lock taken only when no environment claim of it is left (`EnvClaimsLeft`, `FreeIfUnused`), so a sibling's start never holds it up.
+- An environment with no claim takes nothing down at its free: its flat compose name may be another project's.
+- The door's free reads the owner from the path in the caller's tree (`ownerAt`, which holds the name to the project's own), never from the caller's words, and refuses while the environment's directory, or an entry of its data (`<space>/mnt/<compose name>`, `dataLeft`), is left; its named volumes go with the down's `--volumes`.
+- A request reads its own project's claims alone (`Store.ListOf`), never every tenant's.
+- `--server-info` takes a door project's claims for live when its tree's read listed none of its environments: that read runs as its user and may answer nothing in time.
+- The receiving side of every copy gives each file owned by a uid (and a gid, apart) of the environment range its own `DEVOPSY_UID`, of either project range its own `DEVOPSY_PROJECT_UID`, and leaves every other owner as it is (`uids.Map`): copied data carries the sender's uids, which none of the receiver's containers runs as.
+- The map goes by range alone and carries nothing of the sender's (no header, manifest or list line of the sender's): the range says the kind, so a tar by hand or from an older devopsy maps alike.
+- The receiving side's uids are its own load's (`ownMap`); a parent writing into a child takes them from the child's list (`!uids`, `parseChildUIDs`) and refuses the copy without them.
+- One map, two renderers: rsync's `--usermap` and `--groupmap` with the ranges as FROM (`Map.RsyncArgs`), never with `--chown`, which rsync refuses beside them, and a find script (`uids.MapScript`) after what copies owners as they are (a reflink clone, a tar's extraction), changing only what differs, since chown clears setuid and setgid bits.
+- A bind mount's entry is not mapped locally on macOS, where Docker fakes its owners: its file sharing may refuse the chown.

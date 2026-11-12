@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // A sync, operator side: devopsy @<child> --sync, and the first release
@@ -1115,7 +1116,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	if in == nil {
 		return code
 	}
-	services, streams, dirs, vols, child := in.services, in.streams, in.dirs, in.vols, in.child
+	services, streams, dirs, vols, child, childUIDs := in.services, in.streams, in.dirs, in.vols, in.child, in.childUIDs
 
 	set := cli.DataStops(services, cli.SyncParent, "")
 	// What it stopped comes back: restoring reads the containers' state.
@@ -1229,7 +1230,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 				code = fail("interrupted: the files not copied")
 				return
 			}
-			if err := syncRsync(ctx, from, project, childOwners(child), childShares(child), last); err != nil {
+			if err := syncRsync(ctx, from, project, childOwners(child), childShares(child), childUIDs, last); err != nil {
 				code = fail(err.Error())
 			}
 		}
@@ -1325,6 +1326,9 @@ type pushInputs struct {
 	dirs     []string
 	vols     []cli.Volume
 	child    []childService
+	// childUIDs are the child's own uids, from its list: what the copy maps the parent's
+	// owners to (uids.Map).
+	childUIDs uids.Map
 }
 
 // pushChecks is everything that can refuse a push before it changes
@@ -1360,7 +1364,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 	// So is an import's mark on the child for a service this side does
 	// not copy: only a sync that writes it may clear it. Asked even with
 	// nothing to copy here, for that mark.
-	child, mark, restoreMark, err := childServices(ctx)
+	child, mark, restoreMark, childUIDs, err := childServices(ctx)
 	if err != nil {
 		return nil, fail(err.Error())
 	}
@@ -1463,7 +1467,7 @@ func pushChecks(ctx context.Context, cwd, projectDir string, reset bool) (*pushI
 			}
 		}
 	}
-	return &pushInputs{services, streams, dirs, vols, child}, 0
+	return &pushInputs{services, streams, dirs, vols, child, childUIDs}, 0
 }
 
 // cloneContainer starts the containers of a push's or an export's clone
@@ -1989,19 +1993,65 @@ const listRestore = "!restore"
 // service of its import's mark if any, through --sync-exec, after it
 // prepared them: across servers the sync's first session there, which
 // checks the child's devopsy for needs too.
-func childServices(ctx context.Context) ([]childService, string, []childService, error) {
+func childServices(ctx context.Context) ([]childService, string, []childService, uids.Map, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, uids.Map{}, err
 	}
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "list")
 	cmd.Stdout, cmd.Stderr = &out, errOut
 	if err := cmd.Run(); err != nil {
-		return nil, "", nil, fmt.Errorf("listing the child's services: %w", err)
+		return nil, "", nil, uids.Map{}, fmt.Errorf("listing the child's services: %w", err)
 	}
 	services, mark, restore := parseChildServices(out.String())
-	return services, mark, restore, nil
+	m, err := parseChildUIDs(out.String())
+	return services, mark, restore, m, err
+}
+
+// listUIDs starts the child's list's line of its own two uids, the environment's and its
+// project's (uids.Map), what a copy into it maps the parent's owners to: no service is
+// named so.
+const listUIDs = "!uids"
+
+// parseChildUIDs reads the child's own uids from its list (listUIDs): a list without them
+// refuses the copy, whose map would otherwise give the parent's files to no one's uid.
+func parseChildUIDs(out string) (uids.Map, error) {
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
+		if len(f) != 3 || f[0] != listUIDs {
+			continue
+		}
+		env, err := uids.ParseUID(f[1])
+		if err != nil {
+			break
+		}
+		project, err := uids.ParseUID(f[2])
+		if err != nil {
+			break
+		}
+		return uids.Map{Env: env, Project: project}, nil
+	}
+	return uids.Map{}, errors.New("the child's list gives no uids of its own: nothing copied")
+}
+
+// ownMap is the uid map of the environment at cwd, the receiving side of a copy: its own
+// two uids as its load gives them (cli.UIDEnv, cli.ProjectUIDEnv; in a release the
+// server's claims, locally the plain hashes under the caller's).
+func ownMap(cwd string) (uids.Map, error) {
+	envUID, projectUID, err := cli.LoadedUIDs(cwd, os.Environ())
+	if err != nil {
+		return uids.Map{}, err
+	}
+	env, err := uids.ParseUID(envUID)
+	if err != nil {
+		return uids.Map{}, fmt.Errorf("%s: %w", cli.UIDEnv, err)
+	}
+	project, err := uids.ParseUID(projectUID)
+	if err != nil {
+		return uids.Map{}, fmt.Errorf("%s: %w", cli.ProjectUIDEnv, err)
+	}
+	return uids.Map{Env: env, Project: project}, nil
 }
 
 // childUtilImage gets the child's server's devopsy-util ready
@@ -2198,9 +2248,9 @@ func rsyncEntry(ctx context.Context, c container, srcMnt, dstMnt, d string, file
 // rsyncVolume copies the named volume key from its mount src
 // (<name>:/src/<key>:ro) into dst's (<name or dir>:/dst/<key>), as
 // rsyncEntry copies an entry.
-func rsyncVolume(ctx context.Context, c container, src, dst, key string) error {
+func rsyncVolume(ctx context.Context, c container, src, dst, key string, opts ...string) error {
 	report.Info("rsync volume " + key)
-	run := append([]string{"-v", src, "-v", dst, remote.UtilImage}, remote.RsyncCopy...)
+	run := append(append([]string{"-v", src, "-v", dst, remote.UtilImage}, remote.RsyncCopy...), opts...)
 	return rsyncRun(ctx, c, append(run, "/src/"+key+"/", "/dst/"+key+"/"), "the volume "+key)
 }
 
@@ -2257,9 +2307,10 @@ func shareable(src dataSet, childMnt string, shares map[string]bool) map[string]
 // Then $2 emptied, never removed, and $1 cloned into it, twice when the
 // first fails (a file the live parent removed meanwhile fails cp, which
 // goes on with the rest: the second pass finds the tree as it is now),
-// and any special file made meanwhile removed.
-const shareScript = `set -e
-[ -z "$(find "$1" \( ! -type f ! -type d ! -type l \) -print -quit)" ] || exit 3
+// and any special file made meanwhile removed. Last, the parent's owners
+// mapped to the child's own uids, $3 and $4 (uids.MapScript): a clone
+// keeps the owners it is cloned with.
+var shareScript = "set -e\n" + uids.MapScript + `[ -z "$(find "$1" \( ! -type f ! -type d ! -type l \) -print -quit)" ] || exit 3
 f=$(find "$1" -type f -print -quit)
 if [ -n "$f" ]; then
   cp --reflink=always "$f" "$2/.devopsy-reflink.$$" 2>/dev/null || { rm -f "$2/.devopsy-reflink.$$"; exit 4; }
@@ -2268,6 +2319,7 @@ fi
 find "$2" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 cp -a --reflink=always "$1/." "$2/" || cp -a --reflink=always "$1/." "$2/"
 find "$2" \( ! -type f ! -type d ! -type l \) -delete
+map_owners "$2" "$3" "$4"
 `
 
 // shareMount is the --mount of x at target: a bind of x when it is a
@@ -2286,12 +2338,12 @@ func shareMount(x, target string) (string, error) {
 // when src does not clone into dst: nothing changed, the caller rsyncs
 // it and the rest. Any other failure: false, said, and the caller
 // rsyncs it, which replaces whatever the clone left.
-func shareInto(ctx context.Context, c container, src, dst, what string) (ok, cloneless bool) {
+func shareInto(ctx context.Context, c container, src, dst, what string, m uids.Map) (ok, cloneless bool) {
 	from, err := shareMount(src, "/s")
 	if err == nil {
 		var into string
 		if into, err = shareMount(dst, "/d"); err == nil {
-			err = dockerRun(ctx, c, "--network", "none", "--mount", from+",readonly", "--mount", into, remote.UtilImage, "sh", "-c", shareScript, "sh", "/s", "/d")
+			err = dockerRun(ctx, c, append([]string{"--network", "none", "--mount", from + ",readonly", "--mount", into, remote.UtilImage, "sh", "-c", shareScript, "sh", "/s", "/d"}, m.Args()...)...)
 		}
 	}
 	switch {
@@ -2393,7 +2445,7 @@ func (d dataSet) in(dir string) dataSet {
 // daemon on this server with no network, and per entry or volume an SSH
 // session with the sync's key whose stdin and stdout are the daemon's, the
 // child's rsync at the other end (receiveOne).
-func syncRsync(ctx context.Context, src dataSet, parent string, owners map[string]string, shares map[string]bool, last bool) error {
+func syncRsync(ctx context.Context, src dataSet, parent string, owners map[string]string, shares map[string]bool, m uids.Map, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -2439,7 +2491,7 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 		// The first that will not clone says so for all, and the rest are
 		// rsynced too, without a try.
 		share := func(c container, from, into, what string) bool {
-			ok, cloneless := shareInto(ctx, c, from, into, what)
+			ok, cloneless := shareInto(ctx, c, from, into, what, m)
 			if cloneless {
 				report.Info("no reflinks between the parent's data and the child's: " + cli.DataCopyReflinkLabel + " rsynced as any")
 				shares = nil
@@ -2455,9 +2507,11 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 					continue
 				}
 			}
-			var opts []string
+			// An owned entry's files all go to its owner (--chown); any other's by the map,
+			// rsync refusing the two together.
+			opts := m.RsyncArgs()
 			if o := owners[d]; o != "" {
-				opts = append(opts, "--chown="+o)
+				opts = []string{"--chown=" + o}
 			}
 			if err := rsyncEntry(ctx, write.with(fmt.Sprintf("-rsync-%d", i)), src.mnt, childMnt, d, slices.Contains(files, d), opts...); err != nil {
 				return err
@@ -2467,12 +2521,12 @@ func syncRsync(ctx context.Context, src dataSet, parent string, owners map[strin
 			if shares[v.Key] && share(write.with(fmt.Sprintf("-share-v%d", i)), v.Name, toProject+"_"+v.Key, "the volume "+v.Key) {
 				continue
 			}
-			if err := rsyncVolume(ctx, write.with(fmt.Sprintf("-rsync-v%d", i)), v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key); err != nil {
+			if err := rsyncVolume(ctx, write.with(fmt.Sprintf("-rsync-v%d", i)), v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key, m.RsyncArgs()...); err != nil {
 				return err
 			}
 		}
-		// A clone keeps the parent's owners: the child's own, as the
-		// rsync's --chown gives them.
+		// A clone keeps the parent's owners, mapped by its script: an owned
+		// entry's own, as the rsync's --chown gives them.
 		if err := ownMnt(ctx, childMnt, shared, write.with("-owners")); err != nil {
 			return err
 		}
@@ -2800,7 +2854,12 @@ func childList(p place, services []cli.SyncService) int {
 	if _, err := cli.MntOwners(services); err != nil {
 		return fail(err.Error())
 	}
+	m, err := ownMap(p.cwd)
+	if err != nil {
+		return fail("the child's own uids: " + err.Error())
+	}
 	mnt, _ := filepath.EvalSymlinks(filepath.Join(p.projectDir, "mnt"))
+	fmt.Printf("%s\t%d\t%d\n", listUIDs, m.Env, m.Project)
 	for _, s := range services {
 		reflink := ""
 		if s.Reflink {
@@ -2972,6 +3031,16 @@ func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []s
 	}
 	switch word {
 	case "go":
+		// The copy carried the parent's owners, its volumes' roots included: theirs back,
+		// before anything starts on them (a reset's too, after its copy). When that fails the
+		// data stays marked and its services down, as a copy that did not complete leaves them.
+		if err := ownProjectVolumes(context.Background(), p.cwd, newContainer("sync", composeName(p.cwd), "finish-owners", remote.SyncTask("finish"))); err != nil {
+			code = fail(err.Error())
+			if merr := markIncomplete(p.base, "", remote.IncompleteFinish, "the copy completed, but its volumes' roots could not be given to their owners: "+err.Error(), false); merr != nil {
+				fail(merr.Error())
+			}
+			break
+		}
 		// Complete: whatever an earlier sync or import left is replaced.
 		_ = os.Remove(incomplete)
 		var written []string
@@ -3182,16 +3251,16 @@ func wipeData(p place) error {
 	// the services with data, and a stream's import brings its service
 	// up, on entries Docker would otherwise make root's. Its volumes
 	// too, for the rsync to write into.
-	owners, mnt, err := projectOwners(p.cwd)
+	owned, err := projectOwners(p.cwd)
+	c := newContainer("sync", composeName(p.cwd), id+"-owners", remote.SyncTask(id))
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, newContainer("sync", composeName(p.cwd), id+"-owners", remote.SyncTask(id)))
+		err = ownMnt(context.Background(), owned.mnt, owned.entries, c)
 	}
-	if err != nil {
-		return err
-	}
-	_, services, err := cli.SyncServices(p.cwd, os.Environ())
 	if err == nil {
-		err = ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(services), services)
+		err = ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(owned.services), owned.services)
+	}
+	if err == nil {
+		err = ownVolumes(context.Background(), p.cwd, composeName(p.cwd), owned.volumes, owned.services, c)
 	}
 	if err != nil {
 		return err

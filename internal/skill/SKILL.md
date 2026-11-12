@@ -73,12 +73,18 @@ What devopsy requires:
   concern (`storage`, `database`, `logs`), never `./mnt` whole. On servers
   `mnt` is a link to the environment's `shared/mnt`, so releases and
   rollbacks keep the data. A service that writes an entry says who owns
-  it: give it a numeric `user: "<uid>:<gid>"` and
+  it: give it a numeric `user: "<uid>:<gid>"` (devopsy's own,
+  `"${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"`, so no other environment's
+  containers share it; `DEVOPSY_PROJECT_UID` for one an image builds in) and
   `devopsy.mnt.owner=user`, which takes the owner from that `user:`
   (`devopsy.mnt.owner=<uid>:<gid>` only for an image that drops
   privileges itself and has no `user:`). devopsy creates the entry and
   gives it to the service on every release, a sync, an import and a
-  restore. Without the label Docker creates a missing entry as root, and
+  restore. The label owns the named volumes the service mounts writable
+  too, their root alone, and then every service's mount of such a volume
+  takes `nocopy` (`dbdata:/var/lib/mysql:nocopy`), refused otherwise:
+  Docker would fill it from the image and give its root the image's
+  owner. Without the label Docker creates a missing entry as root, and
   files from an import, a sync, a restore or an upload by hand keep the
   owners they came with, so a non-root app cannot write them; the only
   other way is a root step in the project (an entrypoint's chown with

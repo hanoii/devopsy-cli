@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/complete"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // Set at build time by GoReleaser.
@@ -164,6 +166,8 @@ func run() int {
 			return runReleaseSettings(args[1:])
 		case remote.MntReadyFlag:
 			return runMntReady(args[1:])
+		case remote.FreeUIDsFlag:
+			return runFreeUIDs(args[1:])
 		case remote.ServerFactsFlag:
 			return runServerFacts()
 		case remote.ProjectUsersFlag:
@@ -355,15 +359,28 @@ func run() int {
 			return failErr(err)
 		}
 	}
+	// A project user's start takes its locks at the door, which holds the claims.
+	var startLocks []*uids.Lock
+	if plan.StartsUIDs && !behindDoor() {
+		if startLocks, err = holdStartLocks(plan); err != nil {
+			return failErr(err)
+		}
+	}
 	if notice := plan.Notice; notice != "" {
 		if verboseLevel > 1 && plan.NoticeFull != "" {
 			notice = plan.NoticeFull
 		}
 		report.Debug(notice)
 	}
+	if err := keepAcrossExec(startLocks); err != nil {
+		return failErr(err)
+	}
 	// Replace this process, so signals and the terminal go straight to the
 	// command, as with the shell version's exec.
 	err = syscall.Exec(path, plan.Args, plan.Env)
+	// The locks' descriptors stay open up to the exec: unreachable before it, the collector
+	// could close them first, and compose would run without them.
+	runtime.KeepAlive(startLocks)
 	// A script without a shebang: run it with sh, as a shell's exec would.
 	if errors.Is(err, syscall.ENOEXEC) {
 		err = syscall.Exec("/bin/sh", append([]string{"/bin/sh"}, plan.Args...), plan.Env)

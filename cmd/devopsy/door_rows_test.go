@@ -137,7 +137,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 		}}
 	}
 	side := func(command string) *doorSide {
-		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
+		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree}, claims: testShopClaims,
 			vets: []remote.DoorVet{{Prefix: "vetted.", Command: command}}, real: docker}
 	}
 	for _, label := range []string{"vetted.x", "VETTED.X", "Vetted.Host"} {

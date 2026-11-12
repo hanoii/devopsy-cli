@@ -82,6 +82,12 @@ over it, as in compose. It adds, for the compose files and commands:
 
 - `COMPOSE_PROJECT_NAME`, always (Project name, below);
 - `DEVOPSY_PROJECT_DIR`;
+- `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID`, the uids a server would give
+  ([Variables on a server](config.md#variables-on-a-server)), here a hash
+  of the local project name and of `config.yaml`'s `project:`. Yours win
+  (`DEVOPSY_UID=$(id -u)` in `.devopsy/.env`): on Linux for a bind mount
+  you edit that a container writes, or for rootless Docker or Podman,
+  which run no uid above 65535;
 - whatever the project's [env capability](capabilities.md#env) computes,
   which is how projects derive values like their hosts.
 

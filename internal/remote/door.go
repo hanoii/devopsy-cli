@@ -16,6 +16,10 @@ import (
 // the deploy user's space for a project user (cmd/devopsy's runMntReady).
 const MntReadyFlag = "--mnt-ready"
 
+// FreeUIDsFlag is the hidden flag that frees an environment's uid claim, a --destroy's last
+// step (cmd/devopsy's runFreeUIDs), through the door for a project user.
+const FreeUIDsFlag = "--free-uids"
+
 // Door is a server's `door:`, the deploy user's: who may ask it what, for a project
 // user with no Docker socket. A key in a project's config could grant itself, so
 // this is read only from the deploy user's own.

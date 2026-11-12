@@ -76,7 +76,7 @@ func (p Policy) CheckVerb(argv []string) error {
 		}
 		// A shell's user (devopsy.shell.user) is held as a service's `user:` is.
 		if name == "-u" || name == "--user" {
-			if why := p.userRefused(value); why != "" {
+			if why := p.userRefused(value, p.UIDs); why != "" {
 				return refuse("%s: user %s", verb, why)
 			}
 		}

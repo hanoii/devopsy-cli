@@ -11,6 +11,7 @@ import (
 var testPolicy = Policy{
 	Project: "shop", User: "devopsy-shop", UID: "1", Space: "/space", Tree: "/home/devopsy-shop/shop",
 	Joinable: []string{"traefik"}, ForbiddenIDs: []int{1000, 1001, 999},
+	UIDs: []uint32{10001, 1900000000}, ProjectUIDs: []uint32{10001, 1900000000, 2000000000},
 }
 
 // fakePaths answers as a project user's tree would: links lists where a path
@@ -228,7 +229,12 @@ func TestCheckFileIdentity(t *testing.T) {
 		{"a project user's range", `{"user":"50000:10001","security_opt":["no-new-privileges"]}`, true},
 		{"a project user's range, its group", `{"user":"10001:59999","security_opt":["no-new-privileges"]}`, true},
 		{"past a uid", `{"user":"99999999999999999999:1","security_opt":["no-new-privileges"]}`, true},
-		{"below the range", `{"user":"49999:60000","security_opt":["no-new-privileges"]}`, false},
+		// Only the environment's uid or its project's, uid and gid alike: no other
+		// environment's container shares it.
+		{"the project's uid", `{"user":"1900000000:1900000000","security_opt":["no-new-privileges"]}`, false},
+		{"another environment's uid", `{"user":"2000000000:2000000000","security_opt":["no-new-privileges"]}`, true},
+		{"a uid no claim holds", `{"user":"49999:49999","security_opt":["no-new-privileges"]}`, true},
+		{"uid and gid apart", `{"user":"10001:1900000000","security_opt":["no-new-privileges"]}`, true},
 		// The end's own uid (EndUID), whose kill(-1) reaches what runs as it.
 		{"the end's uid", `{"user":"2147483646:10001","security_opt":["no-new-privileges"]}`, true},
 		{"root's group", `{"user":"10001:0","security_opt":["no-new-privileges"]}`, true},

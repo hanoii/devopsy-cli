@@ -174,20 +174,91 @@ func bindMount(source, target string) (string, error) {
 }
 
 // projectOwners are the owned entries of the project at cwd's mnt,
-// entry to owner, from its labels (every profile, cli.MntOwners), and
-// its mnt resolved. Only entries: a bind source below one is refused by
-// the mounts check (cli.CheckMounts).
-func projectOwners(cwd string) (owned map[string]string, mnt string, err error) {
+// entry to owner, from its labels (every profile, cli.MntOwners), its mnt
+// resolved, and its owned named volumes (cli.OwnedVolumes) with the
+// services they need to be made. Only entries: a bind source below one
+// is refused by the mounts check (cli.CheckMounts).
+func projectOwners(cwd string) (o projectOwned, err error) {
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
-		return nil, "", err
+		return o, err
 	}
-	owned, err = cli.MntOwners(services)
-	if err != nil || len(owned) == 0 {
-		return owned, "", err
+	o.services = services
+	if o.entries, err = cli.MntOwners(services); err != nil {
+		return o, err
 	}
-	mnt, err = dataMnt(projectDir)
-	return owned, mnt, err
+	if o.volumes, err = cli.OwnedVolumes(services); err != nil {
+		return o, err
+	}
+	if len(o.entries) > 0 {
+		o.mnt, err = dataMnt(projectDir)
+	}
+	return o, err
+}
+
+// projectOwned is what projectOwners reads.
+type projectOwned struct {
+	entries  map[string]string
+	mnt      string
+	volumes  map[string]cli.OwnedVolume
+	services []cli.SyncService
+}
+
+// ownVolumeRoot gives the volume mounted at /vol/$1 its owner $2, its root
+// alone: what a service writes in it is its own.
+const ownVolumeRoot = `chown "$2" "/vol/$1"`
+
+// ownVolumes gives each owned named volume's root, only its root, to its
+// owner (cli.OwnedVolumes), each made first when missing (ensureVolumes,
+// project the environment's compose name, at cwd), in a util container of
+// c's named c.name-vol-<n> without a network, mounting the volume alone
+// at a path its image lacks (/vol/<key>), so the mount fills nothing.
+// Every owners' step does it again: cheap, and it heals a volume Docker
+// made first. A volume whose driver refuses the chown (a share) fails it.
+func ownVolumes(ctx context.Context, cwd, project string, owned map[string]cli.OwnedVolume, services []cli.SyncService, c container) error {
+	if len(owned) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(owned))
+	var vols []cli.Volume
+	var parts []string
+	for _, k := range keys {
+		vols = append(vols, owned[k].Volume)
+		parts = append(parts, "the volume "+k+"'s root to "+owned[k].Owner)
+	}
+	if err := ensureVolumes(ctx, cwd, project, vols, services); err != nil {
+		return err
+	}
+	if err := ensureUtilImage(ctx); err != nil {
+		return err
+	}
+	report.Info("giving " + strings.Join(parts, ", "))
+	for i, k := range keys {
+		if err := ownVolume(ctx, c.with(fmt.Sprintf("-vol-%d", i)), owned[k]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ownProjectVolumes gives the roots of the project at cwd's owned volumes (ownVolumes), after
+// what writes into its data (an import, a restore, a sync's finish): a tar or a copy carries its
+// maker's owners, the root's included.
+func ownProjectVolumes(ctx context.Context, cwd string, c container) error {
+	owned, err := projectOwners(cwd)
+	if err != nil {
+		return err
+	}
+	return ownVolumes(ctx, cwd, composeName(cwd), owned.volumes, owned.services, c)
+}
+
+// ownVolume is ownVolumes' container for the volume v, as c.
+func ownVolume(ctx context.Context, c container, v cli.OwnedVolume) error {
+	if err := dockerRunFresh(ctx, c, "--network", "none", "-v", v.Name+":/vol/"+v.Key, remote.UtilImage, "sh", "-c", ownVolumeRoot, "sh", v.Key, v.Owner); err != nil {
+		return &report.Failure{Msg: fmt.Sprintf("giving the volume %s's root to %s (%s): %v", v.Key, v.Owner, cli.MntOwnerLabel, err),
+			Remedies: []report.Remedy{report.Fix("give the service a volume whose driver takes a chown (a share's may refuse one), or mount it without " + cli.MntOwnerLabel + " and have its own user there")}}
+	}
+	return nil
 }
 
 // runMntOwners implements the hidden --mnt-owners [restored], run by an
@@ -210,9 +281,9 @@ func runMntOwners(cwd string, args []string) int {
 	// one, and of a SIGTERM even ignored by the script (it only keeps an
 	// inherited SIGINT and SIGHUP ignored), as runImages says.
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	owners, mnt, err := projectOwners(cwd)
+	owned, err := projectOwners(cwd)
 	if err != nil && restored {
-		report.Warn("the entries of mnt keep their owners: the restored release's labels cannot be read", report.Messages(err)...)
+		report.Warn("the entries of mnt and the named volumes keep their owners: the restored release's labels cannot be read", report.Messages(err)...)
 		return 0
 	}
 	// Under the release lock no other owners' step of this environment
@@ -222,7 +293,10 @@ func runMntOwners(cwd string, args []string) int {
 		err = removeLeft(composeName(cwd), remote.TaskOwners)
 	}
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, ownersContainer(cwd))
+		err = ownMnt(context.Background(), owned.mnt, owned.entries, ownersContainer(cwd))
+	}
+	if err == nil {
+		err = ownVolumes(context.Background(), cwd, composeName(cwd), owned.volumes, owned.services, ownersContainer(cwd))
 	}
 	if err != nil {
 		return failErr(err)
@@ -325,13 +399,15 @@ func runCheckMounts(cwd string, args []string) int {
 		carried = restoredEntries(m, services)
 	}
 	if restored && err == nil {
-		// Two owners on one entry: --mnt-owners restored reads them as
-		// labels it cannot read.
-		_, err = cli.MntOwners(services)
+		// Two owners on one entry, or a volume's refused: --mnt-owners
+		// restored reads them as labels it cannot read.
+		if _, err = cli.MntOwners(services); err == nil {
+			_, err = cli.OwnedVolumes(services)
+		}
 	}
 	switch {
 	case restored && err != nil:
-		report.Warn("the restored release's labels cannot be read: the entries of mnt will keep their owners", report.Messages(err)...)
+		report.Warn("the restored release's labels cannot be read: the entries of mnt and the named volumes will keep their owners", report.Messages(err)...)
 		return 0
 	case errors.Is(err, cli.ErrComposeConfig):
 		return 0
@@ -359,11 +435,21 @@ func runCheckMounts(cwd string, args []string) int {
 }
 
 // checkOwned refuses owned entries of mnt that are symbolic links, and
-// readies the util image, when the project owns any entry.
+// readies the util image, when the project owns any entry or volume.
 func checkOwned(projectDir string, services []cli.SyncService) error {
 	owned, err := cli.MntOwners(services)
-	if err != nil || len(owned) == 0 {
+	if err != nil {
 		return err
+	}
+	vols, err := cli.OwnedVolumes(services)
+	if err != nil {
+		return err
+	}
+	if len(owned) == 0 {
+		if len(vols) == 0 {
+			return nil
+		}
+		return ensureUtilImage(context.Background())
 	}
 	mnt, err := dataMnt(projectDir)
 	if err != nil {
@@ -396,41 +482,55 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 	return links
 }
 
-// localMnt readies the owned entries of mnt before compose starts
-// anything locally (cli.Plan.Starts): each missing one is made, and on
-// Linux one missing or whose top directory is not its owner's is given
-// away in a util container, only then, and scanned whole there: an
-// entry whose top is right is never scanned, since that would run
-// before every such command. On macOS the top is never checked: Docker
-// Desktop and OrbStack let any container user write the Mac's files,
-// and show them the owner Docker asks for, whatever the Mac says.
+// localMnt readies the owned entries of mnt and named volumes before
+// compose starts anything locally (cli.Plan.Starts): each missing entry is
+// made, and on Linux one missing or whose top directory is not its
+// owner's is given away in a util container, only then, and scanned whole
+// there: an entry whose top is right is never scanned, since that would
+// run before every such command. On macOS the top is never checked:
+// Docker Desktop and OrbStack let any container user write the Mac's
+// files, and show them the owner Docker asks for, whatever the Mac says.
+// An owned volume is made and its root given on macOS as on Linux
+// (ownVolumes): a volume is Docker's own, whose owners nothing fakes.
 // Labels that cannot be read (names from before a change, a compose
 // error) are a warning and the command goes on: it is compose's, which
 // says what is wrong with its files, and a label devopsy reads must
 // never stop a plain up (on a server, a rollback's run step:
-// cli.Plan.Starts is never set in a release there). For the same reason
-// an owned entry that is a symbolic link (an entry shared between
-// worktrees, a database on another disk) is a warning, left as it is:
-// Docker mounts what it points to, which is the developer's choice
-// locally (on a server the mounts check refuses one).
+// cli.Plan.Starts is never set in a release there). An owned volume
+// refused (cli.OwnedVolumes: a mount without nocopy) stops it: the start
+// would fill the volume from the image and leave its owner a root it
+// cannot write. For the same reason as labels, an owned entry that is a
+// symbolic link (an entry shared between worktrees, a database on
+// another disk) is a warning, left as it is: Docker mounts what it points
+// to, which is the developer's choice locally (on a server the mounts
+// check refuses one).
 func localMnt(cwd string) error {
-	owners, mnt, err := projectOwners(cwd)
+	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
+		report.Warn("the entries of mnt and the named volumes are left as they are: the labels cannot be read", report.Messages(err)...)
+		return nil
+	}
+	owned := projectOwned{services: services}
+	if owned.volumes, err = cli.OwnedVolumes(services); err != nil {
+		return err
+	}
+	owned.entries, err = cli.MntOwners(services)
+	if err == nil && len(owned.entries) > 0 {
+		owned.mnt, err = dataMnt(projectDir)
+	}
 	if err != nil {
 		report.Warn("the entries of mnt are left as they are: the labels cannot be read", report.Messages(err)...)
-		return nil
-	}
-	if len(owners) == 0 {
-		return nil
+		owned.entries = nil
 	}
 	wrong := map[string]string{}
-	for _, e := range slices.Sorted(maps.Keys(owners)) {
-		o := owners[e]
-		fi, err := os.Lstat(filepath.Join(mnt, e))
+	for _, e := range slices.Sorted(maps.Keys(owned.entries)) {
+		o := owned.entries[e]
+		fi, err := os.Lstat(filepath.Join(owned.mnt, e))
 		switch {
 		case err == nil && fi.Mode()&os.ModeSymlink != 0:
 			report.Warn("mnt/"+e+" is a symbolic link: devopsy leaves it and what it points to as they are, not giving it to "+o, "Docker mounts what it points to")
 		case runtime.GOOS == "darwin":
-			if err := makeEntry(mnt, e); err != nil {
+			if err := makeEntry(owned.mnt, e); err != nil {
 				return err
 			}
 		case err != nil:
@@ -441,5 +541,8 @@ func localMnt(cwd string) error {
 			}
 		}
 	}
-	return ownMnt(context.Background(), mnt, wrong, ownersContainer(cwd))
+	if err := ownMnt(context.Background(), owned.mnt, wrong, ownersContainer(cwd)); err != nil {
+		return err
+	}
+	return ownVolumes(context.Background(), cwd, composeName(cwd), owned.volumes, owned.services, ownersContainer(cwd))
 }

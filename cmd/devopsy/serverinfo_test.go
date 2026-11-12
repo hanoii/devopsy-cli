@@ -715,7 +715,7 @@ func TestServerInfoEnvironments(t *testing.T) {
 func TestEnvPathIn(t *testing.T) {
 	t.Parallel()
 	for path, ok := range map[string]bool{
-		"shop/prod": true, "shop/eu/prod": true, "shop/Stage.2": true,
+		"shop/prod": true, "shop/eu/prod": true, "shop/stage.2": true, "shop/Stage.2": false,
 		"blog/prod": false, "shop": false, "shop/a/b/c": false, "shop/prod$(touch x)": false,
 		"shop/prod;id": false, "shop/it's": false, "shop/../blog": false, "shop/EU/prod": false, "shop/-x": false,
 	} {

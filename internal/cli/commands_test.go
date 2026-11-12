@@ -149,6 +149,18 @@ func TestShell(t *testing.T) {
 		}
 	}
 
+	// A label's value with a variable is the variable's, as compose reads it: a shell user
+	// given as the service's uid (devopsy.shell.user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}").
+	varCompose := "services:\n  app:\n    image: x\n    labels:\n      devopsy.shell: \"${SHELL_ON:-true}\"\n      devopsy.shell.user: \"${DEVOPSY_UID:?}:${DEVOPSY_UID:?}\"\n"
+	withVar := project(t, "withvar", map[string]string{"compose.yaml": varCompose})
+	plan, err = build(withVar, []string{"--shell"}, []string{"DEVOPSY_UID=2000000123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Args[len(plan.Args)-7 : len(plan.Args)-3]; !slices.Equal(got, []string{"exec", "--user", "2000000123:2000000123", "app"}) {
+		t.Errorf("a shell user from a variable: %q", got)
+	}
+
 	// A command after --: run directly, in the same service and user.
 	for args, want := range map[string][]string{
 		"--shell -- drush status":        {"exec", "--user", "app", "app", "drush", "status"},

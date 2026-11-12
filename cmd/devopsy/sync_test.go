@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // syncFakeDocker logs every call, with its compose project, to
@@ -188,7 +190,10 @@ app2=
 # directories of $DOCKER_LOG.vol, by name.
 dbvol= appvol= topvols=
 # FAKE_DB_VOLUME_OPTS: that volume's driver_opts, as JSON (a share's password, say).
-[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"%s}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME" "${FAKE_DB_VOLUME_OPTS:+,\"driver_opts\":$FAKE_DB_VOLUME_OPTS}"); }
+# FAKE_VOLUME_NOCOPY: every mount of a named volume with nocopy.
+nocopy=
+[ -z "${FAKE_VOLUME_NOCOPY:-}" ] || nocopy=',"volume":{"nocopy":true}'
+[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s","target":"/data"%s}' "$FAKE_DB_VOLUME" "$nocopy"); topvols=$(printf '"%s":{"name":"%s_%s"%s}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME" "${FAKE_DB_VOLUME_OPTS:+,\"driver_opts\":$FAKE_DB_VOLUME_OPTS}"); }
 # FAKE_APP_BUILD: app has a build: section, its context the release's
 # code, its argument APP_UID FAKE_APP_UID (10001 by default).
 appbuild=
@@ -202,7 +207,7 @@ dbimg=
 # container: an anonymous volume its image declares, say).
 dbmounts=$(printf '{"type":"bind","source":"%s/mnt/db"}%s' "${dir:-}" "$dbvol")
 [ -z "${FAKE_DB_NO_BIND:-}" ] || dbmounts=${dbvol#,}
-[ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_APP_VOLUME"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
+[ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s","target":"/data"%s}' "$FAKE_APP_VOLUME" "$nocopy"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
 vols="$DOCKER_LOG.vol"
 # FAKE_RUN_WAIT: a docker run whose arguments hold $FAKE_RUN_WAIT_ON (a
 # long check, copy or tar) takes until $FAKE_RUN_WAIT.go exists, or its
@@ -568,10 +573,13 @@ case "$*" in
     # One entry per container (--mount, its source the entry): emptied,
     # then the members named after it extracted from the tar mounted at
     # /in (a snapshot's .tar.zst is a plain tar here), as the util image
-    # does.
+    # does; the uids its owners are mapped to after the entry, numbers
+    # (- for none), which a fake cannot chown to.
     vol= in=
     while [ $# -gt 0 ]; do case $1 in --mount) case $2 in *,target=/in/*) in=${2#type=bind,source=}; in=${in%%,target=*} ;; type=volume,*) vol=1; src=${2#type=volume,source=}; src="$vols/${src%%,target=*}" ;; *) src=${2#type=bind,source=}; src=${src%%,target=*} ;; esac ;; -c) shift 3; break ;; esac; shift; done
-    e=$2; shift 2
+    e=$2
+    case "$3 $4" in "- -") ;; *[!0-9\ ]*|" "*|*" ") echo "no uids to map to: $3 $4" >&2; exit 1 ;; esac
+    shift 4
     [ -n "$in" ] || { echo "the tar is no file mounted at /in" >&2; exit 1; }
     if [ -d "$src" ] && [ ! -L "$src" ]; then find "$src" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi
     if [ -n "$vol" ]; then
@@ -769,6 +777,25 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	return s
 }
 
+// mapOf is the rsync map (uids.Map.RsyncArgs) shop's environment env takes copied data
+// with on a server: its plain uids, which a test's claims give it.
+func mapOf(env string) string { return strings.Join(uidsOf(env).RsyncArgs(), " ") }
+
+// uidsOf is the uid map of shop's environment env on a server, its plain uids.
+func uidsOf(env string) uids.Map {
+	o, _ := uids.EnvOwner("shop", "", env)
+	return uids.Map{Env: o.Plain(), Project: o.ProjectOf().Plain()}
+}
+
+// localMap is the uids an import into shop's local project maps an entry's owners to, as
+// an extraction's arguments: its plain hashes, none on macOS (extractEntry).
+var localMap = func() string {
+	if runtime.GOOS == "darwin" {
+		return "- -"
+	}
+	return fmt.Sprintf("%d %d", uids.HashIn(uids.EnvDomain, "env:shop"), uids.HashIn(uids.ProjectDomain, "project:shop"))
+}()
+
 // fake replaces the setup's fake name with script (replaceFake).
 func (s *syncSetup) fake(name, script string) {
 	s.t.Helper()
@@ -926,8 +953,8 @@ func TestSyncSameHost(t *testing.T) {
 	// alone, keeps running. A first release then creates every labeled
 	// service, whatever containers it found.
 	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/db/ /dst/db/",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/storage/ /dst/storage/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse " + mapOf("dev") + " /src/db/ /dst/db/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse " + mapOf("dev") + " /src/storage/ /dst/storage/",
 		"shop-prod compose", "start db", "shop-dev compose", "up -d --wait app db"}
 	rest := docker
 	for _, want := range order {
@@ -974,7 +1001,7 @@ func TestSyncSameHost(t *testing.T) {
 	s.logs()
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, ssh = s.logs()
-	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --sparse /src/storage/") {
+	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --sparse "+mapOf("dev")+" /src/storage/") {
 		t.Fatalf("--sync (%d):\n%s\n%s", code, out, docker)
 	}
 	// Four sessions, as before snapshots: the parent's check, the holder,
@@ -1344,6 +1371,10 @@ func TestSyncReflinkShare(t *testing.T) {
 	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {
 		t.Errorf("the owner not given after the clone:\n%s", docker)
 	}
+	// The clone's owners mapped to the child's own uids, in its script.
+	if !strings.Contains(docker, "map_owners \"$2\" \"$3\" \"$4\"\n sh /s /d "+strings.Join(uidsOf("dev").Args(), " ")+"\n") {
+		t.Errorf("the clone not mapped to the child's uids:\n%s", docker)
+	}
 
 	// No reflinks between them: rsync, said (its --delete removes what the
 	// child has of its own; the fake's copy does not).
@@ -1385,7 +1416,7 @@ func TestSyncFileEntry(t *testing.T) {
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+	if code != 0 || !strings.Contains(docker, "devopsy.internal/util:5 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse "+mapOf("dev")+" --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -1410,7 +1441,7 @@ func TestSyncFileEntry(t *testing.T) {
 	env = append(env, "DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock")
 	out, code = s.run(env, "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-v " + s.mnt("dev") + "/app.ini:/mnt/app.ini ", "--numeric-ids --modify-window=-1 --sparse --inplace devopsy::app.ini/app.ini /mnt/app.ini\n"} {
+	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-v " + s.mnt("dev") + "/app.ini:/mnt/app.ini ", "--numeric-ids --modify-window=-1 --sparse " + mapOf("dev") + " --inplace devopsy::app.ini/app.ini /mnt/app.ini\n"} {
 		if code != 0 || !strings.Contains(docker, want) {
 			t.Fatalf("across servers (%d), missing %q:\n%s\n%s", code, want, out, docker)
 		}
@@ -1532,7 +1563,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !regexp.MustCompile(childSSH+` -T -p 22 devopsy@two\n`).MatchString(ssh) {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/tmp/rsyncd.conf .\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-", " --network none -v " + s.mnt("dev") + "/db:/mnt/db devopsy.internal/util:5 sh -c ", "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse devopsy::db/ /mnt/db/\n", "devopsy::storage/ /mnt/storage/\n", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "run --rm -d --network none --name devopsy-sync-", "exec -i cid123 rsync --server --daemon --config=/tmp/rsyncd.conf .\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-", " --network none -v " + s.mnt("dev") + "/db:/mnt/db devopsy.internal/util:5 sh -c ", "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse " + mapOf("dev") + " devopsy::db/ /mnt/db/\n", mapOf("dev") + " devopsy::storage/ /mnt/storage/\n", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -1563,7 +1594,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	out, code = s.run(agent, "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	os.Remove(s.log + ".shop-dev")
-	if code != 0 || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --sparse --chown=10001:10001 devopsy::storage/ /mnt/storage/") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --sparse devopsy::db/ /mnt/db/") {
+	if code != 0 || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --sparse --chown=10001:10001 devopsy::storage/ /mnt/storage/") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --sparse "+mapOf("dev")+" devopsy::db/ /mnt/db/") {
 		t.Errorf("an owned entry across servers (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -2665,6 +2696,19 @@ func TestChildServicesParse(t *testing.T) {
 	if got := childShares(want); len(got) != 0 {
 		t.Errorf("shares without the field: %v", got)
 	}
+	// The child's own uids, its list's line, which a copy into it maps to; a list without
+	// them refuses the copy, which would otherwise map to no one's uid.
+	if m, err := parseChildUIDs("!uids\t2000000123\t1900000456\napp\tvolumes+never\trunning\tstorage\n"); err != nil || m != (uids.Map{Env: 2000000123, Project: 1900000456}) {
+		t.Errorf("the child's uids: %+v %v", m, err)
+	}
+	for _, list := range []string{"app\tvolumes+never\trunning\tstorage\n", "!uids\t2000000123\n", "!uids\tx\t1\n"} {
+		if m, err := parseChildUIDs(list); err == nil {
+			t.Errorf("%q: %+v", list, m)
+		}
+	}
+	if got, _, _ := parseChildServices("!uids\t2000000123\t1900000456\n"); len(got) != 0 {
+		t.Errorf("the uids line taken for a service: %+v", got)
+	}
 }
 
 // Interrupted during the copy, the parent's push stops at once, though
@@ -3153,7 +3197,7 @@ func TestExportImport(t *testing.T) {
 	}
 	// The spool mounted read-only and read there, never on the
 	// container's stdin (Docker's stream is slow).
-	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy.internal/util:5 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy.internal/util:5 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage `+localMap+` \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
 	// An entry that is a file: made empty when missing, for its
@@ -3164,7 +3208,7 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini": "[x]\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {
 		t.Errorf("--import of a file entry (%d):\n%s", code, errs)
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, " --network none --mount type=bind,source="+mnt+"/app.ini,target=/mnt/app.ini --mount type=bind,source=") || !regexp.MustCompile(` sh /in/[^ ]* app\.ini app\.ini\n`).MatchString(docker) {
+	if docker, _ := s.logs(); !strings.Contains(docker, " --network none --mount type=bind,source="+mnt+"/app.ini,target=/mnt/app.ini --mount type=bind,source=") || !regexp.MustCompile(` sh /in/[^ ]* app\.ini `+localMap+` app\.ini\n`).MatchString(docker) {
 		t.Errorf("--import of a file entry:\n%s", docker)
 	}
 	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries mnt/app.ini as a directory, and it is a file here: nothing imported") || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {

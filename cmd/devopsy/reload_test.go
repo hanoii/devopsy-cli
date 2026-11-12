@@ -278,13 +278,13 @@ func TestLocalReloadInRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel := filepath.Join(tmp, "releases", "20261027000000")
+	rel := filepath.Join(tmp, "app", "prod", "releases", "20261027000000")
 	dir := filepath.Join(rel, remote.CodeDir, ".devopsy")
 	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
 	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {release: deploy, reload: general}\nenvironments:\n  prod: {reload: apply}\n", 0o644)
 	write(t, filepath.Join(dir, "commands", "apply"), "#!/bin/sh\n## Description: a\necho APPLIED\n", 0o755)
 	write(t, filepath.Join(dir, "commands", "general"), "#!/bin/sh\n## Description: g\necho GENERAL\n", 0o755)
-	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='app-prod'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
+	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='app-prod'\nDEVOPSY_PROJECT='app'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
 	if out, code := runDevopsy(t, filepath.Join(rel, remote.CodeDir), nil, "--reload"); code != 0 || !strings.Contains(out, "APPLIED") || strings.Contains(out, "GENERAL") {
 		t.Errorf("--reload in a release (%d):\n%s", code, out)
 	}
@@ -676,12 +676,12 @@ func TestLocalReloadInReleaseRunTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel := filepath.Join(tmp, "releases", "20261027000000")
+	rel := filepath.Join(tmp, "app", "prod", "releases", "20261027000000")
 	dir := filepath.Join(rel, remote.CodeDir, ".devopsy")
 	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
 	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {release: deploy}\nenvironments:\n  prod: {reload: apply}\n", 0o644)
 	write(t, filepath.Join(dir, "commands", "apply"), "#!/bin/sh\n## Description: a\n## Run: target\necho APPLIED\n", 0o755)
-	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='app-prod'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
+	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='app-prod'\nDEVOPSY_PROJECT='app'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
 	if out, code := runDevopsy(t, filepath.Join(rel, remote.CodeDir), nil, "--reload"); code != 0 || !strings.Contains(out, "APPLIED") {
 		t.Errorf("--reload in a release, its step a target's command (%d):\n%s", code, out)
 	}

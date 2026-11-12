@@ -32,6 +32,9 @@ var binary string
 const startWait = time.Minute
 
 func TestMain(m *testing.M) {
+	if spec := os.Getenv("DEVOPSY_TEST_LOCKED_DOCKER"); spec != "" {
+		lockedDockerHelper(spec) // TestComposeRunHoldsStartLocks
+	}
 	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
 		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
 	}
@@ -634,6 +637,10 @@ func TestRemoteVars(t *testing.T) {
 	if out, code := run("", "@prod", "--vars", "set", "A=b"); code == 0 || !strings.Contains(out, "not a variable name") {
 		t.Fatalf("value in argument (%d):\n%s", code, out)
 	}
+	// A uid is the server's to give: one set by hand could be another tenant's.
+	if out, code := run("2000000001\n", "@prod", "--vars", "set", "DEVOPSY_UID"); code == 0 || !strings.Contains(out, "DEVOPSY_UID is devopsy's") {
+		t.Errorf("--vars set DEVOPSY_UID (%d):\n%s", code, out)
+	}
 	// Several keys and no value anywhere: refuse rather than guess.
 	if out, code := run("x", "@prod", "--vars", "set", "X1", "X2"); code == 0 || !strings.Contains(out, "X1 is not set") {
 		t.Fatalf("missing values (%d):\n%s", code, out)
@@ -1028,7 +1035,8 @@ func TestDebugEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A release: its code/ through current, its target env beside it.
+	// A release where a server keeps one: its code/ through current, its target env beside it.
+	tmp = filepath.Join(tmp, "shop", "prod")
 	rel := filepath.Join(tmp, "releases", "1")
 	if err := os.MkdirAll(filepath.Join(rel, remote.CodeDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1044,7 +1052,7 @@ func TestDebugEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(dot, "project.env"), "LEVEL=project\nDB_PASSWORD=oldoldoldold\n", 0o644)
-	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='shop-prod'\nLEVEL=target\n"+cli.ImportedMarker+"\nDEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", 0o644)
+	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='shop-prod'\nDEVOPSY_PROJECT='shop'\nDEVOPSY_ENVIRONMENT='prod'\nLEVEL=target\n"+cli.ImportedMarker+"\nDEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", 0o644)
 	write(t, filepath.Join(dot, "capabilities", "env", "compute"), "#!/bin/sh\necho \"SITE_URL='https://$COMPOSE_PROJECT_NAME.$DEVOPSY_WILDCARD_DOMAIN'\"\necho LEVEL=computed\n", 0o755)
 	dir := filepath.Join(tmp, "current")
 	// PWD as a shell sets it: commands run through current.
@@ -1096,12 +1104,12 @@ func TestRolesEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	release := filepath.Join(tmp, "releases", "1")
+	release := filepath.Join(tmp, "shop", "prod", "releases", "1")
 	rel := filepath.Join(release, remote.CodeDir)
 	dot := filepath.Join(rel, ".devopsy")
 	targetEnv := filepath.Join(release, remote.TargetEnvFile)
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels: [devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN]\n", 0o644)
-	write(t, targetEnv, "COMPOSE_PROJECT_NAME='shop'\n", 0o644)
+	write(t, targetEnv, "COMPOSE_PROJECT_NAME='shop'\nDEVOPSY_PROJECT='shop'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
 	bin := t.TempDir()
 	docker := `#!/bin/sh
 case "$1" in

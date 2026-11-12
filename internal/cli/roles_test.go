@@ -237,6 +237,8 @@ func TestPrepareReleaseReload(t *testing.T) {
 	}
 	released, _ := os.ReadFile(releaseTargetEnv(root))
 	pending := filepath.Join(filepath.Dir(root), remote.TargetReloadFile)
+	// The release's own lines, the target's among them, before what it imported.
+	own, _, _ := strings.Cut(string(released), ImportedMarker)
 
 	fakeHost(t, container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=vm2.example.com"))
 	said, err := PrepareRelease(root, nil, true)
@@ -244,7 +246,7 @@ func TestPrepareReleaseReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(pending)
-	if want := "COMPOSE_PROJECT_NAME='shop-prod'\n" + ImportedMarker + "\nWILDCARD='vm2.example.com'\n"; string(got) != want {
+	if want := own + ImportedMarker + "\nWILDCARD='vm2.example.com'\n"; string(got) != want {
 		t.Errorf("pending:\n%s\nwant:\n%s\n(said %q)", got, want, said)
 	}
 	if now, _ := os.ReadFile(releaseTargetEnv(root)); string(now) != string(released) {
@@ -266,7 +268,7 @@ func TestPrepareReleaseReload(t *testing.T) {
 	if _, err := PrepareRelease(root, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(pending); string(got) != "COMPOSE_PROJECT_NAME='shop-prod'\n" {
+	if got, _ := os.ReadFile(pending); string(got) != own {
 		t.Errorf("pending with the value set:\n%s", got)
 	}
 }
