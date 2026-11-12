@@ -112,12 +112,34 @@ func fakeBin(t *testing.T) string {
 	return bin
 }
 
+// fakeRequired answers compose's config -q and config --variables as compose does for the
+// -f files' ${VAR:?msg} and ${VAR?msg}: -q fails on the first one unset (or empty, for :?)
+// with compose's words, --variables lists each as required.
+const fakeRequired = `case "$*" in *' config -q'|*' config --variables --format json')
+  files= next=
+  for a in "$@"; do [ -z "$next" ] || files="$files $a"; next=; [ "$a" != -f ] || next=1; done
+  req=$(cat $files 2>/dev/null | grep -o '[$][{][A-Za-z_][A-Za-z0-9_]*:*[?][^}]*[}]' | sort -u)
+  case "$*" in *' config -q')
+    printf '%s\n' "$req" | while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      n=${r#??}; n=${n%%[:?]*}; m=${r#*[?]}; m=${m%?}
+      eval "set=\${$n+x} v=\${$n:-}"
+      case $r in *:[?]*) [ -n "$v" ] && continue ;; *) [ -n "$set" ] && continue ;; esac
+      echo "required variable $n is missing a value${m:+: $m}" >&2; exit 1
+    done; exit ;;
+  esac
+  printf '{'; sep=
+  for r in $(printf '%s\n' "$req" | sed 's/^..\([A-Za-z0-9_]*\).*/\1/' | sort -u); do printf '%s"%s":{"Required":true}' "$sep" "$r"; sep=,; done
+  echo '}'; exit 0 ;;
+esac
+`
+
 var fakeBinOnce = sync.OnceValues(func() (string, error) {
 	bin, err := os.MkdirTemp(filepath.Dir(binary), "bin")
 	if err != nil {
 		return "", err
 	}
-	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  version) [ -z \"${FAKE_DOCKER_DOWN:-}\" ] || exit 1 ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
+	docker := "#!/bin/sh\n" + fakeRequired + "case \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  version) [ -z \"${FAKE_DOCKER_DOWN:-}\" ] || exit 1 ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
 	if err := testfile.Write(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
 		return "", err
 	}
@@ -841,9 +863,9 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("a missing release root (%d):\n%s", code, out)
 	}
 
-	// prepare generates SECRET; NEEDED is missing: listed, nothing live.
+	// prepare generates SECRET; NEEDED is missing: listed with compose's words, nothing live.
 	out, code := run(nil, "@prod", "--release")
-	if code == 0 || !strings.Contains(out, "NEEDED  set it per environment") || strings.Contains(out, "SECRET ") || !strings.Contains(out, "devopsy @devopsy@server:prod --vars set") || current() != "" || strings.Contains(out, "deploy --fast") {
+	if code == 0 || !strings.Contains(out, "|   NEEDED\n") || !strings.Contains(out, "required variable NEEDED is missing a value: set it per environment\n") || strings.Contains(out, "SECRET ") || !strings.Contains(out, "devopsy @devopsy@server:prod --vars set") || current() != "" || strings.Contains(out, "deploy --fast") {
 		t.Fatalf("missing variable (%d), current %q:\n%s", code, current(), out)
 	}
 	if !strings.Contains(out, "remote before steps skipped") {
@@ -873,7 +895,7 @@ func TestReleaseSteps(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("releases: %v", entries)
 	}
-	if out, code := run(nil, "@prod", "--log", entries[0].Name()); code != 0 || !strings.Contains(out, "NEEDED  set it per environment") || !strings.Contains(out, "release exited 1") {
+	if out, code := run(nil, "@prod", "--log", entries[0].Name()); code != 0 || !strings.Contains(out, "required variable NEEDED is missing a value: set it per environment") || !strings.Contains(out, "release exited 1") {
 		t.Fatalf("--log <id> (%d):\n%s", code, out)
 	}
 

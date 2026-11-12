@@ -122,11 +122,11 @@ func (p *loadedProject) defaultVar(k, v, from string) {
 	p.env.Mark(k)
 }
 
-// ReadsUIDs says whether the compose files of the project at projectDir read either uid
-// variable: a release of it then needs a server's devopsy that gives them (remote.UIDsFeature).
-func ReadsUIDs(projectDir string) (bool, error) {
-	names, err := ComposeVariables(projectDir)
-	return slices.Contains(names, UIDEnv) || slices.Contains(names, ProjectUIDEnv), err
+// ReadsUIDs says whether names, the variables a project's compose files read
+// (ComposeVariables), hold either uid: a release of it then needs a server's devopsy that
+// gives them (remote.UIDsFeature).
+func ReadsUIDs(names []string) bool {
+	return slices.Contains(names, UIDEnv) || slices.Contains(names, ProjectUIDEnv)
 }
 
 // LoadedUIDs are the two uids the load of the project at cwd gives (setUIDs), read with

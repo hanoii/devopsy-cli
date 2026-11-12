@@ -49,7 +49,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
   - an owned entry that is a symbolic link in `shared/mnt` (`ownedLinks`);
   - a bind source below an entry that a link in the entry leads out of (`LeavingBinds`, the entry resolved first, so one on another disk is its own place), or that the deploy user cannot resolve (`HiddenBinds`, below).
 - Labels are read exactly as `--mnt-owners` reads them after the switch (`cli.SyncServices`): a label that step cannot read refuses here, never after the switch.
-- A compose config that cannot be read (`cli.ErrComposeConfig`) is no refusal, as for `--check-names`: after `--missing-vars` that is a broken file, which the run step names.
+- A compose config that cannot be read (`cli.ErrComposeConfig`) is no refusal, as for `--check-names`: where `--missing-vars` ran before them, it refused those files already.
 - Each bind source counts as written and as where its links lead (`resolvePath`: `filepath.EvalSymlinks` where it exists, else its longest existing prefix, a link whose target is missing followed all the same), both forms for `Binds` and the resolved one alone for `TreeBinds` and `WholeMnt`; links into `shared/` lead out of the release tree and stay fine.
 - A bind source that reaches `mnt` through links (for example the tree's `files -> .devopsy/mnt/storage/files`) is judged by where it lands in `mnt`, before the links in `mnt` are followed (`throughMnt`).
 - A bind source below an entry that the deploy user cannot resolve (a directory on the way it cannot search) is refused as one leading out of it is (`HiddenBinds`), in the leaving binds' words (`LeavingLines`, one place for the mounts check, the start gate and `CheckLeavingBinds`): Docker resolves it as root.

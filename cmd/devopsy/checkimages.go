@@ -73,7 +73,7 @@ func runCheckImages(cwd string, args []string) int {
 			return failErr(err)
 		}
 		for _, m := range missing {
-			fmt.Println("missing " + m[0])
+			fmt.Println("missing " + m)
 		}
 		if len(missing) > 0 {
 			return checkImagesMissing

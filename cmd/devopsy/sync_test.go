@@ -209,7 +209,8 @@ dbmounts=$(printf '{"type":"bind","source":"%s/mnt/db"}%s' "${dir:-}" "$dbvol")
 [ -z "${FAKE_DB_NO_BIND:-}" ] || dbmounts=${dbvol#,}
 [ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s","target":"/data"%s}' "$FAKE_APP_VOLUME" "$nocopy"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
 vols="$DOCKER_LOG.vol"
-# FAKE_RUN_WAIT: a docker run whose arguments hold $FAKE_RUN_WAIT_ON (a
+# compose's required variables, as fakeBin's docker answers them.
+` + fakeRequired + `# FAKE_RUN_WAIT: a docker run whose arguments hold $FAKE_RUN_WAIT_ON (a
 # long check, copy or tar) takes until $FAKE_RUN_WAIT.go exists, or its
 # client is killed.
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi

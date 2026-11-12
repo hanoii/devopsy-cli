@@ -52,13 +52,15 @@ A release uploads the project as a new directory, then one activation session sw
 3. The pending lock (fd 7), then remote before steps in `current`.
 4. Links into the release (`shared/*`, `inherit.env`, `parent.env`, `project.env`, `instance.env`), made even when the target is missing, so one created later applies, and relative like `current`: an absolute link breaks every release when the release root moves.
 5. Releases only: `--prepare-release` when the compose files use role or import labels (`PrepareScript`, internals/roles.md).
-6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`, compose's `${VAR:?}` and `${VAR?}` left unset), then, releases only, `--check-names` and `--check-mounts` (below).
+6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`: the files as the server's compose reads them, `config -q`, and when they do not read, the required variables `config --variables` lists that are unset or empty, with compose's words), then, releases only, `--check-names` and `--check-mounts` (below).
 7. The images (`fetch_release`, internals/images.md); `ServerLogFile` is created here: a full disk fails the release before it goes live.
 8. `PendingFile` removed, `ActivatingFile` written (internals/sessions.md), `make_current`, `--mnt-owners` (before the sync of a release that syncs, after `followOutput` otherwise; in a rollback `--mnt-owners restored` from the restored release's labels, where unreadable labels only warn), the sync, `followOutput`, the run step.
 9. A failed run or sync: `FailedFile`, `failureReport` into the server's log, `current` back, and the previous release restarted (below) except on a partial copy; a first release, with nothing to restart, is taken down (`firstDown`) and leaves nothing current.
 10. A rollback marks the release it left (`RolledBackFile`).
 11. Pruning to `keep` (`img to-prune`, `img remove-releases`), then remote after steps, whose failure is reported with the release live.
 
+- `--missing-vars` goes by the server's compose alone, never devopsy's compose-go: the server's compose may be newer, and it is what runs the release.
+- The variables a release reads before its upload (the `uids` feature's gate, secret-like names) come from compose-go's loader on the operator's machine (`cli.ComposeVariables`), what the files include and extend followed, never a Docker call: a release needs no Docker where it starts; what the loader cannot follow is said, and the files' own variables read alone.
 - `--check-names` and `--check-mounts` read compose's configuration, which fails while a required variable is unset, so they run after the prepare steps and `--missing-vars`.
 - `--check-names` refuses containers of the same compose project from another directory (`cli.ProjectConflict`, the `-`-joined names coinciding, `a-b`/`c` and `a`/`b-c`) and a network the project names as its own that another compose project owns (`cli.NetworkConflicts`), external networks being how a project joins another's: Compose would silently share it.
 - `--check-mounts` (internals/data.md) readies `UtilImage` when an entry is owned, so a registry down refuses the release rather than failing it after its switch.
