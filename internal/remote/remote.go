@@ -891,29 +891,40 @@ func firstDown(projectName string) string {
 // it. A tag (time and pid) on the LogSection line and the marker ties
 // this part to the session log's anchor. No tail once a sync found
 // devopsy gone (sync_gone: stderr is .devopsy-sync.log by then). The
-// tail ends half a second after the shell (the EXIT trap, which keeps the exit status: on a -t session
-// the pty hangs up as soon as the shell exits, which cut the last lines,
-// and inotify has the tail copy a line in milliseconds), or a second
-// after a helper finds the shell gone without its trap (killed): never
-// tail's --pid, which, like kill -0, takes a zombie for alive, and
-// nothing may reap one. Both are killed with SIGKILL: they start while
-// the script ignores INT, TERM and HUP (from the fetch to the run step),
-// which they inherit. Neither holds the locks (5, 6, 8, 9: a lock the
-// script drops before its run step must go then) nor the sync's answer.
-// Without GNU's tail (macOS, in tests), as before.
+// tail ends once it has copied everything the script wrote: it watches a
+// sleeper (--pid), never the shell, which only its parent may reap (a
+// zombie is alive to --pid, as to kill -0). The EXIT trap, which keeps
+// the exit status, ends and reaps the sleeper and waits for the tail (on
+// a -t session the pty hangs up as soon as the shell exits, which cut the
+// last lines); a helper that finds the shell gone without its trap
+// (killed) ends the sleeper, whoever reaps it then. Each waits for the
+// tail at most fo_wait tenths of a second, then kills it: a session that
+// stalls must not keep the shell, and its locks, waiting. The tail and
+// the helper are killed with SIGKILL: they start while the script ignores
+// INT, TERM and HUP (from the fetch to the run step), which they inherit.
+// None of the three holds the locks (5, 6, 8, 9: a lock the script drops
+// before its run step must go then) nor the sync's answer. Without GNU's
+// tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
   fo_tag="${fo_tag:-$(date -u '+%Y%m%d%H%M%S').$$}"
   echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out" || true
   if [ -z "${sync_gone:-}" ]; then
     fo_off=$(wc -c <"$out")
-    tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 5>&- 6>&- 8>&- 9>&- >&2 &
+    fo_wait=50
+    # fo_live: $1 runs and is no zombie.
+    fo_live() { fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$1/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; }
+    # fo_drain: the tail's end once its sleeper is gone, waited for at most fo_wait tenths.
+    fo_drain() { fo_n=0; while fo_live $fo_tp && [ $fo_n -lt $fo_wait ]; do sleep 0.1; fo_n=$((fo_n + 1)); done; kill -9 $fo_tp 2>/dev/null || true; }
+    sleep infinity </dev/null >/dev/null 2>&1 3<&- 5>&- 6>&- 8>&- 9>&- &
+    fo_sl=$!
+    tail -c +$((fo_off + 1)) -s 0.2 --pid=$fo_sl -f "$out" </dev/null 3<&- 5>&- 6>&- 8>&- 9>&- >&2 &
     fo_tp=$!
-    ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
-      sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 5>&- 6>&- 8>&- 9>&- &
+    ( while fo_live $$; do sleep 1; done
+      kill -9 $fo_sl; fo_drain ) </dev/null >/dev/null 2>&1 3<&- 5>&- 6>&- 8>&- 9>&- &
     fo_hp=$!
     echo "` + SwitchMarker + ` $fo_tag" >&2 || true
-    trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; sleep 0.5; kill -9 $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; [ "$fo_s" != 255 ] || fo_s=254; exit $fo_s' EXIT
+    trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; kill -9 $fo_sl 2>/dev/null || true; wait $fo_sl 2>/dev/null || true; fo_drain; wait $fo_tp 2>/dev/null || true; [ "$fo_s" != 255 ] || fo_s=254; exit $fo_s' EXIT
   fi
   exec >>"$out" 2>&1
 fi

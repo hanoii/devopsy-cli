@@ -2078,7 +2078,7 @@ case "$*" in
       touch "$FAKE_ROOT/building"
       while [ ! -e "$FAKE_ROOT/dropped" ]; do sleep 0.05; done
     fi
-    ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+    `+fakeFetchTag+`echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)
@@ -2516,8 +2516,9 @@ func TestReleaseLockReopens(t *testing.T) {
 // From the switch on, a release finishes or goes back whatever happens
 // to its session (followOutput): one gone without a signal mid-run kills
 // only the tails, and the run step ends well; so does one that gets
-// Ctrl-C, which nothing there takes (script in a session of its own).
-// GNU's tail only: as before without it.
+// Ctrl-C, which nothing there takes (script in a session of its own);
+// the session gets the last lines however late its tail. GNU's tail only:
+// as before without it.
 func TestAfterSwitchSurvives(t *testing.T) {
 	t.Parallel()
 	// The script's PATH, not the test's: a GNU tail from Homebrew is not
@@ -2530,13 +2531,22 @@ func TestAfterSwitchSurvives(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
-  "-- build --pull") id=$(pwd -P); id=${id%/code}; ` + fakeFetchTag + `echo "${id##*/}" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+  "-- build --pull") id=$(pwd -P); id=${id%/code}; `+fakeFetchTag+`echo "${id##*/}" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
   deploy)
     if [ -n "${FAKE_WAIT:-}" ]; then
       touch "$FAKE_ROOT/running"
       while [ ! -e "$FAKE_ROOT/go" ]; do sleep 0.05; done
     fi
     [ -z "${FAKE_FAIL:-}" ] || exit 1
+    # FAKE_LATE: the tail stopped for a second (a loaded server) before the step's last line.
+    if [ -n "${FAKE_LATE:-}" ]; then
+      for d in /proc/[0-9]*; do
+        case "$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null)" in "tail "*"$FAKE_ROOT"*)
+          kill -STOP "${d#/proc/}"; (sleep 1; kill -CONT "${d#/proc/}") </dev/null >/dev/null 2>&1 & ;;
+        esac
+      done
+      echo "deployed late"; exit 0
+    fi
     echo "deployed $(pwd -P)"; echo "deploy progress" >&2 ;;
   "--release-steps restart run") echo restarted >>"$FAKE_ROOT/calls" ;;
 esac
@@ -2651,6 +2661,12 @@ exit 0
 	}
 	if o := readFile(filepath.Join(base, "releases/2", ServerLogFile)); strings.Count(o, LogSection) != 2 || !strings.Contains(o, "deployed") {
 		t.Errorf("release 2's output after a rollback to it:\n%s\nthe rollback's session:\n%s", o, rbOut)
+	}
+
+	// A tail a second behind the shell's end (a loaded server) still copies the last lines:
+	// it ends once it has copied everything, never at a fixed time after the shell.
+	if out, err := command("5", "FAKE_LATE=1").CombinedOutput(); err != nil || !strings.Contains(string(out), "deployed late") {
+		t.Errorf("release 5 with its tail late (%v), its last line lost:\n%s", err, out)
 	}
 }
 
@@ -3265,7 +3281,7 @@ case "$*" in
     if [ -n "${FAKE_SLOW_LIST:-}" ] && [ "$id" = 2 ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
     printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
-  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; `+fakeFetchTag+`echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)
@@ -3414,7 +3430,7 @@ mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."},"image":"registry/app:prod"}}}' ;;
   "-- pull") echo "pulled-$id" >"$FAKE_ROOT/images/registry_app:prod" ;;
-  "-- build --pull") ` + fakeFetchTag + `echo "built-$id" >"$FAKE_ROOT/images/${t:-registry_app:prod}" ;;
+  "-- build --pull") `+fakeFetchTag+`echo "built-$id" >"$FAKE_ROOT/images/${t:-registry_app:prod}" ;;
 esac
 exit 0
 `)
