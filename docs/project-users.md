@@ -334,19 +334,9 @@ the server by its deploy user, `devopsy@vm1`.
 
 Every user's processes should be hidden from the others too: a process's
 command line names projects and paths, and a devopsy session's is its
-whole script, the operator's command in it. To hide them, as root:
-
-- make a group that sees every process, and add the deploy user to it:
-  it is root through Docker already;
-- mount `/proc` with `hidepid=invisible,gid=<that group's id>`, with a
-  line in `/etc/fstab` so it holds after a reboot and a remount for now
-  (`mount -o remount,hidepid=invisible,gid=<id> /proc`);
-- give polkit the group (`SupplementaryGroups=` in a drop-in of
-  `polkit.service`, then its restart), since it reads its callers'
-  processes.
-
-devopsy-server's setup does all three ([Other users'
-processes](https://github.com/hanoii/devopsy-server/blob/main/docs/things-to-know.md#other-users-processes)).
+whole script, the operator's command in it. `devopsy
+--server-setup-howto processes` prints the steps that hide them
+([Server setup how-to](server-setup-howto.md#processes)).
 devopsy only checks it: `add`, and `--server-info` on a server with project users,
 warn when `/proc` has no `hidepid` of `invisible`, `ptraceable` or
 `noaccess` (`2`, `4` or `1` on an older kernel), and go on; on a server

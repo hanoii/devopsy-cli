@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -97,6 +98,7 @@ var Flags = []FlagGroup{
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},
+		{Name: howto.Flag, Args: "[<topic>]", Scope: Local, Desc: "the steps, as root, for what devopsy\nchecks on a server and cannot set up"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
 	}},
 	{"Setup and tools", []Flag{
@@ -157,32 +159,39 @@ var RemoteOnly = func() []string {
 // flag of devopsy's, cannot run: compose's flags never stand alone (a
 // flag followed by anything passes through to compose), so a lone flag
 // devopsy does not know is a typo. Empty otherwise. The nearest flag of
-// devopsy's is suggested when it is a couple of letters off, or two more
-// when the two share a part (--ssh-host and --shell-host).
+// devopsy's is suggested (Nearest).
 func LoneUnknownFlag(args []string) error {
 	if len(args) != 1 || !strings.HasPrefix(args[0], "-") || args[0] == "--" {
 		return nil
 	}
 	word := args[0]
-	var nearest string
-	best := 5
-	for _, f := range flagsWhere(func(Scope) bool { return true }) {
-		if f.Name == word {
-			return nil
-		}
-		d := editDistance(f.Name, word)
-		if d > 2 && !sharePart(f.Name, word) {
-			continue
-		}
-		if d < best {
-			best, nearest = d, f.Name
-		}
+	all := names(flagsWhere(func(Scope) bool { return true }))
+	if slices.Contains(all, word) {
+		return nil
 	}
+	nearest := Nearest(word, all)
 	why := fmt.Sprintf("%s is not a devopsy flag", word)
 	if nearest != "" {
 		why += fmt.Sprintf(" (did you mean %s?)", nearest)
 	}
 	return &report.Failure{Msg: why, Remedies: []report.Remedy{report.Hint("devopsy's flags:", "devopsy --help")}}
+}
+
+// Nearest is the name of names nearest word, for a "did you mean": one a couple of letters
+// off, or up to four when the two share a hyphen-separated part (--ssh-host and
+// --shell-host), "" for none.
+func Nearest(word string, names []string) string {
+	nearest, best := "", 5
+	for _, n := range names {
+		d := editDistance(n, word)
+		if d > 2 && !sharePart(n, word) {
+			continue
+		}
+		if d < best {
+			best, nearest = d, n
+		}
+	}
+	return nearest
 }
 
 // sharePart reports whether two flags have a hyphen-separated part in

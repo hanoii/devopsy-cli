@@ -220,6 +220,8 @@ ask devopsy at every Tab, so they follow the installed version.
   importing them, release snapshots.
 - [Servers](docs/servers.md): server commands, `--server-info`, CI, SSH
   and keys.
+- [Server setup how-to](docs/server-setup-howto.md): the steps for what
+  devopsy checks on a server and does not set up itself.
 - [Codes](docs/codes.md): the codes of messages for a server's admin.
 - [Project users](docs/project-users.md): a project with a Unix user of
   its own and no Docker socket, why and how.

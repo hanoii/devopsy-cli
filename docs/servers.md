@@ -65,8 +65,8 @@ root run through devopsy's util image, so the deploy user needs no sudo:
 the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
-host's `docker.service`. It installs none of them: devopsy-server's
-`setup.sh` does. The release root (`releases: root` in the deploy user's
+host's `docker.service`. It installs none of them: they are the
+admin's ([`--server-setup-howto`](#--server-setup-howto)). The release root (`releases: root` in the deploy user's
 `config.yaml`, else its home, never `/`, a link to it included) it makes
 when missing, and gives to the deploy user when root owns it and it is
 empty (a fresh volume's `lost+found` aside); one root owns that holds
@@ -183,6 +183,17 @@ A second run changes nothing. What `--server-setup` applied, the values
 kept, and the devopsy that last applied with no failure are recorded in
 `server.yaml` beside the deploy user's `config.yaml`: devopsy's record,
 never edited by hand. Its first run writes it.
+
+## `--server-setup-howto`
+
+What devopsy checks on a server and does not set up itself (Docker, the
+tools, `/proc`'s `hidepid`, the kernel's command line) is the server
+admin's, as root. `devopsy --server-setup-howto` lists the topics, and
+`devopsy --server-setup-howto <topic>` prints one's steps and how to check
+them, the command every such fix offers; it runs anywhere, needing no
+server or project. [Server setup how-to](server-setup-howto.md) shows the
+same text. devopsy-server's `setup.sh` is one way to do these steps on
+Debian 13 and Ubuntu 26.04.
 
 ## `--server-info`
 

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -127,6 +128,14 @@ func Complete(cwd string, words []string, environ []string) Result {
 		r := Result{Directive: DirectiveNoFileComp}
 		if strings.HasPrefix(cur, "-") {
 			r.Candidates = []Candidate{{"--out", "where the private key goes", GroupDevopsy}, {"--help", "how", GroupDevopsy}}
+		}
+		return filter(r, cur)
+	case first == howto.Flag:
+		r := Result{Directive: DirectiveNoFileComp}
+		if len(words) == 2 {
+			for _, t := range howto.Topics {
+				r.Candidates = append(r.Candidates, Candidate{string(t.Name), t.Summary, GroupDevopsy})
+			}
 		}
 		return filter(r, cur)
 	case first == "--shell":

@@ -1,6 +1,6 @@
 # Server setup
 
-`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`). User docs: `docs/servers.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
+`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`), `internal/howto/` (`--server-setup-howto`'s topics) and `cmd/devopsy/howto.go`. User docs: `docs/servers.md`, `docs/server-setup-howto.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
 
 ## Items
 
@@ -17,7 +17,7 @@
 - The mounts drop-in's put is followed by a daemon-reload whatever comes after it, and with no restart queued the apply says Docker starts only once the root's filesystem is mounted, with a detail that nothing is asked of the operator.
 - What the apply leaves for later (the drop-in, a `daemon.json` for Docker's next restart) says what happened and whether the operator has anything to do (`pendingWords`).
 - The check after the apply judges only what went; a refused step is no "what was applied did not hold".
-- devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
+- devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are the admin's, and what devopsy checks of them has a topic of `--server-setup-howto`.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).
 - Every state comes from the server's devopsy, which applies it (`readSetup`, `setup.Facts`); the operator only words them and asks.
 - Every item is idempotent: a second run in a row changes nothing and restarts nothing.
@@ -115,3 +115,13 @@
 - `--server-setup` and `--upgrade`'s apply are one path, the level of what they say and the exit the only differences.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.
 - A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`asProjectUser`): the server's setup is its admin's, and the door would refuse Docker's reads and log each; it asks the door's `firewall` request instead and shows W0001 for the admin on wrong (`projectUserFacts`).
+
+## --server-setup-howto
+
+- `--server-setup-howto [<topic>]` is local and prints only, on stdout, plain: the topics without one, a topic's steps with its name; it needs no server, project or Docker, so a fix's command runs wherever it is copied.
+- A topic is one thing devopsy checks on a server and cannot set up, a `howto.Topic` in `howto.Topics`, its name a `howto.Name` constant; what one command or one package fixes, or devopsy fixes itself, has none.
+- Every fix for a topic's setting offers `howto.Command` of its constant, never the flag spelled again (`TestFlagSpelledOnce`, `TestConstantsAreTopics`).
+- A topic's commands are copyable as they are: a value the admin chooses is a variable set on the step's first line with its usual value, a system's value computed, never a `<word>` to replace.
+- A topic's steps are generic for Debian and Ubuntu with systemd, say where the two differ, and leave out choices of one way to set up a server (the deploy user's making, swap, unattended upgrades); no topic names a tool that does them.
+- Each topic ends with its check: the `--server-info` line that goes away, else a command whose output shows it.
+- `docs/server-setup-howto.md` shows each topic, under `## <name>`, in a fenced block equal to what the flag prints (`TestDocsPage`): a change to a topic changes the page in the same commit.

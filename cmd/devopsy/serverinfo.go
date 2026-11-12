@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -134,23 +135,23 @@ func processesHidden(hidepid string) bool {
 func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
 
 // processesFix is the way out of a /proc that shows every user's processes, the setting itself
-// and the doc with its steps, never a tool that sets it: devopsy checks it and never mounts
-// /proc, the host's hardening being its admin's.
-const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root (docs/project-users.md)"
+// with the command that prints its steps, never a tool that sets it: devopsy checks it and never
+// mounts /proc, the host's hardening being its admin's.
+const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root:"
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
 // that shows project users every other user's processes (processesShown).
 func processesShownWarning() (msg, detail string, fix report.Remedy) {
 	return "/proc shows project users every other user's processes (no hidepid)",
 		"their command lines can hold a secret",
-		report.Fix(processesFix)
+		report.Fix(processesFix, howto.Command(howto.Processes))
 }
 
 // processesShownNote is the same on a server with no project user, where it only matters once
 // one is added.
 func processesShownNote() (msg string, hint report.Remedy) {
 	return "/proc shows every user's processes (no hidepid), which matters once the server has project users",
-		report.Hint(processesFix)
+		report.Hint(processesFix, howto.Command(howto.Processes))
 }
 
 // warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
