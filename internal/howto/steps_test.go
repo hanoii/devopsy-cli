@@ -132,8 +132,13 @@ func TestImageStoreStepKeepsDaemonJSONWhenJqFails(t *testing.T) {
 	path := fakes(t, map[string]string{
 		"jq":        "echo 'jq: error: Objects must consist of key:value pairs' >&2\nexit 2\n",
 		"systemctl": "echo \"$*\" >> " + restarted + "\n",
-	}, "apt-get", "jq", "systemctl")
-	out := pasted(t, stepWith(t, ProjectUsers, "containerd-snapshotter"), path, "/etc/docker/daemon.json", daemon)
+	}, "apt-get", "docker", "jq", "systemctl")
+	s := stepWith(t, ProjectUsers, "containerd-snapshotter")
+	// The step's first command shows the store, as the step says, before anything changes.
+	if s.Cmds[0] != `docker info --format '{{.DriverStatus}}'` {
+		t.Errorf("the image store's step starts with %q, not the command that shows the store", s.Cmds[0])
+	}
+	out := pasted(t, s, path, "/etc/docker/daemon.json", daemon)
 	got, err := os.ReadFile(daemon)
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +148,21 @@ func TestImageStoreStepKeepsDaemonJSONWhenJqFails(t *testing.T) {
 	}
 	if r, _ := os.ReadFile(restarted); len(r) > 0 {
 		t.Errorf("Docker restarted though daemon.json was not rewritten: %s", r)
+	}
+	// A jq that rewrites it: the file holds its output, Docker restarts, no file is left.
+	path = fakes(t, map[string]string{
+		"jq":        "echo '{\"features\":{\"containerd-snapshotter\":true}}'\n",
+		"systemctl": "echo \"$*\" >> " + restarted + "\n",
+	}, "apt-get", "docker", "jq", "systemctl")
+	out = pasted(t, s, path, "/etc/docker/daemon.json", daemon)
+	if got, _ := os.ReadFile(daemon); string(got) != "{\"features\":{\"containerd-snapshotter\":true}}\n" {
+		t.Errorf("a jq that succeeded left daemon.json as %q:\n%s", got, out)
+	}
+	if r, _ := os.ReadFile(restarted); string(r) != "restart docker\n" {
+		t.Errorf("Docker's restarts after a rewrite: %q", r)
+	}
+	if _, err := os.Stat(daemon + ".new"); err == nil {
+		t.Error("the step left daemon.json.new")
 	}
 }
 

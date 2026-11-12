@@ -126,16 +126,16 @@ var Topics = []Topic{
 				`apt-get update`,
 				`apt-get install -y --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`,
 			}},
-			{"Give Docker its containerd image store, which a Docker 29 installed fresh uses already: docker info says io.containerd.snapshotter.v1 as its driver type, where the classic store says overlay2 as its driver. " +
-				"A Docker installed earlier on the classic store stays on it until its daemon is told otherwise, and moves at a cost: no image or container of the classic store shows on the containerd one (volumes and networks stay), " +
-				"so every environment needs a release or a restart to make its containers again, a hold on an older built image cannot come back, and the classic store keeps its disk until it is removed. " +
-				"To move it, at that cost, turn its daemon's containerd-snapshotter feature on in /etc/docker/daemon.json, then restart Docker (https://docs.docker.com/engine/storage/containerd/):", []string{
+			{"Skip this step where Docker is on its containerd image store already, as a Docker 29 installed fresh is: the first command then shows io.containerd.snapshotter.v1 as its driver type, where the classic store shows overlay2 as its driver. " +
+				"Moving a Docker off the classic store restarts it, which stops every container, and no container or image of the classic store shows on the containerd one (volumes and networks stay): " +
+				"every environment then needs a release to make its containers again, a rollback finds none of the images held for it, and the classic store keeps its disk until it is removed. " +
+				"To move it, turn on its daemon's containerd-snapshotter feature in /etc/docker/daemon.json and restart Docker (https://docs.docker.com/engine/storage/containerd/); where jq fails, nothing is written and nothing restarts:", []string{
+				`docker info --format '{{.DriverStatus}}'`,
 				`apt-get install -y jq`,
 				`f=/etc/docker/daemon.json`,
 				`[ -s "$f" ] || echo '{}' > "$f"`,
-				`jq '.features."containerd-snapshotter" = true' "$f" > "$f.new"`,
-				`cat "$f.new" > "$f" && rm "$f.new"`,
-				`systemctl restart docker`,
+				`jq '.features."containerd-snapshotter" = true' "$f" > "$f.new" && cat "$f.new" > "$f" && systemctl restart docker`,
+				`rm -f "$f.new"`,
 			}},
 			{"Then add project users, locally, with --project-users add, and reboot the server after the first: sshd takes its part at the next boot.", nil},
 		},
