@@ -13,7 +13,7 @@ deploy user is.
 - [`tools`](#tools): tar, flock and the other tools devopsy uses, sudo and acl
 - [`processes`](#processes): /proc hiding every user's processes from the others
 - [`project-users`](#project-users): the door's directory, Docker's containerd image store
-- [`kexec-handover`](#kexec-handover): kho=off on the kernel's command line, for its memory
+- [`kexec-handover`](#kexec-handover): kho=off on the kernel's command line, freeing memory it keeps
 - [`kdump`](#kdump): no memory kept for a crash kernel, a choice
 
 ## docker
@@ -54,8 +54,9 @@ user=devopsy).
       apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin apparmor
       systemctl enable --now docker
 
-3. Put the deploy user in the docker group, from its next login: devopsy
-   runs Docker as that user, whom the group makes root's equivalent.
+3. Put the deploy user in the docker group, which applies from its next
+   login: devopsy runs Docker as that user, and the group makes it as good
+   as root.
 
       user=devopsy
       usermod -aG docker "$user"
@@ -121,10 +122,11 @@ user=devopsy).
       getent group "$group" >/dev/null || groupadd --system "$group"
       usermod -aG "$group" "$user"
 
-2. Mount /proc with hidepid=invisible and the group's id, which is all the
-   kernel takes, now and at every boot, once: the line takes the place of
-   any other for /proc in /etc/fstab, and names /proc's own flags, which
-   defaults would drop.
+2. Mount /proc with hidepid=invisible and gid= the group's number (the
+   kernel takes no name), now and at every boot: the /etc/fstab line
+   replaces any other for /proc, and names nosuid, nodev and noexec, which
+   /proc has by default and an fstab line without them would drop. No
+   reboot, and containers are not touched.
 
       group=devopsy-proc
       gid=$(getent group "$group" | cut -d: -f3)
@@ -154,12 +156,13 @@ To check it: /proc's options say hidepid=invisible and the group's id, and
 ```
 What a server with project users needs
 
-Project users reach Docker through the door, which keeps their data in a
-directory of its own on a mount with nosuid and nodev, and needs Docker's
-containerd image store with buildx 0.33.0 or later: --project-users add
-refuses a server without that mount or that Docker, and --server-info warns
-of both. The door needs sudo and acl too (the tools topic), and /proc should
-hide other users' processes from project users (the processes topic).
+Project users reach Docker through the door, devopsy's check of every Docker
+request they make. The door keeps their data in a directory of its own on a
+mount with nosuid and nodev, and needs Docker's containerd image store with
+buildx 0.33.0 or later: --project-users add refuses a server without that
+mount or that Docker, and --server-info warns of both. The door needs sudo
+and acl too (the tools topic), and /proc should hide other users' processes
+from project users (the processes topic).
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
@@ -175,8 +178,8 @@ user=devopsy).
       systemctl daemon-reload
       mountpoint -q "$space" || mount "$space"
 
-2. Name it in the deploy user's config, ~/.config/devopsy/config.yaml, where
-   the file has no door: yet.
+2. Name it as door: space: in the deploy user's config,
+   ~/.config/devopsy/config.yaml, unless the file has a door: already.
 
       user=devopsy space=/var/lib/devopsy-door
       config=$(getent passwd "$user" | cut -d: -f6)/.config/devopsy/config.yaml
@@ -209,8 +212,10 @@ user=devopsy).
       jq '.features."containerd-snapshotter" = true' "$f" > "$f.new" && cat "$f.new" > "$f" && systemctl restart docker
       rm -f "$f.new"
 
-5. Then add project users, locally, with --project-users add, and reboot the
-   server after the first: sshd takes its part at the next boot.
+5. Then add project users with --project-users add, from the operator's
+   machine, and reboot the server after the first: sshd reads what the add
+   wrote for it only at the next boot, and until then no project user logs
+   in.
 
 To check it: the directory is mounted with nosuid and nodev, Docker says its
 containerd image store (io.containerd.snapshotter.v1) and buildx 0.33.0 or
@@ -240,7 +245,7 @@ first line sets the values to change, if it has any (for example
 user=devopsy).
 
 1. Add kho=off to GRUB's command line in a drop-in of its own, named to sort
-   after the image's, then update GRUB's config.
+   after the cloud image's own drop-ins, then update GRUB's config.
 
       mkdir -p /etc/default/grub.d
       printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' > /etc/default/grub.d/zz-kho-off.cfg
@@ -264,8 +269,8 @@ No crash kernel
 
 kdump keeps memory for a crash kernel, which nothing else may use, to save a
 dump when the kernel crashes. Going without it is a choice: a crash then
-leaves no dump, and --server-info says the memory kept without a warning.
-These steps are for an image with kdump-tools, whose
+leaves no dump, and --server-info only notes the memory kept, with no
+warning. These steps are for an image with kdump-tools, whose
 /etc/default/grub.d/kdump-tools.cfg adds crashkernel= to the kernel's
 command line.
 

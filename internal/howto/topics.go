@@ -36,7 +36,7 @@ var Topics = []Topic{
 				`apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin apparmor`,
 				`systemctl enable --now docker`,
 			}},
-			{"Put the deploy user in the docker group, from its next login: devopsy runs Docker as that user, whom the group makes root's equivalent.", []string{
+			{"Put the deploy user in the docker group, which applies from its next login: devopsy runs Docker as that user, and the group makes it as good as root.", []string{
 				`user=devopsy`,
 				`usermod -aG docker "$user"`,
 			}},
@@ -79,8 +79,9 @@ var Topics = []Topic{
 				`getent group "$group" >/dev/null || groupadd --system "$group"`,
 				`usermod -aG "$group" "$user"`,
 			}},
-			{"Mount /proc with hidepid=invisible and the group's id, which is all the kernel takes, now and at every boot, once: " +
-				"the line takes the place of any other for /proc in /etc/fstab, and names /proc's own flags, which defaults would drop.", []string{
+			{"Mount /proc with hidepid=invisible and gid= the group's number (the kernel takes no name), now and at every boot: " +
+				"the /etc/fstab line replaces any other for /proc, and names nosuid, nodev and noexec, which /proc has by default and an fstab line without them would drop. " +
+				"No reboot, and containers are not touched.", []string{
 				`group=devopsy-proc`,
 				`gid=$(getent group "$group" | cut -d: -f3)`,
 				`awk '$1 ~ /^#/ || $2 != "/proc"' /etc/fstab > /etc/fstab.new`,
@@ -105,7 +106,7 @@ var Topics = []Topic{
 		Name:    ProjectUsers,
 		Summary: "the door's directory, Docker's containerd image store",
 		Title:   "What a server with project users needs",
-		Why: "Project users reach Docker through the door, which keeps their data in a directory of its own on a mount with nosuid and nodev, " +
+		Why: "Project users reach Docker through the door, devopsy's check of every Docker request they make. The door keeps their data in a directory of its own on a mount with nosuid and nodev, " +
 			"and needs Docker's containerd image store with buildx 0.33.0 or later: --project-users add refuses a server without that mount or that Docker, and --server-info warns of both. " +
 			"The door needs sudo and acl too (the tools topic), and /proc should hide other users' processes from project users (the processes topic).",
 		Steps: []Step{
@@ -116,7 +117,7 @@ var Topics = []Topic{
 				`systemctl daemon-reload`,
 				`mountpoint -q "$space" || mount "$space"`,
 			}},
-			{"Name it in the deploy user's config, ~/.config/devopsy/config.yaml, where the file has no door: yet.", []string{
+			{"Name it as door: space: in the deploy user's config, ~/.config/devopsy/config.yaml, unless the file has a door: already.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`config=$(getent passwd "$user" | cut -d: -f6)/.config/devopsy/config.yaml`,
 				`runuser -u "$user" -- mkdir -p "${config%/*}"`,
@@ -137,7 +138,7 @@ var Topics = []Topic{
 				`jq '.features."containerd-snapshotter" = true' "$f" > "$f.new" && cat "$f.new" > "$f" && systemctl restart docker`,
 				`rm -f "$f.new"`,
 			}},
-			{"Then add project users, locally, with --project-users add, and reboot the server after the first: sshd takes its part at the next boot.", nil},
+			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
 		},
 		Check: Step{"the directory is mounted with nosuid and nodev, Docker says its containerd image store (io.containerd.snapshotter.v1) and buildx 0.33.0 or later, and --server-info no longer warns of either.", []string{
 			`space=/var/lib/devopsy-door`,
@@ -148,13 +149,13 @@ var Topics = []Topic{
 	},
 	{
 		Name:    KexecHandOver,
-		Summary: "kho=off on the kernel's command line, for its memory",
+		Summary: "kho=off on the kernel's command line, freeing memory it keeps",
 		Title:   "Kexec HandOver off",
 		Why: "A kernel with Kexec HandOver on, as Ubuntu 26.04's 7.0 is by default, keeps memory as CMA, which only movable pages may use: page tables, slab and socket buffers can run out while memory is free. " +
 			"Nothing on a server hands over to another kernel with kexec, so kho=off on the kernel's command line frees it; a kernel without Kexec HandOver passes the word to init, which ignores it. " +
 			"--server-info warns while the memory is kept.",
 		Steps: []Step{
-			{"Add kho=off to GRUB's command line in a drop-in of its own, named to sort after the image's, then update GRUB's config.", []string{
+			{"Add kho=off to GRUB's command line in a drop-in of its own, named to sort after the cloud image's own drop-ins, then update GRUB's config.", []string{
 				`mkdir -p /etc/default/grub.d`,
 				`printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT kho=off"' > /etc/default/grub.d/zz-kho-off.cfg`,
 				`update-grub`,
@@ -172,7 +173,7 @@ var Topics = []Topic{
 		Summary: "no memory kept for a crash kernel, a choice",
 		Title:   "No crash kernel",
 		Why: "kdump keeps memory for a crash kernel, which nothing else may use, to save a dump when the kernel crashes. " +
-			"Going without it is a choice: a crash then leaves no dump, and --server-info says the memory kept without a warning. " +
+			"Going without it is a choice: a crash then leaves no dump, and --server-info only notes the memory kept, with no warning. " +
 			"These steps are for an image with kdump-tools, whose /etc/default/grub.d/kdump-tools.cfg adds crashkernel= to the kernel's command line.",
 		Steps: []Step{
 			{"Take crashkernel= off GRUB's command line in a drop-in of its own, named to sort after kdump-tools', then update GRUB's config.", []string{
