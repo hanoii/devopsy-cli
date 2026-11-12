@@ -9,6 +9,7 @@ const (
 	ProjectUsers  Name = "project-users"
 	KexecHandOver Name = "kexec-handover"
 	Kdump         Name = "kdump"
+	XFS           Name = "xfs"
 )
 
 // Topics are the topics, in the order the list shows them.
@@ -195,6 +196,35 @@ var Topics = []Topic{
 		},
 		Check: Step{"/sys/kernel/kexec_crash_size says 0, and --server-info no longer says that kdump keeps memory.", []string{
 			`cat /sys/kernel/kexec_crash_size`,
+		}},
+	},
+	{
+		Name:    XFS,
+		Summary: "the data on XFS, so its copies are reflinks",
+		Title:   "The data on XFS, for copies by reflinks",
+		Why: "On a filesystem with reflinks (XFS, btrfs) a copy shares its blocks with the original until one of them is written, so it takes seconds at any size. " +
+			"A snapshot and a sync then stop an environment's services only for that clone; without reflinks they stay stopped for the whole copy, which --server-info warns of. " +
+			"A reflink never crosses filesystems, so the release root and Docker's own directory, where volumes are, must be on the same one. " +
+			"The simplest server has its whole root on XFS: the system, the releases and Docker on one filesystem the size of the disk, which grows with it. " +
+			"devopsy formats and converts nothing, and for a site XFS is about as fast as ext4.",
+		Steps: []Step{
+			{"See what the server has: the filesystem of the deploy user's home, where releases go unless its config names another root, and of Docker's directory. Both xfs, on one device, is what reflinks need.", []string{
+				`user=devopsy`,
+				`findmnt -no SOURCE,FSTYPE --target "$(getent passwd "$user" | cut -d: -f6)"`,
+				`findmnt -no SOURCE,FSTYPE --target "$(docker info --format '{{.DockerRootDir}}')"`,
+			}},
+			{"Choose it for a new server, before anything is on its disk: no root is converted in place once it holds data. Where the server is installed by hand, pick XFS for the root in the installer's partitioning. " +
+				"A cloud image comes as ext4 with no choice: its root can be converted during its first boots, by user data given when the server is created, and never later.", nil},
+			{"Leave an existing server on ext4 as it is. To get reflinks for it, make a new server on XFS and move each environment there, by a release to it and a sync or a snapshot of its data. " +
+				"Until then, snapshots: {mirror: true} in a project's config keeps a copy that takes most of a snapshot while the services run.", nil},
+			{"Know what a clone costs a database: while a clone exists, what the database writes goes to new blocks, and its files stay fragmented once the clone is gone. " +
+				"A snapshot and a sync remove their clone once they have read it, for that reason. xfs_fsr, from the xfsprogs package, puts a file back in one extent while it is in use.", nil},
+		},
+		Check: Step{"a copy by reflink works in the deploy user's home, and --server-info says reflinks on its disks line and no longer warns of none.", []string{
+			`user=devopsy`,
+			`home=$(getent passwd "$user" | cut -d: -f6)`,
+			`echo check > "$home/.reflink-a" && cp --reflink=always "$home/.reflink-a" "$home/.reflink-b" && echo reflinks`,
+			`rm -f "$home/.reflink-a" "$home/.reflink-b"`,
 		}},
 	},
 }

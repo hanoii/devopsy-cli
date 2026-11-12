@@ -1203,7 +1203,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
-				reflinkFix(info.MirrorsOff))
+				reflinkFix(info.MirrorsOff), report.Hint("what data on XFS takes:", howto.Command(howto.XFS)))
 		}
 	}
 	if info.SnapshotRoot != "" && snapshotDisk >= 0 && snapshotDisk == release {

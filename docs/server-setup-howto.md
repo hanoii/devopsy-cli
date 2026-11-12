@@ -13,6 +13,7 @@ no server, project or Docker.
 - [project-users](#project-users): sudo and acl, the door's directory, Docker's image store
 - [kexec-handover](#kexec-handover): kho=off on the kernel's command line, freeing memory it keeps
 - [kdump](#kdump): no memory kept for a crash kernel, a choice
+- [xfs](#xfs): the data on XFS, so its copies are reflinks
 
 ## docker
 
@@ -338,4 +339,62 @@ longer says that kdump keeps memory.
 
 ```sh
 cat /sys/kernel/kexec_crash_size
+```
+
+## xfs
+
+The data on XFS, for copies by reflinks
+
+On a filesystem with reflinks (XFS, btrfs) a copy shares its blocks with the
+original until one of them is written, so it takes seconds at any size. A
+snapshot and a sync then stop an environment's services only for that clone;
+without reflinks they stay stopped for the whole copy, which --server-info
+warns of. A reflink never crosses filesystems, so the release root and
+Docker's own directory, where volumes are, must be on the same one. The
+simplest server has its whole root on XFS: the system, the releases and
+Docker on one filesystem the size of the disk, which grows with it. devopsy
+formats and converts nothing, and for a site XFS is about as fast as ext4.
+
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
+
+1. See what the server has: the filesystem of the deploy user's home, where
+   releases go unless its config names another root, and of Docker's
+   directory. Both xfs, on one device, is what reflinks need.
+
+   ```sh
+   user=devopsy
+   findmnt -no SOURCE,FSTYPE --target "$(getent passwd "$user" | cut -d: -f6)"
+   findmnt -no SOURCE,FSTYPE --target "$(docker info --format '{{.DockerRootDir}}')"
+   ```
+
+2. Choose it for a new server, before anything is on its disk: no root is
+   converted in place once it holds data. Where the server is installed by
+   hand, pick XFS for the root in the installer's partitioning. A cloud
+   image comes as ext4 with no choice: its root can be converted during its
+   first boots, by user data given when the server is created, and never
+   later.
+
+3. Leave an existing server on ext4 as it is. To get reflinks for it, make a
+   new server on XFS and move each environment there, by a release to it and
+   a sync or a snapshot of its data. Until then, snapshots: {mirror: true}
+   in a project's config keeps a copy that takes most of a snapshot while
+   the services run.
+
+4. Know what a clone costs a database: while a clone exists, what the
+   database writes goes to new blocks, and its files stay fragmented once
+   the clone is gone. A snapshot and a sync remove their clone once they
+   have read it, for that reason. xfs_fsr, from the xfsprogs package, puts a
+   file back in one extent while it is in use.
+
+To check it: a copy by reflink works in the deploy user's home, and
+--server-info says reflinks on its disks line and no longer warns of none.
+
+```sh
+user=devopsy
+home=$(getent passwd "$user" | cut -d: -f6)
+echo check > "$home/.reflink-a" && cp --reflink=always "$home/.reflink-a" "$home/.reflink-b" && echo reflinks
+rm -f "$home/.reflink-a" "$home/.reflink-b"
 ```
