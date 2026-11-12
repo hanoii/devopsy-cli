@@ -349,3 +349,151 @@ func TestDoorFreeTakesWhatItsPathSays(t *testing.T) {
 
 // noneThere is a free's gone check for an environment that is gone.
 func noneThere() error { return nil }
+
+// Behind the door a start runs as an environment's uid only under that environment's own name:
+// a file in prod's directory named as another of the project's environments gets no uid, since
+// prod's --destroy downs by name and a container under another would outlive the free.
+//
+// Not parallel: it sets doorLog and doorWho, and PATH (doorFakes).
+func TestDoorHoldsAUIDsContainersToItsName(t *testing.T) {
+	doorFakes(t)
+	dir := t.TempDir()
+	savedLog, savedWho := doorLog, doorWho
+	t.Cleanup(func() { doorLog, doorWho = savedLog, savedWho })
+	doorLog, doorWho = filepath.Join(dir, "refused.log"), "devopsy-shop"
+	tree := filepath.Join(dir, "tree")
+	if err := os.MkdirAll(filepath.Join(tree, "prod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	docker := doorImageFake(t, dir)
+	fakeManifest(t, dir, plainManifest("busybox"), "busybox:1.37")
+	write(t, filepath.Join(dir, "store"), "", 0o644)
+	seen := filepath.Join(dir, "seen")
+	vet := filepath.Join(dir, "vet")
+	write(t, vet, "#!/bin/sh\ncat >"+seen+"\nexit 2\n", 0o755)
+	claims := []uids.Claim{
+		{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 2000000003},
+		{Owner: uids.Owner{Project: "shop"}, UID: 1900000001},
+	}
+	file := func(name string) map[string]any {
+		return map[string]any{"name": name, "services": map[string]any{
+			"web": map[string]any{
+				"image": "busybox:1.37", "user": "2000000003:2000000003", "security_opt": []any{"no-new-privileges"},
+				"labels": map[string]any{"vetted.x": "1"},
+			},
+		}}
+	}
+	side := func() *doorSide {
+		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
+			claims: claims, vets: []remote.DoorVet{{Prefix: "vetted.", Command: vet}}, real: docker}
+	}
+	// The control: prod's own name gets past the checks to the vet.
+	side().compose("", file("shop-prod"), "", filepath.Join(tree, "prod"), []string{"up", "-d"})
+	if _, err := os.Stat(seen); err != nil {
+		t.Fatalf("the control: prod's own start did not reach the vet: %v", err)
+	}
+	os.Remove(seen)
+	side().compose("", file("shop-other"), "", filepath.Join(tree, "prod"), []string{"up", "-d"})
+	if _, err := os.Stat(seen); err == nil {
+		t.Error("a file named shop-other in prod's directory passed the door's checks running as prod's uid: the free of prod's claim takes only shop-prod down")
+	}
+}
+
+// Behind the door a start's uids follow the request's directory, never a name the file picks:
+// a pr-1 checkout naming itself shop-prod gets no prod uid.
+//
+// Not parallel: it sets doorLog and doorWho, and PATH (doorFakes).
+func TestDoorUIDsAreTheDirectorys(t *testing.T) {
+	doorFakes(t)
+	dir := t.TempDir()
+	savedLog, savedWho := doorLog, doorWho
+	t.Cleanup(func() { doorLog, doorWho = savedLog, savedWho })
+	doorLog, doorWho = filepath.Join(dir, "refused.log"), "devopsy-shop"
+	tree := filepath.Join(dir, "tree")
+	for _, env := range []string{"prod", "pr-1"} {
+		if err := os.MkdirAll(filepath.Join(tree, env), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docker := doorImageFake(t, dir)
+	fakeManifest(t, dir, plainManifest("busybox"), "busybox:1.37")
+	write(t, filepath.Join(dir, "store"), "", 0o644)
+	seen := filepath.Join(dir, "seen")
+	vet := filepath.Join(dir, "vet")
+	write(t, vet, "#!/bin/sh\ncat >"+seen+"\nexit 2\n", 0o755)
+	claims := []uids.Claim{
+		{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 2000000003},
+		{Owner: uids.Owner{Project: "shop", Env: "pr-1"}, UID: 2000000004},
+		{Owner: uids.Owner{Project: "shop"}, UID: 1900000001},
+	}
+	// compose changes the file it checks (its labels, its images pinned): one each time.
+	file := func() map[string]any {
+		return map[string]any{"name": "shop-prod", "services": map[string]any{
+			"web": map[string]any{
+				"image": "busybox:1.37", "user": "2000000003:2000000003", "security_opt": []any{"no-new-privileges"},
+				"labels": map[string]any{"vetted.x": "1"},
+			},
+		}}
+	}
+	side := func() *doorSide {
+		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
+			claims: claims, vets: []remote.DoorVet{{Prefix: "vetted.", Command: vet}}, real: docker}
+	}
+	// The control: prod's own directory gets past the checks to the vet.
+	side().compose("", file(), "", filepath.Join(tree, "prod"), []string{"up", "-d"})
+	if _, err := os.Stat(seen); err != nil {
+		t.Fatalf("the control: prod's own start did not reach the vet: %v", err)
+	}
+	os.Remove(seen)
+	side().compose("", file(), "", filepath.Join(tree, "pr-1"), []string{"up", "-d"})
+	if _, err := os.Stat(seen); err == nil {
+		t.Error("pr-1's directory passed the door's checks running as prod's uid")
+	}
+}
+
+// A free takes the project's start lock only when the project's claim goes: a sibling's start
+// (prod's long run) never holds up pr-1's --destroy.
+func TestFreeUIDsWaitsForNoSiblingsStart(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), ".devopsy-uids")
+	s := busyStore(dir)
+	prod := uids.Owner{Project: "shop", Env: "prod"}
+	pr := uids.Owner{Project: "shop", Env: "pr-1"}
+	for _, o := range []uids.Owner{prod, pr} {
+		if _, _, err := s.LookupPair(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// prod runs a container: its start holds both locks, shared, for as long as compose runs.
+	for _, o := range []uids.Owner{prod, prod.ProjectOf()} {
+		l, err := s.LockStart(o, syscall.LOCK_SH)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Close()
+	}
+	if err := freeUIDs(s, pr, noneThere, func(string) error { return nil }); err != nil {
+		t.Errorf("pr-1's free waited for prod's start, though the project's claim stays: %v", err)
+	}
+	if _, ok, _ := s.Read(prod.ProjectOf()); !ok {
+		t.Error("the project's claim went with prod still there")
+	}
+}
+
+// A free of an environment that never held a claim takes nothing down: its flat compose name
+// may be another project's (an instance admin's prod, project shop-admin's prod).
+func TestFreeUIDsDownsNothingNeverClaimed(t *testing.T) {
+	t.Parallel()
+	s := uids.Store{Dir: filepath.Join(t.TempDir(), ".devopsy-uids")}
+	var downs []string
+	err := freeUIDs(s, uids.Owner{Project: "shop", Instance: "admin", Env: "prod"}, noneThere, func(name string) error {
+		downs = append(downs, name)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(downs) != 0 {
+		t.Errorf("an environment that never claimed a uid took down %s", strings.Join(downs, ", "))
+	}
+}

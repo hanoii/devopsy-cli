@@ -595,3 +595,25 @@ func TestOwnersMount(t *testing.T) {
 		t.Errorf("an entry a link: %v", err)
 	}
 }
+
+// An import gives its owned volumes' roots to their owners after its extraction, as its
+// entries': a tar carries its maker's owners, the root's included.
+func TestImportGivesAnOwnedVolumesRoot(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	env := []string{"FAKE_DB_VOLUME=dbdata", "FAKE_DB_NO_BIND=1", "FAKE_DB_OWNER=2000000123:2000000123", "FAKE_VOLUME_NOCOPY=1"}
+	if out, code := s.run(env, "@solo", "--release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	_, errs, code := s.runIO(env, tarOf(t, map[string]string{"dbdata/ibd": "pages\n"}), "@solo", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	if code != 0 {
+		t.Fatalf("the import (%d):\n%s\n%s", code, errs, docker)
+	}
+	extract := strings.Index(docker, "--mount type=volume,source=shop-solo_dbdata,target=/mnt/dbdata")
+	own := regexp.MustCompile(`-v shop-solo_dbdata:/vol/dbdata devopsy\.internal/util:5 sh -c chown "\$2" "/vol/\$1" sh dbdata 2000000123:2000000123\n`).FindStringIndex(docker)
+	if extract < 0 || own == nil || own[0] < extract {
+		t.Errorf("the owned volume's root not given after the import's extraction (extract at %d, owner at %v):\n%s\n%s", extract, own, errs, docker)
+	}
+}

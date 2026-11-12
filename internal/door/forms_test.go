@@ -370,3 +370,28 @@ func TestScriptFormChecksArgumentsWhereTheScriptReadsThem(t *testing.T) {
 		}
 	}
 }
+
+// An import's form short of the uids it maps owners to is refused with words, never read past
+// the end of its command.
+func TestImportFormShortOfItsMapIsRefused(t *testing.T) {
+	t.Parallel()
+	const entry, tree = "/space/mnt/shop-prod/data", "/home/devopsy-shop/shop/prod"
+	for name, args := range map[string][]string{
+		"no argument":    nil,
+		"no map":         {"sh", "/in/t", "data"},
+		"one uid of two": {"sh", "/in/t", "data", "10001"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("the door panicked: %v", r)
+				}
+			}()
+			argv := append([]string{"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script"}, args...)
+			if _, err := decide(t, argv...); err == nil {
+				t.Error("taken")
+			}
+		})
+	}
+}
