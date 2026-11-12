@@ -120,7 +120,7 @@ var Topics = []Topic{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`config=$(getent passwd "$user" | cut -d: -f6)/.config/devopsy/config.yaml`,
 				`runuser -u "$user" -- mkdir -p "${config%/*}"`,
-				`grep -qs '^door:' "$config" || printf 'door:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
+				`grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
 			}},
 			{"Give Docker buildx 0.33.0 or later by upgrading its plugin's package alone, which restarts nothing.", []string{
 				`apt-get update`,
