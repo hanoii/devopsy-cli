@@ -47,6 +47,9 @@ How the keys combine:
   removes the list. `snapshots:` merges key by key: `true` and `false`
   only turn a kind on or off, `{keep: <n>}` only changes the count, and
   `~` goes back to the default.
+- An environment's name is lowercase letters, digits, `.`, `_` and `-`,
+  starting with a letter or a digit: a compose name lowercases it, so two
+  names differing only in case would be one set of containers.
 - An environment key with `*` is a pattern, matching one or more name
   characters (`"*"` matches any name). An exact name wins over a pattern,
   then the pattern with the most literal characters.

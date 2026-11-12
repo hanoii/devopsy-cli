@@ -12,6 +12,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -424,13 +425,13 @@ func StepArgs(step string) []string {
 }
 
 var (
-	envName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	envName = uids.EnvRe
 	// envPattern is an environments: key with * standing for one or more
 	// name characters.
-	envPattern = regexp.MustCompile(`^[A-Za-z0-9_.*-]+$`)
+	envPattern = regexp.MustCompile(`^[a-z0-9_.*-]+$`)
 	// nameRe is a project's or an instance's name: a directory and part of
 	// compose and host names.
-	nameRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	nameRe  = uids.NameRe
 	varName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -601,7 +602,7 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 			}
 			for name, n := range nodes {
 				if !envName.MatchString(name) && !envPattern.MatchString(name) {
-					return nil, fmt.Errorf("%s: environments: %q: letters, digits, '.', '_', '-' and * in patterns", file, name)
+					return nil, fmt.Errorf("%s: environments: %q: lowercase letters, digits, '.', '_', '-' and * in patterns", file, name)
 				}
 				t, nulls, err := decodeTarget(file, name, &n, true)
 				if err != nil {
@@ -622,7 +623,7 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 			for i := 0; i+1 < len(node.Content); i += 2 {
 				name := node.Content[i].Value
 				if !envName.MatchString(name) {
-					return nil, fmt.Errorf("%s: aliases: %q: letters, digits, '.', '_' and '-'", file, name)
+					return nil, fmt.Errorf("%s: aliases: %q: lowercase letters, digits, '.', '_' and '-'", file, name)
 				}
 				for j := 0; j+1 < len(node.Content[i+1].Content); j += 2 {
 					switch k := node.Content[i+1].Content[j].Value; k {
@@ -1443,6 +1444,9 @@ func parseAddress(s string) (address, error) {
 	}
 	a.env = rest
 	if !envName.MatchString(a.env) {
+		if envName.MatchString(strings.ToLower(a.env)) {
+			return a, fmt.Errorf("@%s: environment %q: names are lowercase", s, a.env)
+		}
 		return a, fmt.Errorf("@%s: not an address: @[<server>:][<instance>/]<environment>", s)
 	}
 	return a, nil

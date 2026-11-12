@@ -60,11 +60,12 @@ func DomainOf(uid uint32) (Domain, bool) {
 }
 
 var (
-	// nameRe is a project's or an instance's name, as the config takes it.
-	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-	// envRe is an environment's name, as the config takes it: lowercase, since the compose
-	// name lowercases it and two names differing in case would be one set of containers.
-	envRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
+	// NameRe is a project's or an instance's name: a directory, and part of compose and
+	// host names. The config takes names by it.
+	NameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	// EnvRe is an environment's name, lowercase: the compose name lowercases it, so two
+	// names differing in case would be one set of containers. The config takes names by it.
+	EnvRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 )
 
 // nameMax is the longest file name a claim can have.
@@ -93,11 +94,11 @@ func (o Owner) ProjectOf() Owner { return Owner{Project: o.Project, Instance: o.
 
 func (o Owner) check() error {
 	switch {
-	case !nameRe.MatchString(o.Project):
+	case !NameRe.MatchString(o.Project):
 		return fmt.Errorf("%q is no project name", o.Project)
-	case o.Instance != "" && !nameRe.MatchString(o.Instance):
+	case o.Instance != "" && !NameRe.MatchString(o.Instance):
 		return fmt.Errorf("%q is no instance name", o.Instance)
-	case o.Env != "" && !envRe.MatchString(o.Env):
+	case o.Env != "" && !EnvRe.MatchString(o.Env):
 		return fmt.Errorf("%q is no environment name (lowercase letters, digits, '_', '.' and '-')", o.Env)
 	case len(o.String()) > nameMax:
 		return fmt.Errorf("%s: too long for a claim's name, %d bytes at most", o, nameMax)

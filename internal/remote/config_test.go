@@ -203,12 +203,21 @@ func TestConfigErrors(t *testing.T) {
 		"inherit DEVOPSY_":   "project: app\nenvironments:\n  prod: {inherit: [DEVOPSY_DOMAINS]}\n",
 		"inherit compose":    "project: app\ndefaults: {inherit: [COMPOSE_PROJECT_NAME]}\nenvironments:\n  prod: {}\n",
 		"inherit twice":      "project: app\nenvironments:\n  prod: {inherit: [DB, DB]}\n",
+		// Environment names are lowercase: the compose name lowercases them, so Prod and prod
+		// would be two directories and two uids for one set of containers.
+		"uppercase environment": "project: app\nenvironments:\n  prod: {}\n  Stage: {}\n",
+		"uppercase pattern":     "project: app\nenvironments:\n  prod: {}\n  \"PR-*\": {}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
 		if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ConfigFile), "project: app\nenvironments:\n  prod: {}\n")
+	if _, err := LoadTarget(dir, "vm1:Prod", nil); err == nil || !strings.Contains(err.Error(), "lowercase") {
+		t.Errorf("an uppercase address: %v, want an error naming lowercase", err)
 	}
 }
 
