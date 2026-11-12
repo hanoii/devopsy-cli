@@ -191,13 +191,14 @@ never edited by hand. Its first run writes it.
 ## `--server-setup-howto`
 
 What devopsy checks on a server and does not set up itself (Docker, the
-tools, `/proc`'s `hidepid`, the kernel's command line) is the server
-admin's, as root. `devopsy --server-setup-howto` lists the topics, and
-`devopsy --server-setup-howto <topic>` prints one's steps and how to check
-them, the command every such fix offers; it runs anywhere, needing no
-server or project. [Server setup how-to](server-setup-howto.md) shows the
-same text. devopsy-server's `setup.sh` is one way to do these steps on
-Debian 13 and Ubuntu 26.04.
+tools, `/proc`'s `hidepid`, what project users need, the kernel's
+command line) is the server admin's, as root. `devopsy
+--server-setup-howto` lists the topics, and `devopsy
+--server-setup-howto <topic>` prints one's steps and how to check them,
+the command every such fix offers; it runs anywhere, needing no server
+or project. [Server setup how-to](server-setup-howto.md) shows the same
+text. devopsy-server's `setup.sh` is one way to do these steps on Debian
+13 and Ubuntu 26.04.
 
 ## `--server-info`
 

@@ -339,22 +339,18 @@ address the server by its deploy user, `devopsy@vm1`.
 Every user's processes should be hidden from the others too: a process's
 command line names projects and paths, and a devopsy session's is its
 whole script, the operator's command in it. `devopsy
---server-setup-howto processes` prints the steps that hide them
-([Server setup how-to](server-setup-howto.md#processes)).
-devopsy only checks it: `add`, and `--server-info` on a server with project users,
-warn when `/proc` has no `hidepid` of `invisible`, `ptraceable` or
-`noaccess` (`2`, `4` or `1` on an older kernel), and go on; on a server
-with none yet, `--server-info` says it without a warning.
-`noaccess` shows that a process is there and whose it is, never its
-command line.
+--server-setup-howto processes` prints the steps that hide them ([Server
+setup how-to](server-setup-howto.md#processes)). devopsy only checks it:
+`add`, and `--server-info` on a server with project users, warn when
+`/proc` has no `hidepid` of `invisible`, `ptraceable` or `noaccess`
+(`2`, `4` or `1` on an older kernel), and go on; on a server with none
+yet, `--server-info` says it without a warning. `noaccess` shows that a
+process is there and whose it is, never its command line.
 
 1. Set the server up for project users, as root: `devopsy
-   --server-setup-howto project-users` prints the steps (the door's
-   directory mounted with `nosuid` and `nodev`, its `door: space:` in the
-   deploy user's config, Docker's containerd image store and what moving
-   to it costs), and `devopsy --server-setup-howto tools` installs `sudo`
-   and `acl`, as [Server setup how-to](server-setup-howto.md#project-users)
-   shows them.
+   --server-setup-howto project-users` and `devopsy --server-setup-howto
+   tools` print the steps ([Server setup
+   how-to](server-setup-howto.md#project-users)).
 
 2. Add the project user and its keys, locally:
 
