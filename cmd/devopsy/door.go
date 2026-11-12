@@ -29,6 +29,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"golang.org/x/sys/unix"
 )
 
@@ -187,6 +188,9 @@ func doorReadRun(c *exec.Cmd, output bool) int {
 // doorSide is the deploy user's side of one request.
 type doorSide struct {
 	policy door.Policy
+	// claims are the project's uid claims (projectClaims), read once per request: what its
+	// containers may run as (uidsOf) and its data's owners may be (Policy.ProjectUIDs).
+	claims []uids.Claim
 	real   string
 	env    []string
 	vets   []remote.DoorVet
@@ -942,7 +946,12 @@ func runDoor(args []string) int {
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
 	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
-	side := &doorSide{policy: policy, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
+	claims, err := projectClaims(policy.Project)
+	if err != nil {
+		return doorRefused(fmt.Errorf("refused: the project's uid claims: %w", err))
+	}
+	policy.ProjectUIDs = claimedUIDs(claims)
+	side := &doorSide{policy: policy, claims: claims, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
 	// With no key left, or an end pending: what a removed key left running gets nothing.
 	if err := side.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
@@ -1405,6 +1414,9 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
 	// A claim's copy is a work directory too, which a door killed mid-start leaves.
 	s.sweepWork()
+	// What its containers may run as: the claims of the environment the file names.
+	name, _ := file["name"].(string)
+	s.policy.UIDs = uidsOf(s.claims, name)
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
@@ -1423,7 +1435,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
 		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
-	name, _ := file["name"].(string)
 	if argv[0] == "pull" {
 		return s.pull(config, file, profiles, dir, argv)
 	}

@@ -123,6 +123,16 @@ func (o Owner) check() error {
 	return nil
 }
 
+// ComposeName is the compose name o's environment has: <project>[-<instance>]-<environment>,
+// one name that two owners can share (an instance admin's prod and a project shop-admin's).
+func (o Owner) ComposeName() string {
+	parts := []string{o.Project}
+	if o.Instance != "" {
+		parts = append(parts, o.Instance)
+	}
+	return strings.Join(append(parts, o.Env), "-")
+}
+
 // Domain is o's domain.
 func (o Owner) Domain() Domain {
 	switch {

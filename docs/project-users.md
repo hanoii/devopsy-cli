@@ -266,11 +266,14 @@ A project user's compose file is an ordinary one, within these rules.
 The door names what it refuses, and logs each refusal in
 `<space>/refused.log`.
 
-- Every service runs as `<uid>:<gid>` in numbers, neither of them 0, an
-  id of the host's own users and groups (the deploy user, the project
-  users, the socket's group), nor in 50000 to 59999, the range project
-  users take their ids from: `user: "10001:10001"`. A user name is
-  refused, since the image's own `/etc/passwd` could map it to root.
+- Every service runs as the uid the server gives its environment, or
+  its project's, as uid and gid both:
+  `user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"`, or `DEVOPSY_PROJECT_UID`
+  ([Variables on a server](config.md#variables-on-a-server)). No other
+  environment's containers on the server run as it, so a process that
+  escapes one container cannot reach another's through `/proc`. A user
+  name is refused, since the image's own `/etc/passwd` could map it to
+  root, and so is any other number.
 - Every service has `security_opt: [no-new-privileges]`, and nothing
   else there. `cap_add` takes only `NET_BIND_SERVICE`.
 - No `ports`: a project publishes nothing on the host, and the server's

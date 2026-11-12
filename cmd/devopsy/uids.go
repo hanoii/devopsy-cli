@@ -115,3 +115,51 @@ func (s *doorSide) ownerAt(base string) (uids.Owner, error) {
 	}
 	return o, nil
 }
+
+// projectClaims are the claims of project in the deploy user's claims directory, none when
+// it has no directory yet.
+func projectClaims(project string) ([]uids.Claim, error) {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return nil, err
+	}
+	all, err := claimsStore(r.Root).List()
+	if err != nil {
+		return nil, err
+	}
+	var mine []uids.Claim
+	for _, c := range all {
+		if c.Bad == "" && c.Owner.Project == project {
+			mine = append(mine, c)
+		}
+	}
+	return mine, nil
+}
+
+// claimedUIDs are every uid project's claims hold: what an owner of its data may be.
+func claimedUIDs(claims []uids.Claim) []uint32 {
+	var out []uint32
+	for _, c := range claims {
+		out = append(out, c.UID)
+	}
+	return out
+}
+
+// uidsOf are what a container of the environment named name may run as: the uid of each of
+// the project's environments whose compose name it is (two owners can share one, both the
+// same tenant's), and each one's project uid. None when no load of its release claimed one.
+func uidsOf(claims []uids.Claim, name string) []uint32 {
+	var out []uint32
+	for _, c := range claims {
+		if c.Owner.Env == "" || c.Owner.ComposeName() != name {
+			continue
+		}
+		out = append(out, c.UID)
+		for _, p := range claims {
+			if p.Owner == c.Owner.ProjectOf() {
+				out = append(out, p.UID)
+			}
+		}
+	}
+	return out
+}

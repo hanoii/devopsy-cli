@@ -376,7 +376,7 @@ func TestDecideAllows(t *testing.T) {
 		{"run", "--mount", "type=bind,source=" + entry + ",target=/s,readonly", "--mount", "type=bind,source=/space/mnt/shop-dev/data,target=/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"},
 		{"run", "-v", "/space/mnt/shop-prod:/m:ro", "-v", "shop-prod_db:/v/db:ro", "util:1", "du", "-sk", "/m/data", "/v/db"},
 		{"run", "-v", "/space/mnt/shop-prod:/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"},
-		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown=1:1", "/src/data/", "/dst/data/"},
+		{"run", "-v", "/space/mnt/shop-prod:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "--chown=10001:10001", "/src/data/", "/dst/data/"},
 		receive("/space/mnt/shop-prod/data:/mnt/data", "devopsy::data/", "/mnt/data/"),
 		{"run", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + daemonSettings + "[data]\npath = /mnt/data\n[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "-v", "/space/mnt/shop-prod:/mnt:ro", "util:1", "sh", "-c", "daemon script"},
 		{"run", "-v", "/space/clones/shop/abc/mnt:/src:ro", "-v", "/space/mnt/shop-dev:/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"},

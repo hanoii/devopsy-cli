@@ -25,15 +25,16 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 		// bad are the same request with one word swapped: from, to.
 		bad map[string][2]string
 	}{
-		{"owners", []string{"run", "-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "1:2"}, map[string][2]string{
+		{"owners", []string{"run", "-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "10001:10001"}, map[string][2]string{
 			"the whole mnt":     {entry + ":/mnt/data", mnt + ":/mnt/data"},
 			"a path of its own": {entry + ":/mnt/data", tree + "/x:/mnt/data"},
-			"a name as owner":   {"1:2", "root"},
+			"a name as owner":   {"10001:10001", "root"},
 			// An entry's owner is a container's user: never root's or one of the host's own.
-			"root as owner":      {"1:2", "0:0"},
-			"a host id as owner": {"1:2", "1000:2"},
-			"a walking word":     {"sh\x00data", "sh\x00../x"},
-			"deeper than one":    {entry + ":/mnt/data", entry + ":/mnt/data/x"},
+			"root as owner":                      {"10001:10001", "0:0"},
+			"a host id as owner":                 {"10001:10001", "1000:2"},
+			"another environment's uid as owner": {"10001:10001", "49999:49999"},
+			"a walking word":                     {"sh\x00data", "sh\x00../x"},
+			"deeper than one":                    {entry + ":/mnt/data", entry + ":/mnt/data/x"},
 		}},
 		{"export", []string{"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "data"}, map[string][2]string{
 			"written":           {entry + ":/x/data:ro", entry + ":/x/data"},
@@ -191,7 +192,7 @@ func TestFormsTakeNoWordStartingWithADash(t *testing.T) {
 	for what, argv := range map[string][]string{
 		"export":       {"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "-delete"},
 		"snapshot tar": {"run", "-v", "/space/mnt/shop-prod:/m/mnt:ro", "-v", "/home/devopsy-shop/shop/prod/o:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "-delete", "f.zst", "1:2"},
-		"owners":       {"run", "-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "-x", "1:2"},
+		"owners":       {"run", "-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "-x", "10001:10001"},
 	} {
 		if a, err := decide(t, argv...); err == nil {
 			t.Errorf("%s: %q", what, a.Docker)

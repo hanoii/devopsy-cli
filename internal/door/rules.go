@@ -44,6 +44,14 @@ type Policy struct {
 	// Images are the ids of images the project claimed (Action.Claims), the door's
 	// record in its space (ImagesFile).
 	Images []string
+	// UIDs are what a container of the request's environment may run as, its uid and gid
+	// both: its own claim's and its project's (DEVOPSY_UID, DEVOPSY_PROJECT_UID), read from
+	// the server's claims. A compose file is its branch's code, so it gets no other
+	// environment's: a pr-* one never runs as prod.
+	UIDs []uint32
+	// ProjectUIDs are every uid the project's claims hold, for an owner devopsy gives the
+	// project's data (the owners form, an rsync's --chown), which the project user asks for.
+	ProjectUIDs []uint32
 }
 
 // ImagesFile is the door's record of a project user's claimed images, one id a line, in
@@ -492,7 +500,7 @@ func checkLimits(svc string, s map[string]any, fail func(string, ...any)) {
 
 func checkIdentity(svc string, s map[string]any, p Policy, fail func(string, ...any)) {
 	user, _ := s["user"].(string)
-	if why := p.userRefused(user); why != "" {
+	if why := p.userRefused(user, p.UIDs); why != "" {
 		fail("%s: user %s", svc, why)
 	}
 	// Without no-new-privileges a setuid image writes a root binary onto the host.
@@ -525,9 +533,10 @@ const EndUID = 2147483646
 // userRefused says why a container may not run as user, or nothing: a user is numbers
 // only, since a name is the image's to map (to 0, say), never root, an id of the host's
 // (ForbiddenIDs), whose processes it would reach through /proc, or one of the project users'
-// range, a user's to come, and no larger than a uid can be. One check for a service's user:
-// and for exec's -u.
-func (p Policy) userRefused(user string) string {
+// range, a user's to come, and no larger than a uid can be; and one of allowed, uid and gid
+// the same number, so no other tenant's container shares it. One check for a service's
+// user:, exec's -u (allowed: UIDs) and an owner devopsy gives data (ProjectUIDs).
+func (p Policy) userRefused(user string, allowed []uint32) string {
 	m := numericUser.FindStringSubmatch(user)
 	if m == nil {
 		return fmt.Sprintf(`%q: <uid>:<gid> in numbers, for example "10001:10001"`, user)
@@ -542,6 +551,13 @@ func (p Policy) userRefused(user string) string {
 		case id >= ProjectIDMin && id <= ProjectIDMax:
 			return fmt.Sprintf("%s: in %d to %d, the project users' ids", user, ProjectIDMin, ProjectIDMax)
 		}
+	}
+	if len(allowed) == 0 {
+		return user + ": no uid is claimed for this environment, which a load of its release claims"
+	}
+	uid, _ := strconv.ParseUint(m[1], 10, 32)
+	if m[1] != m[2] || !slices.Contains(allowed, uint32(uid)) {
+		return fmt.Sprintf(`%s: not this environment's uid, given as uid and gid: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}", or DEVOPSY_PROJECT_UID`, user)
 	}
 	return ""
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"golang.org/x/sys/unix"
 )
 
@@ -161,13 +162,13 @@ func TestDoorTakesComputedForms(t *testing.T) {
 	if script := cloneScript(d); !door.CloneScriptForm(script) {
 		t.Errorf("the door does not take devopsy's own clone:\n%s", script)
 	}
-	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop"}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{10001}}
 	daemon := []string{"run", "--rm", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + rsyncdConf([]string{"storage", "app.ini"}, []string{"app.ini"}, []string{"db"}),
 		"-v", "/space/mnt/shop-prod:/mnt:ro", "-v", "shop-prod_db:/vol/db:ro", remote.UtilImage, "sh", "-c", rsyncDaemonScript}
 	if _, err := door.Decide(daemon, p, nil, doorTestHost{}, doorKnown()); err != nil {
 		t.Errorf("the door does not take devopsy's own rsync daemon: %v", err)
 	}
-	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "1:2"}}}
+	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "10001:10001"}}}
 	c := newContainer("sync", "shop-dev", "1.abcdef-receive", remote.SyncTask("1.abcdef"))
 	for _, r := range []syncReceive{{Entry: "storage"}, {Entry: "app.ini", File: true}, {Volume: "db"}} {
 		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev", false)
@@ -572,7 +573,7 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 	clone := space + "/clones/shop/abc/1"
 	tree := "/home/devopsy-shop/shop/prod"
 	// The caller is this user, as devopsy runs as the project user: its tar gives it its own ids.
-	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop"}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{10001}}
 	c := newContainer("export", "shop-prod", "1", remote.TaskExport)
 	ctx := context.Background()
 	d := dataSet{mnt: mnt, entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
@@ -583,7 +584,7 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 		"probe":              func() { reflinks(ctx, c, clone, d) },
 		"clone":              func() { _ = cloneData(ctx, c, clone, d) },
 		"rsync an entry":     func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false) },
-		"rsync with owners":  func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false, "--chown=1:2") },
+		"rsync with owners":  func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false, "--chown=10001:10001") },
 		"rsync a file":       func() { _ = rsyncEntry(ctx, c, mnt, dev, "app.ini", true) },
 		"rsync from a clone": func() { _ = rsyncEntry(ctx, c, inClone.mnt, dev, "storage", false) },
 		"rsync a volume":     func() { _ = rsyncVolume(ctx, c, "shop-prod_db:/src/db:ro", "shop-dev_db:/dst/db", "db") },
@@ -659,7 +660,7 @@ esac
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	side := &doorSide{policy: door.Policy{Project: "shop"}, real: docker}
+	side := &doorSide{policy: door.Policy{Project: "shop", UIDs: uidsOf(testShopClaims, "shop-prod")}, claims: testShopClaims, real: docker}
 	file := func(svc string) map[string]any {
 		f := map[string]any{"name": "shop-prod", "services": map[string]any{svc: map[string]any{
 			"build": map[string]any{"context": "."}, "image": "mongo-express:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"}}}}
@@ -1618,6 +1619,7 @@ func doorComposeHelper(dir string) {
 	doorLog = os.Getenv("DEVOPSY_TEST_DOOR_LOG")
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
+		claims: testShopClaims,
 		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
 		// As runDoor reads it from what its sudo kept (doorEnvironment).
 		asked: remote.SessionFrom(os.Getenv),
@@ -1837,4 +1839,11 @@ func TestDoorEntriesBelieveOnlyACleanAnswer(t *testing.T) {
 	if fileExists(theirs) {
 		t.Errorf("the door made %s, another project's mnt, and gave it to devopsy-shop:\n%s", theirs, readString(acl))
 	}
+}
+
+// testShopClaims are claims the door tests' project holds: its prod on 10001, the uid their
+// compose files run as.
+var testShopClaims = []uids.Claim{
+	{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 10001},
+	{Owner: uids.Owner{Project: "shop"}, UID: 10001},
 }

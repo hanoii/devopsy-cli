@@ -362,7 +362,7 @@ func decideForm(cmd []string, mounts []mount, opts []string, network, conf strin
 			}
 			continue
 		}
-		if why := p.userRefused(owner); why != "" {
+		if why := p.userRefused(owner, p.ProjectUIDs); why != "" {
 			return nil, refuse("docker run: %s: an owner: %s", f.name, why)
 		}
 	}

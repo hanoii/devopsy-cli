@@ -206,7 +206,7 @@ func TestCheckFileImageIsNoFlag(t *testing.T) {
 func TestDecideRefusesOtherSpellings(t *testing.T) {
 	t.Parallel()
 	entry := "/space/mnt/shop-prod/data"
-	own := []string{"-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "1:2"}
+	own := []string{"-v", entry + ":/mnt/data", "util:1", "sh", "-c", "own script", "sh", "data", "10001:10001"}
 	if _, err := decide(t, append([]string{"run"}, own...)...); err != nil {
 		t.Fatalf("the control: %v", err)
 	}
