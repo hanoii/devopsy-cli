@@ -1177,6 +1177,13 @@ const ImagesLock = ".devopsy-images.lock"
 // does), so whoever waits can say who holds it and for how long.
 const ImagesHolders = ".devopsy-images.holders"
 
+// HolderLine is a holder's file in ImagesHolders as image_lock writes its
+// own and image_holders reads it: the time it took the lock, who (spaces as
+// _) and what it does, for a holder in Go (the door's claim).
+func HolderLine(at time.Time, who, doing string) string {
+	return fmt.Sprintf("%d %s %s\n", at.Unix(), strings.ReplaceAll(who, " ", "_"), doing)
+}
+
 // ImagesLeftFile, in a project's directory, records the names Docker
 // refused to remove (images.LeftFile): --releases lists them, and the
 // project's removals retry them.

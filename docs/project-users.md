@@ -140,6 +140,17 @@ that every layer is there and matches its digest, and has Docker load
 them, which leaves the image as a pull by digest would. While it runs,
 `<space>` needs room for the image's compressed layers.
 
+The image a fetch lands is tagged at once as the project's
+(`<repository>:devopsy-shop-claim.<digest>`, the first 12 hex digits
+of its digest), so no other project's or the deploy user's pruning
+removes it before the release's own tag holds it. The release's tag
+then replaces it, and the project's next pruning removes any left
+over. The fetch loads the image while holding the server's images
+shared, so a removal of the deploy user's waits for it, naming the
+project as claiming, and the fetch waits for a removal, saying
+`waiting for the server's images, held by a removal, up to 10
+minutes`.
+
 Docker skips layers it already holds. A registry could use that to
 serve a manifest naming another project's private layers without their
 content, or an image whose config names another project's layers over

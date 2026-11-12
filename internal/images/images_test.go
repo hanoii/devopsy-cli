@@ -351,6 +351,33 @@ func TestBookmarkPrefix(t *testing.T) {
 	}
 }
 
+// A claim's hold is a hold by HoldOf, so every removal takes its image for held, its project
+// read back from it, and no bookmark of the project's (an environment named claim's included)
+// is one: a hold within 128 characters for the longest project name.
+func TestClaimHold(t *testing.T) {
+	t.Parallel()
+	d := "sha256:" + strings.Repeat("ab", 32)
+	h := ClaimHold("registry.example.com/blog/private", "my-shop", d)
+	if h != "registry.example.com/blog/private:devopsy-my-shop-claim.abababababab" {
+		t.Errorf("ClaimHold: %q", h)
+	}
+	if p, ok := ClaimHoldOf(h); !ok || p != "my-shop" {
+		t.Errorf("ClaimHoldOf(%q): %q %v", h, p, ok)
+	}
+	if !isBookmark(h) || len(holding([]string{h}, nil, nil)) != 1 {
+		t.Errorf("%s holds nothing", h)
+	}
+	for _, b := range []string{"busybox:devopsy-my-shop-claim-20260101000000", "busybox:devopsy-my-shop-prod-20260101000000-123", "busybox:devopsy-my-shop-prod-s20260101000000", "busybox:claim.abababababab", "busybox:1.37"} {
+		if p, ok := ClaimHoldOf(b); ok {
+			t.Errorf("ClaimHoldOf(%q): a claim's hold of %q", b, p)
+		}
+	}
+	_, tag := SplitRef(ClaimHold("busybox", strings.Repeat("a", 200), d))
+	if len(tag) > 128 {
+		t.Errorf("a claim's hold of %d characters", len(tag))
+	}
+}
+
 func TestRepo(t *testing.T) {
 	t.Parallel()
 	for ref, want := range map[string]string{

@@ -2397,6 +2397,98 @@ func TestRebookmark(t *testing.T) {
 	}
 }
 
+// The image lock is a user's own release root's ($root), and across the users of the server's
+// Docker (the deploy user, its project users) each direction is kept apart its own way:
+//
+//   - a project user's fetch from the deploy user's removals by the door's claim, which holds
+//     the deploy user's lock shared (claimLock, as here: the lock and a holder's line,
+//     remote.HolderLine) from the image's landing to the claim's hold, which every removal
+//     counts: the deploy user's removal waits for it, naming the project claiming;
+//   - the deploy user's fetch, and another project's, from a project user's removals by the
+//     door, which removes only that project's own holds and build names, never a name by
+//     digest (TestDecideImagePruneAndOthersDoNothing): a project user's lock is its own root's,
+//     and it never holds the deploy user's, whose exclusive holder would hold every removal on
+//     the server.
+func TestImageLockAcrossUsers(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("no flock")
+	}
+	bin := t.TempDir()
+	for _, f := range []string{"docker", "devopsy"} {
+		write(t, filepath.Join(bin, f), "#!/bin/sh\nexit 0\n")
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deploy, shop, blog := t.TempDir(), t.TempDir(), t.TempDir()
+	target := func(project string) *Target {
+		return &Target{Name: "prod", Path: project + "/prod", Project: &Project{Name: project}}
+	}
+	remove := func(root, project string) string {
+		t.Helper()
+		c := exec.Command("sh", "-c", "set -u\nroot=$R\n"+releaseImages(project, target(project))+`if image_lock exclusive removing now; then echo took; else echo "busy $?: $il_busy"; fi
+`)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "R=" + root}
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return string(out)
+	}
+
+	// The claim, as the door's claimLock holds the deploy user's images.
+	lock, err := os.OpenFile(filepath.Join(deploy, ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	holder := filepath.Join(deploy, ImagesHolders, strconv.Itoa(os.Getpid()))
+	write(t, holder, HolderLine(time.Now(), "shop", "claiming"))
+	if out := remove(deploy, "app"); !strings.Contains(out, "busy 75: the server's images are in use by shop (claiming, ") {
+		t.Errorf("the deploy user's removal took the images while a project's claim held them:\n%s", out)
+	}
+	os.Remove(holder)
+	lock.Close()
+
+	// A project user's fetch, in its own root.
+	for _, c := range []struct {
+		what                   string
+		fetchRoot, fetchName   string
+		removeRoot, removeName string
+	}{
+		{"the deploy user's fetch, a project user's removal", deploy, "app", shop, "shop"},
+		{"a project user's fetch, another's removal", shop, "shop", blog, "blog"},
+	} {
+		dir := t.TempDir()
+		ready, goOn := filepath.Join(dir, "ready"), filepath.Join(dir, "go")
+		fetch := exec.Command("sh", "-c", "set -eu\nroot=$R\n"+releaseImages(c.fetchName, target(c.fetchName))+`image_lock shared fetching
+: >"$READY"
+while [ ! -e "$GO" ]; do sleep 0.05; done
+`)
+		fetch.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "R=" + c.fetchRoot, "READY=" + ready, "GO=" + goOn}
+		if err := fetch.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for start := time.Now(); !fileExists(ready); time.Sleep(50 * time.Millisecond) {
+			if time.Since(start) > startWait {
+				_ = fetch.Process.Kill()
+				t.Fatalf("%s: the fetch never took the image lock", c.what)
+			}
+		}
+		out := remove(c.removeRoot, c.removeName)
+		write(t, goOn, "")
+		if err := fetch.Wait(); err != nil {
+			t.Errorf("%s: the fetch: %v", c.what, err)
+		}
+		if strings.TrimSpace(out) != "took" {
+			t.Errorf("%s: a project user's lock reached another root's:\n%s", c.what, out)
+		}
+	}
+}
+
 // The upload takes the release lock: --destroy removes $base meanwhile.
 // Every release links inherit.env, so
 // --inherit reaches one released before the parent had inherit:. A sync's

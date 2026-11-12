@@ -926,7 +926,7 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 // every call in dir/calls, and answers compose with its arguments
 // and the file it was given, for a door that execs it (doorComposeHelper). Image
 // inspects answer the two formats the door uses today and `{{json .}}`, as
-// images.CLI.Inspect reads it. Its containers are dir/containers, one a line,
+// images.CLI.Inspect reads it, and a listing of images says dir/names. Its containers are dir/containers, one a line,
 // `<id>|<labels json>|<mounts json>`, which a listing by label filters gives whatever its
 // filters (whose each one is, its inspect says) and a container's inspect answers, unless
 // dir/inspectfails is there; a listing of every container gives none.
@@ -987,6 +987,7 @@ case "$all" in
     { echo "$fam|$id|$fam||$ls"; cat `+in("store")+` 2>/dev/null || true; } >"$d/store" && cat "$d/store" >`+in("store")+` ;;
   'compose version --short') echo "${FAKE_COMPOSE_VERSION:-2.40.0}" | grep -v '^$' || echo 2.40.0 ;;
   'tag '*|'image rm '*) ;;
+  'image ls '*) cat `+in("names")+` 2>/dev/null ;;
   'buildx inspect '*) ;;
   'buildx build '*) cat >/dev/null ;;
   'ps -a '*) ;;
@@ -1116,7 +1117,7 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		remote.UtilImage+"|sha256:u4|||{}",
 		"loaded:1|sha256:n1||loaded:1|{}",
 	)
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir, Others: []string{"blog"}}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: dir, Others: []string{"blog"}}, real: fake, imagesRoot: dir}
 	calls := filepath.Join(dir, "calls")
 	// start checks a file naming image, and says what compose then gets as the image.
 	start := func(image string) (string, error) {
@@ -1642,8 +1643,8 @@ func doorComposeHelper(dir string) {
 	doorLog = os.Getenv("DEVOPSY_TEST_DOOR_LOG")
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
-		claims: testShopClaims,
-		real:   filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
+		claims: testShopClaims, imagesRoot: dir,
+		real: filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
 		// As runDoor reads it from what its sudo kept (doorEnvironment).
 		asked: remote.SessionFrom(os.Getenv),
 	}
@@ -1811,7 +1812,7 @@ func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
 	// The registry serves it by its tag and digest too, as a registry does.
 	write(t, filepath.Join(dir, "raw", strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(repo+":1@"+idx)), index, 0o644)
 	write(t, filepath.Join(dir, "store"), "", 0o644)
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
 	// With its tag and without.
 	for _, image := range []string{repo + ":1@" + idx, repo + "@" + idx} {
 		os.Remove(filepath.Join(dir, "calls"))

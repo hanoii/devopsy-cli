@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"cmp"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -61,18 +64,32 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	}
 	pinned := images.ByDigest(ref, m)
 	// The skip: that digest in the repository asked, an image the project claimed. A bare id
-	// is no key: a name by digest in another repository is no tag's to make.
+	// is no key: a name by digest in another repository is no tag's to make. Read under the
+	// server's images, and held before they are let go (claimLock).
+	unlock, err := s.claimLock()
+	if err != nil {
+		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+	}
 	if img, err := s.inspectImage(pinned); err == nil && slices.Contains(s.policy.Images, img.ID) {
+		defer unlock()
+		if err := s.hold(pinned, m); err != nil {
+			return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+		}
 		s.nameAsAsked(ref, pinned)
 		return m, img, nil
 	}
+	unlock()
 	if err := s.hostReady(d); err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
 	if s.onFetch != nil {
 		s.onFetch()
 	}
-	if loaded, err := s.fetch(g, pinned, m, d); err != nil {
+	unlock, loaded, err := s.fetch(g, pinned, m, d)
+	if unlock != nil {
+		defer unlock()
+	}
+	if err != nil {
 		// A load that failed may have left the name: no later claim skips onto it. Nothing
 		// before the load touched the store, so a failed copy leaves the record as it was.
 		if loaded {
@@ -89,11 +106,42 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if img.ID != m {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %s goes by %s, not the %s loaded", ref, pinned, img.ID, m)
 	}
+	if err := s.hold(pinned, m); err != nil {
+		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+	}
 	if err := s.record(img.ID); err != nil {
+		// Nothing claimed: the hold goes with it.
+		_ = s.docker("image", "rm", images.ClaimHold(images.RepoOf(pinned), s.policy.Project, m)).Run()
 		return "", images.Image{}, err
 	}
 	s.nameAsAsked(ref, pinned)
 	return m, img, nil
+}
+
+// claimLock holds the server's image lock (the deploy user's, in root) shared for a claim's
+// stretch on the store, from its skip's read or its load to its hold: a removal of anyone's,
+// which takes the lock exclusively, then never runs between the image landing and the hold
+// that keeps it (hold). Its wait is bounded and said as every lock wait is (imagesSharedAt),
+// and its holder written as the project claiming, which a removal's wait names. Only the
+// door holds it, for that stretch alone: a project user never opens the lock, whose
+// exclusive holder would hold every removal on the server.
+func (s *doorSide) claimLock() (func(), error) {
+	if s.imagesRoot == "" {
+		return nil, errors.New("the server has no release root, where its image lock is")
+	}
+	return imagesSharedAt(context.Background(), cmp.Or(s.log, report.Default()), s.imagesRoot, s.policy.Project, "claiming")
+}
+
+// hold tags the image a claim got (pinned, by its digest m) with the project's claim hold
+// (images.ClaimHold), in its repository: a hold every removal counts (images' holding), so it
+// stays until the project's own bookmark replaces the hold (unclaim) or its next pruning
+// takes it (dropClaimHolds), whoever else ran it and went.
+func (s *doorSide) hold(pinned, m string) error {
+	h := images.ClaimHold(images.RepoOf(pinned), s.policy.Project, m)
+	if out, err := s.docker("tag", pinned, h).CombinedOutput(); err != nil {
+		return fmt.Errorf("could not hold it (%s): %s", h, cmp.Or(strings.TrimSpace(string(out)), err.Error()))
+	}
+	return nil
 }
 
 // registryFailure is a claim's failure that is its registry's (a tag or a platform it does not
@@ -119,22 +167,27 @@ func (s *doorSide) hostReady(logins string) error {
 }
 
 // fetch copies the image pinned names (<repo>@m) from its registry as it is, with the logins
-// in the DOCKER_CONFIG dir logins, and loads it, in a work directory of the claim's (g). It says
-// whether the load ran.
-func (s *doorSide) fetch(g *claimCut, pinned, m, logins string) (bool, error) {
+// in the DOCKER_CONFIG dir logins, and loads it, in a work directory of the claim's (g), the
+// load under the server's images (claimLock), which it gives back to let go once the claim
+// holds the image; the copy and its checks touch no store, and hold nothing. It says whether
+// the load ran.
+func (s *doorSide) fetch(g *claimCut, pinned, m, logins string) (unlock func(), loaded bool, err error) {
 	work, err := g.workDir()
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	layout := filepath.Join(work, "layout")
 	if err := s.copyImage(g.run, pinned, layout, logins); err != nil {
-		return false, err
+		return nil, false, err
 	}
 	blobs, manifest, err := checkLayout(layout, m)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	return true, s.loadImage(g.run, pinned, m, manifest, layout, blobs)
+	if unlock, err = s.claimLock(); err != nil {
+		return nil, false, err
+	}
+	return unlock, true, s.loadImage(g.run, pinned, m, manifest, layout, blobs)
 }
 
 // claimCut is what a claim has running and on disk while it reads, copies and loads: its work

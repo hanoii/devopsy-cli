@@ -72,7 +72,7 @@ const imagesFlag = "--images"
 // release root, the server's own setting (remote.ReleaseSettings), which
 // every environment of the project shares (remote's leftPath, for the
 // listing). No mode: each release's own record says its (images.ModeOf).
-// The image lock is imagesLockPath's, in the same root.
+// The image lock is in the same root (imagesLockAt).
 func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	root, err := imagesRoot()
 	if err != nil {
@@ -133,16 +133,6 @@ func imagesRoot() (string, error) {
 		return "", fmt.Errorf("the server's release settings: %w", err)
 	}
 	return r.Root, nil
-}
-
-// imagesLockPath is the server's image lock (remote.ImagesLock, in the
-// release root), which imagesLockNow takes.
-func imagesLockPath() (string, error) {
-	root, err := imagesRoot()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, remote.ImagesLock), nil
 }
 
 // projectUnder is the project whose directory base is in, under root

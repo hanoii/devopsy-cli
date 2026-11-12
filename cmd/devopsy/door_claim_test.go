@@ -20,6 +20,8 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -168,7 +170,7 @@ func TestDoorClaimThatDoesNotLoadLeavesNothing(t *testing.T) {
 	fake := doorImageFake(t, dir)
 	private := "registry.example.com/blog/private"
 	d := fakeManifest(t, dir, plainManifest("private"), private+":1")
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
 	write(t, side.policy.ImagesFile(), d+"\n", 0o600)
 	side.policy.Images = []string{d}
 	calls := filepath.Join(dir, "calls")
@@ -366,7 +368,7 @@ func TestDoorClaimTakesOnlyWhatItAsked(t *testing.T) {
 	fake := doorImageFake(t, dir)
 	private := "registry.example.com/blog/private"
 	d := fakeManifest(t, dir, plainManifest("private"), private+":1")
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
 	key := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace
 	other := digestOf([]byte("other"))
 	write(t, filepath.Join(dir, "raw", key(private+"@"+other)), plainManifest("private"), 0o644)
@@ -485,7 +487,7 @@ func TestDoorClaimFailedCopyKeepsTheRecord(t *testing.T) {
 	app, mirror := "registry.example.com/blog/app", "mirror.example.com/blog/app"
 	d := fakeManifest(t, dir, plainManifest("app"), app+":1")
 	fakeManifest(t, dir, plainManifest("app"), mirror+":1")
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
 	if _, _, err := side.claim(app+":1", filepath.Join(dir, "none.json")); err != nil || readString(side.policy.ImagesFile()) != d+"\n" {
 		t.Fatalf("the control, a first claim (%v): %q", err, readString(side.policy.ImagesFile()))
 	}
@@ -573,7 +575,7 @@ func TestDoorClaimChecksTheBuildxThatCopies(t *testing.T) {
 	write(t, wrap, "#!/bin/sh\necho \"${DOCKER_CONFIG-unset}|$*\" >>"+envCalls+"\nexec "+fake+" \"$@\"\n", 0o755)
 	private := "registry.example.com/blog/private"
 	fakeManifest(t, dir, plainManifest("private"), private+":1")
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: wrap}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: wrap, imagesRoot: dir}
 	if _, _, err := side.claim(private+":1", filepath.Join(dir, "none.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +667,7 @@ func TestDoorClaimChecksAPinnedIndexsBytes(t *testing.T) {
 	pinned := repo + "@" + digestOf([]byte("the index the project pinned"))
 	key := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace
 	write(t, filepath.Join(dir, "raw", key(pinned)), index, 0o644)
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
 	if d, _, err := side.claim(pinned, filepath.Join(dir, "none.json")); err == nil {
 		t.Errorf("%s, its registry serving another index, claimed as %s", pinned, d)
 	}
@@ -742,7 +744,7 @@ func TestDoorClaimReadsNoLocalLayout(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fake := doorImageFake(t, dir)
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake}
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
 	layout := "oci-layout://" + filepath.Join(dir, "space", "work", "blog-123", "layout") + ":claim"
 	_, _, _ = side.claim(layout, filepath.Join(dir, "none.json"))
 	if c := readString(filepath.Join(dir, "calls")); strings.Contains(c, "imagetools inspect --raw oci-layout://") {
@@ -770,7 +772,7 @@ func TestDoorClaimStopsAtTheUsersEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake,
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir,
 		env: []string{"PATH=" + os.Getenv("PATH")}, keysFile: keys, keysAt: at}
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image + ":1"}}}
 	// What compose's up runs before the door execs compose (doorSide.compose).
@@ -825,5 +827,127 @@ func TestDoorClaimEndKeepsALateSignal(t *testing.T) {
 	}
 	if work, _ := os.ReadDir(filepath.Join(space, "work")); len(work) > 0 {
 		t.Errorf("it left work: %v", work)
+	}
+}
+
+// A claim holds the image it got with a hold of the project's (images.ClaimHold), which every
+// removal counts, and gets it under the server's image lock (the deploy user's, in its release
+// root) shared, from the load to the hold: a removal of the deploy user's, which takes the
+// lock exclusively, never runs between the image landing and its hold, so it never deletes an
+// image the project claimed for a release and has not bookmarked yet. The claim waits for a
+// removal holding the lock, saying so, and names itself in the lock's holders while it holds
+// it. A skip holds the image too, whose bookmark may be gone; a claim
+// whose record fails after its hold removes the hold.
+func TestDoorClaimHoldsItsImage(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := doorImageFake(t, dir)
+	private := "registry.example.com/blog/private"
+	d := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	hold := private + ":devopsy-shop-claim." + strings.TrimPrefix(d, "sha256:")[:12]
+	// The holders as the claim's hold finds them.
+	wrap := filepath.Join(dir, "wrap")
+	write(t, wrap, "#!/bin/sh\n[ \"$1\" = tag ] && cat "+filepath.Join(dir, remote.ImagesHolders)+"/* >>"+filepath.Join(dir, "holders")+" 2>/dev/null\nexec "+fake+" \"$@\"\n", 0o755)
+	said, err := os.Create(filepath.Join(dir, "said"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer said.Close()
+	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: wrap, imagesRoot: dir, log: report.New(said, false, 0)}
+	calls := filepath.Join(dir, "calls")
+	// A removal holds the server's images.
+	lock, err := os.OpenFile(filepath.Join(dir, remote.ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := side.claim(private+":1", filepath.Join(dir, "none.json"))
+		done <- err
+	}()
+	for start := time.Now(); !strings.Contains(readString(said.Name()), "waiting for the server's images, held by a removal"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			t.Fatalf("the claim never waited for the removal:\n%s\n%s", readString(said.Name()), readString(calls))
+		}
+	}
+	if c := readString(calls); strings.Contains(c, "load ") || strings.Contains(c, "\ntag ") {
+		t.Errorf("the claim loaded or held while a removal held the server's images:\n%s", c)
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the claim, once the removal let go: %v", err)
+		}
+	case <-time.After(startWait):
+		t.Fatal("the claim never went on once the removal let go")
+	}
+	c := readString(calls)
+	if load, held := strings.Index(c, "load "), strings.Index(c, "\ntag "+private+"@"+d+" "+hold+"\n"); load < 0 || held < load {
+		t.Errorf("the claim does not hold what it loaded as %s:\n%s", hold, c)
+	}
+	if h := readString(filepath.Join(dir, "holders")); !strings.Contains(h, " shop claiming\n") {
+		t.Errorf("the claim's holder, as its hold found the holders: %q", h)
+	}
+	if left, _ := os.ReadDir(filepath.Join(dir, remote.ImagesHolders)); len(left) > 0 {
+		t.Errorf("the claim's holder outlived it: %v", left)
+	}
+	// The skip: the image recorded, a claim holds it again.
+	side.policy.Images = []string{d}
+	write(t, filepath.Join(dir, "store"), private+"@"+d+"|"+d+"|"+private+"@"+d+"||{}\n", 0o644)
+	os.Remove(calls)
+	if _, _, err := side.claim(private+":1", filepath.Join(dir, "none.json")); err != nil || strings.Contains(readString(calls), "load ") || !strings.Contains(readString(calls), "tag "+private+"@"+d+" "+hold+"\n") {
+		t.Errorf("a skip (%v) does not hold the image:\n%s", err, readString(calls))
+	}
+	// A record that fails after the hold: nothing claimed, the hold goes.
+	side.policy.Images = nil
+	os.Remove(filepath.Join(dir, "store"))
+	os.RemoveAll(filepath.Join(dir, "space", "images"))
+	write(t, filepath.Join(dir, "space", "images"), "not a directory", 0o644)
+	os.Remove(calls)
+	if _, _, err := side.claim(private+":1", filepath.Join(dir, "none.json")); err == nil || !strings.Contains(readString(calls), "image rm "+hold+"\n") {
+		t.Errorf("a claim whose record failed (%v) keeps its hold:\n%s", err, readString(calls))
+	}
+}
+
+// A hold of the project's on an image it claimed (a release's bookmark) replaces the claim's
+// hold, which only bridges the claim to that bookmark, and another project's claim hold
+// stays; the project's pruning takes its claim holds left (a cut claim's, an inspect's), never
+// another's or a bookmark. In a helper process (doorComposeHelper), since the door execs
+// Docker, here the fake, which logs its calls.
+func TestDoorClaimHoldGoesWithTheBookmark(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	private := "registry.example.com/blog/private"
+	p1 := fakeManifest(t, dir, plainManifest("private"), private+":1")
+	mine, others := images.ClaimHold(private, "shop", p1), images.ClaimHold(private, "blog", p1)
+	bookmark := "busybox:devopsy-shop-prod-20260101000000"
+	write(t, filepath.Join(dir, "store"), private+"@"+p1+"|"+p1+"|"+private+"@"+p1+"||{}\n"+bookmark+"|"+p1+"|"+private+"@"+p1+"|"+bookmark+" "+mine+" "+others+"|{}\n", 0o644)
+	request := func(req string) string {
+		t.Helper()
+		os.Remove(filepath.Join(dir, "calls"))
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_REQUEST="+req)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("%s (%v):\n%s", req, err, out)
+		}
+		return readString(filepath.Join(dir, "calls"))
+	}
+	calls := request("tag " + private + ":1 " + bookmark)
+	if tag, rm := strings.Index(calls, "\ntag "+private+"@"+p1+" "+bookmark+"\n"), strings.Index(calls, "image rm "+mine+"\n"); tag < 0 || rm < tag {
+		t.Errorf("the bookmark does not replace the claim's hold:\n%s", calls)
+	}
+	if strings.Contains(calls, "image rm "+others) || strings.Contains(calls, "image rm "+bookmark) {
+		t.Errorf("the bookmark took another's hold:\n%s", calls)
+	}
+	write(t, filepath.Join(dir, "names"), strings.Join([]string{mine, others, bookmark, private + ":1", "busybox:devopsy-shop-claim-20260101000000"}, "\n")+"\n", 0o644)
+	calls = request("image prune -f")
+	if strings.Count(calls, "image rm ") != 1 || !strings.Contains(calls, "image rm "+mine+"\n") {
+		t.Errorf("the pruning takes other than its own claim's hold:\n%s", calls)
 	}
 }

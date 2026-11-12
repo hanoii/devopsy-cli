@@ -605,12 +605,16 @@ func TestDecideRunRemovals(t *testing.T) {
 
 // What of the image store is the server's is the admin's: for a project user there is
 // nothing to do, nothing was refused for it, and a release says nothing about it, the
-// project's own names asked with them removed.
+// project's own names asked with them removed. Its pruning takes its own claim holds only
+// (TestDoorClaimHoldGoesWithTheBookmark).
 func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	t.Parallel()
-	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}} {
+	// A name by digest neither, its own hold's included: removing one takes every name of its
+	// repository on the image, another user's fetch's not yet bookmarked among them.
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}, {"image", "rm", "busybox" + digest}, {"image", "rm", "busybox:devopsy-shop-prod-1" + digest}} {
 		a, err := decide(t, argv...)
-		if err != nil || len(a.Docker) != 0 || a.Exit != 0 {
+		if err != nil || len(a.Docker) != 0 || a.Exit != 0 || a.DropClaimHolds != (argv[1] == "prune") {
 			t.Errorf("%q: %+v, %v", argv, a, err)
 		}
 	}
@@ -813,9 +817,12 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	if _, err := Decide([]string{"tag", "sha256:aaa", "devopsy.internal/shop-prod/web"}, p, testDaemon, &fakeHost{}, testKnown); err == nil {
 		t.Error("a tag onto its build's plain name")
 	}
-	for _, target := range []string{"devopsy.internal/shop-prod/web:devopsy-shop-prod-20240101000001", "busybox:devopsy-shop-stage-1"} {
-		if _, err := Decide([]string{"tag", "sha256:aaa", target}, p, testDaemon, &fakeHost{}, testKnown); err != nil {
-			t.Errorf("a tag onto its own %s: %v", target, err)
+	// Its own hold then holds the image, replacing its claim's (Unclaim), unless it is its
+	// claim's hold itself.
+	for target, unclaim := range map[string]bool{"devopsy.internal/shop-prod/web:devopsy-shop-prod-20240101000001": true, "busybox:devopsy-shop-stage-1": true, "busybox:devopsy-shop-claim.abababababab": false} {
+		a, err := Decide([]string{"tag", "sha256:aaa", target}, p, testDaemon, &fakeHost{}, testKnown)
+		if err != nil || (a.Unclaim == target) != unclaim || !unclaim && a.Unclaim != "" {
+			t.Errorf("a tag onto its own %s: %+v, %v", target, a, err)
 		}
 	}
 	for _, argv := range [][]string{
