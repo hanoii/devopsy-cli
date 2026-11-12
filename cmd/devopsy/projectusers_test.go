@@ -480,7 +480,7 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 	// A PATH with no sudo and no setfacl; visudo may still be found in sbin.
 	out, code := runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + t.TempDir()}, remote.ProjectUsersFlag, "add", "shop")
 	if code != 1 || !strings.Contains(out, "devopsy: error: no sudo or ") || !strings.Contains(out, " on this server, which project users need: no project user made\n") ||
-		!strings.Contains(out, "$ "+howto.Command(howto.Tools)+"\n") {
+		!strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add without the door's tools (%d):\n%s", code, out)
 	}
 	if entries, _ := os.ReadDir(home); len(entries) != 1 {

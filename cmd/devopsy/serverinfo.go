@@ -120,6 +120,19 @@ const toolsFixText = "install what is missing with the system's packages, as roo
 // toolsFix is toolsFixText as a fix, as fixWords words the tools' refusal's.
 var toolsFix = report.Fix(toolsFixText+":", howto.Command(howto.Tools))
 
+// doorToolsFixText is the way out of a door's tool missing (sudo, visudo, setfacl), which
+// only project users need, so by their topic's steps (howto.ProjectUsers), never the tools':
+// a fix where it is warned of or refused, a hint where it is only noted.
+const doorToolsFixText = "install sudo and acl with the system's packages, as root:"
+
+// toolFix is the fix of a missing tool: the door's by doorToolsFixText, any other by toolsFix.
+func toolFix(door bool) report.Remedy {
+	if door {
+		return report.Fix(doorToolsFixText, howto.Command(howto.ProjectUsers))
+	}
+	return toolsFix
+}
+
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
 // waits for a reboot to take it, and the host's listeners from read, the root read of the
 // firewall ("" when none was made).
@@ -1206,9 +1219,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		switch msg, door := toolMissingWords(name); {
 		case msg == "":
 		case door && !projectUsers:
-			note(msg, report.Hint(toolsFixText+":", howto.Command(howto.Tools)))
+			note(msg, report.Hint(doorToolsFixText, howto.Command(howto.ProjectUsers)))
 		default:
-			warn(msg, toolsFix)
+			warn(msg, toolFix(door))
 		}
 	}
 

@@ -219,7 +219,7 @@ func TestServerInfoReport(t *testing.T) {
 		// project users.
 		{"missing setfacl", func(i *remote.ServerInfo) {
 			i.Missing, i.Door = []string{"setfacl"}, &remote.DoorFacts{Space: "/space", Users: 1}
-		}, "", "has no setfacl: no project user can be added|$ devopsy --server-setup-howto tools"},
+		}, "", "has no setfacl: no project user can be added|$ devopsy --server-setup-howto project-users"},
 		// Held by a restarting container too, as releases and imports see
 		// it: docker ps lists it (review).
 		{"role twice", func(i *remote.ServerInfo) {
@@ -382,9 +382,9 @@ func TestServerInfoReport(t *testing.T) {
 		info.Door, info.Missing = c.door, []string{"sudo", "setfacl"}
 		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 		said := len(warnings) == 2 && warnings[0].msg == "the server has no sudo: no project user can be added, nor reach Docker through the door" &&
-			strings.HasPrefix(warnings[1].msg, "the server has no setfacl: ") && strings.Count(out, howto.Command(howto.Tools)) == 1
+			strings.HasPrefix(warnings[1].msg, "the server has no setfacl: ") && strings.Count(out, howto.Command(howto.ProjectUsers)) == 1
 		for _, w := range warnings {
-			said = said && w.note != c.warn && len(w.fixes) == 1 && w.fixes[0].Hint != c.warn && slices.Equal(w.fixes[0].Cmds, []string{howto.Command(howto.Tools)})
+			said = said && w.note != c.warn && len(w.fixes) == 1 && w.fixes[0].Hint != c.warn && slices.Equal(w.fixes[0].Cmds, []string{howto.Command(howto.ProjectUsers)})
 		}
 		if !said {
 			t.Errorf("the door's tools, %s: %+v\n%s", name, warnings, out)

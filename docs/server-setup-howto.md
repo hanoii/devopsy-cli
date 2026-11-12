@@ -8,9 +8,9 @@ devopsy offers for one of them names its command. It runs anywhere, needing
 no server, project or Docker.
 
 - [docker](#docker): Docker from its repository, its compose and buildx plugins
-- [tools](#tools): tar, flock and the other tools devopsy uses, sudo and acl
+- [tools](#tools): tar, flock and the other tools devopsy uses
 - [processes](#processes): /proc hiding every user's processes from the others
-- [project-users](#project-users): the door's directory, Docker's containerd image store
+- [project-users](#project-users): sudo and acl, the door's directory, Docker's image store
 - [kexec-handover](#kexec-handover): kho=off on the kernel's command line, freeing memory it keeps
 - [kdump](#kdump): no memory kept for a crash kernel, a choice
 
@@ -81,10 +81,8 @@ The tools devopsy uses
 A release needs tar and flock, and --server-setup and every release refuse a
 server without them. setsid, script, mkfifo and a tail that answers
 --version each serve a part of a release or a sync, which goes without them,
-and --server-info and --server-setup warn of each one missing. Project users
-need sudo, visudo and setfacl, which --project-users add refuses without: on
-a server with project users both warn of them too, and on one without,
---server-info only notes them.
+and --server-info and --server-setup warn of each one missing. What only
+project users need, sudo and acl, is in the project-users topic.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
@@ -92,18 +90,17 @@ first line sets the values to change, if it has any (for example
 user=devopsy).
 
 1. Install their packages: tar, util-linux (flock, setsid), bsdutils
-   (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl
-   (setfacl).
+   (script) and coreutils (mkfifo, tail).
 
    ```sh
    apt-get update
-   apt-get install -y tar util-linux bsdutils coreutils sudo acl
+   apt-get install -y tar util-linux bsdutils coreutils
    ```
 
 To check it: each tool is found, and tail answers --version.
 
 ```sh
-command -v tar flock setsid script mkfifo tail sudo visudo setfacl
+command -v tar flock setsid script mkfifo tail
 tail --version | head -n 1
 ```
 
@@ -171,18 +168,27 @@ What a server with project users needs
 
 Project users reach Docker through the door, devopsy's check of every Docker
 request they make. The door keeps their data in a directory of its own on a
-mount with nosuid and nodev, and needs Docker's containerd image store with
-buildx 0.33.0 or later: --project-users add refuses a server without that
-mount or that Docker, and --server-info warns of both. The door needs sudo
-and acl too (the tools topic), and /proc should hide other users' processes
-from project users (the processes topic).
+mount with nosuid and nodev, and needs sudo, visudo and setfacl, and
+Docker's containerd image store with buildx 0.33.0 or later: --project-users
+add refuses a server without any of them. --server-info warns of each one
+missing, and of sudo, visudo or setfacl only notes it while the server has
+no project user. /proc should hide other users' processes from project users
+too (the processes topic).
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
 first line sets the values to change, if it has any (for example
 user=devopsy).
 
-1. Make the door's directory, the deploy user's, and mount it on itself with
+1. Install sudo (sudo, visudo) and acl (setfacl), which nothing else of
+   devopsy uses.
+
+   ```sh
+   apt-get update
+   apt-get install -y sudo acl
+   ```
+
+2. Make the door's directory, the deploy user's, and mount it on itself with
    nosuid and nodev, now and at every boot.
 
    ```sh
@@ -193,7 +199,7 @@ user=devopsy).
    mountpoint -q "$space" || mount "$space"
    ```
 
-2. Name it as door: space: in the deploy user's config,
+3. Name it as door: space: in the deploy user's config,
    ~/.config/devopsy/config.yaml, unless the file has a door: already.
 
    ```sh
@@ -203,7 +209,7 @@ user=devopsy).
    grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null
    ```
 
-3. Give Docker buildx 0.33.0 or later by upgrading its plugin's package
+4. Give Docker buildx 0.33.0 or later by upgrading its plugin's package
    alone, which restarts nothing.
 
    ```sh
@@ -211,7 +217,7 @@ user=devopsy).
    apt-get install -y --only-upgrade docker-buildx-plugin
    ```
 
-4. Skip this step where Docker is on its containerd image store already, as
+5. Skip this step where Docker is on its containerd image store already, as
    a Docker 29 installed fresh is: the first command then shows
    io.containerd.snapshotter.v1 as its driver type, and the classic store
    shows no driver type. Moving a Docker off the classic store restarts it,
@@ -233,16 +239,18 @@ user=devopsy).
    rm -f "$f.new"
    ```
 
-5. Then add project users with --project-users add, from the operator's
+6. Then add project users with --project-users add, from the operator's
    machine, and reboot the server after the first: sshd reads what the add
    wrote for it only at the next boot, and until then no project user logs
    in.
 
-To check it: the directory is mounted with nosuid and nodev, Docker says its
-containerd image store (io.containerd.snapshotter.v1) and buildx 0.33.0 or
-later, and --server-info no longer warns of either.
+To check it: the three tools are found, the directory is mounted with nosuid
+and nodev, Docker says its containerd image store
+(io.containerd.snapshotter.v1) and buildx 0.33.0 or later, and --server-info
+no longer says any of them.
 
 ```sh
+command -v sudo visudo setfacl
 space=/var/lib/devopsy-door
 findmnt -no OPTIONS --target "$space"
 docker info --format '{{.DriverStatus}}'

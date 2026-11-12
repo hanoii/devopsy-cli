@@ -50,19 +50,19 @@ var Topics = []Topic{
 	},
 	{
 		Name:    Tools,
-		Summary: "tar, flock and the other tools devopsy uses, sudo and acl",
+		Summary: "tar, flock and the other tools devopsy uses",
 		Title:   "The tools devopsy uses",
 		Why: "A release needs tar and flock, and --server-setup and every release refuse a server without them. " +
 			"setsid, script, mkfifo and a tail that answers --version each serve a part of a release or a sync, which goes without them, and --server-info and --server-setup warn of each one missing. " +
-			"Project users need sudo, visudo and setfacl, which --project-users add refuses without: on a server with project users both warn of them too, and on one without, --server-info only notes them.",
+			"What only project users need, sudo and acl, is in the project-users topic.",
 		Steps: []Step{
-			{"Install their packages: tar, util-linux (flock, setsid), bsdutils (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl (setfacl).", []string{
+			{"Install their packages: tar, util-linux (flock, setsid), bsdutils (script) and coreutils (mkfifo, tail).", []string{
 				`apt-get update`,
-				`apt-get install -y tar util-linux bsdutils coreutils sudo acl`,
+				`apt-get install -y tar util-linux bsdutils coreutils`,
 			}},
 		},
 		Check: Step{"each tool is found, and tail answers --version.", []string{
-			`command -v tar flock setsid script mkfifo tail sudo visudo setfacl`,
+			`command -v tar flock setsid script mkfifo tail`,
 			`tail --version | head -n 1`,
 		}},
 	},
@@ -104,12 +104,17 @@ var Topics = []Topic{
 	},
 	{
 		Name:    ProjectUsers,
-		Summary: "the door's directory, Docker's containerd image store",
+		Summary: "sudo and acl, the door's directory, Docker's image store",
 		Title:   "What a server with project users needs",
 		Why: "Project users reach Docker through the door, devopsy's check of every Docker request they make. The door keeps their data in a directory of its own on a mount with nosuid and nodev, " +
-			"and needs Docker's containerd image store with buildx 0.33.0 or later: --project-users add refuses a server without that mount or that Docker, and --server-info warns of both. " +
-			"The door needs sudo and acl too (the tools topic), and /proc should hide other users' processes from project users (the processes topic).",
+			"and needs sudo, visudo and setfacl, and Docker's containerd image store with buildx 0.33.0 or later: --project-users add refuses a server without any of them. " +
+			"--server-info warns of each one missing, and of sudo, visudo or setfacl only notes it while the server has no project user. " +
+			"/proc should hide other users' processes from project users too (the processes topic).",
 		Steps: []Step{
+			{"Install sudo (sudo, visudo) and acl (setfacl), which nothing else of devopsy uses.", []string{
+				`apt-get update`,
+				`apt-get install -y sudo acl`,
+			}},
 			{"Make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`install -d -o "$user" -m 755 "$space"`,
@@ -140,7 +145,8 @@ var Topics = []Topic{
 			}},
 			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
 		},
-		Check: Step{"the directory is mounted with nosuid and nodev, Docker says its containerd image store (io.containerd.snapshotter.v1) and buildx 0.33.0 or later, and --server-info no longer warns of either.", []string{
+		Check: Step{"the three tools are found, the directory is mounted with nosuid and nodev, Docker says its containerd image store (io.containerd.snapshotter.v1) and buildx 0.33.0 or later, and --server-info no longer says any of them.", []string{
+			`command -v sudo visudo setfacl`,
 			`space=/var/lib/devopsy-door`,
 			`findmnt -no OPTIONS --target "$space"`,
 			`docker info --format '{{.DriverStatus}}'`,

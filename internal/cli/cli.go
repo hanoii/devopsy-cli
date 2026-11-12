@@ -1230,7 +1230,7 @@ the others. Asked as the deploy user, the server named with its user
 (@devopsy@vm1:). The server needs a door: space: first, a directory on a
 mount of its own with nosuid and nodev, sudo and acl, and Docker's
 containerd image store: devopsy ` + howto.Flag + ` prints the steps,
-as root (its project-users and tools topics).
+as root (its project-users topic).
 
   --project-users           list them: project, whether the Unix user is
                             there, how many keys

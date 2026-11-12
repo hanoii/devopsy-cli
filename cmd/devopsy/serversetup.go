@@ -346,8 +346,8 @@ func sayRefusals(f setup.Facts, level report.Level, said []string, tools bool) [
 	}
 	addTools := func() {
 		for _, name := range f.Missing {
-			if msg, _ := toolMissingWords(name); msg != "" && tools {
-				add(report.WarnLevel, toolsItem, msg, []report.Remedy{toolsFix})
+			if msg, door := toolMissingWords(name); msg != "" && tools {
+				add(report.WarnLevel, toolsItem, msg, []report.Remedy{toolFix(door)})
 			}
 		}
 		tools = false

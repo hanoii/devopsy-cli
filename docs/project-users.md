@@ -348,8 +348,7 @@ yet, `--server-info` says it without a warning. `noaccess` shows that a
 process is there and whose it is, never its command line.
 
 1. Set the server up for project users, as root: `devopsy
-   --server-setup-howto project-users` and `devopsy --server-setup-howto
-   tools` print the steps ([Server setup
+   --server-setup-howto project-users` prints the steps ([Server setup
    how-to](server-setup-howto.md#project-users)).
 
 2. Add the project user and its keys, locally:

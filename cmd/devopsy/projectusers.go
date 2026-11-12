@@ -194,7 +194,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	// check, a setfacl of the tree).
 	if missing := missingTools(doorTool); len(missing) > 0 {
 		report.Fail(errors.New("no "+strings.Join(missing, " or ")+" on this server, which project users need: no project user made"),
-			report.Fix("install sudo and acl with the system's packages, as root:", howto.Command(howto.Tools)))
+			toolFix(true))
 		return 1
 	}
 	// A removal of the user's, or a key's removal's end, not seen through: what settles it
