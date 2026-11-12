@@ -78,4 +78,3 @@ func TestChangingCountsWhatARefusalHides(t *testing.T) {
 		t.Errorf("flock missing, the firewall in sync: %v", tools.Stopped())
 	}
 }
-

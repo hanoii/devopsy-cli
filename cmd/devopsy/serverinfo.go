@@ -879,10 +879,13 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			report.Hint("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
 	}
 	if info.RebootRequired {
-		msg := "the server needs a reboot"
+		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
+		// packages when the setup or the door asked for it.
+		msg := "the server needs a reboot (" + remote.RebootRequired
 		if len(info.RebootPackages) > 0 {
-			msg += " (for " + strings.Join(info.RebootPackages, ", ") + ")"
+			msg += ", for " + strings.Join(info.RebootPackages, ", ")
 		}
+		msg += ")"
 		warn(msg, report.Fix("reboot it at a quiet time: its containers come back with Docker"))
 	}
 	// Against the operator's clock, which a laptop or CI keeps
@@ -1354,5 +1357,6 @@ func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
 		msg, fixes := daemonWords(f.DaemonError)
 		line(remote.StatusWarning, msg, fixes...)
 	}
-	return append(es, setupItems(f, setup.ShowInfo, &fix, "setup")...)
+	sooner := soonerHint(ref)
+	return append(es, setupItems(f, setup.ShowInfo, &fix, &sooner, "setup")...)
 }

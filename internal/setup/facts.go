@@ -24,8 +24,12 @@ type Facts struct {
 	Buffers []BufferFact `json:"buffers"`
 	// Firewall is the metadata firewall's, nil from a devopsy that judges none.
 	Firewall *FirewallFact `json:"firewall,omitempty"`
-	// Pending: Docker has yet to take daemon.json (Pending).
-	Pending bool `json:"pending,omitempty"`
+	// Pending: Docker has yet to take daemon.json (Pending); PendingParts the parts docker info
+	// shows it has yet to take, none when only the marker tells (log-opts).
+	Pending      bool     `json:"pending,omitempty"`
+	PendingParts []string `json:"pending_parts,omitempty"`
+	// Reboot: the system's restart flag is raised, a reboot asked for, which restarts Docker.
+	Reboot bool `json:"reboot,omitempty"`
 	// Running is how many containers run; LiveRestore whether the daemon keeps them
 	// through its restart.
 	Running     int  `json:"running"`

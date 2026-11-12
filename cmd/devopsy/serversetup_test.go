@@ -171,8 +171,9 @@ func TestServerSetupYes(t *testing.T) {
 	}
 }
 
-// restartLaterSaid is the detail under a daemon.json left for Docker's next restart.
-const restartLaterSaid = "devopsy: | nothing to do now: the next reboot takes it; run --server-setup again to restart Docker sooner\n"
+// pendingRebootSaid is what follows a daemon.json Docker has yet to take, the system's restart
+// flag raised: what does it, and the restart sooner.
+const pendingRebootSaid = "devopsy: | nothing is lost by waiting: the reboot the server needs (/run/reboot-required) does it\ndevopsy: | to restart Docker sooner, run --server-setup for this server\n"
 
 // A value someone else set is kept with --yes and recorded so, every other key of the file
 // stays, and with containers running Docker is not restarted: the restart marker holds its
@@ -184,7 +185,7 @@ func TestServerSetupKeepsAndMarks(t *testing.T) {
 	write(t, filepath.Join(host, setup.DaemonFile), `{"proxies": {"http-proxy": "http://proxy.example.com:3128"}, "default-address-pools": [{"base": "10.200.0.0/16", "size": 24}]}`, 0o644)
 	out, code := s.run([]string{"FAKE_RUNNING=c1"}, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 0 || !strings.Contains(out, "default-address-pools: "+pools+", someone else's") || !strings.Contains(out, "devopsy: Docker is not restarted, with containers running\n") ||
-		!strings.Contains(out, "devopsy: Docker takes daemon.json at its next restart, and /run/reboot-required is raised for it\n"+restartLaterSaid) {
+		!strings.Contains(out, "devopsy: Docker needs a restart to take daemon.json (logs, live-restore)\n"+pendingRebootSaid) {
 		t.Fatalf("(%d):\n%s", code, out)
 	}
 	// The mounts drop-in put, Docker not restarted: what it changes, and that it asks nothing.
@@ -203,7 +204,7 @@ func TestServerSetupKeepsAndMarks(t *testing.T) {
 		t.Errorf("restarted, or not marked:\n%s", readString(filepath.Join(host, "systemctl.log")))
 	}
 	// Asked again: kept, so listed as kept; pending, Docker is still not restarted.
-	if out, code := s.run([]string{"FAKE_RUNNING=c1"}, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "kept by the admin") || !strings.Contains(out, "devopsy: Docker has yet to take daemon.json, which it takes at its next restart\n"+restartLaterSaid) {
+	if out, code := s.run([]string{"FAKE_RUNNING=c1"}, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "kept by the admin") || !strings.Contains(out, "devopsy: Docker needs a restart to take daemon.json (logs, live-restore, default-address-pools)\n"+pendingRebootSaid) {
 		t.Errorf("again (%d):\n%s", code, out)
 	}
 }
@@ -813,7 +814,7 @@ func TestServerSetupRestartNotConfirmed(t *testing.T) {
 	s, host := setupServer(t)
 	out, code := s.run([]string{"FAKE_RESTART_STUCK=1", remote.RestartWaitEnv + "=1"}, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || !strings.Contains(out, "error: Docker's restart did not end in a second") || !strings.Contains(out, "$ journalctl -u docker.service") ||
-		markerID(host) != "inv1" || !strings.Contains(out, "Docker takes daemon.json at its next restart") {
+		markerID(host) != "inv1" || !strings.Contains(out, "devopsy: Docker needs a restart to take daemon.json (logs, live-restore, default-address-pools)\n"+pendingRebootSaid) {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 	if rec := readRecordOf(t, s); rec["logs"] != (setup.Entry{Applied: setup.Parts[0].Want}) {

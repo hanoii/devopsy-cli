@@ -238,6 +238,11 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	marker, _ := os.ReadFile(h.path(setup.RestartMarker))
 	outside := setup.OutsideParts(rd.states)
 	f.Pending = rd.docker && f.Goes(setup.StepRestart) && setup.Pending(string(marker), rd.invocation, rd.fileVisible.Except(outside), rd.running.Except(outside))
+	if f.Pending {
+		f.PendingParts = rd.fileVisible.Except(outside).Differ(rd.running.Except(outside))
+	}
+	_, err = os.Stat(h.path(remote.RebootRequired))
+	f.Reboot = err == nil
 	return rd, nil
 }
 
@@ -704,7 +709,7 @@ func applySetup(h setupHost, a setupApply) int {
 		report.Info("Docker is not restarted: it has nothing new to take from daemon.json")
 	case restart && a.idle && f.Running > 0:
 		restart = false
-		// What it then waits for is said by the run's end (restartLater).
+		// What it then waits for is said by the run's end (pendingWords).
 		report.Info("Docker is not restarted, with containers running")
 	}
 
@@ -801,7 +806,7 @@ func applySetup(h setupHost, a setupApply) int {
 			switch err := rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, "", rd.flags, &marked); {
 			case err == nil:
 				report.Fail(said)
-				sayRootLines(marked.String(), nil, f.Root)
+				sayRootLines(marked.String(), putNames, f.Root)
 			case dockerInfo().Error != "":
 				said.Details = []string{"Docker does not answer, so nothing was flagged for a reboot: it takes daemon.json whenever it starts again"}
 				report.Fail(said)
@@ -874,7 +879,8 @@ func applySetup(h setupHost, a setupApply) int {
 		}
 	}
 	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
-		report.Info("Docker has yet to take daemon.json, which it takes at its next restart", restartLater)
+		state, detail := pendingWords(again.facts.PendingParts, again.facts.Reboot)
+		report.Say(report.InfoLevel, "Docker "+state, []string{detail}, soonerHint(""))
 	}
 	if dropinText != "" && !queued {
 		report.Info("Docker starts only once the release root's filesystem is mounted, from its next start on", "nothing to do now: it matters at a boot, and needs no restart")
@@ -1001,9 +1007,28 @@ func hasLine(out, word string) bool {
 	return false
 }
 
-// restartLater is the detail under a daemon.json left for Docker's next restart: what takes it,
-// and that the operator need do nothing.
-const restartLater = "nothing to do now: the next reboot takes it; run --server-setup again to restart Docker sooner"
+// pendingWords is how every command says Docker has yet to take daemon.json: the restart it
+// needs, for parts when known, and what does it, the reboot the server needs when the
+// system's restart flag is raised (reboot), else whoever restarts Docker.
+func pendingWords(parts []string, reboot bool) (state, detail string) {
+	state = "needs a restart to take daemon.json"
+	if len(parts) > 0 {
+		state += " (" + strings.Join(parts, ", ") + ")"
+	}
+	if reboot {
+		return state, "nothing is lost by waiting: the reboot the server needs (" + remote.RebootRequired + ") does it"
+	}
+	return state, "it waits for Docker's next restart, whoever makes it"
+}
+
+// soonerHint is --server-setup offered to restart Docker before what pendingWords says does
+// it: a choice, never a fix. ref is the server as typed, "" where no address is known.
+func soonerHint(ref string) report.Remedy {
+	if ref == "" {
+		return report.Hint("to restart Docker sooner, run --server-setup for this server")
+	}
+	return report.Hint("to restart Docker sooner:", "devopsy @"+ref+" --server-setup")
+}
 
 // sayRootLines says what the root run changed, line by line (remote.SetupRootScript's).
 func sayRootLines(out string, parts []string, root string) {
@@ -1029,7 +1054,9 @@ func sayRootLines(out string, parts []string, root string) {
 		case remote.SetupQueued:
 			report.Info("restarting Docker")
 		case remote.SetupMarked:
-			report.Info("Docker takes daemon.json at its next restart, and "+remote.RebootRequired+" is raised for it", restartLater)
+			// The run raised the system's restart flag with the marker.
+			state, detail := pendingWords(parts, true)
+			report.Say(report.InfoLevel, "Docker "+state, []string{detail}, soonerHint(""))
 		case remote.SetupNoSystem:
 			report.Say(report.WarnLevel, "Docker was not restarted", nil, report.Fix("restart it, as root:", "systemctl restart docker"))
 		}

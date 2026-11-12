@@ -125,7 +125,7 @@ func TestServerInfoReport(t *testing.T) {
 		want   string // the warning, then its fix after |
 	}{
 		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "older than the local 0.54.0|devopsy @vm1: --upgrade"},
-		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "needs a reboot (for linux-image-amd64)|reboot it"},
+		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "the server needs a reboot (/run/reboot-required, for linux-image-amd64)|reboot it"},
 		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
@@ -210,7 +210,7 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup = setUp("")
 			i.Setup.Buffers[0].Live, i.Setup.Buffers[0].Low = 212992, true
 		}, "", "net.core.rmem_max is 212992, below 7500000|devopsy @vm1: --server-setup"},
-		{"setup pending", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Pending = true }, "", "has yet to take daemon.json, at its next restart|devopsy @vm1: --server-setup"},
+		{"setup pending", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Pending = true }, "", "Docker: needs a restart to take daemon.json\nit waits for Docker's next restart, whoever makes it|to restart Docker sooner:\n$ devopsy @vm1: --server-setup"},
 		{"setup firewall", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
@@ -359,6 +359,32 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	if len(warnings) != 5 || slices.ContainsFunc(warnings, func(w said) bool { return len(w.fixes) != 1 }) {
 		t.Errorf("each warning with its own fix: %+v", warnings)
+	}
+
+	// Docker yet to take daemon.json: the restart it needs and the parts it takes, then what
+	// does it. With no reboot asked for it waits for whoever restarts Docker, a warning; with
+	// the reboot the setup asked for, the reboot does it and nothing is lost by waiting, a line
+	// beside the reboot's own warning. --server-setup restarts it sooner either way, a hint.
+	for _, reboot := range []bool{false, true} {
+		info = healthy()
+		info.Setup = setUp("")
+		info.Setup.Pending, info.Setup.PendingParts, info.Setup.Reboot = true, []string{"live-restore"}, reboot
+		info.RebootRequired, info.RebootPackages = reboot, []string{"devopsy"}
+		out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+		detail, warned := "it waits for Docker's next restart, whoever makes it", 1
+		if reboot {
+			detail = "nothing is lost by waiting: the reboot the server needs (/run/reboot-required) does it"
+		}
+		want := "              Docker: needs a restart to take daemon.json (live-restore)\n              " + detail + "\n              to restart Docker sooner:\n              $ devopsy @vm1: --server-setup\n"
+		n := 0
+		for _, w := range warnings {
+			if !w.note {
+				n++
+			}
+		}
+		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "the server needs a reboot (/run/reboot-required, for devopsy)\n") {
+			t.Errorf("pending, reboot %v: %d warnings %+v\n%s", reboot, n, warnings, out)
+		}
 	}
 
 	// A kernel without AppArmor is said, not warned: nothing to install.

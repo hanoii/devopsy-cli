@@ -209,7 +209,8 @@ fix; a fix that serves several lines in a row (`--server-setup` for the
 setup's items) comes once, after the last of them:
 
 - an older devopsy;
-- a reboot the system asks for;
+- a reboot the system asks for (`/run/reboot-required`, with the
+  packages asking, devopsy among them when its setup or its door did);
 - memory Kexec HandOver keeps as CMA. Only movable pages may use it, so
   the kernel's allocations can run out while memory is free. `kho=off`
   frees it, and devopsy-server's `setup.sh` adds it;
@@ -221,9 +222,15 @@ setup's items) comes once, after the last of them:
 - a server never set up by devopsy, on which `--upgrade` applies nothing,
   and each item of the setup that is not devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
-  mounts drop-in, the metadata firewall, `W0001`) or that Docker has not
-  taken yet, each fixed by `--server-setup`, or, where the setup refuses
-  every step, by what it refuses first;
+  mounts drop-in, the metadata firewall, `W0001`), each fixed by
+  `--server-setup`, or, where the setup refuses every step, by what it
+  refuses first;
+- Docker needing a restart to take `daemon.json` (the parts, where
+  `docker info` shows them), while nothing is to restart it: it waits
+  for Docker's next restart, whoever makes it. Once a reboot is asked for,
+  the line says the reboot does it, and is no warning: nothing is lost by
+  waiting, and the reboot's own line is the one that needs attention.
+  Either way `--server-setup` is offered to restart Docker sooner;
 - a disk 90% full, or with less than 5 GB free;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which

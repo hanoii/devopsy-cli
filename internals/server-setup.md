@@ -15,7 +15,7 @@
 - A failure of one step's apply goes on to the next independent one: the root run puts in order, `daemon.json` last, and a put that fails, by its check (exit 4) or its write (exit 5), ends that run with what came before put, the record keeping no part that did not go in and the answers asked again; the firewall's run follows.
 - A restart not confirmed in time leaves the firewall's step to go when Docker answers, and fails naming it when Docker does not; the run raising the reboot flag failing is said as its own error, Docker not answering only when `docker info` says so.
 - The mounts drop-in's put is followed by a daemon-reload whatever comes after it, and with no restart queued the apply says Docker starts only once the root's filesystem is mounted, with a detail that nothing is asked of the operator.
-- What the apply leaves for later (the drop-in, a `daemon.json` for Docker's next restart) says what happened and whether the operator has anything to do (`restartLater`).
+- What the apply leaves for later (the drop-in, a `daemon.json` for Docker's next restart) says what happened and whether the operator has anything to do (`pendingWords`).
 - The check after the apply judges only what went; a refused step is no "what was applied did not hold".
 - devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).
@@ -89,6 +89,8 @@
 
 - `--server-setup` offers a restart when the run changes `daemon.json` or Docker has yet to take it (`setup.Pending`), and the operator passes its answer as a condition (`--restart`, `--yes`'s `--restart-idle`, only with no container running): the apply judges it under its locks, restarting only when this run put `daemon.json` or something is pending then, else saying why not.
 - Pending is read only where a restart could go (Docker answering and this host's, the restart's step going), never hidden by a refusal that stops nothing.
+- Pending is worded once (`pendingWords`) for `--server-setup`'s differences, its end, `--server-info` and the operator's "nothing to change": the restart Docker needs, the parts `docker info` shows it has yet to take (`setup.Visible.Differ`, none when only the marker tells), and what does it, the reboot the server needs where the system's restart flag is raised (`setup.Facts.Reboot`), else whoever restarts Docker.
+- `--server-setup` sooner is a hint (`soonerHint`), never a fix: waiting may be the operator's choice. In `--server-info` pending is a warning while nothing is to restart Docker, and an info line once a reboot is asked for, the reboot's own warning keeping exit 3 for a server that waits on it alone.
 - A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up.
 - The restart's locks are the deploy user's own projects' alone (`deployEnvBases`, `ownProjects`, `--server-info`'s filter), a project user's tree being that user's to change: never walked or locked, and the run says those releases are not waited for.
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.

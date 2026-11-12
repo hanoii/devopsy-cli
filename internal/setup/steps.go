@@ -160,4 +160,3 @@ func (f Facts) AllRefusals() []Refusal {
 	}
 	return rs
 }
-

@@ -76,7 +76,8 @@ func runServerSetup(t *remote.Target, args []string) int {
 			return 1
 		}
 		if f.Pending {
-			report.Info("nothing to change: Docker takes daemon.json at its next restart", restartLater)
+			state, detail := pendingWords(f.PendingParts, f.Reboot)
+			report.Say(report.InfoLevel, "nothing to change, but Docker "+state, []string{detail}, soonerHint(targetRef(t)))
 		} else {
 			report.Info("nothing to change: " + t.Host + " is set up as devopsy wants it")
 		}
@@ -197,15 +198,15 @@ func setupEntries(f setup.Facts) []remote.StatusEntry {
 	if f.RootAction != "" {
 		root.Lines[0] = rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's"
 	}
-	return append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, "")...)
+	return append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, nil, "")...)
 }
 
 // setupItems are the setup's tunable items as --server-setup and --server-info show them, each
 // part as show says (setup.ShowSetup, setup.ShowInfo): what is not devopsy's one warning per
 // item with fix (none when nil), each kept part and each set outside daemon.json a line,
-// pending a warning, the volume hint a line. Each is under its item's key, or under key with
+// pending as pendingWords says it with sooner its hint (none when nil), the volume hint a line. Each is under its item's key, or under key with
 // the item's name first when key is not "".
-func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Remedy, key string) []remote.StatusEntry {
+func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix, sooner *report.Remedy, key string) []remote.StatusEntry {
 	var es []remote.StatusEntry
 	entry := func(level, item string, lines ...string) {
 		if len(lines) == 0 {
@@ -260,8 +261,22 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix *report.Re
 		}
 		entry(remote.StatusWarning, x.Item, lines...)
 	}
+	// Docker yet to take daemon.json: a warning while nothing is to restart it, a line once a
+	// reboot asked for does (the reboot its own warning), --server-setup sooner a hint.
 	if f.Pending {
-		entry(remote.StatusWarning, "Docker", "has yet to take daemon.json, at its next restart")
+		state, detail := pendingWords(f.PendingParts, f.Reboot)
+		level := remote.StatusWarning
+		if f.Reboot {
+			level = remote.StatusInfo
+		}
+		e := remote.StatusEntry{Level: level, Key: "Docker", Lines: []string{state, detail}}
+		if key != "" {
+			e.Key, e.Lines[0] = key, "Docker: "+state
+		}
+		if sooner != nil {
+			e.Remedies = []report.Remedy{*sooner}
+		}
+		es = append(es, e)
 	}
 	// A refused allow leaves the door's firewall as it is: its chains, read, said as without it.
 	if fw := f.Firewall; fw != nil && (fw.State.Changes() || fw.State == setup.FirewallRefused && len(fw.Wrong) > 0) {

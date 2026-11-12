@@ -188,9 +188,22 @@ type Visible struct {
 }
 
 // Equal reports whether v and o show the same values, pools in order.
-func (v Visible) Equal(o Visible) bool {
-	return v.LogDriver == o.LogDriver && v.LiveRestore == o.LiveRestore &&
-		slices.Equal(v.Pools, o.Pools)
+func (v Visible) Equal(o Visible) bool { return len(v.Differ(o)) == 0 }
+
+// Differ names the parts whose values v and o show differently, in Parts' order, pools in
+// order.
+func (v Visible) Differ(o Visible) []string {
+	var names []string
+	if v.LogDriver != o.LogDriver {
+		names = append(names, "logs")
+	}
+	if v.LiveRestore != o.LiveRestore {
+		names = append(names, "live-restore")
+	}
+	if !slices.Equal(v.Pools, o.Pools) {
+		names = append(names, "default-address-pools")
+	}
+	return names
 }
 
 // Except is v with the named parts' values Docker's defaults: what the daemon's flags set is
