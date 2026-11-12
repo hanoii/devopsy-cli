@@ -132,7 +132,10 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return filter(r, cur)
 	case first == howto.Flag:
 		r := Result{Directive: DirectiveNoFileComp}
-		if len(words) == 2 {
+		switch {
+		case len(words) == 2 && strings.HasPrefix(cur, "-"):
+			r.Candidates = []Candidate{{"--help", "how", GroupDevopsy}}
+		case len(words) == 2:
 			for _, t := range howto.Topics {
 				r.Candidates = append(r.Candidates, Candidate{string(t.Name), t.Summary, GroupDevopsy})
 			}
