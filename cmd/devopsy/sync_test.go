@@ -188,7 +188,10 @@ app2=
 # directories of $DOCKER_LOG.vol, by name.
 dbvol= appvol= topvols=
 # FAKE_DB_VOLUME_OPTS: that volume's driver_opts, as JSON (a share's password, say).
-[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"%s}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME" "${FAKE_DB_VOLUME_OPTS:+,\"driver_opts\":$FAKE_DB_VOLUME_OPTS}"); }
+# FAKE_VOLUME_NOCOPY: every mount of a named volume with nocopy.
+nocopy=
+[ -z "${FAKE_VOLUME_NOCOPY:-}" ] || nocopy=',"volume":{"nocopy":true}'
+[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s","target":"/data"%s}' "$FAKE_DB_VOLUME" "$nocopy"); topvols=$(printf '"%s":{"name":"%s_%s"%s}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME" "${FAKE_DB_VOLUME_OPTS:+,\"driver_opts\":$FAKE_DB_VOLUME_OPTS}"); }
 # FAKE_APP_BUILD: app has a build: section, its context the release's
 # code, its argument APP_UID FAKE_APP_UID (10001 by default).
 appbuild=
@@ -202,7 +205,7 @@ dbimg=
 # container: an anonymous volume its image declares, say).
 dbmounts=$(printf '{"type":"bind","source":"%s/mnt/db"}%s' "${dir:-}" "$dbvol")
 [ -z "${FAKE_DB_NO_BIND:-}" ] || dbmounts=${dbvol#,}
-[ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_APP_VOLUME"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
+[ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s","target":"/data"%s}' "$FAKE_APP_VOLUME" "$nocopy"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
 vols="$DOCKER_LOG.vol"
 # FAKE_RUN_WAIT: a docker run whose arguments hold $FAKE_RUN_WAIT_ON (a
 # long check, copy or tar) takes until $FAKE_RUN_WAIT.go exists, or its

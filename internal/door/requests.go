@@ -19,7 +19,7 @@ type Known struct {
 	// Dockerfile is what the door builds it from.
 	Dockerfile string
 	// The scripts, each with its own mounts and arguments.
-	Owners, Export, Import, ReflinkProbe, SnapshotTar, Space, Share, Daemon, Restore, Receive string
+	Owners, VolumeOwner, Export, Import, ReflinkProbe, SnapshotTar, Space, Share, Daemon, Restore, Receive string
 	// RsyncCopy is how every rsync starts.
 	RsyncCopy []string
 	// Clone says whether a script is a reflink clone's, which is computed.

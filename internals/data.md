@@ -9,11 +9,16 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - `devopsy.mnt.owner=user` or `=<uid>:<gid>` (`cli.MntOwnerLabel`) owns a service's writable entries of `mnt`, read with the data labels in every profile into `Owner` and `Writable`, `cli.MntOwners` mapping entry to owner: Docker makes a missing entry root's, the deploy user cannot chown, and an import, a sync, a restore or an upload by hand keeps the owners it came with, so without it a non-root app cannot write its entries short of a root step in the project (an entrypoint's chown, an init service).
 - Owners are numbers only, 0 to 4294967294, normalized by `parseOwner` and compared as numbers: names cannot be resolved from the host, and past a `uid_t` or at 4294967295 (chown's -1) an owner passes the checks and fails `find` and `chown` after the switch.
 - A read-only mount claims nothing, two owners on one entry are an error, and an unlabeled writer of an owned entry is none (a tool sharing it).
+- The label owns the named volumes its service mounts writable too, their root alone (`cli.OwnedVolumes`, from every mount in `VolumeMounts`): what the service writes there is its own.
+- Every mount of an owned volume carries `nocopy`, read-only ones and unlabeled services' included, refused by the mounts check and locally before a start: Docker fills an empty volume from the image at its first mount and gives its root the image directory's owner, which a root given beforehand does not stop.
+- An owned volume that is `external:` or has a fixed `name:` is refused, and so are two owners on one volume.
 - The value `user` takes the service's own `user:` (`cli.OwnerUser`, `labelOwner`), which must be `<uid>:<gid>` in numbers: a name cannot be resolved from the host, and a uid alone leaves the group to the image.
 - `user` is resolved where labels are parsed, so every consumer and the child's list see numbers, never the word.
 - The label stays opt-in, never a default from `user:`: some images have no `user:` and drop privileges themselves, and a tool sharing a mount would claim it too.
 - Owners are applied as root in `UtilImage`, one container per owned entry mounting that entry alone (`ownMnt`, `--mount` with its source as a CSV field), `--network none`, `chown -h` in batches of only what differs (`chownEntry`), only files, directories and links in the chown and in the look after it: one container per entry keeps a directory the app swaps for a link during the scan from leading the chown into another entry or the host, and a device node given to the owner would be the server's raw disk.
 - A missing owned entry is made by devopsy first, 0755 (`makeEntry`); one that is a link is refused.
+- An owned volume's root is given in a util container of its own mounting that volume alone at a path the image lacks (`ownVolumes`, `/vol/<key>`), so the mount fills nothing, the volume made first when missing (`ensureVolumes`), at every owners' step: it heals a volume Docker made first.
+- A chown an owned volume's driver refuses (a share) fails the owners' step with words.
 - A scan that fails is looked at again with `-ignore_readdir_race`, chowning nothing, and fails only when something is left with another owner or that look fails itself (a directory find cannot read): the services may run meanwhile, and a file removed between find and chown is no failure.
 - Every owned entry is scanned whole on a server: what devopsy did not write can have the wrong owner deep under a correct top.
 - On a server owners are given at these points:
@@ -21,10 +26,12 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
   - by `--mnt-owners restored` in a rollback and in the restart after a failed run, from the restored release's labels, where labels this devopsy cannot read, a compose error and `./mnt` whole only warn and nothing is given away, while a chown that fails on labels it read fails as a release's does;
   - by a sync's rsync, `--chown` per entry from the child's labels (internals/syncs.md);
   - by a `volumes` import and a snapshot's restore, after their extracting containers (internals/export-import.md, internals/snapshots.md);
-  - by a reset, after `emptyMnt`.
-- Locally, before compose's `up`, `start`, `restart`, `run`, `create`, `watch` and `scale` (`Plan.Starts`), devopsy makes the missing owned entries and, on Linux, gives away and scans whole an entry whose top has the wrong owner, never one whose top is right; macOS never checks, since Docker Desktop and OrbStack show containers the owner Docker asks for.
+  - by a reset, after `emptyMnt`, its owned volumes' roots with its entries.
+- A release's prepare makes no owned volume before the switch: the prepare steps, the only steps before it, run before `--missing-vars` lets the labels be read, and a volume with options is made by compose's `create` of the new release's containers.
+- Locally, before compose's `up`, `start`, `restart`, `run`, `create`, `watch` and `scale` (`Plan.Starts`), devopsy makes the missing owned entries and, on Linux, gives away and scans whole an entry whose top has the wrong owner, never one whose top is right; macOS never checks, since Docker Desktop and OrbStack show containers the owner Docker asks for; owned volumes are made and their roots given on macOS as on Linux, since only bind mounts fake owners there.
 - `Plan.Starts` reads the labels from the project's own compose files (`ComposeConfig`), never a `-f` the command adds; never for a `--dry-run` where compose parses it (before the command, after it up to `--`, for `run` only before its service: `commandValueFlags`, `dryRun`); never in a release on a server (`cli.InRelease`), where `--mnt-owners` owns it, so a rollback's plain `up` never fails on labels `--mnt-owners restored` only warns about.
 - Locally, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
+- Locally, an owned volume `cli.OwnedVolumes` refuses stops the start: the start would fill the volume and leave its owner a root it cannot write.
 - No owners are fixed for a stream's import (it writes as the service's user), restarts or reboots (owners persist), and no flag fixes owners: a release does it.
 - The owners in copies are a named feature, `mnt-owner` found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
 
@@ -33,8 +40,9 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - `--check-mounts` (`cli.CheckMounts`) runs on the server after the prepare steps and `--missing-vars`, beside `--check-names` (internals/releases.md), and refuses a release before its switch for:
   - a writable bind from the project's tree outside `mnt` (`TreeBinds`), which goes with the next release;
   - a service copied as `volumes` with no entry of `mnt` and no named volume, which a sync would take for nothing to copy;
-  - an owner of no writable entry;
+  - an owner of no writable entry or named volume;
   - two owners on one entry;
+  - an owned volume `cli.OwnedVolumes` refuses (a mount without `nocopy`, an external or fixed name, two owners);
   - `./mnt` whole mounted writable by any service (`WholeMnt`);
   - a bind source below an owned entry (`Binds`);
   - an owned entry that is a symbolic link in `shared/mnt` (`ownedLinks`);
@@ -44,7 +52,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - Each bind source counts as written and as where its links lead (`resolvePath`: `filepath.EvalSymlinks` where it exists, else its longest existing prefix, a link whose target is missing followed all the same), both forms for `Binds` and the resolved one alone for `TreeBinds` and `WholeMnt`; links into `shared/` lead out of the release tree and stay fine.
 - A bind source that reaches `mnt` through links (for example the tree's `files -> .devopsy/mnt/storage/files`) is judged by where it lands in `mnt`, before the links in `mnt` are followed (`throughMnt`).
 - A bind source below an entry that the deploy user cannot resolve (a directory on the way it cannot search) is refused as one leading out of it is (`HiddenBinds`), in the leaving binds' words (`LeavingLines`, one place for the mounts check, the start gate and `CheckLeavingBinds`): Docker resolves it as root.
-- With an entry owned the check readies `UtilImage` (`ensureUtilImage`), so a registry down refuses the release instead of failing `--mnt-owners` after its switch.
+- With an entry or a volume owned the check readies `UtilImage` (`ensureUtilImage`), so a registry down refuses the release instead of failing `--mnt-owners` after its switch.
 - Absolute bind paths cannot be checked; `docs/data.md` says so.
 - `--check-mounts restored` (a rollback's, in the release it restores; the restart's after a failed run step, `restart`; a full restore's, `restored <snapshot>`, all but the entries the snapshot replaces) refuses no label, warning on ones it cannot read, and checks only what `--mnt-owners restored` needs: the leaving binds (`CheckLeavingBinds`), no owned entry a link and the util image readied (`checkOwned`).
 - A `--no-code` restore checks the leaving binds in the entries it keeps (`check-tars`), and a sync's `finish go` before it starts anything, a copy that brings one kept as one its finish refused (`IncompleteFinish`).

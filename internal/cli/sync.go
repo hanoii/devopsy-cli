@@ -244,6 +244,33 @@ type SyncService struct {
 	// Excluded with its entries): a service with data's are its data as
 	// its entries of mnt are, copied as files the same way.
 	Volumes []Volume
+	// VolumeMounts are its mounts of named volumes, one per mount as
+	// written, excluded volumes included: an Owner covers the volumes it
+	// mounts writable (OwnedVolumes).
+	VolumeMounts []VolumeMount
+}
+
+// VolumeMount is one mount of a named volume by a service: where, whether
+// read-only, whether with nocopy (compose's volume: {nocopy: true}, or
+// the short syntax's :nocopy), and whose the volume is when it is not the
+// environment's own ("external", "named <name>").
+type VolumeMount struct {
+	Volume
+	Target           string
+	ReadOnly, NoCopy bool
+	Whose            string
+}
+
+// OwnedVolume is a named volume MntOwnerLabel owns: its root is given to
+// Owner wherever owners are given.
+type OwnedVolume struct {
+	Volume
+	Owner string
+}
+
+// WritesVolume reports whether s mounts a named volume writable.
+func (s SyncService) WritesVolume() bool {
+	return slices.ContainsFunc(s.VolumeMounts, func(m VolumeMount) bool { return !m.ReadOnly })
 }
 
 // Volume is a named volume of the project: its compose key, the name
@@ -351,7 +378,11 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			Volumes   []struct {
 				Type     string `json:"type"`
 				Source   string `json:"source"`
+				Target   string `json:"target"`
 				ReadOnly bool   `json:"read_only"`
+				Volume   struct {
+					NoCopy bool `json:"nocopy"`
+				} `json:"volume"`
 			} `json:"volumes"`
 		} `json:"services"`
 	}
@@ -479,13 +510,6 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				// A named volume (an anonymous one has no source, and dies
 				// with its container): data on a service with data, by its
 				// key; refused there when it is not the environment's own.
-				if slices.ContainsFunc(cs.Volumes, func(x Volume) bool { return x.Key == v.Source }) || slices.Contains(cs.Excluded, v.Source) {
-					continue
-				}
-				if slices.Contains(exclude, v.Source) {
-					cs.Excluded = append(cs.Excluded, v.Source)
-					continue
-				}
 				top := config.Volumes[v.Source]
 				whose := ""
 				switch {
@@ -493,6 +517,18 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 					whose = "external"
 				case top.Name != "" && config.Name != "" && top.Name != config.Name+"_"+v.Source:
 					whose = "named " + top.Name
+				}
+				vol := Volume{Key: v.Source, Name: cmp.Or(top.Name, v.Source), Driver: top.Driver, Opts: top.DriverOpts, Labels: top.Labels}
+				// Every mount, excluded ones too: an owner covers what it writes
+				// whatever a copy carries, and each mount of an owned volume
+				// must hold nocopy (OwnedVolumes).
+				cs.VolumeMounts = append(cs.VolumeMounts, VolumeMount{Volume: vol, Target: v.Target, ReadOnly: v.ReadOnly, NoCopy: v.Volume.NoCopy, Whose: whose})
+				if slices.ContainsFunc(cs.Volumes, func(x Volume) bool { return x.Key == v.Source }) || slices.Contains(cs.Excluded, v.Source) {
+					continue
+				}
+				if slices.Contains(exclude, v.Source) {
+					cs.Excluded = append(cs.Excluded, v.Source)
+					continue
 				}
 				if cs.HasData && whose != "" {
 					return nil, fmt.Errorf("service %s: %s=true mounts the volume %s, which is %s: a copy into it would write another project's data, or every environment's: give the environment its own (no name:, not external:), or leave it out (%s=%s)", name, DataLabel, v.Source, whose, DataExcludeLabel, v.Source)
@@ -768,6 +804,74 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 	return owners, nil
 }
 
+// OwnedVolumes are the named volumes MntOwnerLabel owns, by key: each one a
+// service with an owner mounts writable, from the services of every
+// profile. Refused, every reason a detail of one failure: two owners on
+// one volume; an owned volume that is external: or has a fixed name:
+// (another project's, or every environment's); a key no argument can
+// carry; and any service's mount of an owned volume without nocopy,
+// read-only and unlabeled ones included. Why nocopy: Docker fills an
+// empty volume from the image at the first mount of it, giving its root
+// the image directory's owner and mode, which a root given to the owner
+// beforehand does not stop, so one mount without it leaves the owner a
+// root it cannot write.
+func OwnedVolumes(services []SyncService) (map[string]OwnedVolume, error) {
+	owned := map[string]OwnedVolume{}
+	by := map[string]string{}
+	var bad []string
+	two, fixed, nocopy := false, false, false
+	for _, s := range services {
+		if s.Owner == "" {
+			continue
+		}
+		for _, m := range s.VolumeMounts {
+			if m.ReadOnly {
+				continue
+			}
+			o, ok := owned[m.Key]
+			switch {
+			case ok && o.Owner != s.Owner:
+				if l := fmt.Sprintf("the volume %s is written by %s (%s=%s) and %s (%s): one owner per volume", m.Key, by[m.Key], MntOwnerLabel, o.Owner, s.Name, s.Owner); !slices.Contains(bad, l) {
+					bad = append(bad, l)
+				}
+				two = true
+			case ok:
+			case m.Whose != "":
+				bad = append(bad, fmt.Sprintf("%s has %s=%s and mounts the volume %s writable, which is %s: its owner would be given another project's volume, or every environment's", s.Name, MntOwnerLabel, s.Owner, m.Key, m.Whose))
+				fixed = true
+				owned[m.Key], by[m.Key] = OwnedVolume{Volume: m.Volume, Owner: s.Owner}, s.Name
+			case !argName(m.Key) || strings.Contains(m.Key, "/"):
+				bad = append(bad, fmt.Sprintf("%s has %s=%s and mounts the volume %s writable: a volume devopsy.mnt.owner owns cannot have whitespace in its key or start with a dash", s.Name, MntOwnerLabel, s.Owner, m.Key))
+				owned[m.Key], by[m.Key] = OwnedVolume{Volume: m.Volume, Owner: s.Owner}, s.Name
+			default:
+				owned[m.Key], by[m.Key] = OwnedVolume{Volume: m.Volume, Owner: s.Owner}, s.Name
+			}
+		}
+	}
+	for _, s := range services {
+		for _, m := range s.VolumeMounts {
+			if _, ok := owned[m.Key]; ok && !m.NoCopy {
+				bad = append(bad, fmt.Sprintf("%s mounts the volume %s at %s without nocopy, and %s owns it (%s=%s): Docker would fill it from the image at its first mount, its root then the image's", s.Name, m.Key, m.Target, by[m.Key], MntOwnerLabel, owned[m.Key].Owner))
+				nocopy = true
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return owned, nil
+	}
+	var fixes []report.Remedy
+	if two {
+		fixes = append(fixes, report.Fix("give the services writing a volume one "+MntOwnerLabel+" (a variable keeps them alike), or mount it read-only where it is only read (:ro)"))
+	}
+	if fixed {
+		fixes = append(fixes, report.Fix("give the environment its own volume (no name:, not external:), or mount it read-only"))
+	}
+	if nocopy {
+		fixes = append(fixes, report.Fix("mount it with nocopy in every service (<volume>:<path>:nocopy, or volume: {nocopy: true}): the service then makes what it needs there itself"))
+	}
+	return nil, &report.Failure{Msg: "a named volume " + MntOwnerLabel + " owns is refused", Details: bad, Remedies: fixes}
+}
+
 // CheckLeavingBinds refuses the bind sources a symbolic link in their
 // entry leads out of it (SyncService.LeavingBinds), alone: a rollback's
 // check (--check-mounts restored), whose labels otherwise refuse
@@ -844,6 +948,7 @@ func CheckMounts(services []SyncService) error {
 	var fixes []report.Remedy
 	tree, data, owner, whole, below := false, false, false, false, false
 	owners, ownersErr := MntOwners(services)
+	_, volumesErr := OwnedVolumes(services)
 	bad, leavingFixes := LeavingLines(services, nil)
 	for _, s := range services {
 		for _, b := range s.Binds {
@@ -864,14 +969,19 @@ func CheckMounts(services []SyncService) error {
 			bad = append(bad, fmt.Sprintf("%s has data (%s=true, %s=%s) and copies no entry of mnt or named volume: a sync would copy nothing of it", s.Name, DataLabel, DataCopyLabel, CopyVolumes))
 			data = true
 		}
-		if s.Owner != "" && len(s.Writable) == 0 {
-			bad = append(bad, fmt.Sprintf("%s has %s=%s and mounts no entry of mnt writable: it owns nothing", s.Name, MntOwnerLabel, s.Owner))
+		if s.Owner != "" && len(s.Writable) == 0 && !s.WritesVolume() {
+			bad = append(bad, fmt.Sprintf("%s has %s=%s and mounts no entry of mnt or named volume writable: it owns nothing", s.Name, MntOwnerLabel, s.Owner))
 			owner = true
 		}
 	}
 	if err := ownersErr; err != nil {
 		bad = append(bad, err.Error())
 		fixes = append(fixes, report.Fix("give the services writing an entry one "+MntOwnerLabel+" (a variable keeps them alike), or mount it read-only where it is only read (:ro)"))
+	}
+	var vf *report.Failure
+	if errors.As(volumesErr, &vf) {
+		bad = append(bad, vf.Details...)
+		fixes = append(fixes, vf.Remedies...)
 	}
 	if len(bad) == 0 {
 		return nil
@@ -883,7 +993,7 @@ func CheckMounts(services []SyncService) error {
 		fixes = append(fixes, report.Fix("bind-mount its data from ./mnt/<name> or a named volume, or label it "+DataCopyLabel+"="+CopyCustom+" or "+CopyNone+", or "+DataLabel+"=false"))
 	}
 	if owner {
-		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name>"))
+		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name> or a named volume"))
 	}
 	if whole {
 		fixes = append(fixes, report.Fix("mount the entries it writes (./mnt/<name>), or ./mnt read-only (:ro)"))

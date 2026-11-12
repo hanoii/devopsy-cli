@@ -3182,16 +3182,16 @@ func wipeData(p place) error {
 	// the services with data, and a stream's import brings its service
 	// up, on entries Docker would otherwise make root's. Its volumes
 	// too, for the rsync to write into.
-	owners, mnt, err := projectOwners(p.cwd)
+	owned, err := projectOwners(p.cwd)
+	c := newContainer("sync", composeName(p.cwd), id+"-owners", remote.SyncTask(id))
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, newContainer("sync", composeName(p.cwd), id+"-owners", remote.SyncTask(id)))
+		err = ownMnt(context.Background(), owned.mnt, owned.entries, c)
 	}
-	if err != nil {
-		return err
-	}
-	_, services, err := cli.SyncServices(p.cwd, os.Environ())
 	if err == nil {
-		err = ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(services), services)
+		err = ensureVolumes(context.Background(), p.cwd, composeName(p.cwd), copiedVolumes(owned.services), owned.services)
+	}
+	if err == nil {
+		err = ownVolumes(context.Background(), p.cwd, composeName(p.cwd), owned.volumes, owned.services, c)
 	}
 	if err != nil {
 		return err

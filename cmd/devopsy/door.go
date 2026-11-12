@@ -883,6 +883,7 @@ func doorKnown() door.Known {
 		Image:        remote.UtilImage,
 		Dockerfile:   strings.Join(remote.UtilDockerfile, "\n") + "\n",
 		Owners:       ownEntry,
+		VolumeOwner:  ownVolumeRoot,
 		Export:       exportTarScript,
 		Import:       emptyAndExtract,
 		ReflinkProbe: reflinkProbeScript,

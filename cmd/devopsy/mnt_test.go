@@ -83,7 +83,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	}
 	// Failing, it is a failed run step: nothing current on a first one.
 	write(t, s.log+".shop-solo", "FAKE_APP_OWNER=10001:10001\n", 0o644)
-	if out, code := s.run([]string{"FAIL_OWNERS=3"}, "@solo", "--release"); code == 0 || !strings.Contains(out, "giving the entries of mnt to their owners failed (1)") || strings.Contains(out, "deploy in shop-solo") || s.current("solo") != "" {
+	if out, code := s.run([]string{"FAIL_OWNERS=3"}, "@solo", "--release"); code == 0 || !strings.Contains(out, "giving the entries of mnt and the named volumes to their owners failed (1)") || strings.Contains(out, "deploy in shop-solo") || s.current("solo") != "" {
 		t.Errorf("failing owners (%d), current %q:\n%s", code, s.current("solo"), out)
 	}
 	s.logs()
@@ -157,7 +157,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	// warns too.
 	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT=/db FAKE_APP_OWNER=1:1 FAKE_DB_OWNER=2:2\n", 0o644)
 	out, code = s.run(nil, "@prod", "--rollback")
-	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | ./mnt/db is written by") {
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt and the named volumes will keep their owners\ndevopsy: | ./mnt/db is written by") {
 		t.Errorf("a rollback to a release with two owners on an entry (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 	write(t, s.log+".shop-prod", "", 0o644)
@@ -165,7 +165,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	s.logs()
 	write(t, s.log+".shop-prod", "FAKE_APP=pause\n", 0o644)
 	out, code = s.run(nil, "@prod", "--rollback")
-	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.data=pause: true or false") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.data=pause: true or false") || strings.Contains(out, "error") || strings.Contains(out, "the entries of mnt are left as they are") || !strings.Contains(out, "deploy in shop-prod") {
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt and the named volumes will keep their owners\ndevopsy: | service app: devopsy.data=pause: true or false") || !strings.Contains(out, "devopsy: warning: the entries of mnt and the named volumes keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.data=pause: true or false") || strings.Contains(out, "error") || strings.Contains(out, "the entries of mnt are left as they are") || !strings.Contains(out, "deploy in shop-prod") {
 		t.Errorf("a rollback to a release with labels it cannot read (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
@@ -289,14 +289,71 @@ func TestMntOwnersReset(t *testing.T) {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	s.logs()
-	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001 FAKE_DB_VOLUME=dbdata FAKE_VOLUME_NOCOPY=1 FAKE_DB_OWNER=2000000123:2000000123\n", 0o644)
 	out, code := s.run(nil, "@dev", "--reset", "--yes")
 	docker, _ := s.logs()
+	// The owned volume's root too, once the wipe made it again.
+	if vol := regexp.MustCompile(`-owners-vol-0 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none -v shop-dev_dbdata:/vol/dbdata .* sh dbdata 2000000123:2000000123\n`).FindStringIndex(docker); code != 0 || vol == nil || vol[0] < strings.Index(docker, "-wipe ") {
+		t.Errorf("reset, an owned volume (%d):\n%s\n%s", code, out, docker)
+	}
 	// Both the sync's own (remote.SyncTask), which its holder ends.
 	wipe := regexp.MustCompile(`-wipe --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ -v `).FindStringIndex(docker)
-	owners := regexp.MustCompile(`-owners-0 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=` + regexp.QuoteMeta(s.mnt("dev")) + `/storage,target=/mnt/storage `).FindStringIndex(docker)
+	owners := regexp.MustCompile(`-owners-1 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=` + regexp.QuoteMeta(s.mnt("dev")) + `/storage,target=/mnt/storage `).FindStringIndex(docker)
 	if code != 0 || wipe == nil || owners == nil || owners[0] < wipe[0] || !strings.Contains(docker, "run --rm --name devopsy-sync-") {
 		t.Errorf("reset (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// devopsy.mnt.owner owns the named volumes its service mounts writable: the
+// owners' step right after the switch makes a missing one and gives its
+// root, its root alone, to the owner, in a util container mounting it
+// alone at a path the image lacks, and does it again at every release
+// (it heals a volume Docker made first). A mount of it without nocopy, by
+// any service, refuses the release before the switch: Docker would fill
+// it from the image and give its root the image's owner. A chown the
+// volume's driver refuses fails the step with words. Locally, before a
+// start, the same on macOS as on Linux, and a mount without nocopy
+// refuses the start.
+func TestMntOwnersVolume(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	vol := []string{"FAKE_DB_VOLUME=dbdata", "FAKE_DB_NO_BIND=1", "FAKE_DB_OWNER=2000000123:2000000123"}
+	nocopy := append(slices.Clone(vol), "FAKE_VOLUME_NOCOPY=1")
+	out, code := s.run(vol, "@solo", "--release")
+	if code == 0 || s.current("solo") != "" || !strings.Contains(out, "devopsy: error: the mounts check refuses the release: it does not go live") ||
+		!strings.Contains(out, "devopsy: | db mounts the volume dbdata at /data without nocopy, and db owns it (devopsy.mnt.owner=2000000123:2000000123): Docker would fill it from the image at its first mount, its root then the image's") ||
+		!strings.Contains(out, "mount it with nocopy in every service") {
+		t.Errorf("an owned volume mounted without nocopy (%d), current %q:\n%s", code, s.current("solo"), out)
+	}
+	s.logs()
+	own := "-vol-0 --label devopsy.env=shop-solo --label devopsy.task=owners --network none -v shop-solo_dbdata:/vol/dbdata devopsy.internal/util:5 sh -c chown \"$2\" \"/vol/$1\" sh dbdata 2000000123:2000000123\n"
+	for _, again := range []bool{false, true} {
+		out, code = s.run(nocopy, "@solo", "--release")
+		docker, _ := s.logs()
+		switched, giving, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving the volume dbdata's root to 2000000123:2000000123"), strings.Index(out, "deploy in shop-solo")
+		create := strings.Index(docker, "volume create --label com.docker.compose.project=shop-solo --label com.docker.compose.volume=dbdata shop-solo_dbdata\n")
+		if code != 0 || switched < 0 || giving < switched || deployed < giving || !strings.Contains(docker, own) || (create < 0) == !again || create > strings.Index(docker, own) {
+			t.Errorf("an owned volume's root, again %v (%d):\n%s\n%s", again, code, out, docker)
+		}
+	}
+	// A driver refusing the chown (a share): the step fails, a failed run step.
+	out, code = s.run(append(slices.Clone(nocopy), "FAIL_OWNERS=1"), "@solo", "--release")
+	if code == 0 || !strings.Contains(out, "devopsy: error: giving the volume dbdata's root to 2000000123:2000000123 (devopsy.mnt.owner): exit status 1") || !strings.Contains(out, "a share's may refuse one") || !strings.Contains(out, "owners failed (1), current is back to") {
+		t.Errorf("a chown the driver refuses (%d):\n%s", code, out)
+	}
+	s.logs()
+
+	// Locally, on macOS as on Linux: made and its root given before compose starts.
+	compose := filepath.Join(s.dot, "compose.yaml")
+	out, code = s.run(nocopy, "up", "-d")
+	docker, _ := s.logs()
+	if code != 0 || !regexp.MustCompile(`run --rm --name devopsy-owners-shop-[0-9]+-vol-0 .* -v shop_dbdata:/vol/dbdata devopsy.internal/util:5 sh -c chown "\$2" "/vol/\$1" sh dbdata 2000000123:2000000123\n`).MatchString(docker) ||
+		!strings.Contains(docker, "volume create --label com.docker.compose.project=shop --label com.docker.compose.volume=dbdata shop_dbdata\n") || strings.Index(docker, "-vol-0 ") > strings.Index(docker, "compose -f "+compose+" up -d") {
+		t.Errorf("a local up with an owned volume (%d):\n%s\n%s", code, out, docker)
+	}
+	out, code = s.run(vol, "up", "-d")
+	if docker, _ := s.logs(); code == 0 || !strings.Contains(out, "devopsy: error: a named volume devopsy.mnt.owner owns is refused\ndevopsy: | db mounts the volume dbdata at /data without nocopy") || strings.Contains(docker, " up -d") {
+		t.Errorf("a local up with an owned volume without nocopy (%d):\n%s\n%s", code, out, docker)
 	}
 }
 
@@ -347,7 +404,7 @@ func TestMntOwnersLocal(t *testing.T) {
 	// warning, and compose's command goes on: it says what is wrong with
 	// its own files (review of 2026-10-23, round 2: up failed on them).
 	out, code := s.run(append(slices.Clone(owned), "FAKE_APP=pause"), "up", "-d")
-	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: the entries of mnt are left as they are: the labels cannot be read\ndevopsy: | service app: devopsy.data=pause: true or false") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: the entries of mnt and the named volumes are left as they are: the labels cannot be read\ndevopsy: | service app: devopsy.data=pause: true or false") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
 		t.Errorf("up on labels that cannot be read (%d):\n%s\n%s", code, out, docker)
 	}
 	// compose's watch starts the services first too (unless --no-up),

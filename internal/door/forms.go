@@ -174,6 +174,9 @@ func forms(known Known) []form {
 	return []form{
 		{name: "owners", matches: script(known.Owners, Word, ownerArg),
 			mounts: []mountRule{{target(`/mnt/` + word), false, []sourceKind{kindEntry}}}},
+		// A named volume's root to its owner: the volume alone, at a path the image lacks.
+		{name: "volume owner", matches: script(known.VolumeOwner, Word, ownerArg),
+			mounts: []mountRule{{target(`/vol/` + word), false, []sourceKind{kindVolume}}}},
 		{name: "export", matches: script(known.Export, Word),
 			mounts: []mountRule{{target(`/x/` + word), true, copied}}},
 		{name: "import", matches: script(known.Import, inPath, Word, tarMember),

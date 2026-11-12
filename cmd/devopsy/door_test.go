@@ -31,7 +31,7 @@ import (
 // a project user's door must take, or its release fails at runtime.
 var utilScripts = map[string]string{
 	"exportTarScript": exportTarScript, "reflinkProbeScript": reflinkProbeScript, "snapshotTarScript": snapshotTarScript,
-	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
+	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "ownVolumeRoot": ownVolumeRoot, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
 	"rsyncDaemonScript": rsyncDaemonScript, "restoreStreamScript": restoreStreamScript, "receiveScript": receiveScript,
 }
 
@@ -40,7 +40,7 @@ var utilScripts = map[string]string{
 func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 	t.Parallel()
 	known := doorKnown()
-	scripts := []string{known.Owners, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
+	scripts := []string{known.Owners, known.VolumeOwner, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
 	for name, script := range utilScripts {
 		if !slices.Contains(scripts, script) {
 			t.Errorf("%s is not in doorKnown", name)
@@ -592,6 +592,9 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 			_ = tarInto(ctx, c, tree+"/snapshots/1.tmp/data/mnt.storage.tar.zst", []string{"-v", clone + ":/m:ro"}, "mnt", "storage")
 		},
 		"a share": func() { shareInto(ctx, c, mnt+"/storage", dev+"/storage", "mnt/storage") },
+		"a volume's root": func() {
+			_ = ownVolume(ctx, c, cli.OwnedVolume{Volume: cli.Volume{Key: "db", Name: "shop-prod_db"}, Owner: "10001:10001"})
+		},
 	} {
 		if err := os.Remove(logged); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)

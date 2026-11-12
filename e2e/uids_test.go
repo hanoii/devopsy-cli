@@ -217,3 +217,50 @@ func TestUIDsThroughCopies(t *testing.T) {
 		t.Errorf("after the import the child's file is %s's, want its uid %s", got, dev)
 	}
 }
+
+// A named volume devopsy.mnt.owner owns is its service's from its first start, on its
+// environment's uid near 2 billion, mounted with nocopy where the image has a directory of
+// root's (/var/www): the release makes the volume and gives its root before its run step,
+// and nocopy keeps Docker from filling it, and so from giving its root the image's owner.
+// Compose's own config is what says nocopy, short syntax and long: a mount without it, a
+// read-only one too, refuses the release before its switch.
+func TestUIDsOwnedVolumeFirstStart(t *testing.T) {
+	compose := func(reader string) string {
+		return `services:
+  db:
+    image: busybox:1.37
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
+    command: [sh, -c, "echo up >/var/www/f && exec sleep infinity"]
+    volumes: ["dbdata:/var/www:nocopy"]
+    labels: {devopsy.mnt.owner: user}
+  reader:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes:
+      - type: volume
+        source: dbdata
+        target: /backup
+        read_only: true
+` + reader + `volumes:
+  dbdata: {}
+`
+	}
+	dir := uidsProject(t, "uidsvol", compose(""))
+	out, code := op(t, dir, "devopsy @prod --release")
+	if code == 0 || !strings.Contains(out, "reader mounts the volume dbdata at /backup without nocopy") || strings.Contains(out, "current is now") {
+		t.Fatalf("a read-only mount of an owned volume without nocopy (%d):\n%s", code, out)
+	}
+	if got, _ := srvRoot(t, "docker volume ls -q --filter name=uidsvol-prod_dbdata"); strings.TrimSpace(got) != "" {
+		t.Errorf("the refused release made the volume: %s", got)
+	}
+	if out, code := op(t, dir, "printf '%s' "+quote(compose("        volume: {nocopy: true}\n"))+" >.devopsy/compose.yaml"); code != 0 {
+		t.Fatalf("the compose file: %s", out)
+	}
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 || !strings.Contains(out, "giving the volume dbdata's root to") {
+		t.Fatalf("prod, its owned volume written at its first start (%d):\n%s", code, out)
+	}
+	uid := uidOf(t, srvRoot, "uidsvol-prod-db-1", uids.EnvDomain)
+	if got, _ := srvRoot(t, "docker run --rm -v uidsvol-prod_dbdata:/v busybox:1.37 stat -c '%u:%g %a' /v /v/f"); strings.Join(strings.Fields(got), " ") != uid+":"+uid+" 755 "+uid+":"+uid+" 644" {
+		t.Errorf("the volume's root and file: %q, want both %s's", got, uid)
+	}
+}

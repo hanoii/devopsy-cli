@@ -341,6 +341,64 @@ func TestMntOwners(t *testing.T) {
 	}
 }
 
+// devopsy.mnt.owner owns the named volumes its service mounts writable,
+// excluded ones too, read-only mounts claiming nothing. Every mount of an
+// owned volume carries nocopy, a read-only one and an unlabeled service's
+// included, else it is refused, and so is an owned volume that is
+// external or has a fixed name, and two owners on one volume; the
+// mounts check says each. A service owning a volume alone owns something.
+func TestOwnedVolumes(t *testing.T) {
+	t.Parallel()
+	dot := filepath.Join(t.TempDir(), ProjectDirName)
+	vol := func(key string, ro, nocopy bool) string {
+		return fmt.Sprintf(`{"type":"volume","source":%q,"target":"/%s","read_only":%v,"volume":{"nocopy":%v}}`, key, key, ro, nocopy)
+	}
+	parse := func(volumes, services string) []SyncService {
+		t.Helper()
+		parsed, err := parseSyncServices([]byte(`{"name":"shop-prod","volumes":{`+volumes+`},"services":{`+services+`}}`), dot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	plain := `"db":{"name":"shop-prod_db"},"cache":{"name":"shop-prod_cache"},"logs":{"name":"shop-prod_logs"}`
+	services := parse(plain, `"db":{"labels":{"devopsy.data":"true","devopsy.data.version":"any","devopsy.data.exclude":"cache","devopsy.mnt.owner":"2000000123:2000000123"},"volumes":[`+vol("db", false, true)+`,`+vol("cache", false, true)+`,`+vol("logs", true, false)+`]},
+"backup":{"volumes":[`+vol("db", true, true)+`]}`)
+	owned, err := OwnedVolumes(services)
+	if err != nil || len(owned) != 2 || owned["db"].Owner != "2000000123:2000000123" || owned["db"].Name != "shop-prod_db" || owned["cache"].Owner != "2000000123:2000000123" {
+		t.Errorf("owned: %+v %v", owned, err)
+	}
+	if err := CheckMounts(services); err != nil {
+		t.Errorf("a service owning volumes alone, a read-only reader with nocopy: %v %q", err, report.Details(err))
+	}
+	for what, c := range map[string]struct{ volumes, services, want string }{
+		"a read-only mount without nocopy": {plain, `"db":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + vol("db", false, true) + `]},"backup":{"volumes":[` + vol("db", true, false) + `]}`,
+			"backup mounts the volume db at /db without nocopy, and db owns it (devopsy.mnt.owner=1:1): Docker would fill it from the image at its first mount, its root then the image's"},
+		"the owner's own mount without nocopy": {plain, `"db":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + vol("db", false, false) + `]}`,
+			"db mounts the volume db at /db without nocopy"},
+		"an unlabeled writer without nocopy": {plain, `"db":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + vol("db", false, true) + `]},"tool":{"volumes":[` + vol("db", false, false) + `]}`,
+			"tool mounts the volume db at /db without nocopy"},
+		"external": {`"db":{"name":"db","external":true}`, `"db":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + vol("db", false, true) + `]}`,
+			"db has devopsy.mnt.owner=1:1 and mounts the volume db writable, which is external: its owner would be given another project's volume, or every environment's"},
+		"a fixed name": {`"db":{"name":"shared-db"}`, `"db":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + vol("db", false, true) + `]}`,
+			"which is named shared-db"},
+		"two owners": {plain, `"db":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + vol("db", false, true) + `]},"tool":{"labels":{"devopsy.mnt.owner":"2:2"},"volumes":[` + vol("db", false, true) + `]}`,
+			"the volume db is written by db (devopsy.mnt.owner=1:1) and tool (2:2): one owner per volume"},
+	} {
+		services := parse(c.volumes, c.services)
+		if _, err := OwnedVolumes(services); err == nil || err.Error() != "a named volume devopsy.mnt.owner owns is refused" || !strings.Contains(strings.Join(report.Details(err), "\n"), c.want) {
+			t.Errorf("%s: %v %q", what, err, report.Details(err))
+		}
+		if err := CheckMounts(services); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), c.want) {
+			t.Errorf("%s, the mounts check: %v %q", what, err, report.Details(err))
+		}
+	}
+	// A volume nobody owns takes any mount, as before.
+	if _, err := OwnedVolumes(parse(plain, `"db":{"volumes":[`+vol("db", false, false)+`]}`)); err != nil {
+		t.Errorf("a volume nobody owns: %v", err)
+	}
+}
+
 // The mounts check refuses each mount whose data is not what the labels
 // say: a writable bind from the release's tree outside mnt (read-only
 // ones, and shared/'s links out of it, stay), mnt data with no entry,
@@ -428,7 +486,7 @@ func TestCheckMounts(t *testing.T) {
 		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                                                           "app mounts ./src writable: it is in the release, and the next one replaces it",
 		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                                                        "app mounts ./.devopsy/cache/x writable",
 		`"app":{"labels":{"devopsy.data":"true","devopsy.data.version":"any"},"volumes":[` + bind(root+"/src", true) + `]}`:                              "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt or named volume",
-		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`:                                                      "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`:                                                      "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt or named volume writable: it owns nothing",
 		`"app":{"labels":{"devopsy.data":"true","devopsy.data.version":"any","devopsy.data.exclude":"a"},"volumes":[` + bind(dot+"/mnt/a", false) + `]}`: "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt or named volume",
 		// A writable tool over all of mnt, which the child guard missed
 		// once its mount was no entry (review of 2026-10-23): a sync
