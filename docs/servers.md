@@ -226,7 +226,7 @@ setup's items) comes once, after the last of them:
   packages asking, devopsy among them when its setup or its door did);
 - memory Kexec HandOver keeps as CMA. Only movable pages may use it, so
   the kernel's allocations can run out while memory is free. `kho=off`
-  frees it, and devopsy-server's `setup.sh` adds it;
+  frees it ([`kexec-handover`](server-setup-howto.md#kexec-handover));
 - a clock out of sync;
 - a kernel with AppArmor and no `apparmor_parser`, on which no container
   starts;
@@ -277,7 +277,7 @@ kinds.
 A sync or a snapshot under way is reported as information. So are the
 volumes the release root could be on, while it holds no project and is
 not on one, and the memory kdump keeps, with how to free it
-(devopsy-server's `DEVOPSY_KDUMP=off`), since crash dumps are a choice.
+([`kdump`](server-setup-howto.md#kdump)), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check: on a server never
 set up by `--server-setup`, it always does. `--json` prints the facts and

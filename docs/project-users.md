@@ -344,39 +344,21 @@ with none yet, `--server-info` says it without a warning.
 `noaccess` shows that a process is there and whose it is, never its
 command line.
 
-A server set up earlier on Docker's classic image store can be moved to
-the containerd one, at a cost: no image and no container shows on the
-containerd store (volumes and networks stay), so every environment needs
-a release or a restart to make its containers again, a build-mode hold
-on an older image cannot come back, and the classic store keeps its disk
-until it is removed. A data root holding classic images stays on the
-classic store until its daemon is told otherwise.
+1. Set the server up for project users, as root: `devopsy
+   --server-setup-howto project-users` prints the steps (`sudo` and
+   `acl`, the door's directory mounted with `nosuid` and `nodev`, its
+   `door: space:` in the deploy user's config, Docker's containerd image
+   store and what moving to it costs), as [Server setup
+   how-to](server-setup-howto.md#project-users) shows them.
 
-1. Make the door's directory, as root, and mount it on itself with
-   `nosuid` and `nodev`, in `/etc/fstab`:
-
-   ```sh
-   install -d -o devopsy -m 755 /var/lib/devopsy-door
-   echo '/var/lib/devopsy-door /var/lib/devopsy-door none bind,nosuid,nodev 0 0' >>/etc/fstab
-   mount /var/lib/devopsy-door
-   ```
-
-2. Name it in the deploy user's config, `~/.config/devopsy/config.yaml`,
-   beside its [release settings](config.md#release-settings):
-
-   ```yaml
-   door:
-     space: /var/lib/devopsy-door
-   ```
-
-3. Add the project user and its keys, locally:
+2. Add the project user and its keys, locally:
 
    ```sh
    devopsy @devopsy@vm1: --project-users add shop
    devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
    ```
 
-4. Reboot the server after the first `add`. sshd takes devopsy's part of
+3. Reboot the server after the first `add`. sshd takes devopsy's part of
    its configuration at the next boot, and until then no project user
    logs in; `--project-users` says so.
 

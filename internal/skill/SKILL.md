@@ -267,10 +267,9 @@ what `config.yaml` sets.
   `--upgrade` applies the setup once per devopsy version, asking nothing,
   and `--server-info` warns of what is not devopsy's.
 - What devopsy checks on a server and does not set up (Docker, the tools,
-  `/proc`'s `hidepid`, the kernel's command line, the clock, XFS) is the
-  server admin's, as root: `devopsy --server-setup-howto` lists the topics,
-  and `devopsy --server-setup-howto <topic>` prints one's steps, the command
-  every such fix offers. It runs anywhere, needing no server or project.
+  `/proc`'s `hidepid`, what project users need, the kernel's command line)
+  is the server admin's, as root: `devopsy --server-setup-howto [<topic>]`
+  prints the topics, or one's steps, the command every such fix offers.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
 

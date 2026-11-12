@@ -198,6 +198,11 @@ func TestList(t *testing.T) {
 			t.Errorf("%s missing:\n%s", tp.Name, list)
 		}
 	}
+	for _, l := range strings.Split(list, "\n") {
+		if len(l) > 80 {
+			t.Errorf("over 80 columns: %q", l)
+		}
+	}
 	if !strings.Contains(list, "devopsy "+Flag) {
 		t.Errorf("the list does not say how to print a topic:\n%s", list)
 	}
