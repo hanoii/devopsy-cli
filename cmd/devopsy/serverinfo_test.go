@@ -172,8 +172,8 @@ func TestServerInfoReport(t *testing.T) {
 		// Project users on a host that shows them every user's processes: what it exposes, and
 		// devopsy-server's setup.sh, which mounts /proc so, as the fix.
 		{"door processes shown", func(i *remote.ServerInfo) {
-			i.Door = &remote.DoorFacts{Space: "/space", Users: 2, HidePID: "off"}
-		}, "", "other users' processes are not hidden from project users (/proc mounted without hidepid=invisible)\na project user reads every process's command line, the deploy user's and other projects' included|/proc mounted with hidepid=invisible, its gid= a group the deploy user is in: devopsy-server's setup.sh mounts it so, rerun as root"},
+			i.Door, i.HidePID = &remote.DoorFacts{Space: "/space", Users: 2}, "off"
+		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|rerun devopsy-server's setup.sh as root: it mounts /proc with hidepid=invisible"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
@@ -318,18 +318,34 @@ func TestServerInfoReport(t *testing.T) {
 		t.Errorf("clock ahead: %+v\n%s", warnings, out)
 	}
 
-	// Other users' processes are said only where project users could read them: never with
-	// them hidden (a name, a number, noaccess's closed /proc/<pid>), with no project user, or
-	// unknown (an older server's facts, a project user's, which hold none).
-	for name, door := range map[string]remote.DoorFacts{
-		"hidden": {Users: 2, HidePID: "invisible"}, "hidden, by number": {Users: 2, HidePID: "2"}, "noaccess": {Users: 2, HidePID: "noaccess"},
-		"no project user": {HidePID: "off"}, "unknown": {Users: 2},
+	// Other users' processes are never said with them hidden (a name, a number, noaccess's
+	// closed /proc/<pid>) or unknown (an older server's facts, a project user's, which hold
+	// none); shown with no project user, with or without a door, they are a line with the
+	// way out and no warning.
+	for name, c := range map[string]struct {
+		hidepid string
+		door    *remote.DoorFacts
+		note    bool
+	}{
+		"hidden":            {"invisible", &remote.DoorFacts{Users: 2}, false},
+		"hidden, by number": {"2", &remote.DoorFacts{Users: 2}, false},
+		"noaccess":          {"noaccess", &remote.DoorFacts{Users: 2}, false},
+		"unknown":           {"", &remote.DoorFacts{Users: 2}, false},
+		"no project user":   {"off", &remote.DoorFacts{}, true},
+		"no door":           {"off", nil, true},
 	} {
 		info := healthy()
-		door.Space = "/space"
-		info.Door = &door
-		if out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || strings.Contains(out, "processes") {
-			t.Errorf("door, %s: %+v\n%s", name, warnings, out)
+		info.HidePID = c.hidepid
+		if c.door != nil {
+			c.door.Space = "/space"
+			info.Door = c.door
+		}
+		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+		noted := len(warnings) == 1 && warnings[0].note && len(warnings[0].fixes) == 1 && warnings[0].fixes[0].Hint &&
+			warnings[0].msg == "/proc shows every user's processes (no hidepid), which matters once the server has project users" &&
+			warnings[0].fixes[0].Text == "rerun devopsy-server's setup.sh as root: it mounts /proc with hidepid=invisible"
+		if c.note != noted || (!c.note && (len(warnings) != 0 || strings.Contains(out, "processes"))) {
+			t.Errorf("processes, %s: %+v\n%s", name, warnings, out)
 		}
 	}
 

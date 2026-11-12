@@ -329,7 +329,8 @@ processes](https://github.com/hanoii/devopsy-server/blob/main/docs/things-to-kno
 says, the deploy user in the group that sees them all. devopsy only
 checks it: `add`, and `--server-info` on a server with project users,
 warn when `/proc` has no `hidepid` of `invisible`, `ptraceable` or
-`noaccess` (`2`, `4` or `1` on an older kernel), and go on.
+`noaccess` (`2`, `4` or `1` on an older kernel), and go on; on a server
+with none yet, `--server-info` says it without a warning.
 `noaccess` shows that a process is there and whose it is, never its
 command line.
 

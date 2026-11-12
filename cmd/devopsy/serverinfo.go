@@ -56,18 +56,14 @@ var serverTools = []struct {
 }
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
-// waits for a reboot to take it, the host's listeners from read, the root read of the
-// firewall ("" when none was made), and /proc's hidepid from the mounts file at mounts ("" reads
-// none).
-func doorFacts(read, mounts string) *remote.DoorFacts {
+// waits for a reboot to take it, and the host's listeners from read, the root read of the
+// firewall ("" when none was made).
+func doorFacts(read string) *remote.DoorFacts {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return nil
 	}
 	f := &remote.DoorFacts{Space: d.Space, Users: len(d.Users)}
-	if mounts != "" {
-		f.HidePID = readHidePID(mounts)
-	}
 	if err := spaceGuarded(d.Space); err != nil {
 		f.Unguarded = err.Error()
 	}
@@ -137,13 +133,23 @@ func processesHidden(hidepid string) bool {
 // user's processes; "" is unknown (an older server's facts, no /proc mount), never said.
 func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
 
+// processesFix is the way out of a /proc that shows every user's processes: devopsy checks it
+// and never mounts /proc, the host's hardening being devopsy-server's setup.sh's.
+const processesFix = "rerun devopsy-server's setup.sh as root: it mounts /proc with hidepid=invisible"
+
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
-// that shows project users every other user's processes (processesShown): devopsy checks it and
-// never mounts /proc, the host's hardening being devopsy-server's setup.sh's.
+// that shows project users every other user's processes (processesShown).
 func processesShownWarning() (msg, detail string, fix report.Remedy) {
-	return "other users' processes are not hidden from project users (/proc mounted without hidepid=invisible)",
-		"a project user reads every process's command line, the deploy user's and other projects' included, and a command line can hold a secret",
-		report.Fix("/proc mounted with hidepid=invisible, its gid= a group the deploy user is in: devopsy-server's setup.sh mounts it so, rerun as root")
+	return "/proc shows project users every other user's processes (no hidepid)",
+		"their command lines can hold a secret",
+		report.Fix(processesFix)
+}
+
+// processesShownNote is the same on a server with no project user, where it only matters once
+// one is added.
+func processesShownNote() (msg string, hint report.Remedy) {
+	return "/proc shows every user's processes (no hidepid), which matters once the server has project users",
+		report.Hint(processesFix)
 }
 
 // warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
@@ -202,12 +208,12 @@ func serverFacts() (remote.ServerInfo, error) {
 	// an install's even where the setup cannot be read; a project user's, whose server's setup
 	// is its admin's and whose docker is the door, none of it nor of Docker but what the door
 	// tells (projectUserFacts): the door would refuse Docker's reads and log each.
-	read, mounts := "", ""
+	read := ""
 	if asProjectUser() {
 		info.Docker.Door = true
 		projectUserFacts(&info, askDoorFirewall)
 	} else {
-		mounts = h.path(procMounts)
+		info.HidePID = readHidePID(h.path(procMounts))
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
 		if rd, err := readSetup(h, hd); err == nil {
@@ -217,7 +223,7 @@ func serverFacts() (remote.ServerInfo, error) {
 			read = readChains(&setup.FirewallFact{Loaded: kind}, dockerHere(hd.facts), false)
 		}
 	}
-	info.Door = doorFacts(read, mounts)
+	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -999,6 +1005,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		warn(msg, fixes...)
 	}
 
+	// A warning only where a project user is there to read them: without one every login is
+	// the deploy user's or an admin's, and it is a line to know before adding one.
+	if processesShown(info.HidePID) {
+		if info.Door != nil && info.Door.Users > 0 {
+			msg, detail, fix := processesShownWarning()
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: []report.Remedy{fix}})
+		} else {
+			note(processesShownNote())
+		}
+	}
+
 	if dr := info.Door; dr != nil {
 		row("door", fmt.Sprintf("%s, %d project users", dr.Space, dr.Users))
 		if dr.Unguarded != "" {
@@ -1016,12 +1033,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),
 				Remedies: []report.Remedy{report.Fix("make each listen on 127.0.0.1, which no container reaches")}})
-		}
-		// Only where a project user is there to read them: without one every login is the
-		// deploy user's or an admin's.
-		if dr.Users > 0 && processesShown(dr.HidePID) {
-			msg, detail, fix := processesShownWarning()
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: []report.Remedy{fix}})
 		}
 	}
 

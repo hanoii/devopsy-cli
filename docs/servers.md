@@ -243,7 +243,8 @@ setup's items) comes once, after the last of them:
   user does not build ([project users](project-users.md));
 - on a server with project users, a `/proc` that shows them every other
   user's processes, whose command lines can hold a secret: devopsy-server's
-  `setup.sh` mounts it with `hidepid=invisible`;
+  `setup.sh` mounts it with `hidepid=invisible` (with no project user it
+  is a line, not a warning);
 - a role held twice;
 - an environment with a failed first release, an activation cut off past
   its switch, a sync, an import or a restore that did not complete, an

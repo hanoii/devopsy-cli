@@ -60,8 +60,11 @@ type ServerInfo struct {
 	// pass on to the server's admin.
 	ForAdmin []string `json:"for_admin,omitempty"`
 	// Door is the server's door, nil on a server with none (ServerDoor).
-	Door  *DoorFacts `json:"door,omitempty"`
-	Disks []Disk     `json:"disks"`
+	Door *DoorFacts `json:"door,omitempty"`
+	// HidePID is /proc's hidepid as the kernel prints it in /proc/mounts, "off" for none, ""
+	// when unknown (no /proc mount there, a project user's facts).
+	HidePID string `json:"hidepid,omitempty"`
+	Disks   []Disk `json:"disks"`
 	// Missing are the tools a server needs that are not there.
 	Missing []string `json:"missing,omitempty"`
 	// Containers are every container on the host, any state.
@@ -118,9 +121,6 @@ type DoorFacts struct {
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
 	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`
-	// HidePID is /proc's hidepid as the kernel prints it in /proc/mounts, "off" for none, ""
-	// when unknown (no /proc mount there, a devopsy older than it).
-	HidePID string `json:"hidepid,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.
