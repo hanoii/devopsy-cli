@@ -32,7 +32,8 @@ func TestDockerRepositoryStepBesideAnOlderList(t *testing.T) {
 	if err := os.WriteFile(osRelease, []byte("ID=debian\nVERSION_CODENAME=trixie\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	path := fakes(t, nil, "apt-get", "curl")
+	// apt, as it refuses two sources of Docker's: every apt-get of the step finds one at most.
+	path := fakes(t, map[string]string{"apt-get": "if [ \"$(grep -ls download.docker.com " + lists + "/* | wc -l)\" -gt 1 ]; then echo 'E: Conflicting values set for option Signed-By' >&2; exit 100; fi\n"}, "apt-get", "curl")
 	out := pasted(t, stepWith(t, Docker, "docker.sources"), path, "/etc/apt", apt, "/etc/os-release", osRelease)
 	entries, err := os.ReadDir(lists)
 	if err != nil {
@@ -48,7 +49,7 @@ func TestDockerRepositoryStepBesideAnOlderList(t *testing.T) {
 			docker = append(docker, e.Name())
 		}
 	}
-	if len(docker) != 1 {
+	if len(docker) != 1 || strings.Contains(out, "E: Conflicting") {
 		t.Errorf("apt has %d sources of Docker's, %v, which apt refuses when their keys differ:\n%s", len(docker), docker, out)
 	}
 }

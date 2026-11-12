@@ -30,9 +30,11 @@ answer, lacks its compose or buildx plugin, or is not the host's service.
 As root, on Debian or Ubuntu with systemd:
 
 1. Add Docker's apt repository, as Docker's install guide says
-   (https://docs.docker.com/engine/install/): the distributions' own
-   packages lag behind it.
+   (https://docs.docker.com/engine/install/), since the distributions' own
+   packages lag behind it. A list of it already there is removed first: apt
+   refuses every source while two lists of it name different keys.
 
+      for f in /etc/apt/sources.list.d/*; do if grep -qs download.docker.com "$f"; then rm -f "$f"; fi; done
       apt-get update
       apt-get install -y ca-certificates curl
       . /etc/os-release
@@ -44,7 +46,9 @@ As root, on Debian or Ubuntu with systemd:
 
 2. Install Docker with its compose and buildx plugins, and apparmor, whose
    parser Docker needs to start containers on a kernel with AppArmor; then
-   start Docker now and at every boot.
+   start Docker now and at every boot. Where the distribution's own
+   docker.io package is installed, apt replaces it with Docker's, which
+   stops every container while it does.
 
       apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin apparmor
       systemctl enable --now docker

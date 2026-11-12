@@ -20,7 +20,8 @@ var Topics = []Topic{
 		Why: "devopsy runs everything through the host's docker.service, as the deploy user, and never installs it: " +
 			"--server-setup refuses a Docker that does not answer, lacks its compose or buildx plugin, or is not the host's service.",
 		Steps: []Step{
-			{"Add Docker's apt repository, as Docker's install guide says (https://docs.docker.com/engine/install/): the distributions' own packages lag behind it.", []string{
+			{"Add Docker's apt repository, as Docker's install guide says (https://docs.docker.com/engine/install/), since the distributions' own packages lag behind it. A list of it already there is removed first: apt refuses every source while two lists of it name different keys.", []string{
+				`for f in /etc/apt/sources.list.d/*; do if grep -qs download.docker.com "$f"; then rm -f "$f"; fi; done`,
 				`apt-get update`,
 				`apt-get install -y ca-certificates curl`,
 				`. /etc/os-release`,
@@ -30,7 +31,8 @@ var Topics = []Topic{
 				`printf 'Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$ID" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.sources`,
 				`apt-get update`,
 			}},
-			{"Install Docker with its compose and buildx plugins, and apparmor, whose parser Docker needs to start containers on a kernel with AppArmor; then start Docker now and at every boot.", []string{
+			{"Install Docker with its compose and buildx plugins, and apparmor, whose parser Docker needs to start containers on a kernel with AppArmor; then start Docker now and at every boot. " +
+				"Where the distribution's own docker.io package is installed, apt replaces it with Docker's, which stops every container while it does.", []string{
 				`apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin apparmor`,
 				`systemctl enable --now docker`,
 			}},
