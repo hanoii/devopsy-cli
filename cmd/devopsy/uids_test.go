@@ -9,9 +9,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
@@ -162,5 +164,46 @@ func TestDoorFreeRefuses(t *testing.T) {
 	}
 	if code := side.free("env:shop:prod"); code != 2 {
 		t.Errorf("freed with its data there (%d)", code)
+	}
+}
+
+// --server-info lists every uid claim with its owner, and warns of one whose environment is
+// gone (removed without --destroy) or whose project has no environment claim left, and of an
+// entry that is no claim, each with its removal by hand.
+func TestServerInfoListsUIDClaims(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	s := claimsStore(root)
+	for _, o := range []uids.Owner{{Project: "shop", Env: "prod"}, {Project: "blog", Env: "prod"}} {
+		if _, _, err := s.LookupPair(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("x", filepath.Join(s.Dir, "stray")); err != nil {
+		t.Fatal(err)
+	}
+	info := remote.ServerInfo{Version: "0.53.0", Root: root, Environments: []remote.Environment{{Path: "shop/prod", Status: "none\t\n"}}}
+	info.UIDsDir, info.UIDs = uidFacts(root)
+	out, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
+	for _, want := range []string{"env:shop:prod", "project:shop", "env:blog:prod", "project:blog", "stray  no claim"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no uids row for %s:\n%s", want, out)
+		}
+	}
+	stale := map[string]bool{}
+	for _, w := range warnings {
+		for _, owner := range []string{"env:shop:prod", "env:blog:prod", "project:blog", "project:shop", "stray"} {
+			if strings.HasPrefix(w.msg, owner+"'s uid claim is left") || strings.HasPrefix(w.msg, owner+" in ") {
+				stale[owner] = true
+				if len(w.fixes) != 1 || len(w.fixes[0].Cmds) != 1 || !strings.HasPrefix(w.fixes[0].Cmds[0], "rm ") {
+					t.Errorf("%s: no removal offered: %+v", owner, w.fixes)
+				}
+			}
+		}
+	}
+	for owner, want := range map[string]bool{"env:blog:prod": true, "stray": true, "env:shop:prod": false, "project:shop": false, "project:blog": false} {
+		if stale[owner] != want {
+			t.Errorf("%s warned %v, want %v", owner, stale[owner], want)
+		}
 	}
 }

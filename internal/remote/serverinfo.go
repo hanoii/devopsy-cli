@@ -67,6 +67,10 @@ type ServerInfo struct {
 	// Containers are every container on the host, any state.
 	Containers   []HostContainer `json:"containers"`
 	Environments []Environment   `json:"environments"`
+	// UIDs are the claims of the uids containers run as (internal/uids), under the release
+	// root's claims directory UIDsDir.
+	UIDsDir string     `json:"uids_dir,omitempty"`
+	UIDs    []UIDClaim `json:"uids,omitempty"`
 }
 
 // DockerFacts are the host's Docker, from docker info, docker compose
@@ -158,4 +162,13 @@ type Environment struct {
 // prelude's checks: a server without it refuses, naming the upgrade.
 func ServerInfoScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + devopsyCall("", []string{ServerFactsFlag}, true) + "\n"
+}
+
+// UIDClaim is one entry of the uid claims: its owner (env:<project>[:<instance>]:<environment>,
+// project:<project>[:<instance>]) and uid, or the name of an entry that is no claim and why.
+type UIDClaim struct {
+	Owner string `json:"owner,omitempty"`
+	UID   uint32 `json:"uid,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Bad   string `json:"bad,omitempty"`
 }

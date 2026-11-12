@@ -231,6 +231,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	info.Environments = environments(info.Root, doorTrees(info.Root), func(who, tree string) []remote.Environment {
 		return treeEnvironments(who, tree, doorTreeWait)
 	}, ownedByMe)
+	info.UIDsDir, info.UIDs = uidFacts(info.Root)
 	return info, nil
 }
 
@@ -1242,6 +1243,25 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				lines = append(lines, env.Path+": "+p)
 			}
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env)}})
+		}
+	}
+
+	// The uids containers run as: each claim, and those whose environment is gone.
+	if len(info.UIDs) == 0 {
+		row("uids", "none")
+	}
+	for _, c := range info.UIDs {
+		rm := func() report.Remedy {
+			return report.Fix("remove it by hand, as the deploy user, once nothing of it is left on the server:", "rm "+remote.QuoteWord(filepath.Join(info.UIDsDir, c.Name)))
+		}
+		if c.Bad != "" {
+			row("uids", c.Name+"  no claim")
+			warn(c.Name+" in "+info.UIDsDir+" is no claim: "+c.Bad, rm())
+			continue
+		}
+		row("uids", strconv.FormatUint(uint64(c.UID), 10)+"  "+c.Owner)
+		if why := staleUID(c, info.UIDs, info.Environments); why != "" {
+			warn(c.Owner+"'s uid claim is left: "+why, rm())
 		}
 	}
 	return es

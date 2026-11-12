@@ -202,7 +202,9 @@ in `--shell-host`; anywhere else it refuses. It reports:
   makes reflinks;
 - the roles projects hold and what they export;
 - every environment under the release root, with its current release,
-  its containers and its state.
+  its containers and its state;
+- the uids its environments' containers run as, each claim with its
+  owner ([uids](#uids)).
 
 What needs attention is a warning under the line it is about, with its
 fix; a fix that serves several lines in a row (`--server-setup` for the
@@ -248,7 +250,10 @@ setup's items) comes once, after the last of them:
   import or a restore under way (what it stopped stays down until it
   completes), services an operation left stopped, or containers
   restarting, paused, dead, unhealthy, or exited on an error of their
-  own (a stop's codes excepted), each as `--status` says it.
+  own (a stop's codes excepted), each as `--status` says it;
+- a uid claim whose environment is gone from the server (removed by
+  hand, never by `--destroy`), or an entry of the claims directory that
+  is no claim, each with its removal by hand.
 
 `--json` prints the facts and the same lines for scripts and agents, each
 warning with its own fix. Its
@@ -266,6 +271,30 @@ It exits 3 when it warned, so CI can run it as a check: on a server never
 set up by `--server-setup`, it always does. `--json` prints the facts and
 the same lines as JSON on stdout, each with its fixes and hints
 (`remedies`), for scripts and agents.
+
+## uids
+
+Every environment's containers run as a uid of its own, and its
+project's (or instance's) as another, which the server's devopsy gives
+its compose files as `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID`
+([Variables on a server](config.md#variables-on-a-server)): a process
+escaped from one container then reaches no other environment's through
+`/proc`. They are between 1,900,000,000 and 2,099,999,999, a range no
+system user, subordinate range or systemd container takes.
+
+Each is a claim in `<release root>/.devopsy-uids/`, a symlink named for
+its owner whose target is the uid (`env:shop:prod -> 2064483025`,
+`project:shop -> 1911770400`), made the first time devopsy loads the
+environment there and removed by its `--destroy`. A uid two owners would
+share goes to the next free one, and stays its owner's for as long as
+the claim does. Back the directory up with the release root: claimed
+anew elsewhere, a uid can differ.
+
+`--server-info` lists them, and warns of one left over. The deploy user
+may remove a claim by hand (`rm`), once nothing of that environment is
+left on the server: its next start would claim a new uid while its data
+keeps the old one. The names hold `:`, which rsync and scp read as a
+host: name a claim as `./env:shop:prod`, or copy the directory.
 
 ## The server's devopsy
 

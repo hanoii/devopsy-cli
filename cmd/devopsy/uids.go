@@ -333,3 +333,46 @@ func (s *doorSide) startLocks(name string) ([]*uids.Lock, error) {
 	s.claims = claims
 	return locks, nil
 }
+
+// uidFacts are the claims under root, for --server-info: the directory, and each entry.
+func uidFacts(root string) (string, []remote.UIDClaim) {
+	s := claimsStore(root)
+	claims, err := s.List()
+	if err != nil {
+		return s.Dir, []remote.UIDClaim{{Name: s.Dir, Bad: err.Error()}}
+	}
+	var out []remote.UIDClaim
+	for _, c := range claims {
+		if c.Bad != "" {
+			out = append(out, remote.UIDClaim{Name: c.Name, Bad: c.Bad})
+			continue
+		}
+		out = append(out, remote.UIDClaim{Owner: c.Owner.String(), UID: c.UID, Name: c.Name})
+	}
+	return s.Dir, out
+}
+
+// staleUID says why claim c is left over, or nothing: an environment's whose environment is
+// on the server no more (removed without --destroy), a project's with no environment claim of
+// it left.
+func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment) string {
+	o, err := uids.ParseOwner(c.Owner)
+	if err != nil {
+		return err.Error()
+	}
+	if o.Env != "" {
+		path := filepath.ToSlash(filepath.Join(o.Project, o.Instance, o.Env))
+		for _, e := range envs {
+			if e.Path == path {
+				return ""
+			}
+		}
+		return "no environment " + path + " on the server"
+	}
+	for _, other := range all {
+		if e, err := uids.ParseOwner(other.Owner); err == nil && e.Env != "" && e.ProjectOf() == o {
+			return ""
+		}
+	}
+	return "no environment of it holds a claim"
+}
