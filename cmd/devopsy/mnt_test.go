@@ -81,6 +81,32 @@ func TestMntOwnersRelease(t *testing.T) {
 			t.Errorf("mnt/%s: %v %v, want a directory %v", e, fi, err, mode)
 		}
 	}
+	// What changes owner stops first, after the switch and before the
+	// chown, with what depends on it, so nothing runs as the old owner on
+	// files given away under it (MariaDB's shutdown could not delete its
+	// tc.log, and refused the next start); the run step starts it again.
+	// The entries here were made by the test's user, the owner 10001's.
+	stopping, stop := strings.Index(out, "devopsy: stopping app (its data changes owner)\n"), strings.Index(docker, " stop app\n")
+	if stopping < switched || stopping > giving || stop < 0 || stop > strings.Index(docker, "run --rm --name devopsy-owners-shop-prod-") {
+		t.Errorf("a release whose entries change owner, stopping at %d, the stop at %d:\n%s\n%s", stopping, stop, out, docker)
+	}
+	me := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	// db's entry there already, as Docker makes a bind source; one missing
+	// stops nothing, since no container mounts it.
+	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "db"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER="+me+" FAKE_APP_MOUNT2=/cache FAKE_DB_OWNER=10001:10001\n", 0o644)
+	out, code = s.run(nil, "@prod", "--release")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: stopping db (its data changes owner), app (depends on db)\n") || !strings.Contains(docker, " stop db app\n") {
+		t.Errorf("a release whose db entry changes owner, its app depending on it (%d):\n%s\n%s", code, out, docker)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER="+me+" FAKE_APP_MOUNT2=/cache FAKE_DB_OWNER="+me+"\n", 0o644)
+	out, code = s.run(nil, "@prod", "--release")
+	if docker, _ := s.logs(); code != 0 || strings.Contains(out, "stopping") || strings.Contains(docker, " stop ") || !strings.Contains(out, "devopsy: giving mnt/cache to "+me) {
+		t.Errorf("a release whose entries are their owners' already stops something (%d):\n%s\n%s", code, out, docker)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache\n", 0o644)
 	// Failing, it is a failed run step: nothing current on a first one.
 	write(t, s.log+".shop-solo", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	if out, code := s.run([]string{"FAIL_OWNERS=3"}, "@solo", "--release"); code == 0 || !strings.Contains(out, "giving the entries of mnt and the named volumes to their owners failed (1)") || strings.Contains(out, "deploy in shop-solo") || s.current("solo") != "" {
@@ -336,6 +362,14 @@ func TestMntOwnersVolume(t *testing.T) {
 			t.Errorf("an owned volume's root, again %v (%d):\n%s\n%s", again, code, out, docker)
 		}
 	}
+	// A root another owner has stops what mounts it first, with its
+	// dependents, before the chown; one that is its owner's stops nothing
+	// (above).
+	out, code = s.run(append(slices.Clone(nocopy), "FAKE_VOLUME_ROOTS=dbdata 1:1"), "@solo", "--release")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: stopping db (its data changes owner), app (depends on db)\n") || strings.Index(docker, " stop db app\n") > strings.Index(docker, own) ||
+		!strings.Contains(docker, "-roots --label devopsy.env=shop-solo --label devopsy.task=owners --network none -v shop-solo_dbdata:/vol/dbdata:ro devopsy.internal/util:5 sh -c ") {
+		t.Errorf("an owned volume whose root changes owner (%d):\n%s\n%s", code, out, docker)
+	}
 	// A driver refusing the chown (a share): the step fails, a failed run step.
 	out, code = s.run(append(slices.Clone(nocopy), "FAIL_OWNERS=1"), "@solo", "--release")
 	if code == 0 || !strings.Contains(out, "devopsy: error: giving the volume dbdata's root to 2000000123:2000000123 (devopsy.mnt.owner): exit status 1") || !strings.Contains(out, "a share's may refuse one") || !strings.Contains(out, "owners failed (1), current is back to") {
@@ -453,6 +487,12 @@ func TestMntOwnersLocal(t *testing.T) {
 	}
 	if runtime.GOOS == "darwin" {
 		return
+	}
+	// The entry there and another's (the test's user, the label 10001):
+	// the running app stops before it is given away, as in a release.
+	out, code = s.run(owned, "up", "-d")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: stopping app (its data changes owner)\n") || strings.Index(docker, " stop app\n") > strings.Index(docker, "run --rm --name devopsy-owners-") {
+		t.Errorf("a local up whose entry changes owner (%d):\n%s\n%s", code, out, docker)
 	}
 	// The entry there and its owner's (the test's own user): nothing to do.
 	uid, gid := os.Getuid(), os.Getgid()

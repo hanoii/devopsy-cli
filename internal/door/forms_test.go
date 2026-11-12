@@ -45,6 +45,14 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"a walking key":      {"sh\x00db", "sh\x00../x"},
 			"another script":     {"volume owner script", "own script"},
 		}},
+		{"volume roots", []string{"run", "-v", "shop-prod_db:/vol/db:ro", "-v", "shop-prod_files:/vol/files:ro", "util:1", "sh", "-c", "volume roots script", "sh", "db", "files"}, map[string][2]string{
+			"written":          {"shop-prod_db:/vol/db:ro", "shop-prod_db:/vol/db"},
+			"another's volume": {"shop-prod_db:/vol/db:ro", "other-prod_db:/vol/db:ro"},
+			"an entry":         {"shop-prod_db:/vol/db:ro", entry + ":/vol/db:ro"},
+			"elsewhere":        {"shop-prod_db:/vol/db:ro", "shop-prod_db:/mnt/db:ro"},
+			"a walking key":    {"sh\x00db", "sh\x00../x"},
+			"another script":   {"volume roots script", "volume owner script"},
+		}},
 		{"export", []string{"run", "-v", entry + ":/x/data:ro", "util:1", "sh", "-c", "export script", "sh", "data"}, map[string][2]string{
 			"written":           {entry + ":/x/data:ro", entry + ":/x/data"},
 			"the whole mnt":     {entry + ":/x/data:ro", mnt + ":/x/data:ro"},

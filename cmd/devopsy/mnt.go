@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -216,21 +217,38 @@ const ownVolumeRoot = `chown "$2" "/vol/$1"`
 // Every owners' step does it again: cheap, and it heals a volume Docker
 // made first. A volume whose driver refuses the chown (a share) fails it.
 func ownVolumes(ctx context.Context, cwd, project string, owned map[string]cli.OwnedVolume, services []cli.SyncService, c container) error {
+	if err := readyVolumes(ctx, cwd, project, owned, services); err != nil {
+		return err
+	}
+	return giveVolumes(ctx, owned, c)
+}
+
+// readyVolumes makes each owned volume Docker lacks (ensureVolumes) and
+// readies the util image that gives their roots away.
+func readyVolumes(ctx context.Context, cwd, project string, owned map[string]cli.OwnedVolume, services []cli.SyncService) error {
 	if len(owned) == 0 {
 		return nil
 	}
-	keys := slices.Sorted(maps.Keys(owned))
 	var vols []cli.Volume
-	var parts []string
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(owned)) {
 		vols = append(vols, owned[k].Volume)
-		parts = append(parts, "the volume "+k+"'s root to "+owned[k].Owner)
 	}
 	if err := ensureVolumes(ctx, cwd, project, vols, services); err != nil {
 		return err
 	}
-	if err := ensureUtilImage(ctx); err != nil {
-		return err
+	return ensureUtilImage(ctx)
+}
+
+// giveVolumes gives the roots of owned volumes readyVolumes made to their
+// owners, as ownVolumes says.
+func giveVolumes(ctx context.Context, owned map[string]cli.OwnedVolume, c container) error {
+	if len(owned) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(owned))
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, "the volume "+k+"'s root to "+owned[k].Owner)
 	}
 	report.Info("giving " + strings.Join(parts, ", "))
 	for i, k := range keys {
@@ -293,15 +311,124 @@ func runMntOwners(cwd string, args []string) int {
 		err = removeLeft(composeName(cwd), remote.TaskOwners)
 	}
 	if err == nil {
-		err = ownMnt(context.Background(), owned.mnt, owned.entries, ownersContainer(cwd))
-	}
-	if err == nil {
-		err = ownVolumes(context.Background(), cwd, composeName(cwd), owned.volumes, owned.services, ownersContainer(cwd))
+		err = ownStarted(context.Background(), cwd, owned, owned.entries)
 	}
 	if err != nil {
 		return failErr(err)
 	}
 	return 0
+}
+
+// ownStarted gives entries (of owned.entries, entry to owner) and every
+// owned volume's root to their owners where the services may run: a
+// release's owners' step after its switch, a local start's before
+// compose. What changes owner stops first (stopForNewOwners).
+func ownStarted(ctx context.Context, cwd string, owned projectOwned, entries map[string]string) error {
+	c := ownersContainer(cwd)
+	if err := readyVolumes(ctx, cwd, composeName(cwd), owned.volumes, owned.services); err != nil {
+		return err
+	}
+	if err := stopForNewOwners(ctx, cwd, owned, entries, c); err != nil {
+		return err
+	}
+	if err := ownMnt(ctx, owned.mnt, entries, c); err != nil {
+		return err
+	}
+	return giveVolumes(ctx, owned.volumes, c)
+}
+
+// statOwner is a file's owner as the host has it, <uid>:<gid>.
+func statOwner(fi fs.FileInfo) string {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return fmt.Sprintf("%d:%d", st.Uid, st.Gid)
+	}
+	return ""
+}
+
+// volumeRoots prints each volume's key and its root's owner, each volume
+// mounted read-only at /vol/<key>, where giveVolumes mounts it.
+const volumeRoots = `for k; do printf '%s %s\n' "$k" "$(stat -c %u:%g "/vol/$k")"; done`
+
+// readVolumeRoots reads the owners of owned volumes' roots, key to
+// <uid>:<gid>, in one util container, c's named c.name-roots, without a
+// network.
+func readVolumeRoots(ctx context.Context, owned map[string]cli.OwnedVolume, c container) (map[string]string, error) {
+	keys := slices.Sorted(maps.Keys(owned))
+	args := []string{"--network", "none"}
+	for _, k := range keys {
+		args = append(args, "-v", owned[k].Name+":/vol/"+k+":ro")
+	}
+	c = c.with("-roots")
+	if err := removeNamed(c.name); err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := dockerRunIO(ctx, c, nil, &out, append(append(args, remote.UtilImage, "sh", "-c", volumeRoots, "sh"), keys...)...); err != nil {
+		return nil, fmt.Errorf("reading the owners of the named volumes' roots: %w", err)
+	}
+	roots := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if k, o, ok := strings.Cut(line, " "); ok {
+			roots[k] = o
+		}
+	}
+	return roots, nil
+}
+
+// stopForNewOwners stops the running services that mount what is about
+// to change owner, with their dependents (cli.WithDependents), in one
+// docker compose stop, saying what and why: entries (entry to owner)
+// whose top another owner has, and owned volumes whose root another has
+// (readVolumeRoots). A service
+// left running as the old owner loses its own files under it: MariaDB's
+// shutdown marks its tc.log and cannot delete it, and refuses the next
+// start. The step that starts them comes after (the run step, the local
+// command). An entry or a root that is its owner's already stops nothing.
+func stopForNewOwners(ctx context.Context, cwd string, owned projectOwned, entries map[string]string, c container) error {
+	var changing []string
+	for _, e := range slices.Sorted(maps.Keys(entries)) {
+		if fi, err := os.Lstat(filepath.Join(owned.mnt, e)); err == nil && fi.Mode()&os.ModeSymlink == 0 && statOwner(fi) != entries[e] {
+			changing = append(changing, e)
+		}
+	}
+	var volumes []string
+	if len(owned.volumes) > 0 {
+		roots, err := readVolumeRoots(ctx, owned.volumes, c)
+		if err != nil {
+			return err
+		}
+		for _, k := range slices.Sorted(maps.Keys(roots)) {
+			if v, ok := owned.volumes[k]; ok && roots[k] != v.Owner {
+				volumes = append(volumes, k)
+			}
+		}
+	}
+	if len(changing) == 0 && len(volumes) == 0 {
+		return nil
+	}
+	var direct []string
+	for _, s := range owned.services {
+		mounts := slices.ContainsFunc(s.Binds, func(b string) bool {
+			return slices.ContainsFunc(changing, func(e string) bool { return b == e || strings.HasPrefix(b, e+"/") })
+		}) || slices.ContainsFunc(s.VolumeMounts, func(m cli.VolumeMount) bool { return slices.Contains(volumes, m.Key) })
+		if mounts {
+			direct = append(direct, s.Name)
+		}
+	}
+	set := cli.WithDependents(owned.services, direct, "its data changes owner")
+	up, err := upServices(cwd)
+	if err != nil {
+		return err
+	}
+	stop := intersect(cli.StoppedNames(set), up)
+	if len(stop) == 0 {
+		return nil
+	}
+	report.Info(cli.StoppingLine(set, stop))
+	if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
+		return fmt.Errorf("docker compose stop: %w", err)
+	}
+	return nil
 }
 
 // checkStartBinds refuses to start anything of the release at cwd while a
@@ -536,13 +663,10 @@ func localMnt(cwd string) error {
 		case err != nil:
 			wrong[e] = o
 		default:
-			if st, ok := fi.Sys().(*syscall.Stat_t); ok && fmt.Sprintf("%d:%d", st.Uid, st.Gid) != o {
+			if statOwner(fi) != o {
 				wrong[e] = o
 			}
 		}
 	}
-	if err := ownMnt(context.Background(), owned.mnt, wrong, ownersContainer(cwd)); err != nil {
-		return err
-	}
-	return ownVolumes(context.Background(), cwd, composeName(cwd), owned.volumes, owned.services, ownersContainer(cwd))
+	return ownStarted(context.Background(), cwd, owned, wrong)
 }

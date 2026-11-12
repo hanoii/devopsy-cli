@@ -87,7 +87,7 @@ func (h *fakeHost) WorkDir() (string, error) {
 }
 
 var testKnown = Known{
-	Image: "util:1", Dockerfile: "FROM alpine\n", Owners: "own script", VolumeOwner: "volume owner script", Export: "export script", Import: "import script",
+	Image: "util:1", Dockerfile: "FROM alpine\n", Owners: "own script", VolumeOwner: "volume owner script", VolumeRoots: "volume roots script", Export: "export script", Import: "import script",
 	ReflinkProbe: "probe", SnapshotTar: "tar script", Space: "space script", Share: "share script",
 	Daemon: "daemon script", Restore: "restore script", Receive: "receive script", RsyncCopy: []string{"rsync", "-a"}, Clone: CloneScriptForm,
 }

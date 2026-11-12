@@ -226,7 +226,7 @@ the entries it writes:
 ```yaml
 services:
   app:
-    user: "${APP_UID:-10001}:${APP_UID:-10001}"
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     volumes: [./mnt/storage:/app/storage, ./mnt/logs:/app/logs]
     labels:
       devopsy.mnt.owner: user
@@ -238,7 +238,10 @@ services:
   image) is an error wherever the labels are read, so the app and its
   data can never drift apart.
 - `devopsy.mnt.owner=<uid>:<gid>` names the owner itself, for an image
-  that drops privileges on its own and has no `user:`.
+  that drops privileges on its own and has no `user:`. That uid is the
+  same in every environment, so the service shares it with every other
+  environment's: a `user:` of `DEVOPSY_UID` keeps environments apart
+  where the image allows it.
 
 Either way the owner is given in numbers, from 0 to 4294967294, since
 names cannot be resolved from the host; `010001` is `10001`.
@@ -287,6 +290,17 @@ container that mounts that entry alone, so a directory the app swaps for
 a link meanwhile cannot lead anywhere else. Only files, directories and
 links are given away. A device node, a FIFO or a socket keeps its owner,
 the host's root, since devopsy never makes one there.
+
+An owner that changes (another `user:`, another uid, a label changed)
+stops what runs on it first. Before devopsy gives away an entry whose
+directory has another owner, or an owned volume whose root has another,
+it stops the running services that mount it and those that depend on
+them, saying so (`stopping database (its data changes owner), app
+(depends on database)`), and the run step, or the local command, starts
+them again. A service left running as the old owner would lose its own
+files under it: MariaDB's shutdown, for one, cannot remove its `tc.log`
+then, and it refuses the next start. An entry or a root that is its
+owner's already stops nothing.
 
 Where owners are applied:
 
