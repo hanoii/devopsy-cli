@@ -14,7 +14,8 @@
 - The first session shows the differences and the refusals together, its question covering what goes and naming what a refusal stops (`refusedLine`); with nothing to apply it ends there, failing.
 - A failure of one step's apply goes on to the next independent one: the root run puts in order, `daemon.json` last, and a put that fails, by its check (exit 4) or its write (exit 5), ends that run with what came before put, the record keeping no part that did not go in and the answers asked again; the firewall's run follows.
 - A restart not confirmed in time leaves the firewall's step to go when Docker answers, and fails naming it when Docker does not; the run raising the reboot flag failing is said as its own error, Docker not answering only when `docker info` says so.
-- The mounts drop-in's put is followed by a daemon-reload whatever comes after it, and the apply says Docker waits for the mounts by whether a restart was queued.
+- The mounts drop-in's put is followed by a daemon-reload whatever comes after it, and with no restart queued the apply says Docker starts only once the root's filesystem is mounted, with a detail that nothing is asked of the operator.
+- What the apply leaves for later (the drop-in, a `daemon.json` for Docker's next restart) says what happened and whether the operator has anything to do (`restartLater`).
 - The check after the apply judges only what went; a refused step is no "what was applied did not hold".
 - devopsy checks and never installs: packages, Docker, the deploy user and devopsy itself are devopsy-server's setup.sh's.
 - systemd is assumed, not a distribution: the one convention used is the system's restart flag (`remote.RebootRequired`).

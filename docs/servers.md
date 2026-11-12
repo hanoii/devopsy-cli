@@ -110,7 +110,7 @@ What it keeps as devopsy wants it:
 | `daemon.json`'s `live-restore` | `true` |
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
 | Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it) |
-| Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on |
+| Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on; putting it asks for no restart |
 | Metadata firewall | packets from containers on Docker's bridges (`docker0`, `br-*`) to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through; with `door:` in the server's config, or the door's firewall loaded already, the door's chains too ([Project users](project-users.md#the-firewall)); by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`), by `--server-setup` and `--project-users add`, and with the door's at every start of Docker |
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
@@ -140,7 +140,8 @@ that start Docker again): not back by then is an error, `/run/reboot-required` r
 when Docker still answers, and said when it does not. Not restarted now,
 Docker takes the file at its next restart, and `/run/reboot-required` is
 raised for a reboot that takes it (devopsy-server's
-`DEVOPSY_AUTO_REBOOT_TIME`).
+`DEVOPSY_AUTO_REBOOT_TIME`): nothing is left to do, and a later
+`--server-setup` offers the restart again for sooner.
 
 The metadata firewall keeps an app in a container from reading its
 cloud instance's credentials, and its first load can cut an app that read

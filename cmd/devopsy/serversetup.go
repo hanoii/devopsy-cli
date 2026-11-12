@@ -76,7 +76,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 			return 1
 		}
 		if f.Pending {
-			report.Info("nothing to change: Docker takes daemon.json at its next restart")
+			report.Info("nothing to change: Docker takes daemon.json at its next restart", restartLater)
 		} else {
 			report.Info("nothing to change: " + t.Host + " is set up as devopsy wants it")
 		}

@@ -704,7 +704,8 @@ func applySetup(h setupHost, a setupApply) int {
 		report.Info("Docker is not restarted: it has nothing new to take from daemon.json")
 	case restart && a.idle && f.Running > 0:
 		restart = false
-		report.Info("Docker is not restarted, with containers running: it takes daemon.json at its next restart")
+		// What it then waits for is said by the run's end (restartLater).
+		report.Info("Docker is not restarted, with containers running")
 	}
 
 	// The release locks of the deploy user's environments, held until the restart is
@@ -873,10 +874,10 @@ func applySetup(h setupHost, a setupApply) int {
 		}
 	}
 	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
-		report.Info("Docker has yet to take daemon.json: it does at its next restart")
+		report.Info("Docker has yet to take daemon.json, which it takes at its next restart", restartLater)
 	}
 	if dropinText != "" && !queued {
-		report.Info("Docker waits for the release root's mounts from its next start on")
+		report.Info("Docker starts only once the release root's filesystem is mounted, from its next start on", "nothing to do now: it matters at a boot, and needs no restart")
 	}
 	if line := refusedLine(f); line != "" {
 		report.Say(sayLevel(a.upgrade), line, nil)
@@ -1000,6 +1001,10 @@ func hasLine(out, word string) bool {
 	return false
 }
 
+// restartLater is the detail under a daemon.json left for Docker's next restart: what takes it,
+// and that the operator need do nothing.
+const restartLater = "nothing to do now: the next reboot takes it; run --server-setup again to restart Docker sooner"
+
 // sayRootLines says what the root run changed, line by line (remote.SetupRootScript's).
 func sayRootLines(out string, parts []string, root string) {
 	who := "the deploy user"
@@ -1024,7 +1029,7 @@ func sayRootLines(out string, parts []string, root string) {
 		case remote.SetupQueued:
 			report.Info("restarting Docker")
 		case remote.SetupMarked:
-			report.Info("Docker takes daemon.json at its next restart: " + remote.RebootRequired + " is raised")
+			report.Info("Docker takes daemon.json at its next restart, and "+remote.RebootRequired+" is raised for it", restartLater)
 		case remote.SetupNoSystem:
 			report.Say(report.WarnLevel, "Docker was not restarted", nil, report.Fix("restart it, as root:", "systemctl restart docker"))
 		}
