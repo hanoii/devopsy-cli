@@ -158,36 +158,48 @@ hide other users' processes from project users (the processes topic).
 As root, on Debian or Ubuntu with systemd:
 
 1. Make the door's directory, the deploy user's, and mount it on itself with
-   nosuid and nodev, now and at every boot, once.
+   nosuid and nodev, now and at every boot.
 
       user=devopsy space=/var/lib/devopsy-door
       install -d -o "$user" -m 755 "$space"
-      echo "$space $space none bind,nosuid,nodev 0 0" >> /etc/fstab
+      grep -qs "^$space " /etc/fstab || echo "$space $space none bind,nosuid,nodev 0 0" >> /etc/fstab
       systemctl daemon-reload
-      mount "$space"
+      mountpoint -q "$space" || mount "$space"
 
-2. Name it in the deploy user's config, where the file has no door: yet.
+2. Name it in the deploy user's config, ~/.config/devopsy/config.yaml, where
+   the file has no door: yet.
 
       user=devopsy space=/var/lib/devopsy-door
-      home=$(getent passwd "$user" | cut -d: -f6)
-      runuser -u "$user" -- mkdir -p "$home/.config/devopsy"
-      printf 'door:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$home/.config/devopsy/config.yaml" >/dev/null
+      config=$(getent passwd "$user" | cut -d: -f6)/.config/devopsy/config.yaml
+      runuser -u "$user" -- mkdir -p "${config%/*}"
+      grep -qs '^door:' "$config" || printf 'door:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null
 
-3. Give Docker its containerd image store, which a Docker 29 installed fresh
-   uses already, and a current buildx, which an upgrade of Docker's packages
-   brings. A Docker installed earlier on the classic store moves at a cost:
-   no image or container of the classic store shows on the containerd one
-   (volumes and networks stay), so every environment needs a release or a
-   restart to make its containers again, a hold on an older built image
-   cannot come back, and the classic store keeps its disk until it is
-   removed; a data root holding classic images stays on that store until its
-   daemon is told otherwise. Docker's doc has the move:
-   https://docs.docker.com/engine/storage/containerd/
+3. Give Docker a current buildx, which an upgrade of Docker's packages
+   brings.
 
       apt-get update
       apt-get install -y --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-4. Then add project users, locally, with --project-users add, and reboot the
+4. Give Docker its containerd image store, which a Docker 29 installed fresh
+   uses already: docker info says io.containerd.snapshotter.v1 as its driver
+   type, where the classic store says overlay2 as its driver. A Docker
+   installed earlier on the classic store stays on it until its daemon is
+   told otherwise, and moves at a cost: no image or container of the classic
+   store shows on the containerd one (volumes and networks stay), so every
+   environment needs a release or a restart to make its containers again, a
+   hold on an older built image cannot come back, and the classic store
+   keeps its disk until it is removed. To move it, at that cost, turn its
+   daemon's containerd-snapshotter feature on in /etc/docker/daemon.json,
+   then restart Docker (https://docs.docker.com/engine/storage/containerd/):
+
+      apt-get install -y jq
+      f=/etc/docker/daemon.json
+      [ -s "$f" ] || echo '{}' > "$f"
+      jq '.features."containerd-snapshotter" = true' "$f" > "$f.new"
+      cat "$f.new" > "$f" && rm "$f.new"
+      systemctl restart docker
+
+5. Then add project users, locally, with --project-users add, and reboot the
    server after the first: sshd takes its part at the next boot.
 
 To check it: the directory is mounted with nosuid and nodev, Docker says its
