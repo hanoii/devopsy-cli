@@ -2538,20 +2538,26 @@ case "$*" in
       while [ ! -e "$FAKE_ROOT/go" ]; do sleep 0.05; done
     fi
     [ -z "${FAKE_FAIL:-}" ] || exit 1
-    # FAKE_LATE: the tail stopped for a second (a loaded server) before the step's last line.
-    if [ -n "${FAKE_LATE:-}" ]; then
-      for d in /proc/[0-9]*; do
-        case "$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null)" in "tail "*"$FAKE_ROOT"*)
-          kill -STOP "${d#/proc/}"; (sleep 1; kill -CONT "${d#/proc/}") </dev/null >/dev/null 2>&1 & ;;
-        esac
-      done
-      echo "deployed late"; exit 0
-    fi
+    [ -z "${FAKE_LATE:-}" ] || { echo "deployed late"; exit 0; }
     echo "deployed $(pwd -P)"; echo "deploy progress" >&2 ;;
   "--release-steps restart run") echo restarted >>"$FAKE_ROOT/calls" ;;
 esac
 exit 0
 `)
+	// FAKE_LATE: GNU's tail started only once what it watches (--pid, else the shell) is
+	// ending, as far behind as a loaded server can leave it (at most 10 s).
+	lateTail := `#!/bin/sh
+if [ -n "${FAKE_LATE:-}" ] && [ "$1" != --version ]; then
+  w=$PPID
+  for a; do case $a in --pid=*) w=${a#--pid=} ;; esac; done
+  n=0
+  while st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$w/status 2>/dev/null) && [ -n "$st" ] && [ "${st%% *}" != Z ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+fi
+exec /usr/bin/tail "$@"
+`
+	if err := testfile.Write(filepath.Join(bin, "tail"), []byte(lateTail), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	fakeImageTools(t, bin)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "images"), 0o755); err != nil {
@@ -2663,7 +2669,7 @@ exit 0
 		t.Errorf("release 2's output after a rollback to it:\n%s\nthe rollback's session:\n%s", o, rbOut)
 	}
 
-	// A tail a second behind the shell's end (a loaded server) still copies the last lines:
+	// A tail that starts only as the shell ends (a loaded server) still copies the last lines:
 	// it ends once it has copied everything, never at a fixed time after the shell.
 	if out, err := command("5", "FAKE_LATE=1").CombinedOutput(); err != nil || !strings.Contains(string(out), "deployed late") {
 		t.Errorf("release 5 with its tail late (%v), its last line lost:\n%s", err, out)
