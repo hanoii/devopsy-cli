@@ -631,7 +631,7 @@ func (a *activation) restartPrevious() string {
     fi
 `
 	s += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
-    ` + inTTY(`"$base/current"`, devopsyCall(a.project, []string{"--release-steps", "restart", "run"}, false), `devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"`) + `    img ran "$base" "$base/$prev" || true
+    ` + inTTY(`"$base/current"`, devopsyCall(a.project, []string{"--release-steps", "restart", "run"}, false), `devopsy --say error "restarting ${prev#releases/} failed too ($?): its services may be down" `+sayRemedies(SeeHint(HintAddress(a.t), "what runs", "--status"), LogHint(HintAddress(a.t)))) + `    img ran "$base" "$base/$prev" || true
 `
 	if a.releaseSnap() {
 		s += `    [ -z "${rs_id:-}" ] || ` + a.snapStep("release-record", Quote("done"), `"$rel"`) + ` || true

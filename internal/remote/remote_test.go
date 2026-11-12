@@ -1450,6 +1450,7 @@ case "$*" in
   deploy) exit ${FAIL_RUN:-0} ;;
   --mnt-owners*) [ "$id" != "${FAIL_OWNERS:-}" ] || exit 5 ;;
   "--check-mounts restored restart") exit ${FAIL_RESTART_CHECK:-0} ;;
+  "--release-steps restart run") exit ${FAIL_RESTART:-0} ;;
 esac
 exit 0
 `
@@ -1544,6 +1545,13 @@ exit 0
 	// whatever the check said, not always a link (review round 9).
 	if out, err := release("33", "FAIL_RUN=4", "FAIL_RESTART_CHECK=1"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "not restarting 1") || strings.Contains(out, "once the link is gone") || !strings.Contains(out, "once what the check says is fixed") {
 		t.Fatalf("failed run, the restart's check refusing (%v), current %q:\n%s", err, current(), out)
+	}
+
+	// The restart failing too: an error that says what may be down and
+	// offers what shows it, never a bare "check the site".
+	if out, err := release("34", "FAIL_RUN=4", "FAIL_RESTART=6"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "restarting 1 failed too (6): its services may be down") ||
+		!strings.Contains(out, " --status") || !strings.Contains(out, " --log") {
+		t.Fatalf("failed run, the restart failing too (%v), current %q:\n%s", err, current(), out)
 	}
 
 	// Another failed run, while another compose project runs the
