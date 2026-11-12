@@ -112,12 +112,9 @@ func TestProcessesStepKeepsFstab(t *testing.T) {
 	}
 }
 
-// The image store's step leaves daemon.json as it was when jq cannot rewrite it (a file that
-// is no JSON, jq not installed): the file holds what --server-setup put there.
-//
-// Bug (review, round 1): the step's lines are pasted one after the other, and the line after
-// jq's copies its output over daemon.json whatever jq returned, so a jq that fails empties
-// the file, and the next line restarts Docker on it.
+// The image store's step, its lines pasted one after the other, leaves daemon.json as it was
+// and restarts nothing when jq cannot rewrite it (a file that is no JSON, jq not installed);
+// with a jq that rewrites it, the file holds jq's output and Docker restarts once.
 func TestImageStoreStepKeepsDaemonJSONWhenJqFails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -167,12 +164,8 @@ func TestImageStoreStepKeepsDaemonJSONWhenJqFails(t *testing.T) {
 }
 
 // The door's config step adds door: on a line of its own to a config that ends without a
-// newline, the file's last key kept as it was.
-//
-// Bug (review, round 1): tee -a appends "door:" right after the file's last byte, so a config
-// whose last line has no newline ends up with "root: /srvdoor:", which is no YAML devopsy
-// reads, and every devopsy on the server then fails on its config.
-func TestDoorConfigStepOnAConfigWithoutAFinalNewline(t *testing.T) {
+// newline, the file's last key kept as it was, and a second run changes nothing.
+func TestDoorConfigStepKeepsTheConfigsLastLine(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	config := filepath.Join(home, ".config", "devopsy", "config.yaml")
@@ -231,5 +224,48 @@ func TestTopicsUpdateAptBeforeInstalling(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The docker topic's repository step leaves apt one source of Docker's, also on a server whose
+// Docker came from an older edition of Docker's install guide (a docker.list signed by
+// /etc/apt/keyrings/docker.gpg): two files naming download.docker.com with different keys are
+// a list apt refuses whole ("Conflicting values set for option Signed-By ... The list of
+// sources could not be read"), and every apt-get after it fails, security updates included.
+func TestDockerRepositoryStepTakesOverAnOlderList(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	apt := filepath.Join(dir, "apt")
+	lists := filepath.Join(apt, "sources.list.d")
+	if err := os.MkdirAll(lists, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	older := "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable\n"
+	if err := os.WriteFile(filepath.Join(lists, "docker.list"), []byte(older), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	osRelease := filepath.Join(dir, "os-release")
+	if err := os.WriteFile(osRelease, []byte("ID=debian\nVERSION_CODENAME=trixie\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// apt, as it refuses two sources of Docker's: every apt-get of the step finds one at most.
+	path := fakes(t, map[string]string{"apt-get": "if [ \"$(grep -ls download.docker.com " + lists + "/* | wc -l)\" -gt 1 ]; then echo 'E: Conflicting values set for option Signed-By' >&2; exit 100; fi\n"}, "apt-get", "curl")
+	out := pasted(t, stepWith(t, Docker, "docker.sources"), path, "/etc/apt", apt, "/etc/os-release", osRelease)
+	entries, err := os.ReadDir(lists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var docker []string
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(lists, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "download.docker.com") {
+			docker = append(docker, e.Name())
+		}
+	}
+	if len(docker) != 1 || strings.Contains(out, "E: Conflicting") {
+		t.Errorf("apt has %d sources of Docker's, %v, which apt refuses when their keys differ:\n%s", len(docker), docker, out)
 	}
 }
