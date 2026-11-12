@@ -2095,7 +2095,7 @@ func TestDoorSyncAcrossDoorServers(t *testing.T) {
 	dir := doorProject(t, "doorpair", `services:
   web:
 `+doorService+`    command: [sleep, infinity]
-    volumes: [./mnt/data:/d, db:/v]
+    volumes: [./mnt/data:/d, "db:/v:nocopy"]
     labels: {devopsy.mnt.owner: user, devopsy.data: "true", devopsy.data.version: any}
 volumes:
   db: {}
@@ -2420,7 +2420,7 @@ func TestDoorDataFlows(t *testing.T) {
 	dir := doorProject(t, "doorflow", `services:
   web:
 `+doorService+`    command: [sleep, infinity]
-    volumes: [./mnt/data:/d, ./mnt/settings.ini:/etc/settings.ini, db:/v]
+    volumes: [./mnt/data:/d, ./mnt/settings.ini:/etc/settings.ini, "db:/v:nocopy"]
     labels: {devopsy.mnt.owner: user, devopsy.data: "true", devopsy.data.version: any, devopsy.shell: "true", devopsy.shell.user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"}
 volumes:
   db: {}
