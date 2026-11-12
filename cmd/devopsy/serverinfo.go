@@ -1094,15 +1094,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 
-	// Docker.
+	// Docker, and what the setup refuses of what it answers (dockerAnswers), said here only.
 	d := info.Docker
+	sayDocker := func() {
+		for _, r := range dockerAnswers(d) {
+			warn(r.Message, fixWords(r)...)
+		}
+	}
 	switch {
 	case d.Door:
 		key = "docker"
 		more("the server's admin's, through the door")
 	case d.Error != "":
 		key = "docker"
-		warn("Docker did not answer: " + d.Error)
+		sayDocker()
 	default:
 		parts := []string{d.Version}
 		if d.Compose != "" {
@@ -1117,9 +1122,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			parts = append(parts, "cgroup "+d.Cgroup)
 		}
 		row("docker", strings.Join(parts, ", "))
-		if d.Compose == "" {
-			warn("docker compose is missing", report.Fix("install the docker-compose-plugin package, as root"))
-		}
+		sayDocker()
 		// Docker lists apparmor whenever the kernel has it, and then loads
 		// its profile with apparmor_parser: without it no container
 		// starts ("the docker-default profile could not be loaded").
@@ -1154,7 +1157,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// The server's setup, as --server-setup judges it.
 	if info.Setup != nil {
-		es = append(es, setupInfoEntries(*info.Setup, ref)...)
+		es = append(es, setupInfoEntries(*info.Setup, d, ref)...)
 	}
 	// What a project user can only pass on: by its code, no remedy it could take.
 	for _, id := range info.ForAdmin {
@@ -1510,8 +1513,9 @@ func sortedKeysOf[V any](m map[string]V) []string {
 
 // setupInfoEntries are --server-info's lines on the server's setup (f): under setup, whether
 // devopsy set it up and what refuses releases there, then its items (setupItems), each not
-// devopsy's fixed by --server-setup on ref (in words locally, ref "").
-func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
+// devopsy's fixed by --server-setup on ref (in words locally, ref ""). What Docker (d) answers
+// itself is said under docker (dockerAnswers), and the tools under tools, never again here.
+func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.StatusEntry {
 	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
 	// With every step refused, --server-setup applies nothing: the way out is the refusal's.
 	if f.NoneGoes() {
@@ -1526,9 +1530,13 @@ func setupInfoEntries(f setup.Facts, ref string) []remote.StatusEntry {
 	} else {
 		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
 	}
+	var docker []string
+	for _, r := range dockerAnswers(d) {
+		docker = append(docker, r.ID())
+	}
 	for _, r := range f.Refusals {
 		// The tools are said once, with the others the server needs (serverTools).
-		if r.Item != toolsItem {
+		if r.Item != toolsItem && !slices.Contains(docker, r.ID()) {
 			msg, fixes := refusalWords(r)
 			line(remote.StatusWarning, msg, fixes...)
 		}

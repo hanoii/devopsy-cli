@@ -462,21 +462,35 @@ type dockerSetup struct {
 	flags, flagKeys []string
 }
 
-// setupDocker reads Docker as the setup needs it, from docker info as read (d), and refuses
-// what it cannot set up: no daemon answering, no compose or buildx, no systemd, or a daemon
-// that is not the host's docker.service (rootless, another host's).
-func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusal) {
-	var ds dockerSetup
-	fix := "install Docker, with its compose and buildx plugins, and start it, as root"
+// dockerFix is the way out of a Docker the setup refuses, by the docker topic's steps.
+const dockerFix = "install Docker, with its compose and buildx plugins, and start it, as root"
+
+// dockerAnswers are the setup's refusals of what Docker answers itself (d, docker info as
+// read): no daemon answering, else no compose or no buildx plugin. --server-info says them
+// under docker, and not again under setup (setupInfoEntries).
+func dockerAnswers(d remote.DockerFacts) []setup.Refusal {
 	if d.Error != "" {
-		return ds, []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: fix, Howto: howto.Docker}}
+		return []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: dockerFix, Howto: howto.Docker}}
 	}
 	var refusals []setup.Refusal
 	if d.Compose == "" {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: fix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: dockerFix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
 	}
 	if !d.Buildx {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: fix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: dockerFix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+	}
+	return refusals
+}
+
+// setupDocker reads Docker as the setup needs it, from docker info as read (d), and refuses
+// what it cannot set up: no daemon answering, no compose or buildx, no systemd, or a daemon
+// that is not the host's docker.service (rootless, another host's), what Docker answers
+// itself first (dockerAnswers).
+func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusal) {
+	var ds dockerSetup
+	refusals := dockerAnswers(d)
+	if d.Error != "" {
+		return ds, refusals
 	}
 	// Whether Docker is this host's, judged with or without systemd, so its refusal and fix
 	// are said beside one of systemd's.
@@ -488,7 +502,7 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 		return ds, refusals
 	}
 	if state := systemctlShow("ActiveState"); state != "active" {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: fix, Howto: howto.Docker})
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "docker.service is not active (" + state + "): the Docker devopsy reaches is not the host's service", Fix: dockerFix, Howto: howto.Docker})
 	}
 	// The daemon's own flags, as docker.service starts it next: a key one sets is never put
 	// beside it, and a config file of its own is not daemon.json.

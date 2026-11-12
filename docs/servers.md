@@ -232,6 +232,8 @@ setup's items) comes once, after the last of them:
   the kernel's allocations can run out while memory is free. `kho=off`
   frees it ([`kexec-handover`](server-setup-howto.md#kexec-handover));
 - a clock out of sync;
+- Docker not answering, or without its compose or buildx plugin, said
+  under Docker and not again under the setup;
 - a kernel with AppArmor and no `apparmor_parser`, on which no container
   starts;
 - Docker logs that grow without a limit, on a server whose devopsy does

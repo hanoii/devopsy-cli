@@ -103,7 +103,7 @@ func TestServerInfoReport(t *testing.T) {
 			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
 			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
 			AppArmor: true, AppArmorParser: true,
-			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
+			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: true, Containerd: true, Driver: "overlayfs", Cgroup: "v2",
 				RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
 				LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
 			Disks: []remote.Disk{{Paths: []string{"releases=/home/devopsy", "docker=/var/lib/docker", "/=/"}, Type: "xfs", Size: 80e9, Free: 40e9, Used: 40e9, Reflinks: "yes"}},
@@ -182,8 +182,19 @@ func TestServerInfoReport(t *testing.T) {
 		}, "", "clock is not synchronized (about 0.8 s behind local)|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
 		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot, as root:\n$ devopsy --server-setup-howto kexec-handover"},
-		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
-		{"no compose", func(i *remote.ServerInfo) { i.Docker.Compose = "" }, "", "docker compose is missing|docker-compose-plugin"},
+		// Docker's own, said once under docker with the docker topic, the setup's judgment of
+		// them (setupDocker's refusals) not said again under setup.
+		{"docker down", func(i *remote.ServerInfo) {
+			i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"}
+			i.Setup = setUp("")
+			i.Setup.Refusals = dockerAnswers(i.Docker)
+		}, "", "Docker's daemon does not answer: docker info: Cannot connect|install Docker, with its compose and buildx plugins, and start it, as root:\n$ devopsy --server-setup-howto docker"},
+		{"no compose", func(i *remote.ServerInfo) {
+			i.Docker.Compose = ""
+			i.Setup = setUp("")
+			i.Setup.Refusals = dockerAnswers(i.Docker)
+		}, "", "Docker has no compose plugin|$ devopsy --server-setup-howto docker"},
+		{"no buildx", func(i *remote.ServerInfo) { i.Docker.Buildx = false }, "", "Docker has no buildx plugin|$ devopsy --server-setup-howto docker"},
 		// Docker lists apparmor whenever the kernel has it, and needs
 		// apparmor_parser to load its profile (review).
 		{"no apparmor_parser", func(i *remote.ServerInfo) { i.AppArmorParser = false }, "", "no apparmor_parser: Docker cannot load its profile, so containers fail to start|install the apparmor package"},
