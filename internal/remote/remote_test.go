@@ -2397,6 +2397,80 @@ func TestRebookmark(t *testing.T) {
 	}
 }
 
+// The image lock excludes a removal by any user of the server's Docker
+// while another user's fetch holds the images, from its pull to its
+// bookmark, and names that holder: Docker's store is one for every user,
+// and a removal of a name by digest takes every name of its repository
+// on the image (internals/gotchas.md), so a removal running beside
+// another user's fetch deletes the image that fetch is about to bookmark.
+// The users here are the deploy user and project users, each with a
+// release root of its own.
+//
+// Bug, kept failing: each user's lock is $root's, its own release root
+// (image_lock), so a project user's fetch excludes nothing of the deploy
+// user's removals, nor the reverse, nor one project user's of another's.
+func TestImageLockAcrossUsers(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("no flock")
+	}
+	bin := t.TempDir()
+	for _, f := range []string{"docker", "devopsy"} {
+		write(t, filepath.Join(bin, f), "#!/bin/sh\nexit 0\n")
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deploy, shop, blog := t.TempDir(), t.TempDir(), t.TempDir()
+	target := func(project string) *Target {
+		return &Target{Name: "prod", Path: project + "/prod", Project: &Project{Name: project}}
+	}
+	// A project user's removal goes through the door, which removes only
+	// that project's own holds and build names, never a name by digest
+	// (TestDecideImagePruneAndOthersDoNothing): it cannot take another
+	// user's image, but the lock is one for every user all the same.
+	for _, c := range []struct {
+		what                   string
+		fetchRoot, fetchName   string
+		removeRoot, removeName string
+	}{
+		{"a project user's fetch, the deploy user's removal", shop, "shop", deploy, "app"},
+		{"the deploy user's fetch, a project user's removal", deploy, "app", shop, "shop"},
+		{"a project user's fetch, another's removal", shop, "shop", blog, "blog"},
+	} {
+		dir := t.TempDir()
+		ready, goOn := filepath.Join(dir, "ready"), filepath.Join(dir, "go")
+		fetch := exec.Command("sh", "-c", "set -eu\nroot=$R\n"+releaseImages(c.fetchName, target(c.fetchName))+`image_lock shared fetching
+: >"$READY"
+while [ ! -e "$GO" ]; do sleep 0.05; done
+`)
+		fetch.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "R=" + c.fetchRoot, "READY=" + ready, "GO=" + goOn}
+		if err := fetch.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for start := time.Now(); !fileExists(ready); time.Sleep(50 * time.Millisecond) {
+			if time.Since(start) > startWait {
+				_ = fetch.Process.Kill()
+				t.Fatalf("%s: the fetch never took the image lock", c.what)
+			}
+		}
+		remove := exec.Command("sh", "-c", "set -u\nroot=$R\n"+releaseImages(c.removeName, target(c.removeName))+`if image_lock exclusive removing now; then echo took; else echo "busy $?: $il_busy"; fi
+`)
+		remove.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "R=" + c.removeRoot}
+		out, err := remove.CombinedOutput()
+		write(t, goOn, "")
+		if werr := fetch.Wait(); werr != nil {
+			t.Errorf("%s: the fetch: %v", c.what, werr)
+		}
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", c.what, err, out)
+		}
+		if want := "busy 75: the server's images are in use by " + c.fetchName + "-prod (fetching, "; !strings.Contains(string(out), want) {
+			t.Errorf("%s: the removal took the images while the fetch held them, want %q:\n%s", c.what, want, out)
+		}
+	}
+}
+
 // The upload takes the release lock: --destroy removes $base meanwhile.
 // Every release links inherit.env, so
 // --inherit reaches one released before the parent had inherit:. A sync's

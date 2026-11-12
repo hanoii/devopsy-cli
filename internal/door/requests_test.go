@@ -608,7 +608,10 @@ func TestDecideRunRemovals(t *testing.T) {
 // project's own names asked with them removed.
 func TestDecideImagePruneAndOthersDoNothing(t *testing.T) {
 	t.Parallel()
-	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}} {
+	// A name by digest neither, its own hold's included: removing one takes every name of its
+	// repository on the image, another user's fetch's not yet bookmarked among them.
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for _, argv := range [][]string{{"image", "prune", "-f"}, {"image", "rm", "busybox:1.37"}, {"image", "rm", "other-prod-app"}, {"image", "rm", "shop-prod-web"}, {"image", "rm", "devopsy.internal/blog-prod/web"}, {"image", "rm", "busybox" + digest}, {"image", "rm", "busybox:devopsy-shop-prod-1" + digest}} {
 		a, err := decide(t, argv...)
 		if err != nil || len(a.Docker) != 0 || a.Exit != 0 {
 			t.Errorf("%q: %+v, %v", argv, a, err)
