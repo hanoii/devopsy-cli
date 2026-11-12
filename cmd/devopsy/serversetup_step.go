@@ -415,7 +415,7 @@ func toolsRefusalOf(missing []string) *setup.Refusal {
 		stops = setup.RefusalFlock
 	}
 	return &setup.Refusal{Item: toolsItem, Message: "no " + strings.Join(missing, " or ") + " in PATH, which every release needs",
-		Fix: "install them with the system's packages (tar, util-linux), as root", Howto: howto.Tools, Stops: stops}
+		Fix: toolsFixText, Howto: howto.Tools, Stops: stops}
 }
 
 // releaseRootCheck is the release root's required item: there, a directory, uid's (/ is
@@ -621,7 +621,7 @@ func applySetup(h setupHost, a setupApply) int {
 	// once per run with its fix (here, unless the first session said it), the others applied;
 	// the apply then fails, a warning under --upgrade.
 	refused = len(f.Refused()) > 0
-	sayRefusals(f, sayLevel(a.upgrade), a.said)
+	sayRefusals(f, sayLevel(a.upgrade), a.said, false)
 	if a.upgrade && f.RootAction != "" {
 		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}

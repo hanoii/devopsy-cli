@@ -180,14 +180,21 @@ func TestServerSetupWarnsOfToolsMissing(t *testing.T) {
 	t.Parallel()
 	s, _ := setupServer(t)
 	bin := filepath.Join(filepath.Dir(s.root), "bin")
-	path := "PATH=" + pathWithout(t, pathWithout(t, bin, "setfacl"), "mkfifo")
+	path := "PATH=" + pathWithout(t, bin, "setfacl", "mkfifo")
 	out, code := s.run([]string{path}, "@devopsy@one:", "--server-setup", "--yes")
 	// mkfifo is the last of serverTools missing here: the fix follows it, and only it.
 	last := "devopsy: warning: the server has no mkfifo: no sync runs\n" +
-		"devopsy: | to fix it:\ndevopsy: | install it with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
+		"devopsy: | to fix it:\ndevopsy: | install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
 	if code != 0 || !strings.Contains(out, last) || strings.Contains(out, "setfacl") ||
 		strings.Count(out, howto.Command(howto.Tools)) != 1 || !strings.Contains(out, "this server is set up by devopsy now") {
 		t.Errorf("tools missing (%d):\n%s", code, out)
+	}
+	// With tar missing too, its refusal and the warnings share the fix: the tools topic is
+	// offered once, after the last of them.
+	out, code = s.run([]string{"PATH=" + pathWithout(t, bin, "tar", "mkfifo")}, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "devopsy: error: tools: no tar in PATH, which every release needs\n") || !strings.Contains(out, last) ||
+		strings.Count(out, howto.Command(howto.Tools)) != 1 {
+		t.Errorf("tar and mkfifo missing (%d):\n%s", code, out)
 	}
 	// With a project user, the setup's facts name setfacl too.
 	setupConfig(t, s, "door:\n  space: $HOME/space\n")
@@ -325,7 +332,7 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it, as root:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
 		"tar missing": {func(t *testing.T, host string) []string {
 			return []string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), "tar")}
-		}, "no tar in PATH", "install them with the system's packages (tar, util-linux), as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
+		}, "no tar in PATH", "install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -344,14 +351,14 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 	}
 }
 
-// pathWithout is a PATH holding every command of bin and the test's PATH but tool, as links.
-func pathWithout(t *testing.T, bin, tool string) string {
+// pathWithout is a PATH holding every command of bin and the test's PATH but tools, as links.
+func pathWithout(t *testing.T, bin string, tools ...string) string {
 	t.Helper()
 	path := t.TempDir()
 	for _, dir := range append([]string{bin}, filepath.SplitList(os.Getenv("PATH"))...) {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
-			if e.Name() != tool && !fileExists(filepath.Join(path, e.Name())) {
+			if !slices.Contains(tools, e.Name()) && !fileExists(filepath.Join(path, e.Name())) {
 				_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
 			}
 		}
@@ -2138,16 +2145,7 @@ func TestServerSetupToolsStopOnlyTheFirewall(t *testing.T) {
 	for _, tool := range []string{"flock", "tar"} {
 		s, host := setupServer(t)
 		bin := filepath.Join(filepath.Dir(host), "bin")
-		// A PATH with every tool but the one: a directory of links to the rest.
-		path := t.TempDir()
-		for _, dir := range append([]string{bin}, filepath.SplitList(os.Getenv("PATH"))...) {
-			entries, _ := os.ReadDir(dir)
-			for _, e := range entries {
-				if e.Name() != tool && !fileExists(filepath.Join(path, e.Name())) {
-					_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
-				}
-			}
-		}
+		path := pathWithout(t, bin, tool)
 		out, code := s.run([]string{"PATH=" + path}, remote.ServerSetupFlag, "apply")
 		loaded := fileExists(filepath.Join(host, remote.FirewallScript))
 		if code != 1 || !strings.Contains(out, "no "+tool+" in PATH") || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || loaded != (tool == "tar") {

@@ -112,11 +112,13 @@ func toolMissingWords(name string) (msg string, door bool) {
 }
 
 // toolsFixText is the way out of a tool missing, its package, by the tools topic's steps
-// (howto.Tools): a fix where it is warned of, a hint where the door's is only noted.
-const toolsFixText = "install it with the system's packages, as root:"
+// (howto.Tools): the tools' refusal's fix (fixWords), a missing one's where it is warned of,
+// a hint where the door's is only noted. The refusal's and the warnings' are one text, so a
+// run says it once after the last of them (sharedLater).
+const toolsFixText = "install what is missing with the system's packages, as root"
 
-// toolsFix is toolsFixText as a fix.
-var toolsFix = report.Fix(toolsFixText, howto.Command(howto.Tools))
+// toolsFix is toolsFixText as a fix, as fixWords words the tools' refusal's.
+var toolsFix = report.Fix(toolsFixText+":", howto.Command(howto.Tools))
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
 // waits for a reboot to take it, and the host's listeners from read, the root read of the
@@ -1201,7 +1203,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		switch msg, door := toolMissingWords(name); {
 		case msg == "":
 		case door && !projectUsers:
-			note(msg, report.Hint(toolsFixText, howto.Command(howto.Tools)))
+			note(msg, report.Hint(toolsFixText+":", howto.Command(howto.Tools)))
 		default:
 			warn(msg, toolsFix)
 		}

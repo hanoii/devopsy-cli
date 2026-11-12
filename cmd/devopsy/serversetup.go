@@ -60,16 +60,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	// what it refuses (setup.Facts.Goes), the rest applied.
 	es := setupEntries(f)
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
-	said := sayRefusals(f, report.ErrorLevel, nil)
-	// The tools missing that refuse nothing, their one fix after the last, as --server-info
-	// shares it.
-	for i, name := range f.Missing {
-		if msg, _ := toolMissingWords(name); msg != "" && i == len(f.Missing)-1 {
-			report.Say(report.WarnLevel, msg, nil, toolsFix)
-		} else if msg != "" {
-			report.Warn(msg)
-		}
-	}
+	said := sayRefusals(f, report.ErrorLevel, nil, true)
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
 	if err == errDeclined {
@@ -341,9 +332,26 @@ func firewallLine(fw *setup.FirewallFact) string {
 
 // sayRefusals says f's refusals at level, each with its fix, a daemon.json devopsy cannot
 // judge among them, but those said already (by their setup.Refusal.ID): each once per run, by
-// the first session or by its apply when new since. It returns the IDs of every refusal f has.
-func sayRefusals(f setup.Facts, level report.Level, said []string) []string {
+// the first session or by its apply when new since. With tools, it then warns of the tools
+// missing that refuse nothing (setup.Facts.Missing), right after the tools' refusal when there
+// is one: the fix they share, the tools topic's, is said once, after the last of them
+// (sharedLater). It returns the IDs of every refusal f has.
+func sayRefusals(f setup.Facts, level report.Level, said []string, tools bool) []string {
 	var ids []string
+	var es []remote.StatusEntry
+	var levels []report.Level
+	add := func(l report.Level, key, msg string, fixes []report.Remedy) {
+		es = append(es, remote.StatusEntry{Key: key, Lines: []string{msg}, Remedies: fixes})
+		levels = append(levels, l)
+	}
+	addTools := func() {
+		for _, name := range f.Missing {
+			if msg, _ := toolMissingWords(name); msg != "" && tools {
+				add(report.WarnLevel, toolsItem, msg, []report.Remedy{toolsFix})
+			}
+		}
+		tools = false
+	}
 	for _, r := range f.AllRefusals() {
 		ids = append(ids, r.ID())
 		if slices.Contains(said, r.ID()) {
@@ -353,7 +361,17 @@ func sayRefusals(f setup.Facts, level report.Level, said []string) []string {
 		if r.Item == setup.RefusalDaemon && r.Message == f.DaemonError {
 			msg, fixes = daemonWords(f.DaemonError)
 		}
-		report.Say(level, msg, nil, fixes...)
+		add(level, r.Item, msg, fixes)
+		if r.Item == toolsItem {
+			addTools()
+		}
+	}
+	addTools()
+	for i, e := range es {
+		if sharedLater(es, i) {
+			e.Remedies = nil
+		}
+		report.Say(levels[i], e.Lines[0], nil, e.Remedies...)
 	}
 	return ids
 }
