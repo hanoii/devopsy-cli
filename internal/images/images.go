@@ -332,6 +332,39 @@ func bookmarkPrefix(composeName string) string {
 	return "devopsy-" + composeName + "-"
 }
 
+// ClaimHold is the hold the door's claim of an image writes for a project, in repo: the
+// project's bookmarkPrefix, then claim. and the first 12 hex digits of the image's digest. A
+// compose name has no dot, so no bookmark or snapshot of the project's is ever this name, and
+// HoldOf counts it like them, so every removal takes the image for held.
+func ClaimHold(repo, project, digest string) string {
+	if i := strings.LastIndex(digest, ":"); i >= 0 {
+		digest = digest[i+1:]
+	}
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	return repo + ":" + bookmarkPrefix(project) + claimMark + digest
+}
+
+// claimMark follows a project's bookmarkPrefix in a ClaimHold.
+const claimMark = "claim."
+
+// ClaimHoldOf says whether ref's tag is a ClaimHold, and of which project (as bookmarkPrefix
+// wrote it).
+func ClaimHoldOf(ref string) (project string, ok bool) {
+	rest, ok := HoldOf(ref)
+	if !ok {
+		return "", false
+	}
+	i := strings.LastIndex(rest, "-"+claimMark)
+	if i <= 0 || !claimDigest.MatchString(rest[i+1+len(claimMark):]) {
+		return "", false
+	}
+	return rest[:i], true
+}
+
+var claimDigest = regexp.MustCompile(`^[0-9a-f]{1,12}$`)
+
 // RepoOf is a ref's repository: no digest, no tag; a registry's port stays.
 func RepoOf(ref string) string {
 	repo, _ := SplitRef(ref)

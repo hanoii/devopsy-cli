@@ -111,6 +111,12 @@ type Action struct {
 	Cleanup []string
 	// Entries are what Docker's mounts need there, which the door makes first.
 	Entries []EntryToMake
+	// Unclaim is a hold Docker writes: once it did, this project's claim holds on the image it
+	// names go (images.ClaimHold), which the hold keeps from then.
+	Unclaim string
+	// DropClaimHolds takes this project's claim holds (the project's pruning): its bookmarks
+	// hold what its releases run.
+	DropClaimHolds bool
 }
 
 // EntryToMake is an entry of a mnt, a directory or a file.
@@ -268,6 +274,9 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		// by the id that made it so, a claimed one by the digest its claim got (Claims):
 		// a name another writes may move before Docker tags.
 		a := &Action{Docker: argv}
+		if _, claim := images.ClaimHoldOf(args[1]); !claim {
+			a.Unclaim = args[1]
+		}
 		id, owned := p.ownedImage(d, args[0], known)
 		if owned && id != "" {
 			a.Docker = []string{"tag", id, args[1]}
@@ -478,8 +487,9 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 		}
 		return &Action{Docker: own}, nil
 	case "prune":
-		// devopsy's tidying up, server-wide, so the admin's: for this user nothing to do.
-		return &Action{}, nil
+		// devopsy's tidying up, server-wide, so the admin's: for this user, only its own claim
+		// holds, which its releases' bookmarks replace.
+		return &Action{DropClaimHolds: true}, nil
 	}
 	return nil, refuse("docker image %s: the admin's", strings.Join(args, " "))
 }

@@ -194,9 +194,12 @@ type doorSide struct {
 	// (Policy.ProjectUIDs). uidRoot is the release root they are under.
 	claims  []uids.Claim
 	uidRoot string
-	real    string
-	env     []string
-	vets    []remote.DoorVet
+	// imagesRoot is the deploy user's release root too, where the server's image lock a
+	// claim holds is (claimLock).
+	imagesRoot string
+	real       string
+	env        []string
+	vets       []remote.DoorVet
 	// made are this request's work directories, so that a refusal, or a claim cut by a
 	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
 	made   []string
@@ -216,6 +219,9 @@ type doorSide struct {
 	// onFetch, when set, is said when a claim goes past its skip to fetch (the pull verb's
 	// progress).
 	onFetch func()
+	// log is what a claim's wait for the server's images says through (claimLock),
+	// report.Default when nil.
+	log *report.Logger
 	// asked is what the caller's session carries (doorEnvironment), for the commands its
 	// remedies offer alone: never in a refusal's log, never a decision.
 	asked remote.Session
@@ -960,7 +966,7 @@ func runDoor(args []string) int {
 		return doorRefused(fmt.Errorf("refused: the project's uid claims: %w", err))
 	}
 	policy.ProjectUIDs = claimedUIDs(claims)
-	side := &doorSide{policy: policy, claims: claims, uidRoot: releases.Root, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
+	side := &doorSide{policy: policy, claims: claims, uidRoot: releases.Root, imagesRoot: releases.Root, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
 	// With no key left, or an end pending: what a removed key left running gets nothing.
 	if err := side.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
@@ -1987,6 +1993,9 @@ func (s *doorSide) request(config string, argv []string) int {
 	if a.Stream != nil {
 		return s.stream(a.Stream)
 	}
+	if a.DropClaimHolds {
+		s.dropClaimHolds()
+	}
 	if len(a.Docker) == 0 {
 		os.Stdout.WriteString(a.Output)
 		return a.Exit
@@ -1997,7 +2006,7 @@ func (s *doorSide) request(config string, argv []string) int {
 		stdin = strings.NewReader(a.Stdin)
 	}
 	regrant := slices.Concat(a.Regrant, s.writtenEntries(a.Removes))
-	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 {
+	if a.Stdin == "" && len(a.Collect) == 0 && len(a.Cleanup) == 0 && len(regrant) == 0 && a.Unclaim == "" {
 		err := execDecided(s.real, append([]string{"docker"}, a.Docker...), env)
 		return refused(err)
 	}
@@ -2028,7 +2037,42 @@ func (s *doorSide) request(config string, argv []string) int {
 	for _, d := range a.Cleanup {
 		s.removeWork(d)
 	}
+	if code == 0 && a.Unclaim != "" {
+		s.unclaim(a.Unclaim)
+	}
 	return code
+}
+
+// unclaim removes this project's claim holds (images.ClaimHold) from the image ref names, a
+// hold of its own (a release's bookmark) that keeps it from now: a claim's hold only bridges
+// the claim to that bookmark. A hold left by a failure here goes with the project's next
+// pruning (dropClaimHolds).
+func (s *doorSide) unclaim(ref string) {
+	img, err := s.inspectImage(ref)
+	if err != nil {
+		return
+	}
+	for _, t := range img.Tags {
+		if p, ok := images.ClaimHoldOf(t); ok && p == s.policy.Project {
+			_ = s.docker("image", "rm", t).Run()
+		}
+	}
+}
+
+// dropClaimHolds removes this project's claim holds from every image, the project's pruning
+// (its image prune): one a cut claim or a failed unclaim left, or a claim's no bookmark
+// followed (an inspect's, a start's). Its releases' bookmarks hold what they run. Nothing here
+// fails the pruning, which never fails a release.
+func (s *doorSide) dropClaimHolds() {
+	out, err := s.docker("image", "ls", "--format", "{{.Repository}}:{{.Tag}}").Output()
+	if err != nil {
+		return
+	}
+	for _, t := range strings.Fields(string(out)) {
+		if p, ok := images.ClaimHoldOf(t); ok && p == s.policy.Project {
+			_ = s.docker("image", "rm", t).Run()
+		}
+	}
 }
 
 // stream runs a restore's pipe: the file by the project user's rights, through a

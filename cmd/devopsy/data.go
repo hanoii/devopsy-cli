@@ -519,30 +519,49 @@ func localServices(cwd string) ([]images.Service, error) {
 	return images.ParseComposeConfig(out.Bytes(), false)
 }
 
-// imagesShared takes the server's image lock shared (imagesLockPath),
+// imagesShared takes the server's image lock shared (imagesLockAt),
 // as a sync's img sync-check and sync-done do, for an import's check and
 // take-over of the export's history of its data, and a restore's pulls
 // and bookmarks: a removal elsewhere, which takes it exclusively, then
 // never runs between them. Waits up to 10 minutes, saying so (boundedWait).
 func imagesShared(ctx context.Context) (unlock func(), err error) {
-	err = boundedWait{what: "the server's images", held: "a removal"}.wait(ctx, report.Default(), func() (bool, error) {
-		u, ok, err := imagesLockNow(syscall.LOCK_SH)
+	root, err := imagesRoot()
+	if err != nil {
+		return nil, err
+	}
+	return imagesSharedAt(ctx, report.Default(), root, "", "")
+}
+
+// imagesSharedAt is imagesShared with the image lock in root, waiting through log, its
+// holder written as who doing what (imagesLockAt) when who is set: the door's claim, under
+// the deploy user's root, says itself there for a removal's wait.
+func imagesSharedAt(ctx context.Context, log *report.Logger, root, who, doing string) (unlock func(), err error) {
+	err = boundedWait{what: "the server's images", held: "a removal"}.wait(ctx, log, func() (bool, error) {
+		u, ok, err := imagesLockAt(root, syscall.LOCK_SH, who, doing)
 		unlock = u
 		return ok, err
 	})
 	return unlock, err
 }
 
-// imagesLockNow takes the server's image lock (imagesLockPath) shared
+// imagesLockNow takes the server's image lock (imagesLockAt) shared
 // or exclusively (syscall.LOCK_SH or LOCK_EX) when it is free at once:
 // ok false when busy. Only on a server: every caller runs in a release
 // there.
 func imagesLockNow(how int) (unlock func(), ok bool, err error) {
-	path, err := imagesLockPath()
+	root, err := imagesRoot()
 	if err != nil {
 		return nil, false, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
+	return imagesLockAt(root, how, "", "")
+}
+
+// imagesLockAt is imagesLockNow with the lock in root (remote.ImagesLock). While it holds the
+// lock, a holder named who writes remote.ImagesHolders/<pid> as the scripts' image_lock does
+// (remote.HolderLine), which a waiter's message reads: for messages only, so a write that
+// fails fails nothing.
+func imagesLockAt(root string, how int, who, doing string) (unlock func(), ok bool, err error) {
+	f, err := os.OpenFile(filepath.Join(root, remote.ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, false, fmt.Errorf("the server's image lock: %w", err)
 	}
@@ -553,7 +572,19 @@ func imagesLockNow(how int) (unlock func(), ok bool, err error) {
 		}
 		return nil, false, nil
 	}
-	return func() { f.Close() }, true, nil
+	holder := ""
+	if who != "" {
+		holder = filepath.Join(root, remote.ImagesHolders, strconv.Itoa(os.Getpid()))
+		if os.MkdirAll(filepath.Dir(holder), 0o755) == nil {
+			_ = os.WriteFile(holder, []byte(remote.HolderLine(time.Now(), who, doing)), 0o644)
+		}
+	}
+	return func() {
+		if holder != "" {
+			os.Remove(holder)
+		}
+		f.Close()
+	}, true, nil
 }
 
 // exportHeader writes an export's record as the tar's first header, a

@@ -2397,18 +2397,18 @@ func TestRebookmark(t *testing.T) {
 	}
 }
 
-// The image lock excludes a removal by any user of the server's Docker
-// while another user's fetch holds the images, from its pull to its
-// bookmark, and names that holder: Docker's store is one for every user,
-// and a removal of a name by digest takes every name of its repository
-// on the image (internals/gotchas.md), so a removal running beside
-// another user's fetch deletes the image that fetch is about to bookmark.
-// The users here are the deploy user and project users, each with a
-// release root of its own.
+// The image lock is a user's own release root's ($root), and across the users of the server's
+// Docker (the deploy user, its project users) each direction is kept apart its own way:
 //
-// Bug, kept failing: each user's lock is $root's, its own release root
-// (image_lock), so a project user's fetch excludes nothing of the deploy
-// user's removals, nor the reverse, nor one project user's of another's.
+//   - a project user's fetch from the deploy user's removals by the door's claim, which holds
+//     the deploy user's lock shared (claimLock, as here: the lock and a holder's line,
+//     remote.HolderLine) from the image's landing to the claim's hold, which every removal
+//     counts: the deploy user's removal waits for it, naming the project claiming;
+//   - the deploy user's fetch, and another project's, from a project user's removals by the
+//     door, which removes only that project's own holds and build names, never a name by
+//     digest (TestDecideImagePruneAndOthersDoNothing): a project user's lock is its own root's,
+//     and it never holds the deploy user's, whose exclusive holder would hold every removal on
+//     the server.
 func TestImageLockAcrossUsers(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("flock"); err != nil {
@@ -2425,16 +2425,40 @@ func TestImageLockAcrossUsers(t *testing.T) {
 	target := func(project string) *Target {
 		return &Target{Name: "prod", Path: project + "/prod", Project: &Project{Name: project}}
 	}
-	// A project user's removal goes through the door, which removes only
-	// that project's own holds and build names, never a name by digest
-	// (TestDecideImagePruneAndOthersDoNothing): it cannot take another
-	// user's image, but the lock is one for every user all the same.
+	remove := func(root, project string) string {
+		t.Helper()
+		c := exec.Command("sh", "-c", "set -u\nroot=$R\n"+releaseImages(project, target(project))+`if image_lock exclusive removing now; then echo took; else echo "busy $?: $il_busy"; fi
+`)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "R=" + root}
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return string(out)
+	}
+
+	// The claim, as the door's claimLock holds the deploy user's images.
+	lock, err := os.OpenFile(filepath.Join(deploy, ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	holder := filepath.Join(deploy, ImagesHolders, strconv.Itoa(os.Getpid()))
+	write(t, holder, HolderLine(time.Now(), "shop", "claiming"))
+	if out := remove(deploy, "app"); !strings.Contains(out, "busy 75: the server's images are in use by shop (claiming, ") {
+		t.Errorf("the deploy user's removal took the images while a project's claim held them:\n%s", out)
+	}
+	os.Remove(holder)
+	lock.Close()
+
+	// A project user's fetch, in its own root.
 	for _, c := range []struct {
 		what                   string
 		fetchRoot, fetchName   string
 		removeRoot, removeName string
 	}{
-		{"a project user's fetch, the deploy user's removal", shop, "shop", deploy, "app"},
 		{"the deploy user's fetch, a project user's removal", deploy, "app", shop, "shop"},
 		{"a project user's fetch, another's removal", shop, "shop", blog, "blog"},
 	} {
@@ -2454,19 +2478,13 @@ while [ ! -e "$GO" ]; do sleep 0.05; done
 				t.Fatalf("%s: the fetch never took the image lock", c.what)
 			}
 		}
-		remove := exec.Command("sh", "-c", "set -u\nroot=$R\n"+releaseImages(c.removeName, target(c.removeName))+`if image_lock exclusive removing now; then echo took; else echo "busy $?: $il_busy"; fi
-`)
-		remove.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "R=" + c.removeRoot}
-		out, err := remove.CombinedOutput()
+		out := remove(c.removeRoot, c.removeName)
 		write(t, goOn, "")
-		if werr := fetch.Wait(); werr != nil {
-			t.Errorf("%s: the fetch: %v", c.what, werr)
+		if err := fetch.Wait(); err != nil {
+			t.Errorf("%s: the fetch: %v", c.what, err)
 		}
-		if err != nil {
-			t.Fatalf("%s: %v\n%s", c.what, err, out)
-		}
-		if want := "busy 75: the server's images are in use by " + c.fetchName + "-prod (fetching, "; !strings.Contains(string(out), want) {
-			t.Errorf("%s: the removal took the images while the fetch held them, want %q:\n%s", c.what, want, out)
+		if strings.TrimSpace(out) != "took" {
+			t.Errorf("%s: a project user's lock reached another root's:\n%s", c.what, out)
 		}
 	}
 }

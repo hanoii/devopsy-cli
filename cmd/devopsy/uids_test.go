@@ -385,7 +385,7 @@ func TestDoorHoldsAUIDsContainersToItsName(t *testing.T) {
 	}
 	side := func() *doorSide {
 		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
-			claims: claims, vets: []remote.DoorVet{{Prefix: "vetted.", Command: vet}}, real: docker}
+			claims: claims, vets: []remote.DoorVet{{Prefix: "vetted.", Command: vet}}, real: docker, imagesRoot: dir}
 	}
 	// The control: prod's own name gets past the checks to the vet.
 	side().compose("", file("shop-prod"), "", filepath.Join(tree, "prod"), []string{"up", "-d"})
@@ -437,7 +437,7 @@ func TestDoorUIDsAreTheDirectorys(t *testing.T) {
 	}
 	side := func() *doorSide {
 		return &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree},
-			claims: claims, vets: []remote.DoorVet{{Prefix: "vetted.", Command: vet}}, real: docker}
+			claims: claims, vets: []remote.DoorVet{{Prefix: "vetted.", Command: vet}}, real: docker, imagesRoot: dir}
 	}
 	// The control: prod's own directory gets past the checks to the vet.
 	side().compose("", file(), "", filepath.Join(tree, "prod"), []string{"up", "-d"})
