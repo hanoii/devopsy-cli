@@ -235,7 +235,7 @@ func (s *doorSide) free(owner string) int {
 		return doorRefused(fmt.Errorf("refused: not an environment of this project's: %q", owner))
 	}
 	name := env.ComposeName()
-	if _, err := os.Stat(s.policy.Mnt(name)); err == nil {
+	if left, err := dataLeft(s.policy.Mnt(name)); err != nil || left {
 		return doorRefused(fmt.Errorf("refused: %s still has its data (%s): its --destroy removes it first", name, s.policy.Mnt(name)))
 	}
 	r, err := remote.ReleaseSettings()
@@ -375,4 +375,14 @@ func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environmen
 		}
 	}
 	return "no environment of it holds a claim"
+}
+
+// dataLeft says whether dir, an environment's mnt in the door's space, still holds an entry:
+// a --destroy empties it and leaves the directory.
+func dataLeft(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return len(entries) > 0, err
 }

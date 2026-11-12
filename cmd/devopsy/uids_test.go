@@ -159,7 +159,7 @@ func TestDoorFreeRefuses(t *testing.T) {
 			t.Errorf("%s: freed (%d)", owner, code)
 		}
 	}
-	if err := os.MkdirAll(side.policy.Mnt("shop-prod"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(side.policy.Mnt("shop-prod"), "storage"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if code := side.free("env:shop:prod"); code != 2 {
@@ -205,5 +205,26 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 		if stale[owner] != want {
 			t.Errorf("%s warned %v, want %v", owner, stale[owner], want)
 		}
+	}
+}
+
+// A --destroy empties the door's mnt directory and leaves it: an empty one is no data left.
+func TestDataLeft(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "shop-prod")
+	if left, err := dataLeft(dir); err != nil || left {
+		t.Errorf("none there: %v %v", left, err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := dataLeft(dir); err != nil || left {
+		t.Errorf("an emptied directory: %v %v", left, err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "storage"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := dataLeft(dir); err != nil || !left {
+		t.Errorf("an entry left: %v %v", left, err)
 	}
 }
