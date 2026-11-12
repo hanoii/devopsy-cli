@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"go.yaml.in/yaml/v3"
 )
@@ -152,12 +153,31 @@ func composeServices(p *loadedProject) (services, labeled []string, users map[st
 		if err := yaml.Unmarshal(data, &doc); err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", file, err)
 		}
+		// A label's value takes the project's variables, as compose reads it: a shell user
+		// is the service's uid (devopsy.shell.user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}").
+		value := func(name string, labels yaml.Node, key string) (string, bool, error) {
+			v, ok := labelValue(labels, key)
+			if !ok {
+				return "", false, nil
+			}
+			v, err := template.Substitute(v, p.env.Lookup)
+			if err != nil {
+				return "", false, fmt.Errorf("%s: service %s: %s: %v", file, name, key, err)
+			}
+			return v, true, nil
+		}
 		for name, s := range doc.Services {
 			all[name] = true
-			if v, ok := labelValue(s.Labels, ShellLabel); ok {
+			v, ok, err := value(name, s.Labels, ShellLabel)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if ok {
 				marked[name] = v == "true"
 			}
-			if v, ok := labelValue(s.Labels, ShellUserLabel); ok {
+			if v, ok, err = value(name, s.Labels, ShellUserLabel); err != nil {
+				return nil, nil, nil, err
+			} else if ok {
 				users[name] = v
 			}
 		}
