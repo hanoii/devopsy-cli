@@ -192,7 +192,7 @@ func doorNameOwner(d *remote.Door, root, project, name string) string {
 func addProjectUser(d *remote.Door, project, who, entry string) int {
 	// The door's tools, before anything: without them the host's pieces fail halfway (visudo's
 	// check, a setfacl of the tree).
-	if missing := doorToolsMissing(missingTools()); len(missing) > 0 {
+	if missing := missingTools(doorTool); len(missing) > 0 {
 		report.Fail(errors.New("no "+strings.Join(missing, " or ")+" on this server, which project users need: no project user made"),
 			report.Fix("install sudo and acl with the system's packages, as root:", howto.Command(howto.Tools)))
 		return 1

@@ -167,7 +167,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
 	}
-	f.Missing = optionalMissing(missingTools())
+	f.Missing = missingTools(func(t serverTool) bool { return !t.required })
 	action, refusal := releaseRootCheck(f.Root, os.Getuid())
 	f.RootAction = action
 	if refusal != nil {
@@ -396,28 +396,10 @@ func devopsysAt(h setupHost, p string) bool {
 // toolsItem is the tools' required item's name.
 const toolsItem = setup.RefusalTools
 
-// toolsRefusal is the tools' required item: the required ones of serverTools in PATH, nil
-// when they are.
+// toolsRefusal is the tools' required item: the required ones of serverTools there, nil when
+// they are.
 func toolsRefusal() *setup.Refusal {
-	var missing []string
-	for _, t := range serverTools {
-		if _, err := exec.LookPath(t.name); err != nil && t.required {
-			missing = append(missing, t.name)
-		}
-	}
-	return toolsRefusalOf(missing)
-}
-
-// optionalMissing are the tools of missing (missingTools) that refuse nothing, which the setup
-// warns of: the required ones are its refusal (toolsRefusal).
-func optionalMissing(missing []string) []string {
-	var out []string
-	for _, t := range serverTools {
-		if !t.required && slices.Contains(missing, t.name) {
-			out = append(out, t.name)
-		}
-	}
-	return out
+	return toolsRefusalOf(missingTools(requiredTool))
 }
 
 // toolsRefusalOf is the tools' refusal for the required tools missing, nil for none.

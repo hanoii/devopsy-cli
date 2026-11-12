@@ -486,9 +486,6 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 	if entries, _ := os.ReadDir(home); len(entries) != 1 {
 		t.Errorf("add without the door's tools changed its config's directory: %v", entries)
 	}
-	if doorToolsMissing([]string{"tar", "visudo", "setfacl"})[0] != "visudo" || len(doorToolsMissing([]string{"tar", "setsid"})) != 0 {
-		t.Error("doorToolsMissing")
-	}
 }
 
 // --project-users add on a server with no door names the setting and the project-users topic,

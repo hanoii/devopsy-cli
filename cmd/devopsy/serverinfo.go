@@ -44,13 +44,9 @@ const (
 // serverTools are the tools a server needs beyond Docker and devopsy
 // (internals/releases.md), with what goes without each; a release refuses a server without
 // a required one (toolsRefusal), and the others degrade. The door's (door) are project users',
-// which --project-users add refuses without (doorToolsMissing); an sbin one is looked for in
-// /usr/sbin and /sbin too, outside a deploy user's PATH.
-var serverTools = []struct {
-	name, without string
-	required      bool
-	door, sbin    bool
-}{
+// which --project-users add refuses without; an sbin one is looked for in /usr/sbin and /sbin
+// too, outside a deploy user's PATH. Every lookup of them is missingTools.
+var serverTools = []serverTool{
 	{name: "tar", without: "no release can be uploaded", required: true},
 	{name: "flock", without: "nothing that changes an environment runs", required: true},
 	{name: "setsid", without: "the run step runs plainly, and a fetch's live progress shows only before it"},
@@ -62,46 +58,45 @@ var serverTools = []struct {
 	{name: "setfacl", without: "no project user can be added, nor given its files", door: true},
 }
 
-// toolThere says whether name, one of serverTools, is there: in PATH, or for an sbin one in
-// /usr/sbin or /sbin.
-func toolThere(name string, sbin bool) bool {
-	if _, err := exec.LookPath(name); err == nil {
-		return true
+// serverTool is one of serverTools: its name, what goes without it, whether a release refuses
+// without it, whether project users need it, whether it lives in sbin.
+type serverTool struct {
+	name, without string
+	required      bool
+	door, sbin    bool
+}
+
+// Which tools a lookup takes (missingTools): all of them, the required ones, the door's.
+func anyTool(serverTool) bool        { return true }
+func requiredTool(t serverTool) bool { return t.required }
+func doorTool(t serverTool) bool     { return t.door }
+
+// missingTools are the tools of serverTools that which takes and that are not there, in
+// order: one not in PATH, nor in /usr/sbin or /sbin for an sbin one, and a tail that does not
+// answer --version, as the scripts tell (followOutput: GNU's, or uutils').
+func missingTools(which func(serverTool) bool) []string {
+	var out []string
+	for _, t := range serverTools {
+		if which(t) && !toolThere(t) {
+			out = append(out, t.name)
+		}
 	}
-	if sbin {
+	return out
+}
+
+// toolThere says whether t is there, as missingTools looks.
+func toolThere(t serverTool) bool {
+	if _, err := exec.LookPath(t.name); err == nil {
+		return t.name != "tail" || exec.Command("tail", "--version").Run() == nil
+	}
+	if t.sbin {
 		for _, dir := range []string{"/usr/sbin", "/sbin"} {
-			if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			if fi, err := os.Stat(filepath.Join(dir, t.name)); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// missingTools are the tools of serverTools not there, required ones included, in order.
-func missingTools() []string {
-	var out []string
-	for _, t := range serverTools {
-		if !toolThere(t.name, t.sbin) {
-			out = append(out, t.name)
-		} else if t.name == "tail" && exec.Command("tail", "--version").Run() != nil {
-			// As the scripts tell (followOutput): GNU's, or uutils'.
-			out = append(out, "tail")
-		}
-	}
-	return out
-}
-
-// doorToolsMissing are the door's tools of missing (missingTools), which --project-users add
-// refuses without.
-func doorToolsMissing(missing []string) []string {
-	var out []string
-	for _, t := range serverTools {
-		if t.door && slices.Contains(missing, t.name) {
-			out = append(out, t.name)
-		}
-	}
-	return out
 }
 
 // toolMissingWords is how --server-info and --server-setup say a tool of serverTools missing
@@ -289,7 +284,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
-	info.Missing = missingTools()
+	info.Missing = missingTools(anyTool)
 	info.Containers = hostContainers()
 	trees := doorTrees(info.Root)
 	for _, who := range trees {
