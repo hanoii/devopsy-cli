@@ -139,8 +139,10 @@ func runDoorRead(args []string) int {
 		return 0
 	case "environments":
 		// --server-info's, of this user's tree: as the deploy user would list them, but by this
-		// user's rights.
-		if json.NewEncoder(os.Stdout).Encode(projectEnvironments(filepath.Dir(path), path)) != nil {
+		// user's rights. None when a directory of it fails to read: a list in part would read as
+		// the rest gone, its uid claims stale.
+		envs, err := projectEnvironments(filepath.Dir(path), path)
+		if err != nil || json.NewEncoder(os.Stdout).Encode(envs) != nil {
 			return 1
 		}
 		return 0

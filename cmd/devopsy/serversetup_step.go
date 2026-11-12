@@ -219,7 +219,9 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		}
 		f.Candidates = append(f.Candidates, c)
 	}
-	f.Projects = len(deployEnvBases(f.Root)) > 0
+	// A root it cannot read in full is taken for one with projects: no hint to move it.
+	bases, err := deployEnvBases(f.Root)
+	f.Projects = len(bases) > 0 || err != nil
 	d, err := remote.ServerDoor()
 	if err != nil {
 		return rd, err
@@ -735,7 +737,11 @@ func applySetup(h setupHost, a setupApply) int {
 				l.Close()
 			}
 		}()
-		for _, base := range deployEnvBases(f.Root) {
+		bases, err := deployEnvBases(f.Root)
+		if err != nil {
+			return failed(err.Error() + ": nothing changed")
+		}
+		for _, base := range bases {
 			l, err := os.OpenFile(filepath.Join(base, ".lock"), os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
 				return failed(err.Error() + ": nothing changed")

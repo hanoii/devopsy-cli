@@ -421,8 +421,9 @@ func uidFacts(root string) (string, []remote.UIDClaim) {
 // staleUID says why claim c is left over, or nothing: an environment's whose environment is
 // on the server no more (removed without --destroy), a project's with no environment claim of
 // it left. A door project's tree is read as its user, which may answer nothing in time: with
-// none of its environments listed, its claims are taken for live.
-func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment, door []string) string {
+// none of its environments listed, its claims are taken for live. With envs read only in part
+// (unread), every environment's claim is.
+func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment, unread bool, door []string) string {
 	o, err := uids.ParseOwner(c.Owner)
 	if err != nil {
 		return err.Error()
@@ -436,7 +437,7 @@ func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environmen
 			}
 			listed = listed || strings.HasPrefix(e.Path, o.Project+"/")
 		}
-		if slices.Contains(door, o.Project) && !listed {
+		if unread || slices.Contains(door, o.Project) && !listed {
 			return ""
 		}
 		return "no environment " + path + " on the server"

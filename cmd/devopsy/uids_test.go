@@ -233,6 +233,15 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 			t.Errorf("%s warned %v, want %v", owner, stale[owner], want)
 		}
 	}
+	// With the environments not all read, an environment's claim is taken for live: blog's
+	// directory may be the one that failed.
+	info.EnvironmentsUnread = "open " + filepath.Join(root, "blog") + ": permission denied"
+	_, warnings = serverInfoSays(info, "", "", "0.53.0", time.Now())
+	for _, w := range warnings {
+		if strings.HasPrefix(w.msg, "env:blog:prod's uid claim is left") {
+			t.Errorf("with environments unread: %s", w.msg)
+		}
+	}
 }
 
 // A --destroy empties the door's mnt directory and leaves it: an empty one is no data left.

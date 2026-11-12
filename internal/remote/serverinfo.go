@@ -70,6 +70,10 @@ type ServerInfo struct {
 	// Containers are every container on the host, any state.
 	Containers   []HostContainer `json:"containers"`
 	Environments []Environment   `json:"environments"`
+	// ContainersUnread and EnvironmentsUnread are why the list above could not be read, or
+	// read only in part: a list with a failure is unknown, never none.
+	ContainersUnread   string `json:"containers_unread,omitempty"`
+	EnvironmentsUnread string `json:"environments_unread,omitempty"`
 	// UIDs are the claims of the uids containers run as (internal/uids), under the release
 	// root's claims directory UIDsDir.
 	UIDsDir string     `json:"uids_dir,omitempty"`
