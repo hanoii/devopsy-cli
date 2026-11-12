@@ -3687,9 +3687,14 @@ func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
 // Across servers, a sync cancelled during a stream's import stops the
 // import on the child, though its session outlives devopsy's ssh: the
 // pipe the push keeps open as its stdin closes, and the import ends its
-// hook and removes the spool.
+// hook and removes the spool. On macOS (no /proc) that pipe is all that
+// ends it: the child's holder signals only an import it finds there.
+//
+// Not parallel: it checks the import ends within 10 s of the operator's
+// exit, which a loaded macOS runner once missed (the push and import
+// lines never came, the holder's did); a failure lists the processes
+// left, to tell a stall from a slow run.
 func TestSyncImportCancelled(t *testing.T) {
-	t.Parallel()
 	s := newSyncSetup(t)
 	tmp := t.TempDir()
 	started, stopped := filepath.Join(tmp, "started"), filepath.Join(tmp, "stopped")
@@ -3717,7 +3722,16 @@ func TestSyncImportCancelled(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	out := func() string { return readString(outFile.Name()) + readString(s.log) }
+	out := func() string {
+		ps, _ := exec.Command("ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,command=").Output()
+		var left []string
+		for _, l := range strings.Split(string(ps), "\n") {
+			if strings.Contains(l, filepath.Dir(s.root)) || strings.Contains(l, binary) || strings.Contains(l, "sleep 20") {
+				left = append(left, l)
+			}
+		}
+		return readString(outFile.Name()) + readString(s.log) + "processes:\n" + strings.Join(left, "\n")
+	}
 	waitFile(t, started, "the import", startWait, out)
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
