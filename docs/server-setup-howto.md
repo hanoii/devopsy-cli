@@ -6,10 +6,8 @@ step, for the server's admin. Each topic below is what
 offers for one of them names that command; `devopsy --server-setup-howto`
 lists the topics. It runs anywhere, needing no server, project or Docker.
 
-The steps are for Debian and Ubuntu with systemd, run as root on the
-server, and say where the two differ. A value you choose, such as the
-deploy user's name, is a shell variable set on a step's first line with
-its usual value; a value of the system is computed.
+Each topic opens with where and as whom its steps run, and who the
+deploy user is.
 
 - [`docker`](#docker): Docker from its repository, its compose and buildx plugins
 - [`tools`](#tools): tar, flock and the other tools devopsy uses, sudo and acl
@@ -27,7 +25,10 @@ devopsy runs everything through the host's docker.service, as the deploy
 user, and never installs it: --server-setup refuses a Docker that does not
 answer, lacks its compose or buildx plugin, or is not the host's service.
 
-As root, on Debian or Ubuntu with systemd:
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
 
 1. Add Docker's apt repository, as Docker's install guide says
    (https://docs.docker.com/engine/install/), since the distributions' own
@@ -79,7 +80,10 @@ server without them. setsid, script, mkfifo and a tail that answers
 and project users need sudo, visudo and setfacl, which --project-users add
 refuses without; --server-info and --server-setup name each one missing.
 
-As root, on Debian or Ubuntu with systemd:
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
 
 1. Install their packages: tar, util-linux (flock, setsid), bsdutils
    (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl
@@ -105,7 +109,10 @@ with project users, each should see only its own. --server-info and
 --project-users add warn while /proc has no hidepid; devopsy checks it and
 never mounts /proc.
 
-As root, on Debian or Ubuntu with systemd:
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
 
 1. Make a group that sees every process, and put the deploy user in it, from
    its next login: it is root through Docker already.
@@ -154,7 +161,10 @@ refuses a server without that mount or that Docker, and --server-info warns
 of both. The door needs sudo and acl too (the tools topic), and /proc should
 hide other users' processes from project users (the processes topic).
 
-As root, on Debian or Ubuntu with systemd:
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
 
 1. Make the door's directory, the deploy user's, and mount it on itself with
    nosuid and nodev, now and at every boot.
@@ -224,7 +234,10 @@ over to another kernel with kexec, so kho=off on the kernel's command line
 frees it; a kernel without Kexec HandOver passes the word to init, which
 ignores it. --server-info warns while the memory is kept.
 
-As root, on Debian or Ubuntu with systemd:
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
 
 1. Add kho=off to GRUB's command line in a drop-in of its own, named to sort
    after the image's, then update GRUB's config.
@@ -256,7 +269,10 @@ These steps are for an image with kdump-tools, whose
 /etc/default/grub.d/kdump-tools.cfg adds crashkernel= to the kernel's
 command line.
 
-As root, on Debian or Ubuntu with systemd:
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
 
 1. Take crashkernel= off GRUB's command line in a drop-in of its own, named
    to sort after kdump-tools', then update GRUB's config.

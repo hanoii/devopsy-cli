@@ -156,12 +156,19 @@ func TestDocsPage(t *testing.T) {
 }
 
 // A topic in the terminal: its title, why, the steps numbered, each command indented
-// under its step as it is, the check last; its words within 80 columns.
+// under its step as it is, the check last; its words within 80 columns. Its opening says what
+// the docs page tells its reader: as root on the server, who the deploy user is, where a value
+// to change is set.
 func TestText(t *testing.T) {
 	t.Parallel()
+	for _, words := range []string{"as root on the server", "Debian or Ubuntu with systemd", "The deploy user is the Unix user devopsy logs in as", "first line sets the values to change", "user=devopsy"} {
+		if !strings.Contains(asRoot, words) {
+			t.Errorf("the steps' opening does not say %q: %s", words, asRoot)
+		}
+	}
 	for _, tp := range Topics {
 		text := tp.Text()
-		if !strings.HasPrefix(text, tp.Title+"\n\n") || !strings.Contains(text, asRoot) || !strings.Contains(text, "\nTo check it: ") {
+		if !strings.HasPrefix(text, tp.Title+"\n\n") || !strings.Contains(text, wrap(asRoot, "", "")) || !strings.Contains(text, "\nTo check it: ") {
 			t.Errorf("%s:\n%s", tp.Name, text)
 		}
 		var cmds []string

@@ -63,8 +63,9 @@ func Command(name Name) string { return "devopsy " + Flag + " " + string(name) }
 // width is where the text wraps.
 const width = 76
 
-// asRoot introduces every topic's steps.
-const asRoot = "As root, on Debian or Ubuntu with systemd:"
+// asRoot introduces every topic's steps, so a topic printed alone tells what the docs page's
+// reader is told: where and as whom they run, who the deploy user is, where a value is set.
+const asRoot = "Run each step as root on the server, Debian or Ubuntu with systemd. The deploy user is the Unix user devopsy logs in as, which must exist. A step's first line sets the values to change, if it has any (for example user=devopsy)."
 
 // cmdIndent is how far a step's commands sit, under its text: indented, never after "$ ",
 // which is how devopsy offers a command in what it says (report.Remedy).
@@ -91,7 +92,7 @@ func (t Topic) Text() string {
 	var b strings.Builder
 	b.WriteString(t.Title + "\n\n")
 	b.WriteString(wrap(t.Why, "", "") + "\n")
-	b.WriteString(asRoot + "\n\n")
+	b.WriteString(wrap(asRoot, "", "") + "\n")
 	for i, s := range t.Steps {
 		num := strconv.Itoa(i+1) + ". "
 		b.WriteString(wrap(s.Text, num, strings.Repeat(" ", len(num))))
