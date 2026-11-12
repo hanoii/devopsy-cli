@@ -39,3 +39,25 @@ func TestRelease(t *testing.T) {
 		t.Errorf("rolled back to %s, not %s", back, first)
 	}
 }
+
+// A variable only an included file requires is listed and refused before the switch, as the
+// server's compose reads the files, nothing current after it; one the include's own
+// env_file sets is not missing to compose (the list may name it beside a missing one, as
+// --variables cannot tell), so once the other is set the release goes.
+func TestReleaseIncludedVariables(t *testing.T) {
+	dir := project(t, "inclvars", map[string]string{
+		".devopsy/.env":            "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml":     "project: inclvars\ndefaults:\n  mode: image\n  release: {run: deploy}\nenvironments:\n  prod: {}\n",
+		".devopsy/compose.yaml":    "include:\n  - path: sub/inc.yaml\n    env_file: sub/inc.env\nservices:\n  app:\n    image: busybox:1.37\n    command: [sleep, infinity]\n",
+		".devopsy/sub/inc.yaml":    "services:\n  side:\n    image: busybox:1.37\n    command: [sleep, infinity]\n    environment: [\"NAME=${INC_NAME:?the site's name}\", \"SET=${INC_SET:?}\"]\n",
+		".devopsy/sub/inc.env":     "INC_SET=1\n",
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts\nexec devopsy up -d --wait\n",
+	})
+	out, code := op(t, dir, "devopsy @prod --release")
+	if cur, _ := srv(t, "readlink inclvars/prod/current"); code == 0 || cur != "" || !strings.Contains(out, "compose requires variables that are not set") || !strings.Contains(out, "INC_NAME") || !strings.Contains(out, "required variable INC_NAME is missing a value: the site's name") || !strings.Contains(out, "not made current") {
+		t.Fatalf("a release missing an included file's variable (%d), current %q:\n%s", code, cur, out)
+	}
+	if out, code := op(t, dir, "INC_NAME=shop devopsy @prod --vars set INC_NAME && devopsy @prod --release"); code != 0 {
+		t.Fatalf("the release once it is set (%d):\n%s", code, out)
+	}
+}

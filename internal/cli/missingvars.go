@@ -1,17 +1,22 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/hanoii/devopsy-cli/internal/remote"
-	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
+
+	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/template"
-	"go.yaml.in/yaml/v3"
+	"github.com/compose-spec/compose-go/v2/types"
 )
 
 // composeFiles are the compose files devopsy runs a project with, each
@@ -28,76 +33,105 @@ func composeFiles(projectDir string) []string {
 	return files
 }
 
-// ComposeVariables lists the variables the project's compose files
-// interpolate.
+// composeModel is the project's compose files as compose reads them, without interpolating
+// them, through compose-go's loader: what they include and extend is followed, an
+// include's own .env and env_file too. Schema and consistency are left to compose, which
+// may be newer than devopsy's compose-go.
+func composeModel(projectDir string, opts ...func(*loader.Options)) (map[string]any, error) {
+	details := types.ConfigDetails{WorkingDir: projectDir, ConfigFiles: types.ToConfigFiles(composeFiles(projectDir)), Environment: types.Mapping{}}
+	return loader.LoadModelWithContext(context.Background(), details, append([]func(*loader.Options){func(o *loader.Options) {
+		o.SkipInterpolation = true
+		o.SkipValidation = true
+		o.SkipConsistencyCheck = true
+		o.SkipResolveEnvironment = true
+		o.SkipResolveLabels = true
+		o.SetProjectName("devopsy", false)
+	}}, opts...)...)
+}
+
+// ComposeVariables lists the variables the project's compose files interpolate, those of
+// the files they include and extend too, read on the operator's machine with no Docker.
+// What the loader cannot follow (an include from a registry or a git repository, or whose
+// path is a variable, which compose's own config --variables fails on too) is said, and
+// the files are read again without their includes and extends.
 func ComposeVariables(projectDir string) ([]string, error) {
+	model, err := composeModel(projectDir)
+	if err != nil {
+		var again error
+		if model, again = composeModel(projectDir, func(o *loader.Options) { o.SkipInclude, o.SkipExtends = true, true }); again != nil {
+			return nil, again
+		}
+		report.Warn("devopsy cannot follow what the compose files include or extend, and checks their own variables only", err.Error())
+	}
 	var names []string
-	for _, file := range composeFiles(projectDir) {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return nil, err
-		}
-		var dict map[string]any
-		if err := yaml.Unmarshal(data, &dict); err != nil {
-			return nil, fmt.Errorf("%s: %v", file, err)
-		}
-		for name := range template.ExtractVariables(dict, nil) {
-			names = append(names, name)
-		}
+	for name := range template.ExtractVariables(model, template.DefaultPattern) {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names, nil
 }
 
-// MissingVars lists the variables p's compose files require (${VAR:?msg},
-// ${VAR?msg}) that its environment leaves unset (or empty, for :?), with
-// compose's message for each. Compose refuses every command while one is
-// missing, so releases check them before going live.
-func MissingVars(p *loadedProject) ([][2]string, error) {
-	files := composeFiles(p.dir)
-	var missing [][2]string
-	seen := map[string]bool{}
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return nil, err
-		}
-		var dict map[string]any
-		if err := yaml.Unmarshal(data, &dict); err != nil {
-			return nil, fmt.Errorf("%s: %v", file, err)
-		}
-		vars := template.ExtractVariables(dict, nil)
-		names := make([]string, 0, len(vars))
-		for name, v := range vars {
-			if v.Required {
-				names = append(names, name)
-			}
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			if seen[name] {
-				continue
-			}
-			value, ok := p.env.Lookup(name)
-			colon := regexp.MustCompile(`\$\{` + name + `:\?`).Match(data)
-			if ok && (value != "" || !colon) {
-				continue
-			}
-			seen[name] = true
-			msg := ""
-			if m := regexp.MustCompile(`\$\{` + name + `:?\?([^}]*)\}`).FindSubmatch(data); m != nil {
-				msg = strings.TrimSpace(string(m[1]))
-			}
-			missing = append(missing, [2]string{name, msg})
+// MissingVars says whether p's compose files read, as the installed compose reads them
+// (config -q), and when they do not, the variables they require (config --variables) that
+// p's environment leaves unset or empty, and what compose said. Compose refuses every
+// command while one is missing, so releases check them before going live. It runs where
+// the release runs, a server's compose deciding, never devopsy's own reading of the files.
+func MissingVars(p *loadedProject) (missing []string, said []string, err error) {
+	if _, stderr, err := composeOut(p, "config", "-q"); err == nil {
+		return nil, nil, nil
+	} else if stderr == "" {
+		return nil, nil, fmt.Errorf("docker compose config: %v", err)
+	} else {
+		said = strings.Split(stderr, "\n")
+	}
+	out, _, err := composeOut(p, "config", "--variables", "--format", "json")
+	if err != nil {
+		return nil, said, nil
+	}
+	var vars map[string]struct{ Required bool }
+	if json.Unmarshal([]byte(out), &vars) != nil {
+		return nil, said, nil
+	}
+	for name, v := range vars {
+		if value, _ := p.env.Lookup(name); v.Required && value == "" {
+			missing = append(missing, name)
 		}
 	}
-	return missing, nil
+	sort.Strings(missing)
+	return missing, said, nil
+}
+
+// composeOut runs compose as p's commands do, its files and environment, the docker of
+// that environment's PATH, and returns its stdout and trimmed stderr.
+func composeOut(p *loadedProject, args ...string) (string, string, error) {
+	plan := p.compose(args)
+	cmd := exec.Command(lookPathIn("docker", plan.Env), plan.Args[1:]...)
+	cmd.Env = plan.Env
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	return stdout.String(), strings.TrimSpace(stderr.String()), err
+}
+
+// lookPathIn is name in env's PATH, else name.
+func lookPathIn(name string, env []string) string {
+	for _, kv := range env {
+		if dirs, ok := strings.CutPrefix(kv, "PATH="); ok {
+			for _, dir := range filepath.SplitList(dirs) {
+				if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+					return filepath.Join(dir, name)
+				}
+			}
+		}
+	}
+	return name
 }
 
 // MissingVarsIn is MissingVars for the project at cwd, its variables
 // loaded from environ and its files and computed by its env capability,
-// as --missing-vars has them: each name and where it is required.
-func MissingVarsIn(cwd string, environ []string) ([][2]string, error) {
+// as --missing-vars has them: each name missing, and compose's words
+// when its files read for another reason.
+func MissingVarsIn(cwd string, environ []string) ([]string, error) {
 	p, err := loadProject(cwd, environ)
 	if err != nil {
 		return nil, err
@@ -105,27 +139,31 @@ func MissingVarsIn(cwd string, environ []string) ([][2]string, error) {
 	if err := p.computeEnv(); err != nil {
 		return nil, err
 	}
-	return MissingVars(p)
+	missing, said, err := MissingVars(p)
+	if err == nil && len(missing) == 0 && len(said) > 0 {
+		err = errors.New("docker compose config: " + strings.Join(said, "; "))
+	}
+	return missing, err
 }
 
 // missingVars is the hidden `devopsy --missing-vars`: nothing when every
 // required variable is set, else the list and how to set them, failing.
 func missingVars(p *loadedProject) error {
-	missing, err := MissingVars(p)
+	missing, said, err := MissingVars(p)
 	if err != nil {
 		return &ExitError{Code: 1, Msg: "--missing-vars: " + err.Error()}
 	}
-	if len(missing) == 0 {
+	if len(missing) == 0 && len(said) == 0 {
 		return &Output{}
 	}
-	width := 0
-	for _, m := range missing {
-		width = max(width, len(m[0]))
+	if len(missing) == 0 {
+		return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose cannot read the project's files:", Details: said}}
 	}
 	var lines []string
 	for _, m := range missing {
-		lines = append(lines, fmt.Sprintf("  %-*s  %s", width, m[0], m[1]))
+		lines = append(lines, "  "+m)
 	}
+	lines = append(lines, said...)
 	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
 	// On a server, the address the operator typed (the session's), else the release's.
 	lookup := func(k string) string { v, _ := p.env.Lookup(k); return v }

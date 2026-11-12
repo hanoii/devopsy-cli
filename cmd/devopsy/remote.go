@@ -449,6 +449,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 	if err != nil {
 		return fail(err.Error())
 	}
+	readsUIDs := cli.ReadsUIDs(names)
 	for k := range t.Env {
 		names = append(names, k)
 	}
@@ -467,10 +468,6 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 	// server lacking them.
 	early := remote.WithAlsoNeeds(context.Background(), remote.ActivateScript(t, "0", false, projectName, phases, nil))
 	// A project whose compose files read a uid needs a server that gives them.
-	readsUIDs, err := cli.ReadsUIDs(projectDir)
-	if err != nil {
-		return failErr(err)
-	}
 	if readsUIDs {
 		early = remote.WithAlsoNeeded(early, remote.UIDsFeature)
 	}
