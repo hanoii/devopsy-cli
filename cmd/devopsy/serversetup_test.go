@@ -224,7 +224,7 @@ func TestServerSetupKeepsAndMarks(t *testing.T) {
 		t.Fatalf("(%d):\n%s", code, out)
 	}
 	// The mounts drop-in put, Docker not restarted: what it changes, and that it asks nothing.
-	if !strings.Contains(out, "devopsy: Docker starts only once the release root's filesystem is mounted, from its next start on\ndevopsy: | nothing to do now: it matters at a boot, and needs no restart\n") {
+	if !strings.Contains(out, "devopsy: Docker now waits for the release root's filesystem before it starts\ndevopsy: | this applies from Docker's next start and only matters at a boot: no restart is needed\n") {
 		t.Errorf("the drop-in's words:\n%s", out)
 	}
 	d, _ := setup.ParseDaemon([]byte(readString(filepath.Join(host, setup.DaemonFile))))

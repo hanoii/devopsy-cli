@@ -896,7 +896,7 @@ func applySetup(h setupHost, a setupApply) int {
 		report.Say(report.InfoLevel, "Docker "+state, []string{detail}, soonerHint(""))
 	}
 	if dropinText != "" && !queued {
-		report.Info("Docker starts only once the release root's filesystem is mounted, from its next start on", "nothing to do now: it matters at a boot, and needs no restart")
+		report.Info("Docker now waits for the release root's filesystem before it starts", "this applies from Docker's next start and only matters at a boot: no restart is needed")
 	}
 	if line := refusedLine(f); line != "" {
 		report.Say(sayLevel(a.upgrade), line, nil)
