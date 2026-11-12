@@ -2721,8 +2721,9 @@ func TestChildServicesParse(t *testing.T) {
 // its session outlives devopsy's ssh: the closed stdin tells it. It
 // removes the rsync container, restores its services, and never runs the
 // export of the stream services.
+//
+// Not parallel: it checks the parent restores within 10 s of the interrupt.
 func TestSyncInterruptCopy(t *testing.T) {
-	t.Parallel()
 	s := newSyncSetup(t)
 	tmp := t.TempDir()
 	started, pushed := filepath.Join(tmp, "started"), filepath.Join(tmp, "pushed")
