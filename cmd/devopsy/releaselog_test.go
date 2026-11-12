@@ -46,6 +46,53 @@ func TestReleaseLogFrames(t *testing.T) {
 	}
 }
 
+// The cap counts what the log keeps: a progress display redrawing its
+// lines (BuildKit on a terminal, for minutes) sends far more than the cap
+// while its last frame is a few lines, and what follows it stays.
+func TestReleaseLogFramesPastTheCap(t *testing.T) {
+	t.Parallel()
+	l := &releaseLog{}
+	_, _ = l.Write([]byte("#1 step one\n#2 step two\n"))
+	frame := []byte("\x1b[2A\x1b[2K#1 step one " + strings.Repeat(".", 1000) + "\n\x1b[2K#2 step two\n")
+	for sent := 0; sent <= maxReleaseLog; sent += len(frame) {
+		_, _ = l.Write(frame)
+	}
+	l.Line("devopsy: images fetched")
+	got := string(l.Text())
+	if strings.Contains(got, "log truncated") || !strings.Contains(got, " devopsy: images fetched\n") {
+		t.Errorf("the log lost what follows the frames:\n%.2000s", got)
+	}
+	if strings.Count(got, "step one") != 1 {
+		t.Errorf("frames kept: %d", strings.Count(got, "step one"))
+	}
+}
+
+// Past the cap the log says it was truncated, once, and keeps only
+// devopsy's own lines (the result, the anchor), never a later line of
+// another tool's that happens to fit, nor a line cut at the cap.
+func TestReleaseLogPastTheCap(t *testing.T) {
+	t.Parallel()
+	l := &releaseLog{}
+	line := strings.Repeat("x", 1023) + "\n"
+	for sent := 0; sent <= maxReleaseLog+64*len(line); sent += len(line) {
+		_, _ = l.Write([]byte(line))
+	}
+	_, _ = l.Write([]byte("short\n\x1b[0;36mdevopsy: current is now 1\x1b[0m\nmore\n"))
+	l.Line("devopsy: release exited 1")
+	got := string(l.Text())
+	if strings.Count(got, "[devopsy: log truncated]") != 1 {
+		t.Errorf("truncated said %d times", strings.Count(got, "[devopsy: log truncated]"))
+	}
+	_, after, _ := strings.Cut(got, "[devopsy: log truncated]\n")
+	after = regexp.MustCompile(`(?m)^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d `).ReplaceAllString(after, "")
+	if want := "devopsy: current is now 1\ndevopsy: release exited 1\n"; after != want {
+		t.Errorf("after the cap:\n%q\nwant:\n%q", after, want)
+	}
+	if len(got) > maxReleaseLog+maxReleaseLog/4 {
+		t.Errorf("log of %d bytes", len(got))
+	}
+}
+
 // --log joins the session's log and the server's: each server part right
 // after the anchor with its tag (shown without it), cleaned and
 // indented, whatever the times say; a part no anchor claims (its

@@ -13,8 +13,9 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// maxReleaseLog caps a release log: a runaway build log stays on the
-// screen, not on the server.
+// maxReleaseLog caps the lines a release log keeps, a progress
+// display's redrawn lines not counted: a runaway build log stays on the
+// screen, not on the server. Past it only devopsy's own lines are kept.
 const maxReleaseLog = 8 << 20
 
 // releaseLog records a release or rollback as it runs: devopsy's own
@@ -29,8 +30,9 @@ type releaseLog struct {
 	// cur is the line being written, started at start.
 	cur   bytes.Buffer
 	start time.Time
-	size  int
-	full  bool
+	// size is what lines holds, in bytes; full is past maxReleaseLog.
+	size int
+	full bool
 }
 
 type logLine struct {
@@ -51,37 +53,54 @@ func newReleaseLog(what string, t *remote.Target) *releaseLog {
 func (l *releaseLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.size+len(p) > maxReleaseLog {
-		if !l.full {
-			l.flush()
-			l.lines = append(l.lines, logLine{time.Now(), "[devopsy: log truncated]"})
-			l.full = true
-		}
-		return len(p), nil
-	}
 	n := len(p)
-	l.size += n
 	now := time.Now()
 	for len(p) > 0 {
 		if l.cur.Len() == 0 {
 			l.start = now
 		}
 		i := bytes.IndexByte(p, '\n')
+		line := p
+		if i >= 0 {
+			line = p[:i]
+		}
+		// A line with no end holds no more than the cap.
+		if room := maxReleaseLog - l.cur.Len(); len(line) > room {
+			line = line[:max(room, 0)]
+		}
+		l.cur.Write(line)
 		if i < 0 {
-			l.cur.Write(p)
 			break
 		}
-		l.cur.Write(p[:i])
-		l.flush()
+		l.flush(now)
 		p = p[i+1:]
 	}
 	return n, nil
 }
 
-// flush ends the current line.
-func (l *releaseLog) flush() {
-	l.lines = append(l.lines, logLine{l.start, l.cur.String()})
+// flush ends the current line: it drops the lines a progress display's
+// redraw supersedes, then keeps the line while the log is under the cap,
+// and past it only a line of devopsy's own.
+func (l *releaseLog) flush(now time.Time) {
+	text := l.cur.String()
 	l.cur.Reset()
+	if !l.full {
+		var dropped []logLine
+		l.lines, dropped, text = redraw(l.lines, text)
+		for _, d := range dropped {
+			l.size -= len(d.text)
+		}
+		if l.size+len(text) <= maxReleaseLog {
+			l.size += len(text)
+			l.lines = append(l.lines, logLine{l.start, text})
+			return
+		}
+		l.full = true
+		l.lines = append(l.lines, logLine{now, "[devopsy: log truncated]"})
+	}
+	if strings.HasPrefix(terminalCodes.ReplaceAllString(text, ""), report.Prefix) {
+		l.lines = append(l.lines, logLine{l.start, text})
+	}
 }
 
 // Line records one line of devopsy's own.
@@ -104,6 +123,22 @@ var spinner = regexp.MustCompile(`^\s*[\x{2800}-\x{28FF}]`)
 // cursorUp is a progress display (BuildKit's, on a terminal) going back
 // up n lines to redraw them: those n lines are superseded.
 var cursorUp = regexp.MustCompile(`\x1b\[([0-9]*)A`)
+
+// redraw applies a line's moves up (cursorUp) to the lines before it: it
+// returns them without the ones it supersedes, those it dropped, and the
+// line without the moves.
+func redraw(before []logLine, text string) (kept, dropped []logLine, rest string) {
+	for _, m := range cursorUp.FindAllStringSubmatch(text, -1) {
+		n := 1
+		if m[1] != "" {
+			n, _ = strconv.Atoi(m[1])
+		}
+		n = min(n, len(before))
+		dropped = append(dropped, before[len(before)-n:]...)
+		before = before[:len(before)-n]
+	}
+	return before, dropped, cursorUp.ReplaceAllString(text, "")
+}
 
 // Text is the log as plain text, each line after its time: without
 // terminal codes, with only the last state of lines a progress display
@@ -130,17 +165,9 @@ func cleanLines(lines []logLine) []logLine {
 	// those n go, empty ones included (hence they are dropped only below).
 	var out []logLine
 	for _, line := range lines {
-		for _, m := range cursorUp.FindAllStringSubmatch(line.text, -1) {
-			n := 1
-			if m[1] != "" {
-				n, _ = strconv.Atoi(m[1])
-			}
-			if n > len(out) {
-				n = len(out)
-			}
-			out = out[:len(out)-n]
-		}
-		text := strings.TrimRight(terminalCodes.ReplaceAllString(line.text, ""), "\r")
+		var text string
+		out, _, text = redraw(out, line.text)
+		text = strings.TrimRight(terminalCodes.ReplaceAllString(text, ""), "\r")
 		if j := strings.LastIndex(text, "\r"); j >= 0 {
 			text = text[j+1:]
 		}
