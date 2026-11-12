@@ -188,12 +188,14 @@ func doorReadRun(c *exec.Cmd, output bool) int {
 // doorSide is the deploy user's side of one request.
 type doorSide struct {
 	policy door.Policy
-	// claims are the project's uid claims (projectClaims), read once per request: what its
-	// containers may run as (uidsOf) and its data's owners may be (Policy.ProjectUIDs).
-	claims []uids.Claim
-	real   string
-	env    []string
-	vets   []remote.DoorVet
+	// claims are the project's uid claims (projectClaims), read once per request, again under
+	// a start's locks: what its containers may run as (uidsOf) and its data's owners may be
+	// (Policy.ProjectUIDs). uidRoot is the release root they are under.
+	claims  []uids.Claim
+	uidRoot string
+	real    string
+	env     []string
+	vets    []remote.DoorVet
 	// made are this request's work directories, so that a refusal, or a claim cut by a
 	// signal (claimCut), leaves none behind; madeMu guards it for the latter's goroutine.
 	made   []string
@@ -946,12 +948,16 @@ func runDoor(args []string) int {
 	// A project user with no key left logs in no more, and what it left running gets nothing
 	// from the door either (KeysRemoveScript ends it).
 	keysAt, _ := os.Stat(remote.DoorKeysFile(doorWho))
-	claims, err := projectClaims(policy.Project)
+	releases, err := remote.ReleaseSettings()
+	if err != nil {
+		return doorRefused(err)
+	}
+	claims, err := projectClaims(claimsStore(releases.Root), policy.Project)
 	if err != nil {
 		return doorRefused(fmt.Errorf("refused: the project's uid claims: %w", err))
 	}
 	policy.ProjectUIDs = claimedUIDs(claims)
-	side := &doorSide{policy: policy, claims: claims, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
+	side := &doorSide{policy: policy, claims: claims, uidRoot: releases.Root, real: realDocker(), env: os.Environ(), vets: settings.Vets, keysAt: keysAt, keysFile: remote.DoorKeysFile(doorWho), asked: asked}
 	// With no key left, or an end pending: what a removed key left running gets nothing.
 	if err := side.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
@@ -1012,6 +1018,10 @@ func (s *doorSide) answer(args []string, rendered map[string]any, renderErr erro
 	case "uids":
 		if len(args) == 2 {
 			return s.uids(args[1])
+		}
+	case "free":
+		if len(args) == 2 {
+			return s.free(args[1])
 		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
@@ -1414,8 +1424,16 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
 	// A claim's copy is a work directory too, which a door killed mid-start leaves.
 	s.sweepWork()
-	// What its containers may run as: the claims of the environment the file names.
+	// What its containers may run as: the claims of the environment the file names, read
+	// again under its start locks when it starts containers, which compose then holds.
 	name, _ := file["name"].(string)
+	var locks []*uids.Lock
+	if door.StartsContainers(argv[0]) {
+		var err error
+		if locks, err = s.startLocks(name); err != nil {
+			return doorRefused(fmt.Errorf("refused: the start locks of %s: %w", name, err))
+		}
+	}
 	s.policy.UIDs = uidsOf(s.claims, name)
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
@@ -1513,6 +1531,9 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
 	if err := s.stillAsked(); err != nil {
 		return doorRefused(fmt.Errorf("refused: %w", err))
+	}
+	if err := keepAcrossExec(locks); err != nil {
+		return doorRefused(err)
 	}
 	err = execDecided(s.real, append(cmd, argv...), env)
 	return doorRefused(err)

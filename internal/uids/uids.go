@@ -510,3 +510,28 @@ func (s Store) Free(o Owner, held *Lock) error {
 	}
 	return nil
 }
+
+// FreeIfUnused frees o, a project's (or an instance's) own claim, when no environment claim
+// of its project and instance is left, deciding under the directory's lock so no first claim
+// of another environment comes between; held is o's start lock, exclusive, as Free needs.
+// It says whether it freed.
+func (s Store) FreeIfUnused(o Owner, held *Lock) (bool, error) {
+	if o.Env != "" {
+		return false, fmt.Errorf("%s is an environment's claim", o)
+	}
+	unlock, err := s.lockDir()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	claims, err := s.List()
+	if err != nil {
+		return false, err
+	}
+	for _, c := range claims {
+		if c.Bad == "" && c.Owner.Env != "" && c.Owner.ProjectOf() == o {
+			return false, nil
+		}
+	}
+	return true, s.Free(o, held)
+}

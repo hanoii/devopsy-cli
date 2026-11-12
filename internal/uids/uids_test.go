@@ -432,3 +432,51 @@ func TestHostTaken(t *testing.T) {
 		t.Error("a host with no files takes 0")
 	}
 }
+
+// A project's claim goes only with the last environment claim of its project and instance.
+func TestFreeIfUnused(t *testing.T) {
+	t.Parallel()
+	s := store(t)
+	a, b := env(t, "shop", "", "prod"), env(t, "shop", "", "staging")
+	eu := env(t, "shop", "eu", "prod")
+	for _, o := range []Owner{a, b, eu} {
+		if _, _, err := s.LookupPair(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	free := func(o Owner) {
+		t.Helper()
+		l, err := s.LockStart(o, syscall.LOCK_EX)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Close()
+		if err := s.Free(o, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	project := func() bool {
+		t.Helper()
+		l, err := s.LockStart(a.ProjectOf(), syscall.LOCK_EX)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Close()
+		freed, err := s.FreeIfUnused(a.ProjectOf(), l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return freed
+	}
+	free(a)
+	if project() {
+		t.Fatal("freed with staging left")
+	}
+	free(b)
+	if !project() {
+		t.Fatal("not freed with no environment left")
+	}
+	if _, ok, _ := s.Read(eu.ProjectOf()); !ok {
+		t.Fatal("the instance's project claim went with the project's")
+	}
+}

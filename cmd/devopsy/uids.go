@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -116,14 +120,9 @@ func (s *doorSide) ownerAt(base string) (uids.Owner, error) {
 	return o, nil
 }
 
-// projectClaims are the claims of project in the deploy user's claims directory, none when
-// it has no directory yet.
-func projectClaims(project string) ([]uids.Claim, error) {
-	r, err := remote.ReleaseSettings()
-	if err != nil {
-		return nil, err
-	}
-	all, err := claimsStore(r.Root).List()
+// projectClaims are the claims of project in s, none when it has no directory yet.
+func projectClaims(s uids.Store, project string) ([]uids.Claim, error) {
+	all, err := s.List()
 	if err != nil {
 		return nil, err
 	}
@@ -162,4 +161,175 @@ func uidsOf(claims []uids.Claim, name string) []uint32 {
 		}
 	}
 	return out
+}
+
+// freeUIDs frees env's claim, last in its --destroy: under env's start lock, exclusive, it
+// takes down once more whatever a start made after the destroy's own down (down, by the
+// environment's compose name), then removes the claim; then its project's, when no other
+// environment of it holds a claim. Its waits are announced and bounded.
+func freeUIDs(s uids.Store, env uids.Owner, down func(name string) error) error {
+	lock, err := s.LockStart(env, syscall.LOCK_EX)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := down(env.ComposeName()); err != nil {
+		return fmt.Errorf("taking %s down before its uid goes: %w", env.ComposeName(), err)
+	}
+	if err := s.Free(env, lock); err != nil {
+		return err
+	}
+	project := env.ProjectOf()
+	plock, err := s.LockStart(project, syscall.LOCK_EX)
+	if err != nil {
+		return err
+	}
+	defer plock.Close()
+	_, err = s.FreeIfUnused(project, plock)
+	return err
+}
+
+// downArgs take a compose project down by its name alone, whatever is left of it.
+func downArgs(name string) []string {
+	return []string{"compose", "-p", name, "down", "--volumes", "--remove-orphans"}
+}
+
+// runFreeUIDs is the hidden --free-uids <owner>: a --destroy's last step, which frees the
+// environment's uid claim, the project user's through the door.
+func runFreeUIDs(args []string) int {
+	if len(args) != 1 {
+		report.Error("usage: devopsy " + remote.FreeUIDsFlag + " <owner>")
+		return 2
+	}
+	env, err := uids.ParseOwner(args[0])
+	if err != nil || env.Env == "" {
+		report.Error(fmt.Sprintf("%s: %q is no environment's owner", remote.FreeUIDsFlag, args[0]))
+		return 2
+	}
+	if behindDoor() {
+		if _, err := doorAsk(true, "free", env.String()); err != nil {
+			return 1
+		}
+		return 0
+	}
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return failErr(err)
+	}
+	down := func(name string) error {
+		c := exec.Command(realDocker(), downArgs(name)...)
+		c.Stdout, c.Stderr = errOut, errOut
+		return c.Run()
+	}
+	if err := freeUIDs(claimsStore(r.Root), env, down); err != nil {
+		return failErr(err)
+	}
+	return 0
+}
+
+// free answers "free <owner>": a project user's --destroy's last step, for an environment of
+// its own project whose data is gone, through the same step as the deploy user's.
+func (s *doorSide) free(owner string) int {
+	env, err := uids.ParseOwner(owner)
+	if err != nil || env.Env == "" || env.Project != s.policy.Project {
+		return doorRefused(fmt.Errorf("refused: not an environment of this project's: %q", owner))
+	}
+	name := env.ComposeName()
+	if _, err := os.Stat(s.policy.Mnt(name)); err == nil {
+		return doorRefused(fmt.Errorf("refused: %s still has its data (%s): its --destroy removes it first", name, s.policy.Mnt(name)))
+	}
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return doorRefused(err)
+	}
+	down := func(name string) error {
+		env, err := s.composeEnv("", false)
+		if err != nil {
+			return err
+		}
+		c := s.docker(downArgs(name)...)
+		c.Env, c.Stdout, c.Stderr = env, os.Stderr, os.Stderr
+		return c.Run()
+	}
+	if err := freeUIDs(claimsStore(r.Root), env, down); err != nil {
+		return doorRefused(fmt.Errorf("refused: freeing the uid of %s: %w", name, err))
+	}
+	return 0
+}
+
+// holdStartLocks takes, shared, the start locks of the environment plan starts containers of
+// and of its project, then reads their claims again under them: a --destroy frees a claim only
+// with its lock exclusive, so what the load set either holds until compose ends or the start
+// fails here. The locks are close-on-exec until keepAcrossExec.
+func holdStartLocks(plan *cli.Plan) ([]*uids.Lock, error) {
+	s := claimsStore(plan.UIDRoot)
+	var locks []*uids.Lock
+	for _, o := range []uids.Owner{plan.UIDOwner, plan.UIDOwner.ProjectOf()} {
+		l, err := s.LockStart(o, syscall.LOCK_SH)
+		if err != nil {
+			closeLocks(locks)
+			return nil, err
+		}
+		locks = append(locks, l)
+	}
+	for k, o := range map[string]uids.Owner{cli.UIDEnv: plan.UIDOwner, cli.ProjectUIDEnv: plan.UIDOwner.ProjectOf()} {
+		uid, ok, err := s.Read(o)
+		if err != nil || !ok || envValue(plan.Env, k) != strconv.FormatUint(uint64(uid), 10) {
+			closeLocks(locks)
+			return nil, fmt.Errorf("the uid claim of %s changed as it started (a --destroy meanwhile?): run it again", o)
+		}
+	}
+	return locks, nil
+}
+
+func closeLocks(locks []*uids.Lock) {
+	for _, l := range locks {
+		l.Close()
+	}
+}
+
+// keepAcrossExec hands the locks to what the exec runs, right before it.
+func keepAcrossExec(locks []*uids.Lock) error {
+	for _, l := range locks {
+		if err := l.KeepAcrossExec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startLocks takes, shared, the start locks of the owners whose compose name is name and of
+// their projects, then reads the project's claims again under them, for the check and the
+// exec that follow: a --destroy frees a claim only with its lock exclusive. A side with no
+// claims directory (a test's) takes none.
+func (s *doorSide) startLocks(name string) ([]*uids.Lock, error) {
+	if s.uidRoot == "" {
+		return nil, nil
+	}
+	store := claimsStore(s.uidRoot)
+	var owners []uids.Owner
+	for _, c := range s.claims {
+		if c.Owner.Env != "" && c.Owner.ComposeName() == name {
+			owners = append(owners, c.Owner)
+			if !slices.Contains(owners, c.Owner.ProjectOf()) {
+				owners = append(owners, c.Owner.ProjectOf())
+			}
+		}
+	}
+	var locks []*uids.Lock
+	for _, o := range owners {
+		l, err := store.LockStart(o, syscall.LOCK_SH)
+		if err != nil {
+			closeLocks(locks)
+			return nil, err
+		}
+		locks = append(locks, l)
+	}
+	claims, err := projectClaims(store, s.policy.Project)
+	if err != nil {
+		closeLocks(locks)
+		return nil, err
+	}
+	s.claims = claims
+	return locks, nil
 }

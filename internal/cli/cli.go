@@ -20,6 +20,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -72,6 +73,12 @@ type Plan struct {
 	// whatever brought the link (a restore, a sync, an import): Docker
 	// resolves bind sources at every start.
 	StartsInRelease bool
+	// StartsUIDs is set for a command that starts containers in a release on a server (cp
+	// aside, which starts none): the caller holds the environment's start locks while compose
+	// runs (UIDRoot's claims, UIDOwner's and its project's), so no claim is freed meanwhile.
+	StartsUIDs bool
+	UIDRoot    string
+	UIDOwner   uids.Owner
 }
 
 // startingCommands are compose's commands that start or create
@@ -161,6 +168,8 @@ func (p *loadedProject) starting(plan *Plan, args []string) {
 	// stopped (checked on Docker 29.8: a copy into a bind whose source
 	// became a link landed where the link leads, as root).
 	plan.StartsInRelease = (starts || command == "cp" && !dryRun(args)) && InRelease(p.dir)
+	plan.StartsUIDs = starts && p.uidRoot != ""
+	plan.UIDRoot, plan.UIDOwner = p.uidRoot, p.uidOwner
 }
 
 // Output is returned when devopsy only prints something to stdout.
@@ -1373,6 +1382,10 @@ type loadedProject struct {
 	// address is a local command's, when the devopsy that read it gave one.
 	address   string
 	addressed bool
+	// uidRoot and uidOwner are, in a release, the release root its claims are under and the
+	// environment's owner (setUIDs).
+	uidRoot  string
+	uidOwner uids.Owner
 }
 
 // newSecrets masks the project's secrets as loaded.

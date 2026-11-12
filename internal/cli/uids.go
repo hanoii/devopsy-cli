@@ -81,6 +81,7 @@ func (p *loadedProject) setUIDs(project *remote.Project) error {
 		if err != nil {
 			return &ExitError{Code: 1, Msg: "the uids of " + envOwner.String() + ": " + err.Error()}
 		}
+		p.uidRoot, p.uidOwner = root, envOwner
 		from := "its claim under " + filepath.Join(root, UIDsDir)
 		p.forceVar(UIDEnv, strconv.FormatUint(uint64(envUID), 10), from)
 		p.forceVar(ProjectUIDEnv, strconv.FormatUint(uint64(projectUID), 10), from)

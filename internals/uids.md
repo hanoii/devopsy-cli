@@ -19,3 +19,7 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `interna
 - A project user's devopsy asks the door's `uids` request, whose answer is the two numbers alone (`askDoorUIDs`); the door reads the owner from the path in the caller's tree (`ownerAt`).
 - Locally the uids are the plain hashes, under the caller's and the `.env`'s, the project's from `config.yaml`'s `project:` alone (`CommittedName`) so it matches every server's.
 - `--vars set` and a config's `env:` refuse the two names (`uids.Reserved`).
+- Every start of containers in a release holds both start locks shared, the environment's and its project's, from before it reads the claims again until compose ends (`holdStartLocks` for the deploy user, `doorSide.startLocks` for the door's `up`, `create` and `run`), and fails when a claim changed since the load: a free between the load and the start would leave a container on a freed uid.
+- Starts that run compose as a child (`runCompose`, `ensureVolumes`) need no start lock: they run under the release or sync lock, which `--destroy` takes.
+- A claim is freed only by a `--destroy`'s last step (`--free-uids`, `freeUIDs`, the door's `free`), after the removal and in its "nothing at" branch too, so a rerun finishes a cut one: under the start lock exclusive it takes the compose name down once more, then frees the claim, then the project's when no environment claim of it is left (`FreeIfUnused`).
+- The door frees only its own project's environment, and none whose data (`<space>/mnt/<compose name>`) is left.

@@ -38,6 +38,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // A release's directory, releases/<id>, holds the project as uploaded in
@@ -2067,9 +2068,17 @@ cat "$d/` + ServerLogFile + `" 2>/dev/null || true
 // before anything goes: compose's down removes images too); then the
 // directory. A failure before the removal removes nothing.
 func DestroyScript(t *Target, projectName string) string {
+	// The uid claim goes last, and with nothing left of the environment too, so a cut destroy's
+	// rerun frees it.
+	free := ""
+	if t.Project != nil && t.Project.Name != "" {
+		owner := uids.Owner{Project: t.Project.Name, Instance: t.Instance, Env: t.Name}.String()
+		free = `devopsy ` + FreeUIDsFlag + ` ` + Quote(owner) + ` || { devopsy --say error "the uid of ` + owner + ` is not freed: its --destroy frees it when run again"; exit 1; }
+`
+	}
 	return "set -eu\n" + basePrelude(t) + removeMoved + `if [ ! -d "$base" ]; then
   devopsy --say info "nothing at $base"
-  exit 0
+  ` + free + `  exit 0
 fi
 if [ "$base" = "$root" ] || [ "$base" = / ]; then
   devopsy --say error "refusing to remove $base"
@@ -2122,7 +2131,7 @@ cd /
 }
 # Snapshots outside $base (the server's snapshot root): their directory.
 case "$snaps" in "$base"/*) ;; *) rm -rf "$snaps" || { devopsy --say error "could not remove $snaps"; exit 1; } ;; esac
-devopsy --say info "removed $base"
+` + free + `devopsy --say info "removed $base"
 `
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"io"
 	"os"
 	"os/exec"
@@ -1747,6 +1748,21 @@ exit 0
 	out, err := run(DestroyScript(target("b"), ""), "FAKE_IN_USE=registry/app:def", "TAG=ghi")
 	if err != nil || !strings.Contains(out, "registry/app:def stays: conflict: a container uses registry/app:def") || exists("app/b/prod") {
 		t.Errorf("destroy b (%v):\n%s", err, out)
+	}
+	// Its uid claim goes last, after the removal; and with nothing left of the environment,
+	// as a cut destroy leaves it, the next one frees it still.
+	freed := "--free-uids " + uids.Owner{Project: "app", Instance: "b", Env: "prod"}.String() + "\n"
+	if calls := readFile(filepath.Join(root, "calls")); !strings.HasSuffix(calls, freed) {
+		t.Errorf("destroy b's last call is not its claim's free:\n%s", calls)
+	}
+	if err := os.Remove(filepath.Join(root, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(DestroyScript(target("b"), ""), "TAG=ghi"); err != nil || !strings.Contains(out, "nothing at") {
+		t.Errorf("destroy of nothing (%v):\n%s", err, out)
+	}
+	if calls := readFile(filepath.Join(root, "calls")); !strings.Contains(calls, freed) {
+		t.Errorf("a destroy finding nothing does not free the claim:\n%s", calls)
 	}
 
 	if !strings.Contains(out, "fetch of release 4 was interrupted") {
