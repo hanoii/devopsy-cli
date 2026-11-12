@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
-	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
-	"go.yaml.in/yaml/v3"
 )
 
 // The uids devopsy gives an environment's containers, for its compose files to read
@@ -23,7 +22,7 @@ const (
 )
 
 // UIDsDir is the claims directory's name, under a server's release root.
-const UIDsDir = ".devopsy-uids"
+const UIDsDir = uids.DirName
 
 // ClaimUIDs, when set (cmd/devopsy sets it), looks up the claims of a release's environment
 // and of its project: through the door for a project user, else in root's claims directory,
@@ -76,7 +75,7 @@ func (p *loadedProject) setUIDs(project *remote.Project) error {
 		claim := ClaimUIDs
 		if claim == nil {
 			claim = func(root string, env uids.Owner) (uint32, uint32, error) {
-				return uids.Store{Dir: filepath.Join(root, UIDsDir), Taken: uids.HostTaken("/")}.LookupPair(env)
+				return uids.StoreAt(root).LookupPair(env)
 			}
 		}
 		envUID, projectUID, err := claim(root, envOwner)
@@ -120,22 +119,6 @@ func (p *loadedProject) defaultVar(k, v, from string) {
 // ReadsUIDs says whether the compose files of the project at projectDir read either uid
 // variable: a release of it then needs a server's devopsy that gives them (remote.UIDsFeature).
 func ReadsUIDs(projectDir string) (bool, error) {
-	for _, file := range composeFiles(projectDir) {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return false, err
-		}
-		var dict map[string]any
-		if err := yaml.Unmarshal(data, &dict); err != nil {
-			return false, fmt.Errorf("%s: %v", file, err)
-		}
-		vars := template.ExtractVariables(dict, nil)
-		if _, ok := vars[UIDEnv]; ok {
-			return true, nil
-		}
-		if _, ok := vars[ProjectUIDEnv]; ok {
-			return true, nil
-		}
-	}
-	return false, nil
+	names, err := ComposeVariables(projectDir)
+	return slices.Contains(names, UIDEnv) || slices.Contains(names, ProjectUIDEnv), err
 }

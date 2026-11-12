@@ -71,6 +71,9 @@ type ServerInfo struct {
 	// root's claims directory UIDsDir.
 	UIDsDir string     `json:"uids_dir,omitempty"`
 	UIDs    []UIDClaim `json:"uids,omitempty"`
+	// DoorProjects are the projects of the door's users, whose environments come from a read
+	// of their trees that may give none (a tree that does not answer in time).
+	DoorProjects []string `json:"door_projects,omitempty"`
 }
 
 // DockerFacts are the host's Docker, from docker info, docker compose

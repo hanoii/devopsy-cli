@@ -1,55 +1,13 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
-	"github.com/hanoii/devopsy-cli/internal/door"
-	"github.com/hanoii/devopsy-cli/internal/remote"
-	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
-
-// Bug (review, fable, round 1): the door's "free" checks only the owner's project, never
-// that the owner's compose name is this project's (Policy.OwnName, as downProject does).
-// Compose names are flat: project shop's instance admin, environment prod, is
-// shop-admin-prod, the name of project shop-admin's prod. So shop's user asks
-// "free env:shop:admin:prod" and the door runs, as the deploy user,
-// `docker compose -p shop-admin-prod down --volumes --remove-orphans`: another tenant's
-// containers and volumes.
-func TestDoorFreeDownsOnlyItsOwnName(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	calls := filepath.Join(dir, "calls")
-	docker := filepath.Join(dir, "docker")
-	// It fails, so nothing is freed whatever the door decides.
-	if err := testfile.Write(docker, []byte("#!/bin/sh\necho \"$*\" >> "+calls+"\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Without the check the request reaches the server's own claims directory: leave no
-	// lock file of this test's there.
-	if r, err := remote.ReleaseSettings(); err == nil {
-		t.Cleanup(func() {
-			locks := filepath.Join(claimsStore(r.Root).Dir, "locks")
-			_ = os.Remove(filepath.Join(locks, "env:shop:admin:prod"))
-			_ = os.Remove(locks)
-			_ = os.Remove(filepath.Dir(locks))
-		})
-	}
-	side := &doorSide{
-		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Others: []string{"shop-admin"}},
-		real:   docker, env: os.Environ(),
-	}
-	if code := side.free("env:shop:admin:prod"); code != 2 {
-		t.Errorf("freed another project's compose name (%d)", code)
-	}
-	if out, _ := os.ReadFile(calls); len(out) != 0 {
-		t.Errorf("the door ran docker on shop-admin's name for shop's user:\n%s", out)
-	}
-}
 
 // Bug (review, fable, round 1): freeUIDs takes the project's start lock exclusive whether or
 // not the project's claim goes. With another environment of the project left, the claim

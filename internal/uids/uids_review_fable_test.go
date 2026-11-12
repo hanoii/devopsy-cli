@@ -20,8 +20,9 @@ func TestBadEntryHoldsTheUIDItPointsAt(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := strconv.FormatUint(uint64(o.Plain()), 10)
-	// A name no owner has (an uppercase environment, from a hand's rename), on o's slot.
-	if err := os.Symlink(plain, filepath.Join(s.Dir, "env:shop:Prod")); err != nil {
+	// A name no owner has (a hand's rename), on o's slot; never one differing in case alone,
+	// which macOS's filesystem takes for o's own.
+	if err := os.Symlink(plain, filepath.Join(s.Dir, "env:shop:prod:old")); err != nil {
 		t.Fatal(err)
 	}
 	uid, err := s.Lookup(o)
@@ -29,6 +30,6 @@ func TestBadEntryHoldsTheUIDItPointsAt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if uid == o.Plain() {
-		t.Errorf("%s took %d, which the entry env:shop:Prod points at", o, uid)
+		t.Errorf("%s took %d, which the entry env:shop:prod:old points at", o, uid)
 	}
 }

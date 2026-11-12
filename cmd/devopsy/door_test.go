@@ -660,7 +660,7 @@ esac
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	side := &doorSide{policy: door.Policy{Project: "shop", UIDs: uidsOf(testShopClaims, "shop-prod")}, claims: testShopClaims, real: docker}
+	side := &doorSide{policy: door.Policy{Project: "shop", UIDs: []uint32{10001}}, claims: testShopClaims, real: docker}
 	file := func(svc string) map[string]any {
 		f := map[string]any{"name": "shop-prod", "services": map[string]any{svc: map[string]any{
 			"build": map[string]any{"context": "."}, "image": "mongo-express:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"}}}}
@@ -1647,7 +1647,8 @@ func doorComposeHelper(dir string) {
 			panic(err)
 		}
 	}
-	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, os.Getenv("DEVOPSY_TEST_DOOR_PROFILES"), cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), dir), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
+	// Its prod's directory, whose claim the side holds (testShopClaims), unless a test says.
+	os.Exit(side.compose(filepath.Join(dir, "none.json"), file, os.Getenv("DEVOPSY_TEST_DOOR_PROFILES"), cmp.Or(os.Getenv("DEVOPSY_TEST_DOOR_DIR"), filepath.Join(dir, "prod")), strings.Fields(os.Getenv("DEVOPSY_TEST_DOOR_VERB"))))
 }
 
 // The door's clone and mark take only a clone's directory or a take's in it (door.CloneDir):

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,29 +19,31 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
-// What an environment's containers may run as behind the door: the uid of each of the
-// project's owners whose compose name the file has (an instance admin's prod and an
-// environment admin-prod are both shop-admin-prod, one tenant's) and each one's project uid,
-// never another environment's, and nothing when no claim holds the name.
-func TestUIDsOfAComposeName(t *testing.T) {
+// What an environment's containers may run as behind the door comes from the request's
+// directory, never the file's name: <tree>/<environment>/... or <tree>/<instance>/<environment>/...,
+// each that holds a claim (an instance admin's prod and an environment admin under prod are
+// one tenant's), with its project's uid; a directory of no claimed environment allows none.
+func TestDirOwners(t *testing.T) {
 	t.Parallel()
+	tree := "/home/devopsy-shop/shop"
 	claims := []uids.Claim{
 		{Owner: uids.Owner{Project: "shop", Instance: "admin", Env: "prod"}, UID: 2000000001},
-		{Owner: uids.Owner{Project: "shop", Env: "admin-prod"}, UID: 2000000002},
+		{Owner: uids.Owner{Project: "shop", Env: "admin"}, UID: 2000000002},
 		{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 2000000003},
 		{Owner: uids.Owner{Project: "shop", Instance: "admin"}, UID: 1950000001},
 		{Owner: uids.Owner{Project: "shop"}, UID: 1900000001},
 	}
-	got := uidsOf(claims, "shop-admin-prod")
-	slices.Sort(got)
-	if want := []uint32{1900000001, 1950000001, 2000000001, 2000000002}; !slices.Equal(got, want) {
-		t.Errorf("shop-admin-prod: %v, want %v", got, want)
-	}
-	if got := uidsOf(claims, "shop-prod"); !slices.Equal(got, []uint32{2000000003, 1900000001}) {
-		t.Errorf("shop-prod: %v", got)
-	}
-	if got := uidsOf(claims, "shop-staging"); len(got) != 0 {
-		t.Errorf("an environment with no claim: %v", got)
+	for real, want := range map[string][]uint32{
+		tree + "/admin/prod/current/.devopsy":       {2000000002, 1900000001, 2000000001, 1950000001},
+		tree + "/prod/releases/20260101000000/code": {2000000003, 1900000001},
+		tree + "/prod":                 {2000000003, 1900000001},
+		tree + "/pr-1/current":         nil,
+		tree:                           nil,
+		"/home/devopsy-blog/blog/prod": nil,
+	} {
+		if got := uidsOfOwners(claims, dirOwners("shop", tree, real, claims)); !slices.Equal(got, want) {
+			t.Errorf("%s: %v, want %v", real, got, want)
+		}
 	}
 }
 
@@ -182,7 +186,11 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 	if err := os.Symlink("x", filepath.Join(s.Dir, "stray")); err != nil {
 		t.Fatal(err)
 	}
-	info := remote.ServerInfo{Version: "0.53.0", Root: root, Environments: []remote.Environment{{Path: "shop/prod", Status: "none\t\n"}}}
+	// A door project's tree that answered nothing: its claims taken for live.
+	if _, _, err := s.LookupPair(uids.Owner{Project: "door", Env: "prod"}); err != nil {
+		t.Fatal(err)
+	}
+	info := remote.ServerInfo{Version: "0.53.0", Root: root, Environments: []remote.Environment{{Path: "shop/prod", Status: "none\t\n"}}, DoorProjects: []string{"door"}}
 	info.UIDsDir, info.UIDs = uidFacts(root)
 	out, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
 	for _, want := range []string{"env:shop:prod", "project:shop", "env:blog:prod", "project:blog", "stray  no claim"} {
@@ -192,7 +200,7 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 	}
 	stale := map[string]bool{}
 	for _, w := range warnings {
-		for _, owner := range []string{"env:shop:prod", "env:blog:prod", "project:blog", "project:shop", "stray"} {
+		for _, owner := range []string{"env:shop:prod", "env:blog:prod", "project:blog", "project:shop", "stray", "env:door:prod"} {
 			if strings.HasPrefix(w.msg, owner+"'s uid claim is left") || strings.HasPrefix(w.msg, owner+" in ") {
 				stale[owner] = true
 				if len(w.fixes) != 1 || len(w.fixes[0].Cmds) != 1 || !strings.HasPrefix(w.fixes[0].Cmds[0], "rm ") {
@@ -201,7 +209,7 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 			}
 		}
 	}
-	for owner, want := range map[string]bool{"env:blog:prod": true, "stray": true, "env:shop:prod": false, "project:shop": false, "project:blog": false} {
+	for owner, want := range map[string]bool{"env:blog:prod": true, "stray": true, "env:shop:prod": false, "project:shop": false, "project:blog": false, "env:door:prod": false} {
 		if stale[owner] != want {
 			t.Errorf("%s warned %v, want %v", owner, stale[owner], want)
 		}
@@ -226,5 +234,96 @@ func TestDataLeft(t *testing.T) {
 	}
 	if left, err := dataLeft(dir); err != nil || !left {
 		t.Errorf("an entry left: %v %v", left, err)
+	}
+}
+
+// lockedDockerHelper is a docker for TestComposeRunHoldsStartLocks, spec "<lock>|<out>": a
+// compose config answers an empty project, and an up writes to out whether lock, a start
+// lock's file, is held (its exclusive lock refused) while compose runs.
+func lockedDockerHelper(spec string) {
+	lock, out, _ := strings.Cut(spec, "|")
+	args := strings.Join(os.Args[1:], " ")
+	switch {
+	case strings.Contains(args, " config"):
+		os.Stdout.WriteString(`{"name":"shop-prod","services":{}}`)
+	case strings.Contains(args, " up"):
+		state := "free"
+		if l, err := busyStore(filepath.Dir(filepath.Dir(lock))).LockStart(uids.Owner{Project: "shop", Env: "prod"}, syscall.LOCK_EX); err != nil {
+			state = "held"
+		} else {
+			l.Close()
+		}
+		_ = os.WriteFile(out, []byte(state), 0o644)
+	}
+	os.Exit(0)
+}
+
+// A start devopsy runs as a child in a release (composeRun: a release's step, ensureVolumes)
+// holds the environment's start lock while compose runs, as an exec'd one does: a --destroy
+// frees a claim after its release lock went with the environment's directory, so the release
+// lock keeps no free out.
+//
+// Not parallel: it sets PATH, DOCKER_HOST and DEVOPSY_TEST_LOCKED_DOCKER.
+func TestComposeRunHoldsStartLocks(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(root, "shop", "prod", "releases", "1")
+	write(t, filepath.Join(rel, remote.CodeDir, ".devopsy", "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)
+	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='shop-prod'\nDEVOPSY_PROJECT='shop'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
+	bin := t.TempDir()
+	if err := os.Symlink(os.Args[0], filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "state")
+	lock := filepath.Join(root, cli.UIDsDir, "locks", "env:shop:prod")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DEVOPSY_TEST_LOCKED_DOCKER", lock+"|"+out)
+	// The deploy user's devopsy, which reaches Docker itself: its docker is no door's.
+	t.Setenv("DOCKER_HOST", "unix:///nonexistent")
+	if err := composeRun(context.Background(), filepath.Join(rel, remote.CodeDir), io.Discard, false, "up", "-d"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); string(got) != "held" {
+		t.Errorf("compose ran with the start lock %q", got)
+	}
+}
+
+// The door's free takes an environment directory of the caller's tree and reads the owner
+// from it, never the caller's words: a name that is another project's (an instance admin's
+// prod is shop-admin-prod, project shop-admin's) is refused before anything is taken down,
+// so is an environment still there, and a gone one of its own with no claim takes nothing
+// down either.
+//
+// Not parallel: it sets PATH (doorFakes) and doorLog.
+func TestDoorFreeTakesWhatItsPathSays(t *testing.T) {
+	_, docker := doorFakes(t)
+	dir := t.TempDir()
+	saved := doorLog
+	t.Cleanup(func() { doorLog = saved })
+	doorLog = filepath.Join(dir, "refused.log")
+	tree := filepath.Join(dir, "tree")
+	if err := os.MkdirAll(filepath.Join(tree, "prod"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "root")
+	side := &doorSide{
+		policy:  door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: tree, Others: []string{"shop-admin"}},
+		uidRoot: root, real: docker, env: os.Environ(),
+	}
+	for _, base := range []string{filepath.Join(tree, "admin", "prod"), filepath.Join(tree, "prod"), "env:shop:admin-prod", filepath.Join(dir, "elsewhere", "prod")} {
+		if code := side.free(base); code != 2 {
+			t.Errorf("%s: freed (%d)", base, code)
+		}
+	}
+	if _, err := os.Stat(docker); err == nil {
+		t.Errorf("docker ran for a refused free")
+	}
+	if code := side.free(filepath.Join(tree, "gone")); code != 0 {
+		t.Errorf("a gone environment of its own, never claimed: %d", code)
+	}
+	if _, err := os.Stat(docker); err == nil {
+		t.Errorf("a free of what held no claim took a name down")
 	}
 }

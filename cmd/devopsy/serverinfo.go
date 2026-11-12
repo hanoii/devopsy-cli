@@ -228,7 +228,12 @@ func serverFacts() (remote.ServerInfo, error) {
 		}
 	}
 	info.Containers = hostContainers()
-	info.Environments = environments(info.Root, doorTrees(info.Root), func(who, tree string) []remote.Environment {
+	trees := doorTrees(info.Root)
+	for _, who := range trees {
+		info.DoorProjects = append(info.DoorProjects, strings.TrimPrefix(who, "devopsy-"))
+	}
+	slices.Sort(info.DoorProjects)
+	info.Environments = environments(info.Root, trees, func(who, tree string) []remote.Environment {
 		return treeEnvironments(who, tree, doorTreeWait)
 	}, ownedByMe)
 	info.UIDsDir, info.UIDs = uidFacts(info.Root)
@@ -1260,7 +1265,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			continue
 		}
 		row("uids", strconv.FormatUint(uint64(c.UID), 10)+"  "+c.Owner)
-		if why := staleUID(c, info.UIDs, info.Environments); why != "" {
+		if why := staleUID(c, info.UIDs, info.Environments, info.DoorProjects); why != "" {
 			warn(c.Owner+"'s uid claim is left: "+why, rm())
 		}
 	}

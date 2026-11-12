@@ -32,6 +32,9 @@ var binary string
 const startWait = time.Minute
 
 func TestMain(m *testing.M) {
+	if spec := os.Getenv("DEVOPSY_TEST_LOCKED_DOCKER"); spec != "" {
+		lockedDockerHelper(spec) // TestComposeRunHoldsStartLocks
+	}
 	if dir := os.Getenv("DEVOPSY_TEST_DOOR_COMPOSE"); dir != "" {
 		doorComposeHelper(dir) // TestDoorComposeHandsThePinnedFile
 	}

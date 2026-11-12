@@ -37,13 +37,11 @@ func claimUIDs(root string, env uids.Owner) (uint32, uint32, error) {
 // claimsStore is the claims directory under root, its waits announced and bounded and the
 // host's own ids never taken.
 func claimsStore(root string) uids.Store {
-	return uids.Store{
-		Dir:   filepath.Join(root, cli.UIDsDir),
-		Taken: uids.HostTaken("/"),
-		Wait: func(what string, try func() (bool, error)) error {
-			return boundedWait{what: what}.wait(context.Background(), report.Default(), try)
-		},
+	s := uids.StoreAt(root)
+	s.Wait = func(what string, try func() (bool, error)) error {
+		return boundedWait{what: what}.wait(context.Background(), report.Default(), try)
 	}
+	return s
 }
 
 // askDoorUIDs asks the door's "uids" request for the environment at base, through
@@ -68,11 +66,11 @@ func parseUIDPair(s string) (uint32, uint32, error) {
 	}
 	var got [2]uint32
 	for i, f := range fields {
-		n, err := strconv.ParseUint(f, 10, 32)
+		n, err := uids.ParseUID(f)
 		if err != nil {
-			return 0, 0, fmt.Errorf("%q is no uid", f)
+			return 0, 0, err
 		}
-		got[i] = uint32(n)
+		got[i] = n
 	}
 	return got[0], got[1], nil
 }
@@ -85,11 +83,10 @@ func (s *doorSide) uids(base string) int {
 	if err != nil {
 		return doorRefused(err)
 	}
-	r, err := remote.ReleaseSettings()
-	if err != nil {
-		return doorRefused(err)
+	if s.uidRoot == "" {
+		return doorRefused(errors.New("refused: the server has no uid claims"))
 	}
-	e, p, err := claimsStore(r.Root).LookupPair(envOwner)
+	e, p, err := claimsStore(s.uidRoot).LookupPair(envOwner)
 	if err != nil {
 		return doorRefused(fmt.Errorf("refused: the uids of %s: %w", envOwner, err))
 	}
@@ -121,19 +118,7 @@ func (s *doorSide) ownerAt(base string) (uids.Owner, error) {
 }
 
 // projectClaims are the claims of project in s, none when it has no directory yet.
-func projectClaims(s uids.Store, project string) ([]uids.Claim, error) {
-	all, err := s.List()
-	if err != nil {
-		return nil, err
-	}
-	var mine []uids.Claim
-	for _, c := range all {
-		if c.Bad == "" && c.Owner.Project == project {
-			mine = append(mine, c)
-		}
-	}
-	return mine, nil
-}
+func projectClaims(s uids.Store, project string) ([]uids.Claim, error) { return s.ListOf(project) }
 
 // claimedUIDs are every uid project's claims hold: what an owner of its data may be.
 func claimedUIDs(claims []uids.Claim) []uint32 {
@@ -144,19 +129,41 @@ func claimedUIDs(claims []uids.Claim) []uint32 {
 	return out
 }
 
-// uidsOf are what a container of the environment named name may run as: the uid of each of
-// the project's environments whose compose name it is (two owners can share one, both the
-// same tenant's), and each one's project uid. None when no load of its release claimed one.
-func uidsOf(claims []uids.Claim, name string) []uint32 {
-	var out []uint32
-	for _, c := range claims {
-		if c.Owner.Env == "" || c.Owner.ComposeName() != name {
-			continue
+// dirOwners are the environments of project a request's directory real, in its tree tree,
+// may be of, those claims holds: <tree>/<environment>/... and <tree>/<instance>/<environment>/...
+// (both read from the path, the same tenant's either way), never what a file's name picks.
+func dirOwners(project, tree, real string, claims []uids.Claim) []uids.Owner {
+	rel, ok := strings.CutPrefix(real, strings.TrimRight(tree, "/")+"/")
+	if !ok {
+		return nil
+	}
+	parts := strings.Split(rel, "/")
+	var candidates []uids.Owner
+	if o, err := uids.EnvOwner(project, "", parts[0]); err == nil {
+		candidates = append(candidates, o)
+	}
+	if len(parts) > 1 {
+		if o, err := uids.EnvOwner(project, parts[0], parts[1]); err == nil {
+			candidates = append(candidates, o)
 		}
-		out = append(out, c.UID)
-		for _, p := range claims {
-			if p.Owner == c.Owner.ProjectOf() {
-				out = append(out, p.UID)
+	}
+	var owners []uids.Owner
+	for _, o := range candidates {
+		if slices.ContainsFunc(claims, func(c uids.Claim) bool { return c.Owner == o }) {
+			owners = append(owners, o)
+		}
+	}
+	return owners
+}
+
+// uidsOfOwners are what a container of those environments may run as: each one's uid and its
+// project's, from claims.
+func uidsOfOwners(claims []uids.Claim, owners []uids.Owner) []uint32 {
+	var out []uint32
+	for _, o := range owners {
+		for _, c := range claims {
+			if c.Owner == o || c.Owner == o.ProjectOf() {
+				out = append(out, c.UID)
 			}
 		}
 	}
@@ -165,21 +172,33 @@ func uidsOf(claims []uids.Claim, name string) []uint32 {
 
 // freeUIDs frees env's claim, last in its --destroy: under env's start lock, exclusive, it
 // takes down once more whatever a start made after the destroy's own down (down, by the
-// environment's compose name), then removes the claim; then its project's, when no other
-// environment of it holds a claim. Its waits are announced and bounded.
+// environment's compose name), then removes the claim. An environment that holds no claim
+// (never released, or freed by a cut destroy) takes nothing down: its flat compose name may
+// be another project's. Then its project's claim, taking the project's start lock only when no
+// environment of it holds one, so a sibling's start never holds up this free. Its waits are
+// announced and bounded.
 func freeUIDs(s uids.Store, env uids.Owner, down func(name string) error) error {
 	lock, err := s.LockStart(env, syscall.LOCK_EX)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	if err := down(env.ComposeName()); err != nil {
-		return fmt.Errorf("taking %s down before its uid goes: %w", env.ComposeName(), err)
+	_, claimed, err := s.Read(env)
+	if err != nil {
+		return err
+	}
+	if claimed {
+		if err := down(env.ComposeName()); err != nil {
+			return fmt.Errorf("taking %s down before its uid goes: %w", env.ComposeName(), err)
+		}
 	}
 	if err := s.Free(env, lock); err != nil {
 		return err
 	}
 	project := env.ProjectOf()
+	if left, err := s.EnvClaimsLeft(project); err != nil || left {
+		return err
+	}
 	plock, err := s.LockStart(project, syscall.LOCK_EX)
 	if err != nil {
 		return err
@@ -194,20 +213,15 @@ func downArgs(name string) []string {
 	return []string{"compose", "-p", name, "down", "--volumes", "--remove-orphans"}
 }
 
-// runFreeUIDs is the hidden --free-uids <owner>: a --destroy's last step, which frees the
-// environment's uid claim, the project user's through the door.
+// runFreeUIDs is the hidden --free-uids <environment directory>: a --destroy's last step,
+// once the environment is gone, which frees its uid claim, the project user's through the door.
 func runFreeUIDs(args []string) int {
 	if len(args) != 1 {
-		report.Error("usage: devopsy " + remote.FreeUIDsFlag + " <owner>")
-		return 2
-	}
-	env, err := uids.ParseOwner(args[0])
-	if err != nil || env.Env == "" {
-		report.Error(fmt.Sprintf("%s: %q is no environment's owner", remote.FreeUIDsFlag, args[0]))
+		report.Error("usage: devopsy " + remote.FreeUIDsFlag + " <environment directory>")
 		return 2
 	}
 	if behindDoor() {
-		if _, err := doorAsk(true, "free", env.String()); err != nil {
+		if _, err := doorAsk(true, "free", args[0]); err != nil {
 			return 1
 		}
 		return 0
@@ -216,9 +230,18 @@ func runFreeUIDs(args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
+	env, err := ownerUnder(r.Root, args[0])
+	if err != nil {
+		return failErr(err)
+	}
+	if _, err := os.Lstat(args[0]); err == nil {
+		return failErr(fmt.Errorf("%s is still there: its --destroy removes it first", args[0]))
+	}
 	down := func(name string) error {
 		c := exec.Command(realDocker(), downArgs(name)...)
-		c.Stdout, c.Stderr = errOut, errOut
+		// From /, which holds no compose file of anyone's: compose looks for one in its
+		// directory and every parent.
+		c.Dir, c.Stdout, c.Stderr = "/", errOut, errOut
 		return c.Run()
 	}
 	if err := freeUIDs(claimsStore(r.Root), env, down); err != nil {
@@ -227,31 +250,50 @@ func runFreeUIDs(args []string) int {
 	return 0
 }
 
-// free answers "free <owner>": a project user's --destroy's last step, for an environment of
-// its own project whose data is gone, through the same step as the deploy user's.
-func (s *doorSide) free(owner string) int {
-	env, err := uids.ParseOwner(owner)
-	if err != nil || env.Env == "" || env.Project != s.policy.Project {
-		return doorRefused(fmt.Errorf("refused: not an environment of this project's: %q", owner))
+// ownerUnder is the owner of the environment directory base under the release root root:
+// <root>/<project>/[<instance>/]<environment>.
+func ownerUnder(root, base string) (uids.Owner, error) {
+	rel, err := filepath.Rel(root, filepath.Clean(base))
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if err != nil || !filepath.IsAbs(base) || len(parts) < 2 || len(parts) > 3 {
+		return uids.Owner{}, fmt.Errorf("%s is no environment directory under the release root %s", base, root)
+	}
+	instance := ""
+	if len(parts) == 3 {
+		instance = parts[1]
+	}
+	return uids.EnvOwner(parts[0], instance, parts[len(parts)-1])
+}
+
+// free answers "free <environment directory>": a project user's --destroy's last step, for an
+// environment of its tree that is gone, its owner read from where it was (ownerAt), never from
+// the caller's words, and its compose name taken down through the door's own checked down.
+func (s *doorSide) free(base string) int {
+	env, err := s.ownerAt(base)
+	if err != nil {
+		return doorRefused(err)
+	}
+	real, _ := s.Real(base)
+	if s.IsDir(real) {
+		return doorRefused(fmt.Errorf("refused: %s is still there: its --destroy removes it first", base))
 	}
 	name := env.ComposeName()
 	if left, err := dataLeft(s.policy.Mnt(name)); err != nil || left {
 		return doorRefused(fmt.Errorf("refused: %s still has its data (%s): its --destroy removes it first", name, s.policy.Mnt(name)))
 	}
-	r, err := remote.ReleaseSettings()
-	if err != nil {
-		return doorRefused(err)
+	if s.uidRoot == "" {
+		return doorRefused(errors.New("refused: the server has no uid claims"))
 	}
 	down := func(name string) error {
-		env, err := s.composeEnv("", false)
+		argv, env, err := s.checkedDown(name, []string{"--volumes", "--remove-orphans"})
 		if err != nil {
 			return err
 		}
-		c := s.docker(downArgs(name)...)
-		c.Env, c.Stdout, c.Stderr = env, os.Stderr, os.Stderr
+		c := exec.Command(s.real, argv[1:]...)
+		c.Env, c.Dir, c.Stdout, c.Stderr = env, "/", os.Stderr, os.Stderr
 		return c.Run()
 	}
-	if err := freeUIDs(claimsStore(r.Root), env, down); err != nil {
+	if err := freeUIDs(claimsStore(s.uidRoot), env, down); err != nil {
 		return doorRefused(fmt.Errorf("refused: freeing the uid of %s: %w", name, err))
 	}
 	return 0
@@ -263,14 +305,9 @@ func (s *doorSide) free(owner string) int {
 // fails here. The locks are close-on-exec until keepAcrossExec.
 func holdStartLocks(plan *cli.Plan) ([]*uids.Lock, error) {
 	s := claimsStore(plan.UIDRoot)
-	var locks []*uids.Lock
-	for _, o := range []uids.Owner{plan.UIDOwner, plan.UIDOwner.ProjectOf()} {
-		l, err := s.LockStart(o, syscall.LOCK_SH)
-		if err != nil {
-			closeLocks(locks)
-			return nil, err
-		}
-		locks = append(locks, l)
+	locks, err := s.LockShared(plan.UIDOwner)
+	if err != nil {
+		return nil, err
 	}
 	for k, o := range map[string]uids.Owner{cli.UIDEnv: plan.UIDOwner, cli.ProjectUIDEnv: plan.UIDOwner.ProjectOf()} {
 		uid, ok, err := s.Read(o)
@@ -282,11 +319,7 @@ func holdStartLocks(plan *cli.Plan) ([]*uids.Lock, error) {
 	return locks, nil
 }
 
-func closeLocks(locks []*uids.Lock) {
-	for _, l := range locks {
-		l.Close()
-	}
-}
+func closeLocks(locks []*uids.Lock) { uids.CloseAll(locks) }
 
 // keepAcrossExec hands the locks to what the exec runs, right before it.
 func keepAcrossExec(locks []*uids.Lock) error {
@@ -298,40 +331,36 @@ func keepAcrossExec(locks []*uids.Lock) error {
 	return nil
 }
 
-// startLocks takes, shared, the start locks of the owners whose compose name is name and of
-// their projects, then reads the project's claims again under them, for the check and the
-// exec that follow: a --destroy frees a claim only with its lock exclusive. A side with no
-// claims directory (a test's) takes none.
-func (s *doorSide) startLocks(name string) ([]*uids.Lock, error) {
+// startLocks takes, shared, the start locks of the environments a request's directory real
+// is of (dirOwners) and of their projects, then reads the project's claims again under them,
+// for the check and the exec that follow, and the owners then: a --destroy frees a claim only
+// with its lock exclusive. When the owners changed in between (one claimed or freed
+// meanwhile), it takes them again. A side with no claims directory (a test's) takes none.
+func (s *doorSide) startLocks(real string) ([]uids.Owner, []*uids.Lock, error) {
+	owners := dirOwners(s.policy.Project, s.policy.Tree, real, s.claims)
 	if s.uidRoot == "" {
-		return nil, nil
+		return owners, nil, nil
 	}
 	store := claimsStore(s.uidRoot)
-	var owners []uids.Owner
-	for _, c := range s.claims {
-		if c.Owner.Env != "" && c.Owner.ComposeName() == name {
-			owners = append(owners, c.Owner)
-			if !slices.Contains(owners, c.Owner.ProjectOf()) {
-				owners = append(owners, c.Owner.ProjectOf())
-			}
+	for range 3 {
+		locks, err := store.LockShared(owners...)
+		if err != nil {
+			return nil, nil, err
 		}
-	}
-	var locks []*uids.Lock
-	for _, o := range owners {
-		l, err := store.LockStart(o, syscall.LOCK_SH)
+		claims, err := projectClaims(store, s.policy.Project)
 		if err != nil {
 			closeLocks(locks)
-			return nil, err
+			return nil, nil, err
 		}
-		locks = append(locks, l)
-	}
-	claims, err := projectClaims(store, s.policy.Project)
-	if err != nil {
+		s.claims = claims
+		now := dirOwners(s.policy.Project, s.policy.Tree, real, claims)
+		if slices.Equal(now, owners) {
+			return owners, locks, nil
+		}
 		closeLocks(locks)
-		return nil, err
+		owners = now
 	}
-	s.claims = claims
-	return locks, nil
+	return nil, nil, errors.New("its claims kept changing: run it again")
 }
 
 // uidFacts are the claims under root, for --server-info: the directory, and each entry.
@@ -354,18 +383,24 @@ func uidFacts(root string) (string, []remote.UIDClaim) {
 
 // staleUID says why claim c is left over, or nothing: an environment's whose environment is
 // on the server no more (removed without --destroy), a project's with no environment claim of
-// it left.
-func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment) string {
+// it left. A door project's tree is read as its user, which may answer nothing in time: with
+// none of its environments listed, its claims are taken for live.
+func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment, door []string) string {
 	o, err := uids.ParseOwner(c.Owner)
 	if err != nil {
 		return err.Error()
 	}
 	if o.Env != "" {
 		path := filepath.ToSlash(filepath.Join(o.Project, o.Instance, o.Env))
+		listed := false
 		for _, e := range envs {
 			if e.Path == path {
 				return ""
 			}
+			listed = listed || strings.HasPrefix(e.Path, o.Project+"/")
+		}
+		if slices.Contains(door, o.Project) && !listed {
+			return ""
 		}
 		return "no environment " + path + " on the server"
 	}

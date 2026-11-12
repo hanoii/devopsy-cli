@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
-	"github.com/hanoii/devopsy-cli/internal/uids"
 	"io"
 	"os"
 	"os/exec"
@@ -1751,7 +1750,7 @@ exit 0
 	}
 	// Its uid claim goes last, after the removal; and with nothing left of the environment,
 	// as a cut destroy leaves it, the next one frees it still.
-	freed := "--free-uids " + uids.Owner{Project: "app", Instance: "b", Env: "prod"}.String() + "\n"
+	freed := "--free-uids " + filepath.Join(root, "app", "b", "prod") + "\n"
 	if calls := readFile(filepath.Join(root, "calls")); !strings.HasSuffix(calls, freed) {
 		t.Errorf("destroy b's last call is not its claim's free:\n%s", calls)
 	}

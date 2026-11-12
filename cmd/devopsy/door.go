@@ -1424,17 +1424,22 @@ func (s *doorSide) bindEntries(file map[string]any, name string, real func(strin
 func (s *doorSide) compose(config string, file map[string]any, profiles, dir string, argv []string) int {
 	// A claim's copy is a work directory too, which a door killed mid-start leaves.
 	s.sweepWork()
-	// What its containers may run as: the claims of the environment the file names, read
-	// again under its start locks when it starts containers, which compose then holds.
+	real, err := s.Real(dir)
+	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
+		return doorRefused(errors.New("refused: not this project's directory: " + dir))
+	}
+	// What its containers may run as: the claims of the environment the request's directory
+	// is of, never one the file's name picks, read again under its start locks when it starts
+	// containers, which compose then holds.
 	name, _ := file["name"].(string)
+	owners := dirOwners(s.policy.Project, s.policy.Tree, real, s.claims)
 	var locks []*uids.Lock
 	if door.StartsContainers(argv[0]) {
-		var err error
-		if locks, err = s.startLocks(name); err != nil {
-			return doorRefused(fmt.Errorf("refused: the start locks of %s: %w", name, err))
+		if owners, locks, err = s.startLocks(real); err != nil {
+			return doorRefused(fmt.Errorf("refused: the start locks of %s: %w", real, err))
 		}
 	}
-	s.policy.UIDs = uidsOf(s.claims, name)
+	s.policy.UIDs = uidsOfOwners(s.claims, owners)
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
@@ -1448,10 +1453,6 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			words = append(words, strings.TrimPrefix(r.Error(), "refused: "))
 		}
 		return doorRefused(errors.New("refused: " + strings.Join(words, ", ")))
-	}
-	real, err := s.Real(dir)
-	if err != nil || (real != s.policy.Tree && !s.policy.InTree(real)) {
-		return doorRefused(errors.New("refused: not this project's directory: " + dir))
 	}
 	if argv[0] == "pull" {
 		return s.pull(config, file, profiles, dir, argv)
@@ -1597,30 +1598,42 @@ func (s *doorSide) composeKnowsServiceContexts(env []string) error {
 // downProject takes this project's compose name down by that name alone, no file to
 // check: compose finds what it holds by its own label (composeDownProject).
 func (s *doorSide) downProject(name string, flags []string) int {
-	if !s.policy.OwnName(name) {
-		return doorRefused(errors.New("refused: not this project's name: " + name))
-	}
-	argv := append([]string{"down"}, flags...)
-	if err := s.policy.CheckVerb(argv); err != nil {
-		return doorRefused(err)
-	}
-	if err := s.foreign(); err != nil {
-		return doorRefused(err)
-	}
-	env, err := s.composeEnv("", false)
+	argv, env, err := s.checkedDown(name, flags)
 	if err != nil {
 		return doorRefused(err)
 	}
-	// From /, which holds no compose file of anyone's: compose looks for one in its directory
-	// and every parent, and a down by name runs with none.
+	err = execDecided(s.real, argv, env)
+	return doorRefused(err)
+}
+
+// checkedDown is a down of this project's compose name by that name alone, checked: the name
+// the project's own (OwnName), its flags a down's, no container under it the door did not
+// make (foreign), the caller still asking; its command line (docker first) and environment,
+// for a run from /, which holds no compose file of anyone's: compose looks for one in its
+// directory and every parent, and a down by name runs with none. One check for the request
+// and for a --destroy's free.
+func (s *doorSide) checkedDown(name string, flags []string) ([]string, []string, error) {
+	if !s.policy.OwnName(name) {
+		return nil, nil, errors.New("refused: not this project's name: " + name)
+	}
+	argv := append([]string{"down"}, flags...)
+	if err := s.policy.CheckVerb(argv); err != nil {
+		return nil, nil, err
+	}
+	if err := s.foreign(); err != nil {
+		return nil, nil, err
+	}
+	env, err := s.composeEnv("", false)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := os.Chdir("/"); err != nil {
-		return doorRefused(err)
+		return nil, nil, err
 	}
 	if err := s.stillAsked(); err != nil {
-		return doorRefused(fmt.Errorf("refused: %w", err))
+		return nil, nil, fmt.Errorf("refused: %w", err)
 	}
-	err = execDecided(s.real, append([]string{"docker", "compose", "-p", name}, argv...), env)
-	return doorRefused(err)
+	return append([]string{"docker", "compose", "-p", name}, argv...), env, nil
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a

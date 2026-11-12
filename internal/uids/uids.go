@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -259,8 +260,9 @@ type Store struct {
 type Claim struct {
 	Owner Owner
 	UID   uint32
-	// Bad is why the entry is no claim (a name no owner has, a target no uid), with Name.
-	Bad, Name string
+	// Bad is why the entry is no claim (a name no owner has, a target no uid), with Name;
+	// Target is where its link points, a uid it still holds when it parses as one.
+	Bad, Name, Target string
 }
 
 func (s Store) path(o Owner) string { return filepath.Join(s.Dir, o.String()) }
@@ -283,6 +285,9 @@ func (s Store) Read(o Owner) (uint32, bool, error) {
 	}
 	return uid, true, nil
 }
+
+// ParseUID reads a uid written as devopsy writes one: decimal, nothing around it.
+func ParseUID(s string) (uint32, error) { return parseUID(s) }
 
 func parseUID(s string) (uint32, error) {
 	n, err := strconv.ParseUint(s, 10, 32)
@@ -318,8 +323,9 @@ func (s Store) Lookup(o Owner) (uint32, error) {
 	mine := 0
 	for _, c := range claims {
 		if c.Bad != "" {
-			// A name no owner's still holds whatever it points at: never take its uid.
-			if uid, err := parseUID(c.Name); err == nil {
+			// An entry that is no claim still holds whatever uid it points at, in any range:
+			// never take its uid.
+			if uid, err := parseUID(c.Target); err == nil {
 				used[uid] = true
 			}
 			continue
@@ -412,15 +418,16 @@ func (s Store) List() ([]Claim, error) {
 		if name == ".lock" || name == locksDir {
 			continue
 		}
+		target, _ := os.Readlink(filepath.Join(s.Dir, name))
 		o, err := ParseOwner(name)
 		if err != nil {
-			claims = append(claims, Claim{Name: name, Bad: err.Error()})
+			claims = append(claims, Claim{Name: name, Bad: err.Error(), Target: target})
 			continue
 		}
 		uid, ok, err := s.Read(o)
 		switch {
 		case err != nil:
-			claims = append(claims, Claim{Name: name, Bad: err.Error()})
+			claims = append(claims, Claim{Name: name, Bad: err.Error(), Target: target})
 		case ok:
 			claims = append(claims, Claim{Owner: o, UID: uid, Name: name})
 		}
@@ -534,4 +541,86 @@ func (s Store) FreeIfUnused(o Owner, held *Lock) (bool, error) {
 		}
 	}
 	return true, s.Free(o, held)
+}
+
+// EnvClaimsLeft says whether any environment of project's (project an owner with no Env)
+// still holds a claim, read under the directory's lock.
+func (s Store) EnvClaimsLeft(project Owner) (bool, error) {
+	unlock, err := s.lockDir()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	claims, err := s.List()
+	if err != nil {
+		return false, err
+	}
+	for _, c := range claims {
+		if c.Bad == "" && c.Owner.Env != "" && c.Owner.ProjectOf() == project {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// DirName is the claims directory's name, under a server's release root.
+const DirName = ".devopsy-uids"
+
+// StoreAt is the claims directory under the release root root, the host's own ids never
+// taken; the caller sets Wait.
+func StoreAt(root string) Store {
+	return Store{Dir: filepath.Join(root, DirName), Taken: HostTaken("/")}
+}
+
+// LockShared takes, shared, the start locks of owners and of each one's project, once each,
+// as a start of containers on their uids holds them; on an error it holds none.
+func (s Store) LockShared(owners ...Owner) ([]*Lock, error) {
+	var held []Owner
+	for _, o := range owners {
+		for _, h := range []Owner{o, o.ProjectOf()} {
+			if !slices.Contains(held, h) {
+				held = append(held, h)
+			}
+		}
+	}
+	var locks []*Lock
+	for _, o := range held {
+		l, err := s.LockStart(o, syscall.LOCK_SH)
+		if err != nil {
+			CloseAll(locks)
+			return nil, err
+		}
+		locks = append(locks, l)
+	}
+	return locks, nil
+}
+
+// CloseAll releases locks.
+func CloseAll(locks []*Lock) {
+	for _, l := range locks {
+		l.Close()
+	}
+}
+
+// ListOf is project's claims, its environments' and its own, read without reading another
+// project's: a request reads its own tenant's alone.
+func (s Store) ListOf(project string) ([]Claim, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var claims []Claim
+	for _, e := range entries {
+		o, err := ParseOwner(e.Name())
+		if err != nil || o.Project != project {
+			continue
+		}
+		if uid, ok, err := s.Read(o); err == nil && ok {
+			claims = append(claims, Claim{Owner: o, UID: uid, Name: e.Name()})
+		}
+	}
+	return claims, nil
 }
