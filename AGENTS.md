@@ -178,7 +178,7 @@ docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false \
   chown runner /home/runner /home/runner/.cache && go mod download &&
   HOME=/home/runner setpriv --reuid runner --regid runner --clear-groups sh -c "
   go vet ./... &&
-  go test -count=1 ./cmd/devopsy ./internal/remote &&
+  go test -count=1 -parallel 16 ./cmd/devopsy ./internal/remote &&
   go test -count=1 -race \$(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)"'
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```

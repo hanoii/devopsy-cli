@@ -23,7 +23,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: go test -count=1 ./...
+      # 16 tests at once, as ci.yml runs the scripts' tests: they mostly wait.
+      - run: go test -count=1 -parallel 16 ./...
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
