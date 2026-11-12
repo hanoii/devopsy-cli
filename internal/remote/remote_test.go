@@ -1703,15 +1703,16 @@ exit 0
 		t.Errorf("registry/app:abc went while b's release held it")
 	}
 
-	// The server's image lock taken: pruning skips, naming the holder.
+	// The server's image lock taken: pruning skips, naming the holder. The
+	// gone one's pid no process has, past Linux's and macOS's highest.
 	holders := filepath.Join(root, ImagesHolders)
 	write(t, filepath.Join(holders, strconv.Itoa(os.Getpid())), fmt.Sprintf("%d other-prod fetching\n", time.Now().Unix()-75))
-	write(t, filepath.Join(holders, "999999"), fmt.Sprintf("%d gone-prod fetching\n", time.Now().Unix()))
+	write(t, filepath.Join(holders, "2147483646"), fmt.Sprintf("%d gone-prod fetching\n", time.Now().Unix()))
 	out := release("b", "2", "def", "Y", "FAKE_LOCKED=1")
 	if !strings.Contains(out, "pruning skipped: the server's images are in use by other-prod (fetching, 1m1") || !strings.Contains(out, "the next release prunes") || !exists("app/b/prod/releases/1") {
 		t.Errorf("pruning with the lock taken:\n%s", out)
 	}
-	if exists(filepath.Join(ImagesHolders, "999999")) {
+	if exists(filepath.Join(ImagesHolders, "2147483646")) {
 		t.Errorf("a gone holder's file stays")
 	}
 	os.RemoveAll(holders)
