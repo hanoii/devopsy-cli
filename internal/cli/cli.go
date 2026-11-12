@@ -1498,7 +1498,11 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
-	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, envFile: envFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}, nil
+	p := &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, envFile: envFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}
+	if err := p.setUIDs(project); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // TraceEnv explains the project's environment as every devopsy command

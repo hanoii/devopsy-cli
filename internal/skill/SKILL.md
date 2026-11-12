@@ -73,7 +73,9 @@ What devopsy requires:
   concern (`storage`, `database`, `logs`), never `./mnt` whole. On servers
   `mnt` is a link to the environment's `shared/mnt`, so releases and
   rollbacks keep the data. A service that writes an entry says who owns
-  it: give it a numeric `user: "<uid>:<gid>"` and
+  it: give it a numeric `user: "<uid>:<gid>"` (devopsy's own,
+  `"${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"`, so no other environment's
+  containers share it; `DEVOPSY_PROJECT_UID` for one an image builds in) and
   `devopsy.mnt.owner=user`, which takes the owner from that `user:`
   (`devopsy.mnt.owner=<uid>:<gid>` only for an image that drops
   privileges itself and has no `user:`). devopsy creates the entry and

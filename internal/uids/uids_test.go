@@ -401,3 +401,34 @@ func TestFreeNeedsTheLock(t *testing.T) {
 		t.Fatal("claim gone")
 	}
 }
+
+// TestHostTaken keeps a claim off the host's own users, groups and subordinate ranges.
+func TestHostTaken(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, data := range map[string]string{
+		"passwd": "root:x:0:0::/root:/bin/sh\nbig:x:2000000001:5::/:/bin/sh\n",
+		"group":  "wheel:x:2000000002:\n",
+		"subuid": "someone:2000000100:10\n",
+		"subgid": "someone:2000000200:10\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, "etc", f), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taken := HostTaken(root)
+	for uid, want := range map[uint32]bool{
+		0: true, 2000000001: true, 2000000002: true, 2000000100: true, 2000000109: true,
+		2000000110: false, 2000000205: true, 2000000003: false,
+	} {
+		if taken(uid) != want {
+			t.Errorf("%d: %v, want %v", uid, !want, want)
+		}
+	}
+	if HostTaken(filepath.Join(root, "none"))(0) {
+		t.Error("a host with no files takes 0")
+	}
+}

@@ -62,6 +62,9 @@ type Project struct {
 	// Name is the project's name on every server: its directory under the
 	// release root, and the start of its compose project names.
 	Name string
+	// CommittedName is config.yaml's project: alone, never config.local.yaml's: what the
+	// project's uid hashes locally, so it matches every server's.
+	CommittedName string
 	// Instances is the project's instances: true makes every target name
 	// one, false refuses them.
 	Instances bool
@@ -1127,6 +1130,9 @@ func LoadProject(projectDir string) (*Project, error) {
 		if f.project != "" {
 			p.Name = f.project
 		}
+		if f.project != "" && name == ConfigFile {
+			p.CommittedName = f.project
+		}
 		if f.instances != nil {
 			p.Instances = *f.instances
 		}
@@ -1759,6 +1765,9 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	for k := range t.Env {
 		if !varName.MatchString(k) {
 			return nil, fmt.Errorf("environment %q: env: %q is not a variable name", a.env, k)
+		}
+		if err := uids.Reserved(k); err != nil {
+			return nil, fmt.Errorf("environment %q: env: %w", a.env, err)
 		}
 	}
 	t.Address = t.Host + ":"

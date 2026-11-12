@@ -1000,6 +1000,10 @@ func (s *doorSide) answer(args []string, rendered map[string]any, renderErr erro
 		if len(args) == 1 {
 			return s.firewall()
 		}
+	case "uids":
+		if len(args) == 2 {
+			return s.uids(args[1])
+		}
 	}
 	return doorRefused(errors.New("refused: not a request: " + strings.Join(args[:min(1, len(args))], " ")))
 }

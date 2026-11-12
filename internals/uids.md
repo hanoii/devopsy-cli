@@ -1,6 +1,6 @@
 # Container uids
 
-Code: `internal/uids/` (owners, ranges, the hash, claims, start locks).
+Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `internal/cli/uids.go` (the variables as a project loads), `cmd/devopsy/uids.go` (the claims as the deploy user, the door's `uids` request).
 
 - Containers of different owners never share a uid: a process escaped from one reaches another's environment, root and signals through `/proc` with the same uid and gid alone.
 - An owner is named by its parts joined with `:` (`env:<project>[:<instance>]:<environment>`, `project:<project>[:<instance>]`, `Owner.String`), never by its compose name: compose names are flat, so two owners would share one name.
@@ -14,3 +14,8 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks).
 - A start lock is opened close-on-exec, read-write, and cleared only right before the exec (`Lock.KeepAcrossExec`), so nothing started before it holds the lock.
 - A start lock is checked against its path after it is taken and taken again on the file there now: a free removes the file while it holds it.
 - A claim is freed only with its owner's start lock held exclusive (`Store.Free`), which removes the lock's file too.
+- Only the server's devopsy computes a uid, at every load of a release (`setUIDs` in `internal/cli/uids.go`), setting `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID` over every layer and the caller's value, and stores them nowhere: a restore would bring another environment's back.
+- A release's owner is read from where it is (`releaseOwners`), its target lines checked against its place under the release root, never from a variable a `.env` could set.
+- A project user's devopsy asks the door's `uids` request, whose answer is the two numbers alone (`askDoorUIDs`); the door reads the owner from the path in the caller's tree (`ownerAt`).
+- Locally the uids are the plain hashes, under the caller's and the `.env`'s, the project's from `config.yaml`'s `project:` alone (`CommittedName`) so it matches every server's.
+- `--vars set` and a config's `env:` refuse the two names (`uids.Reserved`).

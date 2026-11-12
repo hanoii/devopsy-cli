@@ -23,6 +23,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// The variables devopsy passes an environment's compose files its uids in
+// (`user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"`): its own, and its project's (or instance's),
+// shared by the project's environments.
+const (
+	EnvVar     = "DEVOPSY_UID"
+	ProjectVar = "DEVOPSY_PROJECT_UID"
+)
+
+// Reserved says why k is devopsy's to set, never a project's or a server's variable: a uid
+// is the claims', and one set by hand could be another tenant's.
+func Reserved(k string) error {
+	if k == EnvVar || k == ProjectVar {
+		return errors.New(k + " is devopsy's: the server gives each environment its uid")
+	}
+	return nil
+}
+
 // Domain is the kind of an owner, each with a range of its own, so the number says its kind
 // and a tenant's own names (its environments, its instances) never reach a bare project's.
 type Domain int
@@ -157,11 +174,56 @@ func ParseOwner(s string) (Owner, error) {
 // Plain is o's hashed slot, its uid wherever no other owner holds it: the start of its
 // domain's range plus FNV-1a-64 of its name, modulo the range's size. Locally, with no
 // claims, it is the uid.
-func (o Owner) Plain() uint32 {
+func (o Owner) Plain() uint32 { return HashIn(o.Domain(), o.String()) }
+
+// HashIn is name's slot in d's range: its start plus FNV-1a-64 of name, modulo its size.
+func HashIn(d Domain, name string) uint32 {
 	h := fnv.New64a()
-	h.Write([]byte(o.String()))
-	r := ranges[o.Domain()]
+	h.Write([]byte(name))
+	r := ranges[d]
 	return r.start + uint32(h.Sum64()%uint64(r.size))
+}
+
+// HostTaken is a Taken for the host whose files are under root ("/" on a server): the uids
+// and gids its users and groups have, and its subordinate ranges, read once. A file missing
+// holds none.
+func HostTaken(root string) func(uint32) bool {
+	ids := map[uint32]bool{}
+	for _, f := range []string{"etc/passwd", "etc/group"} {
+		data, _ := os.ReadFile(filepath.Join(root, f))
+		for _, line := range strings.Split(string(data), "\n") {
+			if fields := strings.Split(line, ":"); len(fields) > 2 {
+				if id, err := parseUID(fields[2]); err == nil {
+					ids[id] = true
+				}
+			}
+		}
+	}
+	type span struct{ start, count uint64 }
+	var spans []span
+	for _, f := range []string{"etc/subuid", "etc/subgid"} {
+		data, _ := os.ReadFile(filepath.Join(root, f))
+		for _, line := range strings.Split(string(data), "\n") {
+			if fields := strings.Split(line, ":"); len(fields) == 3 {
+				start, err1 := strconv.ParseUint(fields[1], 10, 32)
+				count, err2 := strconv.ParseUint(fields[2], 10, 32)
+				if err1 == nil && err2 == nil {
+					spans = append(spans, span{start, count})
+				}
+			}
+		}
+	}
+	return func(uid uint32) bool {
+		if ids[uid] {
+			return true
+		}
+		for _, s := range spans {
+			if uint64(uid) >= s.start && uint64(uid)-s.start < s.count {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // MaxClaims is how many claims one project may hold in a domain: a tenant makes environments
@@ -280,6 +342,16 @@ func (s Store) Lookup(o Owner) (uint32, error) {
 		return uid, nil
 	}
 	return 0, fmt.Errorf("%s: no free uid left in its range", o)
+}
+
+// LookupPair is env's uid and its project's (ProjectOf), each looked up as Lookup does.
+func (s Store) LookupPair(env Owner) (uint32, uint32, error) {
+	e, err := s.Lookup(env)
+	if err != nil {
+		return 0, 0, err
+	}
+	p, err := s.Lookup(env.ProjectOf())
+	return e, p, err
 }
 
 // lockDir takes the directory's own lock, making the directory, for a claim to be made.

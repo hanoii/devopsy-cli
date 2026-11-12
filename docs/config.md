@@ -149,6 +149,20 @@ first:
 
 A rollback brings back its release's `devopsy-target.env`.
 
+Over all of them, the server's devopsy sets the uids an environment's
+containers run as, so its compose files can read them (`user:
+"${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"`):
+
+- `DEVOPSY_UID`, the environment's own: no other environment's
+  containers, on that server, run as it;
+- `DEVOPSY_PROJECT_UID`, its project's (or its instance's), the same for
+  every environment of it, for an image that builds a uid in.
+
+Both come from the server's claims (`<release root>/.devopsy-uids/`), one
+per environment and project, made the first time devopsy loads the
+environment there, and stay the same for as long as it exists. Neither
+can be set by hand: `--vars set` and a config's `env:` refuse them.
+
 ```sh
 devopsy @vm1:prod --vars                       # KEY=value, secrets as *** (--show: all)
 devopsy @vm1:prod --vars set DB_PASSWORD       # from your environment or .env, else a prompt or stdin

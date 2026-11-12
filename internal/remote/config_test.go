@@ -206,6 +206,7 @@ func TestConfigErrors(t *testing.T) {
 		// Environment names are lowercase: the compose name lowercases them, so Prod and prod
 		// would be two directories and two uids for one set of containers.
 		"uppercase environment": "project: app\nenvironments:\n  prod: {}\n  Stage: {}\n",
+		"a uid in env":          "project: app\nenvironments:\n  prod: {env: {DEVOPSY_PROJECT_UID: '1'}}\n",
 		"uppercase pattern":     "project: app\nenvironments:\n  prod: {}\n  \"PR-*\": {}\n",
 	} {
 		dir := t.TempDir()
