@@ -66,7 +66,7 @@ the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
 host's `docker.service`, and warns of the other tools a server needs
-when missing (`setsid`, `script`, `mkfifo`, GNU `tail`, and `sudo`,
+when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers `--version`, and `sudo`,
 `visudo` and `setfacl` for project users). It installs none of them:
 they are the admin's ([`--server-setup-howto`](#--server-setup-howto)).
 The release root (`releases: root` in the deploy user's `config.yaml`,

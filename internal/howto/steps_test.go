@@ -214,3 +214,22 @@ func TestBuildxStepUpgradesOnlyBuildx(t *testing.T) {
 		t.Errorf("the buildx step ran:\n%s\nwant:\n%s\n%s", got, want, out)
 	}
 }
+
+// Every topic that installs a package updates apt's lists before it: on a server whose lists
+// are old or were never read (a cloud image's first boot), apt-get install finds no package.
+func TestTopicsUpdateAptBeforeInstalling(t *testing.T) {
+	t.Parallel()
+	for _, tp := range Topics {
+		updated := false
+		for _, s := range tp.Steps {
+			for _, c := range s.Cmds {
+				switch {
+				case strings.HasPrefix(c, "apt-get update"):
+					updated = true
+				case strings.HasPrefix(c, "apt-get install") && !updated:
+					t.Errorf("%s: %q before any apt-get update", tp.Name, c)
+				}
+			}
+		}
+	}
+}

@@ -53,17 +53,15 @@ var Topics = []Topic{
 		Summary: "tar, flock and the other tools devopsy uses, sudo and acl",
 		Title:   "The tools devopsy uses",
 		Why: "A release needs tar and flock, and --server-setup and every release refuse a server without them. " +
-			"setsid, script, mkfifo and a GNU tail that answers --version each serve a part of a release or a sync, which goes without them, " +
+			"setsid, script, mkfifo and a tail that answers --version each serve a part of a release or a sync, which goes without them, " +
 			"and project users need sudo, visudo and setfacl, which --project-users add refuses without; --server-info and --server-setup name each one missing.",
 		Steps: []Step{
 			{"Install their packages: tar, util-linux (flock, setsid), bsdutils (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl (setfacl).", []string{
+				`apt-get update`,
 				`apt-get install -y tar util-linux bsdutils coreutils sudo acl`,
 			}},
-			{"On Ubuntu, put GNU's coreutils in place of Rust's uutils, which Ubuntu may install as its coreutils: the two packages conflict, and apt swaps them only when told to remove the other.", []string{
-				`apt-get install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-`,
-			}},
 		},
-		Check: Step{"each tool is found, and tail says it is GNU coreutils'.", []string{
+		Check: Step{"each tool is found, and tail answers --version.", []string{
 			`command -v tar flock setsid script mkfifo tail sudo visudo setfacl`,
 			`tail --version | head -n 1`,
 		}},

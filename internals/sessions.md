@@ -56,8 +56,8 @@ How a release notices its operator gone, what a signal may stop, and how a relea
 
 ## From the switch on
 
-- Right after `make_current` (after the sync, in a release that syncs) `followOutput` sends the script's output, both streams, to `ServerLogFile` (the deploy user's alone, umask 077; each activation's part after a `LogSection` line with its time and a tag) and a GNU `tail -f` copies it to the session: a session gone then kills only the tail, never the shell, compose mid-`up` or the switch back.
+- Right after `make_current` (after the sync, in a release that syncs) `followOutput` sends the script's output, both streams, to `ServerLogFile` (the deploy user's alone, umask 077; each activation's part after a `LogSection` line with its time and a tag) and `tail -f` (GNU's or uutils', one that answers `--version`) copies it to the session: a session gone then kills only the tail, never the shell, compose mid-`up` or the switch back.
 - `SwitchMarker`, printed just before, tells the operator's devopsy to stop logging the session and log `LogAnchor` there (`LineMarker` with `Cut`, on logged sessions only; a shell's typing and an export's data pass through untouched).
 - The tail ends once it has copied everything, watching with `tail --pid` a sleeper the shell ends and reaps, never the shell, which an unreaped zombie keeps alive to `--pid`; the EXIT trap, or a helper that finds the shell gone without it, ends the sleeper and waits for the tail at most five seconds: a fixed wait lost the last lines on a loaded server.
 - A release that syncs and a sync's holder follow from the run step: the sync has its own way through a drop (internals/syncs.md), and the copy's lines reach the session's log through the push.
-- Without GNU `tail` (macOS, in tests) only the traps apply (`TestAfterSwitchSurvives` skips).
+- Without a `tail` that answers `--version` (macOS's, in tests) only the traps apply (`TestAfterSwitchSurvives` skips).

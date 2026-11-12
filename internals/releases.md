@@ -15,8 +15,8 @@ A release uploads the project as a new directory, then one activation session sw
 - Only the plain activation's needs are checked so: a sync's are checked where it is decided, and a release that does not sync runs on a server lacking them.
 - A release that opens no session before its upload runs its local before steps first; accepted.
 - `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`, exported into every session so a push passes it on) turns either refusal into a warning, for a local build ahead of the servers.
-- A server needs `devopsy`, `tar`, `flock`, `setsid`, `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
-- Without `script` there is no live build progress, without `setsid` the run step runs plainly, and without GNU `tail` only the traps protect a release after its switch (internals/sessions.md).
+- A server needs `devopsy`, `tar`, `flock`, `setsid`, `script` (util-linux), a `tail` that answers `--version` (GNU's or uutils') and `mkfifo`; locally only `ssh`.
+- Without `script` there is no live build progress, without `setsid` the run step runs plainly, and without a `tail` that answers `--version` only the traps protect a release after its switch (internals/sessions.md).
 
 ## Steps
 

@@ -74,7 +74,7 @@ To check it: Docker answers the deploy user, with both plugins, and
 The tools devopsy uses
 
 A release needs tar and flock, and --server-setup and every release refuse a
-server without them. setsid, script, mkfifo and a GNU tail that answers
+server without them. setsid, script, mkfifo and a tail that answers
 --version each serve a part of a release or a sync, which goes without them,
 and project users need sudo, visudo and setfacl, which --project-users add
 refuses without; --server-info and --server-setup name each one missing.
@@ -85,15 +85,10 @@ As root, on Debian or Ubuntu with systemd:
    (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl
    (setfacl).
 
+      apt-get update
       apt-get install -y tar util-linux bsdutils coreutils sudo acl
 
-2. On Ubuntu, put GNU's coreutils in place of Rust's uutils, which Ubuntu
-   may install as its coreutils: the two packages conflict, and apt swaps
-   them only when told to remove the other.
-
-      apt-get install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-
-
-To check it: each tool is found, and tail says it is GNU coreutils'.
+To check it: each tool is found, and tail answers --version.
 
       command -v tar flock setsid script mkfifo tail sudo visudo setfacl
       tail --version | head -n 1
