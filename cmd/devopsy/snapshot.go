@@ -2492,6 +2492,11 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	if err != nil {
 		return before(err)
 	}
+	// The environment's own uids, which the restored data takes (extractEntry).
+	idmap, err := ownMap(cwd)
+	if err != nil {
+		return before(fmt.Errorf("this environment's own uids, which its data takes: %w", err))
+	}
 	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
 		return before(err)
 	}
@@ -2523,7 +2528,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			e.volume = &v
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
-		if err := extractEntry(ctx, restoredCode, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd), restored); err != nil {
+		if err := extractEntry(ctx, restoredCode, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd), restored, idmap); err != nil {
 			return stayDown(err.Error())
 		}
 	}

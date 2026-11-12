@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -162,16 +163,16 @@ func TestDoorTakesComputedForms(t *testing.T) {
 	if script := cloneScript(d); !door.CloneScriptForm(script) {
 		t.Errorf("the door does not take devopsy's own clone:\n%s", script)
 	}
-	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{10001}}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", Space: "/space", Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{2000000123, 1900000123}}
 	daemon := []string{"run", "--rm", "-d", "--network", "none", "-e", "RSYNCD_CONF=" + rsyncdConf([]string{"storage", "app.ini"}, []string{"app.ini"}, []string{"db"}),
 		"-v", "/space/mnt/shop-prod:/mnt:ro", "-v", "shop-prod_db:/vol/db:ro", remote.UtilImage, "sh", "-c", rsyncDaemonScript}
 	if _, err := door.Decide(daemon, p, nil, doorTestHost{}, doorKnown()); err != nil {
 		t.Errorf("the door does not take devopsy's own rsync daemon: %v", err)
 	}
-	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "10001:10001"}}}
+	child := []childService{{Dirs: []string{"storage", "app.ini"}, Volumes: []string{"db"}, Owners: map[string]string{"storage": "2000000123:2000000123"}}}
 	c := newContainer("sync", "shop-dev", "1.abcdef-receive", remote.SyncTask("1.abcdef"))
 	for _, r := range []syncReceive{{Entry: "storage"}, {Entry: "app.ini", File: true}, {Volume: "db"}} {
-		plan, err := planReceive(&r, child, "/space/mnt/shop-dev", "shop-dev", false)
+		plan, err := planReceive(&r, child, uids.Map{Env: 2000000123, Project: 1900000123}, "/space/mnt/shop-dev", "shop-dev", false)
 		if err != nil {
 			t.Fatalf("%+v: %v", r, err)
 		}
@@ -573,12 +574,13 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 	clone := space + "/clones/shop/abc/1"
 	tree := "/home/devopsy-shop/shop/prod"
 	// The caller is this user, as devopsy runs as the project user: its tar gives it its own ids.
-	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{10001}}
+	p := door.Policy{Project: "shop", User: "devopsy-shop", UID: strconv.Itoa(os.Getuid()), Space: space, Tree: "/home/devopsy-shop/shop", ProjectUIDs: []uint32{10001, 2000000123, 1900000123}}
+	m := uids.Map{Env: 2000000123, Project: 1900000123}
 	c := newContainer("export", "shop-prod", "1", remote.TaskExport)
 	ctx := context.Background()
 	d := dataSet{mnt: mnt, entries: []string{"storage"}, volumes: []cli.Volume{{Key: "db", Name: "shop-prod_db"}}}
 	inClone := d.in(clone)
-	for name, run := range map[string]func(){
+	runs := map[string]func(){
 		"du":                 func() { _, _ = duData(ctx, c, d) },
 		"du of a clone":      func() { _, _ = duData(ctx, c, inClone) },
 		"probe":              func() { reflinks(ctx, c, clone, d) },
@@ -588,14 +590,29 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 		"rsync a file":       func() { _ = rsyncEntry(ctx, c, mnt, dev, "app.ini", true) },
 		"rsync from a clone": func() { _ = rsyncEntry(ctx, c, inClone.mnt, dev, "storage", false) },
 		"rsync a volume":     func() { _ = rsyncVolume(ctx, c, "shop-prod_db:/src/db:ro", "shop-dev_db:/dst/db", "db") },
+		"rsync mapped":       func() { _ = rsyncEntry(ctx, c, mnt, dev, "storage", false, m.RsyncArgs()...) },
+		"rsync a volume mapped": func() {
+			_ = rsyncVolume(ctx, c, "shop-prod_db:/src/db:ro", "shop-dev_db:/dst/db", "db", m.RsyncArgs()...)
+		},
+		"an extraction into a volume": func() {
+			_ = extractEntry(ctx, tree, mnt, tree+"/t.tar", tarEntry{name: "db", forms: []string{"db"}, volume: &cli.Volume{Key: "db", Name: "shop-prod_db"}}, c, "shop-prod", nil, m)
+		},
 		"a tar": func() {
 			_ = tarInto(ctx, c, tree+"/snapshots/1.tmp/data/mnt.storage.tar.zst", []string{"-v", clone + ":/m:ro"}, "mnt", "storage")
 		},
-		"a share": func() { shareInto(ctx, c, mnt+"/storage", dev+"/storage", "mnt/storage") },
+		"a share": func() { shareInto(ctx, c, mnt+"/storage", dev+"/storage", "mnt/storage", m) },
 		"a volume's root": func() {
 			_ = ownVolume(ctx, c, cli.OwnedVolume{Volume: cli.Volume{Key: "db", Name: "shop-prod_db"}, Owner: "10001:10001"})
 		},
-	} {
+	}
+	// An entry's extraction maps its owners on Linux, where the door runs: locally on macOS
+	// it maps none (extractEntry).
+	if runtime.GOOS != "darwin" {
+		runs["an extraction"] = func() {
+			_ = extractEntry(ctx, tree, mnt, tree+"/t.tar", tarEntry{name: "storage", forms: []string{"storage"}}, c, "shop-prod", nil, m)
+		}
+	}
+	for name, run := range runs {
 		if err := os.Remove(logged); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}

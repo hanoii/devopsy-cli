@@ -52,12 +52,16 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"a walking word":    {"sh\x00data", "sh\x00../x"},
 			"elsewhere":         {entry + ":/x/data:ro", entry + ":/y/data:ro"},
 		}},
-		{"import", []string{"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "data"}, map[string][2]string{
+		{"import", []string{"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "10001", "10001", "data"}, map[string][2]string{
 			"its stream written": {tree + "/t:/in/t:ro", tree + "/t:/in/t"},
 			"the whole mnt":      {entry + ":/mnt/data", mnt + ":/mnt/data"},
 			"a stream elsewhere": {"sh\x00/in/t", "sh\x00/etc/t"},
-			"a walking member":   {"/in/t\x00data\x00data", "/in/t\x00data\x00../x"},
-			"an absolute member": {"/in/t\x00data\x00data", "/in/t\x00data\x00/etc/x"},
+			"a walking member":   {"10001\x00data", "10001\x00../x"},
+			"an absolute member": {"10001\x00data", "10001\x00/etc/x"},
+			// The uids it maps owners to are owners it gives: the project's alone, never root.
+			"root as its map's uid":         {"data\x0010001\x00", "data\x000\x00"},
+			"a host id as its map's uid":    {"data\x0010001\x0010001", "data\x0010001\x001000"},
+			"no map, a member in its place": {"data\x0010001\x0010001\x00data", "data\x00data"},
 		}},
 		{"probe", []string{"run", "-v", mnt + ":/m/mnt:ro", "-v", clone + ":/c", "util:1", "sh", "-c", "probe", "sh", "/m/mnt/data"}, map[string][2]string{
 			"its source written": {mnt + ":/m/mnt:ro", mnt + ":/m/mnt"},
@@ -101,11 +105,15 @@ func TestFormsRefuseOneWordChanged(t *testing.T) {
 			"more of find's":    {"-delete", "-print"},
 			"its depth":         {"-mindepth", "-maxdepth"},
 		}},
-		{"share", []string{"run", "-v", entry + ":/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"}, map[string][2]string{
-			"its source written": {entry + ":/s:ro", entry + ":/s"},
-			"the whole mnt":      {dev + "/data:/d", dev + ":/d"},
-			"a path of its own":  {dev + "/data:/d", tree + "/x:/d"},
-			"its order":          {"/s\x00/d", "/d\x00/s"},
+		{"share", []string{"run", "-v", entry + ":/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d", "10001", "10001"}, map[string][2]string{
+			"its source written":        {entry + ":/s:ro", entry + ":/s"},
+			"the whole mnt":             {dev + "/data:/d", dev + ":/d"},
+			"a path of its own":         {dev + "/data:/d", tree + "/x:/d"},
+			"its order":                 {"/s\x00/d", "/d\x00/s"},
+			"root as its map's uid":     {"/d\x0010001", "/d\x000"},
+			"another environment's uid": {"/d\x0010001\x0010001", "/d\x0010001\x0049999"},
+			"a word as its map's uid":   {"/d\x0010001", "/d\x00-"},
+			"no map":                    {"/d\x0010001\x0010001", "/d"},
 		}},
 		{"rsync", []string{"run", "-v", mnt + ":/src:ro", "-v", dev + ":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, map[string][2]string{
 			"its source written":    {mnt + ":/src:ro", mnt + ":/src"},
@@ -311,7 +319,7 @@ func TestDecideRunSaysWhatItWrites(t *testing.T) {
 	}{
 		{"an rsync, narrowed to its entry", []string{"run", "-v", mnt + ":/src:ro", "-v", dev + ":/dst", "util:1", "rsync", "-a", "/src/data/", "/dst/data/"}, []string{dev + "/data"}},
 		{"a receive", receive(mnt+"/data:/mnt/data", "devopsy::data/", "/mnt/data/"), []string{mnt + "/data"}},
-		{"a share", []string{"run", "-v", mnt + "/data:/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d"}, []string{dev + "/data"}},
+		{"a share", []string{"run", "-v", mnt + "/data:/s:ro", "-v", dev + "/data:/d", "util:1", "sh", "-c", "share script", "sh", "/s", "/d", "10001", "10001"}, []string{dev + "/data"}},
 		{"an emptying of the whole mnt", []string{"run", "-v", mnt + ":/mnt", "util:1", "find", "/mnt", "-mindepth", "1", "-delete"}, nil},
 	} {
 		a, err := decide(t, tt.argv...)
@@ -345,7 +353,7 @@ func TestScriptFormChecksArgumentsWhereTheScriptReadsThem(t *testing.T) {
 	// Controls: devopsy's own shapes pass.
 	for name, argv := range map[string][]string{
 		"snapshot tar": {"run", "-v", mnt + ":/m/mnt:ro", "-v", tree + "/snapshots/1.tmp/data:/o", "util:1", "sh", "-c", "tar script", "sh", "mnt", "data", "f.zst", "50001:50001"},
-		"import":       {"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "data"},
+		"import":       {"run", "-v", entry + ":/mnt/data", "-v", tree + "/t:/in/t:ro", "util:1", "sh", "-c", "import script", "sh", "/in/t", "data", "10001", "10001", "data"},
 	} {
 		if _, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown); err != nil {
 			t.Fatalf("%s, devopsy's own: %v", name, err)

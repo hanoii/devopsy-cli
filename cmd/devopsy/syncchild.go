@@ -22,6 +22,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // syncRequest is what the parent's push asks of the child across servers, one per
@@ -169,7 +170,7 @@ type receivePlan struct {
 	args               []string
 }
 
-func planReceive(r *syncReceive, child []childService, mnt, toProject string, reset bool) (receivePlan, error) {
+func planReceive(r *syncReceive, child []childService, m uids.Map, mnt, toProject string, reset bool) (receivePlan, error) {
 	var dirs, vols []string
 	for _, c := range child {
 		dirs = append(dirs, c.Dirs...)
@@ -183,7 +184,7 @@ func planReceive(r *syncReceive, child []childService, mnt, toProject string, re
 			return receivePlan{}, fmt.Errorf("the child's labels name no volume %q", r.Volume)
 		}
 		return receivePlan{what: "volume " + r.Volume, mount: toProject + "_" + r.Volume + ":/vol/" + r.Volume,
-			args: []string{remote.ReceiveFrom + r.Volume + "/", "/vol/" + r.Volume + "/"}}, nil
+			args: append(m.RsyncArgs(), remote.ReceiveFrom+r.Volume+"/", "/vol/"+r.Volume+"/")}, nil
 	}
 	e := r.Entry
 	if !door.Word.MatchString(e) || !slices.Contains(dirs, e) {
@@ -203,6 +204,10 @@ func planReceive(r *syncReceive, child []childService, mnt, toProject string, re
 	if o := childOwners(child)[e]; o != "" {
 		// The child's owner for every file written (its labels, from its list).
 		p.args = append(p.args, "--chown="+o)
+	} else {
+		// Else the parent's owners mapped to the child's own uids: rsync refuses
+		// the maps with --chown.
+		p.args = append(p.args, m.RsyncArgs()...)
 	}
 	if file {
 		// A file: its module serves it alone, into the file mounted, in place (a
@@ -240,11 +245,11 @@ func receiveOne(r *syncReceive, id, base, toDir, toProject string, env map[strin
 	if err != nil {
 		return fail("the child's mnt: " + err.Error())
 	}
-	child, err := childListAt(toDir, toProject, env)
+	child, m, err := childListAt(toDir, toProject, env)
 	if err != nil {
 		return fail(err.Error())
 	}
-	plan, err := planReceive(r, child, mnt, toProject, reset)
+	plan, err := planReceive(r, child, m, mnt, toProject, reset)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -335,21 +340,23 @@ func syncExecAllowed(args []string, reset bool) bool {
 	return false
 }
 
-// childListAt is the child's --sync-services list, run here as a sync's request would.
-func childListAt(toDir, toProject string, env map[string]string) ([]childService, error) {
+// childListAt is the child's --sync-services list, run here as a sync's request would,
+// and its own uids (listUIDs).
+func childListAt(toDir, toProject string, env map[string]string) ([]childService, uids.Map, error) {
 	var out bytes.Buffer
 	cmd := exec.Command("sh", "-c", remote.SyncExecScript(toDir, toProject, env, []string{cli.SyncServicesFlag, "list"}))
 	cmd.Stdout, cmd.Stderr = &out, errOut
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("listing the child's services: %w", err)
+		return nil, uids.Map{}, fmt.Errorf("listing the child's services: %w", err)
 	}
 	services, _, _ := parseChildServices(out.String())
-	return services, nil
+	m, err := parseChildUIDs(out.String())
+	return services, m, err
 }
 
 // childHas refuses unless a service of the child's list is one ok takes.
 func childHas(toDir, toProject string, env map[string]string, ok func(childService) bool) error {
-	child, err := childListAt(toDir, toProject, env)
+	child, _, err := childListAt(toDir, toProject, env)
 	if err != nil {
 		return err
 	}

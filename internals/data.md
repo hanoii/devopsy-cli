@@ -24,7 +24,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - On a server owners are given at these points:
   - by `--mnt-owners` in a release, right after `make_current` (it changes live data, so never before; a failure counts as a failed run step; signals ignored as `runImages` ignores them);
   - by `--mnt-owners restored` in a rollback and in the restart after a failed run, from the restored release's labels, where labels this devopsy cannot read, a compose error and `./mnt` whole only warn and nothing is given away, while a chown that fails on labels it read fails as a release's does;
-  - by a sync's rsync, `--chown` per entry from the child's labels (internals/syncs.md);
+  - by a sync's rsync, `--chown` per entry from the child's labels, the child's uid map for the rest (internals/syncs.md);
   - by a `volumes` import and a snapshot's restore, after their extracting containers (internals/export-import.md, internals/snapshots.md);
   - by a reset, after `emptyMnt`, its owned volumes' roots with its entries.
 - A release's prepare makes no owned volume before the switch: the prepare steps, the only steps before it, run before `--missing-vars` lets the labels be read, and a volume with options is made by compose's `create` of the new release's containers.

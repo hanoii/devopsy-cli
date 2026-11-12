@@ -180,8 +180,22 @@ func TestDoorUIDsKeepProjectsApart(t *testing.T) {
 	}
 }
 
-// A copy into a child gives its entries the child's own uid, a uid near 2 billion through
-// rsync and tar alike: a sync's, and an export imported there.
+// claimed is the uid an owner's claim holds on the server (env:<project>:<env>,
+// project:<project>), under the deploy user's release root.
+func claimed(t *testing.T, owner string) string {
+	t.Helper()
+	out, code := srv(t, "readlink "+quote(".devopsy-uids/"+owner))
+	if code != 0 {
+		t.Fatalf("the claim of %s: %s", owner, out)
+	}
+	return strings.TrimSpace(out)
+}
+
+// A copy into a child gives its files the child's own uids, a uid near 2 billion through
+// rsync and tar alike: a sync's, and an export imported there. An owned entry's all go to
+// its owner; an unowned entry's and a volume's (owned, its root alone) by range, a file on
+// an environment's uid to the child's DEVOPSY_UID, one on a project's to its
+// DEVOPSY_PROJECT_UID, uid and gid apart, and every other owner kept.
 func TestUIDsThroughCopies(t *testing.T) {
 	dir := project(t, "uidscopy", map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
@@ -190,9 +204,11 @@ func TestUIDsThroughCopies(t *testing.T) {
   data:
     image: busybox:1.37
     user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
-    command: [sh, -c, "mkdir -p /data/sub && echo $$HOSTNAME >/data/sub/f && exec sleep infinity"]
-    volumes: [./mnt/data:/data]
+    command: [sh, -c, "mkdir -p /data/sub && echo $$HOSTNAME >/data/sub/f && echo $$HOSTNAME >/vol/f && exec sleep infinity"]
+    volumes: [./mnt/data:/data, ./mnt/files:/files:ro, "vol:/vol:nocopy"]
     labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.mnt.owner: user}
+volumes:
+  vol: {}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})
@@ -203,19 +219,44 @@ func TestUIDsThroughCopies(t *testing.T) {
 	if got := owner(t, srv, "uidscopy/prod/shared/mnt/data/sub/f"); got != prod+":"+prod {
 		t.Fatalf("prod's file is %s's, want its uid %s", got, prod)
 	}
+	// Files of an unowned entry and of the volume on another project's uid, on a mix, and on
+	// owners of no range of devopsy's.
+	if out, code := srvRoot(t, `set -e; cd /home/devopsy/uidscopy/prod/shared/mnt; mkdir -p files; touch files/e files/p files/o files/m
+chown `+prod+`:`+prod+` files/e; chown 1900000001:1900000001 files/p; chown 7:7 files/o; chown 1950000002:`+prod+` files/m
+docker run --rm -v uidscopy-prod_vol:/v busybox:1.37 sh -c 'touch /v/p /v/o && chown 1900000001:1900000001 /v/p && chown 7:7 /v/o'`); code != 0 {
+		t.Fatalf("prod's files: %s", out)
+	}
+	if got, _ := srvRoot(t, "docker run --rm -v uidscopy-prod_vol:/v busybox:1.37 stat -c %u:%g /v/f"); strings.TrimSpace(got) != prod+":"+prod {
+		t.Fatalf("prod's volume written at its first start as %s, want its uid %s", got, prod)
+	}
+	project := claimed(t, "project:uidscopy")
+	check := func(what, dev string) {
+		t.Helper()
+		if got := owner(t, srv, "uidscopy/dev/shared/mnt/data/sub/f"); got != dev+":"+dev {
+			t.Errorf("after %s the child's owned file is %s's, want its uid %s", what, got, dev)
+		}
+		for f, want := range map[string]string{"e": dev + ":" + dev, "p": project + ":" + project, "o": "7:7", "m": project + ":" + dev} {
+			if got := owner(t, srv, "uidscopy/dev/shared/mnt/files/"+f); got != want {
+				t.Errorf("after %s the child's files/%s is %s's, want %s", what, f, got, want)
+			}
+		}
+		got, _ := srvRoot(t, "docker run --rm -v uidscopy-dev_vol:/v busybox:1.37 stat -c '%n %u:%g' /v /v/f /v/p /v/o")
+		if want := "/v " + dev + ":" + dev + " /v/f " + dev + ":" + dev + " /v/p " + project + ":" + project + " /v/o 7:7"; strings.Join(strings.Fields(got), " ") != want {
+			t.Errorf("after %s the child's volume: %q, want %q", what, got, want)
+		}
+	}
 	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 {
 		t.Fatalf("dev, synced (%d):\n%s", code, out)
 	}
 	dev := uidOf(t, srvRoot, "uidscopy-dev-data-1", uids.EnvDomain)
-	if got := owner(t, srv, "uidscopy/dev/shared/mnt/data/sub/f"); got != dev+":"+dev {
-		t.Errorf("after the sync the child's file is %s's, want its uid %s", got, dev)
+	if dev == prod || dev != claimed(t, "env:uidscopy:dev") {
+		t.Fatalf("dev's uid %s, prod's %s", dev, prod)
 	}
+	check("the sync", dev)
 	if out, code := op(t, dir, "devopsy @prod --export data >/tmp/uidscopy.tar && devopsy @dev --import data --yes </tmp/uidscopy.tar"); code != 0 {
 		t.Fatalf("an export imported (%d):\n%s", code, out)
 	}
-	if got := owner(t, srv, "uidscopy/dev/shared/mnt/data/sub/f"); got != dev+":"+dev {
-		t.Errorf("after the import the child's file is %s's, want its uid %s", got, dev)
-	}
+	check("the import", dev)
 }
 
 // A named volume devopsy.mnt.owner owns is its service's from its first start, on its

@@ -32,6 +32,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // --export and --import: one service's data, the way its devopsy.data
@@ -959,10 +960,11 @@ func (e *endReader) Read(p []byte) (int, error) {
 // read there, never sent on the container's stdin: Docker's stream ran
 // at 8 MB/s on a small DigitalOcean Droplet, a restore's downtime for 1
 // GiB 131 s against some 9 for the same tar read in the container
-// (measured 2026-10-26).
-const emptyAndExtract = `set -eu
-set -o pipefail
-src=$1 e=$2; shift 2
+// (measured 2026-10-26). Then what it extracted is mapped to this
+// environment's own uids, $3 and $4 (uids.MapScript, "-" for none): GNU
+// tar maps owners only when it creates a tar, and the tar carries its
+// maker's.
+var emptyAndExtract = "set -eu\nset -o pipefail\n" + uids.MapScript + `src=$1 e=$2 ue=$3 up=$4; shift 4
 if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
   find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 fi
@@ -971,8 +973,9 @@ case $src in
     # What tar leaves unread past its end blocks (a tar of large records)
     # is drained: zstd killed by SIGPIPE would fail the pipe.
     zstd -dcq -- "$src" | { s=0; tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" || s=$?; cat >/dev/null; exit "$s"; } ;;
-  *) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+  *) tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
 esac
+map_owners "/mnt/$e" "$ue" "$up"
 `
 
 // extractEntries empties and extracts each entry of mnt the tar in spool
@@ -989,9 +992,9 @@ esac
 // empty directory or file as the tar has it, for the container to mount;
 // a named volume (project's, by its key) is made when missing as compose
 // would, and mounted by name.
-func extractEntries(ctx context.Context, cwd, mnt, spool string, entries []tarEntry, c container, project string, services []cli.SyncService) error {
+func extractEntries(ctx context.Context, cwd, mnt, spool string, entries []tarEntry, c container, project string, services []cli.SyncService, m uids.Map) error {
 	for i, e := range entries {
-		if err := extractEntry(ctx, cwd, mnt, spool, e, c.with(fmt.Sprintf("-extract-%d", i)), project, services); err != nil {
+		if err := extractEntry(ctx, cwd, mnt, spool, e, c.with(fmt.Sprintf("-extract-%d", i)), project, services, m); err != nil {
 			return err
 		}
 	}
@@ -1000,8 +1003,12 @@ func extractEntries(ctx context.Context, cwd, mnt, spool string, entries []tarEn
 
 // extractEntry empties and extracts the entry or volume e from the tar
 // file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
-// each, in the util container c, which mounts the file read-only.
-func extractEntry(ctx context.Context, cwd, mnt, tarFile string, e tarEntry, c container, project string, services []cli.SyncService) error {
+// each, in the util container c, which mounts the file read-only, its
+// owners then mapped by m, the environment's own uids (ownMap). An entry
+// locally on macOS is not mapped: Docker fakes a bind mount's owners
+// there, and its file sharing may refuse the chown, where a volume is
+// Docker's own.
+func extractEntry(ctx context.Context, cwd, mnt, tarFile string, e tarEntry, c container, project string, services []cli.SyncService, m uids.Map) error {
 	var mount string
 	var err error
 	if e.volume != nil {
@@ -1025,7 +1032,11 @@ func extractEntry(ctx context.Context, cwd, mnt, tarFile string, e tarEntry, c c
 	if err != nil {
 		return err
 	}
-	run := append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, e.forms...)
+	mapped := m.Args()
+	if e.volume == nil && runtime.GOOS == "darwin" {
+		mapped = []string{"-", "-"}
+	}
+	run := append(append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, mapped...), e.forms...)
 	if err := dockerRunFresh(ctx, c, run...); err != nil {
 		what := "mnt/" + e.name
 		if e.volume != nil {
@@ -1149,9 +1160,14 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 
 	var it importTar
+	var idmap uids.Map
 	if s.Copy == cli.CopyVolumes {
 		if it, err = checkImportTar(ctx, s, services, projectDir, spool); err != nil {
 			return fail(err.Error())
+		}
+		// The environment's own uids, which what the tar carries takes (extractEntry).
+		if idmap, err = ownMap(cwd); err != nil {
+			return fail("this environment's own uids, which its data takes: " + err.Error() + ": nothing imported")
 		}
 	}
 	// The data lands on a target (images.Landing): the service's labels
@@ -1252,7 +1268,7 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	run := importRun{cwd: cwd, base: base, projectDir: projectDir, name: name, spool: spool, rel: rel, record: record,
 		services: services, custom: s.Copy == cli.CopyCustom, onTarget: onTarget, wasUp: wasUp,
-		tar: it, owners: owners, set: set, stopped: stopped, imgs: imgs, prior: prior}
+		tar: it, owners: owners, set: set, stopped: stopped, imgs: imgs, prior: prior, uidMap: idmap}
 	timer := report.Default().Timer()
 	if err := run.write(ctx); err != nil {
 		return run.failed(interrupted(ctx, err))
@@ -1442,6 +1458,8 @@ type importRun struct {
 	stopped                                         []string
 	imgs                                            *images.Set
 	prior                                           syncRecord
+	// uidMap is the environment's own uids, which what it extracts takes.
+	uidMap uids.Map
 }
 
 // write puts the data in: the import hook, or the tar's extraction and its
@@ -1468,7 +1486,7 @@ func (r importRun) write(ctx context.Context) error {
 	}
 	report.Info("importing " + r.name + ": mnt/" + strings.Join(r.tar.names, ", mnt/") + " replaced")
 	cname := importContainer(r.cwd)
-	err = extractEntries(ctx, r.cwd, r.tar.mnt, r.spool, r.tar.entries, cname, composeName(r.cwd), r.services)
+	err = extractEntries(ctx, r.cwd, r.tar.mnt, r.spool, r.tar.entries, cname, composeName(r.cwd), r.services, r.uidMap)
 	// What it extracted goes to its owner before the import counts
 	// as complete: a tar made anywhere carries its maker's owners.
 	// Not locally on macOS, as localMnt: Docker Desktop's file

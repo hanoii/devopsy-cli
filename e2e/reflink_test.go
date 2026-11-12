@@ -44,7 +44,9 @@ func TestSyncReflinkE2E(t *testing.T) {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
 	// As root, as the services would: Docker made their entries root's.
-	if out, code := srv(t, "docker run --rm -v \"$PWD/synref/prod/shared/mnt:/m\" busybox:1.37 sh -c 'dd if=/dev/urandom of=/m/files/a.bin bs=1M count=100 2>/dev/null && dd if=/dev/urandom of=/m/db/table bs=1M count=5 2>/dev/null'"); code != 0 {
+	// One of the files on an environment's uid and a project's (prod's, or one of an
+	// earlier server's), one on no range of devopsy's.
+	if out, code := srv(t, "docker run --rm -v \"$PWD/synref/prod/shared/mnt:/m\" busybox:1.37 sh -c 'dd if=/dev/urandom of=/m/files/a.bin bs=1M count=100 2>/dev/null && dd if=/dev/urandom of=/m/db/table bs=1M count=5 2>/dev/null && touch /m/files/o && chown 2000000001:1900000001 /m/files/a.bin && chown 7:7 /m/files/o'"); code != 0 {
 		t.Fatalf("writing the data: %s", out)
 	}
 	used := func() int {
@@ -70,6 +72,13 @@ func TestSyncReflinkE2E(t *testing.T) {
 	for _, f := range []string{"files/a.bin", "db/table"} {
 		if sums, _ := srv(t, "md5sum synref/prod/shared/mnt/"+f+" synref/dev/shared/mnt/"+f+" | cut -d' ' -f1 | uniq | wc -l"); strings.TrimSpace(sums) != "1" {
 			t.Errorf("%s differs on the child", f)
+		}
+	}
+	// The clone's owners mapped to the child's own uids, by range; any other kept.
+	dev, project := claimed(t, "env:synref:dev"), claimed(t, "project:synref")
+	for f, want := range map[string]string{"files/a.bin": dev + ":" + project, "files/o": "7:7"} {
+		if got := owner(t, srv, "synref/dev/shared/mnt/"+f); got != want {
+			t.Errorf("the child's shared %s is %s's, want %s", f, got, want)
 		}
 	}
 	// 105 MiB copied would take as much; the files shared take none.

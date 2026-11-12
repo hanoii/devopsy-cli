@@ -280,7 +280,10 @@ its compose files as `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID`
 ([Variables on a server](config.md#variables-on-a-server)): a process
 escaped from one container then reaches no other environment's through
 `/proc`. They are between 1,900,000,000 and 2,099,999,999, a range no
-system user, subordinate range or systemd container takes.
+system user, subordinate range or systemd container takes: an
+environment's from 2,000,000,000, a project's below it. The range alone
+says a uid's kind, which is how a copy gives data the receiving side's
+uids ([Owners in copies](data.md#owners-in-copies)).
 
 Each is a claim in `<release root>/.devopsy-uids/`, a symlink named for
 its owner whose target is the uid (`env:shop:prod -> 2064483025`,

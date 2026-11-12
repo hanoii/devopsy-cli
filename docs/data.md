@@ -75,10 +75,11 @@ A `volumes` copy:
 
 - A sync copies the entries with rsync (`rsync -a --no-D --delete
   --numeric-ids --modify-window=-1`, times compared to the nanosecond).
-  The child's copy then equals the parent's, with its owners and modes,
-  except that an entry the child owns gets the child's owner (Owners,
-  below). `--export` and `--import` move them as a tar. Both run
-  as root in `devopsy.internal/util`.
+  The child's copy then equals the parent's, with its modes, and its
+  owners but devopsy's own uids, which take the child's ([Owners in
+  copies](#owners-in-copies)), and an entry the child owns, which gets
+  the child's owner (Owners, below). `--export` and `--import` move them
+  as a tar. Both run as root in `devopsy.internal/util`.
 - Device nodes, FIFOs and sockets are never copied, nor given to an
   owner. As root, rsync and tar would make them on the server, where a
   block device given to the app's UID is its raw disk.
@@ -91,8 +92,10 @@ A `volumes` copy:
   services' containers, stopped, so the options never show on a command
   line. In a tar, a volume sits at the top level
   under its key, beside the entries.
-- A volume keeps the owners it is copied with (its image's users);
-  `devopsy.mnt.owner` owns only its root (Owners, below).
+- A volume keeps the owners it is copied with (its image's users), but
+  devopsy's own uids, which take the receiving side's ([Owners in
+  copies](#owners-in-copies)); `devopsy.mnt.owner` owns only its root
+  (Owners, below).
 - On a service with data, devopsy refuses an `external:` volume and one
   with a fixed `name:` (another project's, or every environment's), and
   a volume key named like an entry of `mnt` that a service with data
@@ -336,6 +339,31 @@ Where owners are applied:
 
 A `custom` import writes as the service's own user. Owners persist
 through restarts and reboots.
+
+### Owners in copies
+
+Data copied from another environment carries that environment's uids
+([uids](servers.md#uids)), which no container of the receiving one runs
+as. The receiving side of every copy, a sync by rsync or by reflinks, an
+`--import` and a snapshot's restore, gives each file owned by an
+environment's uid (2,000,000,000 to 2,099,999,999) its own
+`DEVOPSY_UID`, and each one owned by a project's (1,900,000,000 to
+1,999,999,999) its own `DEVOPSY_PROJECT_UID`, the group the same way and
+apart from the owner. Every other owner stays as it is: root, an image's
+own users, anything below those ranges. The range alone says the kind,
+so nothing of the sending side's numbers is carried, a tar made by hand
+or by an older devopsy is mapped alike, and data left on an old uid
+takes the right one at its next copy.
+
+- A sync's rsync maps them as it writes (`--usermap` and `--groupmap`);
+  an entry the child owns gets the child's owner instead (`--chown`).
+- A clone by reflinks, an import's extraction and a restore's are
+  mapped right after, in the same container (`find` and `chown -h`),
+  only the files whose owner differs: `chown` clears a setuid or setgid
+  bit on a file it changes. A restore of the environment's own data
+  takes one pass over it, changing nothing.
+- Locally on macOS an import maps its volumes, not its entries: Docker
+  Desktop and OrbStack show bind mounts' files as any owner.
 
 ## The mounts check
 

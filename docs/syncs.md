@@ -163,7 +163,8 @@ them back together.
 
 The rsync runs as root in `devopsy.internal/util`, devopsy's image (alpine 3
 with rsync and GNU tar, find and chown), so ownership and the deploy
-user's permissions do not matter. The image is built on each server the
+user's permissions do not matter. The child's files on the parent's uids
+land on the child's own ([Owners in copies](data.md#owners-in-copies)). The image is built on each server the
 first time it is needed. Wherever it is used, an image a week old is
 built again with its base pulled, so what runs as root on your data gets
 alpine's fixes. A rebuild that fails (the registry out of reach) warns

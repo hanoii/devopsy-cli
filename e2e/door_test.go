@@ -835,14 +835,16 @@ tar -C /tmp/t -cf `+base+`/.devopsy-sync.stream.evil data
 chown `+user+` `+base+`/.devopsy-sync.stream.evil`); code != 0 {
 		t.Fatal(out)
 	}
-	// devopsy's own import, as a caller would send it, with the tar's checks skipped.
+	// devopsy's own import, as a caller would send it, with the tar's checks skipped, its
+	// map to the environment's own uid.
+	uid := uidOf(t, doorRoot, "doormnt-prod-web-1", uids.EnvDomain)
 	if out, code := doorAs(t, user, `set -u
 script=$(printf '%sx' `+quote(importScript)+`)
 script=${script%x}
 docker run --rm --name devopsy-import-doormnt-prod-1 --label devopsy.env=doormnt-prod --label devopsy.task=import --network none \
   --mount type=bind,source=`+entry+`,target=/mnt/data \
   --mount type=bind,source=`+base+`/.devopsy-sync.stream.evil,target=/in/evil,readonly \
-  devopsy.internal/util:5 sh -c "$script" sh /in/evil data data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
+  devopsy.internal/util:5 sh -c "$script" sh /in/evil data `+uid+` `+uid+` data 2>&1 | tail -n 1`); strings.Contains(out, "refused") || code != 0 {
 		t.Fatalf("devopsy's own import, asked directly (%d): %s", code, out)
 	}
 	asRootID := func() string {
@@ -866,9 +868,7 @@ docker run --rm --name devopsy-import-doormnt-prod-1 --label devopsy.env=doormnt
 
 // importScript is emptyAndExtract, as a caller would have to send it: a change there breaks
 // this test's request first, with a refusal that says so.
-const importScript = `set -eu
-set -o pipefail
-src=$1 e=$2; shift 2
+var importScript = "set -eu\nset -o pipefail\n" + uids.MapScript + `src=$1 e=$2 ue=$3 up=$4; shift 4
 if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
   find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 fi
@@ -877,8 +877,9 @@ case $src in
     # What tar leaves unread past its end blocks (a tar of large records)
     # is drained: zstd killed by SIGPIPE would fail the pipe.
     zstd -dcq -- "$src" | { s=0; tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" || s=$?; cat >/dev/null; exit "$s"; } ;;
-  *) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+  *) tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
 esac
+map_owners "/mnt/$e" "$ue" "$up"
 `
 
 // What another project's user reaches, with a control that its own does and that there is
