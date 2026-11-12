@@ -121,7 +121,7 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 // claimLock holds the server's image lock (the deploy user's, in root) shared for a claim's
 // stretch on the store, from its skip's read or its load to its hold: a removal of anyone's,
 // which takes the lock exclusively, then never runs between the image landing and the hold
-// that keeps it (hold). Its wait is bounded and said as every lock wait is (imagesSharedAt),
+// that keeps it (hold). Its wait is bounded and said as every lock wait is (imagesLock),
 // and its holder written as the project claiming, which a removal's wait names. Only the
 // door holds it, for that stretch alone: a project user never opens the lock, whose
 // exclusive holder would hold every removal on the server.
@@ -129,7 +129,7 @@ func (s *doorSide) claimLock() (func(), error) {
 	if s.imagesRoot == "" {
 		return nil, errors.New("the server has no release root, where its image lock is")
 	}
-	return imagesSharedAt(context.Background(), cmp.Or(s.log, report.Default()), s.imagesRoot, s.policy.Project, "claiming")
+	return imagesLock{root: s.imagesRoot, how: syscall.LOCK_SH, who: s.policy.Project, doing: "claiming"}.take(context.Background(), cmp.Or(s.log, report.Default()))
 }
 
 // hold tags the image a claim got (pinned, by its digest m) with the project's claim hold

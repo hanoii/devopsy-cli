@@ -1068,8 +1068,9 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 }
 
 // removeSnapshotDir removes a snapshot's directory, its bookmarks first,
-// under the exclusive image lock when it is free (else it stays, for the
-// next holder of the snapshot lock); one an export holds locked stays.
+// under the exclusive image lock, waited for up to wait, never when zero
+// (else it stays, for the next holder of the snapshot lock); one an
+// export holds locked stays.
 func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Duration) error {
 	// An export reading it holds its directory locked (SnapshotExportScript):
 	// it stays, never waited for.
@@ -1079,23 +1080,17 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 			return errors.New("snapshot " + filepath.Base(dir) + " is being exported: it stays")
 		}
 	}
-	// The image lock, exclusive, waited for up to wait and kept to the end.
-	var unlock func()
-	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
-		u, ok, err := imagesLockNow(syscall.LOCK_EX)
-		if err != nil {
-			return err
-		}
-		if ok {
-			unlock = u
-			break
-		}
-		if wait == 0 {
-			return errors.New("the server's images are in use: " + filepath.Base(dir) + " stays until the next snapshot")
-		}
-		if time.Since(start) > wait {
-			return errors.New("the server's images are still in use after " + wait.String() + ": " + filepath.Base(dir) + " stays")
-		}
+	// The image lock, exclusive, kept to the end.
+	root, err := imagesRoot()
+	if err != nil {
+		return err
+	}
+	unlock, err := imagesLock{root: root, how: syscall.LOCK_EX, bound: wait, now: wait == 0}.take(context.Background(), report.Default())
+	switch {
+	case errors.Is(err, errImagesBusy):
+		return errors.New(err.Error() + ": " + filepath.Base(dir) + " stays until the next snapshot")
+	case err != nil:
+		return errors.New(err.Error() + ": " + filepath.Base(dir) + " stays")
 	}
 	defer unlock()
 	set, err := serverImages(cwd, composeName(cwd), errOut)

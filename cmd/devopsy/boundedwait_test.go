@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -71,4 +76,60 @@ func TestBoundedWait(t *testing.T) {
 			t.Errorf("boundWords(%s) = %q, want %q", d, got, want)
 		}
 	}
+}
+
+// The server's image lock in Go is taken as the scripts' image_lock takes it: its wait said
+// and bounded, a take that never waits busy at once, and an exclusive one let go when Docker
+// does not answer, since a removal then reads every image as gone.
+func TestImagesLock(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	answers, silent := filepath.Join(root, "docker"), filepath.Join(root, "silent")
+	write(t, answers, "#!/bin/sh\n[ \"$1\" = version ]\n", 0o755)
+	write(t, silent, "#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2\nexit 1\n", 0o755)
+	var said bytes.Buffer
+	log := report.New(&said, false, 0)
+	held, err := os.OpenFile(filepath.Join(root, remote.ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	// Shared beside a shared holder: at once, nothing said.
+	unlock, err := imagesLock{root: root, how: syscall.LOCK_SH, docker: silent}.take(context.Background(), log)
+	if err != nil || said.Len() != 0 {
+		t.Fatalf("shared beside a shared holder: %v\n%s", err, said.String())
+	}
+	unlock()
+	// Exclusive, never waiting: busy.
+	if _, err := (imagesLock{root: root, how: syscall.LOCK_EX, now: true, docker: answers}).take(context.Background(), log); !errors.Is(err, errImagesBusy) || said.Len() != 0 {
+		t.Errorf("now, held: %v\n%s", err, said.String())
+	}
+	// Exclusive, waiting: said, and ended by its bound.
+	_, err = imagesLock{root: root, how: syscall.LOCK_EX, bound: 300 * time.Millisecond, docker: answers}.take(context.Background(), log)
+	if err == nil || err.Error() != "the server's images still held by a release, a claim or a removal after 300ms" ||
+		!strings.Contains(said.String(), "devopsy: waiting for the server's images, held by a release, a claim or a removal, up to 300ms\n") {
+		t.Errorf("waited for: %v\n%s", err, said.String())
+	}
+	// Free, exclusive: taken while Docker answers, let go when it does not.
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (imagesLock{root: root, how: syscall.LOCK_EX, now: true, docker: silent}).take(context.Background(), log); err == nil || err.Error() != "Docker is not answering" {
+		t.Errorf("Docker not answering: %v", err)
+	}
+	if ok, err := tryFlock(held, syscall.LOCK_EX); !ok || err != nil {
+		t.Fatalf("the lock kept with Docker not answering: %v", err)
+	}
+	_ = syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
+	unlock, err = imagesLock{root: root, how: syscall.LOCK_EX, now: true, docker: answers}.take(context.Background(), log)
+	if err != nil {
+		t.Fatalf("exclusive, free: %v", err)
+	}
+	if ok, _ := tryFlock(held, syscall.LOCK_SH); ok {
+		t.Error("an exclusive take let a shared one in")
+	}
+	unlock()
 }
