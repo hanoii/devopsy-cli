@@ -835,7 +835,7 @@ func TestServerSetupAFailedRunIsNoRestartAsked(t *testing.T) {
 		},
 		"a put not written": func(t *testing.T, host string) {
 			write(t, filepath.Join(host, setup.SysctlFile), "# someone's\n", 0o644)
-			write(t, filepath.Join(filepath.Dir(host), "bin", "mv"), "#!/bin/sh\nfor a; do case $a in *"+filepath.Base(setup.SysctlFile)+") exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n", 0o755)
+			replaceFake(t, filepath.Join(filepath.Dir(host), "bin", "mv"), "#!/bin/sh\nfor a; do case $a in *"+filepath.Base(setup.SysctlFile)+") exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2085,7 +2085,7 @@ func TestServerSetupGoesOnPastAFailedPut(t *testing.T) {
 	// A move that fails (a full disk) is the run's failure the same way, never the same text.
 	s2, host2 := setupServer(t)
 	bin := filepath.Join(filepath.Dir(host2), "bin")
-	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nfor a; do case $a in *daemon.json) exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n", 0o755)
+	replaceFake(t, filepath.Join(bin, "mv"), "#!/bin/sh\nfor a; do case $a in *daemon.json) exit 1 ;; esac; done\nexec /bin/mv \"$@\"\n")
 	out, code = s2.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || fileExists(filepath.Join(host2, setup.DaemonFile)) || !strings.Contains(out, setup.DaemonFile+" could not be written") || readString(filepath.Join(host2, setup.SysctlFile)) != setup.SysctlText() {
 		t.Errorf("a move that fails (%d):\n%s", code, out)

@@ -24,14 +24,19 @@ func Write(path string, data []byte, mode os.FileMode) error {
 // Flock writes dir/flock where the system has none (macOS): util-linux's
 // flock -w <seconds> <fd>, an exclusive lock on a descriptor the caller
 // holds open, in perl, so a script a test runs takes its lock as on a
-// server. Nothing where the system has one.
+// server. Nothing where the system has one. What dir/flock was goes first,
+// never written into: it may be a link to a fake other tests share.
 func Flock(dir string) error {
 	for _, d := range []string{"/usr/bin", "/bin"} {
 		if _, err := os.Stat(filepath.Join(d, "flock")); err == nil {
 			return nil
 		}
 	}
-	return Write(filepath.Join(dir, "flock"), []byte(flockPerl), 0o755)
+	p := filepath.Join(dir, "flock")
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return Write(p, []byte(flockPerl), 0o755)
 }
 
 // flockPerl is Flock's flock. Its lock is the descriptor's open file, which

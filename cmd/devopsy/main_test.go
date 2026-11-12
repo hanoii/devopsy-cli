@@ -87,8 +87,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "the tests left the environment changed:\nbefore: %q\nafter: %q\n", environ, now)
 		code = 1
 	}
-	if bin, err := fakeBinOnce(); err == nil {
-		_ = os.Chmod(bin, 0o755) // read-only, so RemoveAll could not empty it
+	for _, once := range []func() (string, error){fakeBinOnce, syncBinOnce} {
+		if bin, err := once(); err == nil {
+			_ = os.Chmod(bin, 0o755) // read-only, so RemoveAll could not empty it
+		}
 	}
 	os.RemoveAll(dir)
 	os.Exit(code)

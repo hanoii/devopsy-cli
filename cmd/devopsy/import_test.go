@@ -844,7 +844,7 @@ func TestImportCutWhileWaitingForLock(t *testing.T) {
 	// wait lasts until the busy file goes.
 	busy := filepath.Join(s.tmp, "busy")
 	write(t, busy, "", 0o644)
-	write(t, filepath.Join(filepath.Dir(s.root), "bin", "flock"), "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\nif [ -e \"$FAKE_LOCK_BUSY\" ]; then\n  case \"$*\" in\n    '-n 9') exit 1 ;;\n    '-w 600 9') while [ -e \"$FAKE_LOCK_BUSY\" ]; do sleep 0.1; done ;;\n  esac\nfi\nexit 0\n", 0o755)
+	s.fake("flock", "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\nif [ -e \"$FAKE_LOCK_BUSY\" ]; then\n  case \"$*\" in\n    '-n 9') exit 1 ;;\n    '-w 600 9') while [ -e \"$FAKE_LOCK_BUSY\" ]; do sleep 0.1; done ;;\n  esac\nfi\nexit 0\n")
 	cmd, errs := s.start([]string{"FAKE_LOCK_BUSY=" + busy}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	for start := time.Now(); !strings.Contains(errs.String(), "waiting for the release running on"); time.Sleep(50 * time.Millisecond) {
 		if time.Since(start) > startWait {

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
 // syncFakeDocker logs every call, with its compose project, to
@@ -47,8 +49,13 @@ import (
 // and fresh unless FAKE_UTIL_* say otherwise (below).
 const syncFakeDocker = `#!/bin/sh
 # devopsy's own compose file (images.ComposeFile) is left out of the log:
-# the tests here match the project's compose commands.
-echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
+# the tests here match the project's compose commands. A sed only where
+# it has something to do: the fake runs thousands of times, and macOS
+# makes every process dear.
+case "$*" in
+  *devopsy-compose.yaml*) echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' ;;
+  *) echo "${COMPOSE_PROJECT_NAME:-} $*" ;;
+esac >> "$DOCKER_LOG"
 # FAKE_CUT_COUNT: docker's calls counted in this file; the one FAKE_CUT_AT
 # names fails (FAKE_CUT_HOW=fail) or kills outright the script of the session
 # it runs under (kill, on Linux: /proc, as FAKE_KILL_RUN finds it).
@@ -75,7 +82,10 @@ if [ "$1" = compose ]; then
   fa=
   for a; do
     case $fa in
-      -f) [ -n "${dir:-}" ] || dir=$(dirname "$a") ;;
+      -f) [ -n "${dir:-}" ] || case $a in
+            /*[!/]/*[!/]) case $a in *//*) dir=$(dirname "$a") ;; *) dir=${a%/*} ;; esac ;;
+            *) dir=$(dirname "$a") ;;
+          esac ;;
       --env-file) envf=$a ;;
     esac
     fa=$a
@@ -94,7 +104,12 @@ fi
 # The compose calls made holding the release lock (fd 9, which the
 # scripts open): what a devopsy killed outright leaves running holds it,
 # so the next lock-taker waits for it.
-[ "$1" != compose ] || [ ! -e /dev/fd/9 ] || echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*##g' >> "$DOCKER_LOG.locked"
+if [ "$1" = compose ] && [ -e /dev/fd/9 ]; then
+  case " $*" in
+    *" -f "*) echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*##g' ;;
+    *) echo "${COMPOSE_PROJECT_NAME:-} $*" ;;
+  esac >> "$DOCKER_LOG.locked"
+fi
 # $DOCKER_LOG.current.<compose project> sets them for the current
 # release's code alone: a restore reads the restored release's too.
 case ${dir:-} in */current/.devopsy) [ ! -f "$DOCKER_LOG.current.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.current.${COMPOSE_PROJECT_NAME:-}" ;; esac
@@ -666,26 +681,59 @@ type syncSetup struct {
 	env              []string
 }
 
+// syncBinOnce is the sync setup's fakes (ssh, docker, flock, id, mv),
+// written once and hard-linked into each setup's bin: macOS checks every
+// new executable on its first run, a link to one it ran is none, and
+// every setup's were new. As fakeBin, read-only, so a test writing into
+// one in place, which would change every setup's, fails at once.
+var syncBinOnce = sync.OnceValues(func() (string, error) {
+	bin, err := os.MkdirTemp(filepath.Dir(binary), "syncbin")
+	if err != nil {
+		return "", err
+	}
+	for name, script := range map[string]string{
+		"fakessh": syncFakeSSH,
+		"docker":  syncFakeDocker,
+		// flock logs, and locks nothing unless FAKE_REAL_FLOCK names the
+		// real one (Linux: a test of what a held lock shows).
+		"flock": "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\n[ -z \"${FAKE_REAL_FLOCK:-}\" ] || exec \"$FAKE_REAL_FLOCK\" \"$@\"\nexit 0\n",
+		// id says the session's user is a project user on FAKE_PROJECT_HOST
+		// (one or two, from fakessh).
+		"id": "#!/bin/sh\nif [ \"$*\" = -nG ] && [ -n \"${FAKE_HOST:-}\" ] && [ \"$FAKE_HOST\" = \"${FAKE_PROJECT_HOST:-}\" ]; then echo 'devopsy devopsy-projects'; exit 0; fi\nexec /usr/bin/id \"$@\"\n",
+		"mv": "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n",
+	} {
+		if err := testfile.Write(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			return "", err
+		}
+	}
+	return bin, readOnly(bin)
+})
+
 func newSyncSetup(t *testing.T) *syncSetup {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The shared fakes, linked (syncBinOnce): a test replaces one by
+	// removing its link first.
 	bin := filepath.Join(tmp, "bin")
-	write(t, filepath.Join(bin, "fakessh"), syncFakeSSH, 0o755)
-	write(t, filepath.Join(bin, "docker"), syncFakeDocker, 0o755)
-	// flock logs, and locks nothing unless FAKE_REAL_FLOCK names the real
-	// one (Linux: a test of what a held lock shows).
-	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\n[ -z \"${FAKE_REAL_FLOCK:-}\" ] || exec \"$FAKE_REAL_FLOCK\" \"$@\"\nexit 0\n", 0o755)
-	// id says the session's user is a project user on FAKE_PROJECT_HOST
-	// (one or two, from fakessh).
-	write(t, filepath.Join(bin, "id"), "#!/bin/sh\nif [ \"$*\" = -nG ] && [ -n \"${FAKE_HOST:-}\" ] && [ \"$FAKE_HOST\" = \"${FAKE_PROJECT_HOST:-}\" ]; then echo 'devopsy devopsy-projects'; exit 0; fi\nexec /usr/bin/id \"$@\"\n", 0o755)
-	// The server's sshd host keys, which a holder sends the push.
-	write(t, filepath.Join(tmp, "hostkeys", "ssh_host_ed25519_key.pub"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g root@two\n", 0o644)
-	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := syncBinOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"fakessh", "docker", "flock", "id", "mv"} {
+		if err := os.Link(filepath.Join(shared, name), filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.Symlink(binary, filepath.Join(bin, "devopsy")); err != nil {
 		t.Fatal(err)
 	}
+	// The server's sshd host keys, which a holder sends the push.
+	write(t, filepath.Join(tmp, "hostkeys", "ssh_host_ed25519_key.pub"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g root@two\n", 0o644)
 	s := &syncSetup{t: t, root: filepath.Join(tmp, "srv"), project: filepath.Join(tmp, "app"), sshLog: filepath.Join(tmp, "ssh.log"), log: filepath.Join(tmp, "docker.log")}
 	// Last among its cleanups but the directory's, so whatever a test does,
 	// no detached tar writes under it as it goes.
@@ -719,6 +767,23 @@ func newSyncSetup(t *testing.T) *syncSetup {
 		// none, else it would exit 3 there.
 		diskWarnEnv + "=off"}
 	return s
+}
+
+// fake replaces the setup's fake name with script (replaceFake).
+func (s *syncSetup) fake(name, script string) {
+	s.t.Helper()
+	replaceFake(s.t, filepath.Join(filepath.Dir(s.root), "bin", name), script)
+}
+
+// replaceFake writes the fake at path anew: what was there goes first, a
+// sync setup's link to its shared one (syncBinOnce) included, which a
+// write in place would change for every setup.
+func replaceFake(t *testing.T, path, script string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	write(t, path, script, 0o755)
 }
 
 func (s *syncSetup) run(extra []string, args ...string) (string, int) {
