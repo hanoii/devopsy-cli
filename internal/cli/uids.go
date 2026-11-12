@@ -66,11 +66,17 @@ func releaseOwners(projectDir string) (root string, env uids.Owner, err error) {
 // and the caller's own value: a uid is devopsy's, never a variable's. Locally they are the
 // plain hashes, under the caller's and the .env's: on a developer's machine an override (a
 // bind mount the developer edits, rootless Docker) is theirs to make.
-func (p *loadedProject) setUIDs(project *remote.Project) error {
+func (p *loadedProject) setUIDs(cwd string, project *remote.Project) error {
 	if InRelease(p.dir) {
 		root, envOwner, err := releaseOwners(p.dir)
 		if err != nil {
 			return &ExitError{Code: 1, Msg: "the uids of this release: " + err.Error()}
+		}
+		// One claims directory per server: a project directory linked to another disk resolves
+		// under that disk, so the configured release root wins when the release, as it was
+		// reached (cwd, never resolved), is under it.
+		if r, err := remote.ReleaseSettings(); err == nil && strings.HasPrefix(filepath.Clean(cwd), strings.TrimRight(r.Root, "/")+"/") {
+			root = r.Root
 		}
 		claim := ClaimUIDs
 		if claim == nil {

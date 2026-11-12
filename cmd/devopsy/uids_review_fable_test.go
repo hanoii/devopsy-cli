@@ -33,7 +33,7 @@ func TestFreeUIDsWaitsForNoSiblingsStart(t *testing.T) {
 		}
 		defer l.Close()
 	}
-	if err := freeUIDs(s, pr, func(string) error { return nil }); err != nil {
+	if err := freeUIDs(s, pr, noneThere, func(string) error { return nil }); err != nil {
 		t.Errorf("pr-1's free waited for prod's start, though the project's claim stays: %v", err)
 	}
 	if _, ok, _ := s.Read(prod.ProjectOf()); !ok {
@@ -51,7 +51,7 @@ func TestFreeUIDsDownsNothingNeverClaimed(t *testing.T) {
 	t.Parallel()
 	s := uids.Store{Dir: filepath.Join(t.TempDir(), ".devopsy-uids")}
 	var downs []string
-	err := freeUIDs(s, uids.Owner{Project: "shop", Instance: "admin", Env: "prod"}, func(name string) error {
+	err := freeUIDs(s, uids.Owner{Project: "shop", Instance: "admin", Env: "prod"}, noneThere, func(name string) error {
 		downs = append(downs, name)
 		return nil
 	})

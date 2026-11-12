@@ -17,6 +17,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -1538,6 +1539,8 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		return doorRefused(err)
 	}
 	err = execDecided(s.real, append(cmd, argv...), env)
+	// The locks' descriptors stay open up to the exec (main's KeepAlive says why).
+	runtime.KeepAlive(locks)
 	return doorRefused(err)
 }
 

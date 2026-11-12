@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -377,6 +378,9 @@ func run() int {
 	// Replace this process, so signals and the terminal go straight to the
 	// command, as with the shell version's exec.
 	err = syscall.Exec(path, plan.Args, plan.Env)
+	// The locks' descriptors stay open up to the exec: unreachable before it, the collector
+	// could close them first, and compose would run without them.
+	runtime.KeepAlive(startLocks)
 	// A script without a shebang: run it with sh, as a shell's exec would.
 	if errors.Is(err, syscall.ENOEXEC) {
 		err = syscall.Exec("/bin/sh", append([]string{"/bin/sh"}, plan.Args...), plan.Env)

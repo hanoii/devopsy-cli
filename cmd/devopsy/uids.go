@@ -179,12 +179,16 @@ func uidsOfOwners(claims []uids.Claim, owners []uids.Owner) []uint32 {
 // be another project's. Then its project's claim, taking the project's start lock only when no
 // environment of it holds one, so a sibling's start never holds up this free. Its waits are
 // announced and bounded.
-func freeUIDs(s uids.Store, env uids.Owner, down func(name string) error) error {
+func freeUIDs(s uids.Store, env uids.Owner, gone func() error, down func(name string) error) error {
 	lock, err := s.LockStart(env, syscall.LOCK_EX)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
+	// Again under the lock: a release of it while the free waited for a start made it anew.
+	if err := gone(); err != nil {
+		return err
+	}
 	_, claimed, err := s.Read(env)
 	if err != nil {
 		return err
@@ -236,8 +240,14 @@ func runFreeUIDs(args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	if _, err := os.Lstat(args[0]); err == nil {
-		return failErr(fmt.Errorf("%s is still there: its --destroy removes it first", args[0]))
+	gone := func() error {
+		if _, err := os.Lstat(args[0]); err == nil {
+			return fmt.Errorf("%s is still there: its --destroy removes it first", args[0])
+		}
+		return nil
+	}
+	if err := gone(); err != nil {
+		return failErr(err)
 	}
 	down := func(name string) error {
 		c := exec.Command(realDocker(), downArgs(name)...)
@@ -246,7 +256,7 @@ func runFreeUIDs(args []string) int {
 		c.Dir, c.Stdout, c.Stderr = "/", errOut, errOut
 		return c.Run()
 	}
-	if err := freeUIDs(claimsStore(r.Root), env, down); err != nil {
+	if err := freeUIDs(claimsStore(r.Root), env, gone, down); err != nil {
 		return failErr(err)
 	}
 	return 0
@@ -276,8 +286,14 @@ func (s *doorSide) free(base string) int {
 		return doorRefused(err)
 	}
 	real, _ := s.Real(base)
-	if s.IsDir(real) {
-		return doorRefused(fmt.Errorf("refused: %s is still there: its --destroy removes it first", base))
+	gone := func() error {
+		if s.IsDir(real) {
+			return fmt.Errorf("refused: %s is still there: its --destroy removes it first", base)
+		}
+		return nil
+	}
+	if err := gone(); err != nil {
+		return doorRefused(err)
 	}
 	name := env.ComposeName()
 	if left, err := dataLeft(s.policy.Mnt(name)); err != nil || left {
@@ -295,7 +311,7 @@ func (s *doorSide) free(base string) int {
 		c.Env, c.Dir, c.Stdout, c.Stderr = env, "/", os.Stderr, os.Stderr
 		return c.Run()
 	}
-	if err := freeUIDs(claimsStore(s.uidRoot), env, down); err != nil {
+	if err := freeUIDs(claimsStore(s.uidRoot), env, gone, down); err != nil {
 		return doorRefused(fmt.Errorf("refused: freeing the uid of %s: %w", name, err))
 	}
 	return 0

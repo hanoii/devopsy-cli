@@ -120,3 +120,36 @@ func TestReadsUIDs(t *testing.T) {
 		t.Errorf("the override's: %v %v", got, err)
 	}
 }
+
+// A project directory linked to another disk resolves under that disk: its claims still go
+// in the configured release root's directory, the server's one, never a second one there.
+//
+// Not parallel: it sets DEVOPSY_HOME, which the release settings are read from.
+func TestUIDsClaimUnderTheReleaseRoot(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, disk := filepath.Join(tmp, "srv"), filepath.Join(tmp, "disk")
+	home := filepath.Join(tmp, "home")
+	t.Setenv("DEVOPSY_HOME", home)
+	write(t, filepath.Join(home, "config.yaml"), "releases: {root: "+root+"}\n")
+	code := filepath.Join(disk, "shop", "prod", "releases", "1", "code")
+	write(t, filepath.Join(code, ProjectDirName, "compose.yaml"), minimalCompose)
+	write(t, filepath.Join(code, "..", "devopsy-target.env"), "DEVOPSY_PROJECT='shop'\nDEVOPSY_ENVIRONMENT='prod'\n")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(disk, "shop"), filepath.Join(root, "shop")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProject(filepath.Join(root, "shop", "prod", "releases", "1", "code"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := uids.StoreAt(root).Read(uids.Owner{Project: "shop", Env: "prod"}); err != nil || !ok {
+		t.Errorf("no claim in the release root's directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(disk, UIDsDir)); err == nil {
+		t.Error("a second claims directory on the linked disk")
+	}
+}

@@ -3031,13 +3031,18 @@ func childFinish(p place, services []cli.SyncService, set []cli.Stopped, env []s
 	}
 	switch word {
 	case "go":
-		// Complete: whatever an earlier sync or import left is replaced.
-		_ = os.Remove(incomplete)
 		// The copy carried the parent's owners, its volumes' roots included: theirs back,
-		// before anything starts on them (a reset's too, after its copy).
+		// before anything starts on them (a reset's too, after its copy). When that fails the
+		// data stays marked and its services down, as a copy that did not complete leaves them.
 		if err := ownProjectVolumes(context.Background(), p.cwd, newContainer("sync", composeName(p.cwd), "finish-owners", remote.SyncTask("finish"))); err != nil {
 			code = fail(err.Error())
+			if merr := markIncomplete(p.base, "", remote.IncompleteFinish, "the copy completed, but its volumes' roots could not be given to their owners: "+err.Error(), false); merr != nil {
+				fail(merr.Error())
+			}
+			break
 		}
+		// Complete: whatever an earlier sync or import left is replaced.
+		_ = os.Remove(incomplete)
 		var written []string
 		for _, s := range services {
 			if s.Copy == cli.CopyVolumes {

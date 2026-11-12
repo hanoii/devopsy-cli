@@ -88,7 +88,7 @@ func TestFreeUIDsWaitsOnlyForWhatItFreesReviewOpus(t *testing.T) {
 		}
 		defer l.Close()
 	}
-	if err := freeUIDs(s, pr, func(string) error { return nil }); err != nil {
+	if err := freeUIDs(s, pr, noneThere, func(string) error { return nil }); err != nil {
 		t.Errorf("pr-1's free failed on prod's start, with prod's claim keeping the project's: %v", err)
 	}
 	if _, ok, _ := s.Read(prod.ProjectOf()); !ok {

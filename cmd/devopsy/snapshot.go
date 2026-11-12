@@ -2538,7 +2538,9 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	if err := ownMnt(ctx, mnt, ownedEntries(owners, m.entries), cname.with("-owners")); err != nil {
 		return stayDown(err.Error())
 	}
-	if err := ownProjectVolumes(ctx, cwd, cname.with("-owners")); err != nil {
+	// By the restored code's labels, as its entries' owners: the release replaced may own what
+	// the snapshot's does not.
+	if err := ownProjectVolumes(ctx, restoredCode, cname.with("-owners")); err != nil {
 		return stayDown(err.Error())
 	}
 	if os.Getenv(remote.RestoreEnvEnv) != "" {

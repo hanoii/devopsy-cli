@@ -98,7 +98,7 @@ func TestFreeUIDs(t *testing.T) {
 		}
 		return nil
 	}
-	if err := freeUIDs(s, prod, down); err != nil {
+	if err := freeUIDs(s, prod, noneThere, down); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(downs, []string{"shop-prod"}) {
@@ -110,17 +110,29 @@ func TestFreeUIDs(t *testing.T) {
 	if _, ok, _ := s.Read(prod.ProjectOf()); !ok {
 		t.Error("the project's claim went with staging still there")
 	}
-	if err := freeUIDs(s, staging, func(string) error { return nil }); err != nil {
+	if err := freeUIDs(s, staging, noneThere, func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := s.Read(prod.ProjectOf()); ok {
 		t.Error("the project's claim left with its last environment gone")
 	}
+	// An environment there again once the lock is held (released while the free waited):
+	// nothing taken down, its claim kept.
+	if _, _, err := s.LookupPair(prod); err != nil {
+		t.Fatal(err)
+	}
+	downs = nil
+	if err := freeUIDs(s, prod, func() error { return errors.New("there again") }, down); err == nil || len(downs) != 0 {
+		t.Errorf("a free of an environment there again: %v, downs %v", err, downs)
+	}
+	if _, ok, _ := s.Read(prod); !ok {
+		t.Error("the claim of an environment there again went")
+	}
 	// A failed down frees nothing.
 	if _, _, err := s.LookupPair(prod); err != nil {
 		t.Fatal(err)
 	}
-	if err := freeUIDs(s, prod, func(string) error { return errors.New("no daemon") }); err == nil {
+	if err := freeUIDs(s, prod, noneThere, func(string) error { return errors.New("no daemon") }); err == nil {
 		t.Error("freed past a failed down")
 	}
 	if _, ok, _ := s.Read(prod); !ok {
@@ -334,3 +346,6 @@ func TestDoorFreeTakesWhatItsPathSays(t *testing.T) {
 		t.Errorf("a free of what held no claim took a name down")
 	}
 }
+
+// noneThere is a free's gone check for an environment that is gone.
+func noneThere() error { return nil }
