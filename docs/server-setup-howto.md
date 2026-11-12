@@ -174,11 +174,11 @@ As root, on Debian or Ubuntu with systemd:
       runuser -u "$user" -- mkdir -p "${config%/*}"
       grep -qs '^door:' "$config" || printf 'door:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null
 
-3. Give Docker a current buildx, which an upgrade of Docker's packages
-   brings.
+3. Give Docker buildx 0.33.0 or later by upgrading its plugin's package
+   alone, which restarts nothing.
 
       apt-get update
-      apt-get install -y --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      apt-get install -y --only-upgrade docker-buildx-plugin
 
 4. Skip this step where Docker is on its containerd image store already, as
    a Docker 29 installed fresh is: the first command then shows

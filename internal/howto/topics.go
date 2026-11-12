@@ -122,9 +122,9 @@ var Topics = []Topic{
 				`runuser -u "$user" -- mkdir -p "${config%/*}"`,
 				`grep -qs '^door:' "$config" || printf 'door:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
 			}},
-			{"Give Docker a current buildx, which an upgrade of Docker's packages brings.", []string{
+			{"Give Docker buildx 0.33.0 or later by upgrading its plugin's package alone, which restarts nothing.", []string{
 				`apt-get update`,
-				`apt-get install -y --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`,
+				`apt-get install -y --only-upgrade docker-buildx-plugin`,
 			}},
 			{"Skip this step where Docker is on its containerd image store already, as a Docker 29 installed fresh is: the first command then shows io.containerd.snapshotter.v1 as its driver type, where the classic store shows overlay2 as its driver. " +
 				"Moving a Docker off the classic store restarts it, which stops every container, and no container or image of the classic store shows on the containerd one (volumes and networks stay): " +

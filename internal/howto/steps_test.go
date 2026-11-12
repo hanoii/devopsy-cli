@@ -199,3 +199,18 @@ func TestDoorConfigStepOnAConfigWithoutAFinalNewline(t *testing.T) {
 		}
 	}
 }
+
+// The project-users topic's buildx step upgrades buildx's package alone and restarts nothing:
+// an upgrade of docker-ce or containerd.io restarts Docker, which stops every container.
+func TestBuildxStepUpgradesOnlyBuildx(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "log")
+	logged := "echo \"$(basename \"$0\") $*\" >> " + log + "\n"
+	path := fakes(t, map[string]string{"apt-get": logged, "systemctl": logged}, "apt-get", "systemctl")
+	out := pasted(t, stepWith(t, ProjectUsers, "docker-buildx-plugin"), path)
+	got, _ := os.ReadFile(log)
+	if want := "apt-get update\napt-get install -y --only-upgrade docker-buildx-plugin\n"; string(got) != want {
+		t.Errorf("the buildx step ran:\n%s\nwant:\n%s\n%s", got, want, out)
+	}
+}
