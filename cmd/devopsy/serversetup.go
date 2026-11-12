@@ -61,6 +61,15 @@ func runServerSetup(t *remote.Target, args []string) int {
 	es := setupEntries(f)
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
 	said := sayRefusals(f, report.ErrorLevel, nil)
+	// The tools missing that refuse nothing, their one fix after the last, as --server-info
+	// shares it.
+	for i, name := range f.Missing {
+		if msg, fix := toolMissingWords(name); msg != "" && i == len(f.Missing)-1 {
+			report.Say(report.WarnLevel, msg, nil, fix)
+		} else if msg != "" {
+			report.Warn(msg)
+		}
+	}
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
 	if err == errDeclined {

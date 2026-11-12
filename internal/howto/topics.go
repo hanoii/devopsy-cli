@@ -48,20 +48,21 @@ var Topics = []Topic{
 	},
 	{
 		Name:    Tools,
-		Summary: "tar, flock and the other tools releases use, GNU coreutils",
-		Title:   "The tools releases use",
+		Summary: "tar, flock and the other tools devopsy uses, sudo and acl",
+		Title:   "The tools devopsy uses",
 		Why: "A release needs tar and flock, and --server-setup and every release refuse a server without them. " +
-			"setsid, script, mkfifo and a GNU tail that answers --version each serve a part of a release or a sync, which goes without them; --server-info names each one missing.",
+			"setsid, script, mkfifo and a GNU tail that answers --version each serve a part of a release or a sync, which goes without them, " +
+			"and project users need sudo, visudo and setfacl, which --project-users add refuses without; --server-info and --server-setup name each one missing.",
 		Steps: []Step{
-			{"Install their packages: tar, util-linux (flock, setsid), bsdutils (script) and coreutils (mkfifo, tail).", []string{
-				`apt-get install -y tar util-linux bsdutils coreutils`,
+			{"Install their packages: tar, util-linux (flock, setsid), bsdutils (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl (setfacl).", []string{
+				`apt-get install -y tar util-linux bsdutils coreutils sudo acl`,
 			}},
 			{"On Ubuntu, put GNU's coreutils in place of Rust's uutils, which Ubuntu may install as its coreutils: the two packages conflict, and apt swaps them only when told to remove the other.", []string{
 				`apt-get install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils-`,
 			}},
 		},
 		Check: Step{"each tool is found, and tail says it is GNU coreutils'.", []string{
-			`command -v tar flock setsid script mkfifo tail`,
+			`command -v tar flock setsid script mkfifo tail sudo visudo setfacl`,
 			`tail --version | head -n 1`,
 		}},
 	},
@@ -102,15 +103,12 @@ var Topics = []Topic{
 	},
 	{
 		Name:    ProjectUsers,
-		Summary: "sudo, acl, the door's directory, Docker's containerd store",
+		Summary: "the door's directory, Docker's containerd image store",
 		Title:   "What a server with project users needs",
-		Why: "Project users reach Docker through the door, which runs through sudo, gives them their files with setfacl, keeps their data in a directory of its own on a mount with nosuid and nodev, " +
+		Why: "Project users reach Docker through the door, which keeps their data in a directory of its own on a mount with nosuid and nodev, " +
 			"and needs Docker's containerd image store with buildx 0.33.0 or later: --project-users add refuses a server without that mount or that Docker, and --server-info warns of both. " +
-			"/proc should hide other users' processes from them too (the processes topic).",
+			"The door needs sudo and acl too (the tools topic), and /proc should hide other users' processes from project users (the processes topic).",
 		Steps: []Step{
-			{"Install sudo and acl.", []string{
-				`apt-get install -y sudo acl`,
-			}},
 			{"Make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot, once.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`install -d -o "$user" -m 755 "$space"`,

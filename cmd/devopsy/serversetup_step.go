@@ -166,6 +166,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
 	}
+	f.Missing = optionalMissing(missingTools())
 	action, refusal := releaseRootCheck(f.Root, os.Getuid())
 	f.RootAction = action
 	if refusal != nil {
@@ -404,6 +405,18 @@ func toolsRefusal() *setup.Refusal {
 		}
 	}
 	return toolsRefusalOf(missing)
+}
+
+// optionalMissing are the tools of missing (missingTools) that refuse nothing, which the setup
+// warns of: the required ones are its refusal (toolsRefusal).
+func optionalMissing(missing []string) []string {
+	var out []string
+	for _, t := range serverTools {
+		if !t.required && slices.Contains(missing, t.name) {
+			out = append(out, t.name)
+		}
+	}
+	return out
 }
 
 // toolsRefusalOf is the tools' refusal for the required tools missing, nil for none.

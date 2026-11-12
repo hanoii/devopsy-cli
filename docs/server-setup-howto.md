@@ -12,9 +12,9 @@ deploy user's name, is a shell variable set on a step's first line with
 its usual value; a value of the system is computed.
 
 - [`docker`](#docker): Docker from its repository, its compose and buildx plugins
-- [`tools`](#tools): tar, flock and the other tools releases use, GNU coreutils
+- [`tools`](#tools): tar, flock and the other tools devopsy uses, sudo and acl
 - [`processes`](#processes): /proc hiding every user's processes from the others
-- [`project-users`](#project-users): sudo, acl, the door's directory, Docker's containerd store
+- [`project-users`](#project-users): the door's directory, Docker's containerd image store
 - [`kexec-handover`](#kexec-handover): kho=off on the kernel's command line, for its memory
 - [`kdump`](#kdump): no memory kept for a crash kernel, a choice
 
@@ -67,19 +67,21 @@ To check it: Docker answers the deploy user, with both plugins, and
 ## tools
 
 ```
-The tools releases use
+The tools devopsy uses
 
 A release needs tar and flock, and --server-setup and every release refuse a
 server without them. setsid, script, mkfifo and a GNU tail that answers
---version each serve a part of a release or a sync, which goes without them;
---server-info names each one missing.
+--version each serve a part of a release or a sync, which goes without them,
+and project users need sudo, visudo and setfacl, which --project-users add
+refuses without; --server-info and --server-setup name each one missing.
 
 As root, on Debian or Ubuntu with systemd:
 
 1. Install their packages: tar, util-linux (flock, setsid), bsdutils
-   (script) and coreutils (mkfifo, tail).
+   (script), coreutils (mkfifo, tail), sudo (sudo, visudo) and acl
+   (setfacl).
 
-      apt-get install -y tar util-linux bsdutils coreutils
+      apt-get install -y tar util-linux bsdutils coreutils sudo acl
 
 2. On Ubuntu, put GNU's coreutils in place of Rust's uutils, which Ubuntu
    may install as its coreutils: the two packages conflict, and apt swaps
@@ -89,7 +91,7 @@ As root, on Debian or Ubuntu with systemd:
 
 To check it: each tool is found, and tail says it is GNU coreutils'.
 
-      command -v tar flock setsid script mkfifo tail
+      command -v tar flock setsid script mkfifo tail sudo visudo setfacl
       tail --version | head -n 1
 ```
 
@@ -146,20 +148,16 @@ To check it: /proc's options say hidepid=invisible and the group's id, and
 ```
 What a server with project users needs
 
-Project users reach Docker through the door, which runs through sudo, gives
-them their files with setfacl, keeps their data in a directory of its own on
-a mount with nosuid and nodev, and needs Docker's containerd image store
-with buildx 0.33.0 or later: --project-users add refuses a server without
-that mount or that Docker, and --server-info warns of both. /proc should
-hide other users' processes from them too (the processes topic).
+Project users reach Docker through the door, which keeps their data in a
+directory of its own on a mount with nosuid and nodev, and needs Docker's
+containerd image store with buildx 0.33.0 or later: --project-users add
+refuses a server without that mount or that Docker, and --server-info warns
+of both. The door needs sudo and acl too (the tools topic), and /proc should
+hide other users' processes from project users (the processes topic).
 
 As root, on Debian or Ubuntu with systemd:
 
-1. Install sudo and acl.
-
-      apt-get install -y sudo acl
-
-2. Make the door's directory, the deploy user's, and mount it on itself with
+1. Make the door's directory, the deploy user's, and mount it on itself with
    nosuid and nodev, now and at every boot, once.
 
       user=devopsy space=/var/lib/devopsy-door
@@ -168,14 +166,14 @@ As root, on Debian or Ubuntu with systemd:
       systemctl daemon-reload
       mount "$space"
 
-3. Name it in the deploy user's config, where the file has no door: yet.
+2. Name it in the deploy user's config, where the file has no door: yet.
 
       user=devopsy space=/var/lib/devopsy-door
       home=$(getent passwd "$user" | cut -d: -f6)
       runuser -u "$user" -- mkdir -p "$home/.config/devopsy"
       printf 'door:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$home/.config/devopsy/config.yaml" >/dev/null
 
-4. Give Docker its containerd image store, which a Docker 29 installed fresh
+3. Give Docker its containerd image store, which a Docker 29 installed fresh
    uses already, and a current buildx, which an upgrade of Docker's packages
    brings. A Docker installed earlier on the classic store moves at a cost:
    no image or container of the classic store shows on the containerd one
@@ -189,7 +187,7 @@ As root, on Debian or Ubuntu with systemd:
       apt-get update
       apt-get install -y --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-5. Then add project users, locally, with --project-users add, and reboot the
+4. Then add project users, locally, with --project-users add, and reboot the
    server after the first: sshd takes its part at the next boot.
 
 To check it: the directory is mounted with nosuid and nodev, Docker says its

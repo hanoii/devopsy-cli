@@ -65,10 +65,12 @@ root run through devopsy's util image, so the deploy user needs no sudo:
 the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
-host's `docker.service`. It installs none of them: they are the
-admin's ([`--server-setup-howto`](#--server-setup-howto)). The release root (`releases: root` in the deploy user's
-`config.yaml`, else its home, never `/`, a link to it included) it makes
-when missing, and gives to the deploy user when root owns it and it is
+host's `docker.service`, and warns of the other tools a server needs
+when missing (`setsid`, `script`, `mkfifo`, GNU `tail`, and `sudo`,
+`visudo` and `setfacl` for project users). It installs none of them:
+they are the admin's ([`--server-setup-howto`](#--server-setup-howto)).
+The release root (`releases: root` in the deploy user's `config.yaml`,
+else its home, never `/`, a link to it included) it makes when missing, and gives to the deploy user when root owns it and it is
 empty (a fresh volume's `lost+found` aside); one root owns that holds
 files (a system directory), one another user owns, or one that is no
 directory, it refuses.
@@ -248,7 +250,8 @@ setup's items) comes once, after the last of them:
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
-- a tool the server needs, missing;
+- a tool the server needs, missing, `sudo`, `visudo` and `setfacl`
+  (which only project users need) among them;
 - on a server with project users, a Docker without its containerd image
   store or buildx 0.33.0, on which the door refuses every image a project
   user does not build ([project users](project-users.md));

@@ -43,18 +43,80 @@ const (
 
 // serverTools are the tools a server needs beyond Docker and devopsy
 // (internals/releases.md), with what goes without each; a release refuses a server without
-// a required one (toolsRefusal), and the others degrade.
+// a required one (toolsRefusal), and the others degrade. The door's (door) are project users',
+// which --project-users add refuses without (doorToolsMissing); an sbin one is looked for in
+// /usr/sbin and /sbin too, outside a deploy user's PATH.
 var serverTools = []struct {
 	name, without string
 	required      bool
+	door, sbin    bool
 }{
-	{"tar", "no release can be uploaded", true},
-	{"flock", "nothing that changes an environment runs", true},
-	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it", false},
-	{"script", "builds and pulls show no live progress", false},
-	{"mkfifo", "no sync runs", false},
-	{"tail", "only the traps protect a release after its switch (a tail that answers --version)", false},
+	{name: "tar", without: "no release can be uploaded", required: true},
+	{name: "flock", without: "nothing that changes an environment runs", required: true},
+	{name: "setsid", without: "the run step runs plainly, and a fetch's live progress shows only before it"},
+	{name: "script", without: "builds and pulls show no live progress"},
+	{name: "mkfifo", without: "no sync runs"},
+	{name: "tail", without: "only the traps protect a release after its switch (a tail that answers --version)"},
+	{name: "sudo", without: "no project user can be added, nor reach Docker through the door", door: true},
+	{name: "visudo", without: "no project user can be added: the door's sudo rules are checked with it", door: true, sbin: true},
+	{name: "setfacl", without: "no project user can be added, nor given its files", door: true},
 }
+
+// toolThere says whether name, one of serverTools, is there: in PATH, or for an sbin one in
+// /usr/sbin or /sbin.
+func toolThere(name string, sbin bool) bool {
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+	if sbin {
+		for _, dir := range []string{"/usr/sbin", "/sbin"} {
+			if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// missingTools are the tools of serverTools not there, required ones included, in order.
+func missingTools() []string {
+	var out []string
+	for _, t := range serverTools {
+		if !toolThere(t.name, t.sbin) {
+			out = append(out, t.name)
+		} else if t.name == "tail" && exec.Command("tail", "--version").Run() != nil {
+			// As the scripts tell (followOutput): GNU's, or uutils'.
+			out = append(out, "tail")
+		}
+	}
+	return out
+}
+
+// doorToolsMissing are the door's tools of missing (missingTools), which --project-users add
+// refuses without.
+func doorToolsMissing(missing []string) []string {
+	var out []string
+	for _, t := range serverTools {
+		if t.door && slices.Contains(missing, t.name) {
+			out = append(out, t.name)
+		}
+	}
+	return out
+}
+
+// toolMissingWords is how --server-info and --server-setup say a tool of serverTools missing
+// (name), with the tools topic's steps as the fix; "" for a name that is none of them.
+func toolMissingWords(name string) (string, report.Remedy) {
+	for _, t := range serverTools {
+		if t.name == name {
+			return "the server has no " + t.name + ": " + t.without, toolsFix
+		}
+	}
+	return "", report.Remedy{}
+}
+
+// toolsFix is the way out of a tool missing: its package, by the tools topic's steps.
+var toolsFix = report.Fix("install it with the system's packages, as root:", howto.Command(howto.Tools))
 
 // doorFacts are the server's door, nil with none: its space's mount, its users, whether sshd
 // waits for a reboot to take it, and the host's listeners from read, the root read of the
@@ -227,14 +289,7 @@ func serverFacts() (remote.ServerInfo, error) {
 	}
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
-	for _, t := range serverTools {
-		if _, err := exec.LookPath(t.name); err != nil {
-			info.Missing = append(info.Missing, t.name)
-		} else if t.name == "tail" && exec.Command("tail", "--version").Run() != nil {
-			// As the scripts tell (followOutput): GNU's, or uutils'.
-			info.Missing = append(info.Missing, "tail")
-		}
-	}
+	info.Missing = missingTools()
 	info.Containers = hostContainers()
 	trees := doorTrees(info.Root)
 	for _, who := range trees {
@@ -1141,9 +1196,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// Tools.
 	key = "tools"
-	for _, t := range serverTools {
-		if slices.Contains(info.Missing, t.name) {
-			warn("the server has no " + t.name + ": " + t.without)
+	for _, name := range info.Missing {
+		if msg, fix := toolMissingWords(name); msg != "" {
+			warn(msg, fix)
 		}
 	}
 

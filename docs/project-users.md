@@ -326,10 +326,12 @@ The door names what it refuses, and logs each refusal in
 
 ## Setting up a server
 
-A server needs `sudo` and `acl` installed, the door's directory on a
-mount of its own, and a current Docker: its containerd image store, which
-Docker 29 uses by default on a fresh install, and buildx 0.33.0 or
-later. `add` refuses a server without them. The commands below address
+A server needs `sudo` and `acl` installed (`sudo`, `visudo` and
+`setfacl`), the door's directory on a mount of its own, and a current
+Docker: its containerd image store, which Docker 29 uses by default on a
+fresh install, and buildx 0.33.0 or later. `add` refuses a server without
+them before it changes anything, and `--server-info` and `--server-setup`
+warn of a missing tool. The commands below address
 the server by its deploy user, `devopsy@vm1`.
 
 Every user's processes should be hidden from the others too: a process's
@@ -345,11 +347,12 @@ with none yet, `--server-info` says it without a warning.
 command line.
 
 1. Set the server up for project users, as root: `devopsy
-   --server-setup-howto project-users` prints the steps (`sudo` and
-   `acl`, the door's directory mounted with `nosuid` and `nodev`, its
-   `door: space:` in the deploy user's config, Docker's containerd image
-   store and what moving to it costs), as [Server setup
-   how-to](server-setup-howto.md#project-users) shows them.
+   --server-setup-howto project-users` prints the steps (the door's
+   directory mounted with `nosuid` and `nodev`, its `door: space:` in the
+   deploy user's config, Docker's containerd image store and what moving
+   to it costs), and `devopsy --server-setup-howto tools` installs `sudo`
+   and `acl`, as [Server setup how-to](server-setup-howto.md#project-users)
+   shows them.
 
 2. Add the project user and its keys, locally:
 

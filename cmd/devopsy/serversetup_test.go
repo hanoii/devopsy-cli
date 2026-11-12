@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -168,6 +169,23 @@ func TestServerSetupYes(t *testing.T) {
 	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if _, sessions := s.logs(); code != 0 || !strings.Contains(out, "nothing to change") || strings.Count(sessions, "\n") != 1 {
 		t.Errorf("a second run (%d):\n%s\nsessions:\n%s", code, out, sessions)
+	}
+}
+
+// A tool the server needs that refuses nothing (the door's setfacl, a sync's mkfifo) is warned
+// of, never refused: the setup applies, their one fix, the tools topic, after the last.
+func TestServerSetupWarnsOfToolsMissing(t *testing.T) {
+	t.Parallel()
+	s, _ := setupServer(t)
+	bin := filepath.Join(filepath.Dir(s.root), "bin")
+	path := pathWithout(t, pathWithout(t, bin, "setfacl"), "mkfifo")
+	out, code := s.run([]string{"PATH=" + path}, "@devopsy@one:", "--server-setup", "--yes")
+	// setfacl is the last of serverTools: the fix follows it, and only it.
+	last := "devopsy: warning: the server has no setfacl: no project user can be added, nor given its files\n" +
+		"devopsy: | to fix it:\ndevopsy: | install it with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
+	if code != 0 || !strings.Contains(out, "devopsy: warning: the server has no mkfifo: no sync runs\ndevopsy: warning: ") || !strings.Contains(out, last) ||
+		strings.Count(out, howto.Command(howto.Tools)) != 1 || !strings.Contains(out, "this server is set up by devopsy now") {
+		t.Errorf("tools missing (%d):\n%s", code, out)
 	}
 }
 
@@ -910,8 +928,13 @@ func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(t.TempDir(), "missing")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
+	// The door's tools there, which add refuses without first.
+	tools := t.TempDir()
+	for _, name := range []string{"sudo", "visudo", "setfacl"} {
+		write(t, filepath.Join(tools, name), "#!/bin/sh\n", 0o755)
+	}
 	c := exec.Command(binary, remote.ProjectUsersFlag, "add", "shop")
-	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=/usr/bin:/bin"}
+	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
 	out, _ := c.CombinedOutput()
 	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made") || fileExists(root) {
 		t.Errorf("(%d):\n%s", c.ProcessState.ExitCode(), out)

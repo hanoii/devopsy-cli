@@ -203,7 +203,9 @@ func TestServerInfoReport(t *testing.T) {
 			i.SnapshotRoot = "/backups"
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
 		}, "", "the snapshot root /backups is on the release root's filesystem|mount the backup volume on /backups"},
-		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|"},
+		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|install it with the system's packages, as root:\n$ devopsy --server-setup-howto tools"},
+		// The door's tools, which only --project-users add refuses without.
+		{"missing setfacl", func(i *remote.ServerInfo) { i.Missing = []string{"setfacl"} }, "", "has no setfacl: no project user can be added|$ devopsy --server-setup-howto tools"},
 		// Held by a restarting container too, as releases and imports see
 		// it: docker ps lists it (review).
 		{"role twice", func(i *remote.ServerInfo) {
