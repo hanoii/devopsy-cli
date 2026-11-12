@@ -32,7 +32,7 @@ import (
 // a project user's door must take, or its release fails at runtime.
 var utilScripts = map[string]string{
 	"exportTarScript": exportTarScript, "reflinkProbeScript": reflinkProbeScript, "snapshotTarScript": snapshotTarScript,
-	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "ownVolumeRoot": ownVolumeRoot, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
+	"spaceProbeScript": spaceProbeScript, "ownEntry": ownEntry, "ownVolumeRoot": ownVolumeRoot, "volumeRoots": volumeRoots, "emptyAndExtract": emptyAndExtract, "shareScript": shareScript,
 	"rsyncDaemonScript": rsyncDaemonScript, "restoreStreamScript": restoreStreamScript, "receiveScript": receiveScript,
 }
 
@@ -41,7 +41,7 @@ var utilScripts = map[string]string{
 func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 	t.Parallel()
 	known := doorKnown()
-	scripts := []string{known.Owners, known.VolumeOwner, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
+	scripts := []string{known.Owners, known.VolumeOwner, known.VolumeRoots, known.Export, known.Import, known.ReflinkProbe, known.SnapshotTar, known.Space, known.Share, known.Daemon, known.Restore, known.Receive}
 	for name, script := range utilScripts {
 		if !slices.Contains(scripts, script) {
 			t.Errorf("%s is not in doorKnown", name)
@@ -603,6 +603,9 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 		"a share": func() { shareInto(ctx, c, mnt+"/storage", dev+"/storage", "mnt/storage", m) },
 		"a volume's root": func() {
 			_ = ownVolume(ctx, c, cli.OwnedVolume{Volume: cli.Volume{Key: "db", Name: "shop-prod_db"}, Owner: "10001:10001"})
+		},
+		"volumes' roots read": func() {
+			_, _ = readVolumeRoots(ctx, map[string]cli.OwnedVolume{"db": {Volume: cli.Volume{Key: "db", Name: "shop-prod_db"}, Owner: "10001:10001"}}, c)
 		},
 	}
 	// An entry's extraction maps its owners on Linux, where the door runs: locally on macOS

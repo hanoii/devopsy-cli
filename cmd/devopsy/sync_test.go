@@ -410,6 +410,11 @@ case "$*" in
     cat >"$DOCKER_LOG.dockerfile"
     [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "pull failed" >&2; exit 1; }
     : >"$DOCKER_LOG.util" ;;
+  # The read of the owned volumes' roots (stopForNewOwners):
+  # FAKE_VOLUME_ROOTS, "<key> <uid>:<gid>" lines, else each root its
+  # owner's already (nothing printed is no change).
+  "run --rm --name devopsy-owners-"*"-roots "*)
+    [ -z "${FAKE_VOLUME_ROOTS:-}" ] || printf '%s\n' "$FAKE_VOLUME_ROOTS" ;;
   # The owners' containers, one per entry (devopsy made it).
   # FAKE_OWNERS_WAIT: each takes until $FAKE_OWNERS_WAIT.go exists.
   "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)

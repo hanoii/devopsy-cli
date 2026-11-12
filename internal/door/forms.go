@@ -183,6 +183,9 @@ func forms(known Known) []form {
 		// A named volume's root to its owner: the volume alone, at a path the image lacks.
 		{name: "volume owner", matches: script(known.VolumeOwner, Word, ownerArg),
 			mounts: []mountRule{{target(`/vol/` + word), false, []sourceKind{kindVolume}}}},
+		// The owners of named volumes' roots, read: the volumes alone, read-only.
+		{name: "volume roots", matches: script(known.VolumeRoots, Word),
+			mounts: []mountRule{{target(`/vol/` + word), true, []sourceKind{kindVolume}}}},
 		{name: "export", matches: script(known.Export, Word),
 			mounts: []mountRule{{target(`/x/` + word), true, copied}}},
 		{name: "import", matches: script(known.Import, inPath, Word, uidArg, uidArg, tarMember), mapped: []int{6, 7},
