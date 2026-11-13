@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -774,6 +776,9 @@ func TestServerReadyRefusesAReleaseLeavingNothing(t *testing.T) {
 		"old compose":                 {[]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "", "compose here is 2.32.4, and devopsy needs 2.33.0 or later"},
 		"classic store, older record": {[]string{"FAKE_CLASSIC_STORE=1"}, "devopsy: 0.1.0\ndocker-floor: 0.1.0\n", "Docker here uses the classic image store"},
 		"old buildx, record unnoted":  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "devopsy: " + version + "\n", "buildx here is 0.32.9"},
+		// A development build notes nothing and trusts no note, another one's of the same name
+		// (dev, a checkout's git describe) included.
+		"classic store, a dev build's note": {[]string{"FAKE_CLASSIC_STORE=1"}, "devopsy: " + version + "\ndocker-floor: " + version + "\n", "Docker here uses the classic image store"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -802,19 +807,54 @@ func TestServerReadyRefusesAReleaseLeavingNothing(t *testing.T) {
 	}
 }
 
-// A release on a server whose record notes that this devopsy found Docker at its floor asks
-// Docker nothing of it: the fake's log shows no docker info and no plugin's version, and a
-// Docker put back below the floor since is not seen (accepted: only a new devopsy raises the
-// floor); the release never writes the record.
+// releaseBinary is devopsy built as a release is, its version releaseVersion (the floor note is
+// a release's alone), built once for the tests that need it, beside binary.
+var releaseBinary = sync.OnceValues(func() (string, error) {
+	out := binary + "-release"
+	build := exec.Command("go", "build", "-ldflags=-X main.version="+releaseVersion, "-o", out, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if msg, err := build.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("%v: %s", err, msg)
+	}
+	return out, nil
+})
+
+// releaseVersion is releaseBinary's version.
+const releaseVersion = "0.0.1"
+
+// asRelease makes s's server run releaseBinary as its devopsy: its bin's link replaced.
+func asRelease(t *testing.T, s *syncSetup) string {
+	t.Helper()
+	rel, err := releaseBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(s.root), "bin", "devopsy")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rel, link); err != nil {
+		t.Fatal(err)
+	}
+	return rel
+}
+
+// A release on a server whose record notes that this devopsy, a release build, found Docker at
+// its floor asks Docker nothing of it: the fake's log shows no docker info and no plugin's
+// version, and a Docker put back below the floor since is not seen (accepted: only a new
+// devopsy raises the floor); the release never writes the record.
 func TestServerReadyTrustsTheFloorNoted(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
+	rel := asRelease(t, s)
 	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
-	text := "devopsy: " + version + "\ndocker-floor: " + version + "\n"
+	text := "devopsy: " + releaseVersion + "\ndocker-floor: " + releaseVersion + "\n"
 	write(t, record, text, 0o600)
 	s.logs()
-	if out, code := s.run([]string{"FAKE_CLASSIC_STORE=1", "FAKE_BUILDX_VERSION=0.1.0"}, remote.ServerReadyFlag, "one:"); code != 0 || out != "" {
-		t.Errorf("--server-ready (%d):\n%s", code, out)
+	cmd := exec.Command(rel, remote.ServerReadyFlag, "one:")
+	cmd.Dir, cmd.Env = s.project, append(append([]string{}, s.env...), "FAKE_CLASSIC_STORE=1", "FAKE_BUILDX_VERSION=0.1.0")
+	if out, err := cmd.CombinedOutput(); err != nil || len(out) > 0 {
+		t.Errorf("--server-ready (%v):\n%s", err, out)
 	}
 	docker, _ := s.logs()
 	for _, call := range []string{" info --format", " buildx version", " compose version"} {
@@ -827,12 +867,16 @@ func TestServerReadyTrustsTheFloorNoted(t *testing.T) {
 	}
 }
 
-// An apply notes the floor in the record by its devopsy's version where its read finds Docker
-// at its floor, and takes the note off where it does not, so the next release reads Docker
-// again; a --server-setup with nothing else to change still applies for the note alone.
+// An apply of a release build notes the floor in the record by its version where its read
+// finds Docker at its floor, and takes the note off where it does not, so the next release
+// reads Docker again; a --server-setup with nothing else to change still applies for the note
+// alone, quietly, and ends saying there is nothing to change. Docker refused whole (not
+// answering) takes the note off too, by --server-setup and --upgrade's apply alike.
 func TestServerSetupNotesTheFloor(t *testing.T) {
 	t.Parallel()
-	s, _ := setupServer(t)
+	s, host := setupServer(t)
+	asRelease(t, s)
+	version := releaseVersion
 	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
 	floor := func() string {
 		t.Helper()
@@ -848,12 +892,21 @@ func TestServerSetupNotesTheFloor(t *testing.T) {
 	if out, code := s.run([]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || floor() != "" || !strings.Contains(out, "compose here is 2.32.4") {
 		t.Errorf("an apply below the floor (%d), noted %q:\n%s", code, floor(), out)
 	}
+	s.logs()
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	if code != 0 || floor() != version || strings.Contains(out, "nothing to change") {
+	if _, sessions := s.logs(); code != 0 || floor() != version || !strings.HasSuffix(out, "\ndevopsy: nothing to change: devopsy@one is set up as devopsy wants it\n") || strings.Contains(out, "devopsy: put ") || strings.Count(sessions, "\n") != 2 {
 		t.Errorf("the floor met again, nothing else to change (%d), noted %q:\n%s", code, floor(), out)
 	}
 	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
 		t.Errorf("a second run in sync (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(host, "docker-down"), "", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || floor() != "" || !strings.Contains(out, "Docker's daemon does not answer") {
+		t.Errorf("Docker down, by --server-setup (%d), noted %q:\n%s", code, floor(), out)
+	}
+	write(t, record, "devopsy: "+version+"\ndocker-floor: "+version+"\n", 0o600)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || floor() != "" {
+		t.Errorf("Docker down, by --upgrade (%d), noted %q:\n%s", code, floor(), out)
 	}
 }
 

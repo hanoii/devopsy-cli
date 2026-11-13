@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
+	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
 // restartWait bounds the wait for Docker's restart to be confirmed, unless
@@ -113,10 +114,11 @@ func dropInWaits(space bool) {
 
 // floorNote is the record's note of the devopsy that found Docker at its floor (setup.Record's
 // Floor), as an apply of this devopsy writes it: its version where it found the floor met,
-// none where it did not. A release of that version then asks Docker nothing of the floor
-// (serverReady).
+// none where it did not, and none from a development build, whose version names no one build
+// ("dev", or a checkout's git describe). A release of that version then asks Docker nothing
+// of the floor (serverReady).
 func floorNote(met bool) string {
-	if met {
+	if met && update.IsRelease(version) {
 		return version
 	}
 	return ""
@@ -725,8 +727,16 @@ func applySetup(h setupHost, a setupApply) int {
 		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}
 	// Every step is a root run: with none going (Docker refused), nothing goes at all, no
-	// image built and no chains read for it, said as the first session says it.
+	// image built and no chains read for it, said as the first session says it; but the
+	// record's floor note, which a release trusts, never outlives the Docker it noted.
 	if f.NoneGoes() {
+		if f.FloorNote && !slices.Contains(f.Refused(), setup.RefusalRecord) {
+			r := rd.record
+			r.Floor = floorNote(rd.floorMet)
+			if err := setup.WriteRecord(record, r); err != nil {
+				fail(err.Error())
+			}
+		}
 		return failed(cmp.Or(refusedLine(f), "nothing changed"))
 	}
 	// The chains read as root (an apply may build the util image), so a wipe reads to load
@@ -1275,10 +1285,14 @@ func serverReady(root, ref string, projectUser bool) []error {
 }
 
 // floorNoted says whether the setup's record notes that this devopsy's apply found Docker at
-// its floor (floorNote): a record missing, unreadable or of another devopsy notes nothing.
+// its floor (floorNote): a record missing, unreadable or of another devopsy notes nothing, and
+// a development build trusts no note, another build's of the same name included.
 func floorNoted() bool {
+	if !update.IsRelease(version) {
+		return false
+	}
 	r, exists, err := setup.ReadRecord(setup.RecordPath(remote.UserConfigFile()))
-	return err == nil && exists && version != "" && r.Floor == version
+	return err == nil && exists && r.Floor == version
 }
 
 // dockerReady is the setup's required check of Docker's own answers (dockerAnswers of

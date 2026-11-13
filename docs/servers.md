@@ -62,16 +62,20 @@ devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
 ## Docker
 
 Every server runs Docker from Docker's repository with its containerd
-image store, buildx 0.33.0 or later and compose 2.33.0 or later. `--server-setup`, every release before its
-upload and `--project-users add` refuse a Docker below any of them, each
+image store, buildx 0.33.0 or later and compose 2.33.0 or later: the
+least devopsy needs of Docker, which these docs call its floor.
+`--server-setup`, every release before its upload, `--project-users
+setup` and `--project-users add` refuse a Docker below any of them, each
 with its fix, and `--server-info` warns of it. A release reads Docker for
-it only until `--server-setup` or `--upgrade` of the same devopsy found
-the floor met, which its record notes: a Docker put back below the floor
-since is seen by `--server-info`, which always reads Docker, and by
-releases from the next devopsy on. A Docker upgraded from an older
-version keeps the classic image store, and a distribution's own package
-may run it too, which devopsy does not support: such a server's projects
-go to a new server whose Docker runs the containerd image store
+it only until `--server-setup` or `--upgrade` of the same devopsy
+release found Docker at its floor, which its record notes; a development
+build notes nothing and trusts no note, and a Docker that does not
+answer takes the note off. A Docker put back below the floor since is
+seen by `--server-info`, which always reads Docker, and by releases from
+the next devopsy on. A Docker upgraded from an older version keeps the
+classic image store, and a distribution's own package may run it too,
+which devopsy does not support: such a server's projects go to a new
+server whose Docker runs the containerd image store
 ([`docker`](server-setup-howto.md#docker)).
 
 ## `--server-setup`
@@ -82,8 +86,8 @@ root run through devopsy's util image, so the deploy user needs no sudo:
 the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
-host's `docker.service`, at its floor ([Docker](#docker)), and warns of the other tools a server needs
-when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers
+host's `docker.service`, at its floor ([Docker](#docker)), and warns of
+the other tools a server needs when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers
 `--version`, and on a server with project users `sudo`, `visudo` and
 `setfacl`). It installs none of them: they are the admin's
 ([`--server-setup-howto`](#--server-setup-howto)). The release root
@@ -209,7 +213,8 @@ A second run changes nothing. What `--server-setup` applied, the values
 kept, the devopsy that last applied with no failure, and the one that
 last found Docker at its floor ([Docker](#docker)) are recorded in
 `server.yaml` beside the deploy user's `config.yaml`: devopsy's record,
-never edited by hand. Its first run writes it.
+never edited by hand. Its first run writes it. A run whose only change
+is that note writes it and says there is nothing to change.
 
 ## `--server-setup-howto`
 

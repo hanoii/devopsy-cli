@@ -70,23 +70,31 @@ func runServerSetup(t *remote.Target, args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	if !run {
-		if refused {
-			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
-			return 1
-		}
+	// Nothing to change for the operator: said so, before an apply that only writes the record's
+	// floor note, which it does quietly, or in its place.
+	inSync := func() {
 		if f.Pending {
 			state, detail := pendingWords(f.PendingParts, f.Reboot)
 			report.Say(report.InfoLevel, "nothing to change, but Docker "+state, []string{detail}, soonerHint(targetRef(t)))
 		} else {
 			report.Info("nothing to change: " + t.Host + " is set up as devopsy wants it")
 		}
+	}
+	if !run {
+		if refused {
+			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
+			return 1
+		}
+		inSync()
 		return 0
 	}
 	// The refusals said here, by their identities: the apply says only one new since.
 	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply", "--said=" + strings.Join(said, ",")}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
 		return failErr(err)
+	}
+	if code == 0 && !refused && len(applyArgs) == 0 && !f.Changes() && !f.Records() && f.Record != "" {
+		inSync()
 	}
 	return code
 }
@@ -105,9 +113,10 @@ type setupAsker interface {
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
-	// Every step a root run: with none going (Docker refused), nothing goes at all.
+	// Every step a root run: with none going (Docker refused), nothing goes at all, but a
+	// floor note to take off, which the apply does.
 	if f.NoneGoes() {
-		return nil, false, nil
+		return nil, f.FloorNote, nil
 	}
 	parts := f.Parts
 	if !f.Goes(setup.StepParts) {
