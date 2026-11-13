@@ -3,14 +3,17 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
@@ -1242,10 +1245,11 @@ docker run --rm `+reg+`/evil/b@`+digest+` cat /secret`); code != 0 || !strings.C
 }
 
 // A claim leaves Docker's store as a pull by that digest does, the id, the registry's digests
-// and the name asked alike: for a Docker Hub short name (an index of several platforms with
-// attestation manifests), for a registry with a port, and for an image of zstd layers, each
-// then running with --pull never. Two claims of one image at once both hold, and record it
-// once. The control is root's own pull by the digest, once the claimed image is removed.
+// and the name asked alike, plus the project's claim hold (images.ClaimHold), which only its
+// bookmark or its pruning takes: for a Docker Hub short name (an index of several platforms
+// with attestation manifests), for a registry with a port, and for an image of zstd layers,
+// each then running with --pull never. Two claims of one image at once both hold, and record
+// it once. The control is root's own pull by the digest, once the claimed image is removed.
 func TestDoorClaimLandsAsAPull(t *testing.T) {
 	user := doorUser(t, "doorland")
 	reg := doorRegistry(t, "doorland-reg", "5041", false)
@@ -1265,10 +1269,21 @@ docker image rm `+zstd+` >/dev/null 2>&1 || true
 docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
 		t.Fatalf("the images (%d): %s", code, out)
 	}
-	state := func(ref string) string {
+	type landed struct {
+		ID      string   `json:"Id"`
+		Digests []string `json:"RepoDigests"`
+		Tags    []string `json:"RepoTags"`
+	}
+	state := func(ref string) landed {
 		t.Helper()
-		out, _ := doorRoot(t, "docker image inspect -f '{{.Id}} {{json .RepoDigests}} {{json .RepoTags}}' "+ref+" 2>&1")
-		return strings.TrimSpace(out)
+		out, _ := doorRoot(t, "docker image inspect -f '{{json .}}' "+ref+" 2>&1")
+		var l landed
+		if err := json.Unmarshal([]byte(out), &l); err != nil {
+			t.Fatalf("%s: inspect: %v: %s", ref, err, out)
+		}
+		slices.Sort(l.Digests)
+		slices.Sort(l.Tags)
+		return l
 	}
 	for _, ref := range []string{hub, plain, zstd} {
 		id, code := doorAs(t, user, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1")
@@ -1278,17 +1293,23 @@ docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
 			continue
 		}
 		claimed := state(ref)
+		repo := ref[:strings.LastIndex(ref, ":")]
+		hold := images.ClaimHold(repo, "doorland", id)
+		if i := slices.Index(claimed.Tags, hold); i < 0 {
+			t.Errorf("%s: a claim left no hold %s: %v", ref, hold, claimed.Tags)
+		} else {
+			claimed.Tags = slices.Delete(claimed.Tags, i, i+1)
+		}
 		if out, code := doorRoot(t, "docker run --rm --pull never "+ref+" sh -c 'cat /z 2>/dev/null || true'"); code != 0 || ref == zstd && !strings.Contains(out, "zstd") {
 			t.Errorf("%s: the claimed image does not run (%d): %s", ref, code, out)
 		}
-		repo := ref[:strings.LastIndex(ref, ":")]
 		pulled, code := doorRoot(t, "set -e\ndocker image rm -f "+id+" >/dev/null\ndocker pull -q "+repo+"@"+id+" >/dev/null\ndocker tag "+repo+"@"+id+" "+ref)
 		if code != 0 {
 			t.Errorf("%s: the control's pull by digest (%d): %s", ref, code, pulled)
 			continue
 		}
-		if got := state(ref); got != claimed {
-			t.Errorf("%s: a claim left\n%s\nwhere a pull by its digest leaves\n%s", ref, claimed, got)
+		if got := state(ref); !slices.Equal(got.Tags, claimed.Tags) || !slices.Equal(got.Digests, claimed.Digests) || got.ID != claimed.ID {
+			t.Errorf("%s: a claim left, besides its hold,\n%+v\nwhere a pull by its digest leaves\n%+v", ref, claimed, got)
 		}
 	}
 	// Two at once, the image gone and its id still recorded. Its own image, so no container of
