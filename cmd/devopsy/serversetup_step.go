@@ -326,7 +326,7 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 	}
 
 	// Volumes only while devopsy may name another root, judged once for them all.
-	if rootFixed(r, d, root) == nil {
+	if rootFixed(r, d) == nil {
 		f.Candidates = rootCandidates(h, hd, f.Root)
 	}
 	rd.door = d != nil
@@ -382,22 +382,22 @@ func nameReleaseRoot(h setupHost, root string) error {
 	}
 	file := remote.UserConfigFile()
 	if err := editConfig(file, func(have []byte) ([]byte, error) { return setup.SetReleaseRoot(have, root) }); err != nil {
-		return rootLinesFailure(file, root, err)
+		return refusalFailure(*configRefusal(file, root, err))
 	}
-	report.Info("named "+root+" the release root in "+file+": releases live there", rootLines(root)...)
+	report.Info("named " + root + " the release root in " + file + ": releases live there")
 	return nil
 }
 
-// rootLines are the lines that name root as releases: root (setup.ReleaseRootLines), one each.
-func rootLines(root string) []string {
-	return strings.Split(strings.TrimSuffix(setup.ReleaseRootLines(root), "\n"), "\n")
+// configRefusal is the deploy user's config at file refused to name root as releases: root
+// (setup.SetReleaseRoot), err why, with the setting to make there by hand.
+func configRefusal(file, root string, err error) *setup.Refusal {
+	return &setup.Refusal{Item: setup.RefusalRoot, Message: "devopsy cannot name " + root + " the release root in " + file + ", " + err.Error(),
+		Fix: "set releases: root to " + root + " in " + file + " by hand, then run --server-setup again"}
 }
 
-// rootLinesFailure is a config at file that cannot take root's lines, err why, with the lines
-// to put there by hand.
-func rootLinesFailure(file, root string, err error) error {
-	return &report.Failure{Msg: "devopsy cannot name the release root in " + file + ", " + err.Error() + ": nothing changed", Details: rootLines(root),
-		Remedies: []report.Remedy{report.Fix("put the lines above in it by hand, then run --server-setup again")}}
+// refusalFailure is r as a command's failure, its fix as fixWords words it.
+func refusalFailure(r setup.Refusal) error {
+	return &report.Failure{Msg: r.Message, Remedies: fixWords(r)}
 }
 
 // editConfig writes the deploy user's config at file as edit makes it of the text there (nil
@@ -450,9 +450,11 @@ func rootHolds(root string, d *remote.Door) bool {
 
 // rootCandidates are the volumes the release root could be on (setup.Candidates), off this
 // host's mounts and Docker's root, with their size and free space, but the one root is on
-// (setup.OnCandidate); one the path's judgment refuses (rootRefusal) carries its refusal.
+// (setup.OnCandidate); one refused carries its refusal, the path's (rootRefusal), else the
+// config's (rootConfig).
 func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 	var cs []setup.Candidate
+	have, readErr := os.ReadFile(remote.UserConfigFile())
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
 		if setup.OnCandidate(root, c) {
@@ -461,7 +463,9 @@ func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 		if _, size, free, _, err := statDisk(c.MountPoint); err == nil {
 			c.Size, c.Free = size, free
 		}
-		c.Refusal = rootRefusal(h, c.MountPoint)
+		if c.Refusal = rootRefusal(h, c.MountPoint); c.Refusal == nil {
+			c.Refusal = rootConfig(have, readErr, c.MountPoint)
+		}
 		cs = append(cs, c)
 	}
 	return cs
@@ -469,9 +473,8 @@ func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 
 // rootTakes says whether --server-setup names root as releases: root, false for the root
 // releases live in already (nothing to name), and refuses it, before anything changes, with
-// why and its fix: by the path's judgment (rootRefusal), then the whole root's (rootFixed), so
-// the config is read for a root's lines only once its path is taken. facts --root and apply
-// --root judge a root by it.
+// why and its fix: by the path's judgment (rootRefusal), the whole root's (rootFixed), then the
+// config's (rootConfig). facts --root and apply --root judge a root by it.
 func rootTakes(h setupHost, root string) (bool, error) {
 	r, err := remote.ReleaseSettings()
 	if err != nil {
@@ -485,35 +488,44 @@ func rootTakes(h setupHost, root string) (bool, error) {
 		return false, err
 	}
 	if refusal := rootRefusal(h, root); refusal != nil {
-		return false, &report.Failure{Msg: refusal.Message, Remedies: fixWords(*refusal)}
+		return false, refusalFailure(*refusal)
 	}
-	if err := rootFixed(r, d, root); err != nil {
+	if err := rootFixed(r, d); err != nil {
 		return false, err
+	}
+	have, err := os.ReadFile(remote.UserConfigFile())
+	if refusal := rootConfig(have, err, root); refusal != nil {
+		return false, refusalFailure(*refusal)
 	}
 	return true, nil
 }
 
 // rootFixed is the whole root's judgment, the server's, once per facts: why --server-setup
-// names no other root than r's, the release settings, nil when it may: the config names one,
-// or cannot take the lines (setup.SetReleaseRoot, root's for their words), or the release root
-// holds something of devopsy's (rootHolds, with the door d, nil for none).
-func rootFixed(r remote.Releases, d *remote.Door, root string) error {
+// names no other root than r's, the release settings, nil when it may: the config names one, or
+// the release root holds something of devopsy's (rootHolds, with the door d, nil for none).
+func rootFixed(r remote.Releases, d *remote.Door) error {
 	refuse := func(why string) error {
 		return &report.Failure{Msg: why, Remedies: []report.Remedy{report.Fix("run --server-setup without --root")}}
 	}
-	file := remote.UserConfigFile()
 	if r.Named {
-		return refuse("releases: root in " + file + " names " + r.Root + " already, and only its admin changes it")
-	}
-	have, err := os.ReadFile(file)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if _, err := setup.SetReleaseRoot(have, root); err != nil {
-		return rootLinesFailure(file, root, err)
+		return refuse("releases: root in " + remote.UserConfigFile() + " names " + r.Root + " already, and only its admin changes it")
 	}
 	if current := resolveRoot(r.Root); rootHolds(current, d) {
 		return refuse("the release root " + current + " holds releases already (a project, its variables, a claim of the uids containers run as, or a project user), and they stay there")
+	}
+	return nil
+}
+
+// rootConfig is why the deploy user's config, its text have as read with err, cannot name root
+// as releases: root (setup.SetReleaseRoot, configRefusal), nil where it can; a config missing
+// is one with nothing in it.
+func rootConfig(have []byte, err error, root string) *setup.Refusal {
+	file := remote.UserConfigFile()
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		_, err = setup.SetReleaseRoot(have, root)
+	}
+	if err != nil {
+		return configRefusal(file, root, err)
 	}
 	return nil
 }

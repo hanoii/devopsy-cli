@@ -204,33 +204,35 @@ metadata firewall (or removes it, for `allow`), so a new server set up
 in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
-While the deploy user's `config.yaml` has no `releases:`, the home
-holds nothing of devopsy's (no project, no variables set before a first
-release, no claim of the uids containers run as, no project user) and a
-volume is offered, `--server-setup` asks where releases live: the home,
-first, or one of the volumes the root could be on, listed with their
-size and free space, and each volume it does not offer with why. A
+While the deploy user's `config.yaml` names no `releases: root`, the
+home holds nothing of devopsy's (no project, no variables set before a
+first release, no claim of the uids containers run as, no project user)
+and a volume is offered, `--server-setup` asks where releases live: the
+home, first, or one of the volumes the root could be on, listed with
+their size and free space, and each volume it does not offer with why. A
 volume is offered only where something mounts it at boot (`/etc/fstab`,
 a `.mount` unit): one mounted by hand or by `systemd-mount` is gone
 after a reboot, and releases would land on the disk under it. A volume
-chosen is named as `releases: root` in that `config.yaml`, the lines
-appended and the rest of the file left as it is, then the root is made
-there and Docker waits for its mount; once named, nothing is asked. The
-home chosen writes nothing, and the next run asks again.
+chosen is named as `releases: root` in that `config.yaml`, added to its
+`releases:` or appended as a new one, the rest of the file left as it
+is, then the root is made there and Docker waits for its mount; once
+named, nothing is asked. The home chosen writes nothing, and the next
+run asks again.
 
 `--root <dir>` gives the answer with no question, for `--yes` and CI:
 any directory (for example `/mnt/vol1/releases`); naming the root
-releases live in already, it does nothing. It is refused before
-anything changes while `config.yaml` has a `releases:` or the home
-holds something of devopsy's, where the release root's check refuses
-it, on a filesystem nothing mounts at boot, under a mount point mounted
-at boot and not mounted now, or in memory (`tmpfs`, `ramfs`), which
-keeps nothing across a reboot. Refused for a `releases:` there already,
-it shows the lines to put in it by hand. With `--yes`, or without a
-terminal, and no `--root`, or with no volume offered, nothing is asked
-and the home is kept: the volumes are listed instead, each offered one
-with the `--server-setup --root` that names it, each other with why it
-is not offered and what to do.
+releases live in already, it does nothing. It is refused before anything
+changes while `config.yaml` names a `releases: root` or the home holds
+something of devopsy's, where the release root's check refuses it, on a
+filesystem nothing mounts at boot, under a mount point mounted at boot
+and not mounted now, or in memory (`tmpfs`, `ramfs`), which keeps
+nothing across a reboot. A `config.yaml` devopsy cannot add the line to
+(a `releases:` written as a flow mapping, a `root:` left empty) refuses
+every volume, each with the setting to make by hand. With `--yes`, or
+without a terminal, and no `--root`, or with no volume offered, nothing
+is asked and the home is kept: the volumes are listed instead, each
+offered one with the `--server-setup --root` that names it, each other
+with why it is not offered and what to do.
 
 A second run changes nothing. What `--server-setup` applied, the values
 kept, the devopsy that last applied with no failure, and the one that

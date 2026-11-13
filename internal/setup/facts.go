@@ -39,9 +39,9 @@ type Facts struct {
 	// through its restart.
 	Running     int  `json:"running"`
 	LiveRestore bool `json:"live_restore"`
-	// Candidates are the volumes the root could be on, each offered or not (Candidate.Refusal),
-	// none while devopsy names no other root (the config names one or cannot take the line, or
-	// the root holds something of devopsy's).
+	// Candidates are the volumes the root could be on, each offered or not (Candidate.Refusal,
+	// the path's or the config's), none while devopsy names no other root (the config names one,
+	// or the root holds something of devopsy's).
 	Candidates []Candidate `json:"candidates,omitempty"`
 	// NamesRoot: an apply with --root names Root as releases: root in the deploy user's config
 	// (ConfigFile) first (facts --root of a root releases do not live in yet).

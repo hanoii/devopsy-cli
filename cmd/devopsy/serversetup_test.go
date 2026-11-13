@@ -972,25 +972,37 @@ func TestServerSetupOffersVolumesMountedAtBoot(t *testing.T) {
 	}
 }
 
-// A config devopsy cannot add releases: root to (any releases:, a flow one, one with a root:
-// left empty, which the loader reads as none) is found by the facts, which list no volume, so
-// nothing is asked; facts --root and apply --root refuse with nothing changed, the lines to put
-// by hand said.
-func TestServerSetupNamesNoRootInAConfigItCannotEdit(t *testing.T) {
+// A config with a releases: block takes releases: root in it, so the facts ask and an apply
+// names the volume there. One devopsy cannot add root: to (a flow releases:, one with a root:
+// left empty, which the loader reads as none) still lists each volume, each with why it is not
+// offered and the setting to make by hand, so nothing is asked and the hint says why; facts
+// --root and apply --root refuse with the same words and nothing changed.
+func TestServerSetupNamesTheRootInTheConfigsReleases(t *testing.T) {
 	t.Parallel()
 	s, _, vol, config := rootChoice(t)
-	for _, text := range []string{"releases: {keep: 3}\n", "releases:\n  root:\n  keep: 3\n", "releases:\n  keep: 3\n"} {
+	for _, text := range []string{"releases: {keep: 3}\n", "releases:\n  root:\n  keep: 3\n"} {
 		write(t, config, text, 0o644)
-		if f, out, code := setupFactsOf(s); code != 0 || f.RootOpen() {
-			t.Errorf("%q: facts (%d), open %v\n%s", text, code, f.RootOpen(), out)
+		why := "devopsy cannot name " + vol + " the release root in " + config + ", "
+		fix := "set releases: root to " + vol + " in " + config + " by hand, then run --server-setup again"
+		f, out, code := setupFactsOf(s)
+		if code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].Refusal == nil ||
+			!strings.HasPrefix(f.Candidates[0].Refusal.Message, why) || f.Candidates[0].Refusal.Fix != fix {
+			t.Errorf("%q: facts (%d), asks %v, the volumes %+v\n%s", text, code, f.AsksRoot(), f.Candidates, out)
 		}
 		for _, step := range []string{"facts", "apply"} {
 			out, code := s.run(nil, remote.ServerSetupFlag, step, "--root", vol)
-			if code != 1 || !strings.Contains(out, "devopsy: error: devopsy cannot name the release root in "+config+", it has a releases: already: nothing changed\n") ||
-				!strings.Contains(out, "devopsy: |   root: "+vol+"\n") || readString(config) != text || fileExists(vol) {
+			if code != 1 || !strings.Contains(out, "devopsy: error: "+why) || !strings.Contains(out, "devopsy: | "+fix+"\n") ||
+				readString(config) != text || fileExists(vol) {
 				t.Errorf("%q: %s --root (%d), the config %q:\n%s", text, step, code, readString(config), out)
 			}
 		}
+	}
+	write(t, config, "releases:\n  keep: 3\n", 0o644)
+	if f, out, code := setupFactsOf(s); code != 0 || !f.AsksRoot() {
+		t.Errorf("a releases: block: facts (%d), asks %v\n%s", code, f.AsksRoot(), out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 0 || readString(config) != "releases:\n  root: "+vol+"\n  keep: 3\n" {
+		t.Errorf("a releases: block: apply --root (%d), the config %q:\n%s", code, readString(config), out)
 	}
 }
 
