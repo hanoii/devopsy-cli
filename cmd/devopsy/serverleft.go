@@ -207,11 +207,13 @@ func snapshotEnvDirs(root string) []string {
 
 // keylessUsers are the project users with no key whose project still holds something on the
 // server, for --server-info and --project-users list: what a plain remove refuses for and the
-// destroy's end checks (heldBy), a read that fails said among it, never taken for nothing.
+// destroy's end checks (heldBy), a read that fails said among it, never taken for nothing. Not
+// one whose destroy did not complete (its mark, remote.DoorDestroyingFile): its own line says
+// so, and no key takes it back while the mark holds it.
 func keylessUsers(d *remote.Door) []remote.KeylessUser {
 	var out []remote.KeylessUser
 	for _, who := range slices.Sorted(maps.Keys(d.Users)) {
-		if keysOf(who) > 0 {
+		if keysOf(who) > 0 || fileExists(remote.DoorDestroyingFile(who)) {
 			continue
 		}
 		project := d.Users[who].Project

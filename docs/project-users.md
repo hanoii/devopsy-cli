@@ -412,10 +412,12 @@ in that root, and says which.
 there, and how many keys each has, and says each with no key whose
 project still holds anything its `remove --destroy` removes (uid claims,
 containers, volumes and networks under its names, its data, image names
-and directories in the door's space), as `--server-info` does. `--server-info` also checks that
-`<space>` is mounted `nosuid,nodev`, that Docker has the containerd
-image store and buildx 0.33.0, that other users' processes are hidden
-from project users, and whether sshd waits for a reboot.
+and directories in the door's space), as `--server-info` does, and each
+whose `remove --destroy` did not complete, with that command, which
+completes it, instead. `--server-info` also checks that `<space>` is
+mounted `nosuid,nodev`, that Docker has the containerd image store and
+buildx 0.33.0, that other users' processes are hidden from project
+users, and whether sshd waits for a reboot.
 
 ## Releasing as a project user
 

@@ -314,7 +314,8 @@ dead or gone. devopsy removes none of it, and none of it makes the exit 3:
   `--project-users remove <project> --destroy` as the hint, or a key
   added to take it back ([project users](project-users.md));
 - a project user whose `--project-users remove <project> --destroy` did
-  not complete, with that command, which completes it, as the hint.
+  not complete, with that command, which completes it, as the hint, and
+  not as a project user with no key.
 
 What goes by an environment's absence is shown only when the release
 root lists environments and every one of them, and the uid claims, could
