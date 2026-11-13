@@ -5,8 +5,8 @@ import "github.com/hanoii/devopsy-cli/internal/report"
 // SayFlag is the hidden `devopsy --say <level> <message> [<detail>...]
 // [--fix|--hint <text> [<command>...]]...`: how scripts say things,
 // formatted and colored as devopsy's own lines (report). Scripts call it
-// after basePrelude, which makes sure the server's devopsy has it
-// (Protocol 5).
+// after basePrelude, which makes sure the server's devopsy has it (the
+// say feature).
 const SayFlag = "--say"
 
 // SaySinceFlag adds to --say's message the time since a script's clock

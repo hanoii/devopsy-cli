@@ -14,8 +14,7 @@ const ServerFactsFlag = "--server-facts"
 // ServerInfo is what a server's devopsy reports about its host, for
 // --server-info: facts only, the warnings are the operator's.
 type ServerInfo struct {
-	Version  string `json:"version"`
-	Protocol int    `json:"protocol"`
+	Version string `json:"version"`
 	// The deploy user's release settings (ReleaseSettings).
 	Root            string `json:"root"`
 	Keep            int    `json:"keep"`

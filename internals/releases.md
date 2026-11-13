@@ -4,8 +4,9 @@ A release uploads the project as a new directory, then one activation session sw
 
 ## The gate
 
-- The server's devopsy must have what a script calls: `--release-settings` reports `protocol=` and `features=`, and `basePrelude` checks them before anything changes, read-only commands too, naming the upgrade.
-- `remote.Protocol` (8) covers only what every script depends on (the prelude, `--say`) or a format both sides share that no script's text shows, said in its comment; anything else is a feature: one number gating every command refuses releases and `--status` on servers that could run them.
+- The server's devopsy must have what a script calls: `--release-settings` reports `features=`, and `basePrelude` checks them before anything changes, read-only commands too, naming the upgrade.
+- Features are the gate's only mechanism, never a version or protocol number: a number gating every command refuses releases and `--status` on servers that could run them.
+- A change every script depends on (the prelude, `--say`'s format) is a named feature found in the prelude's text, and one no script's text shows is added to the needs where it is known (`remote.WithAlsoNeeds`, `projectFeatures`).
 - Every devopsy flag a script calls is a feature (`featureFlags`), and a behavior of a flag that came after it is a named feature found by what the script calls (`namedFeatures`); compose's flags a step or the operator's command starts with (for example `--profile web up`) are none.
 - A script's needs are read from its own text (`Needs`, sent in front of it by `SSHStreams`), and `TestFeaturesCoverScripts` fails on a flag no feature lists: a need listed by hand drifts from the script.
 - A new named feature is one entry in `namedFeatures` with the words that find it, and its area's rule says what finds it and what an older server would do without it: `data-copy` (internals/data-labels.md), `mnt-owner` (internals/data.md), `data-images` and `record-mode` (internals/images.md), `release-snapshots` (internals/snapshots.md), `export-images` (internals/export-import.md), `reset` (internals/syncs.md) and `container-labels` (internals/data.md).
@@ -14,7 +15,7 @@ A release uploads the project as a new directory, then one activation session sw
 - An activation's needs are checked in the first session to the server too (`remote.WithAlsoNeeds` on the role check, a new instance's, a child's current and the upload): refused at the activation alone, a pending release and an instance's directory are left behind.
 - Only the plain activation's needs are checked so: a sync's are checked where it is decided, and a release that does not sync runs on a server lacking them.
 - A release that opens no session before its upload runs its local before steps first; accepted.
-- `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`, exported into every session so a push passes it on) turns either refusal into a warning, for a local build ahead of the servers.
+- `DEVOPSY_FEATURE_CHECK=warn` (`FeatureCheckEnv`, exported into every session so a push passes it on) turns the refusal into a warning, for a local build ahead of the servers.
 - A server needs `devopsy`, `tar`, `flock`, `setsid`, `script` (util-linux), a `tail` that answers `--version` (GNU's or uutils') and `mkfifo`; locally only `ssh`.
 - Without `script` there is no live build progress, without `setsid` the run step runs plainly, and without a `tail` that answers `--version` only the traps protect a release after its switch (internals/sessions.md).
 
