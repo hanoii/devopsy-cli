@@ -481,7 +481,7 @@ type dockerSetup struct {
 }
 
 // dockerFix is the way out of a Docker the setup refuses, by the docker topic's steps.
-const dockerFix = "install Docker, with its compose and buildx plugins, and start it, as root"
+const dockerFix = "install Docker, with its compose and buildx plugins, and start it"
 
 // dockerAnswers are the setup's refusals of what Docker answers itself (d, dockerFacts): no
 // daemon answering, else no compose or no buildx plugin, and each floor missed (floorMissed),
@@ -983,7 +983,7 @@ func fixWords(r setup.Refusal) []report.Remedy {
 	case r.Howto == "":
 		return []report.Remedy{report.Fix(r.Fix)}
 	}
-	return []report.Remedy{report.Fix(r.Fix+":", howto.Command(r.Howto))}
+	return []report.Remedy{stepsFix(r.Fix, r.Howto)}
 }
 
 // rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,

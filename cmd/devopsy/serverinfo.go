@@ -117,20 +117,20 @@ func toolMissingWords(name string) (msg string, door bool) {
 // (howto.Tools): the tools' refusal's fix (fixWords), a missing one's where it is warned of,
 // a hint where the door's is only noted. The refusal's and the warnings' are one text, so a
 // run says it once after the last of them (sharedLater).
-const toolsFixText = "install what is missing with the system's packages, as root"
+const toolsFixText = "install what is missing with the system's packages"
 
 // toolsFix is toolsFixText as a fix, as fixWords words the tools' refusal's.
-var toolsFix = report.Fix(toolsFixText+":", howto.Command(howto.Tools))
+var toolsFix = stepsFix(toolsFixText, howto.Tools)
 
 // doorToolsFixText is the way out of a door's tool missing (sudo, visudo, setfacl), which
 // only project users need, so by their topic's steps (howto.ProjectUsers), never the tools':
 // a fix where it is warned of or refused, a hint where it is only noted.
-const doorToolsFixText = "install sudo and acl with the system's packages, as root:"
+const doorToolsFixText = "install sudo and acl with the system's packages"
 
 // toolFix is the fix of a missing tool: the door's by doorToolsFixText, any other by toolsFix.
 func toolFix(door bool) report.Remedy {
 	if door {
-		return report.Fix(doorToolsFixText, howto.Command(howto.ProjectUsers))
+		return stepsFix(doorToolsFixText, howto.ProjectUsers)
 	}
 	return toolsFix
 }
@@ -213,21 +213,21 @@ func processesShown(hidepid string) bool { return hidepid != "" && !processesHid
 // processesFix is the way out of a /proc that shows every user's processes, the setting itself
 // with the command that prints its steps, never a tool that sets it: devopsy checks it and never
 // mounts /proc, the host's hardening being its admin's.
-const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root:"
+const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, now and at every boot"
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
 // that shows project users every other user's processes (processesShown).
 func processesShownWarning() (msg, detail string, fix report.Remedy) {
 	return "/proc shows project users every other user's processes (no hidepid)",
 		"their command lines can hold a secret",
-		report.Fix(processesFix, howto.Command(howto.Processes))
+		stepsFix(processesFix, howto.Processes)
 }
 
 // processesShownNote is the same on a server with no project user, where it only matters once
 // one is added.
 func processesShownNote() (msg string, hint report.Remedy) {
 	return "/proc shows every user's processes (no hidepid), which matters once the server has project users",
-		report.Hint(processesFix, howto.Command(howto.Processes))
+		stepsHint(processesFix, howto.Processes)
 }
 
 // warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
@@ -1190,11 +1190,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
-			report.Fix("kho=off on the kernel's command line, then a reboot, as root:", howto.Command(howto.KexecHandOver)))
+			stepsFix("kho=off on the kernel's command line, then a reboot", howto.KexecHandOver))
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot, as root:", howto.Command(howto.Kdump)))
+			stepsHint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot", howto.Kdump))
 	}
 	if info.RebootRequired {
 		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
@@ -1360,7 +1360,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
-				reflinkFix(info.MirrorsOff), report.Hint("what data on XFS takes:", howto.Command(howto.XFS)))
+				reflinkFix(info.MirrorsOff), stepsHint("what data on XFS takes", howto.XFS))
 		}
 	}
 	if info.SnapshotRoot != "" && snapshotDisk >= 0 && snapshotDisk == release {
@@ -1376,7 +1376,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		switch msg, door := toolMissingWords(name); {
 		case msg == "":
 		case door && !projectUsers:
-			note(msg, report.Hint(doorToolsFixText, howto.Command(howto.ProjectUsers)))
+			note(msg, stepsHint(doorToolsFixText, howto.ProjectUsers))
 		default:
 			warn(msg, toolFix(door))
 		}

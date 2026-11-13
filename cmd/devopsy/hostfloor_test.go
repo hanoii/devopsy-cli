@@ -53,13 +53,13 @@ func TestDockerFloor(t *testing.T) {
 		want                  []string
 	}{
 		"ready":         {containerdStatus, buildxCurrent, "2.40.0", floorParts, nil},
-		"classic store": {classicStatus, buildxCurrent, "2.40.0", floorParts, []string{"Docker runs its classic image store, and devopsy supports only a current Docker installed fresh, on its containerd image store (io.containerd.snapshotter.v1)"}},
+		"classic store": {classicStatus, buildxCurrent, "2.40.0", floorParts, []string{"Docker here uses the classic image store, and devopsy needs the containerd image store"}},
 		"store unread":  {"", buildxCurrent, "2.40.0", floorParts, []string{"Docker's image store could not be read: Cannot connect to the Docker daemon"}},
-		"old buildx":    {containerdStatus, "github.com/docker/buildx v0.29.1 a8e5ac0f2e6c", "2.40.0", floorParts, []string{"Docker's buildx is 0.29.1, and devopsy needs 0.33.0 or later"}},
-		"no buildx":     {containerdStatus, "", "2.40.0", floorParts, []string{"Docker's buildx answers no version, and devopsy needs 0.33.0 or later"}},
-		"buildx unread": {containerdStatus, "buildx, a build", "2.40.0", floorParts, []string{`Docker's buildx answers no version ("buildx, a build"), and devopsy needs 0.33.0 or later`}},
-		"old compose":   {containerdStatus, buildxCurrent, "v2.20.2", floorParts, []string{"Docker's compose is 2.20.2, and devopsy needs 2.33.0 or later"}},
-		"all three":     {classicStatus, "github.com/docker/buildx v0.29.1 a8e5ac0f2e6c", "2.32.4", floorParts, []string{"classic image store", "buildx is 0.29.1", "compose is 2.32.4"}},
+		"old buildx":    {containerdStatus, "github.com/docker/buildx v0.29.1 a8e5ac0f2e6c", "2.40.0", floorParts, []string{"buildx here is 0.29.1, and devopsy needs 0.33.0 or later"}},
+		"no buildx":     {containerdStatus, "", "2.40.0", floorParts, []string{"buildx here answers no version, and devopsy needs 0.33.0 or later"}},
+		"buildx unread": {containerdStatus, "buildx, a build", "2.40.0", floorParts, []string{"buildx here answers no version, and devopsy needs 0.33.0 or later"}},
+		"old compose":   {containerdStatus, buildxCurrent, "v2.20.2", floorParts, []string{"compose here is 2.20.2, and devopsy needs 2.33.0 or later"}},
+		"all three":     {classicStatus, "github.com/docker/buildx v0.29.1 a8e5ac0f2e6c", "2.32.4", floorParts, []string{"classic image store", "buildx here is 0.29.1", "compose here is 2.32.4"}},
 		// The door's build reads compose alone: an old buildx there is not its to judge.
 		"compose alone": {classicStatus, "", "2.40.0", []floorPart{floorCompose}, nil},
 	} {
@@ -103,9 +103,9 @@ func TestDockerAnswersRefuseTheFloor(t *testing.T) {
 		want   []string
 		fix    string
 	}{
-		"classic store": {func(d *remote.DockerFacts) { d.Containerd = false }, []string{"Docker runs its classic image store"}, "install a current Docker fresh, on a new server where this one runs projects, as root"},
-		"old buildx":    {func(d *remote.DockerFacts) { d.Buildx = "0.29.1" }, []string{"Docker's buildx is 0.29.1, and devopsy needs 0.33.0 or later"}, "upgrade Docker's buildx plugin alone, as root"},
-		"old compose":   {func(d *remote.DockerFacts) { d.Compose = "2.32.4" }, []string{"Docker's compose is 2.32.4, and devopsy needs 2.33.0 or later"}, "upgrade Docker's compose plugin alone, as root"},
+		"classic store": {func(d *remote.DockerFacts) { d.Containerd = false }, []string{"Docker here uses the classic image store"}, "set up Docker with the containerd image store, on a new server if this one already runs projects"},
+		"old buildx":    {func(d *remote.DockerFacts) { d.Buildx = "0.29.1" }, []string{"buildx here is 0.29.1, and devopsy needs 0.33.0 or later"}, "upgrade Docker's buildx plugin"},
+		"old compose":   {func(d *remote.DockerFacts) { d.Compose = "2.32.4" }, []string{"compose here is 2.32.4, and devopsy needs 2.33.0 or later"}, "upgrade Docker's compose plugin"},
 		"no buildx":     {func(d *remote.DockerFacts) { d.Buildx = "" }, []string{"Docker has no buildx plugin"}, dockerFix},
 	} {
 		d := ready

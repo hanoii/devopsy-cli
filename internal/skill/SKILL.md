@@ -265,8 +265,8 @@ what `config.yaml` sets.
   refused where `door:` is set or the door's firewall is loaded; `--yes`
   loads or removes it too). A release refuses, before uploading, a server whose release
   root is missing or root's, that lacks `tar` or `flock`, or whose Docker is
-  below the floor every server runs (a current Docker installed fresh: its
-  containerd image store, buildx 0.33.0, compose 2.33.0), and warns
+  below the floor every server runs (Docker's containerd image store,
+  buildx 0.33.0, compose 2.33.0), and warns
   `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,

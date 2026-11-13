@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -68,8 +67,8 @@ type floor struct {
 const containerdStore = "io.containerd.snapshotter.v1"
 
 // dockerFloors is the Docker every server runs, its one table, and no engine number: the
-// store and the two plugins are what devopsy's features read, and a Docker installed fresh
-// from its repository has all three.
+// store and the two plugins are what devopsy's features read, and a Docker installed from its
+// repository has all three; one upgraded from an older version keeps the classic store.
 //   - the containerd image store: a load of an OCI layout (the door's claims) and registry
 //     digests for every image; the classic store refuses a layout and, given one, records no
 //     digest;
@@ -79,9 +78,9 @@ const containerdStore = "io.containerd.snapshotter.v1"
 //   - compose 2.33.0: it reads a build context service:<name> as another service's build; one
 //     before reads it as a path in the project's directory (the door's checkContexts).
 var dockerFloors = []floor{
-	{part: floorStore, fix: "install a current Docker fresh, on a new server where this one runs projects, as root"},
-	{part: floorBuildx, name: "buildx", version: [3]int{0, 33, 0}, fix: "upgrade Docker's buildx plugin alone, as root"},
-	{part: floorCompose, name: "compose", version: [3]int{2, 33, 0}, fix: "upgrade Docker's compose plugin alone, as root"},
+	{part: floorStore, fix: "set up Docker with the containerd image store, on a new server if this one already runs projects"},
+	{part: floorBuildx, name: "buildx", version: [3]int{0, 33, 0}, fix: "upgrade Docker's buildx plugin"},
+	{part: floorCompose, name: "compose", version: [3]int{2, 33, 0}, fix: "upgrade Docker's compose plugin"},
 }
 
 // floorOf is part's row of dockerFloors.
@@ -127,7 +126,7 @@ func floorMissed(r floorRead, parts ...floorPart) []floorMiss {
 			case r.storeErr != "":
 				msg = "Docker's image store could not be read: " + r.storeErr
 			case !r.containerd:
-				msg = "Docker runs its classic image store, and devopsy supports only a current Docker installed fresh, on its containerd image store (" + containerdStore + ")"
+				msg = "Docker here uses the classic image store, and devopsy needs the containerd image store"
 			}
 		default:
 			out := r.buildx
@@ -137,12 +136,10 @@ func floorMissed(r floorRead, parts ...floorPart) []floorMiss {
 			needs := ", and devopsy needs " + floorWords(f.version) + " or later"
 			switch v, ok := versionAtLeast(out, f.version); {
 			case ok:
-			case !toolVersion.MatchString(out) && v == "":
-				msg = "Docker's " + f.name + " answers no version" + needs
 			case !toolVersion.MatchString(out):
-				msg = "Docker's " + f.name + " answers no version (" + strconv.Quote(v) + ")" + needs
+				msg = f.name + " here answers no version" + needs
 			default:
-				msg = "Docker's " + f.name + " is " + v + needs
+				msg = f.name + " here is " + v + needs
 			}
 		}
 		if msg != "" {

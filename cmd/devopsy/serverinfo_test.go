@@ -205,21 +205,21 @@ func TestServerInfoReport(t *testing.T) {
 		// the mount that hides them, as the fix.
 		{"door processes shown", func(i *remote.ServerInfo) {
 			i.Door, i.HidePID = &remote.DoorFacts{Space: "/space", Users: 2}, "off"
-		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root:\n$ devopsy --server-setup-howto processes"},
+		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|mount /proc with hidepid=invisible and gid= a group the deploy user is in, now and at every boot; this prints the steps:\n$ devopsy --server-setup-howto processes"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
 			i.NTP, i.NTPService, i.Time = "no", "yes", now.Add(-800*time.Millisecond).UnixNano()
 		}, "", "clock is not synchronized (about 0.8 s behind local)|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
-		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot, as root:\n$ devopsy --server-setup-howto kexec-handover"},
+		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot; this prints the steps:\n$ devopsy --server-setup-howto kexec-handover"},
 		// Docker's own, said once under docker with the docker topic, the setup's judgment of
 		// them (setupDocker's refusals) not said again under setup.
 		{"docker down", func(i *remote.ServerInfo) {
 			i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"}
 			i.Setup = setUp("")
 			i.Setup.Refusals = dockerAnswers(i.Docker)
-		}, "", "Docker's daemon does not answer: docker info: Cannot connect|install Docker, with its compose and buildx plugins, and start it, as root:\n$ devopsy --server-setup-howto docker"},
+		}, "", "Docker's daemon does not answer: docker info: Cannot connect|install Docker, with its compose and buildx plugins, and start it; this prints the steps:\n$ devopsy --server-setup-howto docker"},
 		{"no compose", func(i *remote.ServerInfo) {
 			i.Docker.Compose = ""
 			i.Setup = setUp("")
@@ -229,16 +229,16 @@ func TestServerInfoReport(t *testing.T) {
 		// The floor, every server's, said under docker with the docker topic, on a server with
 		// no door as on one with project users.
 		{"classic store", func(i *remote.ServerInfo) { i.Docker.Containerd, i.Docker.Driver = false, "overlay2" }, "",
-			"Docker runs its classic image store, and devopsy supports only a current Docker installed fresh, on its containerd image store (io.containerd.snapshotter.v1)|install a current Docker fresh, on a new server where this one runs projects, as root:\n$ devopsy --server-setup-howto docker"},
+			"Docker here uses the classic image store, and devopsy needs the containerd image store|set up Docker with the containerd image store, on a new server if this one already runs projects; this prints the steps:\n$ devopsy --server-setup-howto docker"},
 		{"classic store, project users", func(i *remote.ServerInfo) {
 			i.Docker.Containerd, i.Door = false, &remote.DoorFacts{Space: "/space", Users: 1}
-		}, "", "Docker runs its classic image store|$ devopsy --server-setup-howto docker"},
-		{"old buildx", func(i *remote.ServerInfo) { i.Docker.Buildx = "0.29.1" }, "", "Docker's buildx is 0.29.1, and devopsy needs 0.33.0 or later|upgrade Docker's buildx plugin alone, as root:\n$ devopsy --server-setup-howto docker"},
+		}, "", "Docker here uses the classic image store|$ devopsy --server-setup-howto docker"},
+		{"old buildx", func(i *remote.ServerInfo) { i.Docker.Buildx = "0.29.1" }, "", "buildx here is 0.29.1, and devopsy needs 0.33.0 or later|upgrade Docker's buildx plugin; this prints the steps:\n$ devopsy --server-setup-howto docker"},
 		{"old compose", func(i *remote.ServerInfo) {
 			i.Docker.Compose = "2.32.4"
 			i.Setup = setUp("")
 			i.Setup.Refusals = dockerAnswers(i.Docker)
-		}, "", "Docker's compose is 2.32.4, and devopsy needs 2.33.0 or later|upgrade Docker's compose plugin alone, as root:\n$ devopsy --server-setup-howto docker"},
+		}, "", "compose here is 2.32.4, and devopsy needs 2.33.0 or later|upgrade Docker's compose plugin; this prints the steps:\n$ devopsy --server-setup-howto docker"},
 		// Docker lists apparmor whenever the kernel has it, and needs
 		// apparmor_parser to load its profile (review).
 		{"no apparmor_parser", func(i *remote.ServerInfo) { i.AppArmorParser = false }, "", "no apparmor_parser: Docker cannot load its profile, so containers fail to start|install the apparmor package"},
@@ -258,7 +258,7 @@ func TestServerInfoReport(t *testing.T) {
 			i.SnapshotRoot = "/backups"
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
 		}, "", "the snapshot root /backups is on the release root's filesystem|mount the backup volume on /backups"},
-		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|install what is missing with the system's packages, as root:\n$ devopsy --server-setup-howto tools"},
+		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|install what is missing with the system's packages; this prints the steps:\n$ devopsy --server-setup-howto tools"},
 		// The door's tools, which only --project-users add refuses without, on a server with
 		// project users.
 		{"missing setfacl", func(i *remote.ServerInfo) {
@@ -411,7 +411,7 @@ func TestServerInfoReport(t *testing.T) {
 		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 		noted := len(warnings) == 1 && warnings[0].note && len(warnings[0].fixes) == 1 && warnings[0].fixes[0].Hint &&
 			warnings[0].msg == "/proc shows every user's processes (no hidepid), which matters once the server has project users" &&
-			warnings[0].fixes[0].Text == "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root:" &&
+			warnings[0].fixes[0].Text == "mount /proc with hidepid=invisible and gid= a group the deploy user is in, now and at every boot; this prints the steps:" &&
 			slices.Equal(warnings[0].fixes[0].Cmds, []string{howto.Command(howto.Processes)})
 		if c.note != noted || (!c.note && (len(warnings) != 0 || strings.Contains(out, "processes"))) {
 			t.Errorf("processes, %s: %+v\n%s", name, warnings, out)
@@ -460,7 +460,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.CrashKernel = 512 << 20
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 1 || !warnings[0].note || !strings.Contains(warnings[0].msg, "kdump keeps 536.9 MB of memory for its crash kernel") ||
-		!strings.Contains(fixText(warnings[0].fixes), "crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot, as root:\n$ devopsy --server-setup-howto kdump\n") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
+		!strings.Contains(fixText(warnings[0].fixes), "crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot; this prints the steps:\n$ devopsy --server-setup-howto kdump\n") || !strings.Contains(out, "kernel keeps 536.9 MB for kdump") {
 		t.Errorf("kdump: %+v\n%s", warnings, out)
 	}
 

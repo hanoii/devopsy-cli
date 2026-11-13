@@ -61,18 +61,17 @@ devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
 
 ## Docker
 
-Every server runs a current Docker, installed fresh from Docker's
-repository: its containerd image store, buildx 0.33.0 or later and
-compose 2.33.0 or later. `--server-setup`, every release before its
+Every server runs Docker from Docker's repository with its containerd
+image store, buildx 0.33.0 or later and compose 2.33.0 or later. `--server-setup`, every release before its
 upload and `--project-users add` refuse a Docker below any of them, each
 with its fix, and `--server-info` warns of it. A release reads Docker for
 it only until `--server-setup` or `--upgrade` of the same devopsy found
 the floor met, which its record notes: a Docker put back below the floor
 since is seen by `--server-info`, which always reads Docker, and by
-releases from the next devopsy on. A Docker upgraded from an
-older one, or a distribution's own package, may run the classic image
-store, which devopsy does not support: such a server's projects go to a
-new server with a Docker installed fresh
+releases from the next devopsy on. A Docker upgraded from an older
+version keeps the classic image store, and a distribution's own package
+may run it too, which devopsy does not support: such a server's projects
+go to a new server whose Docker runs the containerd image store
 ([`docker`](server-setup-howto.md#docker)).
 
 ## `--server-setup`

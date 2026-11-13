@@ -24,11 +24,12 @@ user, and never installs it. Every server runs Docker's containerd image
 store, buildx 0.33.0 or later and compose 2.33.0 or later: --server-setup,
 every release and --project-users add refuse a Docker that does not answer,
 lacks its compose or buildx plugin, or runs below any of them, and
---server-setup one that is not the host's service. devopsy supports a
-current Docker installed fresh, which is on its containerd image store; one
-upgraded from an older Docker, or a distribution's own package, may run the
-classic image store, which devopsy refuses: these steps are then for a new
-server, where the projects that server runs are released.
+--server-setup one that is not the host's service. A Docker installed from
+its repository runs the containerd image store. One upgraded from an older
+version keeps the classic image store, and a distribution's own package may
+run it too: devopsy refuses it, and does not move a Docker from one store to
+the other. These steps are then for a new server, where the projects of that
+one are released.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's

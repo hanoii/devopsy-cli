@@ -184,7 +184,7 @@ func TestServerSetupWarnsOfToolsMissing(t *testing.T) {
 	out, code := s.run([]string{path}, "@devopsy@one:", "--server-setup", "--yes")
 	// mkfifo is the last of serverTools missing here: the fix follows it, and only it.
 	last := "devopsy: warning: the server has no mkfifo: no sync runs\n" +
-		"devopsy: | to fix it:\ndevopsy: | install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
+		"devopsy: | to fix it:\ndevopsy: | install what is missing with the system's packages; this prints the steps:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
 	if code != 0 || !strings.Contains(out, last) || strings.Contains(out, "setfacl") ||
 		strings.Count(out, howto.Command(howto.Tools)) != 1 || !strings.Contains(out, "this server is set up by devopsy now") {
 		t.Errorf("tools missing (%d):\n%s", code, out)
@@ -329,10 +329,10 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 		"Docker down": {func(t *testing.T, host string) []string {
 			write(t, filepath.Join(host, "docker-down"), "", 0o644)
 			return nil
-		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it, as root:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
+		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it; this prints the steps:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
 		"tar missing": {func(t *testing.T, host string) []string {
 			return []string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), "tar")}
-		}, "no tar in PATH", "install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
+		}, "no tar in PATH", "install what is missing with the system's packages; this prints the steps:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -619,9 +619,9 @@ func TestServerReady(t *testing.T) {
 		{file, bin, nil, []string{"the release root " + file + " is not a directory: nothing released"}},
 		{dir, filepath.Join(dir, "none"), nil, []string{"no tar or flock in PATH, which every release needs: nothing released"}},
 		{dir, bin, []string{remote.HostRootEnv + "=" + down}, []string{"error: Docker's daemon does not answer: docker info: Cannot connect to the Docker daemon: nothing released", docker}},
-		{dir, bin, []string{"FAKE_CLASSIC_STORE=1"}, []string{"error: Docker runs its classic image store, and devopsy supports only a current Docker installed fresh, on its containerd image store (io.containerd.snapshotter.v1): nothing released\n", "install a current Docker fresh, on a new server where this one runs projects, as root:\ndevopsy: | " + docker}},
-		{dir, bin, []string{"FAKE_BUILDX_VERSION=0.29.1"}, []string{"error: Docker's buildx is 0.29.1, and devopsy needs 0.33.0 or later: nothing released\n", "upgrade Docker's buildx plugin alone, as root:\ndevopsy: | " + docker}},
-		{dir, bin, []string{"FAKE_COMPOSE_VERSION=2.32.4"}, []string{"error: Docker's compose is 2.32.4, and devopsy needs 2.33.0 or later: nothing released\n", "upgrade Docker's compose plugin alone, as root:\ndevopsy: | " + docker}},
+		{dir, bin, []string{"FAKE_CLASSIC_STORE=1"}, []string{"error: Docker here uses the classic image store, and devopsy needs the containerd image store: nothing released\n", "set up Docker with the containerd image store, on a new server if this one already runs projects; this prints the steps:\ndevopsy: | " + docker}},
+		{dir, bin, []string{"FAKE_BUILDX_VERSION=0.29.1"}, []string{"error: buildx here is 0.29.1, and devopsy needs 0.33.0 or later: nothing released\n", "upgrade Docker's buildx plugin; this prints the steps:\ndevopsy: | " + docker}},
+		{dir, bin, []string{"FAKE_COMPOSE_VERSION=2.32.4"}, []string{"error: compose here is 2.32.4, and devopsy needs 2.33.0 or later: nothing released\n", "upgrade Docker's compose plugin; this prints the steps:\ndevopsy: | " + docker}},
 		{dir, bin, []string{"FAKE_NO_BUILDX=1"}, []string{"error: Docker has no buildx plugin: nothing released\n", docker}},
 	} {
 		out, code := ready(c.root, c.path, c.extra...)
@@ -749,11 +749,11 @@ func TestServerReadyRefusesAReleaseLeavingNothing(t *testing.T) {
 		says   string
 	}{
 		"no release root":             {nil, "", "the release root %s is missing: nothing released"},
-		"classic store":               {[]string{"FAKE_CLASSIC_STORE=1"}, "", "Docker runs its classic image store"},
-		"old buildx":                  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "", "Docker's buildx is 0.32.9, and devopsy needs 0.33.0 or later"},
-		"old compose":                 {[]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "", "Docker's compose is 2.32.4, and devopsy needs 2.33.0 or later"},
-		"classic store, older record": {[]string{"FAKE_CLASSIC_STORE=1"}, "devopsy: 0.1.0\ndocker-floor: 0.1.0\n", "Docker runs its classic image store"},
-		"old buildx, record unnoted":  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "devopsy: " + version + "\n", "Docker's buildx is 0.32.9"},
+		"classic store":               {[]string{"FAKE_CLASSIC_STORE=1"}, "", "Docker here uses the classic image store"},
+		"old buildx":                  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "", "buildx here is 0.32.9, and devopsy needs 0.33.0 or later"},
+		"old compose":                 {[]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "", "compose here is 2.32.4, and devopsy needs 2.33.0 or later"},
+		"classic store, older record": {[]string{"FAKE_CLASSIC_STORE=1"}, "devopsy: 0.1.0\ndocker-floor: 0.1.0\n", "Docker here uses the classic image store"},
+		"old buildx, record unnoted":  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "devopsy: " + version + "\n", "buildx here is 0.32.9"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -825,7 +825,7 @@ func TestServerSetupNotesTheFloor(t *testing.T) {
 	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || floor() != version {
 		t.Fatalf("a first apply at the floor (%d), noted %q:\n%s", code, floor(), out)
 	}
-	if out, code := s.run([]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || floor() != "" || !strings.Contains(out, "Docker's compose is 2.32.4") {
+	if out, code := s.run([]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || floor() != "" || !strings.Contains(out, "compose here is 2.32.4") {
 		t.Errorf("an apply below the floor (%d), noted %q:\n%s", code, floor(), out)
 	}
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
