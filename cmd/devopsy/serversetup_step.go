@@ -1078,12 +1078,15 @@ func sayLevel(upgrade bool) report.Level {
 	return report.ErrorLevel
 }
 
-// fixWords is a refusal's fix as a remedy, none when it has none: its text, and the command that
-// prints its topic's steps when it has one (setup.Refusal.Howto).
+// fixWords is a refusal's fix as a remedy, none when it has none: its text, and its command
+// (setup.Refusal.Command) or the command that prints its topic's steps (setup.Refusal.Howto)
+// when it has one.
 func fixWords(r setup.Refusal) []report.Remedy {
 	switch {
 	case r.Fix == "":
 		return nil
+	case r.Command != "":
+		return []report.Remedy{report.Fix(r.Fix, r.Command)}
 	case r.Howto == "":
 		return []report.Remedy{report.Fix(r.Fix)}
 	}
@@ -1323,17 +1326,27 @@ func dockerReady(nothing string) []error {
 	return errs
 }
 
-// releaseRootReady refuses a release root that is not a directory of this user's
-// (releaseRootCheck), what goes undone said in nothing, with the fix: --server-setup on ref
-// (in words when "") when it makes or gives the root, else the check's own words.
-func releaseRootReady(root, nothing, ref string) error {
+// releaseRootRefusal is the release root's required item for what needs it as it is (a
+// release, --project-users add and setup): a directory of this user's (releaseRootCheck), nil
+// when it is; one --server-setup makes or gives has --server-setup on ref as its fix (in words
+// when ""), anything else the check's own.
+func releaseRootRefusal(root, ref string) *setup.Refusal {
 	action, refusal := releaseRootCheck(root, os.Getuid())
-	setUp := setupFix(ref, "set the server up:", "set the server up with --server-setup first, which makes it the deploy user's")
-	switch {
-	case refusal != nil:
-		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(*refusal)}
-	case action != "":
-		return &report.Failure{Msg: rootWords(root, action) + ": " + nothing, Remedies: []report.Remedy{setUp}}
+	if refusal != nil || action == "" {
+		return refusal
+	}
+	r := &setup.Refusal{Item: setup.RefusalRoot, Message: rootWords(root, action), Fix: "set the server up with --server-setup first, which makes it the deploy user's"}
+	if ref != "" {
+		r.Fix, r.Command = "set the server up:", "devopsy @"+ref+" --server-setup"
+	}
+	return r
+}
+
+// releaseRootReady refuses a release root that is not a directory of this user's
+// (releaseRootRefusal), what goes undone said in nothing.
+func releaseRootReady(root, nothing, ref string) error {
+	if r := releaseRootRefusal(root, ref); r != nil {
+		return &report.Failure{Msg: r.Message + ": " + nothing, Remedies: fixWords(*r)}
 	}
 	return nil
 }

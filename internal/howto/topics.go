@@ -125,7 +125,7 @@ var Topics = []Topic{
 				`apt-get update`,
 				`apt-get install -y sudo acl`,
 			}},
-			{"From the operator's machine, run --project-users setup for this server, addressed by its deploy user: it shows what it sets, asks, and applies.", nil},
+			{"From the operator's machine, run --server-setup for this server, then --project-users setup, both addressed by its deploy user: --project-users setup refuses a server whose release root --server-setup has not made the deploy user's. Each shows what it sets, asks, and applies.", nil},
 			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
 			{"By hand, in place of step 2: make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,

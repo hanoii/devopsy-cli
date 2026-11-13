@@ -244,7 +244,7 @@ what `config.yaml` sets.
   servers uses a key of its own, never the agent.
 - A project with a user of its own, no Docker socket (`devopsy-<project>`):
   the server set up for them once with `devopsy @devopsy@<server>:
-  --project-users setup` (the directory where devopsy keeps their data
+  --project-users setup`, after `--server-setup` (the directory where devopsy keeps their data
   on a mount with nosuid and nodev, `door: space:` in the deploy user's
   config, each user's processes hidden from the others; `sudo` and `acl`
   installed first),

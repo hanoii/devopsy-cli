@@ -227,14 +227,15 @@ const (
 // DoorSteps are --project-users setup's steps, in its order.
 var DoorSteps = []Step{StepSpace, StepDoorDrop, StepProcesses, StepConfig}
 
-// doorNeeds is what each of DoorSteps needs, by what a refusal stops: the tools and Docker
-// refuse first, with nothing applied (a setup half done by a missing package is a state nobody
-// chose), Docker's plugins and floor included.
+// doorNeeds is what each of DoorSteps needs, by what a refusal stops: the tools, Docker and
+// the release root refuse first, with nothing applied (a setup half done by a missing package
+// is a state nobody chose, and a server --project-users add then refuses is not ready for
+// project users), Docker's plugins and floor included.
 var doorNeeds = map[Step][]string{
-	StepSpace:     {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalSpace},
-	StepDoorDrop:  {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalSpace, RefusalMountsPath},
-	StepProcesses: {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalProcesses},
-	StepConfig:    {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalSpace},
+	StepSpace:     {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalRoot, RefusalSpace},
+	StepDoorDrop:  {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalRoot, RefusalSpace, RefusalMountsPath},
+	StepProcesses: {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalRoot, RefusalProcesses},
+	StepConfig:    {RefusalDoorTools, RefusalDocker, RefusalPlugins, RefusalRoot, RefusalSpace},
 }
 
 // Refused is every item that refuses in f, by what each stops.

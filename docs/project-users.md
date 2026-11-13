@@ -330,7 +330,8 @@ The door names what it refuses, and logs each refusal in
 
 A server for project users needs `sudo` and `acl` installed (`sudo`,
 `visudo` and `setfacl`), which devopsy leaves to the admin, the Docker
-every server runs ([Docker](servers.md#docker)), and what
+every server runs ([Docker](servers.md#docker)), a release root of the
+deploy user's, which `--server-setup` makes, and what
 `--project-users setup` sets. On a server with project users,
 `--server-info` and `--server-setup` warn of a missing `sudo`, `visudo`
 or `setfacl`; on one with none yet, `--server-info` notes it without a
@@ -341,9 +342,10 @@ address the server by its deploy user, `devopsy@vm1`.
    project-users` prints the steps ([Server setup
    how-to](server-setup-howto.md#project-users)).
 
-2. Set the server up for project users, locally:
+2. Set the server up, then set it up for project users, locally:
 
    ```sh
+   devopsy @devopsy@vm1: --server-setup
    devopsy @devopsy@vm1: --project-users setup
    ```
 
@@ -365,7 +367,9 @@ as the deploy user, in two sessions as `--server-setup` does: it shows
 what is missing, asks once, applies, and checks again. `--yes` asks
 nothing, and without a terminal it fails naming `--yes`. A second run
 changes nothing. It refuses a server without `sudo`, `visudo` or
-`setfacl`, or with a Docker below the floor, before anything changes.
+`setfacl`, with a Docker below the floor, or whose release root is not a
+directory of the deploy user's (`--server-setup` makes it so), before
+anything changes, as `add` would refuse it.
 Neither `--server-setup` nor `--upgrade` runs it: project users are a
 choice. It sets:
 

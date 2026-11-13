@@ -65,6 +65,9 @@ type Refusal struct {
 	// Howto is the topic of devopsy --server-setup-howto that has the fix's steps, "" for none:
 	// the operator's devopsy offers its command after the fix's text (fixWords).
 	Howto howto.Name `json:"howto,omitempty"`
+	// Command is the fix's command, offered after its text, "" for none: a command of devopsy's
+	// on the server's address as its session named it, the text saying it in words without one.
+	Command string `json:"command,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
 	// file).

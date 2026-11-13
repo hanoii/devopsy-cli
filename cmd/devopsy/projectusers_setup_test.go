@@ -13,11 +13,15 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/setup"
 )
 
-// doorSetupServer is setupServer with what --project-users setup needs beside it: the door's
-// tools (sudo, visudo, setfacl, fakes), and the space it sets, a path of the test's.
+// doorSetupServer is setupServer with what --project-users setup needs beside it: its release
+// root, as --server-setup makes it, the door's tools (sudo, visudo, setfacl, fakes), and the
+// space it sets, a path of the test's.
 func doorSetupServer(t *testing.T) (s *syncSetup, host, space string) {
 	t.Helper()
 	s, host = setupServer(t)
+	if err := os.Mkdir(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(filepath.Dir(s.root), "bin")
 	for _, tool := range []string{"sudo", "visudo", "setfacl"} {
 		write(t, filepath.Join(bin, tool), "#!/bin/sh\nexit 0\n", 0o755)

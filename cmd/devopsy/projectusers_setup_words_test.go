@@ -9,27 +9,32 @@ import (
 
 // --project-users setup says a server is ready for project users, and offers --project-users
 // add, only where add then goes: on a server --server-setup never ran on (its release root
-// missing), add refuses for the release root, so the setup's last line names that instead.
-//
-// Bug: the setup judges only its own items (the tools, Docker, the directory, the config, the
-// processes), never the release root add refuses on, so on a new server it ends "this server
-// is ready for project users" with add to copy, and the add copied refuses.
+// missing), it refuses before anything changes, naming --server-setup on the address as typed,
+// as add refuses; with the release root made, it sets the server up and add goes past it.
 func TestProjectUsersSetupReadyOnlyWhereAddGoes(t *testing.T) {
 	t.Parallel()
-	s, _, space := doorSetupServer(t)
+	s, host, space := doorSetupServer(t)
+	if err := os.Remove(s.root); err != nil {
+		t.Fatal(err)
+	}
+	before := readString(configFile(s))
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-	if code != 0 {
+	entries, _ := os.ReadDir(filepath.Join(host, "etc"))
+	if code != 1 || !strings.Contains(out, "devopsy: error: release root: the release root "+s.root+" is missing\ndevopsy: | to fix it:\ndevopsy: | set the server up:\ndevopsy: | $ devopsy @devopsy@one: --server-setup\n") ||
+		strings.Contains(out, "ready for project users") || len(entries) > 0 || fileExists(space) || readString(configFile(s)) != before {
+		t.Errorf("no release root (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes"); code != 1 || strings.Contains(out, "ready for project users") {
+		t.Errorf("a second run, no release root (%d):\n%s", code, out)
+	}
+	if err := os.Mkdir(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes"); code != 0 || !strings.Contains(out, "devopsy: this server is ready for project users\n") {
 		t.Fatalf("the setup (%d):\n%s", code, out)
 	}
-	ready := strings.Contains(out, "devopsy: this server is ready for project users\n") && strings.Contains(out, "$ devopsy @devopsy@one: --project-users add ")
-	add, code := s.run(nil, "@devopsy@one:", "--project-users", "add", "shop")
-	if ready && code != 0 && strings.Contains(add, "the release root "+s.root+" is missing: no project user made") {
-		t.Errorf("the setup says the server is ready and offers add, which refuses:\n%s\nadd (%d):\n%s", out, code, add)
-	}
-	// A second run says it again, with nothing to change.
-	out, _ = s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
-	if strings.Contains(out, "nothing to change: devopsy@one is ready for project users") {
-		t.Errorf("a second run says the server is ready, its release root missing:\n%s", out)
+	if add, _ := s.run(nil, "@devopsy@one:", "--project-users", "add", "shop"); strings.Contains(add, "the release root") {
+		t.Errorf("add refuses for the release root after the setup said ready:\n%s", add)
 	}
 }
 

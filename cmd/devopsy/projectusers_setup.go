@@ -262,7 +262,7 @@ func runProjectUsersSetupStep(args []string, ref string) int {
 	}
 	switch args[0] {
 	case "facts":
-		rd, err := readDoorSetup(h, dir)
+		rd, err := readDoorSetup(h, dir, ref)
 		if err != nil {
 			return failErr(err)
 		}
@@ -290,9 +290,9 @@ type doorSetupRead struct {
 }
 
 // readDoorSetup reads what project users need of this server, dir the space the operator
-// named ("" for none): each item's state, its refusals, what an apply puts. It changes nothing
-// and takes no lock.
-func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
+// named ("" for none), ref the server as its address named it (for a fix's command): each
+// item's state, its refusals, what an apply puts. It changes nothing and takes no lock.
+func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 	var rd doorSetupRead
 	f := &rd.facts
 	r, err := remote.ReleaseSettings()
@@ -307,7 +307,8 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 	refuse := func(item, stops, msg, fix string) {
 		f.Refusals = append(f.Refusals, setup.Refusal{Item: item, Message: msg, Fix: fix, Stops: stops})
 	}
-	// The tools and Docker first: each refuses every step, with nothing applied.
+	// The tools, Docker and the release root first: each refuses every step, with nothing
+	// applied. The release root is judged as --project-users add and a release judge it.
 	if missing := missingTools(doorTool); len(missing) > 0 {
 		f.Refusals = append(f.Refusals, setup.Refusal{Item: toolsItem, Message: "no " + strings.Join(missing, " or ") + " in PATH, which project users need",
 			Fix: doorToolsFixText, Howto: howto.ProjectUsers, Stops: setup.RefusalDoorTools})
@@ -316,6 +317,9 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 	f.Refusals = append(f.Refusals, dockerAnswers(docker)...)
 	if docker.Error == "" {
 		f.Refusals = append(f.Refusals, hostRefusals(h, docker, "--project-users setup mounts the project users' directory and /proc with")...)
+	}
+	if refusal := releaseRootRefusal(r.Root, ref); refusal != nil {
+		f.Refusals = append(f.Refusals, *refusal)
 	}
 
 	// The space: the config's, else the one named, else devopsy's.
@@ -560,7 +564,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		return failErr(err)
 	}
 	defer lock.Close()
-	rd, err := readDoorSetup(h, dir)
+	rd, err := readDoorSetup(h, dir, ref)
 	if err != nil {
 		return failErr(err)
 	}
@@ -622,7 +626,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 	// Each step judged by its own result, read again: the config, the deploy user's own file,
 	// last, once the space it names is made and mounted, whatever else of the run failed (the
 	// processes).
-	again, err := readDoorSetup(h, dir)
+	again, err := readDoorSetup(h, dir, ref)
 	if err != nil {
 		fail(err.Error())
 		return end()
@@ -636,7 +640,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 				fail("devopsy could not add the project users' directory to " + f.ConfigFile + ": " + err.Error())
 			} else {
 				report.Info("added the project users' directory to "+f.ConfigFile, strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
-				if again, err = readDoorSetup(h, dir); err != nil {
+				if again, err = readDoorSetup(h, dir, ref); err != nil {
 					fail(err.Error())
 					return end()
 				}

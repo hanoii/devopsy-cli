@@ -212,8 +212,10 @@ user=devopsy).
    apt-get install -y sudo acl
    ```
 
-2. From the operator's machine, run --project-users setup for this server,
-   addressed by its deploy user: it shows what it sets, asks, and applies.
+2. From the operator's machine, run --server-setup for this server, then
+   --project-users setup, both addressed by its deploy user: --project-users
+   setup refuses a server whose release root --server-setup has not made the
+   deploy user's. Each shows what it sets, asks, and applies.
 
 3. Then add project users with --project-users add, from the operator's
    machine, and reboot the server after the first: sshd reads what the add
