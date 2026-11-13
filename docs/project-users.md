@@ -428,8 +428,9 @@ the setup refuses, in the setup's words, and go on; on a server with
 none yet, `--server-info` says it without a warning. `noaccess` shows that a
 process is there and whose it is, never its command line. `add` on a
 server with no `door: space:`, or one not mounted `nosuid,nodev`, and
-`--server-info`'s warnings of either, offer `--project-users setup` as
-the fix, and the how-to's steps for doing it by hand.
+`--server-info`'s warning of one not mounted so (`W0002`), offer
+`--project-users setup` as the fix, and the how-to's steps for doing it
+by hand.
 
 `add` makes `devopsy-shop` with no password, a home closed to others,
 and one id from 50000 to 59999 for its uid and its group, which no
@@ -451,6 +452,9 @@ checked before it lands: the `devopsy-projects` and `devopsy-door`
 groups, the door's sudo rules, a `docker` that is devopsy, sshd's part, which asks devopsy for a
 project user's keys, and the firewall. `add` refuses:
 
+- while the release root is not a directory of the deploy user's, which
+  `--server-setup` makes it;
+- while Docker is below its floor ([Docker](servers.md#docker));
 - while `<space>` is not mounted `nosuid,nodev`;
 - while the deploy user or root is in `devopsy-projects`, which would
   have sshd ignore their own keys;
