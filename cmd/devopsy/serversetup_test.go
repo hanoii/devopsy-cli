@@ -851,6 +851,7 @@ func TestServerSetupNamesTheRootChosen(t *testing.T) {
 // nothing; --upgrade takes no root.
 func TestServerSetupRootChoiceRefusals(t *testing.T) {
 	t.Parallel()
+	const newDir = "name a new directory in it with --root, which --server-setup makes"
 	s, _, vol, config := rootChoice(t)
 	home := filepath.Dir(vol)
 	before := readString(config)
@@ -883,6 +884,21 @@ func TestServerSetupRootChoiceRefusals(t *testing.T) {
 		t.Errorf("a file at the volume (%d): %+v\n%s", code, f.Candidates, out)
 	}
 	refused("no directory", vol, "the release root "+vol+" is not a directory")
+	// Each refusal of the release root's check keeps its own fix; only a directory of root's
+	// with files takes a new directory in it, named with --root.
+	fixed := func(name, root, fix string) {
+		t.Helper()
+		if out, _ := s.run(nil, remote.ServerSetupFlag, "facts", "--root", root); !strings.Contains(out, "devopsy: | "+fix) || strings.Contains(out, "through a link") ||
+			fix != newDir && strings.Contains(out, newDir) {
+			t.Errorf("%s: no fix %q:\n%s", name, fix, out)
+		}
+	}
+	fixed("no directory", vol, "set releases: root in "+config+" to a directory of the deploy user's")
+	if os.Getuid() != 0 {
+		fixed("root's with files", "/usr", newDir)
+	}
+	// / in ReleaseSettings' own words, as every command refuses it.
+	refused("/", "/", "releases: root must not be /: releases would sit among the system's own directories")
 	if err := os.Remove(vol); err != nil {
 		t.Fatal(err)
 	}

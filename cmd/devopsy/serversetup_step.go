@@ -500,13 +500,17 @@ func rootFixed(r remote.Releases, d *remote.Door) error {
 }
 
 // rootRefusal is the judgment of a path as a release root the config would name, nil where it
-// takes it: absolute and clean, one the mounts drop-in can name, releaseRootCheck, then the
-// boot mount (bootMounted).
+// takes it: absolute and clean (remote.ReleaseRootError's words for one not absolute, or /), one
+// the mounts drop-in can name, releaseRootCheck (a directory of root's with files fixed by a new
+// one in it), then the boot mount (bootMounted).
 func rootRefusal(h setupHost, root string) *setup.Refusal {
 	refuse := func(why, fix string) *setup.Refusal {
 		return &setup.Refusal{Item: setup.RefusalRoot, Message: why, Fix: fix}
 	}
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+	if err := remote.ReleaseRootError(root); err != nil {
+		return refuse(err.Error(), "")
+	}
+	if filepath.Clean(root) != root {
 		return refuse("a release root is an absolute path, clean, not "+root, "name it with no trailing slash, . or ..")
 	}
 	want := resolveRoot(root)
@@ -514,7 +518,10 @@ func rootRefusal(h setupHost, root string) *setup.Refusal {
 		return refuse("the release root "+want+" "+err.Error(), "choose a path with none")
 	}
 	if _, refusal := releaseRootCheck(want, os.Getuid()); refusal != nil {
-		return refuse(refusal.Message, "name a new directory in it with --root, which --server-setup makes")
+		if fi, err := os.Stat(want); err == nil && fi.IsDir() && fi.Sys().(*syscall.Stat_t).Uid == 0 && want != "/" {
+			refusal.Fix = "name a new directory in it with --root, which --server-setup makes"
+		}
+		return refusal
 	}
 	return bootMounted(h, want)
 }
