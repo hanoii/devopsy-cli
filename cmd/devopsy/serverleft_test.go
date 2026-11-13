@@ -3,7 +3,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -59,7 +61,7 @@ func TestServerInfoLeft(t *testing.T) {
 			{Project: "gone-prod", Service: "migrate", State: "exited", Released: true, OneOff: true},
 			{Project: "tools", Service: "x", State: "running"},
 		},
-		GC: &remote.GCFacts{OneOffs: 2, Builders: 1, Images: 3, Size: 2e9},
+		GC: &remote.GCFacts{OneOffs: 2, Left: 1, Dangling: 3},
 		Images: []remote.HostImage{
 			{ID: "i1", Tags: []string{"app:devopsy-shop-prod-20261101000000", "app:devopsy-shop-stage-20261101000000"}, Containers: 1},
 			{ID: "i2", Tags: []string{"app:devopsy-shop-stage-2-20261101000000", "app:devopsy-shop-stage-2-s20261102000000-a1"}},
@@ -70,19 +72,19 @@ func TestServerInfoLeft(t *testing.T) {
 			{ID: "i7", Tags: []string{remote.UtilImage}},
 		},
 		Volumes: []remote.HostVolume{
-			{Name: "shop-prod_db", Project: "shop-prod", Links: 1},
-			{Name: "gone-prod_db", Project: "gone-prod", Size: 1.2e9},
+			{Name: "shop-prod_db", Project: "shop-prod"},
+			{Name: "gone-prod_db", Project: "gone-prod", Unused: true},
 			{Name: "tools_data", Project: "tools"},
-			{Name: "a1", Anonymous: true, Size: 5e6}, {Name: "a2", Anonymous: true, Size: 5e6}, {Name: "a3", Anonymous: true, Links: 1},
+			{Name: "a1", Anonymous: true, Unused: true}, {Name: "a2", Anonymous: true, Unused: true}, {Name: "a3", Anonymous: true},
 		},
 		SnapshotDirs: []string{"shop/prod", "old/prod"},
 		Removing:     []remote.RemovingDir{{Path: "shop/eu/old.rm.123", Size: 3e6}},
 		Door:         &remote.DoorFacts{Space: "/space", Users: 1, Keyless: []remote.KeylessUser{{User: "devopsy-blog", Project: "blog", Names: []string{"blog-dev"}}}},
 	}
 	want := []string{
-		"gc: --gc would remove up to 2.0 GB: 2 one-off containers, 1 builder's build cache, 3 images\n| list it, then remove it:\n$ devopsy @vm1: --gc",
+		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| its sizes, and the build cache it removes too:\n$ devopsy @vm1: --gc --dry-run",
 		"images: busybox:1.37, 4.0 MB: no release holds it, nor any container uses it\n| remove it once nothing needs it, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi busybox:1.37",
-		"gone: gone-prod: no environment and no uid claim on the server, and left:\ncontainers web (exited)\nvolumes gone-prod_db 1.2 GB\n1 image name of its releases\n" +
+		"gone: gone-prod: no environment and no uid claim on the server, and left:\ncontainers web (exited)\nvolumes gone-prod_db\n1 image name of its releases\n" +
 			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
 		"gone: old-prod: no environment and no uid claim on the server, and left:\nsnapshots in /backups/old/prod\n" +
 			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ rm -rf /backups/old/prod",
@@ -90,7 +92,7 @@ func TestServerInfoLeft(t *testing.T) {
 			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
 		"gone: wiki-stage: no environment and no uid claim on the server, and left:\n1 image name of its releases\n" +
 			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-wiki-stage-20261101000000",
-		"volumes: 2 anonymous volumes no container uses, 10.0 MB (an image's VOLUME after a down without -v: a database's data, maybe)\n| once checked that none holds what is needed, remove them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker volume prune",
+		"volumes: 2 anonymous volumes no container uses (an image's VOLUME after a down without -v: a database's data, maybe)\n| once checked that none holds what is needed, remove them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker volume prune",
 		"environments: shop/eu/old.rm.123: left by a --destroy cut off while it removed shop/eu/old, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
 		"door: devopsy-blog has no key and still holds blog-dev\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys) takes it back",
 	}
@@ -101,7 +103,7 @@ func TestServerInfoLeft(t *testing.T) {
 	// Locally, what needs an address in words, the commands run here.
 	local := strings.Join(leftSays(info, "", ""), "\n\n")
 	for _, w := range []string{
-		"| --gc, run on this server from a checkout or an alias, lists and removes it",
+		"| --gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too",
 		"| remove it once nothing needs it:\n$ docker rmi busybox:1.37",
 		"| a --destroy of shop/eu/old run again from shop's checkout resumes it",
 		"| removing blog's project user with --project-users remove and --destroy removes them with it; a key added for it (--ssh-keys) takes it back",
@@ -136,10 +138,10 @@ func TestServerInfoLeft(t *testing.T) {
 	}
 	// A read that failed is unknown, said, never none.
 	i := info
-	i.ImagesUnread, i.VolumesUnread = "docker system df: EOF", "docker system df: EOF"
+	i.ImagesUnread, i.VolumesUnread = "docker image ls: EOF", "docker volume ls: EOF"
 	says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n")
-	if !strings.Contains(says, "images: the images could not be listed: docker system df: EOF") || !strings.Contains(says, "volumes: the volumes could not be listed") ||
-		strings.Contains(says, "busybox") || strings.Contains(says, "anonymous") || strings.Contains(says, "image name") {
+	if !strings.Contains(says, "images: the images could not be listed: docker image ls: EOF") || !strings.Contains(says, "volumes: the volumes could not be listed") ||
+		strings.Contains(says, "busybox") || strings.Contains(says, "anonymous") || strings.Contains(says, "of its releases") {
 		t.Errorf("unread:\n%s", says)
 	}
 }
@@ -194,5 +196,64 @@ func TestSnapshotEnvDirs(t *testing.T) {
 	}
 	if got := snapshotEnvDirs(root); !slices.Equal(got, []string{"shop/eu/prod", "shop/prod"}) {
 		t.Errorf("snapshot dirs %v", got)
+	}
+}
+
+// --server-info counts what --gc would remove and sizes nothing of Docker's but its images, as
+// monitors run it on a timer: no docker system df -v (it sizes every volume), no inspect --size,
+// no builder's cache (buildx, buildctl), no image inspect for a size, no second ps or inspect of
+// the containers (the one-offs and the images in use are hostContainers' read), and no walk of a
+// release snapshot. An exited one-off of a listed environment past the age, a release snapshot
+// whose release is gone and a dangling image no container uses are counted; an image's size
+// comes from docker image ls, a volume no container uses from docker volume ls.
+func TestServerFactsCountGC(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	base := filepath.Join(root, "shop", "prod")
+	write(t, filepath.Join(base, "releases", "20261101000000", "code", "x"), "", 0o644)
+	write(t, filepath.Join(base, "snapshots", "20261020000001", remote.SnapshotManifest), "format\t1\nkind\trelease\nrelease\t20261001000000\n", 0o600)
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "docker.log")
+	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  'info --format '*) echo '{"ServerVersion":"29.9.1","Driver":"overlayfs","DockerRootDir":"/var/lib/docker"}' ;;
+  'ps -aq --no-trunc') echo c1; echo c2 ;;
+  'inspect --format '*) echo 'exited 0 - sha256:old "2026-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod","com.docker.compose.oneoff":"True"}'
+    echo 'running 0 - sha256:d2 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod"}' ;;
+  'image ls -q --no-trunc --filter dangling=true') echo sha256:d1; echo sha256:d2 ;;
+  'image ls --no-trunc --format {{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}') echo 'sha256:t1 busybox:1.37 4.26MB'; echo 'sha256:d2 <none>:<none> 1MB' ;;
+  'volume ls --format '*) echo '["a1","com.docker.volume.anonymous="]'; echo '["shop-prod_db","com.docker.compose.project=shop-prod"]' ;;
+  'volume ls -q --filter dangling=true') echo a1 ;;
+esac
+exit 0
+`, 0o755)
+	cmd := exec.Command(binary, remote.ServerFactsFlag)
+	cmd.Dir = root
+	cmd.Env = []string{"HOME=" + root, "DEVOPSY_HOME=" + t.TempDir(), remote.HostRootEnv + "=" + t.TempDir(), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("--server-facts: %v", err)
+	}
+	var info remote.ServerInfo
+	if err := json.Unmarshal(out, &info); err != nil || info.GC == nil {
+		t.Fatalf("--server-facts: %v:\n%s", err, out)
+	}
+	if g := *info.GC; g.OneOffs != 1 || g.Snapshots != 1 || g.Dangling != 1 || g.Left != 0 || len(g.Unread) > 0 {
+		t.Errorf("gc facts %+v", g)
+	}
+	if len(info.Images) != 1 || info.Images[0].Size != 4260000 || info.Images[0].Containers != 0 {
+		t.Errorf("images %+v", info.Images)
+	}
+	if !slices.Equal(info.Volumes, []remote.HostVolume{{Name: "a1", Anonymous: true, Unused: true}, {Name: "shop-prod_db", Project: "shop-prod"}}) {
+		t.Errorf("volumes %+v", info.Volumes)
+	}
+	calls := readString(log)
+	for _, costly := range []string{"system df", "--size", "buildx ls", "buildx du", "buildctl", "image inspect", "label=com.docker.compose.oneoff", "container inspect"} {
+		if strings.Contains(calls, costly) {
+			t.Errorf("--server-facts ran %q:\n%s", costly, calls)
+		}
+	}
+	if n := strings.Count(calls, "ps -aq --no-trunc\n"); n != 1 {
+		t.Errorf("%d listings of the containers:\n%s", n, calls)
 	}
 }

@@ -302,8 +302,12 @@ type gcScope struct {
 	policies []door.Policy
 	// projects are the deploy user's project directories, bases its environments'.
 	projects, bases []string
-	// usage is docker system df -v once read (systemUsage).
-	usage *usageRead
+	// counts makes find --server-info's, run on a timer: counts only, never a size or the build
+	// cache (docker system df -v, inspect --size, buildx, a walk of a snapshot), the one-offs
+	// and the images in use from containers, as hostContainers read them (containersErr).
+	counts        bool
+	containers    []remote.HostContainer
+	containersErr error
 	// listedAt is when what remove removes was listed, the server's time: the build cache goes
 	// by the cutoff its listing had.
 	listedAt time.Time
@@ -417,19 +421,27 @@ func (g *gcScope) find() gcPlan {
 			}
 		}
 	}
-	p.OneOffs, err = g.oneOffs()
-	unread("the one-off containers", err)
-	bs, errs := g.builders()
-	p.Builders = bs
-	for _, e := range errs {
-		p.Unread = append(p.Unread, oneLine(e.Error()))
+	if g.counts {
+		p.OneOffs, err = g.countedOneOffs()
+	} else {
+		p.OneOffs, err = g.oneOffs()
+		bs, errs := g.builders()
+		p.Builders = bs
+		for _, e := range errs {
+			p.Unread = append(p.Unread, oneLine(e.Error()))
+		}
 	}
+	unread("the one-off containers", err)
 	for _, b := range g.bases {
 		sp := envSnapshotPaths(b)
 		gone, err := goneSnapshots(sp)
 		rel, _ := filepath.Rel(g.root, b)
 		for _, rs := range gone {
-			p.Snapshots = append(p.Snapshots, gcSnapshot{Env: filepath.ToSlash(rel), Base: b, ID: rs.id, Release: rs.release, Size: treeBytes(filepath.Join(sp.snaps, rs.id))})
+			s := gcSnapshot{Env: filepath.ToSlash(rel), Base: b, ID: rs.id, Release: rs.release}
+			if !g.counts {
+				s.Size = treeBytes(filepath.Join(sp.snaps, rs.id))
+			}
+			p.Snapshots = append(p.Snapshots, s)
 		}
 		var f *report.Failure
 		if errors.As(err, &f) {
@@ -440,8 +452,10 @@ func (g *gcScope) find() gcPlan {
 		set := projectImages(pd, io.Discard)
 		for _, r := range set.Retryable() {
 			l := gcLeft{Retried: r}
-			if img, err := set.Docker.Inspect(r.Ref); err == nil && len(img.Tags) <= 1 {
-				l.Last, l.Size = true, img.Size
+			if !g.counts {
+				if img, err := set.Docker.Inspect(r.Ref); err == nil && len(img.Tags) <= 1 {
+					l.Last, l.Size = true, img.Size
+				}
 			}
 			p.Left = append(p.Left, l)
 		}
@@ -462,6 +476,19 @@ func envSnapshotPaths(base string) snapshotPaths {
 // directory's, or one under a project user's names (door.Policy.OwnName).
 func (g *gcScope) listed(name string) bool {
 	return g.names[name] || slices.ContainsFunc(g.policies, func(p door.Policy) bool { return p.OwnName(name) })
+}
+
+// countedOneOffs are the one-offs of containers that go (goes), as hostContainers read them,
+// with no id and no size.
+func (g *gcScope) countedOneOffs() ([]gcOneOff, error) {
+	var cs []gcOneOff
+	for _, c := range g.containers {
+		o := gcOneOff{Project: c.Project, Finished: c.Finished}
+		if g.goes(c.State, c.OneOff, o) {
+			cs = append(cs, o)
+		}
+	}
+	return cs, g.containersErr
 }
 
 // oneOffs are the one-off containers --gc removes: exited (a created one has no finish time),
@@ -665,9 +692,9 @@ func (g *gcScope) doorBuilders() (map[string]builderNode, error) {
 }
 
 // daemonCache is the daemon's own builder's records, as the daemon gives them with their
-// times (docker system df -v, systemUsage).
+// times (docker system df -v, the costliest of Docker's reads: it sizes every volume).
 func (g *gcScope) daemonCache() ([]cacheRecord, error) {
-	u, err := g.systemUsage()
+	u, err := readDockerUsage(g.docker)
 	if err != nil {
 		return nil, err
 	}
@@ -683,32 +710,9 @@ func (g *gcScope) daemonCache() ([]cacheRecord, error) {
 	return rs, nil
 }
 
-// systemUsage is docker system df -v, read once for the scope: what Docker counts per image,
-// volume and build cache record, the costliest of its reads (it sizes every volume), which
-// --server-info shares with the list.
-func (g *gcScope) systemUsage() (dockerUsage, error) {
-	if g.usage == nil {
-		u, err := readDockerUsage(g.docker)
-		g.usage = &usageRead{u, err}
-	}
-	return g.usage.dockerUsage, g.usage.err
-}
-
-// usageRead is a read of docker system df -v, with its error.
-type usageRead struct {
-	dockerUsage
-	err error
-}
-
-// dockerUsage is docker system df -v as its {{json .}} prints it: every value a string, sizes
-// in Docker's units (parseDockerSize). Images have one line each, by their first tag.
+// dockerUsage is docker system df -v as its {{json .}} prints it, its build cache: every value
+// a string, sizes in Docker's units (parseDockerSize).
 type dockerUsage struct {
-	Images []struct {
-		ID, Size, Containers string
-	}
-	Volumes []struct {
-		Name, Labels, Links, Size string
-	}
 	BuildCache []struct {
 		ID, Parent, Size, LastUsedAt, CreatedAt string
 		InUse, Shared                           string
@@ -779,8 +783,8 @@ func parseDockerSize(s string) int64 {
 	return 0
 }
 
-// dangling are the dangling images no container uses, with their size as Docker counts it:
-// what docker image prune removes.
+// dangling are the dangling images no container uses, with their size as Docker counts it
+// (none counted): what docker image prune removes.
 func (g *gcScope) dangling() (gcDangling, error) {
 	out, err := exec.Command(g.docker, "image", "ls", "-q", "--no-trunc", "--filter", "dangling=true").Output()
 	if err != nil {
@@ -790,21 +794,18 @@ func (g *gcScope) dangling() (gcDangling, error) {
 	if len(ids) == 0 {
 		return gcDangling{}, nil
 	}
-	used := map[string]bool{}
-	if out, err := exec.Command(g.docker, "ps", "-aq", "--no-trunc").Output(); err != nil {
-		return gcDangling{}, dockerFailed("docker ps", err)
-	} else if cs := strings.Fields(string(out)); len(cs) > 0 {
-		out, err := exec.Command(g.docker, append([]string{"container", "inspect", "--format", "{{.Image}}"}, cs...)...).Output()
-		if err != nil {
-			// One gone since the listing is no use; any other is unknown.
-			var ee *exec.ExitError
-			if !errors.As(err, &ee) || !onlyGone(string(ee.Stderr)) {
-				return gcDangling{}, dockerFailed("docker container inspect", err)
+	used, err := g.imagesUsed()
+	if err != nil {
+		return gcDangling{}, err
+	}
+	if g.counts {
+		var d gcDangling
+		for _, id := range ids {
+			if !used[id] {
+				d.Images = append(d.Images, gcImage{ID: id})
 			}
 		}
-		for _, id := range strings.Fields(string(out)) {
-			used[id] = true
-		}
+		return d, nil
 	}
 	out, err = exec.Command(g.docker, append([]string{"image", "inspect", "--format", "{{.Id}} {{.Size}}"}, ids...)...).Output()
 	if err != nil {
@@ -823,6 +824,36 @@ func (g *gcScope) dangling() (gcDangling, error) {
 		d.Images = append(d.Images, gcImage{ID: id, Size: n})
 	}
 	return d, nil
+}
+
+// imagesUsed are the ids of the images a container uses, any state: counted, those of the
+// containers hostContainers read.
+func (g *gcScope) imagesUsed() (map[string]bool, error) {
+	used := map[string]bool{}
+	if g.counts {
+		for _, c := range g.containers {
+			used[c.Image] = true
+		}
+		return used, g.containersErr
+	}
+	out, err := exec.Command(g.docker, "ps", "-aq", "--no-trunc").Output()
+	if err != nil {
+		return nil, dockerFailed("docker ps", err)
+	}
+	if cs := strings.Fields(string(out)); len(cs) > 0 {
+		out, err := exec.Command(g.docker, append([]string{"container", "inspect", "--format", "{{.Image}}"}, cs...)...).Output()
+		if err != nil {
+			// One gone since the listing is no use; any other is unknown.
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) || !onlyGone(string(ee.Stderr)) {
+				return nil, dockerFailed("docker container inspect", err)
+			}
+		}
+		for _, id := range strings.Fields(string(out)) {
+			used[id] = true
+		}
+	}
+	return used, nil
 }
 
 // remove removes what the plan lists, in its order, each removal standing alone and decided

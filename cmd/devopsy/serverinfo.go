@@ -653,10 +653,11 @@ func tryReflink(dir string) string {
 }
 
 // hostContainers is every container, any state, with its compose
-// project and service, state and health, and its role and exports, as
-// docker (its command) lists them, each released when compose worked
-// under one of dirs. A list docker failed to give is an error, with what
-// it gave: unknown, never none.
+// project and service, state and health, its role and exports, its image
+// and when it exited, as docker (its command) lists them, each released
+// when compose worked under one of dirs: the one inspect of every
+// container --server-info makes. A list docker failed to give is an
+// error, with what it gave: unknown, never none.
 func hostContainers(docker string, dirs []string) ([]remote.HostContainer, error) {
 	out, err := exec.Command(docker, "ps", "-aq", "--no-trunc").Output()
 	if err != nil {
@@ -666,7 +667,7 @@ func hostContainers(docker string, dirs []string) ([]remote.HostContainer, error
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	cmd := exec.Command(docker, append([]string{"inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...)
+	cmd := exec.Command(docker, append([]string{"inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{.Image}} {{json .State.FinishedAt}} {{json .Config.Labels}}"}, ids...)...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err = cmd.Output()
@@ -699,23 +700,25 @@ func dockerFailed(what string, err error) error {
 }
 
 // parseHostContainers reads lines of "<state> <exit code> <health or ->
-// <labels as JSON>": a container whose compose working directory is
-// under one of dirs is a release's (Released).
+// <image id> <finish time as JSON> <labels as JSON>": a container whose
+// compose working directory is under one of dirs is a release's
+// (Released).
 func parseHostContainers(out []byte, dirs []string) []remote.HostContainer {
 	var cs []remote.HostContainer
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
-		f := strings.SplitN(sc.Text(), " ", 4)
-		if len(f) < 4 {
+		f := strings.SplitN(sc.Text(), " ", 6)
+		if len(f) < 6 {
 			continue
 		}
 		var labels map[string]string
-		if json.Unmarshal([]byte(f[3]), &labels) != nil {
+		if json.Unmarshal([]byte(f[5]), &labels) != nil {
 			continue
 		}
 		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"],
-			OneOff: labels["com.docker.compose.oneoff"] == "True"}
+			OneOff: labels["com.docker.compose.oneoff"] == "True", Image: f[3]}
+		_ = json.Unmarshal([]byte(f[4]), &c.Finished)
 		if wd := labels["com.docker.compose.project.working_dir"]; wd != "" {
 			c.Released = slices.ContainsFunc(dirs, func(d string) bool { return within(wd, d) })
 		}

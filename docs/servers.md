@@ -290,7 +290,10 @@ kinds.
 It also shows, as information with a command to see to it, what may be
 dead or gone. devopsy removes none of it, and none of it makes the exit 3:
 
-- what [`--gc`](#--gc) would remove, with its size, `--gc` as its hint;
+- what [`--gc`](#--gc) would remove, counted (one-off containers,
+  release snapshots, image names a project's record left, dangling
+  images), with `--gc --dry-run` as its hint for the sizes and the
+  build cache, which only `--gc` reads;
 - images with a tag that no release holds and no container uses (tools
   a project ran, the admin's own), with their size, `docker rmi` as the
   hint;

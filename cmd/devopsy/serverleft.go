@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -23,25 +26,25 @@ import (
 // the operator's devopsy makes of them (leftEntries), each with its hint.
 
 // leftFacts reads, as the deploy user, what may be dead or gone into info: what --gc would
-// remove (its own listing, gcScope.find), the images with a tag, the volumes, what a cut
+// remove (its own listing, gcScope.find, counted: --server-info runs on a timer, and sizes and
+// the build cache are --gc's own listing's), the images with a tag, the volumes, what a cut
 // --destroy left, the snapshot root's environments and the project users with no key that
-// still hold environments. Docker's system df -v is read once, for --gc's listing and the
-// sizes here. A read that fails is said in its *Unread, never taken for none.
+// still hold environments. The containers are info's, as hostContainers read them, never read
+// again. A read that fails is said in its *Unread, never taken for none.
 func leftFacts(info *remote.ServerInfo, r remote.Releases, d *remote.Door, trees map[string]string) {
-	g := &gcScope{docker: "docker", root: r.Root, ages: r.GC, door: d, now: time.Now()}
-	plan := g.find()
-	info.GC = plan.facts()
+	var containersErr error
+	if info.ContainersUnread != "" {
+		containersErr = errors.New(info.ContainersUnread)
+	}
+	g := &gcScope{docker: "docker", root: r.Root, ages: r.GC, door: d, now: time.Now(), counts: true, containers: info.Containers, containersErr: containersErr}
+	info.GC = g.find().facts()
 	if info.Docker.Error == "" {
-		u, err := g.systemUsage()
-		if err != nil {
-			info.ImagesUnread, info.VolumesUnread = err.Error(), err.Error()
-		} else {
-			info.Volumes = hostVolumes(u)
+		var err error
+		if info.Volumes, err = hostVolumes(g.docker); err != nil {
+			info.VolumesUnread = err.Error()
 		}
-		if info.ImagesUnread == "" {
-			if info.Images, err = hostImages(g.docker, u); err != nil {
-				info.ImagesUnread = err.Error()
-			}
+		if info.Images, err = hostImages(g.docker, info.Containers); err != nil {
+			info.ImagesUnread = err.Error()
 		}
 	}
 	info.Removing = cutDestroys(r.Root, trees)
@@ -59,52 +62,37 @@ func leftFacts(info *remote.ServerInfo, r remote.Releases, d *remote.Door, trees
 	}
 }
 
-// facts are the plan counted, for --server-info: what --gc would remove, up to its size.
+// facts are the plan counted, for --server-info: what --gc would remove.
 func (p gcPlan) facts() *remote.GCFacts {
-	f := &remote.GCFacts{OneOffs: len(p.OneOffs), Snapshots: len(p.Snapshots), Images: len(p.Left) + len(p.Dangling.Images), Unread: p.Unread}
-	for _, c := range p.OneOffs {
-		f.Size += c.Size
-	}
-	for _, b := range p.Builders {
-		if !b.Stopped {
-			f.Builders++
-			f.Size += b.Size
-		}
-	}
-	for _, s := range p.Snapshots {
-		f.Size += s.Size
-	}
-	for _, l := range p.Left {
-		f.Size += l.Size
-	}
-	f.Size += p.Dangling.size()
-	return f
+	return &remote.GCFacts{OneOffs: len(p.OneOffs), Snapshots: len(p.Snapshots), Left: len(p.Left), Dangling: len(p.Dangling.Images), Unread: p.Unread}
 }
 
-// hostImages are the images with a tag, by docker image ls, each with every tag it has, and
-// its size and the containers using it as system df -v counts them (u).
-func hostImages(docker string, u dockerUsage) ([]remote.HostImage, error) {
-	out, err := exec.Command(docker, "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}}").Output()
+// hostImages are the images with a tag, by docker image ls, each with every tag it has, its
+// size as it gives it, and how many of containers use it.
+func hostImages(docker string, containers []remote.HostContainer) ([]remote.HostImage, error) {
+	out, err := exec.Command(docker, "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}").Output()
 	if err != nil {
 		return nil, dockerFailed("docker image ls", err)
 	}
 	byID := map[string]*remote.HostImage{}
 	var order []string
 	for _, line := range strings.Split(string(out), "\n") {
-		id, ref, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok || strings.Contains(ref, "<none>") {
+		f := strings.Fields(line)
+		if len(f) < 2 || strings.Contains(f[1], "<none>") {
 			continue
 		}
-		if byID[id] == nil {
-			byID[id] = &remote.HostImage{ID: id}
-			order = append(order, id)
+		if byID[f[0]] == nil {
+			byID[f[0]] = &remote.HostImage{ID: f[0]}
+			if len(f) > 2 {
+				byID[f[0]].Size = parseDockerSize(f[2])
+			}
+			order = append(order, f[0])
 		}
-		byID[id].Tags = append(byID[id].Tags, ref)
+		byID[f[0]].Tags = append(byID[f[0]].Tags, f[1])
 	}
-	for _, i := range u.Images {
-		if img := byID[i.ID]; img != nil {
-			img.Size = parseDockerSize(i.Size)
-			img.Containers, _ = strconv.Atoi(i.Containers)
+	for _, c := range containers {
+		if img := byID[c.Image]; img != nil {
+			img.Containers++
 		}
 	}
 	var imgs []remote.HostImage
@@ -114,14 +102,34 @@ func hostImages(docker string, u dockerUsage) ([]remote.HostImage, error) {
 	return imgs, nil
 }
 
-// hostVolumes are the volumes system df -v gives (u), with the compose project of their labels
-// and whether Docker made them anonymous. Its labels come as one line, k=v joined by commas.
-func hostVolumes(u dockerUsage) []remote.HostVolume {
+// hostVolumes are the volumes docker volume ls gives, with the compose project of their labels,
+// whether Docker made them anonymous and whether no container uses them (its dangling filter),
+// with no size: Docker sizes a volume only by walking it. Its labels come as one line, k=v
+// joined by commas.
+func hostVolumes(docker string) ([]remote.HostVolume, error) {
+	out, err := exec.Command(docker, "volume", "ls", "--format", "[{{json .Name}},{{json .Labels}}]").Output()
+	if err != nil {
+		return nil, dockerFailed("docker volume ls", err)
+	}
+	unused, err := exec.Command(docker, "volume", "ls", "-q", "--filter", "dangling=true").Output()
+	if err != nil {
+		return nil, dockerFailed("docker volume ls", err)
+	}
+	dangling := map[string]bool{}
+	for _, n := range strings.Fields(string(unused)) {
+		dangling[n] = true
+	}
 	var vs []remote.HostVolume
-	for _, v := range u.Volumes {
-		hv := remote.HostVolume{Name: v.Name, Size: parseDockerSize(v.Size)}
-		hv.Links, _ = strconv.Atoi(v.Links)
-		for _, kv := range strings.Split(v.Labels, ",") {
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		var row []string
+		if err := json.Unmarshal([]byte(line), &row); err != nil || len(row) != 2 {
+			return nil, fmt.Errorf("docker volume ls: %q does not read", line)
+		}
+		hv := remote.HostVolume{Name: row[0], Unused: dangling[row[0]]}
+		for _, kv := range strings.Split(row[1], ",") {
 			k, val, _ := strings.Cut(kv, "=")
 			switch k {
 			case "com.docker.compose.project":
@@ -132,7 +140,7 @@ func hostVolumes(u dockerUsage) []remote.HostVolume {
 		}
 		vs = append(vs, hv)
 	}
-	return vs
+	return vs, nil
 }
 
 // cutDestroys are the directories a --destroy cut off while it removed them left under root
@@ -370,17 +378,17 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 		for _, c := range []struct {
 			n    int
 			what string
-		}{{f.OneOffs, "one-off container"}, {f.Builders, "builder's build cache"}, {f.Snapshots, "release snapshot"}, {f.Images, "image"}} {
+		}{{f.OneOffs, "one-off container"}, {f.Snapshots, "release snapshot"}, {f.Left, "image name a project's record left"}, {f.Dangling, "dangling image"}} {
 			if c.n > 0 {
 				what = append(what, plural(c.n, c.what))
 			}
 		}
 		if len(what) > 0 {
-			hint := report.Hint("--gc, run on this server from a checkout or an alias, lists and removes it")
+			hint := report.Hint("--gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too")
 			if ref != "" {
-				hint = report.Hint("list it, then remove it:", "devopsy @"+ref+" --gc")
+				hint = report.Hint("its sizes, and the build cache it removes too:", "devopsy @"+ref+" --gc --dry-run")
 			}
-			add("gc", "--gc would remove up to "+humanBytes(f.Size)+": "+strings.Join(what, ", "), hint)
+			add("gc", "--gc would remove "+strings.Join(what, ", "), hint)
 		}
 	}
 
@@ -447,7 +455,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 			if len(g.volumes) > 0 {
 				var vs, names []string
 				for _, v := range g.volumes {
-					vs = append(vs, v.Name+" "+humanBytes(v.Size))
+					vs = append(vs, v.Name)
 					names = append(names, remote.QuoteWord(v.Name))
 				}
 				lines = append(lines, "volumes "+strings.Join(vs, ", "))
@@ -467,15 +475,14 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 	}
 
 	if dockerUp && info.VolumesUnread == "" {
-		n, size := 0, int64(0)
+		n := 0
 		for _, v := range info.Volumes {
-			if v.Anonymous && v.Links == 0 {
+			if v.Anonymous && v.Unused {
 				n++
-				size += v.Size
 			}
 		}
 		if n > 0 {
-			add("volumes", plural(n, "anonymous volume")+" no container uses, "+humanBytes(size)+" (an image's VOLUME after a down without -v: a database's data, maybe)",
+			add("volumes", plural(n, "anonymous volume")+" no container uses (an image's VOLUME after a down without -v: a database's data, maybe)",
 				onServer("once checked that none holds what is needed, remove them:", "docker volume prune"))
 		}
 	} else if dockerUp {

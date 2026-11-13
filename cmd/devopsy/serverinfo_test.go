@@ -85,9 +85,10 @@ func TestServerFactsParsers(t *testing.T) {
 	if got := readHidePID(filepath.Join(t.TempDir(), "proc", "mounts")); got != "" || processesShown(got) {
 		t.Errorf("no mounts file: %q", got)
 	}
-	cs := parseHostContainers([]byte("running 0 healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - null\nexited 2 - {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"), nil)
+	cs := parseHostContainers([]byte("running 0 healthy sha256:t1 \"0001-01-01T00:00:00Z\" {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - sha256:t2 \"2026-01-01T00:00:00Z\" null\nexited 2 - sha256:t2 \"2026-01-01T00:00:00Z\" {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"), nil)
 	if len(cs) != 3 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[0].OneOff ||
-		cs[1].State != "exited" || cs[1].Health != "" || cs[1].ExitCode != 1 || !cs[2].OneOff {
+		cs[1].State != "exited" || cs[1].Health != "" || cs[1].ExitCode != 1 || !cs[2].OneOff ||
+		cs[0].Image != "sha256:t1" || !cs[0].Finished.IsZero() || cs[2].Image != "sha256:t2" || !cs[2].Finished.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("containers: %+v", cs)
 	}
 }
@@ -97,7 +98,7 @@ func TestServerFactsParsers(t *testing.T) {
 // and no container.
 func TestHostContainers(t *testing.T) {
 	t.Parallel()
-	line := `running 0 - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"app"}`
+	line := `running 0 - sha256:t1 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"app"}`
 	for name, c := range map[string]struct {
 		docker string
 		want   int
@@ -650,13 +651,15 @@ case "$1 $2" in
   "ps -aq") echo c1; echo c2; echo gone; exit 0 ;;
   # A container gone since ps: inspect prints the others, then fails
   # (review: every container was dropped then).
-  "inspect --format") echo 'running 0 - {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
-    echo 'restarting 0 - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
+  "inspect --format") echo 'running 0 - sha256:t2 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
+    echo 'restarting 0 - sha256:t2 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
     # A release's container of an environment removed by hand: compose worked in the root.
-    echo 'exited 0 - {"com.docker.compose.project":"shop-gone","com.docker.compose.service":"web","com.docker.compose.project.working_dir":"`+s.root+`/shop/gone/releases/1/code"}'
+    echo 'exited 0 - sha256:t2 "2026-01-01T00:00:00Z" {"com.docker.compose.project":"shop-gone","com.docker.compose.service":"web","com.docker.compose.project.working_dir":"`+s.root+`/shop/gone/releases/1/code"}'
     echo 'Error response from daemon: No such container: gone' >&2; exit 1 ;;
-  "system df") echo '{"Images":[{"ID":"sha256:t1","Size":"4.26MB","Containers":"0"}],"Volumes":[],"BuildCache":[]}'; exit 0 ;;
-  "image ls") echo 'sha256:t1 busybox:1.37'; exit 0 ;;
+  # Counted, --server-info sizes nothing of Docker's but its images.
+  "system df"|"buildx ls") echo "docker $*: not for --server-info" >&2; exit 9 ;;
+  "image ls") echo 'sha256:t1 busybox:1.37 4.26MB'; exit 0 ;;
+  "volume ls") exit 0 ;;
 esac
 exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 `, 0o755)

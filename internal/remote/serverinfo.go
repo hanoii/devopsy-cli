@@ -1,6 +1,10 @@
 package remote
 
-import "github.com/hanoii/devopsy-cli/internal/setup"
+import (
+	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/setup"
+)
 
 // ServerFactsFlag is the hidden flag behind --server-info: run by its
 // session on the server, it prints the server's facts as one JSON
@@ -84,13 +88,13 @@ type ServerInfo struct {
 
 	// What may be dead or gone, read by the deploy user alone (none for a project user), each
 	// read's failure in its *Unread: unknown, never none.
-	// GC is what --gc would remove now, from its own listing.
+	// GC is what --gc would remove now, from its own listing, counted.
 	GC *GCFacts `json:"gc,omitempty"`
 	// Images are the host's images with a tag (docker image ls), each with its size and how
-	// many containers use it (docker system df -v).
+	// many containers use it (Containers' images).
 	Images       []HostImage `json:"images,omitempty"`
 	ImagesUnread string      `json:"images_unread,omitempty"`
-	// Volumes are the host's volumes, as docker system df -v gives them.
+	// Volumes are the host's volumes, as docker volume ls gives them.
 	Volumes       []HostVolume `json:"volumes,omitempty"`
 	VolumesUnread string       `json:"volumes_unread,omitempty"`
 	// Removing are the directories a --destroy cut off while it removed them left under the
@@ -101,15 +105,14 @@ type ServerInfo struct {
 	SnapshotDirs []string `json:"snapshot_dirs,omitempty"`
 }
 
-// GCFacts are what --gc lists, counted: its one-off containers, builders with build cache to
-// remove, release snapshots, images (names a record left and dangling ones), up to Size bytes,
-// and what it could not read.
+// GCFacts are what --gc lists, counted with no size and no build cache, which only its own
+// listing reads: its one-off containers, release snapshots, image names a project's record
+// left, dangling images, and what it could not read.
 type GCFacts struct {
 	OneOffs   int      `json:"one_offs"`
-	Builders  int      `json:"builders"`
 	Snapshots int      `json:"snapshots"`
-	Images    int      `json:"images"`
-	Size      int64    `json:"size"`
+	Left      int      `json:"left"`
+	Dangling  int      `json:"dangling"`
 	Unread    []string `json:"unread,omitempty"`
 }
 
@@ -123,13 +126,12 @@ type HostImage struct {
 }
 
 // HostVolume is a volume: its name, the compose project its label names, whether Docker made
-// it anonymous, how many containers use it, and its size.
+// it anonymous, and whether no container uses it (docker volume ls's dangling).
 type HostVolume struct {
 	Name      string `json:"name"`
 	Project   string `json:"project,omitempty"`
 	Anonymous bool   `json:"anonymous,omitempty"`
-	Links     int    `json:"links,omitempty"`
-	Size      int64  `json:"size,omitempty"`
+	Unused    bool   `json:"unused,omitempty"`
 }
 
 // RemovingDir is a directory a cut --destroy left, its path under the release root.
@@ -225,6 +227,10 @@ type HostContainer struct {
 	// tree, so a release's, never one of the admin's own.
 	Released bool              `json:"released,omitempty"`
 	Labels   map[string]string `json:"labels,omitempty"` // devopsy.role and devopsy.export.* only
+	// Image and Finished are its image's id and when it last exited, for the server's devopsy
+	// alone (what --gc would remove, the images in use).
+	Image    string    `json:"-"`
+	Finished time.Time `json:"-"`
 }
 
 // Environment is an environment's directory under the release root and
