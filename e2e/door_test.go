@@ -181,6 +181,25 @@ func doorClaimed(t *testing.T, user, ref string) string {
 	return strings.TrimSpace(out)
 }
 
+// doorStoreNames are the names of Docker's image store, by containerd's own records (dockerd's
+// containerd, its moby namespace): an inspect of a name by digest may resolve to another image
+// of that digest (an index's entry), which says nothing of whether the name is there, and a
+// name containerd keeps for an image no name holds (moby-dangling@) shows only there.
+func doorStoreNames(t *testing.T) []string {
+	t.Helper()
+	out, code := doorRoot(t, `for s in /run/docker/containerd/containerd.sock /run/containerd/containerd.sock; do [ -S "$s" ] && exec ctr --address "$s" -n moby images ls -q; done; echo no containerd socket >&2; exit 1`)
+	if code != 0 {
+		t.Fatalf("containerd's names (%d): %s", code, out)
+	}
+	return strings.Fields(out)
+}
+
+// doorImageNamed says whether Docker's store holds an image under name exactly (doorStoreNames).
+func doorImageNamed(t *testing.T, name string) bool {
+	t.Helper()
+	return slices.Contains(doorStoreNames(t), images.Canonical(name))
+}
+
 // doorRemoveClaims removes, by id, every image user's record says it claimed: a claim writes no
 // plain name to remove them by.
 func doorRemoveClaims(t *testing.T, user string) {
@@ -1167,17 +1186,20 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose "$d/con
 	if out, _ := doorRoot(t, "cat /tmp/doorreg-ran"); strings.Contains(out, "devopsy\n") || strings.Contains(out, "root") {
 		t.Errorf("a project's plugin or helper ran as: %s", out)
 	}
-	if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' "+byDigest); code != 0 {
-		t.Errorf("the control: its logins were not taken (%d): %s", code, out)
+	if !doorImageNamed(t, byDigest) {
+		t.Errorf("the control: its logins were not taken, no %s: %v", byDigest, doorStoreNames(t))
 	}
 	doorRoot(t, "docker image rm -f "+app)
+	if doorImageNamed(t, byDigest) {
+		t.Fatalf("the control: %s is still there", byDigest)
+	}
 	other := `cat >/tmp/doorregv.json <<'J'
 {"name":"doorregv-prod","services":{"web":{"image":"REG/private/app:1","user":"` + doorClaim(t, "doorregv", "prod") + `:` + doorClaim(t, "doorregv", "prod") + `","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorregv/prod
 sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorregv.json '' ~/doorregv/prod pull 2>&1`
 	doorAs(t, "devopsy-doorregv", strings.ReplaceAll(other, "REG", reg))
-	if _, code := doorRoot(t, "docker image inspect "+byDigest); code == 0 {
+	if doorImageNamed(t, byDigest) || doorClaimed(t, "devopsy-doorregv", reg+"/private/app:1") != "" {
 		t.Error("another project pulled by this one's login")
 	}
 }
@@ -1312,10 +1334,15 @@ docker pull -q `+hub+` >/dev/null`); code != 0 {
 		return l
 	}
 	server := state(hub)
-	dangling := func() string {
+	dangling := func() int {
 		t.Helper()
-		out, _ := doorRoot(t, "ctr -n moby images ls -q | grep -c '^moby-dangling@'")
-		return strings.TrimSpace(out)
+		n := 0
+		for _, name := range doorStoreNames(t) {
+			if strings.HasPrefix(name, "moby-dangling@") {
+				n++
+			}
+		}
+		return n
 	}
 	danglingBefore := dangling()
 	for _, ref := range []string{hub, plain, zstd} {
@@ -1335,7 +1362,7 @@ docker pull -q `+hub+` >/dev/null`); code != 0 {
 				t.Errorf("%s: the claim moved the server's name from %+v to %+v", ref, server, got)
 			}
 			if got := dangling(); got != danglingBefore {
-				t.Errorf("%s: the claim left moby-dangling@ records, %s where there were %s", ref, got, danglingBefore)
+				t.Errorf("%s: the claim left moby-dangling@ records, %d where there were %d", ref, got, danglingBefore)
 			}
 		} else if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1"); code == 0 {
 			t.Errorf("%s: the claim wrote the name asked: %s", ref, out)
