@@ -469,8 +469,9 @@ func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 
 // rootTakes says whether --server-setup names root as releases: root, false for the root
 // releases live in already (nothing to name), and refuses it, before anything changes, with
-// why and its fix: by the whole root's judgment (rootFixed), then the path's (rootRefusal).
-// facts --root and apply --root judge a root by it.
+// why and its fix: by the path's judgment (rootRefusal), then the whole root's (rootFixed), so
+// the config is read for a root's lines only once its path is taken. facts --root and apply
+// --root judge a root by it.
 func rootTakes(h setupHost, root string) (bool, error) {
 	r, err := remote.ReleaseSettings()
 	if err != nil {
@@ -483,11 +484,11 @@ func rootTakes(h setupHost, root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := rootFixed(r, d, root); err != nil {
-		return false, err
-	}
 	if refusal := rootRefusal(h, root); refusal != nil {
 		return false, &report.Failure{Msg: refusal.Message, Remedies: fixWords(*refusal)}
+	}
+	if err := rootFixed(r, d, root); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -533,7 +534,7 @@ func rootRefusal(h setupHost, root string) *setup.Refusal {
 	}
 	want := resolveRoot(root)
 	if _, err := setup.MountsDropInText(want); err != nil {
-		return refuse("the release root "+want+" "+err.Error(), "choose a path with none")
+		return refuse("the release root "+err.Error(), "choose a path with none")
 	}
 	if _, refusal := releaseRootCheck(want, os.Getuid()); refusal != nil {
 		if fi, err := os.Stat(want); err == nil && fi.IsDir() && fi.Sys().(*syscall.Stat_t).Uid == 0 && want != "/" {

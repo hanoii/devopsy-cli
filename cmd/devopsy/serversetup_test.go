@@ -878,6 +878,8 @@ func TestServerSetupRootChoiceRefusals(t *testing.T) {
 		t.Errorf("--yes (%d), config %q:\n%s", code, readString(config), out)
 	}
 	refused("not clean", vol+"/", "a release root is an absolute path, clean")
+	// A path no unit file holds is refused first, before the config is read for its lines.
+	refused("a control character", vol+"\nb", `the release root "`+vol+`\nb": a control character, which a unit file cannot hold`)
 	if f, out, code := setupFactsOf(s, "--root", home); code != 0 || f.NamesRoot || f.Root != home {
 		t.Errorf("facts --root of the home (%d): %+v\n%s", code, f, out)
 	}
