@@ -370,7 +370,10 @@ container of the door's runs as, so a project user made later never
 shares a running container's uid. The deploy user's own containers stay
 out of that range too. An id is never given twice: the deploy user
 records the highest it gave, so a project user added after another's
-removal never owns what that one left on the host.
+removal never owns what that one left on the host. An `add` that
+stopped after it made the user's group goes on from that group, its id
+the group's, when asked again; a group of that name with members, or
+with a gid outside the range, is refused.
 When the release root (`releases: root`) is outside the deploy user's
 home, it also makes the project's tree under that root. The project
 user's entry goes in the deploy user's config directory ([Shared

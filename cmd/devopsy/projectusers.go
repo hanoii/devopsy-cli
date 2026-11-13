@@ -372,11 +372,15 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Info("closed to project users the deploy user's projects in " + r.Root + ": " + strings.Join(closed, ", "))
 	}
 	// An id given once (takeProjectID), and only to a user the host step makes: one there is
-	// taken as it is.
+	// taken as it is, and so is the group of its name an add cut after it left (leftGroupID),
+	// so that a failed or cut add takes no id again.
 	id := ""
 	if _, err := user.Lookup(who); errors.As(err, new(user.UnknownUserError)) {
 		h := setupHost{root: os.Getenv(remote.HostRootEnv)}
-		n, err := takeProjectID(projectIDsGiven(), h.path("/etc/passwd"), h.path("/etc/group"))
+		n, left, err := leftGroupID(h.path("/etc/group"), who)
+		if err == nil && !left {
+			n, err = takeProjectID(projectIDsGiven(), h.path("/etc/passwd"), h.path("/etc/group"))
+		}
 		if err != nil {
 			report.Fail(fmt.Errorf("%w: no project user made", err))
 			return 1
@@ -471,6 +475,29 @@ func takeProjectID(record, passwd, group string) (int, error) {
 		return 0, err
 	}
 	return next, os.Rename(tmp, record)
+}
+
+// leftGroupID is the gid of the group of who's name in group (a group file) that a project
+// user's add left with no user (one cut between its groupadd and its useradd, or a removal on
+// a host that keeps a user's group), left false when there is none. One with a member, or a gid
+// out of the project users' range, is no project user's, and refused.
+func leftGroupID(group, who string) (gid int, left bool, err error) {
+	data, err := os.ReadFile(group)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) < 4 || f[0] != who {
+			continue
+		}
+		n, err := strconv.Atoi(f[2])
+		if err != nil || n < door.ProjectIDMin || n > door.ProjectIDMax || f[3] != "" {
+			return 0, false, fmt.Errorf("a group %s is there already (gid %s), and no project user's left: a project user's group is one --project-users add made", who, f[2])
+		}
+		return n, true, nil
+	}
+	return 0, false, nil
 }
 
 // projectDir says whether a directory named name in a release root is a project's: none

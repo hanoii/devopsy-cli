@@ -605,3 +605,27 @@ func TestTakeProjectID(t *testing.T) {
 		t.Errorf("a range spent: %v", err)
 	}
 }
+
+// A group of the user's name with no user, which an add cut after its groupadd leaves, gives
+// its gid to the next add, which then takes no new id; one with a member or out of the project
+// users' range is someone else's, and refused.
+func TestLeftGroupID(t *testing.T) {
+	t.Parallel()
+	group := filepath.Join(t.TempDir(), "group")
+	for _, c := range []struct {
+		file      string
+		gid       int
+		left, bad bool
+	}{
+		{file: "users:x:100:\n"},
+		{file: "users:x:100:\ndevopsy-shop:x:50002:\n", gid: 50002, left: true},
+		{file: "devopsy-shop:x:50002:alice\n", bad: true},
+		{file: "devopsy-shop:x:1001:\n", bad: true},
+	} {
+		write(t, group, c.file, 0o644)
+		gid, left, err := leftGroupID(group, "devopsy-shop")
+		if gid != c.gid || left != c.left || (err != nil) != c.bad || (c.bad && !strings.Contains(err.Error(), "no project user's left")) {
+			t.Errorf("%q: gid %d, left %v, %v", c.file, gid, left, err)
+		}
+	}
+}

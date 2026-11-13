@@ -462,13 +462,23 @@ func TestDoorUserDeleteScript(t *testing.T) {
 	if out, err := exec.Command("sh", "-n", "-c", DoorUserDeleteScript).CombinedOutput(); err != nil {
 		t.Fatalf("sh -n: %v\n%s", err, out)
 	}
+	// groupLine is the user's group as getent gives it once the user is deleted, "" for none:
+	// a host that keeps a user's group leaves it.
+	groupLine := ""
+	groupGone := func() bool { return true }
 	run := func(group string, tree, home string) (string, int, string) {
 		t.Helper()
 		bin, users := t.TempDir(), t.TempDir()
 		write(t, filepath.Join(users, "devopsy-shop"), "")
+		if groupLine != "" {
+			write(t, filepath.Join(users, "group-devopsy-shop"), groupLine)
+		}
+		groupGone = func() bool { return !fileThere(filepath.Join(users, "group-devopsy-shop")) }
 		for name, body := range map[string]string{
-			"id":      `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
-			"userdel": `[ "$1" = -r ] && rm "` + users + `/$2"`,
+			"id":       `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
+			"userdel":  `[ "$1" = -r ] && rm "` + users + `/$2"`,
+			"getent":   `[ "$1" = group ] && cat "` + users + `/group-$2" 2>/dev/null`,
+			"groupdel": `rm "` + users + `/group-$1"`,
 		} {
 			write(t, filepath.Join(bin, name), "#!/bin/sh\n"+body+"\n")
 			if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
@@ -498,6 +508,17 @@ func TestDoorUserDeleteScript(t *testing.T) {
 	if out, code, user := run("users", "", ""); code != 3 || user != "kept" || !strings.Contains(out, "is no project user") {
 		t.Errorf("no project user (%d): %s:\n%s", code, user, out)
 	}
+	// The group of its name userdel left goes when it is the project user's (in the range, no
+	// member), so an add takes no id for it again; another stays, said.
+	groupLine = "devopsy-shop:x:59999:\n"
+	if out, code, _ := run(DoorGroup, "", ""); code != 0 || !groupGone() {
+		t.Errorf("a group left by userdel (%d), gone %v:\n%s", code, groupGone(), out)
+	}
+	groupLine = "devopsy-shop:x:59999:alice\n"
+	if out, code, _ := run(DoorGroup, "", ""); code != 0 || groupGone() || !strings.Contains(out, "left as it is") {
+		t.Errorf("a group with a member (%d), gone %v:\n%s", code, groupGone(), out)
+	}
+	groupLine = ""
 	target := t.TempDir()
 	write(t, filepath.Join(target, "keep"), "x")
 	if err := os.Symlink(target, tree); err != nil {

@@ -3,8 +3,10 @@ package remote
 import (
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -248,7 +250,17 @@ if ! id -u "$user" >/dev/null 2>&1; then
       ` + echoLine(report.ErrorLevel, "no id given for $user, which a user made here takes") + `
       exit 3 ;;
   esac
-  groupadd -g "$id" "$user"
+  # A group of its name a cut add left (or an admin's userdel on a host that keeps a user's
+  # group) is taken when it is that id's with no member (addProjectUser gives its gid then),
+  # else refused: a group of another's would be handed to the door.
+  if g=$(getent group "$user"); then
+    if [ "$(printf '%s\n' "$g" | cut -d: -f3)" != "$id" ] || [ -n "$(printf '%s\n' "$g" | cut -d: -f4)" ]; then
+      ` + echoLine(report.ErrorLevel, "a group $user is there already, and no project user's left: a project user's group is one --project-users add made") + `
+      exit 3
+    fi
+  else
+    groupadd -g "$id" "$user"
+  fi
   useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u "$id" -g "$id" --create-home --shell ` + DoorShell + ` --groups "$group" "$user"
   usermod -p '*' "$user"
   made=1
@@ -286,7 +298,8 @@ fi
 // DoorUserDeleteScript is a --project-users remove --destroy's host step, as root on the host
 // through the util image (chroot into /host), once nothing is left under the project's names:
 // the user's user manager's mask (DoorHostScript's), the user itself with its home (userdel
-// -r, only while it is there and a project user, for a rerun), then the tree its entry names
+// -r, only while it is there and a project user, for a rerun), the group of its name it left,
+// then the tree its entry names
 // and the home by the path the destroy's mark kept, should userdel have been cut after it
 // dropped the user and before the home went. Its arguments: the user, its uid, the tree ("" for
 // none: the home's <home>/<project>, which userdel takes) and the home ("" for none known). A
@@ -302,6 +315,17 @@ if id -u "$user" >/dev/null 2>&1; then
     exit 3
   fi
   userdel -r "$user"
+fi
+# The user's group, should userdel have left it (a host that keeps a user's group, a cut after
+# the user went): only when it is provably the project user's left, in the project users' range
+# with no member, since an add takes it back only then.
+if g=$(getent group "$user"); then
+  gid=$(printf '%s\n' "$g" | cut -d: -f3)
+  if [ -z "$(printf '%s\n' "$g" | cut -d: -f4)" ] && [ "$gid" -ge ` + strconv.Itoa(door.ProjectIDMin) + ` ] 2>/dev/null && [ "$gid" -le ` + strconv.Itoa(door.ProjectIDMax) + ` ]; then
+    groupdel "$user"
+  else
+    ` + echoLine(report.WarnLevel, "a group $user is there, with members or out of the project users' range: left as it is") + `
+  fi
 fi
 gone() {
   if [ -L "$1" ]; then
