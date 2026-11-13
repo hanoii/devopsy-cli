@@ -1050,7 +1050,11 @@ func (s *Set) record(ref, img, release, why string) {
 
 // Retry goes over the project's record (retried): a line goes once its name is gone, points
 // to another image or is removed; any other stays.
-func (s *Set) Retry() {
+func (s *Set) Retry() { s.RetryOnly(nil) }
+
+// RetryOnly is Retry removing only the names only gives (Retryable's), every name for nil: a
+// line whose name it would remove and only leaves out stays recorded.
+func (s *Set) RetryOnly(only func(Retried) bool) {
 	ls := readLeft(s.Left)
 	if len(ls) == 0 {
 		return
@@ -1061,6 +1065,10 @@ func (s *Set) Retry() {
 		case leftKept:
 			keep = append(keep, l)
 		case leftRemoved:
+			if only != nil && !only(l.retried()) {
+				keep = append(keep, l)
+				continue
+			}
 			if err := s.Docker.Remove(l.ref); err != nil {
 				keep = append(keep, l)
 				continue
@@ -1113,12 +1121,17 @@ type Retried struct {
 	Ref, Image, Release, Name string
 }
 
+// retried is the line as Retryable gives it.
+func (l left) retried() Retried {
+	return Retried{Ref: l.ref, Image: l.id, Release: l.release, Name: l.name}
+}
+
 // Retryable are the names of the record Retry would remove now (retried), in its order.
 func (s *Set) Retryable() []Retried {
 	var out []Retried
 	for _, l := range readLeft(s.Left) {
 		if s.retried(l) == leftRemoved {
-			out = append(out, Retried{Ref: l.ref, Image: l.id, Release: l.release, Name: l.name})
+			out = append(out, l.retried())
 		}
 	}
 	return out

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +62,7 @@ func TestGCPlanEntries(t *testing.T) {
 		Builders:  []gcBuilder{{Records: 34, Size: 1.2e9}, {Name: "devopsy-blog", Project: "blog", Stopped: true}},
 		Snapshots: []gcSnapshot{{Env: "shop/prod", ID: "20261101120000", Release: "20261020120000", Size: 300e6}},
 		Left:      []gcLeft{{Retried: images.Retried{Ref: "shop-web:old", Release: "20261020120000", Name: "shop-prod"}, Last: true, Size: 100e6}, {Retried: images.Retried{Ref: "app:2", Release: "1", Name: "shop-stage"}}},
-		Dangling:  gcDangling{Count: 4, Size: 600e6},
+		Dangling:  gcDangling{Images: []gcImage{{"d1", 150e6}, {"d2", 150e6}, {"d3", 150e6}, {"d4", 150e6}}},
 		Unread:    []string{"the environments of /home/devopsy/blog: permission denied"},
 	}
 	if p.count() != 9 {
@@ -193,18 +194,20 @@ case "$*" in
 esac
 `, 0o755)
 	d, err := (&gcScope{docker: docker}).dangling()
-	if err != nil || d != (gcDangling{Count: 1, Size: 1000}) {
+	if err != nil || !slices.Equal(d.Images, []gcImage{{ID: "sha256:d1", Size: 1000}}) {
 		t.Errorf("dangling %+v (%v), want d1 alone", d, err)
 	}
 }
 
 // --gc end to end through a session that runs here: --dry-run lists with sizes and exits 3,
-// removing nothing; without a terminal it asks nothing and removes nothing, naming --yes;
-// --yes removes in one session, each removal decided again: the old one-off (never with -v),
-// the daemon's old build cache by prune's own rule, the release snapshot of a release gone,
-// the name a project's record left, then the dangling images; an environment whose snapshot
-// lock is held is skipped and exits 3, its snapshot kept for the next run; a project user is
-// refused before anything.
+// removing nothing; without a terminal it asks nothing and removes nothing, naming --yes.
+// The removal after an answer removes only what its listing listed, each decided again: what
+// came to qualify since (a one-off, a release snapshot, a name a project's record left, a
+// dangling image) stays, and the build cache goes by the listing's cutoff. --yes removes in
+// one session what it lists: the old one-off (never with -v), the daemon's old build cache by
+// prune's own rule, the release snapshot of a release gone, the name a project's record left,
+// then the dangling images; an environment whose snapshot lock is held is skipped and exits
+// 3, its snapshot kept for the next run; a project user is refused before anything.
 func TestGC(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -213,26 +216,35 @@ func TestGC(t *testing.T) {
 	}
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	// What is removed is marked in state (rm-<id>, : and / as _); what came to qualify after
+	// the listing shows once state/new is there: one-off c2, image shop-web:older, dangling d2.
 	log, state := filepath.Join(tmp, "docker.log"), t.TempDir()
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 echo "$*" >>`+log+`
+gone() { [ -e "`+state+`/rm-$(printf %s "$1" | tr :/ __)" ]; }
+new() { [ -e "`+state+`/new" ]; }
 case "$*" in
   version) ;;
-  'ps -a -q --no-trunc --filter label=com.docker.compose.oneoff=True --filter status=exited') [ -e `+state+`/c1 ] || echo c1 ;;
-  'container inspect --size --format {{json .}} c1') [ -e `+state+`/c1 ] && { echo 'No such container: c1' >&2; exit 1; }
-    echo '{"Id":"c1","Name":"/shop-prod-web-run-1a2b","SizeRw":12000000,"State":{"Status":"exited","FinishedAt":"2026-01-01T00:00:00Z"},"Config":{"Labels":{"com.docker.compose.project":"shop-prod","com.docker.compose.oneoff":"True"}}}' ;;
-  'rm c1') touch `+state+`/c1 ;;
+  'ps -a -q --no-trunc --filter label=com.docker.compose.oneoff=True --filter status=exited') gone c1 || echo c1; new && ! gone c2 && echo c2; true ;;
+  'container inspect --size --format {{json .}} '*) shift 5; rc=0
+    for c; do
+      if gone "$c"; then echo "No such container: $c" >&2; rc=1; continue; fi
+      n=1a2b; [ "$c" = c2 ] && n=3c4d
+      echo '{"Id":"'"$c"'","Name":"/shop-prod-web-run-'"$n"'","SizeRw":12000000,"State":{"Status":"exited","FinishedAt":"2026-01-01T00:00:00Z"},"Config":{"Labels":{"com.docker.compose.project":"shop-prod","com.docker.compose.oneoff":"True"}}}'
+    done; exit $rc ;;
+  'rm '*) touch "`+state+`/rm-$2" ;;
   'system df -v --format {{json .BuildCache}}') echo '[{"ID":"a","Size":"1.5MB","LastUsedAt":"2026-01-01 00:00:00 +0000 UTC","InUse":"false","Shared":"false"}]' ;;
-  'builder prune -a -f --filter until=720h0m0s') printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
-  'image inspect --format {{.Id}} shop-web:old') [ -e `+state+`/old ] && { echo 'Error: No such image: shop-web:old' >&2; exit 1; }; echo sha256:aaa ;;
+  'builder prune -a -f --filter until='*) printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
+  'image inspect --format {{.Id}} shop-web:'*) gone "$5" && { echo "Error: No such image: $5" >&2; exit 1; }; [ "$5" = shop-web:old ] && echo sha256:aaa || echo sha256:bbb ;;
   'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:aaa') echo shop-web:old ;;
-  'ps -a --filter ancestor=sha256:aaa --format '*) ;;
+  'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:bbb') echo shop-web:older ;;
+  'ps -a --filter ancestor=sha256:'*) ;;
   'image inspect --format {{json .}} shop-web:old') echo '{"Id":"sha256:aaa","RepoTags":["shop-web:old"],"Size":100000000}' ;;
-  'image rm shop-web:old') touch `+state+`/old ;;
-  'image ls -q --no-trunc --filter dangling=true') echo sha256:d1 ;;
+  'image inspect --format {{json .}} shop-web:older') echo '{"Id":"sha256:bbb","RepoTags":["shop-web:older"],"Size":100000000}' ;;
+  'image rm '*) touch "`+state+`/rm-$(printf %s "$3" | tr :/ __)" ;;
+  'image ls -q --no-trunc --filter dangling=true') gone sha256:d1 || echo sha256:d1; new && ! gone sha256:d2 && echo sha256:d2; true ;;
   'ps -aq --no-trunc') ;;
-  'image inspect --format {{.Id}} {{.Size}} sha256:d1') echo 'sha256:d1 600000000' ;;
-  'image prune -f') echo 'Total reclaimed space: 600MB' ;;
+  'image inspect --format {{.Id}} {{.Size}} '*) shift 4; for i; do echo "$i 600000000"; done ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
 esac
 `, 0o755)
@@ -251,17 +263,31 @@ esac
 	write(t, filepath.Join(tmp, "shop", "prod", "snapshots", "20261102000000", remote.SnapshotManifest), "format\t1\nkind\trelease\nrelease\t20261101000000\n", 0o600)
 	write(t, filepath.Join(tmp, "shop", images.LeftFile), "1700000000\tshop-prod\t20261001000000\tshop-web:old\tsha256:aaa\tin use\n", 0o644)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
+	exit := func(err error) int {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode()
+		}
+		return 0
+	}
 	run := func(args ...string) (string, int) {
 		t.Helper()
 		cmd := exec.Command(binary, append([]string{"@devopsy@server:", "--gc"}, args...)...)
 		cmd.Dir = tmp
 		cmd.Env = append([]string{"DEVOPSY_HOME=" + t.TempDir()}, env...)
 		out, err := cmd.CombinedOutput()
-		code := 0
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		}
-		return string(out), code
+		return string(out), exit(err)
+	}
+	// step runs the hidden step as the deploy user, as a session runs it, stdin in.
+	step := func(stdin []byte, args ...string) ([]byte, string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, append([]string{remote.GCStepFlag}, args...)...)
+		cmd.Dir = tmp
+		cmd.Env = append([]string{"DEVOPSY_HOME=" + t.TempDir()}, env...)
+		cmd.Stdin = bytes.NewReader(stdin)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		return stdout.Bytes(), stderr.String(), exit(err)
 	}
 	removals := func() []string {
 		b, _ := os.ReadFile(log)
@@ -272,6 +298,16 @@ esac
 			}
 		}
 		return rs
+	}
+	// pruned are the removals but the build cache's prune, and its until (0 for none).
+	pruned := func() ([]string, time.Duration) {
+		rs, until := removals(), time.Duration(0)
+		const prune = "builder prune -a -f --filter until="
+		if i := slices.IndexFunc(rs, func(r string) bool { return strings.HasPrefix(r, prune) }); i >= 0 {
+			until, _ = time.ParseDuration(strings.TrimPrefix(rs[i], prune))
+			rs = slices.Delete(rs, i, i+1)
+		}
+		return rs, until
 	}
 	snap := func(env, id string) bool { return fileExists(filepath.Join(tmp, "shop", env, "snapshots", id)) }
 
@@ -297,7 +333,21 @@ esac
 		t.Fatalf("without a terminal (%d), removed %v:\n%s", code, removals(), out)
 	}
 
-	// stage's snapshot lock held: its snapshot stays, the run exits 3.
+	// The listing, then what comes to qualify before the answer: a one-off, a release
+	// snapshot, a name left, a dangling image. stage's snapshot lock held: its snapshot stays,
+	// the run exits 3.
+	listing, errs, code := step(nil, "list")
+	if code != 0 {
+		t.Fatalf("list (%d):\n%s", code, errs)
+	}
+	write(t, filepath.Join(state, "new"), "", 0o644)
+	write(t, filepath.Join(tmp, "shop", "prod", "snapshots", "20261020000002", remote.SnapshotManifest), "format\t1\nkind\trelease\nrelease\t20261002000000\n", 0o600)
+	f, err := os.OpenFile(filepath.Join(tmp, "shop", images.LeftFile), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("1700000001\tshop-prod\t20261002000000\tshop-web:older\tsha256:bbb\tin use\n")
+	f.Close()
 	lock, err := os.OpenFile(filepath.Join(tmp, "shop", "stage", remote.SnapshotLockFile), os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -305,16 +355,32 @@ esac
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
+	_, errs, code = step(listing, "remove-listed")
+	rs, until := pruned()
+	want := []string{"rm c1", "image rm shop-web:old", "image rm sha256:d1"}
+	if code != gcLeftWarned || !slices.Equal(rs, want) || until < 720*time.Hour || until > 721*time.Hour ||
+		snap("prod", "20261020000001") || !snap("prod", "20261020000002") || !snap("prod", "20261102000000") || !snap("stage", "20261020000001") ||
+		!strings.Contains(errs, "the release snapshots of shop/stage stay") || !strings.Contains(errs, "removing snapshot shop/prod 20261020000001 (its release 20261001000000 is gone)") ||
+		!strings.Contains(errs, "removed shop-web:old, left by release 20261001000000 of shop-prod") {
+		t.Fatalf("the listed removal (%d) removed %v, the build cache until %s:\n%s", code, removals(), until, errs)
+	}
+
+	// --yes: what came since goes now, stage's too once its lock is free; again, nothing.
+	os.Remove(log)
+	lock.Close()
 	out, code = run("--yes")
-	want := []string{"rm c1", "builder prune -a -f --filter until=720h0m0s", "image rm shop-web:old", "image prune -f"}
-	if code != gcLeftWarned || !slices.Equal(removals(), want) || snap("prod", "20261020000001") || !snap("prod", "20261102000000") || !snap("stage", "20261020000001") ||
-		!strings.Contains(out, "the release snapshots of shop/stage stay") || !strings.Contains(out, "removing snapshot shop/prod 20261020000001 (its release 20261001000000 is gone)") ||
-		!strings.Contains(out, "removed shop-web:old, left by release 20261001000000 of shop-prod") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-info") {
+	rs, until = pruned()
+	want = []string{"rm c2", "image rm shop-web:older", "image rm sha256:d2"}
+	if code != 0 || !slices.Equal(rs, want) || until < 720*time.Hour || until > 721*time.Hour || snap("prod", "20261020000002") || snap("stage", "20261020000001") || !snap("prod", "20261102000000") ||
+		!strings.Contains(out, "removed shop-web:older, left by release 20261002000000 of shop-prod") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-info") {
 		t.Fatalf("--yes (%d) removed %v:\n%s", code, removals(), out)
 	}
-	lock.Close()
-	if out, code := run("--yes"); code != 0 || snap("stage", "20261020000001") || strings.Contains(out, "rm c1") {
+	if out, code := run("--yes"); code != 0 || strings.Contains(out, "rm c") {
 		t.Fatalf("--yes again (%d):\n%s", code, out)
+	}
+	// A listing that does not read removes nothing.
+	if _, errs, code := step([]byte("{"), "remove-listed"); code != 1 || !strings.Contains(errs, "nothing removed") {
+		t.Errorf("a listing cut short (%d):\n%s", code, errs)
 	}
 
 	// A project user is refused, naming the deploy user's command, before anything.

@@ -244,6 +244,7 @@ func allScripts() map[string]string {
 		"server info":     ServerInfoScript(&Target{Host: "h"}),
 		"gc list":         GCScript(&Target{Host: "h"}, "list"),
 		"gc remove":       GCScript(&Target{Host: "h"}, "remove"),
+		"gc listed":       GCScript(&Target{Host: "h"}, "remove-listed"),
 		"keys add":        KeysAddScript(""),
 		"keys remove":     KeysRemoveScript(""),
 		"keys for":        KeysRemoveScript("devopsy-shop") + KeysAddScript("devopsy-shop"),

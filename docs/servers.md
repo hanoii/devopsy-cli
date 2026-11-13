@@ -320,8 +320,8 @@ gone. In this order:
   removal) is skipped: whatever holds them prunes them;
 - the names each project's record of names left holds that can go now,
   as a release's pruning retries them (`--releases` lists the record),
-  then the dangling images no container uses (`docker image prune`,
-  never `-a`).
+  then the dangling images no container uses, as `docker image prune`
+  finds them (never `-a`).
 
 It never removes a tagged image no release holds, a volume, a release, an
 environment, a project user's snapshots, the containers of a service, or
@@ -330,11 +330,13 @@ anything of a release root that is not mounted, which lists nothing.
 last line says so.
 
 It first lists what it would remove with sizes, in a session that changes
-nothing, then asks. A second session removes, finding everything again
-and deciding each removal again as it goes, so a run cut off leaves only
-less to remove. `--yes` removes without listing or asking; without a
-terminal and without `--yes` it removes nothing. `--dry-run` lists only
-and asks nothing.
+nothing, then asks. A second session removes only what was listed,
+deciding each removal again as it goes, so a run cut off leaves only less
+to remove: what came to qualify between the list and the answer (a
+container that crossed its age, a release snapshot, build cache last used
+after the list's cutoff) stays for the next run. `--yes` removes what it
+finds, without listing or asking; without a terminal and without `--yes`
+it removes nothing. `--dry-run` lists only and asks nothing.
 
 The ages are the deploy user's `gc:` in its `config.yaml`
 ([config](config.md)): `containers` (a day) and `build_cache` (30

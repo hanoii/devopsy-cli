@@ -32,9 +32,11 @@ const gcLeftWarned = serverInfoWarned
 
 // runGC implements devopsy @<server> --gc [--dry-run] [--yes]: what the server keeps that no
 // release, --destroy or pruning removes, listed with its sizes in a session of its own
-// (gcScope.find), asked about locally, then removed by a second session, which decides each
-// removal again under its lock (gcScope.remove). --yes runs the second alone; --dry-run the
-// first alone, asking nothing.
+// (gcScope.find), asked about locally, then removed by a second session, given the listing,
+// which removes only what it listed and still goes, deciding each removal again under its lock
+// (gcScope.remove): what came to go between the listing and the answer was never confirmed.
+// --yes runs the second alone, removing what it finds; --dry-run the first alone, asking
+// nothing.
 func runGC(t *remote.Target, args []string) int {
 	dry, yes := false, false
 	for _, a := range args {
@@ -47,9 +49,9 @@ func runGC(t *remote.Target, args []string) int {
 			return fail("usage: devopsy @" + targetRef(t) + " --gc [--dry-run] [--yes]")
 		}
 	}
-	remove := remote.GCScript(t, "remove")
+	remove := remote.GCScript(t, "remove-listed")
 	if yes && !dry {
-		return gcRemove(t, remove)
+		return gcRemove(t, remote.GCScript(t, "remove"), nil)
 	}
 	// An older server refuses in this first session, before anything: it carries the
 	// removal's needs too.
@@ -92,14 +94,15 @@ func runGC(t *remote.Target, args []string) int {
 		report.Error("nothing removed")
 		return 1
 	}
-	return gcRemove(t, remove)
+	return gcRemove(t, remove, out.Bytes())
 }
 
-// gcRemove runs --gc's removal (script), then says what it leaves: its exit, gcLeftWarned when
-// something is left to remove.
-func gcRemove(t *remote.Target, script string) int {
+// gcRemove runs --gc's removal (script), given the listing as the server's devopsy wrote it
+// (none for --yes), then says what it leaves: its exit, gcLeftWarned when something is left to
+// remove.
+func gcRemove(t *remote.Target, script string, listing []byte) int {
 	var out bytes.Buffer
-	code, err := remote.SSH(t, script, bytes.NewReader(nil), &out, false)
+	code, err := remote.SSH(t, script, bytes.NewReader(listing), &out, false)
 	if err != nil {
 		return failErr(err)
 	}
@@ -135,7 +138,7 @@ type gcPlan struct {
 	Builders   []gcBuilder   `json:"builders,omitempty"`
 	Snapshots  []gcSnapshot  `json:"snapshots,omitempty"`
 	Left       []gcLeft      `json:"left,omitempty"`
-	Dangling   gcDangling    `json:"dangling"`
+	Dangling   gcDangling    `json:"dangling,omitzero"`
 	Unread     []string      `json:"unread,omitempty"`
 }
 
@@ -207,15 +210,28 @@ func (l gcLeft) words() string {
 	return s + ", a name only (the image has others)"
 }
 
-// gcDangling is the dangling images no container uses, which docker image prune removes.
+// gcDangling is the dangling images no container uses, what docker image prune removes, by id.
 type gcDangling struct {
-	Count int   `json:"count"`
-	Size  int64 `json:"size"`
+	Images []gcImage `json:"images,omitempty"`
+}
+
+// gcImage is an image by its id, with Docker's size.
+type gcImage struct {
+	ID   string `json:"id"`
+	Size int64  `json:"size"`
+}
+
+func (d gcDangling) size() int64 {
+	n := int64(0)
+	for _, i := range d.Images {
+		n += i.Size
+	}
+	return n
 }
 
 // count is how many things the plan removes: a stopped builder's cache stays.
 func (p gcPlan) count() int {
-	n := len(p.OneOffs) + len(p.Snapshots) + len(p.Left) + p.Dangling.Count
+	n := len(p.OneOffs) + len(p.Snapshots) + len(p.Left) + len(p.Dangling.Images)
 	for _, b := range p.Builders {
 		if !b.Stopped {
 			n++
@@ -257,9 +273,9 @@ func (p gcPlan) entries() []remote.StatusEntry {
 		lines = append(lines, l.words())
 		total += l.Size
 	}
-	if p.Dangling.Count > 0 {
-		lines = append(lines, fmt.Sprintf("%s no container uses, %s", plural(p.Dangling.Count, "dangling image"), humanBytes(p.Dangling.Size)))
-		total += p.Dangling.Size
+	if n := len(p.Dangling.Images); n > 0 {
+		lines = append(lines, fmt.Sprintf("%s no container uses, %s", plural(n, "dangling image"), humanBytes(p.Dangling.size())))
+		total += p.Dangling.size()
 	}
 	add("images", lines...)
 	for _, u := range p.Unread {
@@ -286,12 +302,28 @@ type gcScope struct {
 	policies []door.Policy
 	// projects are the deploy user's project directories, bases its environments'.
 	projects, bases []string
+	// listedAt is when what remove removes was listed, the server's time: the build cache goes
+	// by the cutoff its listing had.
+	listedAt time.Time
 }
 
-// runGCStep implements the hidden GCStepFlag list|remove, as the deploy user on the server.
+// runGCStep implements the hidden GCStepFlag list|remove|remove-listed, as the deploy user on
+// the server: remove removes what it finds, remove-listed only what of it the listing on stdin
+// (list's output) listed.
 func runGCStep(args []string) int {
-	if len(args) != 1 || (args[0] != "list" && args[0] != "remove") {
-		return fail("usage: devopsy " + remote.GCStepFlag + " list|remove")
+	if len(args) != 1 || !slices.Contains([]string{"list", "remove", "remove-listed"}, args[0]) {
+		return fail("usage: devopsy " + remote.GCStepFlag + " list|remove|remove-listed")
+	}
+	var listing gcPlan
+	if args[0] == "remove-listed" {
+		// Read before anything: a listing cut short removes nothing.
+		b, err := io.ReadAll(os.Stdin)
+		if err == nil {
+			err = json.Unmarshal(b, &listing)
+		}
+		if err != nil {
+			return fail("nothing removed: the listing does not read: " + err.Error())
+		}
 	}
 	r, err := remote.ReleaseSettings()
 	if err != nil {
@@ -303,14 +335,46 @@ func runGCStep(args []string) int {
 	}
 	g := &gcScope{docker: "docker", root: r.Root, ages: r.GC, door: d, now: time.Now()}
 	plan := g.find()
-	if args[0] == "list" {
+	switch args[0] {
+	case "list":
 		if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
 			return failErr(err)
 		}
 		return 0
+	case "remove-listed":
+		plan, g.listedAt = plan.only(listing), listing.Now
+	default:
+		g.listedAt = plan.Now
 	}
 	return g.remove(plan)
 }
+
+// only is what of p the listing listed too, each by its id: a one-off by its container's,
+// a builder by its name, a release snapshot by its environment and id, a name left by its
+// environment, name and image, a dangling image by its id. What p could not read stays in.
+func (p gcPlan) only(listing gcPlan) gcPlan {
+	p.OneOffs = keepListed(p.OneOffs, listing.OneOffs, func(c gcOneOff) string { return c.ID })
+	p.Builders = keepListed(p.Builders, listing.Builders, func(b gcBuilder) string { return b.Name })
+	p.Snapshots = keepListed(p.Snapshots, listing.Snapshots, gcSnapshot.key)
+	p.Left = keepListed(p.Left, listing.Left, func(l gcLeft) string { return leftKey(l.Retried) })
+	p.Dangling.Images = keepListed(p.Dangling.Images, listing.Dangling.Images, func(i gcImage) string { return i.ID })
+	return p
+}
+
+// keepListed are the things of found whose key one of listed has too.
+func keepListed[T any](found, listed []T, key func(T) string) []T {
+	keys := map[string]bool{}
+	for _, x := range listed {
+		keys[key(x)] = true
+	}
+	return slices.DeleteFunc(found, func(x T) bool { return !keys[key(x)] })
+}
+
+// key is a release snapshot by its environment and id.
+func (s gcSnapshot) key() string { return s.Base + "\x00" + s.ID }
+
+// leftKey is a name a project's record left, by its environment, name and image.
+func leftKey(r images.Retried) string { return r.Name + "\x00" + r.Ref + "\x00" + r.Image }
 
 // find is what --gc removes now. Only what reads is listed, and only what a record or Docker's
 // own rule gives, never what looks absent: a release root not mounted lists no environment, so
@@ -710,15 +774,14 @@ func (g *gcScope) dangling() (gcDangling, error) {
 			continue
 		}
 		n, _ := strconv.ParseInt(size, 10, 64)
-		d.Count++
-		d.Size += n
+		d.Images = append(d.Images, gcImage{ID: id, Size: n})
 	}
 	return d, nil
 }
 
 // remove removes what the plan lists, in its order, each removal standing alone and decided
-// again under its lock: a cut run leaves only less to remove. Its exit is gcLeftWarned when
-// something stays: not read, skipped, or not removed.
+// again under its lock, never more than the plan: a cut run leaves only less to remove. Its
+// exit is gcLeftWarned when something stays: not read, skipped, or not removed.
 func (g *gcScope) remove(p gcPlan) int {
 	left := len(p.Unread) > 0
 	log := report.Default()
@@ -739,8 +802,10 @@ func (g *gcScope) remove(p gcPlan) int {
 			left = true
 		}
 	}
-	// 2. Build cache, decided by BuildKit itself.
-	until := "until=" + g.ages.BuildCache.String()
+	// 2. Build cache, decided by BuildKit itself, by the listing's cutoff: prune takes only a
+	// duration, so the time since the listing is added, a second over, so that no record
+	// used after the cutoff goes.
+	until := "until=" + (g.ages.BuildCache + time.Since(g.listedAt).Truncate(time.Second) + time.Second).String()
 	for _, b := range p.Builders {
 		if b.Stopped {
 			continue
@@ -776,7 +841,13 @@ func (g *gcScope) remove(p gcPlan) int {
 			continue
 		}
 		r := &snapshotRemoval{cwd: filepath.Join(base, "current"), name: composeNameOf(rel), of: rel, p: envSnapshotPaths(base), wait: waitBound}
-		if !pruneGone(r.p, r.remove) {
+		listed := func(id, why string) bool {
+			if !slices.ContainsFunc(p.Snapshots, func(s gcSnapshot) bool { return s.Base == base && s.ID == id }) {
+				return true // not listed: it stays
+			}
+			return r.remove(id, why)
+		}
+		if !pruneGone(r.p, listed) {
 			left = true
 		}
 		unlock()
@@ -786,30 +857,66 @@ func (g *gcScope) remove(p gcPlan) int {
 		}
 	}
 	// 4. Images, under the exclusive image lock taken once: each project's record retried,
-	// then the dangling prune. Never after a wait for that lock ended: it would wait again.
+	// then the dangling images. Never after a wait for that lock ended: it would wait again.
 	switch {
 	case ended:
 		log.Warn("the server's images stayed busy: the other release snapshots and the images stay, for the next --gc")
 		return gcLeftWarned
-	case len(p.Left) == 0 && p.Dangling.Count == 0:
+	case len(p.Left) == 0 && len(p.Dangling.Images) == 0:
 	default:
 		unlock, err := imagesLock{root: g.root, how: syscall.LOCK_EX, docker: g.docker, who: "--gc", doing: "removing"}.take(context.Background(), log)
 		if err != nil {
 			log.Warn(err.Error() + ": the images stay, for the next --gc")
 			return gcLeftWarned
 		}
+		listed := func(r images.Retried) bool {
+			return slices.ContainsFunc(p.Left, func(l gcLeft) bool { return leftKey(l.Retried) == leftKey(r) })
+		}
 		for _, pd := range g.projects {
 			set := projectImages(pd, errOut)
-			set.Retry()
-			left = left || len(set.Retryable()) > 0
+			set.RetryOnly(listed)
+			left = left || slices.ContainsFunc(set.Retryable(), listed)
 		}
-		projectImages("", errOut).PruneDangling()
+		if !g.removeDangling(p.Dangling) {
+			left = true
+		}
 		unlock()
 	}
 	if left {
 		return gcLeftWarned
 	}
 	return 0
+}
+
+// removeDangling removes the dangling images of d that are still dangling and used by no
+// container, decided again under the image lock (dangling), each by its id: docker rm without
+// -f refuses one a container started on since. False when one stays.
+func (g *gcScope) removeDangling(d gcDangling) bool {
+	if len(d.Images) == 0 {
+		return true
+	}
+	now, err := g.dangling()
+	if err != nil {
+		report.Warn("the dangling images stay: " + err.Error())
+		return false
+	}
+	ok, n, freed := true, 0, int64(0)
+	for _, i := range d.Images {
+		if !slices.ContainsFunc(now.Images, func(x gcImage) bool { return x.ID == i.ID }) {
+			continue
+		}
+		if out, err := exec.Command(g.docker, "image", "rm", i.ID).CombinedOutput(); err != nil {
+			report.Warn("dangling image "+i.ID+" stays", oneLine(cmp.Or(string(out), err.Error())))
+			ok = false
+			continue
+		}
+		n++
+		freed += i.Size
+	}
+	if n > 0 {
+		report.Info(fmt.Sprintf("removed %s, %s", plural(n, "dangling image"), humanBytes(freed)))
+	}
+	return ok
 }
 
 // errText is err's text as a detail, none for nil.
