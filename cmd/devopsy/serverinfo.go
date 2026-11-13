@@ -1185,8 +1185,23 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	warn := func(msg string, fixes ...report.Remedy) {
 		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg}, Remedies: fixes})
 	}
+	// A project user's (its docker the door's) is read by who can only pass on what the
+	// server's admin fixes.
+	projectUser := info.Docker.Door
 	note := func(msg string, fixes ...report.Remedy) {
+		if projectUser {
+			fixes = nil
+		}
 		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{msg}, Remedies: fixes})
+	}
+	// forAdmin warns of what only the server's admin fixes, by its code: with its fixes to
+	// the admin, to a project user with the code to pass on and no remedy.
+	forAdmin := func(c report.Code, details []string, fixes ...report.Remedy) {
+		lines := append([]string{c.Msg()}, details...)
+		if projectUser {
+			lines, fixes = append(lines, c.ForAdmin()), nil
+		}
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: fixes})
 	}
 
 	// devopsy and the release settings.
@@ -1196,7 +1211,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	row("devopsy", v)
 	if ref != "" && update.Newer(local, info.Version) {
-		warn("the server's devopsy "+info.Version+" is older than the local "+local, report.Fix("", "devopsy @"+ref+" --upgrade"))
+		forAdmin(report.OlderDevopsy, []string{"the server's " + info.Version + ", the local " + local}, report.Fix("", "devopsy @"+ref+" --upgrade"))
 	}
 	row("releases", fmt.Sprintf("%s, keep %d (at most %d)", info.Root, info.Keep, info.MaxKeep))
 	snaps := "in each environment's directory"
@@ -1247,7 +1262,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		more("kernel keeps " + strings.Join(kept, ", "))
 	}
 	if info.KHOScratch > 0 {
-		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
+		forAdmin(report.KexecHandOver, []string{"it keeps " + humanBytes(info.KHOScratch) + ": the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)"},
 			stepsFix("kho=off on the kernel's command line, then a reboot", howto.KexecHandOver))
 	}
 	if info.CrashKernel > 0 {
@@ -1257,12 +1272,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if info.RebootRequired {
 		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
 		// packages when the setup or the door asked for it.
-		msg := "the server needs a reboot (" + remote.RebootRequired
+		why := remote.RebootRequired
 		if len(info.RebootPackages) > 0 {
-			msg += ", for " + strings.Join(info.RebootPackages, ", ")
+			why += ", for " + strings.Join(info.RebootPackages, ", ")
 		}
-		msg += ")"
-		warn(msg, report.Fix("reboot it at a quiet time: its containers come back with Docker"))
+		forAdmin(report.RebootNeeded, []string{why}, report.Fix("reboot it at a quiet time: its containers come back with Docker"))
 	}
 	// Against the operator's clock, which a laptop or CI keeps
 	// synchronized: off by the way's one-way time at most.
@@ -1276,9 +1290,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		more("clock " + clock)
 	}
 	if info.NTP == "no" {
-		msg := "the server's clock is not synchronized: certificates and logs need it"
+		why := "certificates and logs need it synchronized"
 		if off != "" {
-			msg = "the server's clock is not synchronized (" + off + "): certificates and logs need it"
+			why = off + ": " + why
 		}
 		fixes := []report.Remedy{report.Fix("as root:", "timedatectl set-ntp true")}
 		if info.NTPService == "yes" {
@@ -1289,7 +1303,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				report.Fix("name one the network has, NTP=<host> in /etc/systemd/timesyncd.conf.d/ (or chrony's sources), as root"),
 			}
 		}
-		warn(msg, fixes...)
+		forAdmin(report.ClockUnsynced, []string{why}, fixes...)
 	}
 
 	// A warning only where a project user is there to read them: without one every login is
@@ -1423,12 +1437,16 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		key = "disks"
 		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
 		if disk.Reflinks == "no" {
-			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
-				reflinkFix(info.MirrorsOff), stepsHint("what data on XFS takes", howto.XFS))
+			// The mirror is the project's to take, data on XFS the admin's.
+			fixes := []report.Remedy{reflinkFix(info.MirrorsOff)}
+			if !projectUser {
+				fixes = append(fixes, stepsHint("what data on XFS takes", howto.XFS))
+			}
+			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy", fixes...)
 		}
 	}
 	if info.SnapshotRoot != "" && snapshotDisk >= 0 && snapshotDisk == release {
-		warn("the snapshot root "+info.SnapshotRoot+" is on the release root's filesystem: a volume meant for it is not mounted, or the snapshots go down with the data's disk",
+		forAdmin(report.SnapshotOnData, []string{info.SnapshotRoot + ": a volume meant for it is not mounted, or the snapshots go down with the data's disk"},
 			report.Fix("mount the backup volume on "+info.SnapshotRoot))
 	}
 
@@ -1439,10 +1457,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	for _, name := range info.Missing {
 		switch msg, door := toolMissingWords(name); {
 		case msg == "":
-		case door && !projectUsers:
+		case door && !projectUsers && !projectUser:
 			note(msg, stepsHint(doorToolsFixText, howto.ProjectUsers))
 		default:
-			warn(msg, toolFix(door))
+			forAdmin(report.ToolMissing, []string{msg}, toolFix(door))
 		}
 	}
 

@@ -283,13 +283,15 @@ What needs attention is a warning under the line it is about, with its
 fix; a fix that serves several lines in a row (`--server-setup` for the
 setup's items) comes once, after the last of them:
 
-- an older devopsy;
+- an older devopsy (`W0003`);
 - a reboot the system asks for (`/run/reboot-required`, with the
-  packages asking, devopsy among them when its setup or its door did);
+  packages asking, devopsy among them when its setup or its door did,
+  `W0004`);
 - memory Kexec HandOver keeps as CMA. Only movable pages may use it, so
   the kernel's allocations can run out while memory is free. `kho=off`
-  frees it ([`kexec-handover`](server-setup-howto.md#kexec-handover));
-- a clock out of sync;
+  frees it ([`kexec-handover`](server-setup-howto.md#kexec-handover),
+  `W0006`);
+- a clock out of sync (`W0005`);
 - Docker not answering, without its compose or buildx plugin, or below
   its floor ([Docker](#docker)), said under Docker and not again under
   the setup;
@@ -313,10 +315,10 @@ setup's items) comes once, after the last of them:
   [`--gc`](#--gc) as its fix;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
-  usually means the backup volume is not mounted;
+  usually means the backup volume is not mounted (`W0007`);
 - a tool the server needs, missing, and on a server with project users
   a missing `sudo`, `visudo` or `setfacl` (with none yet it is a line,
-  not a warning);
+  not a warning), `W0008`;
 - on a server with project users, a `/proc` that shows them every other
   user's processes, whose command lines can hold a secret, or that hides
   them another way `--project-users setup` refuses ([setting up a
@@ -332,6 +334,11 @@ setup's items) comes once, after the last of them:
 - a uid claim whose environment is gone from the server (removed by
   hand, never by `--destroy`), or an entry of the claims directory that
   is no claim, each with its removal by hand.
+
+A warning only the server's admin can fix carries its
+[code](codes.md). A project user's `--server-info` says it with the
+code to pass on and no fix, and leaves out what only the admin can do
+(the hint to free what kdump keeps, data on XFS).
 
 `--json` prints the facts and the same lines for scripts and agents, each
 warning with its own fix. Its

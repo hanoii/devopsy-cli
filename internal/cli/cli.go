@@ -1065,7 +1065,9 @@ an import or a restore under way, services an operation left stopped,
 or containers restarting, paused, dead, unhealthy or exited on an error
 of their own, each as --status says it. It then exits 3, for
 CI: 0 says nothing needs attention. What kdump keeps is said with how to
-free it, never warned: crash dumps are a choice.
+free it, never warned: crash dumps are a choice. What only the server's
+admin can fix carries a code, which a project user passes on: its report
+has no fix for it.
 
 Options:
   --json   the facts and the same lines as JSON on stdout, for scripts and

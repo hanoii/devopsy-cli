@@ -17,8 +17,20 @@ var FirewallNotLoaded = Code{"W0001", "the server's firewall is not loaded as de
 // request.
 var SpaceUnguarded = Code{"W0002", "the project users' directory is not on a mount with nosuid and nodev"}
 
+// What --server-info warns of that only the server's admin can fix: the server's devopsy
+// older than the operator's, a reboot the system asks for, a clock out of sync, Kexec
+// HandOver's CMA, a snapshot root with no volume of its own, a tool missing.
+var (
+	OlderDevopsy   = Code{"W0003", "the server's devopsy is older than the local one"}
+	RebootNeeded   = Code{"W0004", "the server needs a reboot"}
+	ClockUnsynced  = Code{"W0005", "the server's clock is not synchronized"}
+	KexecHandOver  = Code{"W0006", "Kexec HandOver keeps memory as CMA, which only movable pages may use"}
+	SnapshotOnData = Code{"W0007", "the snapshot root is on the release root's filesystem"}
+	ToolMissing    = Code{"W0008", "the server lacks a tool devopsy uses"}
+)
+
 // Codes is the registry, every code once, which docs/codes.md lists.
-var Codes = []Code{FirewallNotLoaded, SpaceUnguarded}
+var Codes = []Code{FirewallNotLoaded, SpaceUnguarded, OlderDevopsy, RebootNeeded, ClockUnsynced, KexecHandOver, SnapshotOnData, ToolMissing}
 
 // CodeOf is the registry's code by its ID.
 func CodeOf(id string) (Code, bool) {

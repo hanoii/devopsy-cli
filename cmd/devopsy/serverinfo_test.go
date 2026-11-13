@@ -191,8 +191,8 @@ func TestServerInfoReport(t *testing.T) {
 		local  string
 		want   string // the warning, then its fix after |
 	}{
-		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "older than the local 0.54.0|devopsy @vm1: --upgrade"},
-		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "the server needs a reboot (/run/reboot-required, for linux-image-amd64)|reboot it"},
+		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "W0003: the server's devopsy is older than the local one\nthe server's 0.53.0, the local 0.54.0|devopsy @vm1: --upgrade"},
+		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "W0004: the server needs a reboot\n/run/reboot-required, for linux-image-amd64|reboot it"},
 		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "the project users' directory /space is not on a mount with nosuid and nodev"}
@@ -213,13 +213,13 @@ func TestServerInfoReport(t *testing.T) {
 			p, i.ProcRefused = procHiding("proc /proc proc rw,relatime,hidepid=2 0 0\n", false, "devopsy", nil)
 			i.HidePID = p.HidePID
 		}, "", "/proc hides other users' processes (hidepid=2) with no gid=, so the deploy user sees only its own|add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)"},
-		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
+		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "W0005: the server's clock is not synchronized\ncertificates and logs need it synchronized|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
 			i.NTP, i.NTPService, i.Time = "no", "yes", now.Add(-800*time.Millisecond).UnixNano()
-		}, "", "clock is not synchronized (about 0.8 s behind local)|UDP 123 blocked out?"},
+		}, "", "W0005: the server's clock is not synchronized\nabout 0.8 s behind local: certificates|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
-		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot; this prints the steps:\n$ devopsy --server-setup-howto kexec-handover"},
+		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "W0006: Kexec HandOver keeps memory as CMA, which only movable pages may use\nit keeps 1.3 GB: the kernel's own allocations|kho=off on the kernel's command line, then a reboot; this prints the steps:\n$ devopsy --server-setup-howto kexec-handover"},
 		// Docker's own, said once under docker with the docker topic, the setup's judgment of
 		// them (setupDocker's refusals) not said again under setup.
 		{"docker down", func(i *remote.ServerInfo) {
@@ -264,8 +264,8 @@ func TestServerInfoReport(t *testing.T) {
 		{"snapshot root on the data", func(i *remote.ServerInfo) {
 			i.SnapshotRoot = "/backups"
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
-		}, "", "the snapshot root /backups is on the release root's filesystem|mount the backup volume on /backups"},
-		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|install what is missing with the system's packages; this prints the steps:\n$ devopsy --server-setup-howto tools"},
+		}, "", "W0007: the snapshot root is on the release root's filesystem\n/backups: a volume meant for it is not mounted|mount the backup volume on /backups"},
+		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "W0008: the server lacks a tool devopsy uses\nthe server has no script: builds and pulls show no live progress|install what is missing with the system's packages; this prints the steps:\n$ devopsy --server-setup-howto tools"},
 		// The door's tools, which only --project-users add refuses without, on a server with
 		// project users.
 		{"missing setfacl", func(i *remote.ServerInfo) {
@@ -443,8 +443,8 @@ func TestServerInfoReport(t *testing.T) {
 		info := healthy()
 		info.Door, info.Missing = c.door, []string{"sudo", "setfacl"}
 		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-		said := len(warnings) == 2 && warnings[0].msg == "the server has no sudo: no project user can be added, nor reach Docker through the door" &&
-			strings.HasPrefix(warnings[1].msg, "the server has no setfacl: ") && strings.Count(out, howto.Command(howto.ProjectUsers)) == 1
+		said := len(warnings) == 2 && strings.HasSuffix(warnings[0].msg, "the server has no sudo: no project user can be added, nor reach Docker through the door") &&
+			strings.Contains(warnings[1].msg, "the server has no setfacl: ") && strings.Count(out, howto.Command(howto.ProjectUsers)) == 1
 		for _, w := range warnings {
 			said = said && w.note != c.warn && len(w.fixes) == 1 && w.fixes[0].Hint != c.warn && slices.Equal(w.fixes[0].Cmds, []string{howto.Command(howto.ProjectUsers)})
 		}
@@ -463,6 +463,41 @@ func TestServerInfoReport(t *testing.T) {
 	infoDoor.Docker, infoDoor.Setup = remote.DockerFacts{Door: true}, nil
 	if out, warnings := serverInfoSays(infoDoor, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "docker        the server's admin's, through the door") {
 		t.Errorf("a project user's docker: %+v\n%s", warnings, out)
+	}
+	// What only the server's admin fixes reads to a project user as its code to pass on, with
+	// no remedy; what is the project's own keeps its fix, and a note its words only.
+	for _, c := range []struct {
+		name   string
+		change func(*remote.ServerInfo)
+		local  string
+		code   report.Code
+	}{
+		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", report.OlderDevopsy},
+		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired = true }, "", report.RebootNeeded},
+		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", report.ClockUnsynced},
+		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", report.KexecHandOver},
+		{"snapshot root on the data", func(i *remote.ServerInfo) {
+			i.SnapshotRoot = "/backups"
+			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
+		}, "", report.SnapshotOnData},
+		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", report.ToolMissing},
+		{"missing door tool", func(i *remote.ServerInfo) { i.Missing = []string{"setfacl"} }, "", report.ToolMissing},
+	} {
+		info := healthy()
+		info.Docker, info.Setup = remote.DockerFacts{Door: true}, nil
+		c.change(&info)
+		out, warnings := serverInfoSays(info, "vm1", "vm1:", cmp.Or(c.local, "0.53.0"), now)
+		if len(warnings) != 1 || warnings[0].note || len(warnings[0].fixes) != 0 || !strings.HasPrefix(warnings[0].msg, c.code.Msg()+"\n") ||
+			!strings.HasSuffix(warnings[0].msg, "\n"+c.code.ForAdmin()) || strings.Contains(out, "$ ") {
+			t.Errorf("a project user's %s: %+v\n%s", c.name, warnings, out)
+		}
+	}
+	info = healthy()
+	info.Docker, info.Setup = remote.DockerFacts{Door: true}, nil
+	info.CrashKernel, info.Disks[0].Type, info.Disks[0].Reflinks = 512<<20, "ext4", "no"
+	if out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !strings.Contains(warnings[0].msg, "makes no reflinks") ||
+		len(warnings[0].fixes) != 1 || !strings.Contains(warnings[0].fixes[0].Text, "snapshots: {mirror: true}") || !strings.Contains(out, "kdump keeps 536.9 MB") || strings.Contains(out, "$ ") {
+		t.Errorf("a project user's kdump and reflinks: %+v\n%s", warnings, out)
 	}
 
 	// What kdump keeps is a note, never a warning: crash dumps are a
@@ -571,7 +606,7 @@ func TestServerInfoReport(t *testing.T) {
 				n++
 			}
 		}
-		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "the server needs a reboot (/run/reboot-required, for devopsy)\n") {
+		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "W0004: the server needs a reboot\n              /run/reboot-required, for devopsy\n") {
 			t.Errorf("pending, reboot %v: %d warnings %+v\n%s", reboot, n, warnings, out)
 		}
 	}

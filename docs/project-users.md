@@ -277,7 +277,9 @@ user's own read of the chains as root. That `--server-info` shows no
 setup of the server's, its admin's to judge, and skips Docker's own
 facts (`docker info`, its compose and buildx versions), which the door
 refuses a project user: it shows its system, disks, roles and
-environments, the containers they need listed through the door.
+environments, the containers they need listed through the door. What
+only the admin fixes there (a reboot, a clock out of sync, a tool
+missing) it says by its [code](codes.md), with no fix to run.
 
 ## What a compose file may hold
 
