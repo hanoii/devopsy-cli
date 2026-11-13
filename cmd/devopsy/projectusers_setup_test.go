@@ -288,10 +288,9 @@ func TestProjectUsersSetupMountsItsSpaceAgain(t *testing.T) {
 	}
 }
 
-// Review, a bug: the config gets door: space: only when the whole root run went, so a /proc
-// systemd cannot remount (the run's last step) leaves a space made, mounted and named in
-// Docker's drop-in with no door: space: naming it, at every run, and --server-setup then
-// wants the drop-in without the space. The processes' failure must stop the processes alone.
+// Each step goes by its own result: a /proc systemd cannot remount (the run's last step) fails
+// the processes alone, and the space made and mounted is named in the config, so --server-setup
+// wants the drop-in with the space as this run put it.
 func TestProjectUsersSetupNamesTheSpaceBesideAFailedProc(t *testing.T) {
 	t.Parallel()
 	s, _, space := doorSetupServer(t)

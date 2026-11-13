@@ -383,9 +383,12 @@ choice. It sets:
   one root owns that holds files, one that is no directory, or someone's
   mount without the two options is refused.
 - `door:` with `space:` in the deploy user's `config.yaml`, appended as
-  text when the file has no `door:`, the rest of the file as it is. The
-  two lines are shown before the question. A `door:` with no `space:`
-  is refused, naming the line to add.
+  text when the file has no `door:`, the rest of the file as it is, once
+  the directory is made and mounted, whatever else of the run failed.
+  The two lines are shown before the question. A `door:` with no
+  `space:` is refused, naming the line to add, and so is a file where
+  lines added at its end would not be read (its YAML ends before its
+  last line), naming the two lines to add by hand.
 - Every user's processes hidden from the others: a process's command
   line names projects and paths, and a devopsy session's is its whole
   script, the operator's command in it. The group `devopsy-proc` is

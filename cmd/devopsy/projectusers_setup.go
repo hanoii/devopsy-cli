@@ -530,7 +530,6 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 		return failErr(err)
 	}
 	var out bytes.Buffer
-	ran := true
 	if space || dropin != "" || procs {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
@@ -539,29 +538,38 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 		sayDoorSetupLines(out.String(), me.Username)
 		if err != nil {
 			fail(err.Error())
-			ran = false
 		}
 	}
-	// The config last, the deploy user's own file, once the space it names is set.
-	configured := false
-	if does(setup.StepConfig) && ran {
-		if err := appendDoorConfig(f.ConfigFile, rd.space); err != nil {
-			fail("door: space: not added to " + f.ConfigFile + ": " + err.Error())
-		} else {
-			configured = true
-			report.Info("named the door's space in "+f.ConfigFile, strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
-		}
-	}
-
-	// The checks again: what was applied must read in sync now, a refused step's left aside.
+	// Each step judged by its own result, read again: the config, the deploy user's own file,
+	// last, once the space it names is made and mounted, whatever else of the run failed (the
+	// processes).
 	again, err := readDoorSetup(h, dir)
 	if err != nil {
 		fail(err.Error())
 		return end()
 	}
+	if does(setup.StepConfig) {
+		switch {
+		case again.facts.Changes(setup.StepSpace):
+			fail("door: space: not added to " + f.ConfigFile + ": the door's space is not set up")
+		default:
+			if err := appendDoorConfig(f.ConfigFile, rd.space); err != nil {
+				fail("door: space: not added to " + f.ConfigFile + ": " + err.Error())
+			} else {
+				report.Info("named the door's space in "+f.ConfigFile, strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
+				if again, err = readDoorSetup(h, dir); err != nil {
+					fail(err.Error())
+					return end()
+				}
+			}
+		}
+	}
+
+	// The checks again: what was applied must read in sync now, a refused step's left aside,
+	// and the config's when it was not added (said).
 	var left []string
 	for _, s := range setup.DoorSteps {
-		if does(s) && (s != setup.StepConfig || configured) {
+		if does(s) && (s != setup.StepConfig || !again.facts.Changes(setup.StepSpace)) {
 			left = append(left, doorItemLines(again.facts, s)...)
 		}
 	}
