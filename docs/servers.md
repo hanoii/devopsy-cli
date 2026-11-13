@@ -39,8 +39,9 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--server-setup`, `--gc`, `--environments`, `--vars-project` and `--upgrade` (`--environments` and
-`--vars-project` with the checkout's project, or an alias's).
+`--server-setup`, `--gc`, `--environments`, `--vars-project` and
+`--upgrade` (`--environments` and `--vars-project` with the checkout's
+project, or an alias's).
 
 They take `@<server>` alone, or any target, whose server they use, with
 no instance needed. A bare name is still the project's environment or an
@@ -343,23 +344,23 @@ between and would otherwise stay: only what a record of devopsy's or
 Docker's own rule says can go, never something because its owner looks
 gone. In this order:
 
-- one-off containers (`compose run` and the like) that exited more than
-  a day ago, of an environment of the deploy user's or one under a
-  project user's names. Their volumes stay: a database's `compose run`
-  keeps its data in an anonymous volume. One only created, never
-  started, stays too;
-- build cache not used for 30 days, on the server's Docker and on each
-  project user's builder, as `docker buildx prune -a --filter until=`
-  decides it. A project user's builder that is not running keeps its
-  cache;
+- one-off containers (`compose run` and the like) that exited longer
+  ago than its `containers` age, of an environment of the deploy user's
+  or one under a project user's names. Their volumes stay: a database's
+  `compose run` keeps its data in an anonymous volume. One only created,
+  never started, stays too;
+- build cache unused for its `build_cache` age, on the server's Docker
+  and on each project user's builder, as `docker buildx prune -a
+  --filter until=` decides it. A project user's builder that is not
+  running keeps its cache;
 - release snapshots whose release is gone, as `--snapshots remove`
   prunes them, for every environment of the deploy user's. An
   environment whose snapshots are in use (a snapshot taken, a restore, a
   removal) is skipped: whatever holds them prunes them;
-- the names each project's record of names left holds that can go now,
-  as a release's pruning retries them (`--releases` lists the record),
-  then the dangling images no container uses, as `docker image prune`
-  finds them (never `-a`).
+- the names in the deploy user's projects' records of names left that
+  can go now, as a release's pruning retries them (`--releases` lists a
+  project's record), then the dangling images no container uses, as
+  `docker image prune` finds them (never `-a`).
 
 It never removes a tagged image no release holds, a volume, a release, an
 environment, a project user's snapshots, the containers of a service, or
@@ -376,9 +377,8 @@ after the list's cutoff) stays for the next run. `--yes` removes what it
 finds, without listing or asking; without a terminal and without `--yes`
 it removes nothing. `--dry-run` lists only and asks nothing.
 
-The ages are the deploy user's `gc:` in its `config.yaml`
-([config](config.md)): `containers` (a day) and `build_cache` (30
-days).
+The ages are the deploy user's `gc:` in its `config.yaml`, with their
+defaults ([Release settings](config.md#release-settings)).
 
 It exits 3 when something is left to remove: with `--dry-run`, anything
 it lists; otherwise what it skipped, could not remove or could not read.

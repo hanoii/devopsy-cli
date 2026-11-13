@@ -1090,9 +1090,9 @@ Docker's own rule, never because an owner looks gone. In this order:
   snapshots       release snapshots whose release is gone, as
                   --snapshots remove prunes them; an environment whose
                   snapshots are in use is skipped
-  images          the names each project's record of names left holds
-                  that can go now, as a release's pruning retries them,
-                  then the dangling images no container uses
+  images          the names in the deploy user's projects' records of
+                  names left that can go now, as a release's pruning
+                  retries them, then the dangling images no container uses
 
 It lists what it would remove with sizes, asks, then removes, deciding
 each removal again: a run cut off leaves only less to remove. It never
