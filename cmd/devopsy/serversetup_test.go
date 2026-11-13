@@ -2805,3 +2805,70 @@ func TestUpgradeNotesItsVersionByWhatARefusalStopped(t *testing.T) {
 		})
 	}
 }
+
+// Review round 1, bug: with no step going (Docker refused), planSetup returns before it adds
+// --root, so the operator is asked where releases live, the release root's entry says
+// --server-setup names the answer in the config, and no apply ever names it: the run ends on
+// what was refused and the next one asks again. What the entry promises, the apply is told.
+func TestRootChosenIsNamedOrNotPromisedWithNoStepGoing(t *testing.T) {
+	t.Parallel()
+	f := setup.Facts{Root: "/srv", RootProposed: true, ConfigFile: "/home/devopsy/.config/devopsy/config.yaml", Record: "/r",
+		Refusals: []setup.Refusal{{Item: setup.RefusalDocker}}}
+	if !f.NoneGoes() {
+		t.Fatalf("the control: a step goes: %+v", f)
+	}
+	promised := false
+	for _, e := range setupEntries(f) {
+		promised = promised || slices.ContainsFunc(e.Lines, func(l string) bool { return strings.Contains(l, "names it as releases: root") })
+	}
+	args, run, err := planSetup(f, false, &scripted{confirms: []bool{true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if named := run && slices.Contains(args, "--root"); promised != named {
+		t.Errorf("the entry says the root is named: %v; an apply told --root: %v (run %v, %q)", promised, named, run, args)
+	}
+}
+
+// Review round 1, edge: the apply names the root chosen before anything is judged, so a root
+// the facts refuse (here no directory; on a server a volume that is root's and holds files,
+// or another user's) is written into the config all the same. The server is then left with a
+// releases: root every release refuses, and --server-setup asks no more: only an edit by hand
+// brings the home back. A root refused is not named.
+func TestRootRefusedIsNotNamed(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	write(t, vol, "", 0o644)
+	before := readString(config)
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts", "--root", vol)
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 || !f.RootProposed || len(f.Refused()) == 0 {
+		t.Fatalf("the control: facts --root refuse no root (%d, %v): %+v\n%s", code, err, f, out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
+		t.Errorf("a root refused (%d), the config:\n%s\n%s", code, readString(config), out)
+	}
+}
+
+// Review round 1, edge: a releases: root left empty (root: with no value, or "") is no root
+// named for remote.ReleaseSettings, so the facts ask where releases live, while
+// setup.SetReleaseRoot takes the key for a root named and the apply fails, at every run. What
+// the facts ask about, the apply names (or the facts do not ask).
+func TestRootAskedIsOneTheApplyNames(t *testing.T) {
+	t.Parallel()
+	for _, releases := range []string{"releases:\n  root:\n", "releases:\n  root: \"\"\n  keep: 3\n"} {
+		s, _, vol, config := rootChoice(t)
+		write(t, config, releases, 0o644)
+		out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+		var f setup.Facts
+		if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 {
+			t.Fatalf("%q: facts (%d, %v):\n%s", releases, code, err, out)
+		}
+		if !f.AsksRoot() {
+			continue
+		}
+		if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 0 || !strings.Contains(readString(config), vol) {
+			t.Errorf("%q: asked, and the apply names no root (%d), the config:\n%s\n%s", releases, code, readString(config), out)
+		}
+	}
+}
