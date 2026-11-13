@@ -533,7 +533,7 @@ func TestPlanSetup(t *testing.T) {
 		{"--yes, no container", facts("", 0, false, setup.Devopsys, setup.InSync, setup.Changed), true, &scripted{}, []string{"--keep", sum, "--restart-idle"}, true, nil, nil},
 		{"--yes, containers running", facts("/r", 1, false, setup.Devopsys), true, &scripted{}, []string{"--restart-idle"}, true, nil, nil},
 		// A root chosen (facts --root) is a change confirmed with the rest, the apply told it;
-		// with no step going (Docker refused), the apply still names it, unasked.
+		// with no step going (Docker refused), nothing is named, and the next run asks again.
 		{"root chosen", func() setup.Facts { f := facts("/r", 0, false, setup.InSync); f.NamesRoot = true; return f }(), false,
 			&scripted{confirms: []bool{true}}, []string{"--root", "/srv"}, true, []string{"apply these?"}, nil},
 		{"root chosen, declined", func() setup.Facts { f := facts("/r", 0, false, setup.InSync); f.NamesRoot = true; return f }(), false,
@@ -542,7 +542,7 @@ func TestPlanSetup(t *testing.T) {
 			f := facts("/r", 0, false, setup.InSync)
 			f.NamesRoot, f.Refusals = true, []setup.Refusal{{Item: setup.RefusalDocker}}
 			return f
-		}(), false, &scripted{}, []string{"--root", "/srv"}, true, nil, nil},
+		}(), false, &scripted{}, nil, false, nil, nil},
 	} {
 		args, run, err := planSetup(c.f, c.yes, c.ask)
 		if !slices.Equal(args, c.args) || run != c.run || err != c.err || !slices.Equal(c.ask.asked, c.asked) {

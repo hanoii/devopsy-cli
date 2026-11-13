@@ -180,12 +180,9 @@ func candidateWords(c setup.Candidate) string {
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
-	// Every step a root run: with none going (Docker refused), nothing goes at all, but a
-	// floor note to take off and a root chosen to name, which the apply does.
+	// Every step a root run: with none going (Docker refused), nothing goes at all, a root
+	// chosen named neither, but a floor note to take off, which the apply does.
 	if f.NoneGoes() {
-		if f.NamesRoot {
-			return []string{"--root", f.Root}, true, nil
-		}
 		return nil, f.FloorNote, nil
 	}
 	parts := f.Parts
@@ -314,7 +311,7 @@ func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 	if f.RootAction != "" {
 		root.Lines[0] = rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's"
 	}
-	if f.NamesRoot {
+	if f.NamesRoot && !f.NoneGoes() {
 		root.Lines = append(root.Lines, "--server-setup names it as releases: root in "+f.ConfigFile)
 	}
 	es := append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, nil, "")...)
