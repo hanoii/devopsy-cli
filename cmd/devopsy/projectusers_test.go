@@ -554,13 +554,16 @@ func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 // remove refuses for and its destroy removes (heldBy: its claims, the containers, volumes and
 // networks under its names, its mnts, images and door directories), with its way out in words:
 // the server named alone gives the session no address. One with a key, or holding nothing, is
-// no such line.
+// no such line, nor one whose destroy did not complete: its own line says how to complete it,
+// and no key takes it back while its mark holds it.
 func TestProjectUsersListSaysKeyless(t *testing.T) {
 	t.Parallel()
 	home, root := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+t.TempDir()+"\n  users:\n    devopsy-shop: {project: shop}\n    devopsy-blog: {project: blog}\n    devopsy-wiki: {project: wiki}\n    devopsy-news: {project: news}\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+t.TempDir()+"\n  users:\n    devopsy-shop: {project: shop}\n    devopsy-blog: {project: blog}\n    devopsy-wiki: {project: wiki}\n    devopsy-news: {project: news}\n    devopsy-mail: {project: mail}\n", 0o644)
 	write(t, filepath.Join(home, "door", "keys", "devopsy-blog"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o600)
-	for _, o := range []uids.Owner{{Project: "shop", Env: "prod"}, {Project: "blog", Env: "prod"}} {
+	// mail's destroy did not complete (remote.DoorDestroyingFile), its claim still there.
+	write(t, filepath.Join(home, "door", "keys", "devopsy-mail.destroying"), "mail\nhome /home/devopsy-mail\nuid 50000\n", 0o600)
+	for _, o := range []uids.Owner{{Project: "shop", Env: "prod"}, {Project: "blog", Env: "prod"}, {Project: "mail", Env: "prod"}} {
 		if _, err := uids.StoreAt(root).Lookup(o); err != nil {
 			t.Fatal(err)
 		}
@@ -578,7 +581,8 @@ esac
 		"devopsy: | a --project-users remove of shop with --destroy removes it with what it holds\n"+
 		"devopsy: | or a key added for it (--ssh-keys with --for) takes it back\n") ||
 		!strings.Contains(out, "devopsy: devopsy-news has no key and still holds the volumes news-prod_db\n") ||
-		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") {
+		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") ||
+		!strings.Contains(out, "devopsy-mail: the destroy of mail's project user did not complete") || strings.Contains(out, "devopsy-mail has") {
 		t.Errorf("list (%d):\n%s", code, out)
 	}
 }

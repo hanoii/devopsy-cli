@@ -3716,3 +3716,23 @@ func TestCloseProject(t *testing.T) {
 		t.Errorf("one it cannot close (%v): %s", err, out)
 	}
 }
+
+// A server's script (--server-info, --gc), an environment's address included, exports no
+// environment's snapshot directory or base (images.SnapshotsEnv, images.BaseEnv): its devopsy
+// reads every environment's from the server's own settings, and one exported for the target's
+// path (for a server named alone, $root//snapshots) would be taken for every environment's. An
+// environment's script still exports them.
+func TestServerScriptsExportNoEnvironmentDirectories(t *testing.T) {
+	t.Parallel()
+	server := &Target{Host: "vm1"}
+	env := &Target{Host: "vm1", Name: "prod", Path: "shop/prod", Project: &Project{Name: "shop"}}
+	for what, s := range map[string]string{"@vm1: --server-info": ServerInfoScript(server), "@vm1:prod --server-info": ServerInfoScript(env),
+		"@vm1: --gc": GCScript(server, "list"), "@vm1:prod --gc": GCScript(env, "list")} {
+		if strings.Contains(s, images.SnapshotsEnv) || strings.Contains(s, images.BaseEnv) {
+			t.Errorf("%s exports an environment's directories:\n%s", what, s)
+		}
+	}
+	if s := SnapshotsScript(env, "shop"); !strings.Contains(s, "export "+images.SnapshotsEnv+`="$snaps" `+images.BaseEnv+`="$base"`) {
+		t.Errorf("an environment's script exports no directories:\n%s", s)
+	}
+}

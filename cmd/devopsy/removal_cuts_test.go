@@ -474,9 +474,9 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 // A destroy refuses before anything, a rerun too, when a name it found is not the project's (a
 // claim env:shop:eu-prod gives shop-eu-prod, which a deploy project shop-eu holds now),
 // naming both, when the tree its entry names is not a directory (a disk not mounted, or removed
-// by hand), when the claims' directory is missing while containers are under its names, and
-// when the release root does not read: nothing of the user's or another's is touched, its keys
-// included.
+// by hand), or one its host step does not remove as root (not named for its project), when the
+// claims' directory is missing while containers are under its names, and when the release root
+// does not read: nothing of the user's or another's is touched, its keys included.
 func TestUserDestroyRefusesBeforeAnything(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -502,6 +502,11 @@ func TestUserDestroyRefusesBeforeAnything(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, ", the tree devopsy-shop's entry names, is not a directory"},
+		"a tree not named for its project": {func(c *removalCut, s *destroyServer) {
+			tree := filepath.Join(t.TempDir(), "site")
+			write(t, filepath.Join(tree, "prod", "shared", "db"), "data\n", 0o600)
+			write(t, c.entry, "project: shop\ntree: "+tree+"\n", 0o600)
+		}, "is not a project's directory"},
 		"the claims' directory missing": {func(c *removalCut, s *destroyServer) {
 			if err := os.RemoveAll(filepath.Join(s.root, uids.DirName)); err != nil {
 				t.Fatal(err)
@@ -516,7 +521,10 @@ func TestUserDestroyRefusesBeforeAnything(t *testing.T) {
 			r := newRemovalCutIn(t, t.TempDir())
 			s := r.destroyServer()
 			c.spoil(r, s)
-			before := readString(filepath.Join(s.state, "containers")) + readString(filepath.Join(s.state, "images"))
+			state := func() string {
+				return readString(filepath.Join(s.state, "containers")) + readString(filepath.Join(s.state, "volumes")) + readString(filepath.Join(s.state, "images"))
+			}
+			before := state()
 			for _, args := range [][]string{{"--list"}, {}} {
 				out, code := runDevopsy(t, t.TempDir(), r.env(), append([]string{remote.ProjectUsersFlag, "remove", "shop", "--destroy"}, args...)...)
 				if code != 1 || !strings.Contains(out, c.says) || !strings.Contains(out, "nothing removed") {
@@ -524,8 +532,55 @@ func TestUserDestroyRefusesBeforeAnything(t *testing.T) {
 				}
 			}
 			if !remote.KeysLeft(r.keys) || fileExists(r.destroying) || fileExists(r.removing) || !fileExists(r.logins) || !fileExists(s.home) ||
-				readString(filepath.Join(s.state, "containers"))+readString(filepath.Join(s.state, "images")) != before {
-				t.Errorf("a refused destroy changed something: keys %v, its mark %v, its logins %v", remote.KeysLeft(r.keys), fileExists(r.destroying), fileExists(r.logins))
+				!fileExists(filepath.Join(r.space, "mnt", "shop-prod", "db", "f")) || state() != before {
+				t.Errorf("a refused destroy changed something: keys %v, its mark %v, its logins %v, its data %v", remote.KeysLeft(r.keys), fileExists(r.destroying), fileExists(r.logins),
+					fileExists(filepath.Join(r.space, "mnt", "shop-prod", "db", "f")))
+			}
+		})
+	}
+}
+
+// A destroy refuses before anything what its host step (remote.DoorUserDeleteScript) would
+// refuse only once everything else is gone, every run again stopping there: a home that is a
+// link or no directory, and a Unix user of that name outside the project users' group. A home
+// that is a directory passes.
+func TestUserDestroyRefusesWhatItsHostStepLeaves(t *testing.T) {
+	t.Parallel()
+	dir := func(t *testing.T, home string) {
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, c := range map[string]struct {
+		home func(t *testing.T, home string)
+		// outside makes the Unix user one outside the project users' group.
+		outside bool
+		passes  bool
+	}{
+		"a directory": {home: dir, passes: true},
+		"a link to a directory": {home: func(t *testing.T, home string) {
+			if err := os.Symlink(t.TempDir(), home); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		"a file":                          {home: func(t *testing.T, home string) { write(t, home, "", 0o600) }},
+		"a user outside the door's group": {home: dir, outside: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			home := filepath.Join(t.TempDir(), "devopsy-shop")
+			c.home(t, home)
+			x := &userDestroy{d: &remote.Door{Space: t.TempDir()}, project: "shop", who: "devopsy-shop", root: t.TempDir(),
+				lookup: func(who string) (*user.User, error) {
+					return &user.User{Username: who, Uid: "59999", Gid: "59999", HomeDir: home}, nil
+				},
+				projectUser: func(string) bool { return !c.outside }}
+			err := x.ready(destroyMark{}, false)
+			if c.passes && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !c.passes && err == nil {
+				t.Error("passed")
 			}
 		})
 	}

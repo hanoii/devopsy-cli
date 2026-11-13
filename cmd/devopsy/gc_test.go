@@ -181,6 +181,27 @@ esac
 	}
 }
 
+// The listed removal prunes a builder's cache only as its listing listed it: never one the
+// listing said keeps its cache (not running then, started before the answer), nor the daemon's
+// under another name than the listing's, its Docker context's, which would be another daemon's.
+func TestGCOnlyBuildersAsListed(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		listed, now gcBuilder
+		pruned      bool
+	}{
+		"listed as kept":                     {gcBuilder{Name: "devopsy-blog", Project: "blog", Stopped: true}, gcBuilder{Name: "devopsy-blog", Project: "blog", Records: 3, Size: 10e6}, false},
+		"listed":                             {gcBuilder{Name: "devopsy-blog", Project: "blog", Records: 3}, gcBuilder{Name: "devopsy-blog", Project: "blog", Records: 4}, true},
+		"the daemon's under another context": {gcBuilder{Name: "ctx1", Records: 2}, gcBuilder{Name: "ctx2", Records: 2}, false},
+		"the daemon's":                       {gcBuilder{Name: "ctx1", Records: 2}, gcBuilder{Name: "ctx1", Records: 2}, true},
+	} {
+		got := gcPlan{Builders: []gcBuilder{c.now}}.only(gcPlan{Builders: []gcBuilder{c.listed}})
+		if pruned := got.count() > 0; pruned != c.pruned {
+			t.Errorf("%s: pruned %v, want %v", name, pruned, c.pruned)
+		}
+	}
+}
+
 // The dangling images --gc counts are those docker image prune removes: untagged, no container
 // using them.
 func TestGCDangling(t *testing.T) {

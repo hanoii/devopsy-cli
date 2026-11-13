@@ -40,7 +40,9 @@ func leftSays(info remote.ServerInfo, host, ref string) []string {
 // user's builds; a release's containers; volumes of such a name only, never of the admin's own
 // compose projects; snapshots under the snapshot root), dangling anonymous volumes, a cut
 // --destroy's directory, and a project user with no key that holds environments. Locally the
-// hints say in words what needs an address.
+// hints say in words what needs an address. A read that failed (the images, the volumes, what
+// --gc's count could not read, the containers an image's use is counted from) is said or
+// leaves its lines out, never taken for none.
 func TestServerInfoLeft(t *testing.T) {
 	t.Parallel()
 	long := "shop-" + strings.Repeat("e", 95)
@@ -142,6 +144,25 @@ func TestServerInfoLeft(t *testing.T) {
 	if !strings.Contains(says, "images: the images could not be listed: docker image ls: EOF") || !strings.Contains(says, "volumes: the volumes could not be listed") ||
 		strings.Contains(says, "busybox") || strings.Contains(says, "anonymous") || strings.Contains(says, "of its releases") {
 		t.Errorf("unread:\n%s", says)
+	}
+	// What --gc's count could not read is a warning under it, with something counted or not:
+	// the count is not all there is.
+	for name, gc := range map[string]*remote.GCFacts{
+		"with something counted": {OneOffs: 1, Unread: []string{"the dangling images: docker image ls: EOF"}},
+		"with nothing counted":   {Unread: []string{"the dangling images: docker image ls: EOF"}},
+	} {
+		i := info
+		i.GC = gc
+		if says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n"); !strings.Contains(says, "gc: --gc's count could not read the dangling images: docker image ls: EOF") {
+			t.Errorf("%s: what --gc's count could not read is said nowhere:\n%s", name, says)
+		}
+	}
+	// With the containers unread, no image is said to be used by none: each image's count of
+	// containers comes from them.
+	i = info
+	i.ContainersUnread = "docker inspect: EOF"
+	if says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n"); strings.Contains(says, "nor any container uses it") {
+		t.Errorf("with the containers unread, an image is used by none:\n%s", says)
 	}
 }
 
