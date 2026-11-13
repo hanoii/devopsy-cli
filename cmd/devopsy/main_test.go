@@ -315,6 +315,14 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 			}
 		}
 	}
+	// --project-users's words each print its help, the setup's included, which completion
+	// offers --help to.
+	for _, words := range [][]string{{"list", "--help"}, {"add", "--help"}, {"remove", "-h"}, {"setup", "--help"}, {"setup", "/srv/door", "--yes", "-h"}} {
+		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, append([]string{"@vm1:", "--project-users"}, words...)...)
+		if code != 0 || !strings.HasPrefix(out, "Usage: devopsy @<server> --project-users ") {
+			t.Errorf("--project-users %s (%d):\n%s", strings.Join(words, " "), code, out)
+		}
+	}
 	// An environment's command needs an environment.
 	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--releases"); code == 0 || !strings.Contains(out, "--releases needs an environment\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @vm1:<environment> --releases\n") {
 		t.Errorf("@vm1: --releases (%d):\n%s", code, out)

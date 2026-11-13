@@ -29,7 +29,8 @@ import (
 // has two (runProjectUsersSetup).
 func runProjectUsers(t *remote.Target, args []string) int {
 	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project> [--destroy [--yes]] | setup [<directory>] [--yes]]"
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+	// Help wherever it is among the words, each word's included: it only prints.
+	if slices.Contains(args, "--help") || slices.Contains(args, "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
 		return 0
 	}
