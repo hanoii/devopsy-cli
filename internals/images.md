@@ -30,6 +30,7 @@
 - A release fetched again never removes names: it untags the bookmarks its new listing no longer makes and records the names it dropped for the next pruning, since it runs under the shared lock beside other fetches.
 - A re-listing that drops an image records its names as left (`keep`): otherwise the names other releases counted on it to take leak.
 - Snapshots' bookmarks count as the environment's own (`images.Set.own`, internals/snapshots.md).
+- Whose a release's tag is (a bookmark, a snapshot's, a fetch tag) is decided anchored, by the name: `bookmarkPrefix(<name>)`, then `s?` and 14 digits, then the tag's end or `-` (`images.NamesTag`), never by the prefix alone, which takes `shop-stage-2`'s tags for `shop-stage`'s; a name read back from a tag (`images.NameOfTag`) is for display and grouping only, since a long name comes back cut and hashed and an environment named with 14 digits may split wrongly.
 - A project user's claim holds the image it lands as `<repo>:devopsy-<project>-claim.<12 hex of its digest>` (`images.ClaimHold`, `ClaimHoldOf`), a hold by `HoldOf` that no compose name's bookmark can be (a compose name has no dot), so every removal counts it with no reading above its project, until the project's bookmark replaces it or its pruning takes it (internals/door.md).
 
 ## Data follows its version

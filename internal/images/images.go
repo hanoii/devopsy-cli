@@ -334,6 +334,36 @@ func bookmarkPrefix(composeName string) string {
 	return "devopsy-" + composeName + "-"
 }
 
+// NamesTag says whether ref's tag is one a release of the environment whose compose name is
+// name writes (a bookmark, a snapshot's bookmark, a fetch tag): bookmarkPrefix(name), then s
+// and a 14-digit id or the id alone, then its end or -. Anchored so, never by the prefix
+// alone: shop-stage's prefix starts shop-stage-2's tags too.
+func NamesTag(ref, name string) bool {
+	_, tag := SplitRef(ref)
+	rest, ok := strings.CutPrefix(tag, bookmarkPrefix(name))
+	return ok && name != "" && idThenEnd.MatchString(rest)
+}
+
+var idThenEnd = regexp.MustCompile(`^s?[0-9]{14}(-|$)`)
+
+// NameOfTag reads back the compose name of a tag NamesTag would match, for display and
+// grouping only: a name over 94 characters comes back cut and hashed (bookmarkPrefix), and an
+// environment named with 14 digits may split at the wrong place, so deciding whose a tag is
+// goes by NamesTag with the name. ok false for any other tag (a claim's hold, a tag of the
+// admin's).
+func NameOfTag(ref string) (name string, ok bool) {
+	_, tag := SplitRef(ref)
+	m := tagName.FindStringSubmatch(tag)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// tagName is a release's tag: devopsy-<name>-, its id (s for a snapshot's), then a cksum or a
+// fetch's -f<cksum>; the name greedy, so the id is the last that fits.
+var tagName = regexp.MustCompile(`^devopsy-(.+)-s?[0-9]{14}(-f?[0-9a-z]{1,10})?$`)
+
 // ClaimHold is the hold the door's claim of an image writes for a project, in repo: the
 // project's bookmarkPrefix, then claim. and the first 12 hex digits of the image's digest. A
 // compose name has no dot, so no bookmark or snapshot of the project's is ever this name, and

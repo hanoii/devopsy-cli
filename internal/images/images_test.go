@@ -352,6 +352,52 @@ func TestBookmarkPrefix(t *testing.T) {
 	}
 }
 
+// A release's tags are a name's only anchored: its prefix, an id (a snapshot's s<id>), then the
+// end or -, so shop-stage's never take shop-stage-2's, nor the other way; a name over 94
+// characters by its cut prefix. Read back, a tag gives its name for display, the long one cut,
+// and a claim's hold or another tag none.
+func TestNamesTag(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("l", 100)
+	cut := strings.TrimSuffix(strings.TrimPrefix(bookmarkPrefix(long), "devopsy-"), "-")
+	for _, c := range []struct {
+		ref, name string
+		want      bool
+	}{
+		{"app:devopsy-shop-stage-20261101000000", "shop-stage", true},
+		{"app:devopsy-shop-stage-20261101000000-123456", "shop-stage", true},
+		{"app:devopsy-shop-stage-s20261101000000-a1b2", "shop-stage", true},
+		{"app:devopsy-shop-stage-20261101000000-fz9", "shop-stage", true},
+		{"registry.example.com:5000/app:devopsy-shop-stage-20261101000000", "shop-stage", true},
+		{"app:devopsy-shop-stage-2-20261101000000", "shop-stage", false},
+		{"app:devopsy-shop-stage-20261101000000", "shop-stage-2", false},
+		{"app:devopsy-shop-stage-2-20261101000000", "shop-stage-2", true},
+		{"app:devopsy-shop-stage-2026110100000", "shop-stage", false},
+		{"app:devopsy-shop-stage-202611010000001", "shop-stage", false},
+		{"app:devopsy-shop-stage-claim.abababababab", "shop-stage", false},
+		{"app:devopsy-shop-stage-20261101000000", "", false},
+		{"app:" + bookmarkPrefix(long) + "20261101000000", long, true},
+		{"app:" + bookmarkPrefix(long) + "20261101000000", long[:99] + "m", false},
+	} {
+		if got := NamesTag(c.ref, c.name); got != c.want {
+			t.Errorf("NamesTag(%q, %q) = %v", c.ref, c.name, got)
+		}
+	}
+	for ref, want := range map[string]string{
+		"app:devopsy-shop-stage-20261101000000":          "shop-stage",
+		"app:devopsy-shop-stage-2-s20261101000000-a1b2":  "shop-stage-2",
+		"app:devopsy-shop-stage-20261101000000-f3x":      "shop-stage",
+		"app:devopsy-shop-20261101000000-20261102000000": "shop-20261101000000",
+		"app:" + bookmarkPrefix(long) + "20261101000000": cut,
+		"app:devopsy-shop-claim.abababababab":            "",
+		"app:1.37":                                       "",
+	} {
+		if got, ok := NameOfTag(ref); got != want || ok != (want != "") {
+			t.Errorf("NameOfTag(%q) = %q %v, want %q", ref, got, ok, want)
+		}
+	}
+}
+
 // A claim's hold is a hold by HoldOf, so every removal takes its image for held, its project
 // read back from it, and no bookmark of the project's (an environment named claim's included)
 // is one: a hold within 128 characters for the longest project name.
