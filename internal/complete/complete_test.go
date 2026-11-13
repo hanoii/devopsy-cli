@@ -109,7 +109,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--reload", "--releases", "--log", "--destroy", "--sync", "--reset", "--inherit", "--export", "--import", "--snapshot", "--snapshots", "--env", "--vars", "--vars-instance", "--vars-project", "--status", "--shell", "--shell-host", "--environments", "--debug", "--project-users", "--ssh-keys", "--ssh-config", "--server-info", "--server-setup", "--gc", "--upgrade", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--reload", "--releases", "--log", "--destroy", "--sync", "--reset", "--inherit", "--export", "--import", "--snapshot", "--snapshots", "--env", "--vars", "--vars-instance", "--vars-project", "--status", "--shell", "--shell-host", "--environments", "--debug", "--project-users", "--ssh-keys", "--ssh-config", "--server-info", "--server-setup", "--gc", "--upgrade", "--match-server-version", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--snapshots", ""}, []string{"restore", "remove", "export", "import", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--snapshots", "restore", "2026", "--"}, []string{"--no-code", "--with-env", "--yes", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", ""}, []string{"list", "add", "remove"}, nil, DirectiveNoFileComp},

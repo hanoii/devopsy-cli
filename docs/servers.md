@@ -39,8 +39,8 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--server-setup`, `--gc`, `--environments`, `--vars-project` and
-`--upgrade` (`--environments` and `--vars-project` with the checkout's
+`--server-setup`, `--gc`, `--environments`, `--vars-project`,
+`--upgrade` and `--match-server-version` (`--environments` and `--vars-project` with the checkout's
 project, or an alias's).
 
 They take `@<server>` alone, or any target, whose server they use, with
@@ -54,6 +54,7 @@ or an IPv6 address always ends with `:` (`@vm1:5369:`,
 devopsy @vm1 --ssh-keys          # vm1's deploy user's keys, from anywhere
 devopsy @prod --ssh-keys         # prod's server's, in the project
 devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
+devopsy @vm1 --match-server-version   # this devopsy, to the server's version
 devopsy @vm1 --server-info       # what the server is, and what needs attention
 devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
 devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
@@ -283,9 +284,10 @@ What needs attention is a warning under the line it is about, with its
 fix; a fix that serves several lines in a row (`--server-setup` for the
 setup's items) comes once, after the last of them:
 
-- an older devopsy (`W0003`), or an older local one, which reads what
-  it does not know of the server's facts as missing, with `devopsy
-  --upgrade` as its fix;
+- an older devopsy (`W0003`), with `--upgrade` or
+  `--match-server-version` as its fix, or an older local one, which
+  reads what it does not know of the server's facts as missing, with
+  `--match-server-version`;
 - a reboot the system asks for (`/run/reboot-required`, with the
   packages asking, devopsy among them when its setup or its door did,
   `W0004`);
@@ -486,6 +488,8 @@ yours. An
 older one stops a command that needs what it lacks before anything
 changes, says what is missing, and says to run `devopsy @<target>
 --upgrade`, which always works. Commands that need nothing new still run.
+`devopsy @<server> --match-server-version` goes the other way: your
+devopsy becomes the server's release ([CI](#ci)).
 A sync across servers checks the child's devopsy against the parent's
 the same way, before the parent stops anything.
 
@@ -559,6 +563,18 @@ across servers needs none: it uses a key made for it
 by hand; on `--shell` it reaches the server, not the container.
 
 A key for CI is set up with `--ssh-keys` (Keys on a server, below).
+
+`install.sh` installs the latest release, and a new devopsy may read a
+project differently than the one on the server. `--match-server-version`
+after installing makes CI's devopsy the server's release, older or newer,
+downloading nothing when they already match:
+
+```sh
+devopsy @vm1 --match-server-version
+```
+
+It refuses a server whose devopsy is a development build, which no
+release matches.
 
 ## Keys only
 

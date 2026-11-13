@@ -112,3 +112,56 @@ func TestApplyAfterUpgradeFails(t *testing.T) {
 		t.Errorf("not set up (%d):\n%s", code, out.String())
 	}
 }
+
+// --match-server-version reads the server's devopsy --version in one session: a server of this
+// devopsy's version downloads nothing, a server's development build is refused, and so is a
+// local development build, before connecting.
+func TestMatchServerVersion(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	match := func(exe string) (string, int) {
+		cmd := exec.Command(exe, "@prod", "--match-server-version")
+		cmd.Dir, cmd.Env = s.project, s.env
+		out, _ := cmd.CombinedOutput()
+		return string(out), cmd.ProcessState.ExitCode()
+	}
+	rel, err := releaseBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	if out, code := match(binary); code == 0 || !strings.Contains(out, "development build: update its checkout instead") {
+		t.Errorf("a local development build (%d):\n%s", code, out)
+	}
+	if _, ssh := s.logs(); ssh != "" {
+		t.Errorf("a local development build connected:\n%s", ssh)
+	}
+	if out, code := match(rel); code == 0 || !strings.Contains(out, "devopsy: error: the server's devopsy dev is a development build, which no release matches\n") {
+		t.Errorf("the server's development build (%d):\n%s", code, out)
+	}
+	asRelease(t, s)
+	if out, code := match(rel); code != 0 || out != "devopsy: devopsy "+releaseVersion+" is the server's already\n" {
+		t.Errorf("the server's version already (%d):\n%s", code, out)
+	}
+}
+
+// The server's devopsy --version names its release on its first line, and anything else names
+// none: no download is tried.
+func TestServerRelease(t *testing.T) {
+	t.Parallel()
+	for out, want := range map[string]string{
+		"devopsy 0.69.0\ndocker 29.9.1\ndocker compose 5.5.0\n": "0.69.0",
+		"devopsy v0.69.0-2-g1a2b3c4-dirty\n":                    "is a development build",
+		"devopsy dev\n":                                         "is a development build",
+		"":                                                      "answered no version",
+		"sh: 1: devopsy: not found\n":                           "answered no version",
+	} {
+		got, err := serverRelease(out)
+		if err != nil {
+			got = err.Error()
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("%q: %q, want %q", out, got, want)
+		}
+	}
+}

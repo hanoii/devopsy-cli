@@ -1037,6 +1037,14 @@ server --server-setup set up, the devopsy now there applies the setup
 once per version, asking nothing: it leaves each value someone else set,
 and never restarts Docker.
 `,
+	"--match-server-version": `Usage: devopsy @<server> --match-server-version
+
+Replaces this devopsy with the release the server's devopsy is, older or
+newer, as devopsy --upgrade vX.Y.Z does: run in CI after installing, it
+reads the project as the server does. Nothing is downloaded when the
+versions already match; a server's development build has no release to
+match.
+`,
 	"--server-info": `Usage: devopsy [@<server>] --server-info [--json]
 
 What the server is, read in one session that changes nothing and waits

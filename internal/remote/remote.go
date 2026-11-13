@@ -1438,6 +1438,12 @@ func UpgradeScript(args []string) string {
 	return "set -eu\nexec " + devopsyCall("", append([]string{"--upgrade"}, args...), false) + "\n"
 }
 
+// VersionScript prints the server's devopsy --version, its first line naming the version:
+// --match-server-version. Every release has it, so any server's devopsy answers.
+func VersionScript() string {
+	return "set -eu\n" + devopsyCall("", []string{"--version"}, true) + "\n"
+}
+
 // ReleasesScript prints one line per release, newest first: id, current
 // or -, its state (- , failed, rolled-back, incomplete, in-progress,
 // syncing or cut), its images (ImagesFile's names, each with =version or
