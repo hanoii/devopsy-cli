@@ -489,7 +489,8 @@ func toolsRefusalOf(missing []string) *setup.Refusal {
 
 // releaseRootCheck is the release root's required item: there, a directory, uid's (/ is
 // refused by remote.ReleaseSettings already). What --server-setup fixes is its action
-// (setup.RootMake, setup.RootGive); anything else refuses: not a directory, or another user's.
+// (setup.RootMake, setup.RootGive); anything else refuses (dirOwner), and a root that is /
+// through a link.
 func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	refuse := func(msg string) (string, *setup.Refusal) {
 		return "", &setup.Refusal{Item: setup.RefusalRoot, Message: msg, Fix: "set releases: root in " + remote.UserConfigFile() + " to a directory of the deploy user's, or move this one aside"}
@@ -497,29 +498,43 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	if resolveRoot(root) == "/" {
 		return refuse("the release root " + root + " is /, through a link: releases would sit among the system's own directories")
 	}
-	fi, err := os.Stat(root)
+	action, refused, _ := dirOwner("the release root", root, uid)
+	if refused != "" {
+		return refuse(refused)
+	}
+	return action, nil
+}
+
+// dirOwner judges a directory devopsy makes or gives to the deploy user (uid) at p, the release
+// root's and the door's space's alike, named so (what) in a refusal: missing, it is made
+// (setup.RootMake); uid's, it is in place (""); root's and empty, a filesystem's own lost+found
+// aside, it is given (setup.RootGive); anything else refuses, its words refused: root's with
+// files (a system's: /var, /opt), another user's, no directory, or what stat said. fi is p as
+// stat read it, nil when it is not there.
+func dirOwner(what, p string, uid int) (action, refused string, fi os.FileInfo) {
+	fi, err := os.Stat(p)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return setup.RootMake, nil
+		return setup.RootMake, "", nil
 	case err != nil:
-		return refuse(err.Error())
+		return "", err.Error(), nil
 	case !fi.IsDir():
-		return refuse("the release root " + root + " is not a directory")
+		return "", what + " " + p + " is not a directory", fi
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	switch {
 	case !ok, int(st.Uid) == uid:
-		return "", nil
-	case st.Uid == 0 && emptyDir(root):
-		return setup.RootGive, nil
+		return "", "", fi
+	case st.Uid == 0 && emptyDir(p):
+		return setup.RootGive, "", fi
 	case st.Uid == 0:
-		return refuse("the release root " + root + " is root's and holds files: only an empty one is given to the deploy user, never a system directory")
+		return "", what + " " + p + " is root's and holds files: only an empty one is given to the deploy user, never a system directory", fi
 	}
 	owner := strconv.Itoa(int(st.Uid))
 	if u, err := user.LookupId(owner); err == nil {
 		owner = u.Username
 	}
-	return refuse("the release root " + root + " is " + owner + "'s")
+	return "", what + " " + p + " is " + owner + "'s", fi
 }
 
 // dockerSetup is what the setup reads of Docker beyond docker info: its service's

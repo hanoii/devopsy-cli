@@ -1105,6 +1105,10 @@ func (s *doorSide) stillAsked() error {
 	return nil
 }
 
+// guards is the one judgment of a mount that guards the door's space: it takes no setuid file
+// (nosuid) and no device node (nodev).
+func guards(nosuid, nodev bool) bool { return nosuid && nodev }
+
 // refuseUnguarded refuses, through l, a request on a door whose space is not guarded
 // (spaceGuarded), giving what the refusals' log records, nil when it is: the project user
 // asking can only pass it on, so it is told the code for the server's admin and no way out
@@ -1119,13 +1123,17 @@ func refuseUnguarded(l *report.Logger, space string) error {
 
 // spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a
 // container's setuid file crosses projects and a crafted tar reaches root, so the door does
-// nothing rather than half its promise.
+// nothing rather than half its promise. It asks the kernel of the path itself (statfs) at every
+// request, which no table's escaping or order can mislead, while --project-users setup reads
+// the host's /proc/mounts (spaceMount), under a host root in its tests, to tell also whose
+// mount the space is on (its own mount point or not), which statfs does not say; both judge
+// the options by guards, so they never disagree on what guarded means.
 func spaceGuarded(space string) error {
 	nosuid, nodev, err := mountGuards(space)
 	if err != nil {
 		return fmt.Errorf("the project users' directory %s: %v", space, err)
 	}
-	if !nosuid || !nodev {
+	if !guards(nosuid, nodev) {
 		return fmt.Errorf("the project users' directory %s is not on a mount with nosuid and nodev", space)
 	}
 	return nil

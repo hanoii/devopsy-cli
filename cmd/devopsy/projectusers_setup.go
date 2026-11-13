@@ -356,36 +356,14 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 	f := &rd.facts
 	sp := f.Space
 	anew := "name another directory, or move this one aside"
-	fi, err := os.Stat(sp)
-	exists := err == nil
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		f.SpaceAction = setup.RootMake
-	case err != nil:
-		refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), "")
-		return
-	case !fi.IsDir():
-		refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is not a directory", anew)
+	action, refused, fi := dirOwner("the door's space", sp, os.Getuid())
+	if refused != "" {
+		refuse(setup.ItemSpace, setup.RefusalSpace, refused, anew)
 		return
 	}
-	if exists {
-		st, _ := fi.Sys().(*syscall.Stat_t)
-		switch {
-		case st == nil, int(st.Uid) == os.Getuid():
-		case st.Uid == 0 && emptyDir(sp):
-			f.SpaceAction = setup.RootGive
-		case st.Uid == 0:
-			refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is root's and holds files: only an empty one is given to the deploy user", anew)
-		default:
-			owner := strconv.Itoa(int(st.Uid))
-			if u, err := user.LookupId(owner); err == nil {
-				owner = u.Username
-			}
-			refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is "+owner+"'s", anew)
-		}
-		if fi.Mode().Perm() != 0o755 {
-			f.SpaceMode = strconv.FormatUint(uint64(fi.Mode().Perm()), 8)
-		}
+	f.SpaceAction = action
+	if fi != nil && fi.Mode().Perm() != 0o755 {
+		f.SpaceMode = strconv.FormatUint(uint64(fi.Mode().Perm()), 8)
 	}
 	sm := spaceMount(h, sp)
 	f.Guarded = sm.guarded
@@ -467,13 +445,13 @@ type spaceAt struct {
 
 // spaceMount is the mount sp is on in the host's /proc/mounts (under h's root), read the same
 // for --project-users setup's facts and --server-setup's drop-in (mountsDropInWant): whatever
-// made it, an fstab line by hand included.
+// made it, an fstab line by hand included, judged by guards as the door's statfs is.
 func spaceMount(h setupHost, sp string) spaceAt {
 	mounts, _ := os.ReadFile(h.path(procMounts))
 	m, found := mountOf(parseMounts(string(mounts)), sp)
 	_, nosuid := m.opt("nosuid")
 	_, nodev := m.opt("nodev")
-	return spaceAt{m: m, found: found, guarded: found && nosuid && nodev}
+	return spaceAt{m: m, found: found, guarded: found && guards(nosuid, nodev)}
 }
 
 // readProcesses judges /proc's hiding of every user's processes from the others: hidden
@@ -583,17 +561,9 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 	}
 	space, procs := does(setup.StepSpace), does(setup.StepProcesses)
 	var unitText, dropin, procText, polkit string
-	mount := false
-	if space {
-		for _, x := range f.Files {
-			if x.Item == setup.ItemSpace && !x.InSync {
-				mount = true
-			}
-		}
-		mount = mount || !f.Guarded
-		if mount {
-			unitText = rd.unitText
-		}
+	mount := space && f.Mounts()
+	if mount {
+		unitText = rd.unitText
 	}
 	if does(setup.StepDoorDrop) {
 		dropin = rd.dropin

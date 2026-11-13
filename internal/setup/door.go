@@ -274,7 +274,7 @@ func (f DoorFacts) Applies() bool {
 func (f DoorFacts) Changes(s Step) bool {
 	switch s {
 	case StepSpace:
-		return f.SpaceAction != "" || f.SpaceMode != "" || !f.Guarded || f.FilesDiffer(ItemSpace)
+		return f.SpaceAction != "" || f.SpaceMode != "" || f.Mounts()
 	case StepDoorDrop:
 		return f.FilesDiffer(ItemMounts)
 	case StepProcesses:
@@ -285,6 +285,11 @@ func (f DoorFacts) Changes(s Step) bool {
 	}
 	return false
 }
+
+// Mounts says whether the space step mounts the space: it is not on a mount with nosuid and
+// nodev, or its unit or the unit's link are not as devopsy writes them; the apply puts the unit
+// and enables it by this, the one source beside Changes.
+func (f DoorFacts) Mounts() bool { return !f.Guarded || f.FilesDiffer(ItemSpace) }
 
 // Hides says whether /proc hides other users' processes from all but the group devopsy wants:
 // hidepid with gid= devopsy-proc's number (another way's group being judged by its refusal).
