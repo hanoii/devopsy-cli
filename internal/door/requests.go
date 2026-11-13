@@ -95,6 +95,8 @@ type Action struct {
 	Stream *Stream
 	// Output is the answer when Docker is empty.
 	Output string
+	// Said is what goes to stderr then, as Docker would say it.
+	Said string
 	// Exit is the exit code when Docker is empty.
 	Exit int
 	// Claims are images the project must claim before Docker runs: each fetched by the door
@@ -281,6 +283,9 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if owned && id != "" {
 			a.Docker = []string{"tag", id, args[1]}
 		}
+		if !owned && isID(args[0]) {
+			return noImage(args[0]), nil
+		}
 		if !owned {
 			if err := p.Claimable(args[0]); err != nil {
 				return nil, err
@@ -459,6 +464,8 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 			case owned && id != "":
 				a.Docker = append(a.Docker, id)
 				continue
+			case !owned && isID(t):
+				return noImage(t), nil
 			case !owned:
 				if err := p.Claimable(t); err != nil {
 					return nil, err
@@ -609,7 +616,7 @@ func (p Policy) ImageRef(ref string, known Known) (string, bool) {
 	if ref == known.Image || p.OwnRef(ref) {
 		return ref, true
 	}
-	if strings.HasPrefix(ref, "sha256:") {
+	if isID(ref) {
 		return ref, false
 	}
 	if id, ok := p.Names[images.Familiar(ref)]; ok {
@@ -622,6 +629,17 @@ func (p Policy) ImageRef(ref string, known Known) (string, bool) {
 		return ref, false
 	}
 	return "", false
+}
+
+// isID says whether ref is an image's id, or its prefix, which no registry serves to claim.
+func isID(ref string) bool { return strings.HasPrefix(ref, "sha256:") }
+
+// noImage is Docker's answer for an image by an id this project does not own, there or not:
+// no claim of an id goes through, and a refusal of one that is there would tell the project
+// another's image is on the server. A removal reads it as gone, as it reads an image Docker
+// deleted with its last tag (a bookmark of the project's, a claimed image's last name).
+func noImage(id string) *Action {
+	return &Action{Said: "Error response from daemon: No such image: " + id + "\n", Exit: 1}
 }
 
 // OwnsImageOf says whether the image of id and tags, as one inspect read them, is this

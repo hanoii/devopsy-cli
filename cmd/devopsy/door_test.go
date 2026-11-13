@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -1517,6 +1518,32 @@ func TestDoorClaimActsByDigest(t *testing.T) {
 	}
 	if calls := readString(filepath.Join(dir, "calls")); !strings.Contains(calls, "\ntag "+private+"@"+p1+" "+hold+"\n") {
 		t.Errorf("the tag is not by the claim's digest:\n%s", calls)
+	}
+}
+
+// An inspect of an id the project does not own answers as Docker does for an image gone,
+// there or not, and logs nothing: a removal asks after an image its own bookmark took (Docker
+// deletes an image with its last tag), which images.CLI reads as gone only by Docker's words,
+// and no claim of an id goes through. In a helper process (doorComposeHelper).
+func TestDoorAnswersAnIDItDoesNotOwnAsGone(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	gone := "sha256:" + strings.Repeat("d8", 32)
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"),
+		"DEVOPSY_TEST_DOOR_REQUEST=image inspect --format {{.Id}} "+gone)
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	err := c.Run()
+	if c.ProcessState == nil || c.ProcessState.ExitCode() != 1 || !strings.Contains(stderr.String(), "No such image: "+gone) {
+		t.Errorf("an inspect of an id gone (%v) says:\n%s", err, stderr.String())
+	}
+	if got := readString(filepath.Join(dir, "refused.log")); got != "" {
+		t.Errorf("logged as a refusal: %s", got)
+	}
+	if calls := readString(filepath.Join(dir, "calls")); strings.Contains(calls, "imagetools") {
+		t.Errorf("an id claimed:\n%s", calls)
 	}
 }
 

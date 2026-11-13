@@ -2095,6 +2095,7 @@ func (s *doorSide) request(config string, argv []string) int {
 	}
 	if len(a.Docker) == 0 {
 		os.Stdout.WriteString(a.Output)
+		os.Stderr.WriteString(a.Said)
 		return a.Exit
 	}
 	env := s.env

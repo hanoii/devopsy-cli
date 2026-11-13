@@ -806,12 +806,24 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 		}
 	}
 	// (Another project's build name or hold is refused outright: TestClaimWritesNoHoldAndNoBuildName.)
-	for _, image := range []string{"sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123", "shop-prod-web", "sha256:abd", "blog-prod-web", "postgres:15", "sha256:ab1"} {
+	for _, image := range []string{"registry.example.com/blog/private:1", "nginx:1", "shop-prod-web", "blog-prod-web", "postgres:15"} {
 		if c := claims("image", "inspect", image); !slices.Equal(c, []string{image}) {
 			t.Errorf("another's or nobody's %s answered unclaimed: %v", image, c)
 		}
 		if c := claims("tag", image, "busybox:devopsy-shop-prod-20240101000001"); !slices.Equal(c, []string{image}) {
 			t.Errorf("a tag of %s, unclaimed: %v", image, c)
+		}
+	}
+	// An id it does not own, another's or none, is no image to it, as Docker says of one gone:
+	// no registry serves an id to claim, and a refusal of one that is there would say another's
+	// image is on the server. A removal asking after an image Docker deleted with its last tag
+	// reads it as gone.
+	for _, image := range []string{"sha256:ccc", "sha256:fff", "sha256:0123", "sha256:abd", "sha256:ab1", "sha256:" + strings.Repeat("9", 64)} {
+		for _, argv := range [][]string{{"image", "inspect", "--format", "{{.Id}}", image}, {"tag", image, "busybox:devopsy-shop-prod-20240101000001"}} {
+			a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
+			if err != nil || len(a.Docker) != 0 || len(a.Claims) != 0 || a.Exit != 1 || !strings.Contains(a.Said, "No such image: "+image) {
+				t.Errorf("%q: %+v (%v)", argv, a, err)
+			}
 		}
 	}
 	if c := claims("pull", "-q", "postgres:16"); !slices.Equal(c, []string{"postgres:16"}) {
