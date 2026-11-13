@@ -552,10 +552,10 @@ func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 
 // --project-users list says a project user with no key that still holds anything a plain
 // remove refuses for and its destroy removes (heldBy: its claims, the containers, volumes and
-// networks under its names, its mnts, images and door directories), with its way out in words:
-// the server named alone gives the session no address. One with a key, or holding nothing, is
-// no such line, nor one whose destroy did not complete: its own line says how to complete it,
-// and no key takes it back while its mark holds it.
+// networks under its names, its mnts, images and door directories), with its destroy offered
+// by the session's server, in words with none. One with a key, or holding nothing, is no such
+// line, nor one whose destroy did not complete: its own line says how to complete it, by the
+// same address, and no key takes it back while its mark holds it.
 func TestProjectUsersListSaysKeyless(t *testing.T) {
 	t.Parallel()
 	home, root := t.TempDir(), t.TempDir()
@@ -584,6 +584,14 @@ esac
 		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") ||
 		!strings.Contains(out, "devopsy-mail: the destroy of mail's project user did not complete") || strings.Contains(out, "devopsy-mail has") {
 		t.Errorf("list (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", remote.ServerEnv + "=devopsy@vm1:"}, "--project-users-step", "list")
+	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds the uid claims env:shop:prod; the containers c1\n"+
+		"devopsy: | remove it with what it holds:\n"+
+		"devopsy: | $ devopsy @devopsy@vm1: --project-users remove shop --destroy\n") ||
+		!strings.Contains(out, "devopsy: | run it again, which completes it:\n"+
+			"devopsy: | $ devopsy @devopsy@vm1: --project-users remove mail --destroy\n") {
+		t.Errorf("list in a session (%d):\n%s", code, out)
 	}
 }
 

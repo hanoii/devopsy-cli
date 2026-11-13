@@ -295,6 +295,23 @@ fi
 `
 }
 
+// DestroyAgain is kind (report.Fix or report.Hint) offering project's --project-users remove
+// --destroy under text by server, the address a server's command takes (Session.Server,
+// ServerRef locally), or words alone when there is none: the one way every line that names a
+// project user's destroy offers it.
+func DestroyAgain(kind func(string, ...string) report.Remedy, server, project, text, words string) report.Remedy {
+	if server == "" || !ValidName(project) {
+		return kind(words)
+	}
+	return kind(text, "devopsy @"+server+" --project-users remove "+project+" --destroy")
+}
+
+// DestroyAgainFix is the fix of a refusal over project's destroy that did not complete: run it
+// again, which completes it, then what then says ("" for nothing more).
+func DestroyAgainFix(server, project, then string) report.Remedy {
+	return DestroyAgain(report.Fix, server, project, "run its destroy again, which completes it"+then+":", "run its destroy again (--project-users remove with --destroy), which completes it"+then)
+}
+
 // DoorUserDeleteScript is a --project-users remove --destroy's host step, as root on the host
 // through the util image (chroot into /host), once nothing is left under the project's names:
 // the user's user manager's mask (DoorHostScript's), the user itself with its home (userdel

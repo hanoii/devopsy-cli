@@ -24,6 +24,9 @@ const (
 	// EnvironmentEnv is the compose name of the environment those addresses name
 	// (Target.ComposeName): what a devopsy in a release compares with its own (Session.In).
 	EnvironmentEnv = "DEVOPSY_INTERNAL_ENVIRONMENT"
+	// ServerEnv is the address of the target the session is on as typed, a server named alone
+	// included (TypedAddress): what a hint of a server's command (cli.ServerScope) names.
+	ServerEnv = "DEVOPSY_INTERNAL_SERVER"
 )
 
 // commandMax and addressMax cap what a session's values may hold, wherever they are read
@@ -64,6 +67,8 @@ func carried(c string) bool {
 // as a release's hint names it, each "" when the session carries none.
 type Session struct {
 	Command, Address, Hint string
+	// Server is the address a server's command takes, a server named alone included.
+	Server string
 	// Name is the compose name of the environment Address and Hint name.
 	Name string
 }
@@ -83,7 +88,24 @@ func SessionFrom(getenv func(string) string) Session {
 			s.Name = n
 		}
 	}
+	if a := getenv(ServerEnv); isServerAddress(a) {
+		s.Server = a
+	}
 	return s
+}
+
+// isServerAddress says whether s is an address a server's command takes, within its cap: an
+// environment's (IsAddress), or a server named alone (<server>:) that ParseServer takes.
+func isServerAddress(s string) bool {
+	if IsAddress(s) {
+		return true
+	}
+	server, ok := strings.CutSuffix(s, ":")
+	if !ok || len(s) > addressMax {
+		return false
+	}
+	_, _, ok = ParseServer(server)
+	return ok
 }
 
 // composeNameRe is what a compose name holds (Target.ComposeName).
@@ -130,6 +152,14 @@ func (s Session) On(args string) string {
 		return ""
 	}
 	return "devopsy @" + s.Address + " " + args
+}
+
+// OnServer is the server's command devopsy @<Server> args, "" without an address.
+func (s Session) OnServer(args string) string {
+	if s.Server == "" {
+		return ""
+	}
+	return "devopsy @" + s.Server + " " + args
 }
 
 // Releasing is On by the address a hint to release, roll back, sync or restore names
@@ -182,13 +212,17 @@ func TypedAddress(t *Target) string {
 	return cmp.Or(t.Address, t.Name)
 }
 
-// sessionExports is the head of a session's script on t: Command, and t's address as typed
-// and as a release's hint names it with its compose name, unless t is a server named alone, which has no
-// environment to name. Each value is one quoted word of the script, whatever it holds.
+// sessionExports is the head of a session's script on t: Command, t's address as typed for
+// a server's command, and as typed and as a release's hint names it with its compose name,
+// unless t is a server named alone, which has no environment to name. Each value is one
+// quoted word of the script, whatever it holds.
 func sessionExports(t *Target) string {
 	s := ""
 	if carried(Command) {
 		s += CommandEnv + "=" + Quote(Command) + "; export " + CommandEnv + "\n"
+	}
+	if typed := TypedAddress(t); len(typed) <= addressMax {
+		s += ServerEnv + "=" + Quote(typed) + "; export " + ServerEnv + "\n"
 	}
 	if t.Name != "" {
 		if typed, hint := TypedAddress(t), HintAddress(t); len(typed) <= addressMax && len(hint) <= addressMax {

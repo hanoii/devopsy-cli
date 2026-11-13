@@ -262,12 +262,21 @@ func keysOf(who string) int {
 // its names: its destroy, offered by the server's address ref ("" for none, the way in words),
 // and a key added, in words, since a key's command takes the deploy user's address and a file.
 func keptUserHints(project, ref string) []report.Remedy {
-	key := report.Hint("or a key added for it (--ssh-keys with --for) takes it back")
-	if ref == "" {
-		return []report.Remedy{report.Hint("a --project-users remove of " + project + " with --destroy removes it with what it holds"), key}
+	return []report.Remedy{
+		remote.DestroyAgain(report.Hint, ref, project, "remove it with what it holds:", "a --project-users remove of "+project+" with --destroy removes it with what it holds"),
+		report.Hint("or a key added for it (--ssh-keys with --for) takes it back"),
 	}
-	return []report.Remedy{report.Hint("remove it with what it holds:", "devopsy @"+ref+" --project-users remove "+project+" --destroy"), key}
 }
+
+// destroyPendingHint is the way out of a project user's destroy that did not complete, project
+// its project's: its destroy run again, by the server's address ref ("" for none, in words).
+func destroyPendingHint(ref, project string) report.Remedy {
+	return remote.DestroyAgain(report.Hint, ref, project, "run it again, which completes it:", "its destroy run again (--project-users remove with --destroy) completes it")
+}
+
+// sessionServer is the address a server's command takes from the session this devopsy runs
+// in (remote.Session.Server), "" when it carries none.
+func sessionServer() string { return remote.SessionFrom(os.Getenv).Server }
 
 // liveNames are the compose names of what is there, for every report that goes by an
 // absence: the release root's environment directories (the deploy user's, never a read of a
@@ -487,11 +496,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 			add("door", k.User+" has no key and still holds "+strings.Join(k.Held, "; "), keptUserHints(k.Project, ref)...)
 		}
 		for _, u := range info.Door.Destroying {
-			hint := report.Hint("its destroy run again (--project-users remove with --destroy) completes it")
-			if ref != "" && remote.ValidName(u.Project) {
-				hint = report.Hint("run it again, which completes it:", "devopsy @"+ref+" --project-users remove "+u.Project+" --destroy")
-			}
-			add("door", u.User+": its --project-users remove --destroy did not complete, and the door answers it nothing", hint)
+			add("door", u.User+": its --project-users remove --destroy did not complete, and the door answers it nothing", destroyPendingHint(ref, u.Project))
 		}
 	}
 	return es

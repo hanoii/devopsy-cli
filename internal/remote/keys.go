@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -164,13 +165,13 @@ flock -w 60 9 || { ` + echoLine(report.ErrorLevel, "another edit of $f did not e
 // A user's --project-users remove --destroy (DoorDestroyingFile, "$f.destroying") is refused
 // first: settling would clear the marks it holds until its last step, and a key added would
 // let in a user it is removing.
-func keysSettle(user string) string {
+func keysSettle(user, server string) string {
 	if user == "" {
 		return ""
 	}
 	return `if [ -e "$f.destroying" ]; then
   ` + echoLine(report.ErrorLevel, "a --project-users remove --destroy of "+user+"'s did not complete: its keys change no more",
-		report.Fix("run its destroy again (--project-users remove with --destroy), which completes it")) + `
+		DestroyAgainFix(server, door.ProjectOfUser(user), "")) + `
   exit 1
 fi
 if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
@@ -181,12 +182,13 @@ fi
 `
 }
 
-// KeysReadScript prints the keys of user ("" the deploy user), if any.
-func KeysReadScript(user string) string {
+// KeysReadScript prints the keys of user ("" the deploy user), if any. server is the address
+// its refusal over a destroy offers the destroy by ("" for words), as the keys scripts' are.
+func KeysReadScript(user, server string) string {
 	settle := ""
 	if user != "" {
 		settle = `if [ -e "$f.ending" ] || [ -e "$f.removing" ] || [ -e "$f.destroying" ]; then
-` + keysLock + keysSettle(user) + `fi
+` + keysLock + keysSettle(user, server) + `fi
 `
 	}
 	return keysPrelude(user) + settle + `[ ! -f "$f" ] || cat "$f"
@@ -195,8 +197,8 @@ func KeysReadScript(user string) string {
 
 // KeysAddScript appends the authorized_keys line on stdin to user's keys ("" the deploy
 // user's), unless its key is there already (exit 3). It prints the file's path.
-func KeysAddScript(user string) string {
-	return keysPrelude(user) + keysLock + keysSettle(user) + `line=$(cat)
+func KeysAddScript(user, server string) string {
+	return keysPrelude(user) + keysLock + keysSettle(user, server) + `line=$(cat)
 blob=$(printf '%s\n' "$line" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) { print $(i + 1); exit } }')
 [ -n "$blob" ] || { ` + echoLine(report.ErrorLevel, "not a public key") + `; exit 1; }
 if [ -f "$f" ] && grep -qF -- " $blob" "$f"; then
@@ -216,7 +218,7 @@ printf '%s\n' "$f"
 // and its linger (EndProjectUserFlag): a key removed is one no longer trusted, and what it may
 // have left running, or set to start at boot, would outlive its logins, and keep the door by
 // its group.
-func KeysRemoveScript(user string) string {
+func KeysRemoveScript(user, server string) string {
 	last, end := "", ""
 	if user == "" {
 		last = `if ! ` + keysLeft(`"$f.tmp"`) + `; then
@@ -237,7 +239,7 @@ rm -f "$f.ending"
 		mark = `: >"$f.ending"
 `
 	}
-	return keysPrelude(user) + keysLock + keysSettle(user) + `blob=$(cat)
+	return keysPrelude(user) + keysLock + keysSettle(user, server) + `blob=$(cat)
 [ -f "$f" ] || { ` + echoLine(report.ErrorLevel, "no authorized keys on this server") + `; exit 3; }
 grep -qF -- " $blob" "$f" || { ` + echoLine(report.ErrorLevel, "that key is not authorized") + `; exit 3; }
 grep -vF -- " $blob" "$f" > "$f.tmp" || true

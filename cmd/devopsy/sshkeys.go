@@ -71,7 +71,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	}
 	list := func() ([]remote.AuthorizedKey, error) {
 		var buf bytes.Buffer
-		code, err := asked(remote.KeysReadScript(user), bytes.NewReader(nil), &buf)
+		code, err := asked(remote.KeysReadScript(user, targetRef(t)), bytes.NewReader(nil), &buf)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +89,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		var buf bytes.Buffer
-		code, err := asked(remote.KeysAddScript(user), strings.NewReader(k.Line()+"\n"), &buf)
+		code, err := asked(remote.KeysAddScript(user, targetRef(t)), strings.NewReader(k.Line()+"\n"), &buf)
 		if err == errSaid {
 			return 1
 		}
@@ -234,7 +234,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(fp + " is " + t.Host + "'s last key: removing it would lock everyone out")
 		}
 		var buf bytes.Buffer
-		code, err := asked(remote.KeysRemoveScript(user), strings.NewReader(k.Blob+"\n"), &buf)
+		code, err := asked(remote.KeysRemoveScript(user, targetRef(t)), strings.NewReader(k.Blob+"\n"), &buf)
 		if err == errSaid {
 			return 1
 		}

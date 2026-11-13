@@ -140,8 +140,7 @@ func listProjectUsers(d *remote.Door) int {
 			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, keysOf(name))
 		}
 		for _, k := range keylessUsers(d) {
-			// The server named alone carries no address to a session: the way out in words.
-			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Held, "; "), nil, keptUserHints(k.Project, "")...)
+			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Held, "; "), nil, keptUserHints(k.Project, sessionServer())...)
 		}
 	}
 	// An end a key's or a user's removal began and did not see through (remote.DoorEndingFile),
@@ -161,7 +160,7 @@ func listProjectUsers(d *remote.Door) int {
 	}
 	for _, who := range slices.Sorted(maps.Keys(destroying)) {
 		report.Default().Say(report.WarnLevel, who+": the destroy of "+destroying[who]+"'s project user did not complete, and the door answers it nothing", nil,
-			report.Hint("its destroy run again (--project-users remove with --destroy) completes it"))
+			destroyPendingHint(sessionServer(), destroying[who]))
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
@@ -281,7 +280,7 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	// other's.
 	if fileExists(remote.DoorDestroyingFile(who)) {
 		report.Fail(errors.New("the destroy of "+project+"'s project user did not complete, and adding the user would undo it"),
-			report.Fix("run its destroy again (--project-users remove with --destroy), which completes it, then add it"))
+			remote.DestroyAgainFix(sessionServer(), project, ", then add it"))
 		return 1
 	}
 	if fileExists(remote.DoorRemovingFile(who)) || fileExists(remote.DoorEndingFile(who)) {
@@ -565,7 +564,7 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	// A destroy holds its marks until its last step: only it completes them.
 	if fileExists(remote.DoorDestroyingFile(who)) {
 		report.Fail(errors.New("the destroy of "+project+"'s project user did not complete"),
-			report.Fix("run its destroy again (--project-users remove with --destroy), which completes it"))
+			remote.DestroyAgainFix(sessionServer(), project, ""))
 		return 1
 	}
 	// A user the config names, under door: users:, has no entry file (remote.ServerDoor).
@@ -596,7 +595,7 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	// them, nothing would destroy it any more.
 	if held, err := heldBy(d, project, who); err != nil || len(held) > 0 {
 		f := &report.Failure{Msg: who + "'s keys and processes are gone, and it still holds what is under its names, which its door: users: line in " + remote.UserConfigFile() + " is the one record of",
-			Details: held, Remedies: []report.Remedy{report.Fix("remove them with it first, by its destroy (--project-users remove with --destroy), then drop the line")}}
+			Details: held, Remedies: []report.Remedy{remote.DestroyAgain(report.Fix, sessionServer(), project, "remove them with it first, by its destroy, then drop the line:", "remove them with it first, by its destroy (--project-users remove with --destroy), then drop the line")}}
 		if err != nil {
 			f.Details = append(f.Details, "what it holds did not read: "+err.Error())
 		}
@@ -647,8 +646,7 @@ func finishRemoval(d *remote.Door, project, who string, end func(who string) err
 	if err := endRemoval(d, project, who, end); err != nil {
 		return failErr(err)
 	}
-	// The server named alone carries no address to a session: the ways out in words.
-	stays, hints := "its entry, Unix user, home and tree stay, holding its names", keptUserHints(project, "")
+	stays, hints := "its entry, Unix user, home and tree stay, holding its names", keptUserHints(project, sessionServer())
 	if _, err := user.Lookup(who); err != nil {
 		stays, hints = "its entry stays, holding its names; its Unix user was gone already", nil
 	}

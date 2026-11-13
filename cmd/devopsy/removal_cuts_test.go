@@ -171,9 +171,9 @@ func TestRemovalCuts(t *testing.T) {
 			}
 			return fmt.Sprintf("exit %d", removeProjectUser(d, "shop", who, c.entry, c.fakeEnd))
 		},
-		"a listing of its keys": func(c *removalCut) string { return c.script(remote.KeysReadScript(who), "") },
+		"a listing of its keys": func(c *removalCut) string { return c.script(remote.KeysReadScript(who, ""), "") },
 		"a key's removal": func(c *removalCut) string {
-			return c.script(remote.KeysRemoveScript(who), "AAAAC3NzaC1lZDI1NTE5AAAAIPkVz0SeYpQpDNG2uM1BtNSy2LkZ2w3gYBGsgWAIEtxd\n")
+			return c.script(remote.KeysRemoveScript(who, ""), "AAAAC3NzaC1lZDI1NTE5AAAAIPkVz0SeYpQpDNG2uM1BtNSy2LkZ2w3gYBGsgWAIEtxd\n")
 		},
 	}
 	for n := 1; n <= len(userRemovalSteps); n++ {
@@ -219,7 +219,7 @@ func TestRemovalCuts(t *testing.T) {
 		if authorizedKeysOf(&taken, who) != 0 || !strings.Contains(taken.String(), "laptop") || strings.Contains(taken.String(), "sync") {
 			t.Errorf("while its end is pending, sshd takes %q", taken.String())
 		}
-		out := c.script(remote.KeysReadScript(who), "")
+		out := c.script(remote.KeysReadScript(who, ""), "")
 		if !strings.Contains(readString(c.ended), who) || fileExists(c.ending) || !remote.KeysLeft(c.keys) || !fileExists(c.logins) || !fileExists(c.record) || !fileExists(c.entry) {
 			t.Errorf("ended %q, its end's mark %v, a key left %v, its logins %v, its record %v, its entry %v:\n%s",
 				readString(c.ended), fileExists(c.ending), remote.KeysLeft(c.keys), fileExists(c.logins), fileExists(c.record), fileExists(c.entry), out)
@@ -428,8 +428,10 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 				t.Errorf("sshd takes %q", taken.String())
 			}
 			// The add refuses for the mark, before anything, its tools' check included: a host
-			// without sudo or setfacl would refuse it for those.
-			if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "add", "shop"); code == 0 || !strings.Contains(out, "the destroy of shop's project user did not complete") {
+			// without sudo or setfacl would refuse it for those. Its fix runs the destroy again by
+			// the session's server.
+			if out, code := runDevopsy(t, t.TempDir(), append(c.env(), remote.ServerEnv+"=vm1:"), remote.ProjectUsersFlag, "add", "shop"); code == 0 || !strings.Contains(out, "the destroy of shop's project user did not complete") ||
+				!strings.Contains(out, "devopsy: | $ devopsy @vm1: --project-users remove shop --destroy\n") {
 				t.Errorf("an add over a destroy (%d):\n%s", code, out)
 			}
 			d, _ := remote.ServerDoor()
@@ -437,9 +439,12 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 				t.Error("a plain removal over a destroy passed")
 			}
 			if n == 1 {
-				for name, script := range map[string]string{"a listing": remote.KeysReadScript(who), "a key's add": remote.KeysAddScript(who)} {
+				// Its fix offers the destroy by the server's address, in words without one.
+				for name, script := range map[string]string{"a listing": remote.KeysReadScript(who, "vm1:"), "a key's add": remote.KeysAddScript(who, "")} {
 					out := c.script(script, cutKept)
-					if !strings.Contains(out, "--destroy of "+who+"'s did not complete") || !strings.Contains(out, "run its destroy again") || !fileExists(c.destroying) || remote.KeysLeft(c.keys) {
+					offered := strings.Contains(out, "devopsy: | $ devopsy @vm1: --project-users remove shop --destroy\n")
+					if !strings.Contains(out, "--destroy of "+who+"'s did not complete") || !strings.Contains(out, "run its destroy again") || !fileExists(c.destroying) || remote.KeysLeft(c.keys) ||
+						offered != (name == "a listing") {
 						t.Errorf("%s of its keys over a destroy:\n%s", name, out)
 					}
 				}
