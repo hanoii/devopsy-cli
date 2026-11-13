@@ -1125,7 +1125,10 @@ the steps, as root, for what it checks and does not set up.
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
                         root's and empty (releases: root in the deploy
-                        user's config.yaml, else its home, never /)
+                        user's config.yaml, else its home, never /);
+                        while the config names none and the home holds
+                        no project, asked first: the home or a volume it
+                        could be on, the answer named in config.yaml
   daemon.json           rotated logs (log-driver local), live-restore,
                         and /24 address pools, merged in: every other key
                         stays. A value someone else set is asked about,
@@ -1156,9 +1159,9 @@ A second run changes nothing. What it applied is recorded in server.yaml
 beside the deploy user's config.yaml, which marks the server set up.
 
 Options:
-  --yes   ask nothing: keep every value someone changed, restart Docker
-          only when no container runs, and load the metadata firewall
-          (or remove it, for allow)
+  --yes   ask nothing: keep the release root where it is and every value
+          someone changed, restart Docker only when no container runs,
+          and load the metadata firewall (or remove it, for allow)
 
 Examples:
   devopsy @devopsy@vm1: --server-setup

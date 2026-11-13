@@ -445,8 +445,10 @@ var (
 // Releases is the releases: section of the user-level config: settings of
 // the machine releases land on.
 type Releases struct {
-	// Root is where releases live: relative paths resolve against it.
-	Root string `yaml:"root"`
+	// Root is where releases live: relative paths resolve against it. Named: the config names
+	// it, which ReleaseSettings fills in (the home's otherwise).
+	Root  string `yaml:"root"`
+	Named bool   `yaml:"-"`
 	// Keep is the default for projects; MaxKeep caps any project's.
 	Keep    int `yaml:"keep"`
 	MaxKeep int `yaml:"max_keep"`
@@ -1238,6 +1240,7 @@ func ReleaseSettings() (Releases, error) {
 			r.GC = *f.gc
 		}
 	}
+	r.Named = r.Root != ""
 	if r.Root == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {

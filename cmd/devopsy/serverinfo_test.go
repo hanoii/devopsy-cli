@@ -492,13 +492,18 @@ func TestServerInfoReport(t *testing.T) {
 	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{"setup         by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `              daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
-		"              volumes: the release root is on no volume of its own; volumes that could hold it:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n"} {
+		"              volumes: the release root is on no volume of its own; volumes that could hold it:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n              --server-setup without --yes asks which one holds releases, before the first release\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("set up: no %q in:\n%s", want, out)
 		}
 	}
 	if len(warnings) != 0 {
 		t.Errorf("set up: %+v", warnings)
+	}
+	// A root the config names: --server-setup asks nothing, so the hint names the key.
+	info.Setup.RootNamed = true
+	if out, _ = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there\n") {
+		t.Errorf("a root named, the hint:\n%s", out)
 	}
 	info.Docker.LogOpts = nil
 	info.Setup.Parts[0].State, info.Setup.Parts[0].Observed = setup.Changed, `{"log-driver":"json-file"}`

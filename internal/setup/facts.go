@@ -42,7 +42,12 @@ type Facts struct {
 	// Candidates are the volumes the root could be on; Projects whether the root holds a
 	// project's environment already.
 	Candidates []Candidate `json:"candidates,omitempty"`
-	Projects   bool        `json:"projects"`
+	// RootNamed: the deploy user's config (ConfigFile) names releases: root. RootProposed: these
+	// facts judge the root an apply names there (facts --root), which the config names not yet.
+	RootNamed    bool   `json:"root_named,omitempty"`
+	RootProposed bool   `json:"root_proposed,omitempty"`
+	ConfigFile   string `json:"config_file,omitempty"`
+	Projects     bool   `json:"projects"`
 	// Record is the record's path, "" while there is none: the server is not set up by
 	// devopsy yet.
 	Record string `json:"record,omitempty"`
@@ -142,8 +147,14 @@ func (f Facts) Changes() bool {
 	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
-// Hint says whether the volume hint goes with f: candidates, none of them the root's, and
-// no project released there yet.
+// Hint says whether the volume hint goes with f: candidates, none of them the root's, no
+// project released there yet, and no root proposed (the answer to AsksRoot).
 func (f Facts) Hint() bool {
-	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates)
+	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates) && !f.RootProposed
+}
+
+// AsksRoot says whether --server-setup asks where releases live: where the hint goes (Hint)
+// and the config names no root, so the root is the home and no release made it hold anything.
+func (f Facts) AsksRoot() bool {
+	return f.Hint() && !f.RootNamed
 }

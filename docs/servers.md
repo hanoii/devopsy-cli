@@ -204,10 +204,16 @@ metadata firewall (or removes it, for `allow`), so a new server set up
 in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
-While the release root holds no project and is not on a volume of its
-own, it lists the volumes it could be on, with their size and free
-space: `releases: root: <mount point>` in the deploy user's
-`config.yaml`, before the first release, puts releases there.
+While the deploy user's `config.yaml` names no `releases: root`, and the
+home holds no project and is on no volume of its own, `--server-setup`
+asks where releases live: the home, or one of the volumes the root could
+be on, listed with their size and free space. It names the answer as
+`releases: root` in that `config.yaml`, adding the line and leaving the
+rest of the file as it is, then makes the root there and has Docker wait
+for its mount; once named, it asks no more. With `--yes` it asks
+nothing, keeps the home and lists the volumes instead; `releases: root:
+<mount point>` in the deploy user's `config.yaml`, before the first
+release, puts releases there by hand.
 
 A second run changes nothing. What `--server-setup` applied, the values
 kept, the devopsy that last applied with no failure, and the one that

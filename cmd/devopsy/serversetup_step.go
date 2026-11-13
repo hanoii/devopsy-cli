@@ -135,8 +135,21 @@ func runServerSetupStep(args []string) int {
 	if n, err := strconv.Atoi(os.Getenv(remote.RestartWaitEnv)); err == nil && n > 0 {
 		h.restartWait = time.Duration(n) * time.Second
 	}
-	if len(args) == 1 && args[0] == "facts" {
-		rd, err := readSetup(h, readHostDocker(h))
+	if len(args) > 0 && args[0] == "facts" {
+		proposed := ""
+		switch {
+		case len(args) == 3 && args[1] == "--root":
+			proposed = args[2]
+		case len(args) != 1:
+			return fail("usage: devopsy " + remote.ServerSetupFlag + " facts [--root <path>]")
+		}
+		hd := readHostDocker(h)
+		if proposed != "" {
+			if err := rootProposal(h, hd, proposed); err != nil {
+				return failErr(err)
+			}
+		}
+		rd, err := readSetupAt(h, hd, proposed)
 		if err != nil {
 			return failErr(err)
 		}
@@ -155,7 +168,7 @@ func runServerSetupStep(args []string) int {
 		}
 		return applySetup(h, a)
 	}
-	return fail("usage: devopsy " + remote.ServerSetupFlag + " facts | apply [--keep <part>=<sha256>]... [--replace <part>=<sha256>]... [--restart | --restart-idle] [--upgrade] [--said=<id>,...]")
+	return fail("usage: devopsy " + remote.ServerSetupFlag + " facts [--root <path>] | apply [--root <path>] [--keep <part>=<sha256>]... [--replace <part>=<sha256>]... [--restart | --restart-idle] [--upgrade] [--said=<id>,...]")
 }
 
 // setupApply is what an apply was asked: the answers by part, a restart now (idle: only
@@ -171,6 +184,9 @@ type setupApply struct {
 	// said are the IDs of the refusals the first session said (--said=<id>,...), nil when
 	// none was (--upgrade, an apply run alone).
 	said []string
+	// root is the release root the operator chose (--root), which the apply names as
+	// releases: root in the deploy user's config first, "" for none.
+	root string
 }
 
 func parseApply(args []string) (setupApply, error) {
@@ -185,6 +201,12 @@ func parseApply(args []string) (setupApply, error) {
 			a.upgrade = true
 		case "--said":
 			a.said = []string{}
+		case "--root":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return a, errors.New("--root needs a path")
+			}
+			a.root = args[i+1]
+			i++
 		case "--keep", "--replace":
 			if i+1 >= len(args) {
 				return a, errors.New(args[i] + " needs <part>=<sha256>")
@@ -211,8 +233,8 @@ func parseApply(args []string) (setupApply, error) {
 			return a, errors.New("apply takes no " + args[i])
 		}
 	}
-	if a.upgrade && (a.restart || len(a.answers) > 0) {
-		return a, errors.New("apply --upgrade takes no answer and no restart")
+	if a.upgrade && (a.restart || len(a.answers) > 0 || a.root != "") {
+		return a, errors.New("apply --upgrade takes no answer, no root and no restart")
 	}
 	return a, nil
 }
@@ -221,12 +243,22 @@ func parseApply(args []string) (setupApply, error) {
 // items, each tunable's state, pending, and what the operator words. It changes nothing and
 // takes no lock.
 func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
+	return readSetupAt(h, hd, "")
+}
+
+// readSetupAt is readSetup with the release root proposed ("" for none) in place of the home,
+// the one the config names not yet (rootProposal), as the apply that names it then reads it.
+func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error) {
 	var rd setupRead
 	r, err := remote.ReleaseSettings()
 	if err != nil {
 		return rd, err
 	}
 	f := &rd.facts
+	f.RootNamed, f.ConfigFile = r.Named, remote.UserConfigFile()
+	if proposed != "" {
+		r.Root, f.RootProposed = proposed, true
+	}
 	f.Root = resolveRoot(r.Root)
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
@@ -287,13 +319,7 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		f.Files = append(f.Files, mountsDropInFact(h, text))
 	}
 
-	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
-	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
-		if _, size, free, _, err := statDisk(c.MountPoint); err == nil {
-			c.Size, c.Free = size, free
-		}
-		f.Candidates = append(f.Candidates, c)
-	}
+	f.Candidates = rootCandidates(h, hd)
 	// A root it cannot read in full is taken for one with projects: no hint to move it.
 	bases, err := deployEnvBases(f.Root)
 	f.Projects = len(bases) > 0 || err != nil
@@ -338,6 +364,95 @@ func dockerHere(d remote.DockerFacts) bool {
 func emptyDir(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	return err == nil && !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() != "lost+found" })
+}
+
+// nameReleaseRoot names root as releases: root in the deploy user's config (setup.SetReleaseRoot),
+// as the operator chose it, once rootProposal takes it; a config naming that root already, as
+// an apply cut after its write leaves it, is left as it is.
+func nameReleaseRoot(h setupHost, hd hostDocker, root string) error {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return err
+	}
+	if r.Named && resolveRoot(r.Root) == resolveRoot(root) {
+		return nil
+	}
+	if err := rootProposal(h, hd, root); err != nil {
+		return err
+	}
+	file := remote.UserConfigFile()
+	if err := editConfig(file, func(have []byte) ([]byte, error) { return setup.SetReleaseRoot(have, root) }); err != nil {
+		return errors.New("devopsy could not name the release root in " + file + ": " + err.Error())
+	}
+	report.Info("named "+root+" the release root in "+file+": releases live there", strings.Split(strings.TrimSuffix(setup.ReleaseRootLines(root), "\n"), "\n")...)
+	return nil
+}
+
+// editConfig writes the deploy user's config at file as edit makes it of the text there (nil
+// for no file), whole (setup.WriteFile: by rename, a link written at the file it names), the
+// file's mode kept (0600 for one it makes), its directory made when missing.
+func editConfig(file string, edit func([]byte) ([]byte, error)) error {
+	have, err := os.ReadFile(file)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	text, err := edit(have)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0o600)
+	if fi, err := os.Stat(file); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		return err
+	}
+	return setup.WriteFile(file, text, mode)
+}
+
+// rootCandidates are the volumes the release root could be on (setup.Candidates), off this
+// host's mounts and Docker's root, with their size and free space.
+func rootCandidates(h setupHost, hd hostDocker) []setup.Candidate {
+	var cs []setup.Candidate
+	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
+	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
+		if _, size, free, _, err := statDisk(c.MountPoint); err == nil {
+			c.Size, c.Free = size, free
+		}
+		cs = append(cs, c)
+	}
+	return cs
+}
+
+// rootProposal refuses a release root proposed for the config (facts --root, apply --root)
+// that --server-setup would not ask about: one while the config names a root, or while the
+// home holds a project (setup.Facts.AsksRoot), or one other than the home or a volume it
+// could be on, by their one form (resolveRoot). The operator only chooses among those.
+func rootProposal(h setupHost, hd hostDocker, proposed string) error {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return err
+	}
+	if r.Named {
+		return errors.New("releases: root is named in " + remote.UserConfigFile() + " already (" + r.Root + "): only its admin changes it")
+	}
+	home := resolveRoot(r.Root)
+	if bases, err := deployEnvBases(home); len(bases) > 0 || err != nil {
+		return errors.New("the release root " + home + " holds a project already: releases stay there")
+	}
+	if !filepath.IsAbs(proposed) || filepath.Clean(proposed) != proposed {
+		return errors.New("a release root is an absolute path, clean, not " + proposed)
+	}
+	want := resolveRoot(proposed)
+	if want == home {
+		return nil
+	}
+	for _, c := range rootCandidates(h, hd) {
+		if resolveRoot(c.MountPoint) == want {
+			return nil
+		}
+	}
+	return errors.New(proposed + " is neither the home nor a volume the release root could be on")
 }
 
 // resolveRoot is root with every link along it followed, as far as its parts are there, each
@@ -738,7 +853,15 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	defer lock.Close()
 
-	rd, err := readSetup(h, readHostDocker(h))
+	// The root chosen goes into the config first, so everything after judges it as the
+	// config names it; a failure there ends the apply, nothing judged for another root.
+	hd := readHostDocker(h)
+	if a.root != "" {
+		if err := nameReleaseRoot(h, hd, a.root); err != nil {
+			return failed(err.Error())
+		}
+	}
+	rd, err := readSetup(h, hd)
 	if err != nil {
 		return failed(err.Error())
 	}
