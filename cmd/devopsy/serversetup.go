@@ -76,10 +76,15 @@ func runServerSetup(t *remote.Target, args []string) int {
 	// Where releases live, asked at a terminal while it is open (setup.Facts.AsksRoot), before
 	// anything is shown, --root answering it: a volume chosen is judged by facts --root, as the
 	// apply that names it first then reads it, and the home names nothing.
+	// Without a terminal, a question fails offering the run's own command with --yes.
+	ask := terminalAsker{t: t, command: "--server-setup", yes: "keeps the release root where it is and " + yesKeeps}
+	if root != "" {
+		ask.command, ask.yes = "--server-setup --root "+remote.QuoteWord(root), "keeps "+yesKeeps
+	}
 	answered := root != ""
 	if f.AsksRoot() && !yes && !answered && atTerminal() {
 		answered = true
-		chosen, err := askRoot(f, terminalAsker{t: t})
+		chosen, err := askRoot(f, ask)
 		if err != nil {
 			return failErr(err)
 		}
@@ -95,7 +100,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
 	said := sayRefusals(f, report.ErrorLevel, nil, true)
 	refused := len(f.Refused()) > 0
-	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
+	applyArgs, run, err := planSetup(f, yes, ask)
 	if err == errDeclined {
 		report.Error("nothing changed")
 		return 1
@@ -244,18 +249,20 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	return args, changes || f.Records() || answers || restart || f.Record == "" || f.FloorNote, nil
 }
 
-// terminalAsker asks at the terminal, and fails without one, naming --yes: command is what
-// asks (--server-setup when ""), yes what --yes does in its place.
+// yesKeeps is what --server-setup --yes keeps and does in place of its questions, after
+// "keeps".
+const yesKeeps = "every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says"
+
+// terminalAsker asks at the terminal, and fails without one, naming --yes: command is the
+// run's own (its flag and arguments), which asks, yes what --yes does in its place.
 type terminalAsker struct {
 	t            *remote.Target
 	command, yes string
 }
 
 func (a terminalAsker) noTerminal() error {
-	command := cmp.Or(a.command, "--server-setup")
-	yes := cmp.Or(a.yes, "keeps the release root where it is and every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says")
-	return &report.Failure{Msg: command + " asks first, and there is no terminal to ask at",
-		Remedies: []report.Remedy{report.Fix("add --yes, which "+yes+":", "devopsy @"+targetRef(a.t)+" "+command+" --yes")}}
+	return &report.Failure{Msg: a.command + " asks first, and there is no terminal to ask at",
+		Remedies: []report.Remedy{report.Fix("add --yes, which "+a.yes+":", "devopsy @"+targetRef(a.t)+" "+a.command+" --yes")}}
 }
 
 func (a terminalAsker) replace(p setup.PartFact) (bool, error) {

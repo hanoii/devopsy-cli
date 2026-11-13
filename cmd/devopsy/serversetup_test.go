@@ -1061,17 +1061,14 @@ func TestServerSetupNamesNoRootOverVars(t *testing.T) {
 }
 
 // --server-setup --root without --yes and without a terminal fails on its question naming
-// --yes, and the command it offers keeps the --root asked for.
-//
-// BUG (review round 2): the fix is "--server-setup --yes" alone, said to keep the release root
-// where it is (terminalAsker.noTerminal knows nothing of --root): copied, it sets the server up
-// on the home, the root the operator asked for dropped.
+// --yes, and the command it offers is the run's own with --yes, the --root asked for kept,
+// never said to keep the release root where it is.
 func TestServerSetupRootWithoutTerminalKeepsRootInItsFix(t *testing.T) {
 	t.Parallel()
 	s, _, vol, config := rootChoice(t)
 	before := readString(config)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--root", vol)
-	if code != 1 || !strings.Contains(out, "--server-setup asks first, and there is no terminal to ask at") || readString(config) != before {
+	if code != 1 || !strings.Contains(out, "--server-setup --root "+vol+" asks first, and there is no terminal to ask at") || readString(config) != before {
 		t.Fatalf("--root, no terminal (%d), config %q:\n%s", code, readString(config), out)
 	}
 	if !strings.Contains(out, "$ devopsy @devopsy@one: --server-setup --root "+vol+" --yes\n") || strings.Contains(out, "keeps the release root where it is") {
