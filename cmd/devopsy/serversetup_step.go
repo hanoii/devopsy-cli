@@ -527,32 +527,51 @@ func rootRefusal(h setupHost, root string) *setup.Refusal {
 }
 
 // bootMounted says why the filesystem root is on may not hold releases after a boot, nil when
-// it does: one in memory (tmpfs, ramfs) keeps nothing across a reboot, whatever mounts it; /
-// is always mounted, and another mount (the longest mount point holding root) is where its
-// mount unit has a file (FragmentPath, /etc/fstab's through its generator or a .mount unit),
-// never one mounted by hand (none) or by systemd-mount (under /run/systemd/transient/).
-// Docker's drop-in then only orders it after the mount, which a boot leaves out, and releases
-// would land on the disk under it.
+// it does: one in memory (tmpfs, ramfs) keeps nothing across a reboot, whatever mounts it. Its
+// live mount (the longest mount point holding root), / aside, needs a mount unit with a file
+// (FragmentPath, /etc/fstab's through its generator or a .mount unit), never one mounted by
+// hand (none) or by systemd-mount (under /run/systemd/transient/): Docker's drop-in only orders
+// it after the mount, which a boot leaves out. A part of root below that mount with such a unit
+// is mounted at boot and not now (an fstab line with nofail whose disk did not attach). Either
+// way releases would land on the disk under the mount.
 func bootMounted(h setupHost, root string) *setup.Refusal {
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	point, fstype := setup.MountOf(string(mountinfo), root)
+	refuse := func(why, fix, command string) *setup.Refusal {
+		return &setup.Refusal{Item: setup.RefusalRoot, Message: why, Fix: fix, Command: command}
+	}
+	fragment := func(p string) (string, *setup.Refusal) {
+		unit := setup.MountUnitName(p)
+		f, err := unitProperty(unit, "FragmentPath")
+		if err != nil {
+			return "", refuse("devopsy cannot tell whether "+p+" is mounted at boot: systemctl show "+unit+": "+err.Error(), "", "")
+		}
+		return f, nil
+	}
 	switch {
 	case fstype == "tmpfs" || fstype == "ramfs":
-		return &setup.Refusal{Item: setup.RefusalRoot, Message: point + " is a " + fstype + ", in memory: it keeps nothing across a reboot, and every release on it would be gone after one",
-			Fix: "name a directory on a disk with --root"}
-	case point == "/":
-		return nil
+		return refuse(point+" is a "+fstype+", in memory: it keeps nothing across a reboot, and every release on it would be gone after one", "name a directory on a disk with --root", "")
 	case point == "":
-		return &setup.Refusal{Item: setup.RefusalRoot, Message: "devopsy cannot tell what mounts " + root + " at boot: no mount in /proc/self/mountinfo holds it"}
+		return refuse("devopsy cannot tell what mounts "+root+" at boot: no mount in /proc/self/mountinfo holds it", "", "")
 	}
-	unit := setup.MountUnitName(point)
-	fragment, err := unitProperty(unit, "FragmentPath")
-	switch {
-	case err != nil:
-		return &setup.Refusal{Item: setup.RefusalRoot, Message: "devopsy cannot tell whether " + point + " is mounted at boot: systemctl show " + unit + ": " + err.Error()}
-	case fragment == "" || strings.HasPrefix(fragment, "/run/systemd/transient/"):
-		return &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts " + point + " at boot (it was mounted by hand, or by systemd-mount), so after a reboot releases would land on the disk under it",
-			Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}
+	for p := root; p != point && p != "/"; p = filepath.Dir(p) {
+		f, refusal := fragment(p)
+		if refusal != nil {
+			return refusal
+		}
+		if f != "" {
+			return refuse(p+" is mounted at boot ("+f+"), and not mounted now, so releases would land on the disk under it and hide once it mounts", "mount it, as root, then run --server-setup again:", "systemctl start "+remote.QuoteWord(setup.MountUnitName(p)))
+		}
+	}
+	if point == "/" {
+		return nil
+	}
+	f, refusal := fragment(point)
+	if refusal != nil {
+		return refusal
+	}
+	if f == "" || strings.HasPrefix(f, "/run/systemd/transient/") {
+		return refuse("nothing mounts "+point+" at boot (it was mounted by hand, or by systemd-mount), so after a reboot releases would land on the disk under it", "add it to /etc/fstab, as root, then reload systemd:", "systemctl daemon-reload")
 	}
 	return nil
 }

@@ -222,7 +222,8 @@ nothing, and the next run asks again.
 any directory (for example `/mnt/vol1/releases`). It is refused before
 anything changes while the config names another root or the home holds
 something of devopsy's, where the release root's check refuses it, on a
-filesystem nothing mounts at boot, or in memory (`tmpfs`, `ramfs`), which
+filesystem nothing mounts at boot, under a mount point mounted at boot
+and not mounted now, or in memory (`tmpfs`, `ramfs`), which
 keeps nothing across a reboot; naming the root releases live in
 already, it does nothing. With `--yes`, or without a terminal, and no
 `--root`, or with no volume offered, nothing is asked and the home is

@@ -29,8 +29,8 @@ import (
 // --server-setup: systemd, Docker as this host's docker.service (docker-info.json), the live
 // buffers low, and fakes of systemctl (a restart takes docker-info.after, a new
 // InvocationID; devopsy-firewall.service's start runs the loader, its result kept in fwresult
-// until the unit runs again, as systemd keeps it; a mount unit's file is fstab's unless
-// fragment.<unit> says otherwise), dockerd, sysctl, iptables and flock.
+// until the unit runs again, as systemd keeps it; a mount unit's file is what fragment.<unit>
+// says, none for a unit no test names), dockerd, sysctl, iptables and flock.
 func setupServer(t *testing.T) (*syncSetup, string) {
 	t.Helper()
 	s := newSyncSetup(t)
@@ -93,11 +93,11 @@ case "$*" in
   # polkit there when the host root says so.
   "show -p LoadState --value polkit.service") cat "$h/polkit" 2>/dev/null || echo not-found ;;
   # A mount unit's file as a test writes it in fragment.<unit> (fails: systemctl answers
-  # nothing), else /etc/fstab's line through its generator.
+  # nothing), else none, as systemd answers for a unit it has no file of.
   "show -p FragmentPath --value "*.mount)
     f="$h/fragment.$5"
     [ "$(cat "$f" 2>/dev/null)" != fails ] || exit 1
-    if [ -f "$f" ]; then cat "$f"; else echo "/run/systemd/generator/$5"; fi ;;
+    [ ! -f "$f" ] || cat "$f" ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -781,16 +781,25 @@ func TestRestartLocksOnlyTheDeployUsersEnvironments(t *testing.T) {
 
 // rootChoice is setupServer's server with no releases: root named, the home the root then, and a
 // volume the root could be on at vol (a mount of its own in the host root's mountinfo, on
-// another disk than /'s, mounted at boot as the fake systemctl says by default), not made yet;
-// config is the deploy user's config.
+// another disk than /'s, mounted at boot by an /etc/fstab line, its unit's file the
+// generator's), not made yet; config is the deploy user's config.
 func rootChoice(t *testing.T) (s *syncSetup, host, vol, config string) {
 	t.Helper()
 	s, host = setupServer(t)
 	tmp := filepath.Dir(s.root)
 	vol, config = filepath.Join(tmp, "vol"), filepath.Join(tmp, "home", "config.yaml")
 	write(t, config, "# the admin's\nsnapshots:\n  mirror: false\n", 0o644)
+	mountedAtBoot(t, host, vol)
 	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n", 0o644)
 	return s, host, vol, config
+}
+
+// mountedAtBoot gives the fake systemctl in host a mount unit with a file for point, as an
+// /etc/fstab line makes one through its generator.
+func mountedAtBoot(t *testing.T, host, point string) {
+	t.Helper()
+	unit := setup.MountUnitName(point)
+	write(t, filepath.Join(host, "fragment."+unit), "/run/systemd/generator/"+unit+"\n", 0o644)
 }
 
 // setupFactsOf is the setup's facts as s's server prints them (facts, then args), with the
@@ -942,13 +951,22 @@ func TestServerSetupOffersVolumesMountedAtBoot(t *testing.T) {
 			t.Errorf("%s: a root under it (%d):\n%s", name, code, out)
 		}
 	}
-	write(t, filepath.Join(host, "fragment."+unit), "/run/systemd/generator/"+unit+"\n", 0o644)
+	mountedAtBoot(t, host, vol)
 	if f, out, code := setupFactsOf(s); code != 0 || !f.AsksRoot() {
 		t.Errorf("fstab's (%d): asks %v, %+v\n%s", code, f.AsksRoot(), f.Candidates, out)
 	}
 	under := filepath.Join(filepath.Dir(vol), "releases")
 	if f, out, code := setupFactsOf(s, "--root", under); code != 0 || !f.NamesRoot || f.Root != under {
 		t.Errorf("a root on / (%d): %+v\n%s", code, f, out)
+	}
+	// A root under a mount point a unit with a file names, not mounted now (an fstab line with
+	// nofail whose disk did not attach): refused, since releases would land on the disk under it
+	// and hide once it mounts.
+	data := filepath.Join(filepath.Dir(vol), "data")
+	mountedAtBoot(t, host, data)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "facts", "--root", filepath.Join(data, "releases")); code != 1 ||
+		!strings.Contains(out, "devopsy: error: "+data+" is mounted at boot (/run/systemd/generator/"+setup.MountUnitName(data)+"), and not mounted now") {
+		t.Errorf("a root under a mount point not mounted (%d):\n%s", code, out)
 	}
 }
 
@@ -1003,6 +1021,7 @@ func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
 	home := filepath.Dir(s.root)
 	// Outside the home: a directory in it would read as a project of the home's.
 	vol := filepath.Join(t.TempDir(), "vol")
+	mountedAtBoot(t, host, vol)
 	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n", 0o644)
 	write(t, filepath.Join(vol, "shop", "prod", "releases", ".keep"), "", 0o644)
 	owner := uids.Owner{Project: "shop", Env: "prod"}
