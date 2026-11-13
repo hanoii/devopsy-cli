@@ -16,10 +16,13 @@ const (
 var Topics = []Topic{
 	{
 		Name:    Docker,
-		Summary: "Docker from its repository, its compose and buildx plugins",
-		Title:   "Docker, with its compose and buildx plugins",
-		Why: "devopsy runs everything through the host's docker.service, as the deploy user, and never installs it: " +
-			"--server-setup refuses a Docker that does not answer, lacks its compose or buildx plugin, or is not the host's service.",
+		Summary: "a current Docker from its repository, compose and buildx",
+		Title:   "A current Docker, with its compose and buildx plugins",
+		Why: "devopsy runs everything through the host's docker.service, as the deploy user, and never installs it. " +
+			"Every server runs Docker's containerd image store, buildx 0.33.0 or later and compose 2.33.0 or later: " +
+			"--server-setup, every release and --project-users add refuse a Docker that does not answer, lacks its compose or buildx plugin, or runs below any of them, and --server-setup one that is not the host's service. " +
+			"devopsy supports a current Docker installed fresh, which is on its containerd image store; one upgraded from an older Docker, or a distribution's own package, may run the classic image store, which devopsy refuses: " +
+			"these steps are then for a new server, where the projects that server runs are released.",
 		Steps: []Step{
 			{"Add Docker's apt repository, as Docker's install guide says (https://docs.docker.com/engine/install/), since the distributions' own packages lag behind it. A list of it already there is removed first: apt refuses every source while two lists of it name different keys.", []string{
 				`for f in /etc/apt/sources.list.d/*; do if grep -qs download.docker.com "$f"; then rm -f "$f"; fi; done`,
@@ -32,8 +35,7 @@ var Topics = []Topic{
 				`printf 'Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$ID" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.sources`,
 				`apt-get update`,
 			}},
-			{"Install Docker with its compose and buildx plugins, and apparmor, whose parser Docker needs to start containers on a kernel with AppArmor; then start Docker now and at every boot. " +
-				"Where the distribution's own docker.io package is installed, apt replaces it with Docker's, which stops every container while it does.", []string{
+			{"Install Docker with its compose and buildx plugins, and apparmor, whose parser Docker needs to start containers on a kernel with AppArmor; then start Docker now and at every boot.", []string{
 				`apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin apparmor`,
 				`systemctl enable --now docker`,
 			}},
@@ -41,12 +43,17 @@ var Topics = []Topic{
 				`user=devopsy`,
 				`usermod -aG docker "$user"`,
 			}},
+			{"Where Docker from its repository runs already with an older buildx or compose, upgrade the two plugins' packages alone, which restarts nothing: an upgrade of docker-ce or containerd.io restarts Docker, which stops every container.", []string{
+				`apt-get update`,
+				`apt-get install -y --only-upgrade docker-buildx-plugin docker-compose-plugin`,
+			}},
 		},
-		Check: Step{"Docker answers the deploy user, with both plugins, and --server-setup refuses none of it.", []string{
+		Check: Step{"Docker answers the deploy user, its driver type io.containerd.snapshotter.v1 (the classic image store shows none), buildx 0.33.0 or later and compose 2.33.0 or later, and --server-setup refuses none of it.", []string{
 			`user=devopsy`,
 			`runuser -u "$user" -- docker version --format '{{.Server.Version}}'`,
-			`runuser -u "$user" -- docker compose version`,
+			`runuser -u "$user" -- docker info --format '{{.DriverStatus}}'`,
 			`runuser -u "$user" -- docker buildx version`,
+			`runuser -u "$user" -- docker compose version`,
 		}},
 	},
 	{
@@ -105,10 +112,10 @@ var Topics = []Topic{
 	},
 	{
 		Name:    ProjectUsers,
-		Summary: "sudo and acl, the door's directory, Docker's image store",
+		Summary: "sudo and acl, the door's directory",
 		Title:   "What a server with project users needs",
 		Why: "Project users reach Docker through the door, devopsy's check of every Docker request they make. The door keeps their data in a directory of its own on a mount with nosuid and nodev, " +
-			"and needs sudo, visudo and setfacl, and Docker's containerd image store with buildx 0.33.0 or later: --project-users add refuses a server without any of them. " +
+			"and needs sudo, visudo and setfacl: --project-users add refuses a server without any of them, as it refuses a Docker below what every server runs (the docker topic). " +
 			"--server-info warns of each one missing, and of sudo, visudo or setfacl only notes it while the server has no project user. " +
 			"/proc should hide other users' processes from project users too (the processes topic).",
 		Steps: []Step{
@@ -129,29 +136,12 @@ var Topics = []Topic{
 				`runuser -u "$user" -- mkdir -p "${config%/*}"`,
 				`grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
 			}},
-			{"Give Docker buildx 0.33.0 or later by upgrading its plugin's package alone, which restarts nothing.", []string{
-				`apt-get update`,
-				`apt-get install -y --only-upgrade docker-buildx-plugin`,
-			}},
-			{"Skip this step where Docker is on its containerd image store already, as a Docker 29 installed fresh is: the first command then shows io.containerd.snapshotter.v1 as its driver type, and the classic store shows no driver type. " +
-				"Moving a Docker off the classic store restarts it, which stops every container, and no container or image of the classic store shows on the containerd one (volumes and networks stay): " +
-				"every environment then needs a release to make its containers again, a rollback finds none of the images held for it, and the classic store keeps its disk until it is removed. " +
-				"To move it, turn on its daemon's containerd-snapshotter feature in /etc/docker/daemon.json and restart Docker (https://docs.docker.com/engine/storage/containerd/); where jq fails, nothing is written and nothing restarts:", []string{
-				`docker info --format '{{.DriverStatus}}'`,
-				`apt-get install -y jq`,
-				`f=/etc/docker/daemon.json`,
-				`[ -s "$f" ] || echo '{}' > "$f"`,
-				`jq '.features."containerd-snapshotter" = true' "$f" > "$f.new" && cat "$f.new" > "$f" && systemctl restart docker`,
-				`rm -f "$f.new"`,
-			}},
 			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
 		},
-		Check: Step{"the three tools are found, the directory is mounted with nosuid and nodev, Docker says its containerd image store (io.containerd.snapshotter.v1) and buildx 0.33.0 or later, and --server-info no longer says any of them.", []string{
+		Check: Step{"the three tools are found, the directory is mounted with nosuid and nodev, and --server-info no longer says either of them.", []string{
 			`command -v sudo visudo setfacl`,
 			`space=/var/lib/devopsy-door`,
 			`findmnt -no OPTIONS --target "$space"`,
-			`docker info --format '{{.DriverStatus}}'`,
-			`docker buildx version`,
 		}},
 	},
 	{
