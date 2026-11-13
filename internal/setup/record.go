@@ -10,7 +10,6 @@ import (
 	"sort"
 
 	"go.yaml.in/yaml/v3"
-	"golang.org/x/sys/unix"
 )
 
 // RecordFile is the record of what devopsy applied on a server, beside the deploy user's
@@ -201,27 +200,6 @@ func WriteFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-// Writable says why WriteFile could not write path, nil when it could: its directory, or the
-// nearest one of its parents there, as the link path names leads (linkTarget), is one this
-// process may write in, which a rename over the file needs whatever the file's own mode.
-func Writable(path string) error {
-	target, err := linkTarget(path)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(target)
-	for {
-		if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
-			break
-		}
-		dir = filepath.Dir(dir)
-	}
-	if err := unix.Access(dir, unix.W_OK); err != nil {
-		return fmt.Errorf("%s: its directory %s is not this user's to write in (%v)", path, dir, err)
-	}
-	return nil
 }
 
 // linkTarget is the file path names once its symbolic links are followed, each relative one

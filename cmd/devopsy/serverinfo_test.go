@@ -484,33 +484,43 @@ func TestServerInfoReport(t *testing.T) {
 	}
 
 	// Set up by devopsy: where its record is, a kept part said and never warned, the volume
-	// hint a line; the logs part covering json-file without max-size, said once. Locally, the
-	// fix is words, with no address to name.
+	// hint its lines, one not offered with why, and a hint per volume offered on the address;
+	// the logs part covering json-file without max-size, said once.
 	info = healthy()
 	info.Setup = setUp("")
 	info.Setup.Parts[2].State, info.Setup.Parts[2].Observed = setup.Kept, `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`
-	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9}}
+	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9},
+		{MountPoint: "/mnt/vol 2", Source: "/dev/sdc", FSType: "ext4", Size: 50e9, Free: 49e9},
+		{MountPoint: "/mnt/vol3", Source: "/dev/sdd", FSType: "ext4", Size: 10e9, Free: 9e9, Why: "nothing mounts /mnt/vol3 at boot", Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{"setup         by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `              daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
-		"              volumes: the release root is on no volume of its own; volumes that could hold it:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n              --server-setup without --yes asks which one holds releases, before the first release\n"} {
+		"              volumes: releases live in the deploy user's home, /home/devopsy, while releases: root names no other; volumes that could hold them:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n              /mnt/vol 2 (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)\n              /mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("set up: no %q in:\n%s", want, out)
 		}
 	}
-	if len(warnings) != 0 {
+	if len(warnings) != 1 || !warnings[0].note || fixText(warnings[0].fixes) != "to keep releases on /srv:\n$ devopsy @vm1: --server-setup --root /srv\nto keep releases on /mnt/vol 2:\n$ devopsy @vm1: --server-setup --root '/mnt/vol 2'\nfor /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\n" {
 		t.Errorf("set up: %+v", warnings)
 	}
-	// A root the config names is an answer: no volume hint.
-	info.Setup.RootNamed = true
-	if out, _ = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); strings.Contains(out, "volumes:") {
-		t.Errorf("a root named, a hint:\n%s", out)
+	// Locally, with no address to name, the hint is words.
+	if es := volumeEntries(*info.Setup, "", "setup"); len(es) != 1 || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\nto keep releases on a volume, run --server-setup for this server, as its deploy user, with --root and its mount point\n" {
+		t.Errorf("locally: %+v", es)
 	}
-	// Not asked (a config that takes no line): the hint names the key to set by hand.
-	info.Setup.RootNamed, info.Setup.ConfigRefuses = false, "its releases: is no block mapping devopsy adds a line to"
-	if out, _ = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there\n") {
-		t.Errorf("a config that takes no line, the hint:\n%s", out)
+	// A root the config names, one named by this run or a root holding releases is an answer:
+	// no volume hint, nor with every volume refused.
+	for name, change := range map[string]func(f *setup.Facts){
+		"named":        func(f *setup.Facts) { f.RootNamed = true },
+		"naming":       func(f *setup.Facts) { f.NamesRoot = true },
+		"releases":     func(f *setup.Facts) { f.Projects = true },
+		"none offered": func(f *setup.Facts) { f.Candidates = f.Candidates[2:] },
+	} {
+		f := *info.Setup
+		change(&f)
+		if es := volumeEntries(f, "vm1:", "setup"); es != nil {
+			t.Errorf("%s: a hint %+v", name, es)
+		}
 	}
-	info.Setup.ConfigRefuses = ""
+	info.Setup.Candidates = nil
 	info.Docker.LogOpts = nil
 	info.Setup.Parts[0].State, info.Setup.Parts[0].Observed = setup.Changed, `{"log-driver":"json-file"}`
 	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !strings.Contains(warnings[0].msg, "logs: ") {

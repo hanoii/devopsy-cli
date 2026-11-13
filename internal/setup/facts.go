@@ -39,18 +39,16 @@ type Facts struct {
 	// through its restart.
 	Running     int  `json:"running"`
 	LiveRestore bool `json:"live_restore"`
-	// Candidates are the volumes the root could be on; Projects whether the root holds what
-	// devopsy keeps of a release already (a project's environment, a uid claim).
+	// Candidates are the volumes the root could be on, each offered or not (Candidate.Why);
+	// Projects whether the root holds what devopsy keeps of a release already (a project's
+	// environment, a uid claim, a project user added).
 	Candidates []Candidate `json:"candidates,omitempty"`
-	// RootNamed: the deploy user's config (ConfigFile) names releases: root. RootProposed: these
-	// facts judge the root an apply names there (facts --root), which the config names not yet.
-	RootNamed    bool   `json:"root_named,omitempty"`
-	RootProposed bool   `json:"root_proposed,omitempty"`
-	ConfigFile   string `json:"config_file,omitempty"`
-	// ConfigRefuses is why the config takes no releases: root line from devopsy
-	// (SetReleaseRoot), "" when it takes one or names a root.
-	ConfigRefuses string `json:"config_refuses,omitempty"`
-	Projects      bool   `json:"projects"`
+	Projects   bool        `json:"projects"`
+	// RootNamed: the deploy user's config (ConfigFile) names releases: root. NamesRoot: an apply
+	// with --root names Root there first (facts --root of a root releases do not live in yet).
+	RootNamed  bool   `json:"root_named,omitempty"`
+	NamesRoot  bool   `json:"names_root,omitempty"`
+	ConfigFile string `json:"config_file,omitempty"`
 	// Record is the record's path, "" while there is none: the server is not set up by
 	// devopsy yet.
 	Record string `json:"record,omitempty"`
@@ -150,22 +148,9 @@ func (f Facts) Changes() bool {
 	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
-// Hint says whether the volume hint goes with f: candidates, none of them the root's, nothing
-// released there yet, and no root proposed (the answer to AsksRoot) or named (the config's).
-func (f Facts) Hint() bool {
-	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates) && !f.RootProposed && !f.RootNamed
-}
-
-// AsksRoot says whether --server-setup asks where releases live: where the hint goes (Hint),
-// the config names no root, so the root is the home and no release made it hold anything, the
-// config takes the line that names one, and a step goes, so an apply would name it.
+// AsksRoot says whether where releases live is still open: the config names no root and none
+// is being named, nothing is released in the root, and a volume is offered. --server-setup
+// asks it then at a terminal, and the volume hint shows it where it is not asked.
 func (f Facts) AsksRoot() bool {
-	return f.Hint() && f.ConfigRefuses == "" && !f.NoneGoes()
-}
-
-// RootNames says whether an apply names the root proposed (RootProposed) in the config: only
-// where nothing refuses it, the root's making and the mounts drop-in that names it going, so
-// the config never names a root every release would refuse.
-func (f Facts) RootNames() bool {
-	return f.RootProposed && f.Goes(StepRoot) && f.Goes(StepMounts)
+	return !f.RootNamed && !f.NamesRoot && !f.Projects && slices.ContainsFunc(f.Candidates, func(c Candidate) bool { return c.Why == "" })
 }

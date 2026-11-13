@@ -204,20 +204,31 @@ metadata firewall (or removes it, for `allow`), so a new server set up
 in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
-While the deploy user's `config.yaml` names no `releases: root`, and the
-home holds nothing released (no project, no claim of the uids
-containers run as, no project user) and is on no volume of its own, and
-the config is one devopsy can add the line to, `--server-setup`
-asks where releases live: the home, or one of the volumes the root could
-be on, listed with their size and free space. It names the answer as
-`releases: root` in that `config.yaml`, adding the line and leaving the
-rest of the file as it is, then makes the root there and has Docker wait
-for its mount; once named, it asks no more. A root chosen that it
-refuses (one another user owns, or root's with files) ends the run with
-nothing changed, to be run again and another chosen. With `--yes` it asks
-nothing, keeps the home and lists the volumes instead; `releases: root:
-<mount point>` in the deploy user's `config.yaml`, before the first
-release, puts releases there by hand.
+While the deploy user's `config.yaml` names no `releases: root`, the
+home holds nothing released (no project, no claim of the uids containers
+run as, no project user) and a volume is offered, `--server-setup` asks
+where releases live: the home, first, or one of the volumes the root
+could be on, listed with their size and free space. A volume is offered
+only where something mounts it at boot (`/etc/fstab`, a `.mount` unit):
+one mounted by hand or by `systemd-mount` is gone after a reboot, and
+releases would land on the disk under it. A volume chosen is named as
+`releases: root` in that `config.yaml`, the line added and the rest of
+the file left as it is, then the root is made there and Docker waits
+for its mount; once named, nothing is asked. The home chosen writes
+nothing, and the next run asks again.
+
+`--root <dir>` gives the answer with no question, for `--yes` and CI:
+any directory (for example `/mnt/vol1/releases`). It is refused before
+anything changes while the config names another root or the home holds
+something released, where the release root's check refuses it, or on a
+filesystem nothing mounts at boot; naming the root releases live in
+already, it does nothing. With `--yes`, or without a terminal, and no
+`--root`, nothing is asked and the home is kept: the volumes are listed
+instead, each offered one with the `--server-setup --root` that names
+it, each other with why it is not offered and what to do. A
+`config.yaml` devopsy cannot add the line to (a `releases:` written as a
+flow mapping, a `root:` left empty) refuses with nothing changed,
+showing the lines to put there by hand.
 
 A second run changes nothing. What `--server-setup` applied, the values
 kept, the devopsy that last applied with no failure, and the one that
@@ -363,8 +374,8 @@ images, the volumes, a part of `--gc`'s count) is a warning instead:
 unknown, never none.
 
 A sync or a snapshot under way is reported as information. So are the
-volumes the release root could be on, while it holds nothing released
-and is not on one, and the memory kdump keeps, with how to free it
+volumes the release root could be on, while `--server-setup` would ask
+where releases live, and the memory kdump keeps, with how to free it
 ([`kdump`](server-setup-howto.md#kdump)), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check: on a server never

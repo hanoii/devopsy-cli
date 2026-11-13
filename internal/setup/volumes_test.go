@@ -96,3 +96,24 @@ a line it cannot read
 		t.Error("OnCandidate")
 	}
 }
+
+// A path's mount point is the longest one in mountinfo holding it, a mount point's own, one
+// escaped by the kernel read back, and / for a path on no other; none with no mount at all.
+func TestMountPointOf(t *testing.T) {
+	t.Parallel()
+	mountinfo := "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / /mnt/vol1 rw - xfs /dev/sdb rw\n3 1 8:32 / /mnt/vol\\0402 rw - ext4 /dev/sdc rw\n"
+	for path, want := range map[string]string{
+		"/mnt/vol1/releases": "/mnt/vol1",
+		"/mnt/vol1":          "/mnt/vol1",
+		"/mnt/vol10":         "/",
+		"/mnt/vol 2/r":       "/mnt/vol 2",
+		"/home/devopsy":      "/",
+	} {
+		if got := MountPointOf(mountinfo, path); got != want {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
+	}
+	if got := MountPointOf("", "/srv"); got != "" {
+		t.Errorf("no mounts: %q", got)
+	}
+}

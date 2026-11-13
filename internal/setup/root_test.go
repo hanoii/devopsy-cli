@@ -10,8 +10,8 @@ import (
 // --server-setup names the release root in the deploy user's config as text: appended where
 // the config has no releases:, put first in its releases: block where it has one, the rest
 // (comments, order, other keys) as it was, a path YAML would read otherwise quoted; a config
-// whose result would not read as releases: root added, or whose releases: names a root, is
-// refused and left alone.
+// whose result would not read as releases: root added, or whose releases: has a root: (named,
+// or left empty), is refused and left alone.
 func TestSetReleaseRoot(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -21,10 +21,11 @@ func TestSetReleaseRoot(t *testing.T) {
 		"no releases":    {"# mine\nfirewall:\n  metadata: block\n", "/srv", "# mine\nfirewall:\n  metadata: block\nreleases:\n  root: /srv\n", ""},
 		"no newline":     {"snapshots:\n  root: /backups", "/srv", "snapshots:\n  root: /backups\nreleases:\n  root: /srv\n", ""},
 		"releases block": {"releases:\n    # how many\n    keep: 3 # mine\nsnapshots:\n  root: /b\n", "/srv", "releases:\n    root: /srv\n    # how many\n    keep: 3 # mine\nsnapshots:\n  root: /b\n", ""},
-		// A root left empty is none to the loader: its line is the one named.
-		"root empty":     {"releases:\n  keep: 3\n  root:\n", "/srv", "releases:\n  keep: 3\n  root: /srv\n", ""},
-		"root \"\"":      {"releases:\n  root: \"\" # none\n  keep: 3\n", "/srv", "releases:\n  root: /srv # none\n  keep: 3\n", ""},
-		"root ~":         {"releases:\n  root: ~\n", "/srv", "releases:\n  root: /srv\n", ""},
+		// A root left empty is none to the loader, and its line the admin's: refused in words of
+		// its own, never as a root named.
+		"root empty":     {"releases:\n  keep: 3\n  root:\n", "/srv", "", "root: is left empty"},
+		"root \"\"":      {"releases:\n  root: \"\" # none\n  keep: 3\n", "/srv", "", "root: is left empty"},
+		"root ~":         {"releases:\n  root: ~\n", "/srv", "", "root: is left empty"},
 		"crlf":           {"snapshots:\r\n  mirror: false\r\n", "/srv", "snapshots:\r\n  mirror: false\r\nreleases:\r\n  root: /srv\r\n", ""},
 		"a newline":      {"", "/mnt/a\nb", "releases:\n  root: \"/mnt/a\\nb\"\n", ""},
 		"a path quoted":  {"", "/mnt/a #b", "releases:\n  root: '/mnt/a #b'\n", ""},
