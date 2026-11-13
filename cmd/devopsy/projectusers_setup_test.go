@@ -260,3 +260,51 @@ func TestMountOf(t *testing.T) {
 		t.Errorf("/proc's gid: %q", gid)
 	}
 }
+
+// Review, a bug: a space of devopsy's own whose mount is gone (its unit stopped, a boot where
+// it failed) while it holds the door's files is refused ("holds files and is on no mount of its
+// own: a mount over it would hide them", the fix to empty it), though the unit binds the
+// directory on itself, which hides nothing; the door then refuses every request and names
+// --project-users setup as the fix, which refuses in turn. The setup must mount it again.
+func TestProjectUsersSetupMountsItsSpaceAgain(t *testing.T) {
+	t.Parallel()
+	s, host, space := doorSetupServer(t)
+	if out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes"); code != 0 {
+		t.Fatalf("the first setup (%d):\n%s", code, out)
+	}
+	// The door in use, then its mount gone: /proc's line alone is left.
+	write(t, filepath.Join(space, "refused.log"), "x\n", 0o644)
+	var kept []string
+	for _, l := range strings.Split(readString(filepath.Join(host, procMounts)), "\n") {
+		if l != "" && !strings.Contains(l, " "+space+" ") {
+			kept = append(kept, l)
+		}
+	}
+	write(t, filepath.Join(host, procMounts), strings.Join(kept, "\n")+"\n", 0o644)
+	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
+	if code != 0 || !strings.Contains(out, "devopsy: mounted "+space+" on itself with nosuid and nodev\n") || strings.Contains(out, "holds files") {
+		t.Errorf("the space's mount gone (%d):\n%s", code, out)
+	}
+}
+
+// Review, a bug: the config gets door: space: only when the whole root run went, so a /proc
+// systemd cannot remount (the run's last step) leaves a space made, mounted and named in
+// Docker's drop-in with no door: space: naming it, at every run, and --server-setup then
+// wants the drop-in without the space. The processes' failure must stop the processes alone.
+func TestProjectUsersSetupNamesTheSpaceBesideAFailedProc(t *testing.T) {
+	t.Parallel()
+	s, _, space := doorSetupServer(t)
+	bin := filepath.Join(filepath.Dir(s.root), "bin")
+	write(t, filepath.Join(bin, "systemctl-real"), readString(filepath.Join(bin, "systemctl")), 0o755)
+	write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\n[ \"$*\" != 'restart devopsy-proc.service' ] || exit 1\nexec \"$(dirname \"$0\")/systemctl-real\" \"$@\"\n", 0o755)
+	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
+	if code != 1 || !strings.Contains(out, "systemd did not remount /proc") || !strings.Contains(out, "devopsy: mounted "+space+" on itself with nosuid and nodev\n") {
+		t.Fatalf("a /proc systemd does not remount (%d):\n%s", code, out)
+	}
+	if !strings.Contains(readString(configFile(s)), "door:\n  space: "+space+"\n") {
+		t.Errorf("the space is mounted and no door: space: names it:\n%s\nconfig:\n%s", out, readString(configFile(s)))
+	}
+	if out, _ := s.run(nil, remote.ServerSetupFlag, "facts"); strings.Contains(out, `"item":"mounts drop-in","path":"`+setup.MountsDropIn+`","in_sync":false`) {
+		t.Errorf("--server-setup would take the space out of the drop-in:\n%s", out)
+	}
+}
