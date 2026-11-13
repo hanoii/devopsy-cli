@@ -115,11 +115,15 @@ var errDoorThere = errors.New("it has a door: already")
 
 // AppendDoorConfig is the config's text have (nil for no file) with DoorConfigLines appended,
 // as text, the rest as it is (comments, order): after a newline the text lacks at its end.
-// A text that is no YAML, or holds a door: key, is an error: only the admin changes a door:.
+// The result is read back as the config's loader reads it (remote's readConfigFile: the first
+// YAML document, its top mapping by key), and refused unless door: space: reads as space
+// there: a file whose YAML ends before its last line (a flow mapping, an indented one, a ...
+// or a second document) would take the lines where nothing reads them. A text that is no
+// YAML, or holds a door: key, is an error too: only the admin changes a door:.
 func AppendDoorConfig(have []byte, space string) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(have, &doc); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("it is no YAML devopsy reads: %w", err)
 	}
 	if len(doc.Content) > 0 {
 		top := doc.Content[0]
@@ -136,8 +140,22 @@ func AppendDoorConfig(have []byte, space string) ([]byte, error) {
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')
 	}
-	return append(out, DoorConfigLines(space)...), nil
+	out = append(out, DoorConfigLines(space)...)
+	var top map[string]yaml.Node
+	var door struct {
+		Space string `yaml:"space"`
+	}
+	if err := yaml.Unmarshal(out, &top); err != nil {
+		return nil, errNotRead
+	}
+	if n, ok := top["door"]; !ok || n.Decode(&door) != nil || door.Space != space {
+		return nil, errNotRead
+	}
+	return out, nil
 }
+
+// errNotRead is AppendDoorConfig's for a text the lines would land in unread.
+var errNotRead = errors.New("lines added at its end would not be read as part of its settings")
 
 // DoorFacts is what a server's devopsy finds of what project users need of it, for
 // --project-users setup: each item's state, its refusals, and the files devopsy writes whole

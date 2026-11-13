@@ -308,7 +308,8 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 		f.Config = setup.DoorConfigLines(space)
 		if have, err := os.ReadFile(f.ConfigFile); err == nil || errors.Is(err, os.ErrNotExist) {
 			if _, err := setup.AppendDoorConfig(have, space); err != nil {
-				refuse(setup.ItemConfig, setup.RefusalSpace, f.ConfigFile+" cannot take door: space: as text: "+err.Error(), "add the lines by hand")
+				refuse(setup.ItemConfig, setup.RefusalSpace, "devopsy cannot add the project users' directory to "+f.ConfigFile+": "+err.Error(),
+					"add these two lines to its settings by hand, then run it again:\n"+strings.TrimSuffix(f.Config, "\n"))
 			}
 		}
 	}

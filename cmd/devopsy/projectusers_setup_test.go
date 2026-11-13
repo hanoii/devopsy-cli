@@ -175,8 +175,9 @@ func TestProjectUsersSetupLeavesWhatIsSetByHand(t *testing.T) {
 }
 
 // The space and the config refuse what devopsy does not change: a door: with no space: (the
-// line to add named) and a directory other than the config's (a space is moved by hand); each
-// stops the space's steps alone, /proc set up beside it.
+// line to add named), a directory other than the config's (a space is moved by hand), and a
+// config whose YAML ends before its last line (the two lines to add by hand named); each stops
+// the space's steps alone, /proc set up beside it.
 func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -187,6 +188,10 @@ func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 			`has door: with no space: under it` + "\ndevopsy: | to fix it:\ndevopsy: | add \"space: %s\" under its door:, indented, then run it again\n"},
 		"another space": {func(t *testing.T, s *syncSetup, space string) { setupConfig(t, s, "door:\n  space: /srv/elsewhere\n") },
 			"door's space: the door's space is /srv/elsewhere (door: space: in "},
+		"a config read before its end": {func(t *testing.T, s *syncSetup, space string) {
+			write(t, configFile(s), "{releases: {root: "+s.root+"}}\n", 0o644)
+		},
+			"lines added at its end would not be read as part of its settings\ndevopsy: | to fix it:\ndevopsy: | add these two lines to its settings by hand, then run it again:\ndevopsy: | door:\ndevopsy: |   space: %s\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

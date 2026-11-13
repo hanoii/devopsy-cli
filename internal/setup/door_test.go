@@ -76,8 +76,12 @@ WantedBy=sysinit.target
 }
 
 // door: space: goes into the deploy user's config as text, the rest as it is (its comments
-// included), only where the file has no door: key: a file with none, one without a final
-// newline, no file at all; one with a door:, with a space or not, is refused.
+// included), only where the file has no door: key and the lines then read back as door:
+// space: the way the loader reads the file (its first YAML document's top mapping): a file
+// with none, one without a final newline, no file at all take them; one with a door:, with a
+// space or not, is refused, and so is one whose YAML ends before its last line (a flow
+// mapping, an indented one, a ... end marker, a second document), where the lines would land
+// unread and every run would append them again.
 func TestAppendDoorConfig(t *testing.T) {
 	t.Parallel()
 	lines := "door:\n  space: /var/lib/devopsy-door\n"
@@ -91,32 +95,15 @@ func TestAppendDoorConfig(t *testing.T) {
 		"a door: with space": {have: "door:\n  space: /srv/door\n", fails: true},
 		"a door: without":    {have: "door:\n  vets: []\n", fails: true},
 		"no mapping":         {have: "- a\n", fails: true},
+		"a flow mapping":     {have: "{releases: {root: /srv}}\n", fails: true},
+		"a mapping indented": {have: "  releases:\n    root: /srv\n", fails: true},
+		"an end marker":      {have: "releases:\n  root: /srv\n...\n", fails: true},
+		"two documents":      {have: "---\nreleases:\n  root: /srv\n---\nother: 1\n", fails: true},
 	} {
 		got, err := AppendDoorConfig([]byte(c.have), DefaultSpace)
 		if c.fails != (err != nil) || !c.fails && string(got) != c.want {
 			t.Errorf("%s: %q, %v", name, got, err)
 		}
-	}
-	if got, err := AppendDoorConfig(nil, DefaultSpace); err != nil || string(got) != lines {
-		t.Errorf("no file (nil): %q, %v", got, err)
-	}
-}
-
-// Review, a bug: AppendDoorConfig checks only the first YAML document's top keys and never
-// reads its result back, so a config whose first document ends before the appended lines (a
-// flow mapping, a mapping indented, a ... end marker, a second --- document) takes door:
-// space: where the loader (yaml.Unmarshal, the first document) never reads it: the apply says
-// it named the space, its check finds no door:, and every run appends the lines again. The
-// lines appended must read back as door: space:, or the text be refused.
-func TestAppendDoorConfigReadsBack(t *testing.T) {
-	t.Parallel()
-	for name, have := range map[string]string{
-		"a flow mapping":     "{releases: {root: /srv}}\n",
-		"a mapping indented": "  releases:\n    root: /srv\n",
-		"an end marker":      "releases:\n  root: /srv\n...\n",
-		"two documents":      "---\nreleases:\n  root: /srv\n---\nother: 1\n",
-	} {
-		got, err := AppendDoorConfig([]byte(have), DefaultSpace)
 		if err != nil {
 			continue
 		}
@@ -128,6 +115,9 @@ func TestAppendDoorConfigReadsBack(t *testing.T) {
 		if err := yaml.Unmarshal(got, &doc); err != nil || doc.Door.Space != DefaultSpace {
 			t.Errorf("%s: appended, and the config reads door: space: %q (%v):\n%s", name, doc.Door.Space, err, got)
 		}
+	}
+	if got, err := AppendDoorConfig(nil, DefaultSpace); err != nil || string(got) != lines {
+		t.Errorf("no file (nil): %q, %v", got, err)
 	}
 }
 
