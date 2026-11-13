@@ -250,18 +250,23 @@ func runFreeUIDs(args []string) int {
 	if err := gone(); err != nil {
 		return failErr(err)
 	}
-	docker := func(args ...string) ([]byte, error) { return exec.Command(realDocker(), args...).Output() }
-	down := downIfLeft(docker, func(name string) error {
-		c := exec.Command(realDocker(), downArgs(name)...)
+	if err := freeUIDs(claimsStore(r.Root), env, gone, downByName(realDocker())); err != nil {
+		return failErr(err)
+	}
+	return 0
+}
+
+// downByName takes a compose name down as the deploy user, docker its client, while anything
+// is left of it (downIfLeft): a --destroy's free, and a project user's destroy.
+func downByName(docker string) func(name string) error {
+	out := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
+	return downIfLeft(out, func(name string) error {
+		c := exec.Command(docker, downArgs(name)...)
 		// From /, which holds no compose file of anyone's: compose looks for one in its
 		// directory and every parent.
 		c.Dir, c.Stdout, c.Stderr = "/", errOut, errOut
 		return c.Run()
 	})
-	if err := freeUIDs(claimsStore(r.Root), env, gone, down); err != nil {
-		return failErr(err)
-	}
-	return 0
 }
 
 // downIfLeft is a free's down that runs only while a container, volume or network still

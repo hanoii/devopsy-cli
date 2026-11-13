@@ -690,12 +690,21 @@ func (s *doorSide) workDir(perms string) (string, error) {
 }
 
 // removeWork removes a work directory, as root where a container left root's files.
-func (s *doorSide) removeWork(dir string) {
+func (s *doorSide) removeWork(dir string) { _ = removeSpaceDir(s.docker, dir) }
+
+// removeSpaceDir removes dir, a directory of the door's space (a work directory, a project's
+// sealed copies or clones), as the deploy user, else as root in the util image, docker the
+// deploy user's own, where a container left other uids' files: its parent is the deploy
+// user's, and rm -rf follows no link inside.
+func removeSpaceDir(docker func(args ...string) *exec.Cmd, dir string) error {
 	if os.RemoveAll(dir) == nil {
-		return
+		return nil
 	}
-	root := filepath.Join(s.policy.Space, "work")
-	_ = s.docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", root + ":/w", remote.UtilImage, "rm", "-rf", "/w/" + filepath.Base(dir)})...).Run()
+	parent := filepath.Dir(dir)
+	if out, err := docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", parent + ":/w", remote.UtilImage, "rm", "-rf", "/w/" + filepath.Base(dir)})...).CombinedOutput(); err != nil {
+		return fmt.Errorf("removing %s: %w: %s", dir, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // ownWork says whether a work directory is this project's, by its name (workDir): not one
