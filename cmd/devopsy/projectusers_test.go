@@ -446,6 +446,23 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 	}
 }
 
+// --project-users add's last line names the user and its entry, and the way to its keys in
+// words, a key's file being the operator's to name, on the server as typed when the session
+// named it.
+func TestProjectUsersAddSaysTheWayToKeys(t *testing.T) {
+	t.Parallel()
+	for ref, want := range map[string]string{
+		"devopsy@one:": "devopsy: project user devopsy-shop for shop, its entry in /e\ndevopsy: | add its keys with --ssh-keys --for shop add and each public key's file, on @devopsy@one:\n",
+		"":             "devopsy: project user devopsy-shop for shop, its entry in /e\ndevopsy: | add its keys with --ssh-keys --for shop add and each public key's file\n",
+	} {
+		var out bytes.Buffer
+		sayAdded(report.New(&out, false, 0), "devopsy-shop", "shop", "/e", ref)
+		if out.String() != want {
+			t.Errorf("%q: said %q, want %q", ref, out.String(), want)
+		}
+	}
+}
+
 // A project user whose Unix user is gone already runs nothing to end: its removal goes on to
 // what the door kept rather than failing on the lookup.
 func TestEndUserOfAUserGone(t *testing.T) {

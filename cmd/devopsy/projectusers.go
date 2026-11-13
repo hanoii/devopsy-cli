@@ -309,7 +309,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	if err := releaseRootReady(r.Root, "no project user made", ""); err != nil {
+	if err := releaseRootReady(r.Root, "no project user made", ref); err != nil {
 		report.Fail(err)
 		return 1
 	}
@@ -411,8 +411,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 			return failErr(err)
 		}
 	}
-	report.Default().Say(report.InfoLevel, "project user "+who+" for "+project+", its entry in "+entry, nil,
-		report.Hint("add its keys with --ssh-keys and --for, as its deploy user"))
+	sayAdded(report.Default(), who, project, entry, ref)
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"any reboot takes it, one the server does by itself for /run/reboot-required included")
@@ -502,6 +501,16 @@ func leftGroupID(group, who string) (gid int, left bool, err error) {
 		return n, true, nil
 	}
 	return 0, false, nil
+}
+
+// sayAdded says on l that add made project's user who, its entry at entry, with the way to its
+// keys in words, on ref as typed when there is one: the key's file is the operator's to name.
+func sayAdded(l *report.Logger, who, project, entry, ref string) {
+	keys := "add its keys with --ssh-keys --for " + project + " add and each public key's file"
+	if ref != "" {
+		keys += ", on @" + ref
+	}
+	l.Say(report.InfoLevel, "project user "+who+" for "+project+", its entry in "+entry, nil, report.Hint(keys))
 }
 
 // projectDir says whether a directory named name in a release root is a project's: none

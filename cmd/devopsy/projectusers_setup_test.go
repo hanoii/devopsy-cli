@@ -80,7 +80,7 @@ func TestProjectUsersSetupYes(t *testing.T) {
 		"devopsy: added the project users' directory to " + configFile(s) + "\n",
 		"devopsy: Docker now waits for the release root's filesystem and the project users' directory before it starts\n",
 		"devopsy: " + me.Username + " sees every process from its next login\ndevopsy: | a session open now, a shared SSH connection's included, sees only its own processes until it is opened again\n",
-		"devopsy: this server is ready for project users\ndevopsy: | add a project's user:\ndevopsy: | $ devopsy @devopsy@one: --project-users add <project>\n",
+		"devopsy: this server is ready for project users\ndevopsy: | add each project's user with --project-users add and the project's name\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q (%d):\n%s", want, code, out)

@@ -1111,7 +1111,8 @@ func TestServerReadySkipsAProjectUser(t *testing.T) {
 }
 
 // --project-users add refuses, before anything else and before it changes anything, a release
-// root that is not the deploy user's directory, a project user's tree going there.
+// root that is not the deploy user's directory, a project user's tree going there, its fix
+// --server-setup on the server as the session named it.
 func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
@@ -1122,10 +1123,10 @@ func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 	for _, name := range []string{"sudo", "visudo", "setfacl"} {
 		write(t, filepath.Join(tools, name), "#!/bin/sh\n", 0o755)
 	}
-	c := exec.Command(binary, remote.ProjectUsersFlag, "add", "shop")
+	c := exec.Command(binary, remote.ProjectUsersFlag, "--server", "devopsy@vm1:", "add", "shop")
 	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
 	out, _ := c.CombinedOutput()
-	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made") || fileExists(root) {
+	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made\ndevopsy: | to fix it:\ndevopsy: | set the server up:\ndevopsy: | $ devopsy @devopsy@vm1: --server-setup\n") || fileExists(root) {
 		t.Errorf("(%d):\n%s", c.ProcessState.ExitCode(), out)
 	}
 }

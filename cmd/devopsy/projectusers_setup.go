@@ -757,10 +757,11 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		report.Error("this server is not ready for project users", waits...)
 	}
 	if !refused && failures == 0 {
-		// The first project user's add, offered only while there is none.
+		// The first project user's add, offered only while there is none, in words: the
+		// project's name is the operator's to choose.
 		var hints []report.Remedy
 		if d, err := remote.ServerDoor(); err == nil && (d == nil || len(d.Users) == 0) {
-			hints = append(hints, offer(report.Hint, "add a project's user:", addCommand(ref), "add a project's user with --project-users add for this server"))
+			hints = append(hints, report.Hint("add each project's user with --project-users add and the project's name"))
 		}
 		report.Say(report.InfoLevel, "this server is ready for project users", nil, hints...)
 	}
@@ -818,15 +819,6 @@ func sayDoorSetupLines(out, who string, f setup.DoorFacts) {
 			report.Info("restarted polkit so it sees every process")
 		}
 	}
-}
-
-// addCommand is --project-users add for the server as ref names it, "" without one: offered as
-// is, the project's name to type in its place.
-func addCommand(ref string) string {
-	if ref == "" {
-		return ""
-	}
-	return "devopsy @" + ref + " --project-users add <project>"
 }
 
 // lineWriter hands line each whole line written to it, without its newline, as it comes.
