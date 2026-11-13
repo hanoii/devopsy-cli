@@ -20,6 +20,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // setupServer is newSyncSetup's server with a host root (remote.HostRootEnv) for
@@ -979,6 +980,31 @@ func TestServerSetupAsksNoRootOfAConfigItCannotWrite(t *testing.T) {
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "takes no releases: root line from devopsy") {
 		t.Errorf("the apply (%d):\n%s", code, out)
+	}
+}
+
+// Review 3, a bug: "the home holds no project" counts only the deploy user's own project
+// directories (deployEnvBases), so a server whose releases are all project users', their trees
+// in their own homes and their uid claims in the release root's claims directory
+// (<release root>/.devopsy-uids), is asked where releases live as a fresh one is, and an apply
+// names a volume as the root: every claim is then left behind in the home, and the door's
+// next uids request claims again from an empty directory. A root whose claims directory holds
+// a claim is asked nothing about, and an apply names no other root over it.
+func TestServerSetupAsksNoRootOverClaims(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	before := readString(config)
+	claims := uids.Store{Dir: filepath.Join(filepath.Dir(vol), uids.DirName)}
+	if _, _, err := claims.LookupPair(uids.Owner{Project: "shop", Env: "prod"}); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 || f.AsksRoot() {
+		t.Errorf("facts (%d, %v): asks %v over a claims directory that holds a claim\n%s", code, err, f.AsksRoot(), out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
+		t.Errorf("the apply (%d) named another root over the claims, the config:\n%s\n%s", code, readString(config), out)
 	}
 }
 
