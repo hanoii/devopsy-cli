@@ -315,7 +315,8 @@ func DestroyAgainFix(server, project, then string) report.Remedy {
 // DoorUserDeleteScript is a --project-users remove --destroy's host step, as root on the host
 // through the util image (chroot into /host), once nothing is left under the project's names:
 // the user's user manager's mask (DoorHostScript's), the user itself with its home (userdel
-// -r, only while it is there and a project user, for a rerun), the group of its name it left,
+// -r, only while it is there and a project user, for a rerun, what it says shown only when it
+// fails), the group of its name it left,
 // then the tree its entry names
 // and the home by the path the destroy's mark kept, should userdel have been cut after it
 // dropped the user and before the home went. Its arguments: the user, its uid, the tree ("" for
@@ -331,7 +332,13 @@ if id -u "$user" >/dev/null 2>&1; then
     ` + echoLine(report.ErrorLevel, "$user is no project user, not in "+DoorGroup+": left as it is") + `
     exit 3
   fi
-  userdel -r "$user"
+  # userdel says things that are no failure (a mail spool not found): its words show only
+  # when it fails, with its exit.
+  if said=$(userdel -r "$user" 2>&1 >/dev/null); then :; else
+    code=$?
+    printf '%s\n' "$said" >&2
+    exit "$code"
+  fi
 fi
 # The user's group, should userdel have left it (a host that keeps a user's group, a cut after
 # the user went): only when it is provably the project user's left, in the project users' range

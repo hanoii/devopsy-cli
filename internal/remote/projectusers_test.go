@@ -455,8 +455,9 @@ func TestDoorHostScriptStopsAtAPieceNotWritten(t *testing.T) {
 }
 
 // A destroy's host step deletes the project user only while it is there and in the project
-// users' group (a rerun finds it gone), then the tree and the home by their paths, each only as
-// a directory: a link the user made there is left, and so is what it points to.
+// users' group (a rerun finds it gone), saying what userdel says only when it fails, then the
+// tree and the home by their paths, each only as a directory: a link the user made there is
+// left, and so is what it points to.
 func TestDoorUserDeleteScript(t *testing.T) {
 	t.Parallel()
 	if out, err := exec.Command("sh", "-n", "-c", DoorUserDeleteScript).CombinedOutput(); err != nil {
@@ -466,17 +467,22 @@ func TestDoorUserDeleteScript(t *testing.T) {
 	// a host that keeps a user's group leaves it.
 	groupLine := ""
 	groupGone := func() bool { return true }
+	fails := false
 	run := func(group string, tree, home string) (string, int, string) {
 		t.Helper()
 		bin, users := t.TempDir(), t.TempDir()
 		write(t, filepath.Join(users, "devopsy-shop"), "")
+		if fails {
+			write(t, filepath.Join(users, "fail"), "")
+		}
 		if groupLine != "" {
 			write(t, filepath.Join(users, "group-devopsy-shop"), groupLine)
 		}
 		groupGone = func() bool { return !fileThere(filepath.Join(users, "group-devopsy-shop")) }
 		for name, body := range map[string]string{
 			"id":       `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
-			"userdel":  `[ "$1" = -r ] && rm "` + users + `/$2"`,
+			"userdel": `[ ! -e "` + users + `/fail" ] || { echo "userdel: user $2 is currently used by process 1" >&2; exit 8; }
+[ "$1" = -r ] && rm "` + users + `/$2" && echo "userdel: $2 mail spool (/var/mail/$2) not found" >&2`,
 			"getent":   `[ "$1" = group ] && cat "` + users + `/group-$2" 2>/dev/null`,
 			"groupdel": `rm "` + users + `/group-$1"`,
 		} {
@@ -498,9 +504,15 @@ func TestDoorUserDeleteScript(t *testing.T) {
 	tree, home := filepath.Join(dir, "shop"), filepath.Join(dir, "devopsy-shop")
 	write(t, filepath.Join(tree, "prod", "db"), "x")
 	write(t, filepath.Join(home, ".profile"), "x")
-	if out, code, user := run(DoorGroup, tree, home); code != 0 || user != "deleted" || fileThere(tree) || fileThere(home) {
+	// userdel's own words show only when it fails: a missing mail spool is no failure.
+	if out, code, user := run(DoorGroup, tree, home); code != 0 || user != "deleted" || fileThere(tree) || fileThere(home) || out != "" {
 		t.Errorf("a project user (%d): user %s, tree %v, home %v:\n%s", code, user, fileThere(tree), fileThere(home), out)
 	}
+	fails = true
+	if out, code, user := run(DoorGroup, "", ""); code != 8 || user != "kept" || out != "userdel: user devopsy-shop is currently used by process 1\n" {
+		t.Errorf("userdel failing (%d): user %s:\n%s", code, user, out)
+	}
+	fails = false
 	// Run again with nothing left, nothing fails.
 	if out, code, _ := run(DoorGroup, tree, home); code != 0 {
 		t.Errorf("run again (%d):\n%s", code, out)
