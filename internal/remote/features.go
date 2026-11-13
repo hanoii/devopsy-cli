@@ -129,9 +129,8 @@ var namedFeatures = []struct {
 	// --say's remedies (sayRemedies): an older --say would print
 	// "--fix" and each word after it as details.
 	{SayRemediesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `\b[^\n]* (` + SayFixFlag + `|` + SayHintFlag + `) "`)},
-	// --project-users setup, and every --project-users session naming its server (--server)
-	// for the fixes it offers: an older server would read the words as a usage error.
-	{ProjectUsersSetupFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + ProjectUsersFlag + `[ '\\]{1,8}--server\b`)},
+	// --project-users setup: an older server's step would read the word as a usage error.
+	{ProjectUsersSetupFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + ProjectUsersFlag + `[ '\\]{1,8}setup\b`)},
 }
 
 // ProjectUserDestroyFeature is --project-users remove <project> --destroy's named feature.
@@ -148,8 +147,7 @@ const UIDsFeature = "uids"
 // reads, never found in a script's text.
 var projectFeatures = []string{UIDsFeature}
 
-// ProjectUsersSetupFeature is the named feature of --project-users setup and of
-// --project-users naming its server.
+// ProjectUsersSetupFeature is the named feature of --project-users setup.
 const ProjectUsersSetupFeature = "project-users-setup"
 
 // SayRemediesFeature is the named feature of --say --fix and --hint.

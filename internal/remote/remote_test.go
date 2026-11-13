@@ -496,6 +496,21 @@ func TestResetFeature(t *testing.T) {
 	}
 }
 
+// --project-users setup needs its named feature, which an older server's step reads as a usage
+// error; its other words do not.
+func TestProjectUsersSetupFeature(t *testing.T) {
+	t.Parallel()
+	tg := &Target{Host: "vm1"}
+	for _, words := range [][]string{{"setup", "facts"}, {"setup", "apply", "--yes"}} {
+		if got := Needs(ProjectUsersScript(tg, words)); !slices.Contains(got, ProjectUsersSetupFeature) {
+			t.Errorf("%v: needs %v", words, got)
+		}
+	}
+	if got := Needs(ProjectUsersScript(tg, []string{"add", "shop"})); slices.Contains(got, ProjectUsersSetupFeature) {
+		t.Errorf("add needs %v", got)
+	}
+}
+
 // A script saying a time needs --since from the server's devopsy, and
 // one saying fixes or hints --fix and --hint: an older --say would print
 // "--since" as the line, and "--fix" and what follows as details.
