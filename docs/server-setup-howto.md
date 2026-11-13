@@ -28,8 +28,8 @@ of them, and --server-setup one that is not the host's service. A Docker
 installed from its repository runs the containerd image store. One upgraded
 from an older version keeps the classic image store, and a distribution's
 own package may run it too: devopsy refuses it, and does not move a Docker
-from one store to the other. These steps are then for a new server, where
-that one's projects are released.
+from one store to the other. Such a server is replaced: these steps set up a
+new one, and the old one's projects are released there.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
