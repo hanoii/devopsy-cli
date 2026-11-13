@@ -348,11 +348,19 @@ func TestDoorFreeTakesWhatItsPathSays(t *testing.T) {
 	if _, err := os.Stat(docker); err == nil {
 		t.Errorf("docker ran for a refused free")
 	}
+	// Its mnt, which its --destroy emptied and left, goes with the free.
+	mnt := side.policy.Mnt("shop-gone")
+	if err := os.MkdirAll(mnt, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if code := side.free(filepath.Join(tree, "gone")); code != 0 {
 		t.Errorf("a gone environment of its own, never claimed: %d", code)
 	}
 	if _, err := os.Stat(docker); err == nil {
 		t.Errorf("a free of what held no claim took a name down")
+	}
+	if _, err := os.Lstat(mnt); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the emptied mnt %s stays after the free: %v", mnt, err)
 	}
 }
 

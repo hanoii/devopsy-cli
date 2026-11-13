@@ -297,7 +297,8 @@ func ownerUnder(root, base string) (uids.Owner, error) {
 
 // free answers "free <environment directory>": a project user's --destroy's last step, for an
 // environment of its tree that is gone, its owner read from where it was (ownerAt), never from
-// the caller's words, and its compose name taken down through the door's own checked down.
+// the caller's words, and its compose name taken down through the door's own checked down;
+// then its emptied mnt in the door's space goes.
 func (s *doorSide) free(base string) int {
 	env, err := s.ownerAt(base)
 	if err != nil {
@@ -332,6 +333,11 @@ func (s *doorSide) free(base string) int {
 	})
 	if err := freeUIDs(claimsStore(s.uidRoot), env, gone, down); err != nil {
 		return doorRefused(fmt.Errorf("refused: freeing the uid of %s: %w", name, err))
+	}
+	// Its mnt, which the --destroy emptied and left, goes once empty: rmdir fails on anything
+	// in it (a start's since the free, under a claim of its own), which then stays.
+	if err := syscall.Rmdir(s.policy.Mnt(name)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		report.Warn("the emptied " + s.policy.Mnt(name) + " stays: " + err.Error())
 	}
 	return 0
 }
