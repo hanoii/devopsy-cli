@@ -94,8 +94,11 @@ func TestAppendDoorConfig(t *testing.T) {
 		have, want string
 		fails      bool
 	}{
-		"no door:":           {have: "# mine\nreleases:\n  root: /srv\n", want: "# mine\nreleases:\n  root: /srv\n" + lines},
-		"no final newline":   {have: "releases:\n  root: /srv", want: "releases:\n  root: /srv\n" + lines},
+		"no door:":         {have: "# mine\nreleases:\n  root: /srv\n", want: "# mine\nreleases:\n  root: /srv\n" + lines},
+		"no final newline": {have: "releases:\n  root: /srv", want: "releases:\n  root: /srv\n" + lines},
+		// The file's own line ends, as the release root's line takes them (appendLines).
+		"CRLF line ends":     {have: "releases:\r\n  root: /srv\r\n", want: "releases:\r\n  root: /srv\r\ndoor:\r\n  space: /var/lib/devopsy-door\r\n"},
+		"CRLF, no final one": {have: "releases:\r\n  root: /srv", want: "releases:\r\n  root: /srv\r\ndoor:\r\n  space: /var/lib/devopsy-door\r\n"},
 		"no file":            {have: "", want: lines},
 		"a door: with space": {have: "door:\n  space: /srv/door\n", fails: true},
 		"a door: without":    {have: "door:\n  vets: []\n", fails: true},
