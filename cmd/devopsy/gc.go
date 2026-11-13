@@ -544,13 +544,19 @@ func (g *gcScope) goes(status string, oneOff bool, c gcOneOff) bool {
 }
 
 // What docker buildx prune and du do, as Docker 29.9 and buildx 0.38 do it, tried on a
-// throwaway daemon and a throwaway docker-container builder:
+// throwaway daemon and a throwaway docker-container builder (BuildKit v0.34.2), and seen on a
+// server's daemon and project builder:
 //   - prune's --filter until=<duration> goes by when a record was last used, never when it was
 //     made: a record made before the cutoff and used since stays;
 //   - without -a it removes only the records of local sources and cache mounts; the layers
 //     (regular records) go only with -a;
-//   - a record stays while one built on it (its child) stays, and goes in the same prune as
-//     the last of them;
+//   - a record stays while one built on it (its child) stays: prune removes the records no
+//     child holds, then again what that freed, until a round removes nothing, each round's
+//     cutoff taken anew;
+//   - a child's removal marks its parent last used then when the child was made on it after
+//     the parent's own last use (a build after the builder's restart reusing it, its use not
+//     marked until then): that parent stays, and its own parents with it; one used again
+//     when its child was made (the same builder's run) goes with its children;
 //   - docker builder prune is buildx prune on the current builder (docker buildx use), which
 //     may be any; the daemon's own, of the docker driver, is named for the current Docker
 //     context (docker context show, daemonBuilder), whose daemon docker system df -v reads;
@@ -573,14 +579,17 @@ type cacheRecord struct {
 	Shared   bool
 	Size     int64
 	LastUsed time.Time
+	Created  time.Time
 }
 
 // cacheGoing is how many of records docker buildx prune -a --filter until=<age> removes at
 // now, and what of them no image shares: each not in use and last used before the cutoff,
-// whose every child goes too.
+// whose every child goes too, none of them made on it after its last use.
 func cacheGoing(records []cacheRecord, now time.Time, age time.Duration) (n int, size int64) {
 	going := map[string]bool{}
+	lastUsed := map[string]time.Time{}
 	for _, r := range records {
+		lastUsed[r.ID] = r.LastUsed
 		if !r.InUse && !r.LastUsed.IsZero() && !r.LastUsed.After(now.Add(-age)) {
 			going[r.ID] = true
 		}
@@ -588,11 +597,8 @@ func cacheGoing(records []cacheRecord, now time.Time, age time.Duration) (n int,
 	for changed := true; changed; {
 		changed = false
 		for _, r := range records {
-			if going[r.ID] {
-				continue
-			}
 			for _, p := range r.Parents {
-				if going[p] {
+				if going[p] && (!going[r.ID] || r.Created.After(lastUsed[p])) {
 					delete(going, p)
 					changed = true
 				}
@@ -716,6 +722,7 @@ func (g *gcScope) daemonCache() ([]cacheRecord, error) {
 		if v.Parent != "" {
 			r.Parents = []string{v.Parent}
 		}
+		r.Created, _ = time.Parse(dockerTime, v.CreatedAt)
 		r.LastUsed, _ = time.Parse(dockerTime, cmp.Or(v.LastUsedAt, v.CreatedAt))
 		rs = append(rs, r)
 	}
@@ -771,7 +778,7 @@ func (g *gcScope) builderCache(node string) ([]cacheRecord, error) {
 		if last.IsZero() {
 			last = v.CreatedAt
 		}
-		rs = append(rs, cacheRecord{ID: v.ID, Parents: v.Parents, InUse: v.InUse, Shared: v.Shared, Size: v.Size, LastUsed: last})
+		rs = append(rs, cacheRecord{ID: v.ID, Parents: v.Parents, InUse: v.InUse, Shared: v.Shared, Size: v.Size, LastUsed: last, Created: v.CreatedAt})
 	}
 	return rs, nil
 }

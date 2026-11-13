@@ -18,7 +18,8 @@ import (
 
 // The build cache --gc counts is what docker buildx prune -a --filter until removes: records
 // last used before the cutoff and not in use, each only with every record built on it, so an
-// old base under a layer used since stays; the size counts what no image shares.
+// old base under a layer used since stays, and never one a child going was made on after its
+// last use; the size counts what no image shares.
 func TestCacheGoing(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
@@ -27,8 +28,8 @@ func TestCacheGoing(t *testing.T) {
 		{ID: "base", LastUsed: old, Size: 100, Shared: true},
 		{ID: "layer", Parents: []string{"base"}, LastUsed: old, Size: 10},
 		{ID: "top", Parents: []string{"layer"}, LastUsed: fresh, Size: 1},
-		{ID: "gone-base", LastUsed: old, Size: 200},
-		{ID: "gone-leaf", Parents: []string{"gone-base"}, LastUsed: old, Size: 20},
+		{ID: "gone-base", LastUsed: old, Created: old.Add(-time.Hour), Size: 200},
+		{ID: "gone-leaf", Parents: []string{"gone-base"}, LastUsed: old, Created: old.Add(-time.Minute), Size: 20},
 		{ID: "running", LastUsed: old, Size: 1000, InUse: true},
 		{ID: "never", Size: 5000},
 	}
@@ -36,10 +37,45 @@ func TestCacheGoing(t *testing.T) {
 	if n != 2 || size != 220 {
 		t.Errorf("%d records, %d bytes going; want gone-base and gone-leaf, 220", n, size)
 	}
+	// A record a child was made on after its own last use, which a builder's restart in between
+	// leaves (BuildKit v0.34.2, the docker driver's and a docker-container builder's), is last
+	// used when that child goes, so it stays, and with it its own parents. As on a server: the
+	// base the build after a restart reused stayed, its two local sources and its layer going.
+	at := func(s string) time.Time { return time.Date(2026, 11, 12, 4, 0, 0, 0, time.UTC).Add(mustDuration(t, s)) }
+	n, size = cacheGoing([]cacheRecord{
+		{ID: "hcj", LastUsed: at("8m1s"), Created: at("7m50s"), Size: 6766266},
+		{ID: "39p", Parents: []string{"hcj"}, LastUsed: at("16m35s"), Created: at("16m34s"), Size: 16800516},
+		{ID: "cp5", LastUsed: at("16m35s"), Created: at("16m30s"), Size: 4096},
+		{ID: "vmg", LastUsed: at("16m35s"), Created: at("16m30s"), Size: 8192},
+	}, at("18m53s"), time.Minute)
+	if n != 3 || size != 16800516+4096+8192 {
+		t.Errorf("%d records, %d bytes going; want 39p, cp5 and vmg, the base staying", n, size)
+	}
+	// Deeper: a reused layer stays for its child made after the restart, its base for it, and
+	// its child made with it before the restart goes, as the chain made after it does.
+	n, _ = cacheGoing([]cacheRecord{
+		{ID: "base", LastUsed: at("16.841s"), Created: at("16.430s")},
+		{ID: "a", Parents: []string{"base"}, LastUsed: at("16.842s"), Created: at("16.754s")},
+		{ID: "a2", Parents: []string{"a"}, LastUsed: at("16.845s"), Created: at("16.787s")},
+		{ID: "b2", Parents: []string{"a"}, LastUsed: at("21.526s"), Created: at("21.390s")},
+		{ID: "b3", Parents: []string{"b2"}, LastUsed: at("21.529s"), Created: at("21.425s")},
+	}, at("24s"), 2*time.Second)
+	if n != 3 {
+		t.Errorf("%d records going; want a2, b2 and b3", n)
+	}
 	// The cutoff itself goes, as prune's until does.
 	if n, _ := cacheGoing([]cacheRecord{{ID: "x", LastUsed: now.Add(-24 * time.Hour)}}, now, 24*time.Hour); n != 1 {
 		t.Errorf("a record last used exactly the age ago stays")
 	}
+}
+
+func mustDuration(t *testing.T, s string) time.Duration {
+	t.Helper()
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 // Sizes as docker prints them, in units of 1000.
