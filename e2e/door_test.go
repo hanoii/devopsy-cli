@@ -1916,14 +1916,14 @@ echo "entry $(ls /home/devopsy/.config/devopsy/door/users/ 2>/dev/null | grep -c
 	if out, _ := root(host); out != made+"entry 1\n" {
 		t.Errorf("the host after add:\n%s\nwant:\n%sentry 1", out, made)
 	}
-	// remove takes its entry, never its Unix user, which holds a tree and data; and an add
-	// of a user that is there takes the subordinate ids it was given meanwhile, and lists
-	// it once more nowhere.
+	// remove keeps its entry, which holds its names and its tree, and its Unix user, which
+	// holds a tree and data; and an add of a user that is there takes the subordinate ids it
+	// was given meanwhile, and lists it once more nowhere.
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users remove "+project+" 2>&1"); code != 0 {
 		t.Fatalf("remove (%d): %s", code, out)
 	}
-	if out, _ := root(host); out != made+"entry 0\n" {
-		t.Errorf("the host after remove:\n%s\nwant:\n%sentry 0", out, made)
+	if out, _ := root(host); out != made+"entry 1\n" {
+		t.Errorf("the host after remove:\n%s\nwant:\n%sentry 1", out, made)
 	}
 	if out, code := root("echo " + user + ":100000:65536 | tee -a /etc/subuid >>/etc/subgid"); code != 0 {
 		t.Fatalf("subordinate ids for %s (%d): %s", user, code, out)
