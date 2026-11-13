@@ -403,7 +403,7 @@ func (g *gcScope) find() gcPlan {
 	unread("the projects under "+g.root, err)
 	g.projects = ps
 	for _, pd := range ps {
-		bases, err := envBases(pd)
+		bases, err := envBases(g.root, pd)
 		unread("the environments of "+pd, err)
 		for _, b := range bases {
 			if rel, err := filepath.Rel(g.root, b); err == nil {

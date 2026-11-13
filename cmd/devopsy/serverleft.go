@@ -162,7 +162,7 @@ func cutDestroys(root string, trees map[string]string) []remote.RemovingDir {
 	}
 	for _, p := range ps {
 		look(p)
-		dirs, _ := envDirs(p)
+		dirs, _ := envDirs(root, p)
 		for _, d := range dirs {
 			look(d)
 		}
@@ -193,9 +193,9 @@ func snapshotEnvDirs(root string) []string {
 		})
 	}
 	var out []string
-	ps, _ := envDirs(root)
+	ps, _ := envDirs(root, root)
 	for _, p := range ps {
-		es, _ := envsUnder(p, holds)
+		es, _ := envsUnder(root, p, holds)
 		for _, e := range es {
 			if rel, err := filepath.Rel(root, e); err == nil {
 				out = append(out, filepath.ToSlash(rel))

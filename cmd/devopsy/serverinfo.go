@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
@@ -773,7 +774,7 @@ func environments(root string, trees map[string]string, readTree func(user, tree
 // user's tree (trees, by its path) and none it does not own (owned), whose files another user
 // may change.
 func ownProjects(root string, trees map[string]string, owned func(path string) bool) ([]string, error) {
-	dirs, err := envDirs(root)
+	dirs, err := envDirs(root, root)
 	var out []string
 	for _, p := range dirs {
 		if _, ok := trees[p]; !ok && owned(p) {
@@ -790,7 +791,7 @@ func deployEnvBases(root string) ([]string, error) {
 	errs := []error{err}
 	var out []string
 	for _, p := range ps {
-		bases, err := envBases(p)
+		bases, err := envBases(root, p)
 		out = append(out, bases...)
 		errs = append(errs, err)
 	}
@@ -807,15 +808,17 @@ func ownedByMe(path string) bool {
 	return ok && int(st.Uid) == os.Getuid()
 }
 
-// envDirs are dir's directories, a link to one included: a project or an
-// environment moved to another disk and linked back is one, as the
-// scripts reach it. A link resolving to nothing (a disk not mounted) is
-// an error, as --destroy takes one: what is there would read as gone. A
-// dir not there, or no directory, holds none (a release root before its
-// first release, a project removed since its root was read); one it
-// cannot read, or an entry it cannot stat, is an error, with what it
-// read.
-func envDirs(dir string) ([]string, error) {
+// envDirs are dir's directories, under the release root root, a link to
+// one included: a project or an environment moved to another disk and
+// linked back is one, as the scripts reach it. A link resolving to
+// nothing is an error when a uid claim names an environment under it
+// (danglingClaimed): an environment's disk not mounted, what is there
+// would read as gone. Any other is a stray link, skipped: the root's top
+// level is by default the deploy user's home. A dir not there, or no
+// directory, holds none (a release root before its first release, a
+// project removed since its root was read); one it cannot read, or an
+// entry it cannot stat, is an error, with what it read.
+func envDirs(root, dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 		return nil, nil
@@ -833,7 +836,7 @@ func envDirs(dir string) ([]string, error) {
 			out = append(out, path)
 		case errors.Is(err, os.ErrNotExist):
 			if li, lerr := os.Lstat(path); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
-				errs = append(errs, errors.New(path+" links to no directory, a disk not mounted perhaps"))
+				errs = append(errs, danglingClaimed(root, path))
 			}
 		case err != nil:
 			errs = append(errs, err)
@@ -842,10 +845,43 @@ func envDirs(dir string) ([]string, error) {
 	return out, errors.Join(errs...)
 }
 
+// danglingClaimed is the error of path, a link to no directory under the release root root,
+// when a uid claim there names an environment under it (its project, and instance if any,
+// path's names), an environment's disk not mounted, else nil. Claims that do not read leave
+// it unknown, an error too.
+func danglingClaimed(root, path string) error {
+	unread := errors.New(path + " links to no directory, a disk not mounted perhaps")
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return unread
+	}
+	claims, err := uids.StoreAt(root).List()
+	if err != nil {
+		return fmt.Errorf("%w, and the uid claims do not read: %w", unread, err)
+	}
+	rel = filepath.ToSlash(rel)
+	for _, c := range claims {
+		if c.Bad != "" {
+			continue
+		}
+		at := c.Owner.Project
+		if c.Owner.Instance != "" {
+			at += "/" + c.Owner.Instance
+		}
+		if c.Owner.Env != "" {
+			at += "/" + c.Owner.Env
+		}
+		if at == rel || strings.HasPrefix(at, rel+"/") {
+			return unread
+		}
+	}
+	return nil
+}
+
 // projectEnvironments are the environments of the project at p under root, with an error for
 // a directory of it it could not read.
 func projectEnvironments(root, p string) ([]remote.Environment, error) {
-	bases, err := envBases(p)
+	bases, err := envBases(root, p)
 	var envs []remote.Environment
 	for _, dir := range bases {
 		rel, _ := filepath.Rel(root, dir)
@@ -858,28 +894,29 @@ func projectEnvironments(root, p string) ([]remote.Environment, error) {
 }
 
 // envBases are the directories of the project at p's environments, [<instance>/]<environment>
-// (a directory with releases/), with an error for a directory it could not read.
-func envBases(p string) ([]string, error) {
-	return envsUnder(p, func(dir string) bool {
+// (a directory with releases/), under the release root root, with an error for a directory it
+// could not read.
+func envBases(root, p string) ([]string, error) {
+	return envsUnder(root, p, func(dir string) bool {
 		fi, err := os.Stat(filepath.Join(dir, "releases"))
 		return err == nil && fi.IsDir()
 	})
 }
 
-// envsUnder are the directories under the project at p, [<instance>/]<environment> as devopsy
-// lays them out, that isEnv takes for an environment's (a release root's, a snapshot root's),
-// an instance's looked into only when it is not one itself, with an error for a directory it
-// could not read.
-func envsUnder(p string, isEnv func(dir string) bool) ([]string, error) {
+// envsUnder are the directories under the project at p in root, [<instance>/]<environment> as
+// devopsy lays them out, that isEnv takes for an environment's (a release root's, a snapshot
+// root's), an instance's looked into only when it is not one itself, with an error for a
+// directory it could not read.
+func envsUnder(root, p string, isEnv func(dir string) bool) ([]string, error) {
 	var out []string
-	dirs, err := envDirs(p)
+	dirs, err := envDirs(root, p)
 	errs := []error{err}
 	for _, e := range dirs {
 		if isEnv(e) {
 			out = append(out, e)
 			continue
 		}
-		inner, err := envDirs(e)
+		inner, err := envDirs(root, e)
 		errs = append(errs, err)
 		for _, i := range inner {
 			if isEnv(i) {

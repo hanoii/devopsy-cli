@@ -19,6 +19,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"strconv"
 	"syscall"
 )
@@ -819,17 +820,36 @@ func TestServerInfoEnvironments(t *testing.T) {
 			t.Errorf("an unreadable project: %v, %v", got, err)
 		}
 	}
-	// A link to no directory (a disk not mounted) is unknown, never none: an environment there
-	// would read as gone, and --server-info would offer to remove what is left of it, its uid
-	// claim's file included. What it read comes with the error.
-	if err := os.Symlink(filepath.Join(elsewhere, "wiki"), filepath.Join(root, "wiki")); err != nil {
-		t.Fatal(err)
+	// A link to no directory that a uid claim names an environment under (a project's or an
+	// environment's disk not mounted) is unknown, never none: an environment there would read
+	// as gone, and --server-info would offer to remove what is left of it, its uid claim's file
+	// included. What it read comes with the error. One no claim names is a stray link, skipped:
+	// the root's top level is by default the deploy user's home.
+	for _, l := range []string{filepath.Join(root, "wiki"), filepath.Join(root, "app", "stage")} {
+		if err := os.Symlink(filepath.Join(elsewhere, "gone"), l); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if envs, err := environments(root, nil, nil, ownedByMe); err == nil || !strings.Contains(err.Error(), filepath.Join(root, "wiki")+" links to no directory") || len(envs) != 3 {
-		t.Errorf("a link to no directory: %v, %v", envs, err)
+	if got := paths(environments(root, nil, nil, ownedByMe)); !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
+		t.Errorf("stray links to no directory: %v", got)
 	}
-	if err := os.Remove(filepath.Join(root, "wiki")); err != nil {
-		t.Fatal(err)
+	for _, c := range []struct {
+		claim uids.Owner
+		link  string
+	}{{uids.Owner{Project: "wiki", Env: "prod"}, filepath.Join(root, "wiki")}, {uids.Owner{Project: "app", Env: "stage"}, filepath.Join(root, "app", "stage")}} {
+		claims := uids.StoreAt(root)
+		if _, err := claims.Lookup(c.claim); err != nil {
+			t.Fatal(err)
+		}
+		if envs, err := environments(root, nil, nil, ownedByMe); err == nil || !strings.Contains(err.Error(), c.link+" links to no directory") || len(envs) != 3 {
+			t.Errorf("a link to no directory a claim names: %v, %v", envs, err)
+		}
+		if err := os.Remove(filepath.Join(claims.Dir, c.claim.String())); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(c.link); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A project user's tree is never the deploy user's to read, a link there least of all:
 	// its environments come from what that user reads (--door-read), and nothing of the
