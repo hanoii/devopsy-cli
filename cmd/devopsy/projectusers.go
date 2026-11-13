@@ -278,15 +278,9 @@ func doorNameOwner(d *remote.Door, root, project, name string) (string, error) {
 }
 
 func addProjectUser(d *remote.Door, project, who, entry string) int {
-	// The door's tools, before anything: without them the host's pieces fail halfway (visudo's
-	// check, a setfacl of the tree).
-	if missing := missingTools(doorTool); len(missing) > 0 {
-		report.Fail(errors.New("no "+strings.Join(missing, " or ")+" on this server, which project users need: no project user made"),
-			toolFix(true))
-		return 1
-	}
 	// A removal of the user's, or a key's removal's end, not seen through: what settles it
-	// would take what add writes now (its entry), so it goes first.
+	// would take what add writes now (its entry), so it goes first, its own refusal before any
+	// other's.
 	if fileExists(remote.DoorDestroyingFile(who)) {
 		report.Fail(errors.New("a --project-users remove "+project+" --destroy did not complete, and adding the user would undo it"),
 			report.Fix("run it again, which completes it, then add it"))
@@ -295,6 +289,13 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if fileExists(remote.DoorRemovingFile(who)) || fileExists(remote.DoorEndingFile(who)) {
 		report.Fail(errors.New("a removal of "+who+"'s did not complete, and finishing it would undo this add"),
 			report.Fix("ask for the removal again, which finishes it, or list the user's keys if only a key was being removed, then add it"))
+		return 1
+	}
+	// The door's tools, before anything else: without them the host's pieces fail halfway
+	// (visudo's check, a setfacl of the tree).
+	if missing := missingTools(doorTool); len(missing) > 0 {
+		report.Fail(errors.New("no "+strings.Join(missing, " or ")+" on this server, which project users need: no project user made"),
+			toolFix(true))
 		return 1
 	}
 	// The release root a project user's tree goes in, as every release needs it.

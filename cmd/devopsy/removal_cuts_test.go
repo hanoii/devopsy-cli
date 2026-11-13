@@ -425,10 +425,12 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 			if authorizedKeysOf(&taken, who) != 0 || taken.Len() > 0 {
 				t.Errorf("sshd takes %q", taken.String())
 			}
-			d, _ := remote.ServerDoor()
-			if code := addProjectUser(d, "shop", who, c.entry); code == 0 {
-				t.Error("an add over a destroy passed")
+			// The add refuses for the mark, before anything, its tools' check included: a host
+			// without sudo or setfacl would refuse it for those.
+			if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "add", "shop"); code == 0 || !strings.Contains(out, "--project-users remove shop --destroy did not complete") {
+				t.Errorf("an add over a destroy (%d):\n%s", code, out)
 			}
+			d, _ := remote.ServerDoor()
 			if code := removeProjectUser(d, "shop", who, c.entry, c.fakeEnd); code == 0 {
 				t.Error("a plain removal over a destroy passed")
 			}
