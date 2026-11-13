@@ -107,7 +107,7 @@
   - used by a container, its names are recorded, never stripped;
   - else its listed names and its other names in the same repositories go (`mariadb:11` with `mariadb:11.4`);
   - a name that moved on stays.
-- Never `docker rmi -f`; a refusal is recorded: the classic store may delete an image a stopped container uses.
+- Never `docker rmi -f`; a refusal is recorded: `-f` strips the names of an image a container uses, which a removal keeps and records instead.
 - Removals are idempotent, and one cut off anywhere is finished by the next; Docker failing (anything but a missing image) stops one with exit 1 and the release stays, `RemoveReleases` removing a directory only after its images, and `--destroy` then keeps the directory and says to run it again.
 - A release's removals scan no directory, sweep nothing server-wide and keep no trash directory: a removal decides from its release's listing and Docker's state, and reads nothing above its project. `--gc` and a project user's destroy are the sweeps: `--gc` by each of the deploy user's projects' records and Docker's own rule (internals/other.md), the destroy by the names only that project writes (`Policy.OwnRef`, internals/door.md).
 - What could not go is recorded in `images.LeftFile` (`<release root>/<project>/.devopsy-images-left`), listed by `--releases` and retried by `img prune` for this project's lines only and by `--gc` for every deploy user's project's (`Set.Retry`, `Retryable` listing beforehand what it removes), a line dropped once its name is gone, moved on or removed.
