@@ -100,3 +100,48 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		t.Errorf("a mount systemd refuses (%d):\n%s", code, out)
 	}
 }
+
+// Review, a bug: systemd refusing the space's mount offers journalctl -u with the unit's name
+// unquoted, and systemd's name for a path with a - holds a \x2d (the default space's,
+// var-lib-devopsy\x2ddoor.mount): copied into a shell, the backslash goes and journalctl is
+// asked for var-lib-devopsyx2ddoor.mount, which has no lines. The command offered must give
+// journalctl the unit's name as systemd has it.
+func TestProjectUsersSetupScriptJournalHint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	host, bin := filepath.Join(dir, "host"), filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"systemctl":  "#!/bin/sh\nexit 1\n",
+		"journalctl": "#!/bin/sh\nprintf '%s\\n' \"$2\"\n",
+	} {
+		if err := testfile.Write(filepath.Join(bin, name), []byte(text), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	space := filepath.Join(dir, "devopsy-door")
+	if err := os.Mkdir(space, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unit := setup.SpaceUnit(space)
+	c := exec.Command("sh", "-c", ProjectUsersSetupScript, "sh", host, "0:0", space, "", "", unit, "", "1", "", "", "deploy", "", "")
+	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
+	out, _ := c.CombinedOutput()
+	var command string
+	for _, l := range strings.Split(string(out), "\n") {
+		if _, after, ok := strings.Cut(l, "$ "); ok && strings.HasPrefix(after, "journalctl") {
+			command = after
+		}
+	}
+	if command == "" {
+		t.Fatalf("no journalctl offered:\n%s", out)
+	}
+	sh := exec.Command("sh", "-c", command)
+	sh.Env = c.Env
+	got, err := sh.Output()
+	if want := filepath.Base(unit); err != nil || strings.TrimSpace(string(got)) != want {
+		t.Errorf("the offered %q asks journalctl for %q, not %q (%v)", command, strings.TrimSpace(string(got)), want, err)
+	}
+}
