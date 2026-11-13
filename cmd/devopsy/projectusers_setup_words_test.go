@@ -72,7 +72,7 @@ func TestProjectUsersSetupFailsWithItsLastWords(t *testing.T) {
 	if code != 1 || !applied || !strings.Contains(out, "devopsy: error: processes: /proc hides other users' processes (hidepid=invisible) with no gid=") {
 		t.Fatalf("a /proc hidden with no gid= (%d):\n%s", code, out)
 	}
-	if !strings.Contains(after, "devopsy: error: ") {
+	if !strings.HasSuffix(after, "devopsy: error: this server is not ready for project users\n") {
 		t.Errorf("the run exits 1 and says no error after its changes:\n%s", out)
 	}
 }

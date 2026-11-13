@@ -699,11 +699,12 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		report.Info(me.Username+" sees every process from its next login",
 			"a session open now, a shared SSH connection's included, sees only its own processes until it is opened again")
 	}
-	// What the apply left waiting is said in its last words.
+	// An apply that fails ends on an error, as its exit goes (end), what it left waiting said
+	// with it.
 	switch line := refusedWords(f.Stopped()); {
 	case line != "":
 		report.Error(line, waits...)
-	case len(waits) > 0:
+	case end() != 0:
 		report.Error("this server is not ready for project users", waits...)
 	}
 	if !refused && failures == 0 {
