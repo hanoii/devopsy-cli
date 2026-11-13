@@ -10,7 +10,7 @@
 - The directory holds a release's copy, `code/` and its files without the logs, its images listing bookmarked as `s<id>` (`images.Set.idOf`, `BookmarkFrom`), the manifest with `format` first (a restore refuses a format it does not know), and `data/` (the tars, `shared.env`, `inherit.env`, `data-images`, and `images`, every data service's window with something there as `ParentData` lines, `SnapshotData`, whatever its copy).
 - Everything in it is written under `umask 077`: it holds the secrets.
 - `images.Set.own` counts snapshots' bookmarks as the environment's own (`TestSnapshotBookmarks`): otherwise a rollback of a built image after a snapshot leaves its name on the newer image.
-- The scripts export `DEVOPSY_INTERNAL_SNAPSHOTS` and `DEVOPSY_INTERNAL_BASE` (`basePrelude`), which a `Set` reads when its own fields are empty.
+- An environment's scripts export `DEVOPSY_INTERNAL_SNAPSHOTS` and `DEVOPSY_INTERNAL_BASE` (`basePrelude`), which a `Set` reads when its own fields are empty; a server's scripts (`serverPrelude`: `--gc`, `--server-info`, `--project-users`, `--server-setup`) and a server named alone export neither: every devopsy a script runs takes them for the environment it acts on.
 - Only a renamed directory is a snapshot: a take writes into `<id>.tmp/` and renames it when complete.
 - The manifest's `copy` records how the take copied (`reflink`, `mirror` or `none`), and `--snapshots` says it of the last take here, never of an imported one.
 - The manifest's names are single names (`readManifest`), and a restore extracts a volume by the name compose gives its key in the restored code, never the manifest's: an imported manifest is anyone's, and a crafted one could name another project's volume, emptied as root.

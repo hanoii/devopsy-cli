@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
@@ -46,9 +47,19 @@ func TestReview1ServerFactsCountGoneReleaseSnapshots(t *testing.T) {
 	if f := facts(); f.Snapshots != 1 {
 		t.Fatalf("with no prelude's variables: %d release snapshots to remove, want 1", f.Snapshots)
 	}
-	// As ServerInfoScript's prelude exports them for @<server>: (t.Path empty).
-	if f := facts(images.SnapshotsEnv+"="+root+"//snapshots", images.BaseEnv+"="+root+"/"); f.Snapshots != 1 {
-		t.Errorf("under ServerInfoScript's prelude: %d release snapshots to remove, want 1 (shop/prod 20261020000001)", f.Snapshots)
+	// ServerInfoScript's prelude exported them for @<server>: (t.Path empty) as $root//snapshots,
+	// which every environment's snapshots were then read from; it exports none for a server's
+	// script, an environment's address included, and an environment's script still does.
+	server := &remote.Target{Host: "vm1"}
+	env := &remote.Target{Host: "vm1", Name: "prod", Path: "shop/prod", Project: &remote.Project{Name: "shop"}}
+	for what, s := range map[string]string{"@vm1: --server-info": remote.ServerInfoScript(server), "@vm1:prod --server-info": remote.ServerInfoScript(env),
+		"@vm1: --gc": remote.GCScript(server, "list"), "@vm1:prod --gc": remote.GCScript(env, "list")} {
+		if strings.Contains(s, images.SnapshotsEnv) || strings.Contains(s, images.BaseEnv) {
+			t.Errorf("%s exports an environment's directories:\n%s", what, s)
+		}
+	}
+	if s := remote.SnapshotsScript(env, "shop"); !strings.Contains(s, "export "+images.SnapshotsEnv+`="$snaps" `+images.BaseEnv+`="$base"`) {
+		t.Errorf("an environment's script exports no directories:\n%s", s)
 	}
 }
 

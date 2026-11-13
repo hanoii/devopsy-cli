@@ -53,3 +53,4 @@ History, not rules: `internals/snapshots.md` wins where they differ.
 - Errors in pruning (2026-11-12): `pruneGone` took any stat error of a release for the release gone, and an unreadable restore mark read as none, so its snapshot, the one a restore that did not complete runs again from, went. Both now keep the snapshots on an error.
 
 - `--gc` (2026-11-12): release snapshots of an environment that never takes another stayed, since only a holder of its snapshot lock prunes; `--gc` holds each environment's lock in turn when free and prunes through the same `pruneGone`.
+- The snapshot directories' exports moved to an environment's scripts alone (2026-11-12): a server named alone exported `$root//snapshots`, so `--server-info`'s count of `--gc`'s read every environment's snapshots there and found none, which `--gc` itself had worked around with an `unset`; a server's script given an environment's address exported that one environment's for every other.

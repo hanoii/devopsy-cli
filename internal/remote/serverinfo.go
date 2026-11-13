@@ -240,7 +240,7 @@ type Environment struct {
 // ServerInfoScript runs ServerFactsFlag on the server, after the
 // prelude's checks: a server without it refuses, naming the upgrade.
 func ServerInfoScript(t *Target) string {
-	return "set -eu\n" + basePrelude(t) + devopsyCall("", []string{ServerFactsFlag}, true) + "\n"
+	return "set -eu\n" + serverPrelude(t) + devopsyCall("", []string{ServerFactsFlag}, true) + "\n"
 }
 
 // UIDClaim is one entry of the uid claims: its owner (env:<project>[:<instance>]:<environment>,

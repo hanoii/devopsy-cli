@@ -16,7 +16,7 @@ const ProjectUsersFlag = "--project-users-step"
 
 // ProjectUsersScript runs ProjectUsersFlag with args on the server, after the prelude's checks.
 func ProjectUsersScript(t *Target, args []string) string {
-	return "set -eu\n" + basePrelude(t) + devopsyCall("", append([]string{ProjectUsersFlag}, args...), true) + "\n"
+	return "set -eu\n" + serverPrelude(t) + devopsyCall("", append([]string{ProjectUsersFlag}, args...), true) + "\n"
 }
 
 // DoorRebootMarker says sshd has not taken the door's drop-in yet: /run is emptied at boot,
