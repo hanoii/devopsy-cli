@@ -410,6 +410,11 @@ It takes the server's image lock before removing anything, waiting up to
 10 minutes for releases that are fetching images, and fetches wait while
 it runs. A failure before the removal removes nothing.
 
+With nothing at the environment's directory, as a cut `--destroy` leaves
+it, it frees the environment's uid and ends. When a part of that path in
+the release root is a link to no directory (a disk not mounted), it
+refuses instead: mount the disk, then run it again.
+
 The project's and the instance's `.env` stay, since their environments
 share them. When no environment is left in their directory, `--purge`
 removes them too (at a terminal devopsy asks; otherwise a warning says

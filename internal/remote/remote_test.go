@@ -1771,6 +1771,30 @@ exit 0
 	if calls := readFile(filepath.Join(root, "calls")); !strings.Contains(calls, freed) {
 		t.Errorf("a destroy finding nothing does not free the claim:\n%s", calls)
 	}
+	// A part of its path linked to no directory is a disk not mounted, whose environment is
+	// back once it is: the destroy refuses, with the fix to mount it, and frees nothing. Linked
+	// to one, it finds nothing there and frees the claim.
+	disk := filepath.Join(t.TempDir(), "disk")
+	if err := os.Symlink(filepath.Join(disk, "c"), filepath.Join(root, "app", "c")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(DestroyScript(target("c"), ""), "TAG=ghi"); err == nil || !strings.Contains(out, "links to no directory") || !strings.Contains(out, "mount the disk") ||
+		strings.Contains(out, "nothing at") || strings.Contains(readFile(filepath.Join(root, "calls")), "--free-uids") {
+		t.Errorf("destroy through a link to no directory (%v):\n%s\n%s", err, out, readFile(filepath.Join(root, "calls")))
+	}
+	if err := os.MkdirAll(filepath.Join(disk, "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(DestroyScript(target("c"), ""), "TAG=ghi"); err != nil || !strings.Contains(out, "nothing at") ||
+		!strings.Contains(readFile(filepath.Join(root, "calls")), "--free-uids "+filepath.Join(root, "app", "c", "prod")+"\n") {
+		t.Errorf("destroy through a link to a directory with nothing in it (%v):\n%s", err, out)
+	}
+	if err := os.Remove(filepath.Join(root, "app", "c")); err != nil {
+		t.Fatal(err)
+	}
 
 	if !strings.Contains(out, "fetch of release 4 was interrupted") {
 		t.Errorf("destroy did not recover release 4:\n%s", out)

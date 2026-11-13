@@ -2090,6 +2090,21 @@ func DestroyScript(t *Target, projectName string) string {
 	free := `devopsy ` + FreeUIDsFlag + ` "$base" || { devopsy --say error "the uid of $base is not freed: its --destroy frees it when run again"; exit 1; }
 `
 	return "set -eu\n" + basePrelude(t) + removeMoved + `if [ ! -d "$base" ]; then
+  # A part of $base's path under the root that is a link to no directory
+  # is a disk not mounted, its environment back once it is: nothing is
+  # freed. Anything else not there (containers of the name included: a
+  # cut destroy's rerun, an environment removed by hand) is nothing at it.
+  d_rel=${base#"$root"/}
+  d_at=$root
+  while [ -n "$d_rel" ]; do
+    d_at="$d_at/${d_rel%%/*}"
+    case $d_rel in */*) d_rel=${d_rel#*/} ;; *) d_rel= ;; esac
+    if [ -L "$d_at" ] && [ ! -d "$d_at" ]; then
+      devopsy --say error "$base is not there: $d_at links to no directory, a disk not mounted perhaps: nothing freed" "$d_at -> $(readlink "$d_at" || :)" ` + sayRemedies(report.Fix("mount the disk it is on, then run it again:", "devopsy @"+HintAddress(t)+" --destroy")) + `
+      exit 1
+    fi
+    [ -d "$d_at" ] || break
+  done
   devopsy --say info "nothing at $base"
   ` + free + `  exit 0
 fi
