@@ -33,9 +33,10 @@ func TestSay(t *testing.T) {
 		t.Errorf("info (%d): %q", code, out)
 	}
 	// Fixes and hints come as report lays them out: the first --fix or
-	// --hint ends the details, each then its text and its commands.
+	// --hint ends the details, the fixes then the hints, each its text and
+	// its commands.
 	if out, code := runDevopsy(t, dir, nil, "--say", "error", "refused", "why", "--hint", "see why:", "devopsy @x --log", "--fix", "sync it again:", "devopsy @x --sync", "--fix", "", "devopsy @x --reset", "devopsy @x --status"); code != 0 ||
-		out != "devopsy: error: refused\ndevopsy: | why\ndevopsy: | see why:\ndevopsy: | $ devopsy @x --log\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. sync it again:\ndevopsy: |    $ devopsy @x --sync\ndevopsy: | 2. $ devopsy @x --reset\ndevopsy: |    $ devopsy @x --status\n" {
+		out != "devopsy: error: refused\ndevopsy: | why\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. sync it again:\ndevopsy: |    $ devopsy @x --sync\ndevopsy: | 2. $ devopsy @x --reset\ndevopsy: |    $ devopsy @x --status\ndevopsy: | see why:\ndevopsy: | $ devopsy @x --log\n" {
 		t.Errorf("fixes (%d): %q", code, out)
 	}
 	if out, code := runDevopsy(t, dir, nil, "--say", "warning", "careful", "--fix"); code != 0 || out != "devopsy: warning: careful\n" {
