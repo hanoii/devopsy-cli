@@ -872,6 +872,25 @@ func (q *quietWriter) keep(base string) {
 	q.mu.Unlock()
 }
 
+// keptOnCut is ctx, cancelled only once what follows goes to base's log
+// too (keep), and said so: a word said where the cancel lands (a copy's
+// entry cut) otherwise races the switch, and goes to the session nobody
+// reads any more. stop ends the watch.
+func keptOnCut(ctx context.Context, base string) (context.Context, func()) {
+	kept, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			errOut.keep(base)
+			report.Warn(time.Now().UTC().Format("2006-01-02 15:04:05") + ": the sync's session is gone: restoring what was stopped")
+			cancel()
+		case <-done:
+		}
+	}()
+	return kept, func() { close(done); cancel() }
+}
+
 // trimSyncLog keeps the last remote.SyncLogLines lines of the log at
 // path once it has more: every sync whose session went appends to it.
 // The holder's shell does the same (remote's trimSyncLog).
@@ -1101,16 +1120,8 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// Cancelled before the end (a signal, the session's EOF): nobody
 	// reads this session any more, so the rest goes to the log too. cwd
 	// is $base/current, as the push script's cd left it.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			errOut.keep(base)
-			report.Warn(time.Now().UTC().Format("2006-01-02 15:04:05") + ": the sync's session is gone: restoring what was stopped")
-		case <-done:
-		}
-	}()
+	ctx, kept := keptOnCut(ctx, base)
+	defer kept()
 
 	in, code := pushChecks(ctx, cwd, projectDir, reset)
 	if in == nil {

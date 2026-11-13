@@ -2747,6 +2747,10 @@ func TestSyncInterruptCopy(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
+	// A long log the cut trims first, so a word said at the cut lands while the parent is
+	// still trimming: it reaches the log all the same.
+	syncLogPath := filepath.Join(s.root, "shop", "prod", ".devopsy-sync.log")
+	write(t, syncLogPath, strings.Repeat("devopsy: an earlier sync's line\n", 1000*remote.SyncLogLines), 0o644)
 
 	outFile, err := os.CreateTemp(tmp, "out")
 	if err != nil {
@@ -2784,20 +2788,23 @@ func TestSyncInterruptCopy(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	time.Sleep(500 * time.Millisecond)
-	if !strings.Contains(readString(s.log), "rm -f devopsy-sync-") {
-		t.Errorf("the rsync container was not removed:\n%s", readString(s.log))
+	// The parent's end, within the restore's bound: the rsync container removed, and in its
+	// log, where its words go once its session is cut, the entry cut and what it did after.
+	cutWord := "devopsy: mnt/storage is half copied: a database copied raw cannot start on it until the next sync completes it"
+	ended := func() bool {
+		log := readString(syncLogPath)
+		return strings.Contains(readString(s.log), "rm -f devopsy-sync-") && strings.Contains(log, cutWord) &&
+			strings.Contains(log, ": the sync's session is gone: restoring what was stopped") && strings.Contains(log, "devopsy: starting app")
+	}
+	for !ended() {
+		if time.Since(start) > 10*time.Second {
+			log := readString(syncLogPath)
+			t.Fatalf("the parent's end (rsync removed, the entry cut and the restore in its log):\n%s\n%s\n%s", readString(s.log), log[max(0, len(log)-2000):], readString(outFile.Name()))
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	if _, err := os.Stat(pushed); err == nil {
 		t.Errorf("the capability's export ran after the interrupt")
-	}
-	// Said where the parent's words go once its session is cut: its log.
-	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.log")); !strings.Contains(log, "devopsy: mnt/storage is half copied: a database copied raw cannot start on it until the next sync completes it") {
-		t.Errorf("no word on the entry cut:\n%s", log)
-	}
-	// What the parent did once nobody read its session is in its log.
-	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.log")); !strings.Contains(log, ": the sync's session is gone: restoring what was stopped") || !strings.Contains(log, "devopsy: starting app") {
-		t.Errorf("the parent's sync log:\n%s", log)
 	}
 }
 
