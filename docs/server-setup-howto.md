@@ -10,7 +10,7 @@ no server, project or Docker.
 - [docker](#docker): a current Docker from its repository, compose and buildx
 - [tools](#tools): tar, flock and the other tools devopsy uses
 - [processes](#processes): /proc hiding every user's processes from the others
-- [project-users](#project-users): sudo and acl, the door's directory
+- [project-users](#project-users): sudo and acl, then --project-users setup
 - [kexec-handover](#kexec-handover): kho=off on the kernel's command line, freeing memory it keeps
 - [kdump](#kdump): no memory kept for a crash kernel, a choice
 - [xfs](#xfs): the data on XFS, so its copies are reflinks
@@ -22,14 +22,14 @@ A current Docker, with its compose and buildx plugins
 devopsy runs everything through the host's docker.service, as the deploy
 user, and never installs it. Every server runs Docker's containerd image
 store, buildx 0.33.0 or later and compose 2.33.0 or later: --server-setup,
-every release and --project-users add refuse a Docker that does not answer,
-lacks its compose or buildx plugin, or runs below any of them, and
---server-setup one that is not the host's service. A Docker installed from
-its repository runs the containerd image store. One upgraded from an older
-version keeps the classic image store, and a distribution's own package may
-run it too: devopsy refuses it, and does not move a Docker from one store to
-the other. These steps are then for a new server, where the projects of that
-one are released.
+every release, --project-users setup and --project-users add refuse a Docker
+that does not answer, lacks its compose or buildx plugin, or runs below any
+of them, and --server-setup one that is not the host's service. A Docker
+installed from its repository runs the containerd image store. One upgraded
+from an older version keeps the classic image store, and a distribution's
+own package may run it too: devopsy refuses it, and does not move a Docker
+from one store to the other. These steps are then for a new server, where
+the projects of that one are released.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
@@ -130,9 +130,11 @@ Every user's processes hidden from the others
 
 A process's command line names projects, paths and arguments, and a devopsy
 session's is its whole script, the operator's command in it: on a server
-with project users, each should see only its own. --server-info and
---project-users add warn while /proc has no hidepid; devopsy checks it and
-never mounts /proc.
+with project users, each should see only its own. On a server with project
+users, --project-users setup does this, with a unit of devopsy's
+(devopsy-proc.service) in place of the /etc/fstab line below: these steps
+are for doing it by hand. --server-info and --project-users add warn while
+/proc has no hidepid.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
@@ -187,13 +189,15 @@ findmnt -no OPTIONS /proc
 What a server with project users needs
 
 Project users reach Docker through the door, devopsy's check of every Docker
-request they make. The door keeps their data in a directory of its own on a
-mount with nosuid and nodev, and needs sudo, visudo and setfacl:
---project-users add refuses a server without any of them, as it refuses a
-Docker below what every server runs (the docker topic). --server-info warns
-of each one missing, and of sudo, visudo or setfacl only notes it while the
-server has no project user. /proc should hide other users' processes from
-project users too (the processes topic).
+request they make. It needs sudo, visudo and setfacl, which devopsy does not
+install: --project-users setup and --project-users add refuse a server
+without any of them, as they refuse a Docker below what every server runs
+(the docker topic). --project-users setup sets the rest: the door's
+directory on a mount of its own with nosuid and nodev, its name in the
+deploy user's config, and every user's processes hidden from the others.
+--server-info warns of each tool missing, and only notes sudo, visudo or
+setfacl while the server has no project user. Steps 4 to 6 are for a server
+set up by hand in place of step 2, where a line in /etc/fstab is fine.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's
@@ -208,8 +212,17 @@ user=devopsy).
    apt-get install -y sudo acl
    ```
 
-2. Make the door's directory, the deploy user's, and mount it on itself with
-   nosuid and nodev, now and at every boot.
+2. From the operator's machine, run --project-users setup for this server,
+   addressed by its deploy user: it shows what it sets, asks, and applies.
+
+3. Then add project users with --project-users add, from the operator's
+   machine, and reboot the server after the first: sshd reads what the add
+   wrote for it only at the next boot, and until then no project user logs
+   in.
+
+4. By hand, in place of step 2: make the door's directory, the deploy
+   user's, and mount it on itself with nosuid and nodev, now and at every
+   boot.
 
    ```sh
    user=devopsy space=/var/lib/devopsy-door
@@ -219,8 +232,9 @@ user=devopsy).
    mountpoint -q "$space" || mount "$space"
    ```
 
-3. Name it as door: space: in the deploy user's config,
-   ~/.config/devopsy/config.yaml, unless the file has a door: already.
+5. By hand, in place of step 2: name it as door: space: in the deploy user's
+   config, ~/.config/devopsy/config.yaml, unless the file has a door:
+   already.
 
    ```sh
    user=devopsy space=/var/lib/devopsy-door
@@ -229,10 +243,8 @@ user=devopsy).
    grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null
    ```
 
-4. Then add project users with --project-users add, from the operator's
-   machine, and reboot the server after the first: sshd reads what the add
-   wrote for it only at the next boot, and until then no project user logs
-   in.
+6. By hand, in place of step 2: hide every user's processes from the others,
+   as the processes topic says.
 
 To check it: the three tools are found, the directory is mounted with nosuid
 and nodev, and --server-info no longer says either of them.

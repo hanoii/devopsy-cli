@@ -262,32 +262,40 @@ func processesHidden(hidepid string) bool { return setup.Hiding(hidepid) }
 // user's processes; "" is unknown (an older server's facts, no /proc mount), never said.
 func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
 
-// processesFix is the way out of a /proc that shows every user's processes, the setting itself
-// with the command that prints its steps, never a tool that sets it: devopsy checks it and never
-// mounts /proc, the host's hardening being its admin's.
-const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, now and at every boot"
+// projectUsersSetup is what --project-users setup sets offered as kind (report.Fix, else
+// report.Hint): the setup on ref, the server as typed, in words where it is "", then topic's
+// steps as a hint for doing it by hand.
+func projectUsersSetup(kind func(string, ...string) report.Remedy, ref string, topic howto.Name) []report.Remedy {
+	cmd := ""
+	if ref != "" {
+		cmd = "devopsy @" + ref + " --project-users setup"
+	}
+	return []report.Remedy{offer(kind, "set the server up for project users:", cmd, "run --project-users setup for this server, as its deploy user"),
+		stepsHint("to set it by hand", topic)}
+}
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
-// that shows project users every other user's processes (processesShown).
-func processesShownWarning() (msg, detail string, fix report.Remedy) {
+// that shows project users every other user's processes (processesShown), its fixes on ref
+// (projectUsersSetup).
+func processesShownWarning(ref string) (msg, detail string, fixes []report.Remedy) {
 	return "/proc shows project users every other user's processes (no hidepid)",
 		"their command lines can hold a secret",
-		stepsFix(processesFix, howto.Processes)
+		projectUsersSetup(report.Fix, ref, howto.Processes)
 }
 
 // processesShownNote is the same on a server with no project user, where it only matters once
-// one is added.
-func processesShownNote() (msg string, hint report.Remedy) {
+// one is added: the setup a hint.
+func processesShownNote(ref string) (msg string, hints []report.Remedy) {
 	return "/proc shows every user's processes (no hidepid), which matters once the server has project users",
-		stepsHint(processesFix, howto.Processes)
+		projectUsersSetup(report.Hint, ref, howto.Processes)
 }
 
 // warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
 // shows project users every other user's processes, nothing where it hides them or cannot tell.
-func warnProcessesShown(l *report.Logger, mounts string) {
+func warnProcessesShown(l *report.Logger, mounts, ref string) {
 	if processesShown(readHidePID(mounts)) {
-		msg, detail, fix := processesShownWarning()
-		l.Say(report.WarnLevel, msg, []string{detail}, fix)
+		msg, detail, fixes := processesShownWarning(ref)
+		l.Say(report.WarnLevel, msg, []string{detail}, fixes...)
 	}
 }
 
@@ -1290,10 +1298,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// the deploy user's or an admin's, and it is a line to know before adding one.
 	if processesShown(info.HidePID) {
 		if info.Door != nil && info.Door.Users > 0 {
-			msg, detail, fix := processesShownWarning()
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: []report.Remedy{fix}})
+			msg, detail, fixes := processesShownWarning(ref)
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: fixes})
 		} else {
-			note(processesShownNote())
+			msg, hints := processesShownNote(ref)
+			note(msg, hints...)
 		}
 	}
 
@@ -1301,7 +1310,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		row("door", dr.Space+", "+plural(dr.Users, "project user"))
 		if dr.Unguarded != "" {
 			warn(dr.Unguarded+": the door refuses every request",
-				spaceFix(dr.Space))
+				projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",

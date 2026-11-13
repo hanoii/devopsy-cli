@@ -20,7 +20,7 @@ var Topics = []Topic{
 		Title:   "A current Docker, with its compose and buildx plugins",
 		Why: "devopsy runs everything through the host's docker.service, as the deploy user, and never installs it. " +
 			"Every server runs Docker's containerd image store, buildx 0.33.0 or later and compose 2.33.0 or later: " +
-			"--server-setup, every release and --project-users add refuse a Docker that does not answer, lacks its compose or buildx plugin, or runs below any of them, and --server-setup one that is not the host's service. " +
+			"--server-setup, every release, --project-users setup and --project-users add refuse a Docker that does not answer, lacks its compose or buildx plugin, or runs below any of them, and --server-setup one that is not the host's service. " +
 			"A Docker installed from its repository runs the containerd image store. One upgraded from an older version keeps the classic image store, and a distribution's own package may run it too: devopsy refuses it, and does not move a Docker from one store to the other. " +
 			"These steps are then for a new server, where the projects of that one are released.",
 		Steps: []Step{
@@ -80,7 +80,8 @@ var Topics = []Topic{
 		Title:   "Every user's processes hidden from the others",
 		Why: "A process's command line names projects, paths and arguments, and a devopsy session's is its whole script, the operator's command in it: " +
 			"on a server with project users, each should see only its own. " +
-			"--server-info and --project-users add warn while /proc has no hidepid; devopsy checks it and never mounts /proc.",
+			"On a server with project users, --project-users setup does this, with a unit of devopsy's (devopsy-proc.service) in place of the /etc/fstab line below: these steps are for doing it by hand. " +
+			"--server-info and --project-users add warn while /proc has no hidepid.",
 		Steps: []Step{
 			{"Make a group that sees every process, and put the deploy user in it, from its next login: it is root through Docker already.", []string{
 				`group=devopsy-proc user=devopsy`,
@@ -112,31 +113,34 @@ var Topics = []Topic{
 	},
 	{
 		Name:    ProjectUsers,
-		Summary: "sudo and acl, the door's directory",
+		Summary: "sudo and acl, then --project-users setup",
 		Title:   "What a server with project users needs",
-		Why: "Project users reach Docker through the door, devopsy's check of every Docker request they make. The door keeps their data in a directory of its own on a mount with nosuid and nodev, " +
-			"and needs sudo, visudo and setfacl: --project-users add refuses a server without any of them, as it refuses a Docker below what every server runs (the docker topic). " +
-			"--server-info warns of each one missing, and of sudo, visudo or setfacl only notes it while the server has no project user. " +
-			"/proc should hide other users' processes from project users too (the processes topic).",
+		Why: "Project users reach Docker through the door, devopsy's check of every Docker request they make. " +
+			"It needs sudo, visudo and setfacl, which devopsy does not install: --project-users setup and --project-users add refuse a server without any of them, as they refuse a Docker below what every server runs (the docker topic). " +
+			"--project-users setup sets the rest: the door's directory on a mount of its own with nosuid and nodev, its name in the deploy user's config, and every user's processes hidden from the others. " +
+			"--server-info warns of each tool missing, and only notes sudo, visudo or setfacl while the server has no project user. " +
+			"Steps 4 to 6 are for a server set up by hand in place of step 2, where a line in /etc/fstab is fine.",
 		Steps: []Step{
 			{"Install sudo (sudo, visudo) and acl (setfacl), which nothing else of devopsy uses.", []string{
 				`apt-get update`,
 				`apt-get install -y sudo acl`,
 			}},
-			{"Make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot.", []string{
+			{"From the operator's machine, run --project-users setup for this server, addressed by its deploy user: it shows what it sets, asks, and applies.", nil},
+			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
+			{"By hand, in place of step 2: make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`install -d -o "$user" -m 755 "$space"`,
 				`grep -qs "^$space " /etc/fstab || echo "$space $space none bind,nosuid,nodev 0 0" >> /etc/fstab`,
 				`systemctl daemon-reload`,
 				`mountpoint -q "$space" || mount "$space"`,
 			}},
-			{"Name it as door: space: in the deploy user's config, ~/.config/devopsy/config.yaml, unless the file has a door: already.", []string{
+			{"By hand, in place of step 2: name it as door: space: in the deploy user's config, ~/.config/devopsy/config.yaml, unless the file has a door: already.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`config=$(getent passwd "$user" | cut -d: -f6)/.config/devopsy/config.yaml`,
 				`runuser -u "$user" -- mkdir -p "${config%/*}"`,
 				`grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
 			}},
-			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
+			{"By hand, in place of step 2: hide every user's processes from the others, as the processes topic says.", nil},
 		},
 		Check: Step{"the three tools are found, the directory is mounted with nosuid and nodev, and --server-info no longer says either of them.", []string{
 			`command -v sudo visudo setfacl`,

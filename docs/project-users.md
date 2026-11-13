@@ -409,7 +409,10 @@ is not in, is refused. The files devopsy writes for it start with
 `/proc` has no `hidepid` of `invisible`, `ptraceable` or `noaccess`
 (`2`, `4` or `1` on an older kernel), and go on; on a server with none
 yet, `--server-info` says it without a warning. `noaccess` shows that a
-process is there and whose it is, never its command line.
+process is there and whose it is, never its command line. `add` on a
+server with no `door: space:`, or one not mounted `nosuid,nodev`, and
+`--server-info`'s warnings of either, offer `--project-users setup` as
+the fix, and the how-to's steps for doing it by hand.
 
 `add` makes `devopsy-shop` with no password, a home closed to others,
 and one id from 50000 to 59999 for its uid and its group, which no

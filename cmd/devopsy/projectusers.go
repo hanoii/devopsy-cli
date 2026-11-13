@@ -128,7 +128,7 @@ func runProjectUsersStep(args []string) int {
 	}
 	if d == nil || d.Space == "" {
 		report.Fail(errors.New("this server is not set up for project users: "+remote.UserConfigFile()+" has no \"door: space:\""),
-			stepsFix("set it to a directory of the deploy user's on a mount of its own, with nosuid and nodev", howto.ProjectUsers))
+			projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		return 1
 	}
 	project := args[1]
@@ -257,11 +257,6 @@ func doorProjects(d *remote.Door) []string {
 	return ps
 }
 
-// spaceFix is how a door's space gets nosuid and nodev, the one way every refusal of it offers.
-func spaceFix(space string) report.Remedy {
-	return report.Fix("mount it so, for example with this line in /etc/fstab:", space+" "+space+" none bind,nosuid,nodev 0 0")
-}
-
 // doorNameOwner is the project user whose names compose project name sits under, by the
 // door's rule (door.Policy.OwnName) among the server's projects (serverProjects, root the
 // release root, and project, the target's own, whose directory a first release has yet to
@@ -318,7 +313,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 		return 1
 	}
 	if err := spaceGuarded(d.Space); err != nil {
-		report.Fail(err, spaceFix(d.Space))
+		report.Fail(err, projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		return 1
 	}
 	if err := staticSelf(); err != nil {
@@ -421,7 +416,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"any reboot takes it, one the server does by itself for /run/reboot-required included")
 	}
-	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts))
+	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts), ref)
 	return 0
 }
 

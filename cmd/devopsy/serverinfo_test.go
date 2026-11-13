@@ -196,16 +196,16 @@ func TestServerInfoReport(t *testing.T) {
 		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
-		}, "", "the door refuses every request|/space /space none bind,nosuid,nodev 0 0"},
+		}, "", "the door refuses every request|set the server up for project users:\n$ devopsy @vm1: --project-users setup"},
 		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
 		// Project users on a host that shows them every user's processes: what it exposes, and
-		// the mount that hides them, as the fix.
+		// the setup that hides them, as the fix.
 		{"door processes shown", func(i *remote.ServerInfo) {
 			i.Door, i.HidePID = &remote.DoorFacts{Space: "/space", Users: 2}, "off"
-		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|mount /proc with hidepid=invisible and gid= a group the deploy user is in, now and at every boot; this prints the steps:\n$ devopsy --server-setup-howto processes"},
+		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|set the server up for project users:\n$ devopsy @vm1: --project-users setup"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
@@ -409,10 +409,10 @@ func TestServerInfoReport(t *testing.T) {
 			info.Door = c.door
 		}
 		out, warnings := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-		noted := len(warnings) == 1 && warnings[0].note && len(warnings[0].fixes) == 1 && warnings[0].fixes[0].Hint &&
+		noted := len(warnings) == 1 && warnings[0].note && len(warnings[0].fixes) == 2 && warnings[0].fixes[0].Hint && warnings[0].fixes[1].Hint &&
 			warnings[0].msg == "/proc shows every user's processes (no hidepid), which matters once the server has project users" &&
-			warnings[0].fixes[0].Text == "mount /proc with hidepid=invisible and gid= a group the deploy user is in, now and at every boot; this prints the steps:" &&
-			slices.Equal(warnings[0].fixes[0].Cmds, []string{howto.Command(howto.Processes)})
+			warnings[0].fixes[0].Text == "set the server up for project users:" && slices.Equal(warnings[0].fixes[0].Cmds, []string{"devopsy @vm1: --project-users setup"}) &&
+			warnings[0].fixes[1].Text == "to set it by hand; this prints the steps:" && slices.Equal(warnings[0].fixes[1].Cmds, []string{howto.Command(howto.Processes)})
 		if c.note != noted || (!c.note && (len(warnings) != 0 || strings.Contains(out, "processes"))) {
 			t.Errorf("processes, %s: %+v\n%s", name, warnings, out)
 		}

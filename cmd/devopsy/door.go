@@ -961,7 +961,7 @@ func runDoor(args []string) int {
 	// From here every refusal is recorded, the space's own included.
 	doorLog = filepath.Join(policy.Space, "refused.log")
 	if err := spaceGuarded(policy.Space); err != nil {
-		report.Fail(err, spaceFix(policy.Space))
+		report.Fail(err, report.Fix("the server's admin sets it up with --project-users setup, as its deploy user"))
 		doorRecord(err.Error())
 		return 2
 	}

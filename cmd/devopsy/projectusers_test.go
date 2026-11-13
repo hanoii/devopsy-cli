@@ -403,8 +403,13 @@ func TestCloseDeployProjects(t *testing.T) {
 // test's, as the host root puts them, never the test machine's own /proc.
 func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 	t.Parallel()
-	msg, detail, fix := processesShownWarning()
-	warning := strings.Join(report.Lines(report.WarnLevel, msg, []string{detail}, []report.Remedy{fix}), "\n") + "\n"
+	msg, detail, fixes := processesShownWarning("devopsy@one:")
+	warning := strings.Join(report.Lines(report.WarnLevel, msg, []string{detail}, fixes), "\n") + "\n"
+	// Its fix is the setup on the server as typed, by hand the processes topic.
+	if !strings.Contains(warning, "devopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n") ||
+		!strings.Contains(warning, "devopsy: | to set it by hand; this prints the steps:\ndevopsy: | $ "+howto.Command(howto.Processes)+"\n") {
+		t.Errorf("the warning's remedies:\n%s", warning)
+	}
 	for _, c := range []struct {
 		name, mounts string // mounts "" writes no mounts file: another system
 		warns        bool
@@ -420,7 +425,7 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 			write(t, h.path(procMounts), c.mounts, 0o644)
 		}
 		var out bytes.Buffer
-		warnProcessesShown(report.New(&out, false, 0), h.path(procMounts))
+		warnProcessesShown(report.New(&out, false, 0), h.path(procMounts), "devopsy@one:")
 		if want := map[bool]string{true: warning}[c.warns]; out.String() != want {
 			t.Errorf("%s: said %q, want %q", c.name, out.String(), want)
 		}
@@ -544,9 +549,16 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 // whose steps make the door's directory and its config.
 func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	t.Parallel()
-	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
-	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
+	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "--server", "devopsy@one:", "add", "shop")
+	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") ||
+		!strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n") ||
+		!strings.Contains(out, "devopsy: | to set it by hand; this prints the steps:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add with no door (%d):\n%s", code, out)
+	}
+	// With no server named, the setup in words: never a placeholder.
+	out, _ = runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
+	if !strings.Contains(out, "run --project-users setup for this server, as its deploy user\n") || strings.Contains(out, "@<") {
+		t.Errorf("add with no door, no server named:\n%s", out)
 	}
 }
 
