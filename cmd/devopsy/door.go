@@ -212,8 +212,8 @@ type doorSide struct {
 	keysFile string
 	keysAt   os.FileInfo
 	// What a request reads once, for every claim and run it makes: the daemon's
-	// "<os> <architecture>" (platform), doorHostReady's answer (hostReady), the directory of
-	// its logins (logins) and its builder's environment (builder).
+	// "<os> <architecture>" (platform), the floor's answer (hostReady, dockerFloor), the
+	// directory of its logins (logins) and its builder's environment (builder).
 	daemonPlatform memo[string]
 	hostChecked    memo[struct{}]
 	loginsDir      memo[string]
