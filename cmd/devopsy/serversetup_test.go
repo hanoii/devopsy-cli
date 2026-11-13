@@ -781,8 +781,7 @@ func rootChoice(t *testing.T) (s *syncSetup, host, vol, config string) {
 }
 
 // --server-setup asks where releases live while the config names no root and the home holds
-// no project: without a terminal the question fails naming --yes, which asks nothing and names
-// no root, the volume hint saying the question. The root chosen is judged by facts --root as
+// nothing released: without a terminal the question fails naming --yes. The root chosen is judged by facts --root as
 // the apply then names it: the apply writes it in the config first, as text, the admin's lines
 // kept, then makes the root there and has Docker wait for its mount, and a second run changes
 // nothing and asks nothing.
@@ -854,7 +853,7 @@ func TestServerSetupRootChoiceRefusals(t *testing.T) {
 	// A project in the home: releases stay there.
 	project := filepath.Join(filepath.Dir(vol), "shop", "prod", "releases")
 	write(t, filepath.Join(project, ".keep"), "", 0o644)
-	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "holds a project already, and releases stay there") || readString(config) != before {
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "holds releases already (a project, or a claim of the uids containers run as), and they stay there") || readString(config) != before {
 		t.Errorf("a project in the home (%d):\n%s", code, out)
 	}
 	if err := os.RemoveAll(filepath.Join(filepath.Dir(vol), "shop")); err != nil {
@@ -943,12 +942,12 @@ func TestVolumeHintSaysTheQuestionWhereAsked(t *testing.T) {
 	says := func(f setup.Facts) bool {
 		return slices.ContainsFunc(volumeHint(f), func(l string) bool { return strings.Contains(l, "--server-setup without --yes asks") })
 	}
-	if !f.AsksRoot() || !says(f) {
+	if !says(f) {
 		t.Errorf("asked, and the hint does not say it: %q", volumeHint(f))
 	}
 	f.Refusals = []setup.Refusal{{Item: setup.RefusalDocker}}
-	if !f.Hint() || f.AsksRoot() || says(f) {
-		t.Errorf("no step goes, hint %v, asks %v: %q", f.Hint(), f.AsksRoot(), volumeHint(f))
+	if !f.Hint() || says(f) {
+		t.Errorf("no step goes, hint %v: %q", f.Hint(), volumeHint(f))
 	}
 }
 
@@ -983,13 +982,9 @@ func TestServerSetupAsksNoRootOfAConfigItCannotWrite(t *testing.T) {
 	}
 }
 
-// Review 3, a bug: "the home holds no project" counts only the deploy user's own project
-// directories (deployEnvBases), so a server whose releases are all project users', their trees
-// in their own homes and their uid claims in the release root's claims directory
-// (<release root>/.devopsy-uids), is asked where releases live as a fresh one is, and an apply
-// names a volume as the root: every claim is then left behind in the home, and the door's
-// next uids request claims again from an empty directory. A root whose claims directory holds
-// a claim is asked nothing about, and an apply names no other root over it.
+// A release root whose claims directory holds a claim holds releases (a project user's, whose
+// tree is in its own home): the facts ask nothing about it, and an apply names no other root
+// over it, so its claims never stay behind in a root releases left.
 func TestServerSetupAsksNoRootOverClaims(t *testing.T) {
 	t.Parallel()
 	s, _, vol, config := rootChoice(t)

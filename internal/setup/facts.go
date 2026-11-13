@@ -39,8 +39,8 @@ type Facts struct {
 	// through its restart.
 	Running     int  `json:"running"`
 	LiveRestore bool `json:"live_restore"`
-	// Candidates are the volumes the root could be on; Projects whether the root holds a
-	// project's environment already.
+	// Candidates are the volumes the root could be on; Projects whether the root holds what
+	// devopsy keeps of a release already (a project's environment, a uid claim).
 	Candidates []Candidate `json:"candidates,omitempty"`
 	// RootNamed: the deploy user's config (ConfigFile) names releases: root. RootProposed: these
 	// facts judge the root an apply names there (facts --root), which the config names not yet.

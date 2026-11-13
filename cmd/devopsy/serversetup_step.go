@@ -336,9 +336,7 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 	}
 
 	f.Candidates = rootCandidates(h, hd)
-	// A root it cannot read in full is taken for one with projects: no hint to move it.
-	bases, err := deployEnvBases(f.Root)
-	f.Projects = len(bases) > 0 || err != nil
+	f.Projects = rootHolds(f.Root)
 	rd.door = d != nil
 	// The door's tools only where the server has project users: without one they matter only
 	// to --project-users add, which refuses without them.
@@ -404,7 +402,8 @@ func nameReleaseRoot(h setupHost, hd hostDocker, root string) error {
 	if rd, err := readSetupAt(h, hd, root); err != nil {
 		return err
 	} else if !rd.facts.RootNames() {
-		return errors.New("the release root " + root + " is refused, so it is not named in the config: run --server-setup again")
+		return &report.Failure{Msg: "the release root " + root + " is refused, so it is not named in the config",
+			Remedies: []report.Remedy{report.Fix("run --server-setup again and choose another")}}
 	}
 	file := remote.UserConfigFile()
 	if err := editConfig(file, func(have []byte) ([]byte, error) { return setup.SetReleaseRoot(have, root) }); err != nil {
@@ -431,6 +430,19 @@ func editConfig(file string, edit func([]byte) ([]byte, error)) error {
 		mode = fi.Mode().Perm()
 	}
 	return setup.WriteFile(file, text, mode)
+}
+
+// rootHolds says whether root holds what devopsy keeps of a release already: a project of the
+// deploy user's (deployEnvBases), or a claim of any user's in its claims directory, a project
+// user's tree being in its own home and its uids claimed here. A root it cannot read in full
+// is taken for one that holds them: no hint or question to move it.
+func rootHolds(root string) bool {
+	bases, err := deployEnvBases(root)
+	if len(bases) > 0 || err != nil {
+		return true
+	}
+	claims, err := claimsStore(root).List()
+	return len(claims) > 0 || err != nil
 }
 
 // rootCandidates are the volumes the release root could be on (setup.Candidates), off this
@@ -476,7 +488,7 @@ func rootNotAsked(f setup.Facts) string {
 	case f.RootNamed:
 		return "releases: root is named in " + f.ConfigFile + " already (" + f.Root + "), and only its admin changes it"
 	case f.Projects:
-		return "the release root " + f.Root + " holds a project already, and releases stay there"
+		return "the release root " + f.Root + " holds releases already (a project, or a claim of the uids containers run as), and they stay there"
 	case f.ConfigRefuses != "":
 		return f.ConfigFile + " takes no releases: root line from devopsy: " + f.ConfigRefuses
 	case f.NoneGoes():
@@ -890,7 +902,8 @@ func applySetup(h setupHost, a setupApply) int {
 	hd := readHostDocker(h)
 	if a.root != "" {
 		if err := nameReleaseRoot(h, hd, a.root); err != nil {
-			return failed(err.Error())
+			report.Fail(err)
+			return 1
 		}
 	}
 	rd, err := readSetup(h, hd)

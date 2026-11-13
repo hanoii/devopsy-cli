@@ -1126,8 +1126,8 @@ Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
                         root's and empty (releases: root in the deploy
                         user's config.yaml, else its home, never /);
-                        while the config names none and the home holds
-                        no project, asked first: the home or a volume it
+                        while the config names none and nothing is
+                        released, asked first: the home or a volume it
                         could be on, the answer named in config.yaml
   daemon.json           rotated logs (log-driver local), live-restore,
                         and /24 address pools, merged in: every other key

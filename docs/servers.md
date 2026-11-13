@@ -205,7 +205,8 @@ in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
 While the deploy user's `config.yaml` names no `releases: root`, and the
-home holds no project and is on no volume of its own, `--server-setup`
+home holds nothing released (no project, and no claim of the uids
+containers run as) and is on no volume of its own, `--server-setup`
 asks where releases live: the home, or one of the volumes the root could
 be on, listed with their size and free space. It names the answer as
 `releases: root` in that `config.yaml`, adding the line and leaving the
@@ -359,8 +360,8 @@ images, the volumes, a part of `--gc`'s count) is a warning instead:
 unknown, never none.
 
 A sync or a snapshot under way is reported as information. So are the
-volumes the release root could be on, while it holds no project and is
-not on one, and the memory kdump keeps, with how to free it
+volumes the release root could be on, while it holds nothing released
+and is not on one, and the memory kdump keeps, with how to free it
 ([`kdump`](server-setup-howto.md#kdump)), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check: on a server never

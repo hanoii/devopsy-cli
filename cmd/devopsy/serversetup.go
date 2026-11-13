@@ -65,9 +65,9 @@ func runServerSetup(t *remote.Target, args []string) int {
 	if code != 0 {
 		return code
 	}
-	// Where releases live, asked while the config names no root and the home holds none
-	// (setup.Facts.AsksRoot), before anything is shown: the facts are then the server's for
-	// the root chosen, which the apply names in the config first.
+	// Where releases live, asked while the config names no root and the home holds nothing
+	// released (setup.Facts.AsksRoot), before anything is shown: the facts are then the
+	// server's for the root chosen, which the apply names in the config first.
 	if f.AsksRoot() && !yes {
 		root, err := askRoot(f, terminalAsker{t: t})
 		if err != nil {

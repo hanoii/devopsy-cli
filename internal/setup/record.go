@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/sys/unix"
 )
 
 // RecordFile is the record of what devopsy applied on a server, beside the deploy user's
@@ -203,8 +203,6 @@ func WriteFile(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmp, path)
 }
 
-// linkTarget is the file path names once its symbolic links are followed, each relative one
-// from the link's own directory, path itself when it is no link or is not there.
 // Writable says why WriteFile could not write path, nil when it could: its directory, or the
 // nearest one of its parents there, as the link path names leads (linkTarget), is one this
 // process may write in, which a rename over the file needs whatever the file's own mode.
@@ -226,6 +224,8 @@ func Writable(path string) error {
 	return nil
 }
 
+// linkTarget is the file path names once its symbolic links are followed, each relative one
+// from the link's own directory, path itself when it is no link or is not there.
 func linkTarget(path string) (string, error) {
 	p := path
 	for range 40 {

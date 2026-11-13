@@ -52,35 +52,15 @@ func yamlScalar(s string) string {
 // that is no YAML, no mapping, or whose releases: names a root already is an error too: a
 // root named is the admin's to change.
 func SetReleaseRoot(have []byte, root string) ([]byte, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(have, &doc); err != nil {
-		return nil, fmt.Errorf("it is no YAML devopsy reads (%w)", err)
+	key, releases, err := topEntry(have, "releases")
+	if err != nil {
+		return nil, err
 	}
-	var releases *yaml.Node
-	keyLine := 0
-	if len(doc.Content) > 0 {
-		top := doc.Content[0]
-		if top.Kind != yaml.MappingNode {
-			return nil, errors.New("it is no YAML mapping")
-		}
-		for i := 0; i+1 < len(top.Content); i += 2 {
-			if top.Content[i].Value == "releases" {
-				releases, keyLine = top.Content[i+1], top.Content[i].Line
-			}
-		}
-	}
-	eol := "\n"
-	if bytes.Contains(have, []byte("\r\n")) {
-		eol = "\r\n"
-	}
+	eol := lineEnd(have)
 	var out []byte
 	switch {
 	case releases == nil:
-		out = slices.Clone(have)
-		if len(out) > 0 && out[len(out)-1] != '\n' {
-			out = append(out, eol...)
-		}
-		out = append(out, strings.ReplaceAll(ReleaseRootLines(root), "\n", eol)...)
+		out = appendLines(have, ReleaseRootLines(root))
 	case releases.Kind == yaml.MappingNode && releases.Style&yaml.FlowStyle == 0 && len(releases.Content) > 0:
 		lines := strings.SplitAfter(string(have), "\n")
 		at, replace, comment := 0, false, ""
@@ -92,7 +72,7 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 				at, replace, comment = k.Line, true, cmp.Or(v.LineComment, k.LineComment)
 			}
 		}
-		first := releases.Content[0]
+		first, keyLine := releases.Content[0], key.Line
 		if first.Line <= keyLine || first.Line > len(lines) {
 			return nil, errLineNotRead
 		}
@@ -122,6 +102,47 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 		return nil, errNotRead
 	}
 	return out, nil
+}
+
+// topEntry is key's key and value in have's top mapping, read as the config's loader reads it
+// (the first YAML document), nil for none; an error for a text that is no YAML or no mapping.
+func topEntry(have []byte, key string) (k, v *yaml.Node, err error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(have, &doc); err != nil {
+		return nil, nil, fmt.Errorf("it is no YAML devopsy reads (%w)", err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil, nil
+	}
+	top := doc.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return nil, nil, errors.New("it is no YAML mapping")
+	}
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value == key {
+			k, v = top.Content[i], top.Content[i+1]
+		}
+	}
+	return k, v, nil
+}
+
+// lineEnd is the line end have uses, CRLF where it holds one, else LF.
+func lineEnd(have []byte) string {
+	if bytes.Contains(have, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// appendLines is have with lines (LF-ended) appended in have's line ends (lineEnd), after one
+// it lacks at its end.
+func appendLines(have []byte, lines string) []byte {
+	eol := lineEnd(have)
+	out := slices.Clone(have)
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, eol...)
+	}
+	return append(out, strings.ReplaceAll(lines, "\n", eol)...)
 }
 
 // emptyScalar says whether n is a scalar the config's loader reads as no value: none, "", ~ or

@@ -127,26 +127,12 @@ var errDoorThere = errors.New("it has a door: already")
 // or a second document) would take the lines where nothing reads them. A text that is no
 // YAML, or holds a door: key, is an error too: only the admin changes a door:.
 func AppendDoorConfig(have []byte, space string) ([]byte, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(have, &doc); err != nil {
-		return nil, fmt.Errorf("it is no YAML devopsy reads (%w)", err)
+	if k, _, err := topEntry(have, "door"); err != nil {
+		return nil, err
+	} else if k != nil {
+		return nil, errDoorThere
 	}
-	if len(doc.Content) > 0 {
-		top := doc.Content[0]
-		if top.Kind != yaml.MappingNode {
-			return nil, errors.New("it is no YAML mapping")
-		}
-		for i := 0; i+1 < len(top.Content); i += 2 {
-			if top.Content[i].Value == "door" {
-				return nil, errDoorThere
-			}
-		}
-	}
-	out := slices.Clone(have)
-	if len(out) > 0 && out[len(out)-1] != '\n' {
-		out = append(out, '\n')
-	}
-	out = append(out, DoorConfigLines(space)...)
+	out := appendLines(have, DoorConfigLines(space))
 	var top map[string]yaml.Node
 	var door struct {
 		Space string `yaml:"space"`
