@@ -534,7 +534,7 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 	if space || dropin != "" || procs {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
-			dropin, flag(procs), me.Username, procText, polkit)
+			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)))
 		err := run.run(&out, func(err error) error { return fmt.Errorf("the setup's run as root: %w", err) })
 		sayDoorSetupLines(out.String(), me.Username)
 		if err != nil {

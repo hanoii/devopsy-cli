@@ -30,11 +30,13 @@ const (
 // host root, the deploy user's uid:gid, the space, 1 to make or give it, 1 to set its mode, its
 // unit's path, the unit's text ("" to leave it), 1 to enable and start it, the drop-in's text
 // ("" to leave it), 1 for the processes, the deploy user, /proc's unit's text with
-// setup.GIDMark for the group's number, polkit's drop-in's text ("" where there is no polkit).
+// setup.GIDMark for the group's number, polkit's drop-in's text ("" where there is no polkit),
+// and the unit's name as a shell word (QuoteWord), for the command a failed mount offers:
+// systemd's name for a path with a - holds a backslash (-), which a shell drops.
 var ProjectUsersSetupScript = `set -eu
 umask 022
 host_root=$1 owner=$2 space=$3 give=$4 mode=$5 unit=$6 unit_text=$7 mount=$8 dropin=$9 procs=${10}
-user=${11} proc_text=${12} polkit=${13}
+user=${11} proc_text=${12} polkit=${13} unit_word=${14}
 sd() { SYSTEMD_IGNORE_CHROOT=1 systemctl "$@"; }
 ` + hostPut + `reload=
 if [ -n "$give" ]; then
@@ -44,7 +46,7 @@ fi
 if [ -n "$mode" ]; then chmod 755 "$space"; echo "` + DoorSetupMode + ` $space"; fi
 if [ -n "$unit_text" ]; then
   mkdir -p "$host_root${unit%/*}"
-  if put "$host_root$unit" 644 true "$unit_text"; then echo "` + SetupPut + ` $unit"; reload=1; fi
+  if put "$host_root$unit" 644 true "$unit_text"; then printf '%s\n' "` + SetupPut + ` $unit"; reload=1; fi
 fi
 ` + hostDropIn + `restart_polkit=
 if [ -n "$procs" ]; then
@@ -73,7 +75,7 @@ if [ -n "$reload" ]; then
   sd daemon-reload >&2 || { ` + echoLine(report.ErrorLevel, "systemctl could not reload systemd from devopsy's container: nothing was mounted") + `; exit 6; }
 fi
 if [ -n "$mount" ]; then
-  sd enable --now "${unit##*/}" >&2 || { ` + echoLine(report.ErrorLevel, "systemd did not mount $space", report.Hint("what it said, as root:", "journalctl -u ${unit##*/}")) + `; exit 6; }
+  sd enable --now "${unit##*/}" >&2 || { ` + echoLine(report.ErrorLevel, "systemd did not mount $space", report.Hint("what it said, as root:", "journalctl -u $unit_word")) + `; exit 6; }
   echo "` + DoorSetupMounted + ` $space"
 fi
 if [ -n "$procs" ]; then
