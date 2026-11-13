@@ -167,8 +167,8 @@ func WriteRecord(path string, r Record) error {
 // new, never part of one. A temporary file of its own beside it is written, synced and renamed
 // over it, and removed when any of that fails. A path that is a symbolic link is written at the
 // file it names, the link staying a link; the directory is made, 0700, when missing. Every file
-// a setup writes in the deploy user's config directory (the record, config.yaml's door:) goes
-// through it.
+// a setup writes in the deploy user's config directory (the record, config.yaml's releases: root
+// and door:) goes through it.
 func WriteFile(path string, data []byte, mode os.FileMode) error {
 	path, err := linkTarget(path)
 	if err != nil {

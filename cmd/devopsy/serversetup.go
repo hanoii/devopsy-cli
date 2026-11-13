@@ -22,9 +22,10 @@ import (
 var errDeclined = errors.New("nothing changed")
 
 // runServerSetup implements devopsy @<server> --server-setup [--yes]: the server's setup as
-// devopsy wants it, in two sessions as the deploy user. The first reads the facts, which the
-// server's devopsy judges; the operator shows what differs and asks; the second applies,
-// under the server's apply lock, what the answers say.
+// devopsy wants it, in two sessions as the deploy user, three with a release root chosen. The
+// first reads the facts, which the server's devopsy judges, and again for the root chosen
+// where it asks where releases live; the operator shows what differs and asks; the last
+// applies, under the server's apply lock, what the answers say.
 func runServerSetup(t *remote.Target, args []string) int {
 	yes := false
 	for _, a := range args {
@@ -124,7 +125,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 type setupAsker interface {
 	replace(p setup.PartFact) (bool, error)
 	confirm(question string, details ...string) (bool, error)
-	choose(question string, choices []string) (int, error)
+	choose(question, detail string, choices []string) (int, error)
 }
 
 // askRoot asks where releases live (setup.Facts.AsksRoot): the release root the config names
@@ -137,7 +138,7 @@ func askRoot(f setup.Facts, ask setupAsker) (string, error) {
 		roots = append(roots, c.MountPoint)
 		choices = append(choices, candidateWords(c))
 	}
-	i, err := ask.choose("where do releases live? devopsy names the answer as releases: root in "+f.ConfigFile+", before the first release", choices)
+	i, err := ask.choose("where do releases live?", "devopsy names the answer as releases: root in "+f.ConfigFile+", before the first release", choices)
 	if err != nil {
 		return "", err
 	}
@@ -183,11 +184,12 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 			answers = true
 		}
 	}
-	// A root chosen is named in the config, a change confirmed with the rest.
-	if f.RootProposed {
+	// A root chosen is named in the config, a change confirmed with the rest, unless it is
+	// refused (setup.Facts.RootNames).
+	if f.RootNames() {
 		args = append(args, "--root", f.Root)
 	}
-	changes := f.Changes() || daemon || f.RootProposed
+	changes := f.Changes() || daemon || f.RootNames()
 	if changes && !yes {
 		var not []string
 		if line := refusedLine(f); line != "" {
@@ -245,15 +247,15 @@ func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
 	return answer == "r" || answer == "replace", nil
 }
 
-// choose shows the choices numbered and asks for one, Enter the first; an answer that names
-// none is asked again.
-func (a terminalAsker) choose(question string, choices []string) (int, error) {
+// choose says the question with its detail and the choices numbered, and asks for one, Enter
+// the first; an answer that names none is asked again.
+func (a terminalAsker) choose(question, detail string, choices []string) (int, error) {
 	if !atTerminal() {
 		return 0, a.noTerminal()
 	}
-	lines := make([]string, len(choices))
+	lines := []string{detail}
 	for i, c := range choices {
-		lines[i] = fmt.Sprintf("%d. %s", i+1, c)
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, c))
 	}
 	report.Info(question, lines...)
 	for {
@@ -285,7 +287,7 @@ func setupEntries(f setup.Facts) []remote.StatusEntry {
 	if f.RootAction != "" {
 		root.Lines[0] = rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's"
 	}
-	if f.RootProposed {
+	if f.RootNames() {
 		root.Lines = append(root.Lines, "--server-setup names it as releases: root in "+f.ConfigFile)
 	}
 	return append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, nil, "")...)
@@ -388,7 +390,7 @@ func volumeHint(f setup.Facts) []string {
 	for _, c := range f.Candidates {
 		lines = append(lines, candidateWords(c))
 	}
-	if !f.RootNamed {
+	if !f.RootNamed && f.ConfigRefuses == "" {
 		return append(lines, "--server-setup without --yes asks which one holds releases, before the first release")
 	}
 	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")

@@ -256,6 +256,15 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 	}
 	f := &rd.facts
 	f.RootNamed, f.ConfigFile = r.Named, remote.UserConfigFile()
+	if !r.Named {
+		have, err := os.ReadFile(f.ConfigFile)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			_, err = setup.SetReleaseRoot(have, r.Root)
+		}
+		if err != nil {
+			f.ConfigRefuses = err.Error()
+		}
+	}
 	if proposed != "" {
 		r.Root, f.RootProposed = proposed, true
 	}
@@ -380,6 +389,12 @@ func nameReleaseRoot(h setupHost, hd hostDocker, root string) error {
 	if err := rootProposal(h, hd, root); err != nil {
 		return err
 	}
+	// Named only where nothing refuses it, as the facts the operator saw judged it.
+	if rd, err := readSetupAt(h, hd, root); err != nil {
+		return err
+	} else if !rd.facts.RootNames() {
+		return errors.New("the release root " + root + " is refused, so it is not named in the config: run --server-setup again")
+	}
 	file := remote.UserConfigFile()
 	if err := editConfig(file, func(have []byte) ([]byte, error) { return setup.SetReleaseRoot(have, root) }); err != nil {
 		return errors.New("devopsy could not name the release root in " + file + ": " + err.Error())
@@ -389,8 +404,8 @@ func nameReleaseRoot(h setupHost, hd hostDocker, root string) error {
 }
 
 // editConfig writes the deploy user's config at file as edit makes it of the text there (nil
-// for no file), whole (setup.WriteFile: by rename, a link written at the file it names), the
-// file's mode kept (0600 for one it makes), its directory made when missing.
+// for no file), whole (setup.WriteFile: by rename, a link written at the file it names, its
+// directory made when missing), the file's mode kept (0600 for one it makes).
 func editConfig(file string, edit func([]byte) ([]byte, error)) error {
 	have, err := os.ReadFile(file)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -403,9 +418,6 @@ func editConfig(file string, edit func([]byte) ([]byte, error)) error {
 	mode := os.FileMode(0o600)
 	if fi, err := os.Stat(file); err == nil {
 		mode = fi.Mode().Perm()
-	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		return err
 	}
 	return setup.WriteFile(file, text, mode)
 }
@@ -425,34 +437,48 @@ func rootCandidates(h setupHost, hd hostDocker) []setup.Candidate {
 }
 
 // rootProposal refuses a release root proposed for the config (facts --root, apply --root)
-// that --server-setup would not ask about: one while the config names a root, or while the
-// home holds a project (setup.Facts.AsksRoot), or one other than the home or a volume it
-// could be on, by their one form (resolveRoot). The operator only chooses among those.
+// that --server-setup would not ask about (setup.Facts.AsksRoot, judged by the facts as read
+// with no root proposed), or one it would not offer: the home or a volume the root could be
+// on, by their one form (resolveRoot). The operator only chooses among those.
 func rootProposal(h setupHost, hd hostDocker, proposed string) error {
-	r, err := remote.ReleaseSettings()
+	rd, err := readSetup(h, hd)
 	if err != nil {
 		return err
 	}
-	if r.Named {
-		return errors.New("releases: root is named in " + remote.UserConfigFile() + " already (" + r.Root + "): only its admin changes it")
-	}
-	home := resolveRoot(r.Root)
-	if bases, err := deployEnvBases(home); len(bases) > 0 || err != nil {
-		return errors.New("the release root " + home + " holds a project already: releases stay there")
+	f := rd.facts
+	if !f.AsksRoot() {
+		return errors.New("--server-setup asks for no release root here: " + rootNotAsked(f))
 	}
 	if !filepath.IsAbs(proposed) || filepath.Clean(proposed) != proposed {
 		return errors.New("a release root is an absolute path, clean, not " + proposed)
 	}
 	want := resolveRoot(proposed)
-	if want == home {
+	if want == f.Root {
 		return nil
 	}
-	for _, c := range rootCandidates(h, hd) {
+	for _, c := range f.Candidates {
 		if resolveRoot(c.MountPoint) == want {
 			return nil
 		}
 	}
 	return errors.New(proposed + " is neither the home nor a volume the release root could be on")
+}
+
+// rootNotAsked is why --server-setup asks for no release root (f.AsksRoot false), in words.
+func rootNotAsked(f setup.Facts) string {
+	switch {
+	case f.RootNamed:
+		return "releases: root is named in " + f.ConfigFile + " already (" + f.Root + "), and only its admin changes it"
+	case f.Projects:
+		return "the release root " + f.Root + " holds a project already, and releases stay there"
+	case f.ConfigRefuses != "":
+		return f.ConfigFile + " takes no releases: root line from devopsy: " + f.ConfigRefuses
+	case f.NoneGoes():
+		return "what is refused above stops every step of the setup"
+	case len(f.Candidates) == 0:
+		return "the server has no volume the release root could be on"
+	}
+	return "the release root " + f.Root + " is on a volume of its own already"
 }
 
 // resolveRoot is root with every link along it followed, as far as its parts are there, each

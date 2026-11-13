@@ -47,7 +47,10 @@ type Facts struct {
 	RootNamed    bool   `json:"root_named,omitempty"`
 	RootProposed bool   `json:"root_proposed,omitempty"`
 	ConfigFile   string `json:"config_file,omitempty"`
-	Projects     bool   `json:"projects"`
+	// ConfigRefuses is why the config takes no releases: root line from devopsy
+	// (SetReleaseRoot), "" when it takes one or names a root.
+	ConfigRefuses string `json:"config_refuses,omitempty"`
+	Projects      bool   `json:"projects"`
 	// Record is the record's path, "" while there is none: the server is not set up by
 	// devopsy yet.
 	Record string `json:"record,omitempty"`
@@ -153,8 +156,16 @@ func (f Facts) Hint() bool {
 	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates) && !f.RootProposed
 }
 
-// AsksRoot says whether --server-setup asks where releases live: where the hint goes (Hint)
-// and the config names no root, so the root is the home and no release made it hold anything.
+// AsksRoot says whether --server-setup asks where releases live: where the hint goes (Hint),
+// the config names no root, so the root is the home and no release made it hold anything, the
+// config takes the line that names one, and a step goes, so an apply would name it.
 func (f Facts) AsksRoot() bool {
-	return f.Hint() && !f.RootNamed
+	return f.Hint() && !f.RootNamed && f.ConfigRefuses == "" && !f.NoneGoes()
+}
+
+// RootNames says whether an apply names the root proposed (RootProposed) in the config: only
+// where nothing refuses it, the root's making and the mounts drop-in that names it going, so
+// the config never names a root every release would refuse.
+func (f Facts) RootNames() bool {
+	return f.RootProposed && f.Goes(StepRoot) && f.Goes(StepMounts)
 }

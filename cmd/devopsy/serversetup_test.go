@@ -456,8 +456,8 @@ func (a *scripted) replace(p setup.PartFact) (bool, error) {
 	return a.replaces[p.Name], nil
 }
 
-func (a *scripted) choose(q string, choices []string) (int, error) {
-	a.asked = append(a.asked, strings.Join(append([]string{q}, choices...), " | "))
+func (a *scripted) choose(q, detail string, choices []string) (int, error) {
+	a.asked = append(a.asked, strings.Join(append([]string{q, detail}, choices...), " | "))
 	return a.choice, nil
 }
 
@@ -547,7 +547,7 @@ func TestAskRoot(t *testing.T) {
 		if err != nil || root != want {
 			t.Errorf("choice %d: %q, %v, want %q", choice, root, err, want)
 		}
-		if q := "where do releases live? devopsy names the answer as releases: root in /home/devopsy/.config/devopsy/config.yaml, before the first release | /home/devopsy, the deploy user's home | /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free) | /data (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)"; !slices.Equal(ask.asked, []string{q}) {
+		if q := "where do releases live? | devopsy names the answer as releases: root in /home/devopsy/.config/devopsy/config.yaml, before the first release | /home/devopsy, the deploy user's home | /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free) | /data (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)"; !slices.Equal(ask.asked, []string{q}) {
 			t.Errorf("asked %q", ask.asked)
 		}
 	}
@@ -563,6 +563,9 @@ func TestAskRoot(t *testing.T) {
 		"on a volume": {func(f *setup.Facts) { f.Root = "/srv/releases" }, false},
 		"chosen":      {func(f *setup.Facts) { f.RootProposed = true }, false},
 		"no volume":   {func(f *setup.Facts) { f.Candidates = nil }, false},
+		// The config cannot take the line, or no step goes: no apply would name the answer.
+		"config refuses": {func(f *setup.Facts) { f.ConfigRefuses = "its releases: is no block mapping devopsy adds a line to" }, false},
+		"nothing goes":   {func(f *setup.Facts) { f.Refusals = []setup.Refusal{{Item: setup.RefusalDocker}} }, false},
 	} {
 		g := f
 		c.change(&g)
@@ -833,13 +836,24 @@ func TestServerSetupRootChoiceRefusals(t *testing.T) {
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol+"/"); code != 1 || !strings.Contains(out, "a release root is an absolute path, clean") {
 		t.Errorf("a root not clean (%d):\n%s", code, out)
 	}
+	// A config that cannot take the line: not asked, the hint naming the key, the apply refused.
+	write(t, config, "releases: {keep: 3}\n", 0o644)
+	out, code = s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 || f.AsksRoot() || !strings.Contains(f.ConfigRefuses, "no block mapping") {
+		t.Errorf("a config that takes no line (%d, %v): %+v\n%s", code, err, f, out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "takes no releases: root line from devopsy") || readString(config) != "releases: {keep: 3}\n" {
+		t.Errorf("a config that takes no line, apply (%d):\n%s", code, out)
+	}
+	write(t, config, before, 0o644)
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade", "--root", vol); code == 0 || !strings.Contains(out, "takes no answer, no root and no restart") {
 		t.Errorf("--upgrade --root (%d):\n%s", code, out)
 	}
 	// A project in the home: releases stay there.
 	project := filepath.Join(filepath.Dir(vol), "shop", "prod", "releases")
 	write(t, filepath.Join(project, ".keep"), "", 0o644)
-	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "holds a project already: releases stay there") || readString(config) != before {
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "holds a project already, and releases stay there") || readString(config) != before {
 		t.Errorf("a project in the home (%d):\n%s", code, out)
 	}
 	if err := os.RemoveAll(filepath.Join(filepath.Dir(vol), "shop")); err != nil {

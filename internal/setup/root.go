@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"reflect"
@@ -19,9 +20,14 @@ func ReleaseRootLines(root string) string {
 	return "releases:\n  root: " + yamlScalar(root) + "\n"
 }
 
-// yamlScalar is s as one YAML scalar on one line.
+// yamlScalar is s as one YAML scalar on one line: plain where YAML reads it back as s, else
+// double-quoted, whose escapes keep a newline on the line.
 func yamlScalar(s string) string {
 	out, err := yaml.Marshal(s)
+	if text := strings.TrimSuffix(string(out), "\n"); err == nil && !strings.Contains(text, "\n") {
+		return text
+	}
+	out, err = yaml.Marshal(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.DoubleQuotedStyle})
 	if err != nil {
 		return fmt.Sprintf("%q", s)
 	}
@@ -29,14 +35,16 @@ func yamlScalar(s string) string {
 }
 
 // SetReleaseRoot is the config's text have (nil for no file) with releases: root: set to root,
-// as text, the rest as it is (comments, order): ReleaseRootLines appended where the config has
-// no releases:, else a line root: put first in its releases: block, indented as the block's
-// first key. The result is read back as the config's loader reads it (the first YAML document,
-// its top mapping by key) and refused unless it reads as have did with releases: root: root
-// added, and nothing else: a text whose YAML ends before its last line, or a releases: that is
-// no block mapping (a flow one, a value on its own line), would take the line where nothing
-// reads it, or as another setting. A text that is no YAML, no mapping, or whose releases:
-// names a root already is an error too: a root named is the admin's to change.
+// as text, the rest as it is (comments, order, line ends): ReleaseRootLines appended where the
+// config has no releases:, else a line root: put first in its releases: block, indented as
+// the block's first key and above the comment lines over it, or in place of a root: left
+// empty there (no value, "", ~), which the config's loader reads as none. The result is read
+// back as the loader reads it (the first YAML document, its top mapping by key) and refused
+// unless it reads as have did with releases: root: root and nothing else: a text whose YAML
+// ends before its last line, or a releases: that is no block mapping (a flow one, a value on
+// its own line), would take the line where nothing reads it, or as another setting. A text
+// that is no YAML, no mapping, or whose releases: names a root already is an error too: a
+// root named is the admin's to change.
 func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(have, &doc); err != nil {
@@ -55,27 +63,45 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 			}
 		}
 	}
+	eol := "\n"
+	if bytes.Contains(have, []byte("\r\n")) {
+		eol = "\r\n"
+	}
 	var out []byte
 	switch {
 	case releases == nil:
 		out = slices.Clone(have)
 		if len(out) > 0 && out[len(out)-1] != '\n' {
-			out = append(out, '\n')
+			out = append(out, eol...)
 		}
-		out = append(out, ReleaseRootLines(root)...)
+		out = append(out, strings.ReplaceAll(ReleaseRootLines(root), "\n", eol)...)
 	case releases.Kind == yaml.MappingNode && releases.Style&yaml.FlowStyle == 0 && len(releases.Content) > 0:
+		lines := strings.SplitAfter(string(have), "\n")
+		at, replace := 0, false
 		for i := 0; i+1 < len(releases.Content); i += 2 {
-			if releases.Content[i].Value == "root" {
-				return nil, errRootThere
+			if k, v := releases.Content[i], releases.Content[i+1]; k.Value == "root" {
+				if !emptyScalar(v) || v.Line != k.Line {
+					return nil, errRootThere
+				}
+				at, replace = k.Line, true
 			}
 		}
 		first := releases.Content[0]
-		lines := strings.SplitAfter(string(have), "\n")
 		if first.Line <= keyLine || first.Line > len(lines) {
 			return nil, errNotRead
 		}
-		line := strings.Repeat(" ", first.Column-1) + "root: " + yamlScalar(root) + "\n"
-		out = []byte(strings.Join(slices.Insert(lines, first.Line-1, line), ""))
+		line := strings.Repeat(" ", first.Column-1) + "root: " + yamlScalar(root) + eol
+		if replace {
+			lines[at-1] = line
+		} else {
+			// Above the comment lines over the block's first key, which are that key's.
+			at = first.Line
+			for at-1 > keyLine && strings.HasPrefix(strings.TrimSpace(lines[at-2]), "#") {
+				at--
+			}
+			lines = slices.Insert(lines, at-1, line)
+		}
+		out = []byte(strings.Join(lines, ""))
 	default:
 		return nil, errors.New("its releases: is no block mapping devopsy adds a line to")
 	}
@@ -85,8 +111,15 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 	return out, nil
 }
 
-// readsWithRoot says whether after reads as before did with releases: root: root added, and
-// nothing else changed, the first document's top mapping read as the config's loader reads it.
+// emptyScalar says whether n is a scalar the config's loader reads as no value: none, "", ~ or
+// null.
+func emptyScalar(n *yaml.Node) bool {
+	return n.Kind == yaml.ScalarNode && (n.Tag == "!!null" || n.Value == "")
+}
+
+// readsWithRoot says whether after reads as before did with releases: root: root, and nothing
+// else changed, the first document's top mapping read as the config's loader reads it, a root
+// left empty in before read as none.
 func readsWithRoot(before, after []byte, root string) bool {
 	var was, is map[string]any
 	if yaml.Unmarshal(before, &was) != nil || yaml.Unmarshal(after, &is) != nil {
@@ -100,7 +133,12 @@ func readsWithRoot(before, after []byte, root string) bool {
 	if was == nil {
 		was = map[string]any{}
 	}
-	if old, ok := was["releases"]; !ok || old == nil {
+	switch old := was["releases"].(type) {
+	case map[string]any:
+		if v, ok := old["root"]; ok && (v == nil || v == "") {
+			delete(old, "root")
+		}
+	case nil:
 		if len(rel) > 0 {
 			return false
 		}
