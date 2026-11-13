@@ -21,24 +21,30 @@ const (
 // ProjectUsersSetupScript is what --project-users setup's apply runs as root on the host,
 // through the util image chrooted into it, its system files under $host_root and the space as
 // the host names it, in this order: the space made or given to the deploy user, its mode set
-// back to 0755; the space's mount unit and the mounts drop-in put; the group made, the deploy
-// user put in it, /proc's unit put with the group's number, polkit's drop-in; then systemd
-// reloaded, the space's unit enabled and started, /proc's enabled and run again (a oneshot
-// that remains active runs again only by a restart), polkit restarted. A mount goes only
-// through systemd, never mount in the container: a mount made in the container's namespace
-// does not reach the host. Each file is put only when it differs. Its arguments, in order: the
-// host root, the deploy user's uid:gid, the space, 1 to make or give it, 1 to set its mode, its
-// unit's path, the unit's text ("" to leave it), 1 to enable and start it, the drop-in's text
-// ("" to leave it), 1 for the processes, the deploy user, /proc's unit's text with
-// setup.GIDMark for the group's number, polkit's drop-in's text ("" where there is no polkit),
-// and the unit's name as a shell word (QuoteWord), for the command a failed mount offers:
-// systemd's name for a path with a - holds a backslash (-), which a shell drops.
+// back to 0755, its mount unit put; the group made, the deploy user put in it, /proc's unit put
+// with the group's number, polkit's drop-in; then systemd reloaded and the space's unit enabled
+// and started; the mounts drop-in put, naming the space only once its mount holds (a
+// RequiresMountsFor= of a mount that fails keeps Docker from starting at the next boot, so a
+// mount that failed gets the drop-in without the space, as --server-setup then wants it);
+// /proc's unit enabled and run again (a oneshot that remains active runs again only by a
+// restart), polkit restarted. A mount goes only through systemd, never mount in the container:
+// a mount made in the container's namespace does not reach the host. Each file is put only when
+// it differs. A step that fails is said and the next independent one goes (the processes
+// beside a mount that failed), the run then exiting 6. Its arguments, in order: the host root,
+// the deploy user's uid:gid, the space, 1 to make or give it, 1 to set its mode, its unit's
+// path, the unit's text ("" to leave it), 1 to enable and start it, the drop-in's text ("" to
+// leave it), 1 for the processes, the deploy user, /proc's unit's text with setup.GIDMark for
+// the group's number, polkit's drop-in's text ("" where there is no polkit), the unit's name as
+// a shell word (QuoteWord), for the command a failed mount offers, and the drop-in's text
+// without the space. systemd's name for a path with a - holds a backslash (\x2d), which a shell
+// drops from a word copied unquoted and some shells' echo reads as an escape, so the unit's
+// path is said with printf.
 var ProjectUsersSetupScript = `set -eu
 umask 022
 host_root=$1 owner=$2 space=$3 give=$4 mode=$5 unit=$6 unit_text=$7 mount=$8 dropin=$9 procs=${10}
-user=${11} proc_text=${12} polkit=${13} unit_word=${14}
+user=${11} proc_text=${12} polkit=${13} unit_word=${14} dropin_bare=${15}
 sd() { SYSTEMD_IGNORE_CHROOT=1 systemctl "$@"; }
-` + hostPut + `reload=
+` + hostPut + `reload= failed=
 if [ -n "$give" ]; then
   if [ ! -e "$space" ]; then install -d -m 755 "$space"; echo "` + SetupMade + ` $space"; fi
   if [ -n "$(find -H "$space" -maxdepth 0 -user 0)" ]; then chown "$owner" "$space"; echo "` + SetupGave + ` $space"; fi
@@ -48,15 +54,17 @@ if [ -n "$unit_text" ]; then
   mkdir -p "$host_root${unit%/*}"
   if put "$host_root$unit" 644 true "$unit_text"; then printf '%s\n' "` + SetupPut + ` $unit"; reload=1; fi
 fi
-` + hostDropIn + `restart_polkit=
+restart_polkit=
 if [ -n "$procs" ]; then
   group=` + setup.ProcGroup + `
   getent group "$group" >/dev/null || { groupadd --system "$group"; echo "` + DoorSetupGroup + ` $group"; }
   gid=$(getent group "$group" | cut -d: -f3)
   case $gid in ''|*[!0-9]*)
     ` + echoLine(report.ErrorLevel, "the group "+setup.ProcGroup+" has no number") + `
-    exit 6 ;;
+    procs= failed=1 ;;
   esac
+fi
+if [ -n "$procs" ]; then
   getent group "$group" | cut -d: -f4 | tr , '\n' | grep -qxF "$user" || { usermod -aG "$group" "$user"; echo "` + DoorSetupMember + ` $user"; }
   mkdir -p "$host_root` + path.Dir(setup.ProcUnit) + `"
   if put "$host_root` + setup.ProcUnit + `" 644 true "${proc_text%%` + setup.GIDMark + `*}$gid${proc_text#*` + setup.GIDMark + `}"; then
@@ -74,16 +82,31 @@ fi
 if [ -n "$reload" ]; then
   sd daemon-reload >&2 || { ` + echoLine(report.ErrorLevel, "systemctl could not reload systemd from devopsy's container: nothing was mounted") + `; exit 6; }
 fi
+mounted=
 if [ -n "$mount" ]; then
-  sd enable --now "${unit##*/}" >&2 || { ` + echoLine(report.ErrorLevel, "systemd did not mount $space", report.Hint("what it said, as root:", "journalctl -u $unit_word")) + `; exit 6; }
-  echo "` + DoorSetupMounted + ` $space"
+  if sd enable --now "${unit##*/}" >&2; then
+    mounted=1
+    echo "` + DoorSetupMounted + ` $space"
+  else
+    ` + echoLine(report.ErrorLevel, "systemd did not mount $space", report.Hint("what it said, as root:", "journalctl -u $unit_word")) + `
+    failed=1
+  fi
+fi
+if [ -n "$mount" ] && [ -z "$mounted" ]; then dropin=$dropin_bare; fi
+reload=
+` + hostDropIn + `if [ -n "$reload" ]; then
+  # systemd's view of docker.service, so it never says the drop-in changed on disk; a reload
+  # refused waits for the next boot.
+  sd daemon-reload >&2 || :
 fi
 if [ -n "$procs" ]; then
-  { sd enable ` + setup.ProcUnitName + ` && sd restart ` + setup.ProcUnitName + `; } >&2 || {
+  if { sd enable ` + setup.ProcUnitName + ` && sd restart ` + setup.ProcUnitName + `; } >&2; then
+    echo ` + DoorSetupHidden + `
+    if [ -n "$restart_polkit" ]; then sd try-restart polkit.service >&2 || :; echo ` + DoorSetupPolkit + `; fi
+  else
     ` + echoLine(report.ErrorLevel, "systemd did not remount /proc", report.Hint("what it said, as root:", "journalctl -u "+setup.ProcUnitName)) + `
-    exit 6
-  }
-  echo ` + DoorSetupHidden + `
-  if [ -n "$restart_polkit" ]; then sd try-restart polkit.service >&2 || :; echo ` + DoorSetupPolkit + `; fi
+    failed=1
+  fi
 fi
+[ -z "$failed" ] || exit 6
 `

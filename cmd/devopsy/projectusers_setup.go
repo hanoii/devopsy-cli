@@ -256,9 +256,10 @@ func runProjectUsersSetupStep(args []string) int {
 // doorSetupRead is what --project-users setup reads of a server: its facts and what an apply puts.
 type doorSetupRead struct {
 	facts setup.DoorFacts
-	// dropin is the mounts drop-in's text devopsy wants, "" where refused; unit the space's
-	// mount unit's path and text.
-	dropin, unit, unitText string
+	// dropin is the mounts drop-in's text devopsy wants, "" where refused, and dropinBare the
+	// one without the space, as --server-setup wants it while the space is not mounted, which
+	// the root run puts where its mount fails; unit the space's mount unit's path and text.
+	dropin, dropinBare, unit, unitText string
 	// space is the space as the config names it (cleaned), which the config gets.
 	space string
 }
@@ -323,11 +324,17 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 	rd.unit, rd.unitText = setup.SpaceUnit(f.Space), setup.SpaceUnitText(f.Space)
 	readSpace(h, &rd, refuse)
 
-	// Docker's wait at boot for the space, beside the release root's (mountsDropInWant).
-	if text, refusal := mountsDropInWant(r.Root, f.Space); refusal != nil {
+	// Docker's wait at boot for the space, beside the release root's (mountsDropInWant): the
+	// space where the config names it or this run will, mounted or mounted by this run.
+	named := ""
+	if d != nil && d.Space != "" || f.Config != "" && f.Goes(setup.StepConfig) {
+		named = space
+	}
+	if text, refusal := mountsDropInWant(h, r.Root, named, f.Goes(setup.StepSpace)); refusal != nil {
 		f.Refusals = append(f.Refusals, *refusal)
 	} else {
 		rd.dropin = text
+		rd.dropinBare, _ = mountsDropInWant(h, r.Root, "", false)
 		f.Files = append(f.Files, mountsDropInFact(h, text))
 	}
 	readProcesses(h, f, refuse)
@@ -375,12 +382,9 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 			f.SpaceMode = strconv.FormatUint(uint64(fi.Mode().Perm()), 8)
 		}
 	}
-	mounts, _ := os.ReadFile(h.path(procMounts))
-	m, found := mountOf(parseMounts(string(mounts)), sp)
-	_, nosuid := m.opt("nosuid")
-	_, nodev := m.opt("nodev")
-	f.Guarded = found && nosuid && nodev
-	point := found && m.point == sp
+	sm := spaceMount(h, sp)
+	f.Guarded = sm.guarded
+	point := sm.found && sm.m.point == sp
 	unitText, _ := os.ReadFile(h.path(rd.unit))
 	ours := unitText != nil
 	if ours || !f.Guarded {
@@ -395,6 +399,24 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 		refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is a mount without nosuid and nodev, not devopsy's: devopsy puts no mount over it",
 			"mount it with nosuid and nodev where it is set (its /etc/fstab line, its unit)")
 	}
+}
+
+// spaceAt is the mount a space is on, as spaceMount reads it: whether there is one, and whether
+// it has nosuid and nodev.
+type spaceAt struct {
+	m              mountEntry
+	found, guarded bool
+}
+
+// spaceMount is the mount sp is on in the host's /proc/mounts (under h's root), read the same
+// for --project-users setup's facts and --server-setup's drop-in (mountsDropInWant): whatever
+// made it, an fstab line by hand included.
+func spaceMount(h setupHost, sp string) spaceAt {
+	mounts, _ := os.ReadFile(h.path(procMounts))
+	m, found := mountOf(parseMounts(string(mounts)), sp)
+	_, nosuid := m.opt("nosuid")
+	_, nodev := m.opt("nodev")
+	return spaceAt{m: m, found: found, guarded: found && nosuid && nodev}
 }
 
 // readProcesses judges /proc's hiding of every user's processes from the others: hidden
@@ -533,7 +555,7 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 	if space || dropin != "" || procs {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
-			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)))
+			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)), rd.dropinBare)
 		err := run.run(&out, func(err error) error { return fmt.Errorf("the setup's run as root: %w", err) })
 		sayDoorSetupLines(out.String(), me.Username)
 		if err != nil {
@@ -577,7 +599,8 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 		fail("what was applied did not hold", left...)
 	}
 	if hasLine(out.String(), remote.SetupPut+" "+setup.MountsDropIn) {
-		dropInWaits(true)
+		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
+		dropInWaits(string(have) != rd.dropinBare)
 	}
 	if hasLine(out.String(), remote.DoorSetupMember) {
 		report.Info(me.Username+" is in "+setup.ProcGroup+" from its next login",

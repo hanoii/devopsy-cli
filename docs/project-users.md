@@ -377,7 +377,9 @@ choice. It sets:
   devopsy's in `/etc/systemd/system`, named as `systemd-escape --path`
   names it (`var-lib-devopsy\x2ddoor.mount`), never by a line in
   `/etc/fstab`. Docker's mounts drop-in names it beside the release
-  root, so Docker starts after it at boot. A space whose mount went
+  root once it is mounted, so Docker starts after it at boot; a mount
+  that fails leaves it out, since Docker would not start at the next
+  boot on a mount that fails. A space whose mount went
   (a boot where it failed) is mounted again, its files and all: a
   directory bound on itself hides nothing. A space another user owns,
   one root owns that holds files, one that is no directory, or someone's

@@ -13,9 +13,10 @@ import (
 
 // The project users' root script, on a host root of the test's with fakes of systemctl
 // (logging to calls, FAKE_SYSTEMCTL_FAILS), groupadd, usermod and getent (the host root's
-// etc/group): the space made, its unit and the drop-in put, the group made with the deploy user
-// in it, /proc's unit put with the group's number, polkit's drop-in, then systemd reloaded, the
-// space's unit enabled and started and /proc's run again, a line per change; a second run
+// etc/group): the space made, its unit put, the group made with the deploy user in it, /proc's
+// unit put with the group's number, polkit's drop-in, then systemd reloaded, the space's unit
+// enabled and started, the drop-in put once the mount holds, systemd reloaded again, and
+// /proc's run again, a line per change; a second run
 // changes and says nothing but the mount and the remount it is asked for; systemd refusing a
 // mount fails the run, naming it, and offers journalctl with the unit's name as systemd has it,
 // its \x2d kept when the command is copied into a shell.
@@ -50,6 +51,10 @@ func TestProjectUsersSetupScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bare, err := setup.MountsDropInText(filepath.Join(dir, "srv"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := func(env []string, args ...string) (string, int) {
 		t.Helper()
 		os.Remove(calls)
@@ -62,9 +67,9 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		data, _ := os.ReadFile(p)
 		return string(data)
 	}
-	all := []string{host, "0:0", space, "1", "", unit, setup.SpaceUnitText(space), "1", dropin, "1", "deploy", setup.ProcUnitText(setup.GIDMark), setup.PolkitDropInText(), word}
+	all := []string{host, "0:0", space, "1", "", unit, setup.SpaceUnitText(space), "1", dropin, "1", "deploy", setup.ProcUnitText(setup.GIDMark), setup.PolkitDropInText(), word, bare}
 	out, code := run(nil, all...)
-	want := "made " + space + "\nput " + unit + "\nput " + setup.MountsDropIn + "\ngroup devopsy-proc\nmember deploy\nput " + setup.ProcUnit + "\nput " + setup.PolkitDropIn + "\nmounted " + space + "\nhidden\npolkit\n"
+	want := "made " + space + "\nput " + unit + "\ngroup devopsy-proc\nmember deploy\nput " + setup.ProcUnit + "\nput " + setup.PolkitDropIn + "\nmounted " + space + "\nput " + setup.MountsDropIn + "\nhidden\npolkit\n"
 	if code != 0 || out != want {
 		t.Errorf("a first run (%d):\n%s\nwant:\n%s", code, out, want)
 	}
@@ -79,7 +84,7 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		t.Errorf("the group file: %q", g)
 	}
 	name := filepath.Base(unit)
-	wantCalls := "1 systemctl daemon-reload\n1 systemctl enable --now " + name + "\n1 systemctl enable devopsy-proc.service\n1 systemctl restart devopsy-proc.service\n1 systemctl try-restart polkit.service\n"
+	wantCalls := "1 systemctl daemon-reload\n1 systemctl enable --now " + name + "\n1 systemctl daemon-reload\n1 systemctl enable devopsy-proc.service\n1 systemctl restart devopsy-proc.service\n1 systemctl try-restart polkit.service\n"
 	if c := read(calls); c != wantCalls {
 		t.Errorf("calls:\n%s\nwant:\n%s", c, wantCalls)
 	}
@@ -93,16 +98,18 @@ func TestProjectUsersSetupScript(t *testing.T) {
 	if err := os.Chmod(space, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := run(nil, host, "0:0", space, "", "1", unit, "", "", "", "", "deploy", "", "", word); code != 0 || out != "mode "+space+"\n" || read(calls) != "" {
+	if out, code := run(nil, host, "0:0", space, "", "1", unit, "", "", "", "", "deploy", "", "", word, ""); code != 0 || out != "mode "+space+"\n" || read(calls) != "" {
 		t.Errorf("the mode (%d):\n%s", code, out)
 	}
 	if fi, _ := os.Stat(space); fi.Mode().Perm() != 0o755 {
 		t.Errorf("the mode: %v", fi.Mode())
 	}
-	// systemd refusing the mount: the run fails, naming it, and says no mount.
-	out, code = run([]string{"FAKE_SYSTEMCTL_FAILS=1"}, host, "0:0", space, "", "", unit, "", "1", "", "", "deploy", "", "", word)
-	if code != 6 || !strings.Contains(out, "devopsy: error: systemd did not mount "+space+"\n") || strings.Contains(out, "mounted") {
-		t.Errorf("a mount systemd refuses (%d):\n%s", code, out)
+	// systemd refusing the mount: the run fails, naming it, says no mount, and puts the drop-in
+	// without the space, which a mount that fails would keep Docker from starting at boot on.
+	out, code = run([]string{"FAKE_SYSTEMCTL_FAILS=1"}, host, "0:0", space, "", "", unit, "", "1", dropin, "", "deploy", "", "", word, bare)
+	if code != 6 || !strings.Contains(out, "devopsy: error: systemd did not mount "+space+"\n") || strings.Contains(out, "mounted") ||
+		!strings.Contains(out, "put "+setup.MountsDropIn+"\n") || read(filepath.Join(host, setup.MountsDropIn)) != bare {
+		t.Errorf("a mount systemd refuses (%d):\n%s\nthe drop-in:\n%s", code, out, read(filepath.Join(host, setup.MountsDropIn)))
 	}
 	var command string
 	for _, l := range strings.Split(out, "\n") {

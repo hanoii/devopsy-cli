@@ -81,7 +81,7 @@ func TestProjectUsersSetupYes(t *testing.T) {
 	if readString(filepath.Join(host, setup.ProcUnit)) != setup.ProcUnitText(gid) || fileExists(filepath.Join(host, setup.PolkitDropIn)) {
 		t.Errorf("/proc's unit (gid %s):\n%s", gid, readString(filepath.Join(host, setup.ProcUnit)))
 	}
-	if want, _ := mountsDropInWant(s.root, space); readString(filepath.Join(host, setup.MountsDropIn)) != want || !strings.Contains(want, " "+space+"\n") {
+	if want, _ := mountsDropInWant(setupHost{root: host}, s.root, space, false); readString(filepath.Join(host, setup.MountsDropIn)) != want || !strings.Contains(want, " "+space+"\n") {
 		t.Errorf("the drop-in:\n%s", readString(filepath.Join(host, setup.MountsDropIn)))
 	}
 	// --server-setup wants the same drop-in, from the config's door: space:.
@@ -306,5 +306,31 @@ func TestProjectUsersSetupNamesTheSpaceBesideAFailedProc(t *testing.T) {
 	}
 	if out, _ := s.run(nil, remote.ServerSetupFlag, "facts"); strings.Contains(out, `"item":"mounts drop-in","path":"`+setup.MountsDropIn+`","in_sync":false`) {
 		t.Errorf("--server-setup would take the space out of the drop-in:\n%s", out)
+	}
+}
+
+// Docker's drop-in names the space only once its mount holds: a mount systemd refuses fails the
+// space alone, leaves the drop-in as --server-setup wants it without the space (Docker would not
+// start at the next boot on a mount that fails), keeps door: space: out of the config, and the
+// processes are hidden all the same.
+func TestProjectUsersSetupDropInWaitsForTheMount(t *testing.T) {
+	t.Parallel()
+	s, host, space := doorSetupServer(t)
+	bin := filepath.Join(filepath.Dir(s.root), "bin")
+	write(t, filepath.Join(bin, "systemctl-real"), readString(filepath.Join(bin, "systemctl")), 0o755)
+	write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\ncase \"$*\" in enable*--now*.mount) exit 1 ;; esac\nexec \"$(dirname \"$0\")/systemctl-real\" \"$@\"\n", 0o755)
+	before := readString(configFile(s))
+	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
+	if code != 1 || !strings.Contains(out, "systemd did not mount "+space) || !strings.Contains(out, "devopsy: hid every") {
+		t.Fatalf("a mount systemd refuses (%d):\n%s", code, out)
+	}
+	if got := readString(filepath.Join(host, setup.MountsDropIn)); strings.Contains(got, space) || !strings.Contains(got, "RequiresMountsFor="+s.root+"\n") {
+		t.Errorf("the drop-in names a space not mounted:\n%s\n%s", got, out)
+	}
+	if readString(configFile(s)) != before {
+		t.Errorf("door: space: added for a space not mounted:\n%s", readString(configFile(s)))
+	}
+	if out, _ := s.run(nil, remote.ServerSetupFlag, "facts"); strings.Contains(out, `"item":"mounts drop-in","path":"`+setup.MountsDropIn+`","in_sync":false`) {
+		t.Errorf("--server-setup wants another drop-in:\n%s", out)
 	}
 }

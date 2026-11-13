@@ -66,18 +66,24 @@ type setupRead struct {
 	// the record's note says for a release (floorNote).
 	floorMet bool
 	// dropin is the mounts drop-in's text devopsy wants (mountsDropInWant), "" where refused,
-	// and space the door's space it names, "" for none.
+	// and space the door's space it names, "" for none (or none mounted).
 	dropin, space string
 }
 
 // mountsDropInWant is the mounts drop-in's text, from the release root and the door's space
-// (space "" for none), each in its one form (resolveRoot): --server-setup's want, from its
-// config's door: space:, and --project-users setup's, from the space it sets, so the two
-// agree. A path a unit file cannot hold is a refusal of the drop-in alone.
-func mountsDropInWant(root, space string) (string, *setup.Refusal) {
+// (space "" for none), each in its one form (resolveRoot): the one function --server-setup and
+// --project-users setup want it by, so the two never fight. The space is in it only where it
+// is mounted with nosuid and nodev (spaceMount, on h's mounts) or the run mounts it (mounting,
+// --project-users setup's), since a RequiresMountsFor= of a mount that fails keeps Docker from
+// starting at the next boot: --server-setup passes the config's space, --project-users setup
+// the one the config names or the run names in it. A path a unit file cannot hold is a refusal
+// of the drop-in alone.
+func mountsDropInWant(h setupHost, root, space string, mounting bool) (string, *setup.Refusal) {
 	paths := []string{resolveRoot(root)}
 	if space != "" {
-		paths = append(paths, resolveRoot(space))
+		if sp := resolveRoot(space); mounting || spaceMount(h, sp).guarded {
+			paths = append(paths, sp)
+		}
 	}
 	text, err := setup.MountsDropInText(paths...)
 	if err == nil {
@@ -264,11 +270,11 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		return rd, err
 	}
 	space := ""
-	if d != nil {
+	if d != nil && d.Space != "" && spaceMount(h, resolveRoot(d.Space)).guarded {
 		space = d.Space
 	}
 	rd.space = space
-	if text, refusal := mountsDropInWant(f.Root, space); refusal != nil {
+	if text, refusal := mountsDropInWant(h, f.Root, space, false); refusal != nil {
 		f.Refusals = append(f.Refusals, *refusal)
 	} else {
 		rd.dropin = text
