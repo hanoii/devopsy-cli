@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -112,6 +113,11 @@ func TestImagesLock(t *testing.T) {
 	if err == nil || err.Error() != "the server's images still held by a release, a claim or a removal after 300ms" ||
 		!strings.Contains(said.String(), "devopsy: waiting for the server's images, held by a release, a claim or a removal, up to 300ms\n") {
 		t.Errorf("waited for: %v\n%s", err, said.String())
+	}
+	// A wait its bound ended is told apart, through a removal's wrapping, from a take that
+	// never waits finding the lock busy: --gc stops its snapshots after the first.
+	if !errors.As(fmt.Errorf("%w: 20261025120000 stays", err), new(waitEnded)) || errors.As(errImagesBusy, new(waitEnded)) {
+		t.Errorf("a wait ended not told apart: %v", err)
 	}
 	// Free, exclusive: taken while Docker answers, let go when it does not.
 	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_UN); err != nil {

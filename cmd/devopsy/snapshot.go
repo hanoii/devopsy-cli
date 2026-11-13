@@ -1034,7 +1034,7 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 			continue
 		}
 		report.Info("removing snapshot " + id + ", cut off before it was complete")
-		if err := removeSnapshotDir(cwd, p, tmp, 0); err != nil {
+		if err := removeSnapshotDir(cwd, "", p, tmp, 0); err != nil {
 			report.Warn(err.Error())
 		}
 	}
@@ -1070,8 +1070,9 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 // removeSnapshotDir removes a snapshot's directory, its bookmarks first,
 // under the exclusive image lock, waited for up to wait, never when zero
 // (else it stays, for the next holder of the snapshot lock); one an
-// export holds locked stays.
-func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Duration) error {
+// export holds locked stays. name is the environment's compose name, the
+// release's at cwd when empty (composeName).
+func removeSnapshotDir(cwd, name string, p snapshotPaths, dir string, wait time.Duration) error {
 	// An export reading it holds its directory locked (SnapshotExportScript):
 	// it stays, never waited for.
 	if d, err := os.Open(dir); err == nil {
@@ -1088,12 +1089,12 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 	unlock, err := imagesLock{root: root, how: syscall.LOCK_EX, bound: wait, now: wait == 0}.take(context.Background(), report.Default())
 	switch {
 	case errors.Is(err, errImagesBusy):
-		return errors.New(err.Error() + ": " + filepath.Base(dir) + " stays until the next snapshot")
+		return fmt.Errorf("%w: %s stays until the next snapshot", err, filepath.Base(dir))
 	case err != nil:
-		return errors.New(err.Error() + ": " + filepath.Base(dir) + " stays")
+		return fmt.Errorf("%w: %s stays", err, filepath.Base(dir))
 	}
 	defer unlock()
-	set, err := serverImages(cwd, composeName(cwd), errOut)
+	set, err := serverImages(cwd, cmp.Or(name, composeName(cwd)), errOut)
 	if err != nil {
 		return err
 	}
@@ -1119,7 +1120,7 @@ func removeSnapshot(cwd string, p snapshotPaths, id string) error {
 		return &report.Failure{Msg: "the restore of snapshot " + id + " did not complete: it stays until a restore completes", Remedies: restoreRemedies(cwd, id)}
 	}
 	report.Info("removing snapshot " + id)
-	return removeSnapshotDir(cwd, p, dir, 10*time.Minute)
+	return removeSnapshotDir(cwd, "", p, dir, 10*time.Minute)
 }
 
 // snapshotList prints p's snapshots for SnapshotsScript, newest first:
@@ -1148,15 +1149,7 @@ func snapshotList(p snapshotPaths) {
 		if err != nil {
 			m = &manifest{}
 		}
-		var bytes int64
-		_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
-			if err == nil && d.Type().IsRegular() {
-				if fi, err := d.Info(); err == nil {
-					bytes += fi.Size()
-				}
-			}
-			return nil
-		})
+		bytes := treeBytes(dir)
 		state := ""
 		if tmp {
 			state = "incomplete"
@@ -1179,6 +1172,20 @@ func snapshotList(p snapshotPaths) {
 	if _, err := os.Lstat(p.mirror); err == nil {
 		fmt.Println("mirror\tkept")
 	}
+}
+
+// treeBytes is the size of the regular files under dir, what it can read of them.
+func treeBytes(dir string) int64 {
+	var n int64
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
 }
 
 // manualSnapshots are the ids of p's manual snapshots, oldest first.
@@ -1383,27 +1390,63 @@ func pruneSnapshots(p snapshotPaths, remove func(id, why string) bool) {
 // with why, a failure warned, false then. wait bounds a wait for the
 // image lock.
 func snapshotRemover(cwd string, p snapshotPaths, wait time.Duration) func(id, why string) bool {
-	return func(id, why string) bool {
-		report.Info("removing snapshot " + id + " (" + why + ")")
-		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, id), wait); err != nil {
-			report.Warn(err.Error())
-			return false
-		}
-		return true
+	return (&snapshotRemoval{cwd: cwd, p: p, wait: wait}).remove
+}
+
+// snapshotRemoval is a pruning's removal of p's snapshots (removeSnapshotDir, from cwd, for the
+// compose name name, composeName's when empty), each said with of before its id when set (an
+// environment's path, for a removal across environments), its image lock waited for up to wait.
+// ended says a wait for that lock ended without it.
+type snapshotRemoval struct {
+	cwd, name, of string
+	p             snapshotPaths
+	wait          time.Duration
+	ended         bool
+}
+
+// remove removes the snapshot id, said with why, a failure warned: false then.
+func (r *snapshotRemoval) remove(id, why string) bool {
+	which := id
+	if r.of != "" {
+		which = r.of + " " + id
 	}
+	report.Info("removing snapshot " + which + " (" + why + ")")
+	if err := removeSnapshotDir(r.cwd, r.name, r.p, filepath.Join(r.p.snaps, id), r.wait); err != nil {
+		r.ended = r.ended || errors.As(err, new(waitEnded))
+		report.Warn(err.Error())
+		return false
+	}
+	return true
 }
 
 // pruneGone removes by remove (snapshotRemover), under the snapshot
-// lock, every release snapshot whose release is gone, never the one a
-// restore's mark names; false when a removal failed (said).
-// A release that does not stat, but for not being there, is never read as
-// gone: the snapshot stays, and nothing more is pruned (false, said).
+// lock, every release snapshot whose release is gone (goneSnapshots); false
+// when a removal failed, or what decides does not read (said).
 func pruneGone(p snapshotPaths, remove func(id, why string) bool) bool {
-	marked, err := restoreMarked(p.base)
-	if err != nil {
-		report.Warn(err.Error() + ": nothing pruned")
+	gone, err := goneSnapshots(p)
+	for _, rs := range gone {
+		if !remove(rs.id, "its release "+rs.release+" is gone") {
+			return false
+		}
+	}
+	var f *report.Failure
+	if errors.As(err, &f) {
+		report.Warn(f.Msg, f.Details...)
 		return false
 	}
+	return err == nil
+}
+
+// goneSnapshots are p's release snapshots whose release is gone, oldest first, never the one a
+// restore's mark names. A mark there that does not read gives none, and a release that does
+// not stat, but for not being there, is never read as gone: what came before it, with a
+// report.Failure saying why the rest stays.
+func goneSnapshots(p snapshotPaths) ([]releaseSnapshot, error) {
+	marked, err := restoreMarked(p.base)
+	if err != nil {
+		return nil, &report.Failure{Msg: err.Error() + ": nothing pruned"}
+	}
+	var gone []releaseSnapshot
 	for _, rs := range releaseSnapshots(p) {
 		if rs.id == marked {
 			continue
@@ -1413,14 +1456,11 @@ func pruneGone(p snapshotPaths, remove func(id, why string) bool) bool {
 		case err == nil:
 			continue
 		case !errors.Is(err, os.ErrNotExist):
-			report.Warn("snapshot "+rs.id+" stays, and nothing more is pruned: whether its release "+rs.release+" is gone does not read", err.Error())
-			return false
+			return gone, &report.Failure{Msg: "snapshot " + rs.id + " stays, and nothing more is pruned: whether its release " + rs.release + " is gone does not read", Details: []string{err.Error()}}
 		}
-		if !remove(rs.id, "its release "+rs.release+" is gone") {
-			return false
-		}
+		gone = append(gone, rs)
 	}
-	return true
+	return gone, nil
 }
 
 // restoreMarked is the snapshot a restore's mark at base names, "" for
