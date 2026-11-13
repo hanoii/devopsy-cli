@@ -253,13 +253,20 @@ owns or one that is no directory until `root:` names another
 
 To move a server's release root:
 
-1. stop each environment (`devopsy down` in its `current`);
-2. `mv` the projects' directories under the new root, a directory of the
-   deploy user's;
-3. change `root:`;
-4. run `--server-setup` again, which makes Docker wait at boot for the
+1. with no release running, stop each environment, the project users'
+   too (`devopsy down` in its `current`);
+2. as root, move the projects' directories and `.devopsy-uids`, which
+   holds the uids containers run as, under the new root, a directory of
+   the deploy user's, keeping their owners (`mv`; a copy across
+   filesystems makes reflinked snapshots full size);
+3. for each project user whose entry has a `tree:`, change it there
+   (`~/.config/devopsy/door/users/<user>.yaml`, the deploy user's) and
+   `releases: root` in the project user's own
+   `~/.config/devopsy/config.yaml`;
+4. change `root:`;
+5. run `--server-setup` again, which makes Docker wait at boot for the
    new root's mounts instead of the old one's;
-5. start each environment again (its `deploy`, or a release).
+6. start each environment again (its `deploy`, or a release).
 
 Containers keep the paths their bind mounts had, so they must be created
 again; everything inside the directories is linked relatively.
