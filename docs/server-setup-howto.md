@@ -197,12 +197,13 @@ directory on a mount of its own with nosuid and nodev, its name in the
 deploy user's config, and every user's processes hidden from the others.
 --server-info warns of each tool missing, and only notes sudo, visudo or
 setfacl while the server has no project user. Steps 4 to 6 are for a server
-set up by hand in place of step 2, where a line in /etc/fstab is fine.
+set up by hand in place of step 3, where a line in /etc/fstab is fine.
 
-Run each step as root on the server, Debian or Ubuntu with systemd. The
-deploy user is the Unix user devopsy logs in as, which must exist. A step's
-first line sets the values to change, if it has any (for example
-user=devopsy).
+Run each step as root on the server, Debian or Ubuntu with systemd. A step
+that starts with Locally runs on the operator's machine instead, where
+devopsy addresses the server by its deploy user. The deploy user is the Unix
+user devopsy logs in as, which must exist. A step's first line sets the
+values to change, if it has any (for example user=devopsy).
 
 1. Install sudo (sudo, visudo) and acl (setfacl), which nothing else of
    devopsy uses.
@@ -212,17 +213,14 @@ user=devopsy).
    apt-get install -y sudo acl
    ```
 
-2. From the operator's machine, run --server-setup for this server, then
-   --project-users setup, both addressed by its deploy user: --project-users
-   setup refuses a server whose release root --server-setup has not made the
-   deploy user's. Each shows what it sets, asks, and applies.
+2. Locally, run --server-setup for this server: it makes the release root
+   the deploy user's, which --project-users setup and --project-users add
+   refuse without. It shows what it sets, asks, and applies.
 
-3. Then add project users with --project-users add, from the operator's
-   machine, and reboot the server after the first: sshd reads what the add
-   wrote for it only at the next boot, and until then no project user logs
-   in.
+3. Locally, run --project-users setup for this server: it shows what it
+   sets, asks, and applies.
 
-4. By hand, in place of step 2: make the door's directory, the deploy
+4. By hand, in place of step 3: make the door's directory, the deploy
    user's, and mount it on itself with nosuid and nodev, now and at every
    boot.
 
@@ -234,7 +232,7 @@ user=devopsy).
    mountpoint -q "$space" || mount "$space"
    ```
 
-5. By hand, in place of step 2: name it as door: space: in the deploy user's
+5. By hand, in place of step 3: name it as door: space: in the deploy user's
    config, ~/.config/devopsy/config.yaml, unless the file has a door:
    already.
 
@@ -245,8 +243,12 @@ user=devopsy).
    grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null
    ```
 
-6. By hand, in place of step 2: hide every user's processes from the others,
+6. By hand, in place of step 3: hide every user's processes from the others,
    as the processes topic says.
+
+7. Locally, add project users with --project-users add, and reboot the
+   server after the first: sshd reads what the add wrote for it only at the
+   next boot, and until then no project user logs in.
 
 To check it: the three tools are found, the directory is mounted with nosuid
 and nodev, and --server-info no longer says either of them.

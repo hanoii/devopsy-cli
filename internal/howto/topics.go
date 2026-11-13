@@ -119,28 +119,29 @@ var Topics = []Topic{
 			"It needs sudo, visudo and setfacl, which devopsy does not install: --project-users setup and --project-users add refuse a server without any of them, as they refuse a Docker below what every server runs (the docker topic). " +
 			"--project-users setup sets the rest: the door's directory on a mount of its own with nosuid and nodev, its name in the deploy user's config, and every user's processes hidden from the others. " +
 			"--server-info warns of each tool missing, and only notes sudo, visudo or setfacl while the server has no project user. " +
-			"Steps 4 to 6 are for a server set up by hand in place of step 2, where a line in /etc/fstab is fine.",
+			"Steps 4 to 6 are for a server set up by hand in place of step 3, where a line in /etc/fstab is fine.",
 		Steps: []Step{
 			{"Install sudo (sudo, visudo) and acl (setfacl), which nothing else of devopsy uses.", []string{
 				`apt-get update`,
 				`apt-get install -y sudo acl`,
 			}},
-			{"From the operator's machine, run --server-setup for this server, then --project-users setup, both addressed by its deploy user: --project-users setup refuses a server whose release root --server-setup has not made the deploy user's. Each shows what it sets, asks, and applies.", nil},
-			{"Then add project users with --project-users add, from the operator's machine, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
-			{"By hand, in place of step 2: make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot.", []string{
+			{"Locally, run --server-setup for this server: it makes the release root the deploy user's, which --project-users setup and --project-users add refuse without. It shows what it sets, asks, and applies.", nil},
+			{"Locally, run --project-users setup for this server: it shows what it sets, asks, and applies.", nil},
+			{"By hand, in place of step 3: make the door's directory, the deploy user's, and mount it on itself with nosuid and nodev, now and at every boot.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`install -d -o "$user" -m 755 "$space"`,
 				`grep -qs "^$space " /etc/fstab || echo "$space $space none bind,nosuid,nodev 0 0" >> /etc/fstab`,
 				`systemctl daemon-reload`,
 				`mountpoint -q "$space" || mount "$space"`,
 			}},
-			{"By hand, in place of step 2: name it as door: space: in the deploy user's config, ~/.config/devopsy/config.yaml, unless the file has a door: already.", []string{
+			{"By hand, in place of step 3: name it as door: space: in the deploy user's config, ~/.config/devopsy/config.yaml, unless the file has a door: already.", []string{
 				`user=devopsy space=/var/lib/devopsy-door`,
 				`config=$(getent passwd "$user" | cut -d: -f6)/.config/devopsy/config.yaml`,
 				`runuser -u "$user" -- mkdir -p "${config%/*}"`,
 				`grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
 			}},
-			{"By hand, in place of step 2: hide every user's processes from the others, as the processes topic says.", nil},
+			{"By hand, in place of step 3: hide every user's processes from the others, as the processes topic says.", nil},
+			{"Locally, add project users with --project-users add, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", nil},
 		},
 		Check: Step{"the three tools are found, the directory is mounted with nosuid and nodev, and --server-info no longer says either of them.", []string{
 			`command -v sudo visudo setfacl`,
