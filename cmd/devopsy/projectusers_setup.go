@@ -695,7 +695,8 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
 		dropInWaits(string(have) != rd.dropinBare)
 	}
-	if hasLine(out.String(), remote.DoorSetupMember) {
+	// Its next login matters only once /proc hides processes: until then every user sees them.
+	if hasLine(out.String(), remote.DoorSetupMember) && again.facts.Processes.Hides() {
 		report.Info(me.Username+" sees every process from its next login",
 			"a session open now, a shared SSH connection's included, sees only its own processes until it is opened again")
 	}
