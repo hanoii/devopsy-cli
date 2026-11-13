@@ -46,6 +46,9 @@ type Facts struct {
 	// Record is the record's path, "" while there is none: the server is not set up by
 	// devopsy yet.
 	Record string `json:"record,omitempty"`
+	// FloorNote: the record's note of the devopsy that found Docker at its floor (Record.Floor)
+	// is not what this read finds, so an apply writes it, or takes it off.
+	FloorNote bool `json:"floor_note,omitempty"`
 }
 
 // What an apply does to the release root.

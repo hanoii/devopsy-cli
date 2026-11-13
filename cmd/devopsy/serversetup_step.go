@@ -62,6 +62,20 @@ type setupRead struct {
 	door bool
 	// fileVisible is what Docker shows once it takes the file; running what it shows now.
 	fileVisible, running setup.Visible
+	// floorMet: Docker answers, with both plugins, at its floor (dockerAnswers none), what
+	// the record's note says for a release (floorNote).
+	floorMet bool
+}
+
+// floorNote is the record's note of the devopsy that found Docker at its floor (setup.Record's
+// Floor), as an apply of this devopsy writes it: its version where it found the floor met,
+// none where it did not. A release of that version then asks Docker nothing of the floor
+// (serverReady).
+func floorNote(met bool) string {
+	if met {
+		return version
+	}
+	return ""
 }
 
 // runServerSetupStep is remote.ServerSetupFlag on a server, as the deploy user: facts prints
@@ -186,6 +200,8 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	if rd.exists {
 		f.Record = recordPath
 	}
+	rd.floorMet = len(dockerAnswers(hd.facts)) == 0
+	f.FloorNote = rd.exists && rd.record.Floor != floorNote(rd.floorMet)
 	if d, visible, why := judgeDaemon(hd.daemon, hd.daemonErr); why != "" {
 		// A file Docker would refuse is judged no further: none of its parts is put.
 		f.DaemonError = why
@@ -467,19 +483,29 @@ type dockerSetup struct {
 // dockerFix is the way out of a Docker the setup refuses, by the docker topic's steps.
 const dockerFix = "install Docker, with its compose and buildx plugins, and start it, as root"
 
-// dockerAnswers are the setup's refusals of what Docker answers itself (d, docker info as
-// read): no daemon answering, else no compose or no buildx plugin. --server-info says them
-// under docker, and not again under setup (setupInfoEntries).
+// dockerAnswers are the setup's refusals of what Docker answers itself (d, dockerFacts): no
+// daemon answering, else no compose or no buildx plugin, and each floor missed (floorMissed),
+// a plugin's only where it answers. --server-info says them under docker, and not again under
+// setup (setupInfoEntries); a release (serverReady) and --project-users add refuse on them.
+// The plugins and the floor stop no step of the setup: releases need them, and no step does.
 func dockerAnswers(d remote.DockerFacts) []setup.Refusal {
 	if d.Error != "" {
 		return []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: dockerFix, Howto: howto.Docker}}
 	}
 	var refusals []setup.Refusal
+	parts := []floorPart{floorStore}
 	if d.Compose == "" {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: dockerFix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+	} else {
+		parts = append(parts, floorCompose)
 	}
-	if !d.Buildx {
+	if d.Buildx == "" {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: dockerFix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+	} else {
+		parts = append(parts, floorBuildx)
+	}
+	for _, m := range floorMissed(floorRead{containerd: d.Containerd, buildx: d.Buildx, compose: d.Compose}, parts...) {
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: m.msg, Fix: m.floor.fix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
 	}
 	return refusals
 }
@@ -889,12 +915,18 @@ func applySetup(h setupHost, a setupApply) int {
 		fail("what was applied did not hold", left...)
 	}
 	// An apply with no failure notes the devopsy that made it, which --upgrade applies once:
-	// one a refusal stopped a change of is applied again.
-	if again.record.Version != version && failures == 0 && len(f.Stopped()) == 0 && !slices.Contains(f.Refused(), setup.RefusalRecord) {
+	// one a refusal stopped a change of is applied again. Every apply notes whether this
+	// devopsy found Docker at its floor, as its last read finds it (floorNote).
+	if !slices.Contains(f.Refused(), setup.RefusalRecord) {
 		r := again.record
-		r.Version = version
-		if err := setup.WriteRecord(record, r); err != nil {
-			fail(err.Error())
+		if failures == 0 && len(f.Stopped()) == 0 {
+			r.Version = version
+		}
+		r.Floor = floorNote(again.floorMet)
+		if r.Version != again.record.Version || r.Floor != again.record.Floor {
+			if err := setup.WriteRecord(record, r); err != nil {
+				fail(err.Error())
+			}
 		}
 	}
 	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
@@ -1142,9 +1174,11 @@ func runServerReady(args []string) int {
 	return 0
 }
 
-// serverReady is what refuses a release on this server: the tools, the release root; nothing
-// for a project user (projectUser), whose tree --project-users add made and whose Docker is
-// the door.
+// serverReady is what refuses a release on this server: the tools, the release root, then
+// what Docker answers of itself (dockerReady), asked only where the record's note does not
+// say this devopsy found Docker at its floor (floorNoted); nothing for a project user
+// (projectUser), whose tree --project-users add made and whose Docker is the door. A release
+// never writes the record.
 func serverReady(root, ref string, projectUser bool) []error {
 	if projectUser {
 		return nil
@@ -1155,6 +1189,28 @@ func serverReady(root, ref string, projectUser bool) []error {
 	}
 	if err := releaseRootReady(root, "nothing released", ref); err != nil {
 		errs = append(errs, err)
+	}
+	if floorNoted() {
+		return errs
+	}
+	return append(errs, dockerReady("nothing released")...)
+}
+
+// floorNoted says whether the setup's record notes that this devopsy's apply found Docker at
+// its floor (floorNote): a record missing, unreadable or of another devopsy notes nothing.
+func floorNoted() bool {
+	r, exists, err := setup.ReadRecord(setup.RecordPath(remote.UserConfigFile()))
+	return err == nil && exists && version != "" && r.Floor == version
+}
+
+// dockerReady is the setup's required check of Docker's own answers (dockerAnswers of
+// dockerFacts: its daemon, its plugins, the floor), each refusal an error with its fix, what
+// goes undone said in nothing: a release and --project-users add refuse on it before anything
+// changes.
+func dockerReady(nothing string) []error {
+	var errs []error
+	for _, r := range dockerAnswers(dockerFacts()) {
+		errs = append(errs, &report.Failure{Msg: r.Message + ": " + nothing, Remedies: fixWords(r)})
 	}
 	return errs
 }

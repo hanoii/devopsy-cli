@@ -329,10 +329,9 @@ The door names what it refuses, and logs each refusal in
 ## Setting up a server
 
 A server needs `sudo` and `acl` installed (`sudo`, `visudo` and
-`setfacl`), the door's directory on a mount of its own, and a current
-Docker: its containerd image store, which Docker 29 uses by default on a
-fresh install, and buildx 0.33.0 or later. `add` refuses a server without
-them before it changes anything. On a server with project users,
+`setfacl`), the door's directory on a mount of its own, and the Docker
+every server runs ([Docker](servers.md#docker)). `add` refuses a server
+without them before it changes anything. On a server with project users,
 `--server-info` and `--server-setup` warn of a missing `sudo`, `visudo`
 or `setfacl`; on one with none yet, `--server-info` notes it without a
 warning and `--server-setup` says nothing of it. The commands below
@@ -415,9 +414,8 @@ containers, volumes and networks under its names, its data, image names
 and directories in the door's space), as `--server-info` does, and each
 whose `remove --destroy` did not complete, with that command, which
 completes it, instead. `--server-info` also checks that `<space>` is
-mounted `nosuid,nodev`, that Docker has the containerd image store and
-buildx 0.33.0, that other users' processes are hidden from project
-users, and whether sshd waits for a reboot.
+mounted `nosuid,nodev`, that other users' processes are hidden from
+project users, and whether sshd waits for a reboot.
 
 ## Releasing as a project user
 

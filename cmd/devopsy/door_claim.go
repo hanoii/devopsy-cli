@@ -159,10 +159,15 @@ func (s *doorSide) nameAsAsked(ref, pinned string) {
 	}
 }
 
-// hostReady is doorHostReady for this door process, read once, its buildx the one that copies,
-// under the logins' directory.
+// hostReady is the floor a claim needs (dockerFloor: the containerd image store and buildx)
+// for this door process, read once, its buildx the one that copies: read under the logins'
+// DOCKER_CONFIG, as the copy runs, since Docker finds a plugin in $DOCKER_CONFIG/cli-plugins
+// first, so the deploy user's ~/.docker could hold another buildx than the one that copies.
 func (s *doorSide) hostReady(logins string) error {
-	_, err := s.hostChecked.get(func() (struct{}, error) { return struct{}{}, doorHostReady(s.real, s.env, logins) })
+	_, err := s.hostChecked.get(func() (struct{}, error) {
+		env := append(slices.Clone(s.env), "DOCKER_CONFIG="+logins)
+		return struct{}{}, floorError(dockerFloor(s.real, env, floorStore, floorBuildx))
+	})
 	return err
 }
 

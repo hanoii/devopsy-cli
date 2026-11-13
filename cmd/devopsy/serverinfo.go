@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -145,9 +146,6 @@ func doorFacts(read string) *remote.DoorFacts {
 	f := &remote.DoorFacts{Space: d.Space, Users: len(d.Users)}
 	if err := spaceGuarded(d.Space); err != nil {
 		f.Unguarded = err.Error()
-	}
-	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
-		f.Docker = err.Error()
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		f.Reboot = true
@@ -469,14 +467,10 @@ type hostDocker struct {
 	daemonErr error
 }
 
-// readHostDocker asks docker info and its plugins, and reads the daemon's configuration file,
-// its log-opts as --server-info shows them.
+// readHostDocker asks Docker of itself (dockerFacts), and reads the daemon's configuration
+// file, its log-opts as --server-info shows them.
 func readHostDocker(h setupHost) hostDocker {
-	hd := hostDocker{facts: dockerInfo()}
-	if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
-		hd.facts.Compose = strings.TrimSpace(string(out))
-	}
-	hd.facts.Buildx = exec.Command("docker", "buildx", "version").Run() == nil
+	hd := hostDocker{facts: dockerFacts()}
 	hd.daemon, hd.daemonErr = readDaemonFile(h)
 	if hd.daemonErr == nil {
 		var conf struct {
@@ -506,6 +500,29 @@ func containerdRoot(d remote.DockerFacts) string {
 		return "/var/lib/containerd"
 	}
 	return ""
+}
+
+// dockerFacts is what Docker answers of itself, as every check of it reads it (dockerAnswers):
+// docker info, and its compose's and buildx's versions, "" for a plugin that does not answer,
+// the three asked at once.
+func dockerFacts() remote.DockerFacts {
+	var d remote.DockerFacts
+	var compose, buildx string
+	var wg sync.WaitGroup
+	wg.Go(func() { d = dockerInfo() })
+	wg.Go(func() {
+		if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
+			compose = strings.TrimSpace(string(out))
+		}
+	})
+	wg.Go(func() {
+		if out, err := exec.Command("docker", "buildx", "version").Output(); err == nil {
+			buildx = versionOf(string(out))
+		}
+	})
+	wg.Wait()
+	d.Compose, d.Buildx = compose, buildx
+	return d
 }
 
 // dockerInfo is what docker info says, alone.
@@ -553,7 +570,7 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 		d.Cgroup = "v" + info.CgroupVersion
 	}
 	for _, s := range info.DriverStatus {
-		if s[0] == "driver-type" && s[1] == "io.containerd.snapshotter.v1" {
+		if s[0] == "driver-type" && s[1] == containerdStore {
 			d.Containerd = true
 		}
 	}
@@ -1234,10 +1251,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			warn(dr.Unguarded+": the door refuses every request",
 				spaceFix(dr.Space))
 		}
-		if dr.Docker != "" {
-			warn(dr.Docker+": the door refuses every image a project user does not build",
-				doorDockerFix)
-		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
 				report.Fix("reboot it at a quiet time: its containers come back with Docker"))
@@ -1266,6 +1279,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		parts := []string{d.Version}
 		if d.Compose != "" {
 			parts = append(parts, "compose "+d.Compose)
+		}
+		if d.Buildx != "" {
+			parts = append(parts, "buildx "+d.Buildx)
 		}
 		store := "classic image store"
 		if d.Containerd {

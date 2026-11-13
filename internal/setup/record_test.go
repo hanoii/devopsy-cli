@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// TestRecordText keeps the record's text: the header, the devopsy that last applied here, Parts'
-// order, each value single-quoted canonical JSON, a part no longer wanted kept after them.
+// TestRecordText keeps the record's text: the header, the devopsy that last applied here, the one
+// that last found Docker at its floor, Parts' order, each value single-quoted canonical JSON, a part no longer wanted kept after them.
 func TestRecordText(t *testing.T) {
 	t.Parallel()
-	r := Record{Version: "0.65.0", Daemon: map[string]Entry{
+	r := Record{Version: "0.65.0", Floor: "0.66.0", Daemon: map[string]Entry{
 		"default-address-pools": {Kept: `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`},
 		"live-restore":          {Applied: `{"live-restore":true}`},
 		"logs":                  {Applied: `{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"}}`},
@@ -24,6 +24,7 @@ func TestRecordText(t *testing.T) {
 	want := `# Written by devopsy (--server-setup, --upgrade): what it applied here. A record, not
 # settings: change daemon.json, never this file.
 devopsy: 0.65.0
+docker-floor: 0.66.0
 daemon.json:
   logs:
     applied: '{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"}}'
@@ -44,8 +45,9 @@ daemon.json:
 	if _, err := ParseRecord([]byte("daemon.json:\n  logs:\n    applied: '{}'\n    kept: '{}'\n")); err == nil {
 		t.Error("an entry both applied and kept read")
 	}
-	// No version line: none recorded, read as another devopsy's.
-	if r, err := ParseRecord([]byte("daemon.json:\n  logs:\n    applied: '{}'\n")); err != nil || r.Version != "" || r.Daemon["logs"].Applied != "{}" {
+	// No version line: none recorded, read as another devopsy's; no floor line, the floor
+	// never found met.
+	if r, err := ParseRecord([]byte("daemon.json:\n  logs:\n    applied: '{}'\n")); err != nil || r.Version != "" || r.Floor != "" || r.Daemon["logs"].Applied != "{}" {
 		t.Errorf("no version line: %+v, %v", r, err)
 	}
 }

@@ -239,11 +239,6 @@ func doorProjects(d *remote.Door) []string {
 	return ps
 }
 
-// doorDockerFix is the way out of a Docker the door refuses (doorHostReady), for --server-info and
-// --project-users add: its containerd image store and a current buildx, by the project-users
-// topic's steps.
-var doorDockerFix = report.Fix("move Docker to its containerd image store and a current buildx, as root:", howto.Command(howto.ProjectUsers))
-
 // spaceFix is how a door's space gets nosuid and nodev, the one way every refusal of it offers.
 func spaceFix(space string) report.Remedy {
 	return report.Fix("mount it so, for example with this line in /etc/fstab:", space+" "+space+" none bind,nosuid,nodev 0 0")
@@ -312,8 +307,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 		report.Fail(err, report.Fix("install a release of devopsy, which is static (install.sh)"))
 		return 1
 	}
-	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
-		report.Fail(err, doorDockerFix)
+	if errs := dockerReady("no project user made"); len(errs) > 0 {
+		for _, err := range errs {
+			report.Fail(err)
+		}
 		return 1
 	}
 	if u, ok := d.Users[who]; ok && u.Project != project {

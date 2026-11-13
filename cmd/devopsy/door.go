@@ -1613,20 +1613,14 @@ func doorLimits() error {
 	return nil
 }
 
-// serviceContexts is the compose that first reads a build context service:<name> as another
-// service's build: one before reads it as a path in the project's directory, the project
-// user's to make, which its client then reads with the deploy user's rights.
-var serviceContexts = [3]int{2, 33, 0}
-
 // composeKnowsServiceContexts refuses a build with contexts (all service:<name>, CheckFile)
-// on a compose before serviceContexts, or one whose version cannot be read, the compose the
-// build's environment env runs.
+// on a compose below its floor (dockerFloors), which first reads service:<name> as another
+// service's build, or one whose version cannot be read: the compose the build's environment
+// env runs, one before reading it as a path in the project's directory, the project user's to
+// make, which its client then reads with the deploy user's rights.
 func (s *doorSide) composeKnowsServiceContexts(env []string) error {
-	c := s.docker("compose", "version", "--short")
-	c.Env = env
-	out, err := c.Output()
-	if v, ok := versionAtLeast(string(out), serviceContexts); err != nil || !ok {
-		return fmt.Errorf("refused: a build context needs compose %s or later, which reads service:<name> as another service's build (this server's: %q)", floorWords(serviceContexts), v)
+	if err := floorError(dockerFloor(s.real, env, floorCompose)); err != nil {
+		return fmt.Errorf("refused: a build with contexts: %w", err)
 	}
 	return nil
 }

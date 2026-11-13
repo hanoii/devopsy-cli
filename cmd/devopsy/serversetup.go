@@ -100,7 +100,8 @@ type setupAsker interface {
 // planSetup is what --server-setup asks and what its apply is then given: each changed part
 // kept or replaced (kept with yes), the rest confirmed once, then the restart, which yes asks
 // for only when no container runs, as the apply finds it. run says whether there is an apply at all: something to
-// put or record, an answer, a restart, or no record yet, which the first apply writes.
+// put or record, an answer, a restart, no record yet, which the first apply writes, or the
+// record's floor note to write or take off.
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
@@ -162,7 +163,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 			}
 		}
 	}
-	return args, changes || f.Records() || answers || restart || f.Record == "", nil
+	return args, changes || f.Records() || answers || restart || f.Record == "" || f.FloorNote, nil
 }
 
 // terminalAsker asks at the terminal, and fails without one, naming --yes.

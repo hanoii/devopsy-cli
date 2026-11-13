@@ -132,7 +132,7 @@ func TestServerInfoReport(t *testing.T) {
 			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
 			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
 			AppArmor: true, AppArmorParser: true,
-			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: true, Containerd: true, Driver: "overlayfs", Cgroup: "v2",
+			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: "0.38.2", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
 				RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
 				LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
 			Disks: []remote.Disk{{Paths: []string{"releases=/home/devopsy", "docker=/var/lib/docker", "/=/"}, Type: "xfs", Size: 80e9, Free: 40e9, Used: 40e9, Reflinks: "yes"}},
@@ -162,7 +162,7 @@ func TestServerInfoReport(t *testing.T) {
 		"system        Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
 		"2 CPUs, 4.3 GB memory (2.1 GB available), no swap, load 0.10 0.20 0.30, up 3 days",
 		"              clock synchronized\n",
-		"docker        29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
+		"docker        29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
 		"security apparmor seccomp",
 		"logs json-file max-file=5 max-size=20m",
 		"disks         releases /home/devopsy, docker /var/lib/docker, /: xfs, 40.0 GB free of 80.0 GB (50% used), reflinks",
@@ -198,10 +198,6 @@ func TestServerInfoReport(t *testing.T) {
 			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
 		}, "", "the door refuses every request|/space /space none bind,nosuid,nodev 0 0"},
 		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
-		// A Docker the door cannot claim with: the classic image store, an old buildx.
-		{"door docker", func(i *remote.ServerInfo) {
-			i.Door = &remote.DoorFacts{Space: "/space", Docker: "Docker runs the classic image store, and project users need its containerd image store (io.containerd.snapshotter.v1)"}
-		}, "", "the door refuses every image a project user does not build|move Docker to its containerd image store and a current buildx, as root:\n$ devopsy --server-setup-howto project-users"},
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
 		}, "", "every container reaches what the host listens on beyond loopback\n0.0.0.0:5432 (postgres)|make each listen on 127.0.0.1"},
@@ -229,7 +225,20 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup = setUp("")
 			i.Setup.Refusals = dockerAnswers(i.Docker)
 		}, "", "Docker has no compose plugin|$ devopsy --server-setup-howto docker"},
-		{"no buildx", func(i *remote.ServerInfo) { i.Docker.Buildx = false }, "", "Docker has no buildx plugin|$ devopsy --server-setup-howto docker"},
+		{"no buildx", func(i *remote.ServerInfo) { i.Docker.Buildx = "" }, "", "Docker has no buildx plugin|$ devopsy --server-setup-howto docker"},
+		// The floor, every server's, said under docker with the docker topic, on a server with
+		// no door as on one with project users.
+		{"classic store", func(i *remote.ServerInfo) { i.Docker.Containerd, i.Docker.Driver = false, "overlay2" }, "",
+			"Docker runs its classic image store, and devopsy supports only a current Docker installed fresh, on its containerd image store (io.containerd.snapshotter.v1)|install a current Docker fresh, on a new server where this one runs projects, as root:\n$ devopsy --server-setup-howto docker"},
+		{"classic store, project users", func(i *remote.ServerInfo) {
+			i.Docker.Containerd, i.Door = false, &remote.DoorFacts{Space: "/space", Users: 1}
+		}, "", "Docker runs its classic image store|$ devopsy --server-setup-howto docker"},
+		{"old buildx", func(i *remote.ServerInfo) { i.Docker.Buildx = "0.29.1" }, "", "Docker's buildx is 0.29.1, and devopsy needs 0.33.0 or later|upgrade Docker's buildx plugin alone, as root:\n$ devopsy --server-setup-howto docker"},
+		{"old compose", func(i *remote.ServerInfo) {
+			i.Docker.Compose = "2.32.4"
+			i.Setup = setUp("")
+			i.Setup.Refusals = dockerAnswers(i.Docker)
+		}, "", "Docker's compose is 2.32.4, and devopsy needs 2.33.0 or later|upgrade Docker's compose plugin alone, as root:\n$ devopsy --server-setup-howto docker"},
 		// Docker lists apparmor whenever the kernel has it, and needs
 		// apparmor_parser to load its profile (review).
 		{"no apparmor_parser", func(i *remote.ServerInfo) { i.AppArmorParser = false }, "", "no apparmor_parser: Docker cannot load its profile, so containers fail to start|install the apparmor package"},
@@ -677,7 +686,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"@devopsy@one:\n",
 		"releases      " + s.root + ", keep 5",
 		"containerd /var/lib/containerd",
-		"docker        29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
+		"docker        29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
 		"disks         releases " + s.root,
 		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
 		"environments  shop/dev  none: 19990101000000 failed",

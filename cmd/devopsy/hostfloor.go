@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // toolVersion is a tool's version as it prints it: its first word of three numbers, a leading v
@@ -14,8 +16,8 @@ import (
 var toolVersion = regexp.MustCompile(`(?:^|\s)v?(\d+)\.(\d+)\.(\d+)`)
 
 // versionAtLeast reads out's version and says whether it is at least floor: a version that
-// cannot be read is not, so a feature that needs one refuses rather than guessing. It gives
-// the version as read, for the refusal's words.
+// cannot be read is not, so a floor refuses rather than guessing. It gives the version as
+// read, for the refusal's words.
 func versionAtLeast(out string, floor [3]int) (string, bool) {
 	m := toolVersion.FindStringSubmatch(out)
 	if m == nil {
@@ -28,54 +30,174 @@ func versionAtLeast(out string, floor [3]int) (string, bool) {
 	return strings.Join(m[1:], "."), slices.Compare(got[:], floor[:]) >= 0
 }
 
+// versionOf is out's version as versionAtLeast reads it.
+func versionOf(out string) string {
+	v, _ := versionAtLeast(out, [3]int{})
+	return v
+}
+
 // floorWords is floor as a version, for a refusal's words.
 func floorWords(floor [3]int) string {
 	return fmt.Sprintf("%d.%d.%d", floor[0], floor[1], floor[2])
 }
 
-// buildxOCILayout is the first buildx whose imagetools writes an OCI layout
-// (`--tag oci-layout://<dir>:<tag>`), what a claim copies a registry's image into; an older
-// one answers "invalid reference format", which says nothing.
-var buildxOCILayout = [3]int{0, 33, 0}
+// floorPart is one thing of a Docker the floor reads.
+type floorPart int
 
-// containerdStore is how docker info's DriverStatus names Docker's containerd image store,
-// the one a claim's load leaves as a pull by digest does: the classic store refuses an OCI
-// layout, and given one records no registry digest.
+const (
+	floorStore floorPart = iota
+	floorBuildx
+	floorCompose
+)
+
+// floorParts are every part of the floor, in the table's order.
+var floorParts = []floorPart{floorStore, floorBuildx, floorCompose}
+
+// floor is one row of dockerFloors.
+type floor struct {
+	part floorPart
+	// name is the plugin's, in a refusal's words; version its oldest. The image store has
+	// neither.
+	name    string
+	version [3]int
+	// fix is the way out of a Docker that misses it, by the docker topic's steps.
+	fix string
+}
+
+// containerdStore is how docker info's DriverStatus names Docker's containerd image store.
 const containerdStore = "io.containerd.snapshotter.v1"
 
-// doorHostReady is what a server with project users needs of its Docker, beyond a current one:
-// the containerd image store and buildx's OCI layout, read with docker (the real client) in
-// env, nil when both are there. --project-users add refuses without them, the door's claims
-// do, and --server-info warns. buildx is read under config, a DOCKER_CONFIG with no plugins of
-// its own (an empty one of its own when ""), as the door's copy runs: Docker finds a plugin in
-// $DOCKER_CONFIG/cli-plugins first, so the deploy user's ~/.docker could hold another buildx
-// than the one that copies.
-func doorHostReady(docker string, env []string, config string) error {
-	if config == "" {
-		dir, err := os.MkdirTemp("", "devopsy-docker-")
-		if err != nil {
-			return err
+// dockerFloors is the Docker every server runs, its one table, and no engine number: the
+// store and the two plugins are what devopsy's features read, and a Docker installed fresh
+// from its repository has all three.
+//   - the containerd image store: a load of an OCI layout (the door's claims) and registry
+//     digests for every image; the classic store refuses a layout and, given one, records no
+//     digest;
+//   - buildx 0.33.0: its imagetools writes an OCI layout (`--tag oci-layout://<dir>:<tag>`),
+//     what a claim copies a registry's image into; an older one answers "invalid reference
+//     format", which says nothing;
+//   - compose 2.33.0: it reads a build context service:<name> as another service's build; one
+//     before reads it as a path in the project's directory (the door's checkContexts).
+var dockerFloors = []floor{
+	{part: floorStore, fix: "install a current Docker fresh, on a new server where this one runs projects, as root"},
+	{part: floorBuildx, name: "buildx", version: [3]int{0, 33, 0}, fix: "upgrade Docker's buildx plugin alone, as root"},
+	{part: floorCompose, name: "compose", version: [3]int{2, 33, 0}, fix: "upgrade Docker's compose plugin alone, as root"},
+}
+
+// floorOf is part's row of dockerFloors.
+func floorOf(part floorPart) floor {
+	for _, f := range dockerFloors {
+		if f.part == part {
+			return f
 		}
-		defer os.RemoveAll(dir)
-		config = dir
 	}
-	env = append(slices.Clone(env), "DOCKER_CONFIG="+config)
+	panic("no floor for part " + fmt.Sprint(part))
+}
+
+// floorRead is what a Docker answered of its floor: whether docker info's driver status names
+// the containerd image store (storeErr why docker info said nothing), and what buildx version
+// and compose version --short printed ("" for nothing).
+type floorRead struct {
+	containerd bool
+	storeErr   string
+	buildx     string
+	compose    string
+}
+
+// floorMiss is one floor a Docker misses, in words.
+type floorMiss struct {
+	floor floor
+	msg   string
+}
+
+func (m floorMiss) Error() string { return m.msg }
+
+// floorMissed is the one judgment of the floor: each of parts' rows r misses, in the table's
+// order, a version that cannot be read missing its floor.
+func floorMissed(r floorRead, parts ...floorPart) []floorMiss {
+	var misses []floorMiss
+	for _, f := range dockerFloors {
+		if !slices.Contains(parts, f.part) {
+			continue
+		}
+		var msg string
+		switch f.part {
+		case floorStore:
+			switch {
+			case r.storeErr != "":
+				msg = "Docker's image store could not be read: " + r.storeErr
+			case !r.containerd:
+				msg = "Docker runs its classic image store, and devopsy supports only a current Docker installed fresh, on its containerd image store (" + containerdStore + ")"
+			}
+		default:
+			out := r.buildx
+			if f.part == floorCompose {
+				out = r.compose
+			}
+			needs := ", and devopsy needs " + floorWords(f.version) + " or later"
+			switch v, ok := versionAtLeast(out, f.version); {
+			case ok:
+			case !toolVersion.MatchString(out) && v == "":
+				msg = "Docker's " + f.name + " answers no version" + needs
+			case !toolVersion.MatchString(out):
+				msg = "Docker's " + f.name + " answers no version (" + strconv.Quote(v) + ")" + needs
+			default:
+				msg = "Docker's " + f.name + " is " + v + needs
+			}
+		}
+		if msg != "" {
+			misses = append(misses, floorMiss{floor: f, msg: msg})
+		}
+	}
+	return misses
+}
+
+// readFloor asks docker, in env, for parts of its floor, each by its own call, all at once:
+// docker info's driver status, buildx version, compose version --short.
+func readFloor(docker string, env []string, parts ...floorPart) floorRead {
+	var r floorRead
 	run := func(args ...string) (string, error) {
 		c := exec.Command(docker, args...)
 		c.Env = env
 		out, err := c.Output()
 		return string(out), err
 	}
-	info, err := run("info", "--format", "{{.DriverStatus}}")
-	if err != nil {
-		return fmt.Errorf("Docker's image store could not be read: %v", err)
+	var wg sync.WaitGroup
+	for _, p := range parts {
+		wg.Go(func() {
+			switch p {
+			case floorStore:
+				out, err := run("info", "--format", "{{.DriverStatus}}")
+				if err != nil {
+					r.storeErr = cmdError(err)
+					return
+				}
+				r.containerd = strings.Contains(out, containerdStore)
+			case floorBuildx:
+				r.buildx, _ = run("buildx", "version")
+			case floorCompose:
+				r.compose, _ = run("compose", "version", "--short")
+			}
+		})
 	}
-	if !strings.Contains(info, containerdStore) {
-		return fmt.Errorf("Docker runs the classic image store, and project users need its containerd image store (%s)", containerdStore)
+	wg.Wait()
+	return r
+}
+
+// dockerFloor is readFloor then floorMissed, for a reader with an environment of its own (the
+// door's DOCKER_CONFIG, a build's).
+func dockerFloor(docker string, env []string, parts ...floorPart) []floorMiss {
+	return floorMissed(readFloor(docker, env, parts...), parts...)
+}
+
+// floorError is misses as one error, nil for none.
+func floorError(misses []floorMiss) error {
+	if len(misses) == 0 {
+		return nil
 	}
-	out, _ := run("buildx", "version")
-	if v, ok := versionAtLeast(out, buildxOCILayout); !ok {
-		return fmt.Errorf("project users need buildx %s or later, which copies a registry's image as it is (this server's: %q)", floorWords(buildxOCILayout), v)
+	words := make([]string, len(misses))
+	for i, m := range misses {
+		words[i] = m.msg
 	}
-	return nil
+	return errors.New(strings.Join(words, "; "))
 }

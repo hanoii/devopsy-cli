@@ -47,25 +47,31 @@ const recordHeader = `# Written by devopsy (--server-setup, --upgrade): what it 
 type Record struct {
 	// Version is the devopsy that last applied here with no failure, "" for none recorded.
 	Version string
-	Daemon  map[string]Entry
+	// Floor is the devopsy whose apply last found Docker at its floor, "" for none: a release
+	// of that devopsy asks Docker nothing of it.
+	Floor  string
+	Daemon map[string]Entry
 }
 
-// The record's keys: daemon.json's parts, and the devopsy that last applied here.
+// The record's keys: daemon.json's parts, the devopsy that last applied here, and the one
+// that last found Docker at its floor.
 const (
 	recordDaemonKey  = "daemon.json"
 	recordVersionKey = "devopsy"
+	recordFloorKey   = "docker-floor"
 )
 
 // ParseRecord reads a record's text. An entry with both applied and kept is an error.
 func ParseRecord(data []byte) (Record, error) {
 	var doc struct {
 		Version string           `yaml:"devopsy"`
+		Floor   string           `yaml:"docker-floor"`
 		Daemon  map[string]Entry `yaml:"daemon.json"`
 	}
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return Record{}, err
 	}
-	r := Record{Version: doc.Version, Daemon: map[string]Entry{}}
+	r := Record{Version: doc.Version, Floor: doc.Floor, Daemon: map[string]Entry{}}
 	for name, e := range doc.Daemon {
 		if e.Applied != "" && e.Kept != "" {
 			return Record{}, fmt.Errorf("%s: %s: both applied and kept", recordDaemonKey, name)
@@ -109,6 +115,9 @@ func (r Record) Marshal() ([]byte, error) {
 	doc := &yaml.Node{Kind: yaml.MappingNode}
 	if r.Version != "" {
 		doc.Content = append(doc.Content, scalar(recordVersionKey, 0), scalar(r.Version, 0))
+	}
+	if r.Floor != "" {
+		doc.Content = append(doc.Content, scalar(recordFloorKey, 0), scalar(r.Floor, 0))
 	}
 	doc.Content = append(doc.Content, scalar(recordDaemonKey, 0), parts)
 	var b bytes.Buffer
@@ -182,7 +191,7 @@ func WriteRecord(path string, r Record) error {
 
 // Set is r with part's entry set to e, for a decision's record.
 func (r Record) Set(part string, e Entry) Record {
-	out := Record{Version: r.Version, Daemon: make(map[string]Entry, len(r.Daemon)+1)}
+	out := Record{Version: r.Version, Floor: r.Floor, Daemon: make(map[string]Entry, len(r.Daemon)+1)}
 	for k, v := range r.Daemon {
 		out.Daemon[k] = v
 	}

@@ -81,7 +81,7 @@ func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 var doorVerbs = map[string]string{
 	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
-	"buildx": "--context-hash, local; --server-setup and --gc, the deploy user's", "info": "--server-info and --server-setup, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
+	"buildx": "--context-hash, local; --server-setup, --gc and the deploy user's --server-ready, the deploy user's", "info": "--server-info, --server-setup and the deploy user's --server-ready, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
 	"builder": "--gc, the deploy user's", "container": "--gc, the deploy user's", "context": "--gc, the deploy user's", "not": "a message",
 }
 
@@ -1486,7 +1486,7 @@ esac
 		return string(out), err
 	}
 	for _, version := range []string{"2.32.4", "v2.20.2", "garbage"} {
-		if out, err := run(version); err == nil || strings.Contains(out, "ARGS: ") || !strings.Contains(out, "a build context needs compose 2.33.0 or later") {
+		if out, err := run(version); err == nil || strings.Contains(out, "ARGS: ") || !strings.Contains(out, "a build with contexts: Docker's compose ") || !strings.Contains(out, "devopsy needs 2.33.0 or later") {
 			t.Errorf("compose %s ran a build with a context (%v):\n%s", version, err, out)
 		}
 	}

@@ -305,9 +305,11 @@ by its `deploy`.
 ## Uploads
 
 Before anything is uploaded or made on the server, the upload refuses a
-server without `tar` or `flock`, or whose release root is not a
-directory of the deploy user's: `devopsy @<server> --server-setup` makes
-a missing root or one root owns the deploy user's ([Servers](servers.md)).
+server without `tar` or `flock`, whose release root is not a directory
+of the deploy user's, or whose Docker does not answer, lacks its compose
+or buildx plugin, or is below its floor ([Docker](servers.md#docker)):
+`devopsy @<server> --server-setup` makes a missing root or one root owns
+the deploy user's ([Servers](servers.md)).
 A project user's release checks neither: its tree is
 `--project-users add`'s.
 
