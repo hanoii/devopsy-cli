@@ -558,3 +558,62 @@ func TestFreeDownOnlyWhatIsLeft(t *testing.T) {
 		}
 	}
 }
+
+// Bug: docs/config.md moves a release root by its projects' directories alone ("mv the
+// projects' directories under the new root"). The claims directory (uids.DirName, under the
+// root, dot-named, so a glob of the projects misses it) stays in the old root, and the new
+// root's claims are made again in the order the environments start: two environments whose
+// hashed slots collide swap uids, each then running as the uid that owns the other's data.
+// A move done as the doc says must keep every environment's uid.
+func TestReleaseRootMoveKeepsUIDs(t *testing.T) {
+	t.Parallel()
+	// Two environments of one project whose hashed slots collide.
+	var first, second uids.Owner
+	seen := map[uint32]uids.Owner{}
+	for i := 0; i < 1_000_000 && first.Env == ""; i++ {
+		o, err := uids.EnvOwner("shop", "", "e"+strconv.Itoa(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other, ok := seen[o.Plain()]; ok {
+			first, second = other, o
+		}
+		seen[o.Plain()] = o
+	}
+	if first.Env == "" {
+		t.Fatal("no two environments' slots collide")
+	}
+	tmp := t.TempDir()
+	old, moved := filepath.Join(tmp, "old"), filepath.Join(tmp, "new")
+	was := map[uids.Owner]uint32{}
+	for _, o := range []uids.Owner{first, second} {
+		write(t, filepath.Join(old, o.Project, o.Env, "releases", ".keep"), "", 0o644)
+		uid, _, err := claimsStore(old).LookupPair(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		was[o] = uid
+	}
+	// The doc's steps: the environments stopped, the projects' directories moved under the new
+	// root, root: changed, then each started again, here the second first.
+	if err := os.MkdirAll(moved, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(old, "shop"), filepath.Join(moved, "shop")); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []uids.Owner{second, first} {
+		uid, _, err := claimsStore(moved).LookupPair(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uid != was[o] {
+			t.Errorf("%s runs as %d after the move, %d before, its data's owner", o, uid, was[o])
+		}
+	}
+	if left, err := claimsStore(old).List(); err != nil || len(left) == 0 {
+		t.Errorf("the old root's claims (%v): %d", err, len(left))
+	} else {
+		t.Logf("claims left in the old root: %d", len(left))
+	}
+}
