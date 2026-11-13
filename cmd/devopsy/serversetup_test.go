@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1024,6 +1025,92 @@ func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, owner.String()) || !strings.Contains(out, "shop/prod") {
 		t.Errorf("--server-info (%d) shows no claim or environment of the volume's:\n%s", code, out)
+	}
+}
+
+// A release root that holds an environment's variables, set before its first release
+// (--vars set makes the environment's directory and its shared/.env, with no releases/ yet),
+// holds what devopsy keeps of a release: nothing is asked and no other root named over them.
+//
+// BUG (review round 2): rootHolds counts only environments with releases/ (deployEnvBases),
+// uid claims and project users, so the question stays open, the volume hint offers --root, and
+// an apply names the volume: the variables stay in the home, where no release reads them, and
+// the first release runs without them (or lists them as missing again).
+func TestServerSetupNamesNoRootOverVars(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	home := filepath.Dir(vol)
+	before := readString(config)
+	if out, code := s.run([]string{"COLOR=blue"}, "@prod", "--vars", "set", "COLOR"); code != 0 || !strings.Contains(readString(filepath.Join(home, "shop", "prod", "shared", ".env")), "COLOR=") {
+		t.Fatalf("--vars set before a first release (%d):\n%s", code, out)
+	}
+	if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || f.RootOpen() {
+		t.Errorf("facts (%d): asks %v, open %v over a release root that holds an environment's variables\n%s", code, f.AsksRoot(), f.RootOpen(), out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
+		t.Errorf("the apply (%d) named another root over the variables, the config:\n%s\n%s", code, readString(config), out)
+	}
+}
+
+// --server-setup --root without --yes and without a terminal fails on its question naming
+// --yes, and the command it offers keeps the --root asked for.
+//
+// BUG (review round 2): the fix is "--server-setup --yes" alone, said to keep the release root
+// where it is (terminalAsker.noTerminal knows nothing of --root): copied, it sets the server up
+// on the home, the root the operator asked for dropped.
+func TestServerSetupRootWithoutTerminalKeepsRootInItsFix(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	before := readString(config)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--root", vol)
+	if code != 1 || !strings.Contains(out, "--server-setup asks first, and there is no terminal to ask at") || readString(config) != before {
+		t.Fatalf("--root, no terminal (%d), config %q:\n%s", code, readString(config), out)
+	}
+	if !strings.Contains(out, "$ devopsy @devopsy@one: --server-setup --root "+vol+" --yes\n") || strings.Contains(out, "keeps the release root where it is") {
+		t.Errorf("the fix drops --root %s, or says --yes keeps the release root where it is:\n%s", vol, out)
+	}
+}
+
+// At a terminal, --server-setup asks where releases live before it shows anything: Enter keeps
+// the home, names nothing and shows no volume hint, the rest asked as ever; a volume's number
+// is judged by a second facts session (facts --root), shown as the root the run names, and
+// named by the apply once the changes are confirmed, the root made there.
+func TestServerSetupAsksTheRootAtATerminal(t *testing.T) {
+	t.Parallel()
+	script, _ := exec.LookPath("script")
+	if runtime.GOOS != "linux" || script == "" {
+		t.Skip("needs util-linux's script, for a terminal")
+	}
+	s, _, vol, config := rootChoice(t)
+	home := filepath.Dir(vol)
+	before := readString(config)
+	// answers are typed at a pseudo-terminal, a line per question.
+	at := func(answers string) (string, int) {
+		cmd := exec.Command(script, "-qec", remote.Quote(binary)+" @devopsy@one: --server-setup", "/dev/null")
+		cmd.Dir, cmd.Env, cmd.Stdin = s.project, s.env, strings.NewReader(answers)
+		out, _ := cmd.CombinedOutput()
+		return strings.ReplaceAll(string(out), "\r\n", "\n"), cmd.ProcessState.ExitCode()
+	}
+	out, code := at("\nn\n")
+	if code != 1 || !strings.Contains(out, "where do releases live?") || !strings.Contains(out, "1. "+home+", the deploy user's home") || !strings.Contains(out, "2. "+vol+" (xfs on /dev/sdb") ||
+		!strings.Contains(out, "apply these?") || !strings.Contains(out, "nothing changed") || strings.Contains(out, "to keep releases on") || strings.Contains(out, "names it as releases: root") ||
+		readString(config) != before || fileExists(vol) {
+		t.Fatalf("Enter, then no (%d), config %q:\n%s", code, readString(config), out)
+	}
+	_, ssh := s.logs()
+	if strings.Contains(ssh, "--root") {
+		t.Errorf("the home chosen ran a session with --root:\n%s", ssh)
+	}
+	out, code = at("0\n2\ny\ny\n")
+	if code != 0 || !strings.Contains(out, "answer with a number from 1 to 2") || !strings.Contains(out, "--server-setup names it as releases: root in "+config) ||
+		!strings.Contains(out, "devopsy: named "+vol+" the release root in "+config) || strings.Contains(out, "to keep releases on") || !fileExists(vol) {
+		t.Fatalf("the volume chosen (%d):\n%s", code, out)
+	}
+	if got := readString(config); got != before+"releases:\n  root: "+vol+"\n" {
+		t.Errorf("the config:\n%s", got)
+	}
+	if out, code := at(""); code != 0 || !strings.Contains(out, "nothing to change") || strings.Contains(out, "where do releases live?") {
+		t.Errorf("a second run (%d):\n%s", code, out)
 	}
 }
 
