@@ -1165,8 +1165,8 @@ Options:
                  it, for allow)
   --root <dir>   where releases live, in place of the question: named as
                  releases: root in config.yaml; refused once a release
-                 root holds releases, or on a filesystem nothing mounts
-                 at boot
+                 root holds releases, on a filesystem nothing mounts at
+                 boot, or in memory (tmpfs)
 
 Examples:
   devopsy @devopsy@vm1: --server-setup

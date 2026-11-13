@@ -76,16 +76,15 @@ func OnCandidate(path string, cs []Candidate) bool {
 	return false
 }
 
-// MountPointOf is the mount point in mountinfo (/proc/self/mountinfo's text) that path is on:
-// the longest holding it, "" for none.
-func MountPointOf(mountinfo, path string) string {
-	point := ""
+// MountOf is the mount in mountinfo (/proc/self/mountinfo's text) that path is on, its mount
+// point and filesystem: the longest mount point holding it, "" for none.
+func MountOf(mountinfo, path string) (point, fstype string) {
 	for _, m := range parseMountinfo(mountinfo) {
 		if under(path, m.point) && len(m.point) >= len(point) {
-			point = m.point
+			point, fstype = m.point, m.fstype
 		}
 	}
-	return point
+	return point, fstype
 }
 
 // mount is one line of mountinfo.

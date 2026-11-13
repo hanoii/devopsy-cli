@@ -70,12 +70,8 @@ func TestServerSetupAsksWhereReleasesLiveAtATerminal(t *testing.T) {
 }
 
 // A root on a filesystem in memory (tmpfs, as Debian 13's /tmp, which tmp.mount mounts at every
-// boot from a unit file of its own) is refused as one nothing mounts at boot is: after a reboot
-// the filesystem is empty again, so every release on it is gone, and Docker's drop-in only
-// waits for its mount.
-//
-// Bug: bootMounted asks only whether a unit file mounts the filesystem, never what it keeps,
-// so facts --root takes a root in /tmp and an apply would name it.
+// boot from a unit file of its own) is refused, whatever mounts it: after a reboot the
+// filesystem is empty again, so every release on it would be gone.
 func TestServerSetupRefusesARootInMemory(t *testing.T) {
 	t.Parallel()
 	s, host, vol, _ := rootChoice(t)
@@ -83,7 +79,7 @@ func TestServerSetupRefusesARootInMemory(t *testing.T) {
 	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n3 1 0:30 / "+tmp+" rw,nosuid,nodev - tmpfs tmpfs rw\n", 0o644)
 	unit := setup.MountUnitName(tmp)
 	write(t, filepath.Join(host, "fragment."+unit), "/usr/lib/systemd/system/tmp.mount\n", 0o644)
-	if f, out, code := setupFactsOf(s, "--root", filepath.Join(tmp, "releases")); code != 1 || !strings.Contains(out, "devopsy: error: ") {
+	if f, out, code := setupFactsOf(s, "--root", filepath.Join(tmp, "releases")); code != 1 || !strings.Contains(out, "devopsy: error: "+tmp+" is a tmpfs, in memory: it keeps nothing across a reboot") {
 		t.Errorf("facts --root in a tmpfs (%d), names %v:\n%s", code, f.NamesRoot, out)
 	}
 }

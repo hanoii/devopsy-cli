@@ -526,19 +526,23 @@ func rootRefusal(h setupHost, root string) *setup.Refusal {
 	return bootMounted(h, want)
 }
 
-// bootMounted says why the filesystem root is on may not be mounted at boot, nil when it is:
-// / always is, and another mount (the longest mount point holding root) is where its mount
-// unit has a file (FragmentPath, /etc/fstab's through its generator or a .mount unit), never
-// one mounted by hand (none) or by systemd-mount (under /run/systemd/transient/). Docker's
-// drop-in then only orders it after the mount, which a boot leaves out, and releases would
-// land on the disk under it.
+// bootMounted says why the filesystem root is on may not hold releases after a boot, nil when
+// it does: one in memory (tmpfs, ramfs) keeps nothing across a reboot, whatever mounts it; /
+// is always mounted, and another mount (the longest mount point holding root) is where its
+// mount unit has a file (FragmentPath, /etc/fstab's through its generator or a .mount unit),
+// never one mounted by hand (none) or by systemd-mount (under /run/systemd/transient/).
+// Docker's drop-in then only orders it after the mount, which a boot leaves out, and releases
+// would land on the disk under it.
 func bootMounted(h setupHost, root string) *setup.Refusal {
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
-	point := setup.MountPointOf(string(mountinfo), root)
-	if point == "/" {
+	point, fstype := setup.MountOf(string(mountinfo), root)
+	switch {
+	case fstype == "tmpfs" || fstype == "ramfs":
+		return &setup.Refusal{Item: setup.RefusalRoot, Message: point + " is a " + fstype + ", in memory: it keeps nothing across a reboot, and every release on it would be gone after one",
+			Fix: "name a directory on a disk with --root"}
+	case point == "/":
 		return nil
-	}
-	if point == "" {
+	case point == "":
 		return &setup.Refusal{Item: setup.RefusalRoot, Message: "devopsy cannot tell what mounts " + root + " at boot: no mount in /proc/self/mountinfo holds it"}
 	}
 	unit := setup.MountUnitName(point)
