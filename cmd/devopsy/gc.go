@@ -510,10 +510,7 @@ func (g *gcScope) inspectOneOffs(ids []string) ([]gcOneOff, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	cmd := exec.Command(g.docker, append([]string{"container", "inspect", "--size", "--format", "{{json .}}"}, ids...)...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	out, err := inspectAll(g.docker, ids, "container", "inspect", "--size", "--format", "{{json .}}")
 	var cs []gcOneOff
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(nil, 1<<20)
@@ -537,10 +534,7 @@ func (g *gcScope) inspectOneOffs(ids []string) ([]gcOneOff, error) {
 		}
 		cs = append(cs, c)
 	}
-	if err != nil && !onlyGone(stderr.String()) {
-		return cs, errors.New("docker container inspect: " + cmp.Or(strings.TrimSpace(stderr.String()), err.Error()))
-	}
-	return cs, nil
+	return cs, err
 }
 
 // goes says whether a container in state status, a one-off or not, goes: an exited one-off
@@ -825,12 +819,9 @@ func (g *gcScope) dangling() (gcDangling, error) {
 		}
 		return d, nil
 	}
-	out, err = exec.Command(g.docker, append([]string{"image", "inspect", "--format", "{{.Id}} {{.Size}}"}, ids...)...).Output()
+	out, err = inspectAll(g.docker, ids, "image", "inspect", "--format", "{{.Id}} {{.Size}}")
 	if err != nil {
-		var ee *exec.ExitError
-		if !errors.As(err, &ee) || !onlyGone(string(ee.Stderr)) {
-			return gcDangling{}, dockerFailed("docker image inspect", err)
-		}
+		return gcDangling{}, err
 	}
 	var d gcDangling
 	for _, line := range strings.Split(string(out), "\n") {
@@ -859,13 +850,9 @@ func (g *gcScope) imagesUsed() (map[string]bool, error) {
 		return nil, dockerFailed("docker ps", err)
 	}
 	if cs := strings.Fields(string(out)); len(cs) > 0 {
-		out, err := exec.Command(g.docker, append([]string{"container", "inspect", "--format", "{{.Image}}"}, cs...)...).Output()
+		out, err := inspectAll(g.docker, cs, "container", "inspect", "--format", "{{.Image}}")
 		if err != nil {
-			// One gone since the listing is no use; any other is unknown.
-			var ee *exec.ExitError
-			if !errors.As(err, &ee) || !onlyGone(string(ee.Stderr)) {
-				return nil, dockerFailed("docker container inspect", err)
-			}
+			return nil, err
 		}
 		for _, id := range strings.Fields(string(out)) {
 			used[id] = true

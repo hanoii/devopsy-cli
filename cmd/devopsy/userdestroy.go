@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/user"
@@ -330,13 +331,7 @@ func (x *userDestroy) find() (destroyFound, error) {
 	for _, n := range f.claimNames {
 		names[n] = true
 	}
-	f.names = slices.Sorted(func(yield func(string) bool) {
-		for n := range names {
-			if !yield(n) {
-				return
-			}
-		}
-	})
+	f.names = slices.Sorted(maps.Keys(names))
 	if f.refs, f.images, err = x.ownRefs(); err != nil {
 		return f, err
 	}
@@ -385,22 +380,21 @@ func labelRows(kind string) ([][2]string, error) {
 // tags, snapshot bookmarks, builds, and its claim holds), sorted, and the size of their images,
 // each counted once. No compose name is read back from one.
 func (x *userDestroy) ownRefs() ([]string, int64, error) {
-	out, err := exec.Command("docker", "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}").Output()
+	rows, err := imageRows("docker")
 	if err != nil {
-		return nil, 0, dockerFailed("docker image ls", err)
+		return nil, 0, err
 	}
 	var refs []string
 	var size int64
 	counted := map[string]bool{}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 || !x.policy.OwnRef(f[1]) {
+	for _, r := range rows {
+		if !x.policy.OwnRef(r.Ref) {
 			continue
 		}
-		refs = append(refs, f[1])
-		if len(f) > 2 && !counted[f[0]] {
-			counted[f[0]] = true
-			size += parseDockerSize(f[2])
+		refs = append(refs, r.Ref)
+		if !counted[r.ID] {
+			counted[r.ID] = true
+			size += r.Size
 		}
 	}
 	slices.Sort(refs)

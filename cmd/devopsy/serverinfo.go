@@ -668,16 +668,24 @@ func hostContainers(docker string, dirs []string) ([]remote.HostContainer, error
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	cmd := exec.Command(docker, append([]string{"inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{.Image}} {{json .State.FinishedAt}} {{json .Config.Labels}}"}, ids...)...)
+	out, err = inspectAll(docker, ids, "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{.Image}} {{json .State.FinishedAt}} {{json .Config.Labels}}")
+	return parseHostContainers(out, dirs), err
+}
+
+// inspectAll is docker (its command) run with args, an inspect, and every one of ids after
+// them, its output: one gone since its listing (a run --rm, a util container) fails it, which
+// printed every other all the same, and is none (onlyGone); any other failure is an error,
+// with what it printed.
+func inspectAll(docker string, ids []string, args ...string) ([]byte, error) {
+	cmd := exec.Command(docker, slices.Concat(args, ids)...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	out, err = cmd.Output()
-	// A container gone since ps (a run --rm, a util container) fails
-	// inspect, which printed every other one all the same.
+	out, err := cmd.Output()
 	if err != nil && !onlyGone(stderr.String()) {
-		return parseHostContainers(out, dirs), errors.New("docker inspect: " + cmp.Or(strings.TrimSpace(stderr.String()), err.Error()))
+		what := "docker " + strings.Join(args[:slices.Index(args, "inspect")+1], " ")
+		return out, errors.New(what + ": " + cmp.Or(strings.TrimSpace(stderr.String()), err.Error()))
 	}
-	return parseHostContainers(out, dirs), nil
+	return out, nil
 }
 
 // onlyGone says whether docker's stderr says only of objects not there: "No such container"

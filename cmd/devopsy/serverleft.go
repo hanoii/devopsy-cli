@@ -66,28 +66,24 @@ func (p gcPlan) facts() *remote.GCFacts {
 	return &remote.GCFacts{OneOffs: len(p.OneOffs), Snapshots: len(p.Snapshots), Left: len(p.Left), Dangling: len(p.Dangling.Images), Unread: p.Unread}
 }
 
-// hostImages are the images with a tag, by docker image ls, each with every tag it has, its
-// size as it gives it, and how many of containers use it.
+// hostImages are the images with a tag, by docker image ls (imageRows), each with every tag it
+// has, its size as it gives it, and how many of containers use it.
 func hostImages(docker string, containers []remote.HostContainer) ([]remote.HostImage, error) {
-	out, err := exec.Command(docker, "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}").Output()
+	rows, err := imageRows(docker)
 	if err != nil {
-		return nil, dockerFailed("docker image ls", err)
+		return nil, err
 	}
 	byID := map[string]*remote.HostImage{}
 	var order []string
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 || strings.Contains(f[1], "<none>") {
+	for _, r := range rows {
+		if strings.Contains(r.Ref, "<none>") {
 			continue
 		}
-		if byID[f[0]] == nil {
-			byID[f[0]] = &remote.HostImage{ID: f[0]}
-			if len(f) > 2 {
-				byID[f[0]].Size = parseDockerSize(f[2])
-			}
-			order = append(order, f[0])
+		if byID[r.ID] == nil {
+			byID[r.ID] = &remote.HostImage{ID: r.ID, Size: r.Size}
+			order = append(order, r.ID)
 		}
-		byID[f[0]].Tags = append(byID[f[0]].Tags, f[1])
+		byID[r.ID].Tags = append(byID[r.ID].Tags, r.Ref)
 	}
 	for _, c := range containers {
 		if img := byID[c.Image]; img != nil {
@@ -99,6 +95,34 @@ func hostImages(docker string, containers []remote.HostContainer) ([]remote.Host
 		imgs = append(imgs, *byID[id])
 	}
 	return imgs, nil
+}
+
+// imageRow is a line of docker image ls: an image's id, one of its names (<none>:<none> for
+// none) and its size as Docker gives it.
+type imageRow struct {
+	ID, Ref string
+	Size    int64
+}
+
+// imageRows are the images docker (its command) lists, a row per name.
+func imageRows(docker string) ([]imageRow, error) {
+	out, err := exec.Command(docker, "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}").Output()
+	if err != nil {
+		return nil, dockerFailed("docker image ls", err)
+	}
+	var rows []imageRow
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		r := imageRow{ID: f[0], Ref: f[1]}
+		if len(f) > 2 {
+			r.Size = parseDockerSize(f[2])
+		}
+		rows = append(rows, r)
+	}
+	return rows, nil
 }
 
 // hostVolumes are the volumes docker volume ls gives, with the compose project of their labels,
