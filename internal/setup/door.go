@@ -173,8 +173,11 @@ type DoorFacts struct {
 	Space       string `json:"space"`
 	SpaceAction string `json:"space_action,omitempty"`
 	SpaceMode   string `json:"space_mode,omitempty"`
-	// Guarded: the mount the space is on has nosuid and nodev now, whatever made it.
-	Guarded bool `json:"guarded"`
+	// Guarded: the mount the space is on has nosuid and nodev now, whatever made it;
+	// SpaceMounted: the space is a mount point of its own now, so enabling and starting its unit
+	// mounts nothing.
+	Guarded      bool `json:"guarded"`
+	SpaceMounted bool `json:"space_mounted,omitempty"`
 	// DropInWithout: the mounts drop-in is as --server-setup writes it without the space, and
 	// devopsy's want adds the space: only Docker's wait for it at boot differs.
 	DropInWithout bool `json:"dropin_without,omitempty"`

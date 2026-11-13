@@ -331,6 +331,15 @@ func TestProjectUsersSetupMountsItsSpaceAgain(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "devopsy: bind-mounted "+space+" on itself with nosuid and nodev\n") || strings.Contains(out, "holds files") {
 		t.Errorf("the space's mount gone (%d):\n%s", code, out)
 	}
+	// Its unit's link gone while the space is mounted: enabled again, said as just that, no mount
+	// said made.
+	if err := os.Remove(filepath.Join(host, setup.SpaceUnitLink(space))); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
+	if code != 0 || strings.Contains(out, "bind-mounted "+space) || !strings.Contains(out, "devopsy: every boot now bind-mounts "+space+" on itself with nosuid and nodev; its mount there now is left as it is\n") {
+		t.Errorf("the unit's link gone, the space mounted (%d):\n%s", code, out)
+	}
 }
 
 // Each step goes by its own result: a /proc systemd cannot remount (the run's last step) fails

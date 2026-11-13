@@ -420,6 +420,7 @@ func readSpace(h setupHost, rd *doorSetupRead, sm spaceAt, refuse func(item, sto
 		f.SpaceMode = strconv.FormatUint(uint64(fi.Mode().Perm()), 8)
 	}
 	point := sm.found && sm.m.point == sp
+	f.SpaceMounted = point
 	unitText, _ := os.ReadFile(h.path(rd.unit))
 	ours := unitText != nil
 	if ours || !f.Guarded {
@@ -669,7 +670,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
 			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)), rd.dropinBare)
 		// Each line said as the run prints it, in order with what the run says itself.
-		runErr = run.run(io.MultiWriter(&out, &lineWriter{line: func(l string) { sayDoorSetupLines(l, me.Username) }}), func(err error) error { return err })
+		runErr = run.run(io.MultiWriter(&out, &lineWriter{line: func(l string) { sayDoorSetupLines(l, me.Username, f) }}), func(err error) error { return err })
 		var ee *exec.ExitError
 		switch {
 		case errors.As(runErr, &ee) && ee.ExitCode() == remote.DoorSetupSaid:
@@ -779,8 +780,8 @@ func appendDoorConfig(file, space string) error {
 }
 
 // sayDoorSetupLines says what the root run changed, line by line
-// (remote.ProjectUsersSetupScript's), who the deploy user.
-func sayDoorSetupLines(out, who string) {
+// (remote.ProjectUsersSetupScript's), who the deploy user, f the facts the run went by.
+func sayDoorSetupLines(out, who string, f setup.DoorFacts) {
 	for _, l := range strings.Split(out, "\n") {
 		word, rest, _ := strings.Cut(l, " ")
 		switch word {
@@ -797,7 +798,13 @@ func sayDoorSetupLines(out, who string) {
 		case remote.DoorSetupMember:
 			report.Info("added " + rest + " to " + setup.ProcGroup)
 		case remote.DoorSetupMounted:
-			report.Info("bind-mounted " + rest + " on itself with nosuid and nodev")
+			// A unit enabled and started over its mount there already (its text or its link
+			// put) mounts nothing now.
+			if f.SpaceMounted {
+				report.Info("every boot now bind-mounts " + rest + " on itself with nosuid and nodev; its mount there now is left as it is")
+			} else {
+				report.Info("bind-mounted " + rest + " on itself with nosuid and nodev")
+			}
 		case remote.DoorSetupHidden:
 			report.Info("hid each user's processes from the others; members of " + setup.ProcGroup + " see all")
 		case remote.DoorSetupPolkit:
