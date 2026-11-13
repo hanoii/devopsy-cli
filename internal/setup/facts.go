@@ -89,11 +89,15 @@ func FactOf(s PartState) PartFact {
 	return PartFact{Name: s.Part.Name, State: s.State, Observed: s.Observed, Kept: s.Entry.Kept, Want: s.Part.Want, Puts: d.Put, Records: d.Record != nil}
 }
 
-// FileFact is a file devopsy writes whole: in sync when it holds its text exactly.
+// FileFact is a file devopsy writes whole: in sync when it holds its text exactly, Missing
+// when it is not there (said only by the facts that word it so). With Link, it is a link that
+// enables the unit Link names: in sync when it leads there.
 type FileFact struct {
-	Item   string `json:"item"`
-	Path   string `json:"path"`
-	InSync bool   `json:"in_sync"`
+	Item    string `json:"item"`
+	Path    string `json:"path"`
+	InSync  bool   `json:"in_sync"`
+	Missing bool   `json:"missing,omitempty"`
+	Link    string `json:"link,omitempty"`
 }
 
 // BufferFact is a live socket buffer: Low when below BufferSize.

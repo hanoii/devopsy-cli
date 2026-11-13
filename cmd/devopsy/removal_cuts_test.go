@@ -191,7 +191,7 @@ func TestRemovalCuts(t *testing.T) {
 				t.Fatal(err)
 			}
 			had := fileExists(c.entry)
-			if code := addProjectUser(d, "shop", who, c.entry); code == 0 || fileExists(c.entry) != had || !fileExists(c.removing) {
+			if code := addProjectUser(d, "shop", who, c.entry, ""); code == 0 || fileExists(c.entry) != had || !fileExists(c.removing) {
 				t.Errorf("an add over it (exit %d): its entry %v (was %v), its mark %v", code, fileExists(c.entry), had, fileExists(c.removing))
 			}
 		})

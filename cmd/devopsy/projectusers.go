@@ -23,14 +23,18 @@ import (
 )
 
 // runProjectUsers implements devopsy @<server> --project-users [list | add <project> |
-// remove <project>]: the server's project users, which have no Docker socket and ask the
-// deploy user's devopsy through the door. Its session runs the server's devopsy as the
-// deploy user (ProjectUsersFlag), which does the work there.
+// remove <project> | setup [<directory>] [--yes]]: the server's project users, which have no
+// Docker socket and ask the deploy user's devopsy through the door. Its session runs the
+// server's devopsy as the deploy user (ProjectUsersFlag), which does the work there; setup
+// has two (runProjectUsersSetup).
 func runProjectUsers(t *remote.Target, args []string) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project> [--destroy [--yes]]]"
+	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project> [--destroy [--yes]] | setup [<directory>] [--yes]]"
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
 		return 0
+	}
+	if len(args) > 0 && args[0] == "setup" {
+		return runProjectUsersSetup(t, args[1:])
 	}
 	if code := projectUsersArgs(args, false); code != 0 {
 		return fail(usage)
@@ -38,10 +42,16 @@ func runProjectUsers(t *remote.Target, args []string) int {
 	if len(args) > 2 {
 		return runDestroyProjectUser(t, args[1], len(args) == 4)
 	}
-	code, err := remote.SSH(t, remote.ProjectUsersScript(t, args), bytes.NewReader(nil), os.Stdout, false)
+	var out bytes.Buffer
+	code, err := remote.SSH(t, remote.ProjectUsersScript(t, args), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return fail(err.Error())
 	}
+	if code == remote.AskedAsProjectUser {
+		refuseProjectUser(t, out.String(), "project users are the server's deploy user's", "--project-users "+strings.Join(args, " "))
+		return 1
+	}
+	os.Stdout.Write(out.Bytes())
 	return code
 }
 
@@ -77,7 +87,7 @@ func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
 	return code
 }
 
-// projectUsersArgs says whether args are --project-users's: 0 when they are. Its destroy takes
+// projectUsersArgs says whether args are --project-users's but setup's: 0 when they are. Its destroy takes
 // --yes from the operator (step false), --list on the server (step), which only lists.
 func projectUsersArgs(args []string, step bool) int {
 	switch {
@@ -96,10 +106,18 @@ func projectUsersArgs(args []string, step bool) int {
 	return 2
 }
 
-// runProjectUsersStep is ProjectUsersFlag, on the server as the deploy user.
+// runProjectUsersStep is ProjectUsersFlag, on the server as the deploy user, the server as
+// its address named it after --server, for the fixes it offers ("" without).
 func runProjectUsersStep(args []string) int {
+	ref := ""
+	if len(args) >= 2 && args[0] == "--server" {
+		ref, args = args[1], args[2:]
+	}
+	if len(args) > 0 && args[0] == "setup" {
+		return runProjectUsersSetupStep(args[1:])
+	}
 	if projectUsersArgs(args, true) != 0 {
-		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [list | add <project> | remove <project> [--destroy [--list]]]")
+		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [--server <server>] [list | add <project> | remove <project> [--destroy [--list]] | setup ...]")
 	}
 	d, err := remote.ServerDoor()
 	if err != nil {
@@ -122,7 +140,7 @@ func runProjectUsersStep(args []string) int {
 	if args[0] == "remove" {
 		return removeProjectUser(d, project, who, entry, endUser)
 	}
-	return addProjectUser(d, project, who, entry)
+	return addProjectUser(d, project, who, entry, ref)
 }
 
 // listProjectUsers prints each project user: its project, whether its Unix user is there,
@@ -269,7 +287,7 @@ func doorNameOwner(d *remote.Door, root, project, name string) (string, error) {
 	return "", nil
 }
 
-func addProjectUser(d *remote.Door, project, who, entry string) int {
+func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	// A removal of the user's, or a key's removal's end, not seen through: what settles it
 	// would take what add writes now (its entry), so it goes first, its own refusal before any
 	// other's.

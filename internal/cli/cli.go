@@ -1257,20 +1257,29 @@ Examples:
   devopsy @prod --status --json
 `,
 	"--project-users": `Usage: devopsy @<server> --project-users [list | add <project> |
-                                     remove <project> [--destroy [--yes]]]
+                                     remove <project> [--destroy [--yes]] |
+                                     setup [<directory>] [--yes]]
 
 A server's project users: one Unix user per project, devopsy-<project>,
 with no Docker socket. What it finds as docker is devopsy, which asks the
 deploy user's devopsy through sudo, and that one checks every request, so
 a project user's leaked key reaches its project and not the server or
 the others. Asked as the deploy user, the server named with its user
-(@devopsy@vm1:). The server needs a door: space: first, a directory on a
-mount of its own with nosuid and nodev, sudo and acl, and Docker's
-containerd image store: devopsy ` + howto.Flag + ` prints the steps,
-as root (its project-users topic).
+(@devopsy@vm1:). The server needs sudo and acl first, which devopsy
+` + howto.Flag + ` project-users prints the steps for, then setup.
 
   --project-users           list them: project, whether the Unix user is
                             there, how many keys
+  --project-users setup [<directory>]
+                            set the server up for them: the door's space
+                            (/var/lib/devopsy-door unless named) on a mount
+                            of its own with nosuid and nodev, at every boot,
+                            named as door: space: in the deploy user's
+                            config, and every user's processes hidden from
+                            the others. Shows what is missing and asks once
+                            (--yes asks nothing); a second run changes
+                            nothing. What is set another way (an fstab
+                            line) is left as it is.
   --project-users add <p>   make devopsy-<p>, its home and, with releases:
                             root elsewhere than the deploy user's home, its
                             tree there, and its entry in the deploy user's
@@ -1297,6 +1306,7 @@ as root (its project-users topic).
 Its keys are --ssh-keys --for <project>.
 
 Examples:
+  devopsy @devopsy@vm1: --project-users setup
   devopsy @devopsy@vm1: --project-users add shop
   devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
   devopsy @devopsy@vm1: --project-users

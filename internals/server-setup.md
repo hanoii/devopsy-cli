@@ -1,6 +1,6 @@
 # Server setup
 
-`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`), `internal/howto/` (`--server-setup-howto`'s topics) and `cmd/devopsy/howto.go`. User docs: `docs/servers.md`, `docs/server-setup-howto.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
+`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`), `cmd/devopsy/projectusers_setup.go` and `internal/remote/projectusers_setup.go` (`--project-users setup`, `ProjectUsersSetupScript`), `internal/howto/` (`--server-setup-howto`'s topics) and `cmd/devopsy/howto.go`. User docs: `docs/servers.md`, `docs/server-setup-howto.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
 
 ## Items
 
@@ -26,7 +26,7 @@
 - Every state comes from the server's devopsy, which applies it (`readSetup`, `setup.Facts`); the operator only words them and asks.
 - Every item is idempotent: a second run in a row changes nothing and restarts nothing.
 - After an apply every item's check runs again, and what was applied and does not read in sync is an error naming the item.
-- A file the setup writes whole sits at a path of its own and starts with `setup.Header`, the firewall's aside; devopsy writes or removes no other file, and none until its want is retired.
+- A file the setup writes whole sits at a path of its own and starts with `setup.Header` (`setup.DoorHeader` for `--project-users setup`'s own, the mounts drop-in both keep keeping `Header`), the firewall's aside; devopsy writes or removes no other file, the deploy user's `config.yaml` aside (`--project-users setup`), and none until its want is retired.
 - The firewall's files, which `--project-users add` writes too, start with `firewallHeader` instead, which says neither command, checked by one test in Go and the removal's shell (`FirewallPiece`, `firewallPieceSh`).
 - The release root is never asked or saved by devopsy: it comes from `releases: root`, else the home, and `/` is refused by `remote.ReleaseSettings` in every command.
 - The release root and the tools are checked by one function each, `releaseRootCheck` and `toolsRefusal`, which `--server-setup`'s facts and the upload's `--server-ready` (stats and path lookups, Docker's own answers unless the record notes its floor, then the firewall's read where one is marked, never building the util image) both call; `--project-users add` checks the door's tools first, then the release root (`releaseRootReady`).
@@ -34,7 +34,7 @@
 - The release root has one form, its links followed by what they say as far as its parts are there, each `..` walked from where the part before it led, the rest as written (`resolveRoot`): a root behind a link, made or not, its volume mounted or not, gives one want.
 - The release root is made when missing and given to the deploy user only when root owns it and it is empty, a filesystem's own `lost+found` aside (`emptyDir`), never recursively: a root-owned directory with files is a system's (`/var`, `/opt`), and refuses, as another user's or one that is no directory does.
 - A root that resolves to `/`, through a link, refuses as `/` does.
-- The mounts drop-in's want comes from the release root alone, in its one form, the home included: `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
+- The mounts drop-in's want comes from the release root and the door's space where `door: space:` names one, each in its one form, the home included, by one function for `--server-setup` and `--project-users setup` (`mountsDropInWant`): `RequiresMountsFor` on `/` is `-.mount`, always there, and a want that moved with the mounts would remove the drop-in while a volume is not mounted.
 - A root systemd reads otherwise is written escaped as systemd reads it back (`systemdPath`), and one a unit file cannot hold refuses.
 - The metadata firewall is an item of devopsy's own (`setup.JudgeFirewall`): put back, never asked keep or replace, loaded through the door's one loader and its unit, the containers' chain alone without a door.
 - A piece devopsy puts no more (the firewall's timer, `remote.FirewallRetired`) is retired: the install and the removal stop it and remove it by its header, the link to it with it, and the facts read one left as to load again.
@@ -119,6 +119,19 @@
 - `--server-setup` and `--upgrade`'s apply are one path, the level of what they say and the exit the only differences.
 - `--server-info` shows the same facts and items as `--server-setup` (`setupItems`), never a second judgment.
 - A project user's `--server-info` gathers no setup facts, reads nothing of Docker and makes no root read (`asProjectUser`): the server's setup is its admin's, and the door would refuse Docker's reads and log each; it asks the door's `firewall` request instead and shows W0001 for the admin on wrong (`projectUserFacts`).
+
+## --project-users setup
+
+- `--project-users setup` sets the door's items alone (the tools, Docker, the space, the config, the processes), in two sessions as `--server-setup`'s, facts then apply under the same apply lock (`applyLock`), an older server refusing in the first (`ProjectUsersSetupFeature`), and neither `--server-setup` nor `--upgrade` runs it: project users are a choice.
+- Its facts are `setup.DoorFacts`, its steps `setup.DoorSteps`, what stops each `doorNeeds`, on the model's own helpers (`refusedItems`, `blocks`): the tools and Docker stop every step, so nothing is applied; the space refused, or a `door:` without `space:`, stops the space, the drop-in and the config; `/proc` set another way and wrong stops the processes alone.
+- A setting there another way is in sync: the space's mount and `/proc`'s hiding are read from the host's `/proc/mounts` (`mountOf`, `procMount`), never from whose file made them, and nothing of devopsy's goes beside them; a unit of devopsy's found there is judged as devopsy's.
+- The space is the config's `door: space:` where it has one, another directory named refused, else the one named, else `setup.DefaultSpace`; a path devopsy writes in a unit or the config is plain (`setup.PlainPath`).
+- The space refuses as the release root does (another user's, no directory, root's with files), and holding files on no mount of its own, or as someone's mount without `nosuid` and `nodev`: a mount over it would hide its files, and devopsy stacks none on the admin's.
+- The space's mount is a unit of devopsy's (`setup.SpaceUnit`, named as `systemd-escape --path` names it), never a line in `/etc/fstab`.
+- `/proc` is remounted by `devopsy-proc.service`, its text holding the group's number, which the root run reads once it made the group (`setup.GIDMark`), run again by a restart, since an active oneshot runs again by nothing else; polkit's drop-in goes only where `polkit.service` is loaded.
+- The deploy user's membership is read from the group file (`groupOf`, through `getent`), never from its process's groups, which count from its login, and the apply says that a session open meanwhile sees every process only once opened again.
+- The config is appended as text (`setup.AppendDoorConfig`) only where the file has no `door:`, after the root run went, its two lines shown before the question.
+- One root run (`ProjectUsersSetupScript`, `doorSetupRun`): the host's root writable and its pids, for `systemctl`, no network and no capability added; every mount goes through systemd from the chroot (`daemon-reload`, `enable --now`), never `mount` in the container, whose namespace a mount would not leave.
 
 ## --server-setup-howto
 

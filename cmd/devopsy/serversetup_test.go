@@ -67,6 +67,24 @@ case "$*" in
     [ -z "${FAKE_RESTART_DOWN:-}" ] || : >"$h/docker-down"
     [ -n "${FAKE_RESTART_STUCK:-}${FAKE_RESTART_DOWN:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
 `+firewallUnitFake+`
+  # A mount unit enabled and started: linked, and its Where= mounted with its options in the
+  # host root's proc/mounts.
+  "enable --now "*.mount)
+    f="$h/etc/systemd/system/$3"
+    mkdir -p "$h/etc/systemd/system/local-fs.target.wants" "$h/proc"
+    ln -sfn "/etc/systemd/system/$3" "$h/etc/systemd/system/local-fs.target.wants/$3"
+    echo "/dev/vda1 $(sed -n 's/^Where=//p' "$f") ext4 rw,$(sed -n 's/^Options=bind,//p' "$f"),relatime 0 0" >>"$h/proc/mounts" ;;
+  "enable devopsy-proc.service")
+    mkdir -p "$h/etc/systemd/system/sysinit.target.wants"
+    ln -sfn /etc/systemd/system/devopsy-proc.service "$h/etc/systemd/system/sysinit.target.wants/devopsy-proc.service" ;;
+  # /proc remounted as its unit says, every other proc line on /proc dropped.
+  "restart devopsy-proc.service")
+    g=$(sed -n 's/.*gid=\([0-9]*\).*/\1/p' "$h/etc/systemd/system/devopsy-proc.service")
+    mkdir -p "$h/proc"
+    { grep -v ' /proc proc ' "$h/proc/mounts" 2>/dev/null || :; echo "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=$g,hidepid=invisible 0 0"; } >"$h/proc/mounts.new"
+    mv "$h/proc/mounts.new" "$h/proc/mounts" ;;
+  # polkit there when the host root says so.
+  "show -p LoadState --value polkit.service") cat "$h/polkit" 2>/dev/null || echo not-found ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -100,8 +118,10 @@ esac
 `, 0o755)
 		write(t, filepath.Join(bin, c+"-restore"), "#!/bin/sh\ncat >\"$DEVOPSY_INTERNAL_HOST_ROOT/fw.$(basename \"$0\" -restore).chain\"\n", 0o755)
 	}
-	// The door's groups, in the host root's etc/group.
-	write(t, filepath.Join(bin, "getent"), "#!/bin/sh\ngrep \"^$2:\" \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null\n", 0o755)
+	// The door's groups, in the host root's etc/group, by name or number; usermod -aG adds a
+	// member there.
+	write(t, filepath.Join(bin, "getent"), "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null\n", 0o755)
+	write(t, filepath.Join(bin, "usermod"), "#!/bin/sh\nf=$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$f\" >\"$f.new\" && mv \"$f.new\" \"$f\"\n", 0o755)
 	write(t, filepath.Join(bin, "groupadd"), "#!/bin/sh\nmkdir -p \"$DEVOPSY_INTERNAL_HOST_ROOT/etc\"\ntouch \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\"\necho \"$2:x:$((1000 + $(wc -l <\"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null || echo 0) + 1)):\" >>\"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\"\n", 0o755)
 	if err := testfile.Flock(bin); err != nil {
 		t.Fatal(err)
@@ -1082,7 +1102,7 @@ func TestServerSetupApplyWaitsForAnother(t *testing.T) {
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for start := time.Now(); !strings.Contains(readString(outFile), "waiting for another --server-setup, up to 10 minutes"); time.Sleep(50 * time.Millisecond) {
+	for start := time.Now(); !strings.Contains(readString(outFile), "waiting for another setup of this server, up to 10 minutes"); time.Sleep(50 * time.Millisecond) {
 		if time.Since(start) > startWait {
 			t.Fatalf("no wait said:\n%s", readString(outFile))
 		}
@@ -1090,7 +1110,7 @@ func TestServerSetupApplyWaitsForAnother(t *testing.T) {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Wait(); err != nil || !strings.Contains(readString(outFile), "done waiting for another --server-setup (") {
+	if err := c.Wait(); err != nil || !strings.Contains(readString(outFile), "done waiting for another setup of this server (") {
 		t.Errorf("%v:\n%s", err, readString(outFile))
 	}
 }

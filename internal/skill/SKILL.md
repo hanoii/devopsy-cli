@@ -243,13 +243,18 @@ what `config.yaml` sets.
   `devopsy --ssh-option IdentityFile=<key> @t --release`. A sync across
   servers uses a key of its own, never the agent.
 - A project with a user of its own, no Docker socket (`devopsy-<project>`):
-  made as the deploy user with `devopsy @devopsy@<server>: --project-users
-  add <project>`, its keys `--ssh-keys --for <project> add <key>.pub`. A
-  project user cannot edit its own keys. The first `add` on a server waits
-  for a reboot before project users log in. `--project-users remove
-  <project>` drops its keys and keeps the rest; `--destroy` after it
-  removes everything the user holds, its Unix user last, listed and asked
-  by the project's name first (`--yes` asks nothing).
+  the server set up for them once with `devopsy @devopsy@<server>:
+  --project-users setup` (the door's space on a mount with nosuid and
+  nodev, `door: space:` in the deploy user's config, every user's
+  processes hidden from the others; `sudo` and `acl` installed first),
+  then each made as the deploy user with `devopsy @devopsy@<server>:
+  --project-users add <project>`, its keys `--ssh-keys --for <project>
+  add <key>.pub`. A project user cannot edit its own keys. The first
+  `add` on a server waits for a reboot before project users log in.
+  `--project-users remove <project>` drops its keys and keeps the rest;
+  `--destroy` after it removes everything the user holds, its Unix user
+  last, listed and asked by the project's name first (`--yes` asks
+  nothing).
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`

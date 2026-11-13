@@ -160,29 +160,88 @@ func doorFacts(read string) *remote.DoorFacts {
 // host root (setupHost) in tests.
 const procMounts = "/proc/mounts"
 
+// mountEntry is one line of a /proc/mounts text: where it is mounted, its type and options.
+type mountEntry struct {
+	point, fstype string
+	opts          []string
+}
+
+// parseMounts is a /proc/mounts text's mounts, in its order, each mount point as the kernel
+// escapes it (\040 a space, \011 a tab, \012 a newline, \134 a backslash) read back.
+func parseMounts(text string) []mountEntry {
+	var ms []mountEntry
+	for _, line := range strings.Split(text, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 {
+			continue
+		}
+		ms = append(ms, mountEntry{point: unescapeMount(f[1]), fstype: f[2], opts: strings.Split(f[3], ",")})
+	}
+	return ms
+}
+
+// unescapeMount reads back a field of /proc/mounts, whose \ooo is the byte of that octal.
+func unescapeMount(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+4 <= len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// mountOf is the mount path p is on: the last listed of the longest mount point holding it,
+// which a path there reaches.
+func mountOf(ms []mountEntry, p string) (mountEntry, bool) {
+	var found mountEntry
+	ok := false
+	for _, m := range ms {
+		in := m.point == "/" || p == m.point || strings.HasPrefix(p, strings.TrimSuffix(m.point, "/")+"/")
+		if in && (!ok || len(m.point) >= len(found.point)) {
+			found, ok = m, true
+		}
+	}
+	return found, ok
+}
+
+// opt is the mount's option key: its value after = ("" for a flag), and whether it is there.
+func (m mountEntry) opt(key string) (string, bool) {
+	for _, o := range m.opts {
+		if o == key {
+			return "", true
+		}
+		if v, ok := strings.CutPrefix(o, key+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// procMount is the proc mount on /proc in a /proc/mounts text, false with none.
+func procMount(mounts string) (mountEntry, bool) {
+	m, ok := mountOf(parseMounts(mounts), "/proc")
+	return m, ok && m.point == "/proc" && m.fstype == "proc"
+}
+
 // procHidePID is /proc's hidepid in mounts, a /proc/mounts text, as the kernel prints it
 // (invisible, noaccess or ptraceable since Linux 5.8, 2 or 1 before it), "off" for a /proc
 // with none, which the kernel then leaves out, and "" with no proc mount on /proc. The last
 // mount on /proc is the one a path there reaches.
 func procHidePID(mounts string) string {
-	hidepid := ""
-	for _, line := range strings.Split(mounts, "\n") {
-		f := strings.Fields(line)
-		if len(f) < 4 || f[1] != "/proc" {
-			continue
-		}
-		hidepid = ""
-		if f[2] != "proc" {
-			continue
-		}
-		hidepid = "off"
-		for _, o := range strings.Split(f[3], ",") {
-			if v, ok := strings.CutPrefix(o, "hidepid="); ok {
-				hidepid = v
-			}
-		}
+	m, ok := procMount(mounts)
+	if !ok {
+		return ""
 	}
-	return hidepid
+	if v, ok := m.opt("hidepid"); ok {
+		return v
+	}
+	return "off"
 }
 
 // readHidePID is procHidePID of the mounts file at path, "" where it cannot be read (a system
@@ -195,16 +254,9 @@ func readHidePID(path string) string {
 	return procHidePID(string(data))
 }
 
-// processesHidden says whether hidepid keeps a user from what other users' processes run:
-// invisible (2) and ptraceable (4) hide the processes, and noaccess (1) shows only that each is
-// there and whose, closing everything under /proc/<pid>, its command line included.
-func processesHidden(hidepid string) bool {
-	switch hidepid {
-	case "invisible", "2", "ptraceable", "4", "noaccess", "1":
-		return true
-	}
-	return false
-}
+// processesHidden says whether hidepid keeps a user from what other users' processes run, by
+// the one judgment (setup.Hiding).
+func processesHidden(hidepid string) bool { return setup.Hiding(hidepid) }
 
 // processesShown says whether hidepid, as procHidePID reads it, shows a project user every other
 // user's processes; "" is unknown (an older server's facts, no /proc mount), never said.

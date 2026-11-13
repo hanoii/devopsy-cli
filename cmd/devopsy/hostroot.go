@@ -124,3 +124,10 @@ func firewallRun(script string, write bool) hostRun {
 func addUserRun(deploy, devopsy, who, tree, root, id string) hostRun {
 	return hostRun{Write: true, Script: remote.DoorHostScript(deploy, devopsy), Args: []string{who, tree, root, id}}
 }
+
+// doorSetupRun is --project-users setup's root run (remote.ProjectUsersSetupScript), with no
+// network and no added capability, in the host's pid namespace for systemctl: systemd refuses
+// a peer it cannot see, and every mount goes through it.
+func doorSetupRun(args ...string) hostRun {
+	return hostRun{Write: true, PID: true, Script: remote.ProjectUsersSetupScript, Args: args}
+}
