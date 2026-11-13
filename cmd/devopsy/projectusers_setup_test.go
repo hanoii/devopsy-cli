@@ -333,7 +333,8 @@ func TestProjectUsersSetupNamesTheSpaceBesideAFailedProc(t *testing.T) {
 // Docker's drop-in names the space only once its mount holds: a mount systemd refuses fails the
 // space alone, leaves the drop-in as --server-setup wants it without the space (Docker would not
 // start at the next boot on a mount that fails), keeps door: space: out of the config, and the
-// processes are hidden all the same.
+// processes are hidden all the same; the run's lines are said as they come, the failure among
+// them in its place.
 func TestProjectUsersSetupDropInWaitsForTheMount(t *testing.T) {
 	t.Parallel()
 	s, host, space := doorSetupServer(t)
@@ -342,7 +343,9 @@ func TestProjectUsersSetupDropInWaitsForTheMount(t *testing.T) {
 	write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\ncase \"$*\" in enable*--now*.mount) exit 1 ;; esac\nexec \"$(dirname \"$0\")/systemctl-real\" \"$@\"\n", 0o755)
 	before := readString(configFile(s))
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-	if code != 1 || !strings.Contains(out, "systemd did not mount "+space) || !strings.Contains(out, "devopsy: hid each") {
+	// Said in the order it happened, the mount's failure once, its drop-in no failure of its own.
+	made, failed := strings.Index(out, "devopsy: made the project users' directory "+space+"\n"), strings.Index(out, "systemd did not mount "+space)
+	if code != 1 || failed < 0 || made < 0 || made > failed || !strings.Contains(out, "devopsy: hid each") || strings.Contains(out, "Docker does not wait") {
 		t.Fatalf("a mount systemd refuses (%d):\n%s", code, out)
 	}
 	if got := readString(filepath.Join(host, setup.MountsDropIn)); strings.Contains(got, space) || !strings.Contains(got, "RequiresMountsFor="+s.root+"\n") {

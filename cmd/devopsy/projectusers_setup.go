@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -138,7 +139,11 @@ func doorSetupEntries(f setup.DoorFacts) []remote.StatusEntry {
 	add(setup.ItemMounts, doorItemLines(f, setup.StepDoorDrop, true), "")
 	same := "/proc hides each user's processes from the others; members of " + setup.ProcGroup + " see all"
 	if p := f.Processes; p.Other {
-		same = "/proc hides each user's processes from the others (hidepid=" + p.HidePID + ", gid=" + p.GID + "), set up outside devopsy and left as it is"
+		opts := "hidepid=" + p.HidePID + ", gid=" + p.GID
+		if p.GID == "" {
+			opts = "hidepid=" + p.HidePID + ", no gid="
+		}
+		same = "/proc hides each user's processes from the others (" + opts + "), set up outside devopsy and left as it is"
 	}
 	add(setup.ItemProcesses, doorItemLines(f, setup.StepProcesses, true), same)
 	same = "door: space: " + f.Space
@@ -334,12 +339,10 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 			}
 		}
 	}
-	rd.space = space
-	f.Space = resolveRoot(space)
-	for _, p := range slices.Compact([]string{space, f.Space}) {
-		if err := setup.PlainPath(p); err != nil {
-			refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), "name a directory with only letters, digits and . _ - /")
-		}
+	// The space as named: a link in its path refuses (swappable), so its one form is itself.
+	rd.space, f.Space = space, space
+	if err := setup.PlainPath(space); err != nil {
+		refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), "name a directory with only letters, digits and . _ - /")
 	}
 	rd.unit, rd.unitText = setup.SpaceUnit(f.Space), setup.SpaceUnitText(f.Space)
 	if why := swappable(space, os.Getuid()); why != "" {
@@ -605,8 +608,8 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
 			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)), rd.dropinBare)
-		err := run.run(&out, func(err error) error { return err })
-		sayDoorSetupLines(out.String(), me.Username)
+		// Each line said as the run prints it, in order with what the run says itself.
+		err := run.run(io.MultiWriter(&out, &lineWriter{line: func(l string) { sayDoorSetupLines(l, me.Username) }}), func(err error) error { return err })
 		var ee *exec.ExitError
 		switch {
 		case errors.As(err, &ee) && ee.ExitCode() == 6:
@@ -644,8 +647,13 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 	// The checks again: what was applied must read in sync now, a refused step's left aside,
 	// and the config's when it was not added (said).
 	var left []string
+	// A drop-in that lacks only the space is the space's own failure, said by its lines.
 	for _, s := range setup.DoorSteps {
-		if does(s) && (s != setup.StepConfig || !again.facts.Changes(setup.StepSpace)) {
+		switch {
+		case !does(s):
+		case s == setup.StepConfig && again.facts.Changes(setup.StepSpace):
+		case s == setup.StepDoorDrop && again.facts.DropInWithout:
+		default:
 			left = append(left, doorItemLines(again.facts, s, false)...)
 		}
 	}
@@ -737,4 +745,22 @@ func addCommand(ref string) string {
 		return ""
 	}
 	return "devopsy @" + ref + " --project-users add <project>"
+}
+
+// lineWriter hands line each whole line written to it, without its newline, as it comes.
+type lineWriter struct {
+	line func(string)
+	buf  []byte
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		w.line(string(w.buf[:i]))
+		w.buf = w.buf[i+1:]
+	}
 }
