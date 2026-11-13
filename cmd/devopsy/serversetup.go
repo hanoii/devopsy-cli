@@ -153,8 +153,8 @@ func askRoot(f setup.Facts, ask setupAsker) (string, error) {
 	choices := []string{f.Root + ", the deploy user's home"}
 	details := []string{"devopsy names a volume chosen as releases: root in " + f.ConfigFile + ", before the first release"}
 	for _, c := range f.Candidates {
-		if c.Why != "" {
-			details = append(details, candidateWords(c)+", not offered: "+c.Why)
+		if c.Refusal != nil {
+			details = append(details, candidateWords(c)+", not offered: "+c.Refusal.Message)
 			continue
 		}
 		roots = append(roots, c.MountPoint)
@@ -424,14 +424,10 @@ func volumeEntries(f setup.Facts, ref, key string) []remote.StatusEntry {
 	words := false
 	for _, c := range f.Candidates {
 		switch {
-		case c.Why != "":
-			lines = append(lines, candidateWords(c)+", not offered: "+c.Why)
-			var cmds []string
-			if c.Command != "" {
-				cmds = []string{c.Command}
-			}
-			if c.Fix != "" {
-				hints = append(hints, report.Hint("for "+c.MountPoint+", "+c.Fix, cmds...))
+		case c.Refusal != nil:
+			lines = append(lines, candidateWords(c)+", not offered: "+c.Refusal.Message)
+			for _, fix := range fixWords(*c.Refusal) {
+				hints = append(hints, report.Hint("for "+c.MountPoint+", "+fix.Text, fix.Cmds...))
 			}
 		case ref == "":
 			lines = append(lines, candidateWords(c))

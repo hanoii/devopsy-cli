@@ -39,14 +39,12 @@ type Facts struct {
 	// through its restart.
 	Running     int  `json:"running"`
 	LiveRestore bool `json:"live_restore"`
-	// Candidates are the volumes the root could be on, each offered or not (Candidate.Why);
-	// Projects whether the root holds what devopsy keeps of a release already (a project's
-	// environment, a uid claim, a project user added).
+	// Candidates are the volumes the root could be on, each offered or not (Candidate.Refusal),
+	// none while devopsy names no other root (the config names one or cannot take the line, or
+	// the root holds something of devopsy's).
 	Candidates []Candidate `json:"candidates,omitempty"`
-	Projects   bool        `json:"projects"`
-	// RootNamed: the deploy user's config (ConfigFile) names releases: root. NamesRoot: an apply
-	// with --root names Root there first (facts --root of a root releases do not live in yet).
-	RootNamed  bool   `json:"root_named,omitempty"`
+	// NamesRoot: an apply with --root names Root as releases: root in the deploy user's config
+	// (ConfigFile) first (facts --root of a root releases do not live in yet).
 	NamesRoot  bool   `json:"names_root,omitempty"`
 	ConfigFile string `json:"config_file,omitempty"`
 	// Record is the record's path, "" while there is none: the server is not set up by
@@ -71,8 +69,8 @@ type Refusal struct {
 	// Howto is the topic of devopsy --server-setup-howto that has the fix's steps, "" for none:
 	// the operator's devopsy offers its command after the fix's text (fixWords).
 	Howto howto.Name `json:"howto,omitempty"`
-	// Command is the fix's command, offered after its text, "" for none: a command of devopsy's
-	// on the server's address as its session named it, the text saying it in words without one.
+	// Command is the fix's command, offered after its text, "" for none (for example devopsy's
+	// on the server's address as its session named it, the text saying it in words without one).
 	Command string `json:"command,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
@@ -148,15 +146,13 @@ func (f Facts) Changes() bool {
 	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
-// RootOpen says whether where releases live is still open: the config names no root and none
-// is being named, nothing is released in the root, and a volume is listed, offered or not. The
-// volume hint shows then, where the question is not asked.
-func (f Facts) RootOpen() bool {
-	return !f.RootNamed && !f.NamesRoot && !f.Projects && len(f.Candidates) > 0
-}
+// RootOpen says whether where releases live is still open: a volume is listed, offered or
+// not, which the server lists only while devopsy may name another root. The volume hint shows
+// then, where the question is not asked.
+func (f Facts) RootOpen() bool { return len(f.Candidates) > 0 }
 
-// AsksRoot says whether --server-setup asks where releases live, at a terminal: it is open
-// (RootOpen) and a volume is offered.
+// AsksRoot says whether --server-setup asks where releases live, at a terminal: a volume is
+// offered.
 func (f Facts) AsksRoot() bool {
-	return f.RootOpen() && slices.ContainsFunc(f.Candidates, func(c Candidate) bool { return c.Why == "" })
+	return slices.ContainsFunc(f.Candidates, func(c Candidate) bool { return c.Refusal == nil })
 }

@@ -16,11 +16,9 @@ type Candidate struct {
 	// Size and Free are the caller's, from the filesystem, in bytes.
 	Size int64 `json:"size,omitempty"`
 	Free int64 `json:"free,omitempty"`
-	// Why is why the volume is not offered for the root, the caller's, "" for one offered; Fix
-	// is the way to offer it in words, Command its command, offered after them ("" for none).
-	Why     string `json:"why,omitempty"`
-	Fix     string `json:"fix,omitempty"`
-	Command string `json:"command,omitempty"`
+	// Refusal is why the volume is not offered for the root, with its fix, the caller's, nil
+	// for one offered.
+	Refusal *Refusal `json:"refusal,omitempty"`
 }
 
 // skipped are the mount points no candidate is on or under, besides Docker's root.

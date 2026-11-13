@@ -491,7 +491,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.Setup.Parts[2].State, info.Setup.Parts[2].Observed = setup.Kept, `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`
 	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9},
 		{MountPoint: "/mnt/vol 2", Source: "/dev/sdc", FSType: "ext4", Size: 50e9, Free: 49e9},
-		{MountPoint: "/mnt/vol3", Source: "/dev/sdd", FSType: "ext4", Size: 10e9, Free: 9e9, Why: "nothing mounts /mnt/vol3 at boot", Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}}
+		{MountPoint: "/mnt/vol3", Source: "/dev/sdd", FSType: "ext4", Size: 10e9, Free: 9e9, Refusal: &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts /mnt/vol3 at boot", Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{"setup         by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `              daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
 		"              volumes: releases live in the deploy user's home, /home/devopsy, while releases: root names no other; volumes that could hold them:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n              /mnt/vol 2 (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)\n              /mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot\n"} {
@@ -511,19 +511,6 @@ func TestServerInfoReport(t *testing.T) {
 	only.Candidates = only.Candidates[2:]
 	if es := volumeEntries(only, "vm1:", "setup"); len(es) != 1 || !strings.Contains(strings.Join(es[0].Lines, "\n"), "/mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot") || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\n" {
 		t.Errorf("none offered: %+v", es)
-	}
-	// A root the config names, one named by this run or a root holding releases is an answer:
-	// no volume hint.
-	for name, change := range map[string]func(f *setup.Facts){
-		"named":    func(f *setup.Facts) { f.RootNamed = true },
-		"naming":   func(f *setup.Facts) { f.NamesRoot = true },
-		"releases": func(f *setup.Facts) { f.Projects = true },
-	} {
-		f := *info.Setup
-		change(&f)
-		if es := volumeEntries(f, "vm1:", "setup"); es != nil {
-			t.Errorf("%s: a hint %+v", name, es)
-		}
 	}
 	info.Setup.Candidates = nil
 	info.Docker.LogOpts = nil

@@ -552,14 +552,13 @@ func TestPlanSetup(t *testing.T) {
 }
 
 // Where releases live is asked as a choice of the home, first, and each volume offered by its
-// mount point, the config file named in the question; the answer is the root. It is open while
-// the config names no root and none is being named, the root holds nothing released, and a
-// volume is offered, the home on a volume of its own or not.
+// mount point, the config file named in the question; the answer is the root. It is asked while
+// a volume is offered, the home on a volume of its own or not.
 func TestAskRoot(t *testing.T) {
 	t.Parallel()
 	f := setup.Facts{Root: "/home/devopsy", ConfigFile: "/home/devopsy/.config/devopsy/config.yaml",
 		Candidates: []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9},
-			{MountPoint: "/mnt/vol1", Source: "/dev/sdd", FSType: "ext4", Why: "nothing mounts /mnt/vol1 at boot"},
+			{MountPoint: "/mnt/vol1", Source: "/dev/sdd", FSType: "ext4", Refusal: &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts /mnt/vol1 at boot"}},
 			{MountPoint: "/data", Source: "/dev/sdc", FSType: "ext4", Size: 50e9, Free: 49e9}}}
 	for choice, want := range []string{"/home/devopsy", "/srv", "/data"} {
 		ask := &scripted{choice: choice}
@@ -575,10 +574,7 @@ func TestAskRoot(t *testing.T) {
 		change func(*setup.Facts)
 		asks   bool
 	}{
-		"fresh":    {func(*setup.Facts) {}, true},
-		"named":    {func(f *setup.Facts) { f.RootNamed = true }, false},
-		"naming":   {func(f *setup.Facts) { f.NamesRoot = true }, false},
-		"projects": {func(f *setup.Facts) { f.Projects = true }, false},
+		"fresh": {func(*setup.Facts) {}, true},
 		// The home on a volume of its own: that volume is no candidate, the others are.
 		"home on a volume": {func(f *setup.Facts) { f.Root = "/home/devopsy"; f.Candidates = f.Candidates[1:] }, true},
 		"none offered":     {func(f *setup.Facts) { f.Candidates = f.Candidates[1:2] }, false},
@@ -824,7 +820,7 @@ func TestServerSetupNamesTheRootChosen(t *testing.T) {
 		t.Errorf("no terminal (%d), config %q:\n%s", code, readString(config), out)
 	}
 	f, out, code := setupFactsOf(s)
-	if code != 0 || !f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].MountPoint != vol || f.Candidates[0].Why != "" {
+	if code != 0 || !f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].MountPoint != vol || f.Candidates[0].Refusal != nil {
 		t.Fatalf("facts (%d): asks %v, %+v\n%s", code, f.AsksRoot(), f.Candidates, out)
 	}
 	f, out, code = setupFactsOf(s, "--root", vol)
@@ -883,7 +879,7 @@ func TestServerSetupRootChoiceRefusals(t *testing.T) {
 	}
 	// No directory: not offered, and refused.
 	write(t, vol, "", 0o644)
-	if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || !strings.Contains(f.Candidates[0].Why, "is not a directory") || f.Candidates[0].Fix == "" {
+	if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].Refusal == nil || !strings.Contains(f.Candidates[0].Refusal.Message, "is not a directory") || f.Candidates[0].Refusal.Fix == "" {
 		t.Errorf("a file at the volume (%d): %+v\n%s", code, f.Candidates, out)
 	}
 	refused("no directory", vol, "the release root "+vol+" is not a directory")
@@ -923,7 +919,7 @@ func TestServerSetupOffersVolumesMountedAtBoot(t *testing.T) {
 	} {
 		write(t, filepath.Join(host, "fragment."+unit), c.fragment, 0o644)
 		f, out, code := setupFactsOf(s)
-		if code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || !strings.HasPrefix(f.Candidates[0].Why, c.says) || f.Candidates[0].Fix != c.fix || f.Candidates[0].Command != c.command {
+		if code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].Refusal == nil || !strings.HasPrefix(f.Candidates[0].Refusal.Message, c.says) || f.Candidates[0].Refusal.Fix != c.fix || f.Candidates[0].Refusal.Command != c.command {
 			t.Errorf("%s: facts (%d), asks %v: %+v\n%s", name, code, f.AsksRoot(), f.Candidates, out)
 		}
 		if out, code := s.run(nil, remote.ServerSetupFlag, "facts", "--root", filepath.Join(vol, "releases")); code != 1 || !strings.Contains(out, "devopsy: error: "+c.says) {

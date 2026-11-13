@@ -260,11 +260,12 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		return rd, err
 	}
 	f := &rd.facts
-	f.RootNamed, f.ConfigFile = r.Named, remote.UserConfigFile()
+	f.ConfigFile = remote.UserConfigFile()
+	root := r.Root
 	if proposed != "" {
-		r.Root, f.NamesRoot = proposed, true
+		root, f.NamesRoot = proposed, true
 	}
-	f.Root = resolveRoot(r.Root)
+	f.Root = resolveRoot(root)
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
 	}
@@ -324,8 +325,10 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		f.Files = append(f.Files, mountsDropInFact(h, text))
 	}
 
-	f.Candidates = rootCandidates(h, hd, f.Root)
-	f.Projects = rootHolds(f.Root, d)
+	// Volumes only while devopsy may name another root, judged once for them all.
+	if rootFixed(r, d) == nil {
+		f.Candidates = rootCandidates(h, hd, f.Root)
+	}
 	rd.door = d != nil
 	// The door's tools only where the server has project users: without one they matter only
 	// to --project-users add, which refuses without them.
@@ -438,7 +441,7 @@ func rootHolds(root string, d *remote.Door) bool {
 
 // rootCandidates are the volumes the release root could be on (setup.Candidates), off this
 // host's mounts and Docker's root, with their size and free space, but the one root is on
-// (setup.OnCandidate); one rootTakes refuses carries why and its fix.
+// (setup.OnCandidate); one the path's judgment refuses (rootRefusal) carries its refusal.
 func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 	var cs []setup.Candidate
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
@@ -449,15 +452,7 @@ func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 		if _, size, free, _, err := statDisk(c.MountPoint); err == nil {
 			c.Size, c.Free = size, free
 		}
-		if _, err := rootTakes(h, c.MountPoint); err != nil {
-			c.Why = err.Error()
-			if f := (*report.Failure)(nil); errors.As(err, &f) && len(f.Remedies) > 0 {
-				c.Fix = f.Remedies[0].Text
-				if cmds := f.Remedies[0].Cmds; len(cmds) > 0 {
-					c.Command = cmds[0]
-				}
-			}
-		}
+		c.Refusal = rootRefusal(h, c.MountPoint)
 		cs = append(cs, c)
 	}
 	return cs
@@ -465,43 +460,63 @@ func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 
 // rootTakes says whether --server-setup names root as releases: root, false for the root
 // releases live in already (nothing to name), and refuses it, before anything changes, with
-// why and its fix: a path not absolute and clean, a release root holding releases already
-// (rootHolds), a config naming another root, a root the release root's check refuses
-// (releaseRootCheck), one the mounts drop-in cannot name, or on a filesystem nothing mounts at
-// boot (bootMounted). It is the one judgment of a root the config does not name, for the
-// volumes offered, facts --root and apply --root.
+// why and its fix: by the whole root's judgment (rootFixed), then the path's (rootRefusal).
+// facts --root and apply --root judge a root by it.
 func rootTakes(h setupHost, root string) (bool, error) {
-	refuse := func(why, fix string) (bool, error) {
-		return false, &report.Failure{Msg: why, Remedies: []report.Remedy{report.Fix(fix)}}
-	}
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return refuse("a release root is an absolute path, clean, not "+root, "name it with no trailing slash, . or ..")
-	}
 	r, err := remote.ReleaseSettings()
 	if err != nil {
 		return false, err
 	}
-	current, want := resolveRoot(r.Root), resolveRoot(root)
-	if want == current {
+	if resolveRoot(root) == resolveRoot(r.Root) {
 		return false, nil
-	}
-	if r.Named {
-		return refuse("releases: root in "+remote.UserConfigFile()+" names "+r.Root+" already, and only its admin changes it", "run --server-setup without --root")
 	}
 	d, err := remote.ServerDoor()
 	if err != nil {
 		return false, err
 	}
-	if rootHolds(current, d) {
-		return refuse("the release root "+current+" holds releases already (a project, a claim of the uids containers run as, or a project user), and they stay there", "run --server-setup without --root")
+	if err := rootFixed(r, d); err != nil {
+		return false, err
+	}
+	if refusal := rootRefusal(h, root); refusal != nil {
+		return false, &report.Failure{Msg: refusal.Message, Remedies: fixWords(*refusal)}
+	}
+	return true, nil
+}
+
+// rootFixed is the whole root's judgment, the server's, once per facts: why --server-setup
+// names no other root than r's, the release settings, nil when it may: the config names one,
+// or the release root holds something of devopsy's (rootHolds, with the door d, nil for none).
+func rootFixed(r remote.Releases, d *remote.Door) error {
+	refuse := func(why string) error {
+		return &report.Failure{Msg: why, Remedies: []report.Remedy{report.Fix("run --server-setup without --root")}}
+	}
+	if r.Named {
+		return refuse("releases: root in " + remote.UserConfigFile() + " names " + r.Root + " already, and only its admin changes it")
+	}
+	if current := resolveRoot(r.Root); rootHolds(current, d) {
+		return refuse("the release root " + current + " holds releases already (a project, its variables, a claim of the uids containers run as, or a project user), and they stay there")
+	}
+	return nil
+}
+
+// rootRefusal is the judgment of a path as a release root the config would name, nil where it
+// takes it: absolute and clean, one the mounts drop-in can name, releaseRootCheck, then the
+// boot mount (bootMounted).
+func rootRefusal(h setupHost, root string) *setup.Refusal {
+	refuse := func(why, fix string) *setup.Refusal {
+		return &setup.Refusal{Item: setup.RefusalRoot, Message: why, Fix: fix}
+	}
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return refuse("a release root is an absolute path, clean, not "+root, "name it with no trailing slash, . or ..")
+	}
+	want := resolveRoot(root)
+	if _, err := setup.MountsDropInText(want); err != nil {
+		return refuse("the release root "+want+" "+err.Error(), "choose a path with none")
 	}
 	if _, refusal := releaseRootCheck(want, os.Getuid()); refusal != nil {
 		return refuse(refusal.Message, "name a new directory in it with --root, which --server-setup makes")
 	}
-	if _, err := setup.MountsDropInText(want); err != nil {
-		return refuse("the release root "+want+" "+err.Error(), "choose a path with none")
-	}
-	return true, bootMounted(h, want)
+	return bootMounted(h, want)
 }
 
 // bootMounted says why the filesystem root is on may not be mounted at boot, nil when it is:
@@ -510,23 +525,23 @@ func rootTakes(h setupHost, root string) (bool, error) {
 // one mounted by hand (none) or by systemd-mount (under /run/systemd/transient/). Docker's
 // drop-in then only orders it after the mount, which a boot leaves out, and releases would
 // land on the disk under it.
-func bootMounted(h setupHost, root string) error {
+func bootMounted(h setupHost, root string) *setup.Refusal {
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	point := setup.MountPointOf(string(mountinfo), root)
 	if point == "/" {
 		return nil
 	}
 	if point == "" {
-		return &report.Failure{Msg: "devopsy cannot tell what mounts " + root + " at boot: no mount in /proc/self/mountinfo holds it"}
+		return &setup.Refusal{Item: setup.RefusalRoot, Message: "devopsy cannot tell what mounts " + root + " at boot: no mount in /proc/self/mountinfo holds it"}
 	}
 	unit := setup.MountUnitName(point)
 	fragment, err := unitProperty(unit, "FragmentPath")
 	switch {
 	case err != nil:
-		return &report.Failure{Msg: "devopsy cannot tell whether " + point + " is mounted at boot: systemctl show " + unit + ": " + err.Error()}
+		return &setup.Refusal{Item: setup.RefusalRoot, Message: "devopsy cannot tell whether " + point + " is mounted at boot: systemctl show " + unit + ": " + err.Error()}
 	case fragment == "" || strings.HasPrefix(fragment, "/run/systemd/transient/"):
-		return &report.Failure{Msg: "nothing mounts " + point + " at boot (it was mounted by hand, or by systemd-mount), so after a reboot releases would land on the disk under it",
-			Remedies: []report.Remedy{report.Fix("add it to /etc/fstab, as root, then reload systemd:", "systemctl daemon-reload")}}
+		return &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts " + point + " at boot (it was mounted by hand, or by systemd-mount), so after a reboot releases would land on the disk under it",
+			Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}
 	}
 	return nil
 }
