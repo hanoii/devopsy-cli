@@ -139,8 +139,10 @@ func runDoorRead(args []string) int {
 		return 0
 	case "environments":
 		// --server-info's, of this user's tree: as the deploy user would list them, but by this
-		// user's rights.
-		if json.NewEncoder(os.Stdout).Encode(projectEnvironments(filepath.Dir(path), path)) != nil {
+		// user's rights. None when a directory of it fails to read: a list in part would read as
+		// the rest gone, its uid claims stale.
+		envs, err := projectEnvironments(filepath.Dir(path), path)
+		if err != nil || json.NewEncoder(os.Stdout).Encode(envs) != nil {
 			return 1
 		}
 		return 0
@@ -688,12 +690,21 @@ func (s *doorSide) workDir(perms string) (string, error) {
 }
 
 // removeWork removes a work directory, as root where a container left root's files.
-func (s *doorSide) removeWork(dir string) {
+func (s *doorSide) removeWork(dir string) { _ = removeSpaceDir(s.docker, dir) }
+
+// removeSpaceDir removes dir, a directory of the door's space (a work directory, a project's
+// sealed copies or clones), as the deploy user, else as root in the util image, docker the
+// deploy user's own, where a container left other uids' files: its parent is the deploy
+// user's, and rm -rf follows no link inside.
+func removeSpaceDir(docker func(args ...string) *exec.Cmd, dir string) error {
 	if os.RemoveAll(dir) == nil {
-		return
+		return nil
 	}
-	root := filepath.Join(s.policy.Space, "work")
-	_ = s.docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", root + ":/w", remote.UtilImage, "rm", "-rf", "/w/" + filepath.Base(dir)})...).Run()
+	parent := filepath.Dir(dir)
+	if out, err := docker(slices.Concat([]string{"run", "--rm", "--network", "none"}, door.RootUtil(), []string{"-v", parent + ":/w", remote.UtilImage, "rm", "-rf", "/w/" + filepath.Base(dir)})...).CombinedOutput(); err != nil {
+		return fmt.Errorf("removing %s: %w: %s", dir, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // ownWork says whether a work directory is this project's, by its name (workDir): not one
@@ -1084,6 +1095,9 @@ func (s *doorSide) stillAsked() error {
 	if s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
 		return errors.New(s.policy.User + "'s keys changed during this request: ask again")
 	}
+	if _, err := os.Lstat(remote.DoorDestroyingFile(s.policy.User)); err == nil {
+		return errors.New(s.policy.User + " is being removed with all it holds")
+	}
 	for _, mark := range []string{remote.DoorEndingFile(s.policy.User), remote.DoorRemovingFile(s.policy.User)} {
 		if _, err := os.Lstat(mark); err == nil {
 			return errors.New("a removal of " + s.policy.User + "'s did not complete: the next listing or edit of its keys completes it")
@@ -1124,29 +1138,40 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 		return door.Policy{}, err
 	}
 	ids := hostIDs(deploy, s.Users)
+	// The projects this one's names stop at: a request is refused rather than judged without
+	// them, which would take a deploy project's names for this one's.
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return door.Policy{}, err
+	}
+	others, err := otherProjects(s, r.Root)
+	if err != nil {
+		return door.Policy{}, fmt.Errorf("refused: %w", err)
+	}
 	p := door.Policy{
 		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
-		ForbiddenIDs: ids, Others: otherProjects(s),
+		ForbiddenIDs: ids, Others: others,
 	}
 	p.Images = claimedImages(p.ImagesFile())
 	return p, nil
 }
 
 // otherProjects are the server's projects but this one: what the door's users hold, and
-// what the deploy user's release root does. Names are flat, so a longer one is out of
-// this project's reach (door.Policy.OwnName).
-func otherProjects(s remote.DoorUser) []string {
-	root := ""
-	if r, err := remote.ReleaseSettings(); err == nil {
-		root = r.Root
+// what the deploy user's release root does (serverProjects, an error when it does not
+// read). Names are flat, so a longer one is out of this project's reach
+// (door.Policy.OwnName).
+func otherProjects(s remote.DoorUser, root string) ([]string, error) {
+	ps, err := serverProjects(s.Others, root)
+	if err != nil {
+		return nil, err
 	}
 	var others []string
-	for _, p := range serverProjects(s.Others, root) {
+	for _, p := range ps {
 		if p != s.Project {
 			others = append(others, p)
 		}
 	}
-	return others
+	return others, nil
 }
 
 // hostIDs are ids no container may run as: the deploy user's (deploy, from its passwd entry,
@@ -1617,34 +1642,49 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	return doorRefused(err)
 }
 
-// checkedDown is a down of this project's compose name by that name alone, checked: the name
-// the project's own (OwnName), its flags a down's, no container under it the door did not
-// make (foreign), the caller still asking; its command line (docker first) and environment,
-// for a run from /, which holds no compose file of anyone's: compose looks for one in its
-// directory and every parent, and a down by name runs with none. One check for the request
-// and for a --destroy's free.
-func (s *doorSide) checkedDown(name string, flags []string) ([]string, []string, error) {
-	if !s.policy.OwnName(name) {
-		return nil, nil, errors.New("refused: not this project's name: " + name)
-	}
-	argv := append([]string{"down"}, flags...)
-	if err := s.policy.CheckVerb(argv); err != nil {
-		return nil, nil, err
-	}
-	if err := s.foreign(); err != nil {
-		return nil, nil, err
-	}
-	env, err := s.composeEnv("", false)
+// checkedDown is a down of this project's compose name by that name alone, checked in
+// checkedProjectDown's order, its flags a down's, the caller still asking; its command line
+// (docker first) and environment, for a run from /, which holds no compose file of anyone's:
+// compose looks for one in its directory and every parent, and a down by name runs with none.
+// One check for the request and for a --destroy's free.
+func (s *doorSide) checkedDown(name string, flags []string) (argv, env []string, err error) {
+	down := append([]string{"down"}, flags...)
+	err = checkedProjectDown(s.policy, s.docker, name, func() error { return s.policy.CheckVerb(down) }, func() error {
+		if env, err = s.composeEnv("", false); err != nil {
+			return err
+		}
+		if err := os.Chdir("/"); err != nil {
+			return err
+		}
+		if err := s.stillAsked(); err != nil {
+			return fmt.Errorf("refused: %w", err)
+		}
+		argv = append([]string{"docker", "compose", "-p", name}, down...)
+		return nil
+	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, refusal(err)
 	}
-	if err := os.Chdir("/"); err != nil {
-		return nil, nil, err
+	return argv, env, nil
+}
+
+// checkedProjectDown is a down of a project user's compose name by that name alone, the door's
+// (checkedDown) and a destroy's (userDestroy.down), its checks in their one order: the name the
+// project's (Policy.OwnName), what its caller checks or clears next (the door's flags, the
+// destroy's removeLeft of devopsy's own containers of the name, which a cut sync or import
+// leaves writing into its mnt), no container under the project's names the door did not make
+// (foreignUnder, read through docker), then down.
+func checkedProjectDown(p door.Policy, docker func(args ...string) *exec.Cmd, name string, next, down func() error) error {
+	if !p.OwnName(name) {
+		return errors.New("refused: not this project's name: " + name)
 	}
-	if err := s.stillAsked(); err != nil {
-		return nil, nil, fmt.Errorf("refused: %w", err)
+	if err := next(); err != nil {
+		return err
 	}
-	return append([]string{"docker", "compose", "-p", name}, argv...), env, nil
+	if err := foreignUnder(p, docker); err != nil {
+		return err
+	}
+	return down()
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a
@@ -2091,39 +2131,59 @@ func (s *doorSide) stream(st *door.Stream) int {
 // containerRows is what says whose each container is, one JSON array per line: a label's
 // value is anyone's to write, spaces included.
 var containerRows = []string{"ps", "-a", "--no-trunc", "--format",
-	`[{{json .ID}},{{json (.Label "com.docker.compose.project")}},{{json (.Label "devopsy.env")}},{{json (.Label "devopsy.door")}}]`}
+	`[{{json .ID}},{{json (.Label "com.docker.compose.project")}},{{json (.Label "devopsy.env")}},{{json (.Label "devopsy.door")}},{{json .Names}}]`}
 
-// containerLabels are the server's containers by id, with the labels that say whose they are.
-func containerLabels(c *exec.Cmd) (map[string]map[string]string, error) {
+// containerLabels are the server's containers by id, with the labels that say whose they are,
+// and each one's name, for what devopsy says of it.
+func containerLabels(c *exec.Cmd) (labels map[string]map[string]string, names map[string]string, err error) {
 	out, err := c.Output()
 	if err != nil {
-		return nil, fmt.Errorf("cannot read what runs: %v", err)
+		return nil, nil, fmt.Errorf("cannot read what runs: %v", err)
 	}
-	all := map[string]map[string]string{}
+	labels, names = map[string]map[string]string{}, map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
 		var row []string
-		if err := json.Unmarshal([]byte(line), &row); err != nil || len(row) != 4 {
-			return nil, fmt.Errorf("cannot read what runs: %q", line)
+		if err := json.Unmarshal([]byte(line), &row); err != nil || len(row) != 5 {
+			return nil, nil, fmt.Errorf("cannot read what runs: %q", line)
 		}
-		all[row[0]] = map[string]string{"com.docker.compose.project": row[1], "devopsy.env": row[2], door.DoorLabel: row[3]}
+		labels[row[0]] = map[string]string{"com.docker.compose.project": row[1], "devopsy.env": row[2], door.DoorLabel: row[3]}
+		names[row[0]] = row[4]
 	}
-	return all, nil
+	return labels, names, nil
 }
 
 // foreign refuses while a container the door did not make for this user is under the
-// project's names (door.Policy.Foreign).
-func (s *doorSide) foreign() error {
-	all, err := containerLabels(s.docker(containerRows...))
+// project's names (foreignUnder).
+func (s *doorSide) foreign() error { return refusal(foreignUnder(s.policy, s.docker)) }
+
+// foreignUnder refuses while containers the door did not make are under p's project's names
+// (door.Policy.Foreign), every container read through docker, naming them (foreignError): what
+// the deploy user runs there stays out of the door's reach, for the door, add and a destroy.
+// A read that fails is an error.
+func foreignUnder(p door.Policy, docker func(args ...string) *exec.Cmd) error {
+	all, _, err := containerLabels(docker(containerRows...))
 	if err != nil {
-		return fmt.Errorf("refused: %v", err)
+		return err
 	}
-	if ids := s.policy.Foreign(all); len(ids) > 0 {
-		return foreignError(s.policy.Project, ids, all)
+	if ids := p.Foreign(all); len(ids) > 0 {
+		return foreignError(p.Project, ids, all)
 	}
 	return nil
+}
+
+// dockerCommand is a docker command as the deploy user runs it, for a check that reads Docker
+// (foreignUnder) outside the door.
+func dockerCommand(args ...string) *exec.Cmd { return exec.Command("docker", args...) }
+
+// refusal is err as the door says it, "refused: " first, a refusal's own words kept.
+func refusal(err error) error {
+	if err == nil || strings.HasPrefix(err.Error(), "refused: ") {
+		return err
+	}
+	return fmt.Errorf("refused: %w", err)
 }
 
 // foreignError names what holds a project's names outside the door, and how it goes.

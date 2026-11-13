@@ -19,6 +19,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"strconv"
 	"syscall"
 )
@@ -85,10 +86,38 @@ func TestServerFactsParsers(t *testing.T) {
 	if got := readHidePID(filepath.Join(t.TempDir(), "proc", "mounts")); got != "" || processesShown(got) {
 		t.Errorf("no mounts file: %q", got)
 	}
-	cs := parseHostContainers([]byte("running 0 healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - null\nexited 2 - {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"))
+	cs := parseHostContainers([]byte("running 0 healthy sha256:t1 \"0001-01-01T00:00:00Z\" {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - sha256:t2 \"2026-01-01T00:00:00Z\" null\nexited 2 - sha256:t2 \"2026-01-01T00:00:00Z\" {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"), nil)
 	if len(cs) != 3 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[0].OneOff ||
-		cs[1].State != "exited" || cs[1].Health != "" || cs[1].ExitCode != 1 || !cs[2].OneOff {
+		cs[1].State != "exited" || cs[1].Health != "" || cs[1].ExitCode != 1 || !cs[2].OneOff ||
+		cs[0].Image != "sha256:t1" || !cs[0].Finished.IsZero() || cs[2].Image != "sha256:t2" || !cs[2].Finished.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("containers: %+v", cs)
+	}
+}
+
+// The containers are what docker lists, a container gone since its ps aside: a list docker
+// failed to give is unknown, never none, so --server-info says it rather than show no role
+// and no container.
+func TestHostContainers(t *testing.T) {
+	t.Parallel()
+	line := `running 0 - sha256:t1 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"app"}`
+	for name, c := range map[string]struct {
+		docker string
+		want   int
+		err    string
+	}{
+		"listed":     {"case $1 in ps) echo c1 ;; inspect) echo '" + line + "' ;; esac", 1, ""},
+		"none":       {"case $1 in ps) ;; inspect) exit 9 ;; esac", 0, ""},
+		"gone since": {"case $1 in ps) echo c1; echo gone ;; inspect) echo '" + line + "'; echo 'Error response from daemon: No such container: gone' >&2; exit 1 ;; esac", 1, ""},
+		"ps fails":   {"case $1 in ps) echo 'Cannot connect to the Docker daemon' >&2; exit 1 ;; esac", 0, "Cannot connect to the Docker daemon"},
+		"inspect fails": {"case $1 in ps) echo c1; echo c2 ;; inspect) echo '" + line + "'; echo 'Error response from daemon: No such container: c2' >&2; echo 'error during connect: EOF' >&2; exit 1 ;; esac",
+			1, "error during connect: EOF"},
+	} {
+		docker := filepath.Join(t.TempDir(), "docker")
+		write(t, docker, "#!/bin/sh\n"+c.docker+"\n", 0o755)
+		cs, err := hostContainers(docker, nil)
+		if len(cs) != c.want || (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
+			t.Errorf("%s: %+v, %v", name, cs, err)
+		}
 	}
 }
 
@@ -149,6 +178,12 @@ func TestServerInfoReport(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("healthy: warnings %+v", warnings)
 	}
+	// A count says one in the singular.
+	one := healthy()
+	one.Door = &remote.DoorFacts{Space: "/space", Users: 1}
+	if out, _ := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "door          /space, 1 project user\n") {
+		t.Errorf("one project user:\n%s", out)
+	}
 
 	for _, c := range []struct {
 		name   string
@@ -199,7 +234,7 @@ func TestServerInfoReport(t *testing.T) {
 		// apparmor_parser to load its profile (review).
 		{"no apparmor_parser", func(i *remote.ServerInfo) { i.AppArmorParser = false }, "", "no apparmor_parser: Docker cannot load its profile, so containers fail to start|install the apparmor package"},
 		{"unbounded logs", func(i *remote.ServerInfo) { i.Docker.LogOpts = nil }, "", "grow without a limit|max-size"},
-		{"full disk", func(i *remote.ServerInfo) { i.Disks[0].Free, i.Disks[0].Used = 4e9, 76e9 }, "", "/ is 95% full, 4.0 GB free|devopsy @vm1: --shell-host"},
+		{"full disk", func(i *remote.ServerInfo) { i.Disks[0].Free, i.Disks[0].Used = 4e9, 76e9 }, "", "/ is 95% full, 4.0 GB free|devopsy @vm1: --gc"},
 		{"little free", func(i *remote.ServerInfo) { i.Disks[0].Size, i.Disks[0].Free, i.Disks[0].Used = 9e9, 4.5e9, 4.5e9 }, "", "is 50% full, 4.5 GB free|"},
 		{"no reflinks", func(i *remote.ServerInfo) { i.Disks[0].Type, i.Disks[0].Reflinks = "ext4", "no" }, "", "(ext4) makes no reflinks|mirror: true} for the environments with large data, in their project's .devopsy/config.yaml"},
 		// The server's mirror: false refuses every project's (review).
@@ -293,6 +328,13 @@ func TestServerInfoReport(t *testing.T) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "exited", ExitCode: 1},
 				remote.HostContainer{Project: "shop-prod", Service: "app", State: "exited", ExitCode: 2, OneOff: true})
 		}, "", "shop/prod: worker exited 1|"},
+		// A list that failed is unknown, never none: said, with what was read shown.
+		{"containers unread", func(i *remote.ServerInfo) {
+			i.Containers, i.ContainersUnread = nil, "docker ps: Cannot connect to the Docker daemon"
+		}, "", "the containers could not be listed: docker ps: Cannot connect to the Docker daemon|"},
+		{"environments unread", func(i *remote.ServerInfo) {
+			i.EnvironmentsUnread = "open /home/devopsy/blog: permission denied"
+		}, "", "not every environment could be read: open /home/devopsy/blog: permission denied|"},
 	} {
 		info := healthy()
 		c.change(&info)
@@ -419,7 +461,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.Disks[0].Free, info.Disks[0].Used = 4e9, 76e9
 	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
 	_, warnings = serverInfoSays(info, "", "", "0.54.0", now)
-	if len(warnings) != 2 || !strings.HasPrefix(fixText(warnings[0].fixes), "see what Docker takes, then empty its build cache:\n$ docker system df\n$ docker builder prune\n") ||
+	if len(warnings) != 2 || !strings.HasPrefix(fixText(warnings[0].fixes), "see what Docker takes, then remove what nothing on this server owns with --gc, run on it from a checkout or an alias:\n$ docker system df\n") ||
 		strings.Contains(fixText(warnings[0].fixes), "--shell-host") ||
 		fixText(warnings[1].fixes) != "\n$ cd /home/devopsy/shop/dev/current && devopsy --status\n" {
 		t.Errorf("local: %+v", warnings)
@@ -599,8 +641,9 @@ func TestServerInfo(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(s.root, "shop", "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// What a --destroy cut off while removing an environment left (review).
-	if err := os.MkdirAll(filepath.Join(s.root, "shop", "old.rm.4242", "releases"), 0o755); err != nil {
+	// What a --destroy cut off while removing an environment left (review): no environment,
+	// said as what a --destroy run again resumes. Its pid is none a system gives.
+	if err := os.MkdirAll(filepath.Join(s.root, "shop", "old.rm.999999999", "releases"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(t.TempDir(), "bin")
@@ -615,9 +658,15 @@ case "$1 $2" in
   "ps -aq") echo c1; echo c2; echo gone; exit 0 ;;
   # A container gone since ps: inspect prints the others, then fails
   # (review: every container was dropped then).
-  "inspect --format") echo 'running 0 - {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
-    echo 'restarting 0 - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
+  "inspect --format") echo 'running 0 - sha256:t2 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
+    echo 'restarting 0 - sha256:t2 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
+    # A release's container of an environment removed by hand: compose worked in the root.
+    echo 'exited 0 - sha256:t2 "2026-01-01T00:00:00Z" {"com.docker.compose.project":"shop-gone","com.docker.compose.service":"web","com.docker.compose.project.working_dir":"`+s.root+`/shop/gone/releases/1/code"}'
     echo 'Error response from daemon: No such container: gone' >&2; exit 1 ;;
+  # Counted, --server-info sizes nothing of Docker's but its images.
+  "system df"|"buildx ls") echo "docker $*: not for --server-info" >&2; exit 9 ;;
+  "image ls") echo 'sha256:t1 busybox:1.37 4.26MB'; exit 0 ;;
+  "volume ls") exit 0 ;;
 esac
 exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 `, 0o755)
@@ -652,7 +701,16 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
 		}
 	}
-	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm") || strings.Contains(out, "has no tail") {
+	for _, want := range []string{
+		"images        busybox:1.37, 4.3 MB: no release holds it, nor any container uses it\n              remove it once nothing needs it, on the server:\n              $ devopsy @devopsy@one: --shell-host\n              $ docker rmi busybox:1.37",
+		"gone          shop-gone: no environment and no uid claim on the server, and left:\n              containers web (exited)",
+		"environments  shop/old.rm.999999999: left by a --destroy cut off while it removed shop/old, 0 B\n              run it again, which resumes it, in shop's checkout:\n              $ devopsy @devopsy@one:old --destroy",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in (%d):\n%s", want, code, out)
+		}
+	}
+	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm.999999999  ") || strings.Contains(out, "has no tail") {
 		t.Errorf("exit %d:\n%s", code, out)
 	}
 	// The fake ssh shares this clock: no first byte seen reads as days off.
@@ -679,6 +737,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		}
 	}
 	if code != serverInfoWarned || !r.Attention || r.Server != "devopsy@one:" || r.Facts.Root != s.root || len(r.Facts.Environments) == 0 ||
+		r.Facts.GC == nil || len(r.Facts.Images) != 1 || len(r.Facts.Removing) != 1 ||
 		!slices.Contains(fixes, "devopsy @devopsy@one:dev --status") {
 		t.Errorf("--json (%d): %+v", code, r)
 	}
@@ -731,12 +790,72 @@ func TestServerInfoEnvironments(t *testing.T) {
 	if err := os.Symlink(filepath.Join(elsewhere, "blog-prod"), filepath.Join(root, "blog", "prod")); err != nil {
 		t.Fatal(err)
 	}
-	var got []string
-	for _, e := range environments(root, nil, nil, ownedByMe) {
-		got = append(got, e.Path)
+	paths := func(envs []remote.Environment, err error) []string {
+		if err != nil {
+			t.Error(err)
+		}
+		var got []string
+		for _, e := range envs {
+			got = append(got, e.Path)
+		}
+		return got
 	}
-	if !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
+	if got := paths(environments(root, nil, nil, ownedByMe)); !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
 		t.Errorf("environments: %v", got)
+	}
+	// A root not made yet (a server before its first release) holds none.
+	if got := paths(environments(filepath.Join(tmp, "none"), nil, nil, ownedByMe)); len(got) != 0 {
+		t.Errorf("no root: %v", got)
+	}
+	// A directory it cannot read is unknown, never none: what it read comes with the error,
+	// which --server-info says. Root reads it all the same.
+	if os.Getuid() != 0 {
+		blog := filepath.Join(root, "blog")
+		if err := os.Chmod(blog, 0); err != nil {
+			t.Fatal(err)
+		}
+		envs, err := environments(root, nil, nil, ownedByMe)
+		if err := os.Chmod(blog, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range envs {
+			got = append(got, e.Path)
+		}
+		if err == nil || !strings.Contains(err.Error(), blog) || !slices.Equal(got, []string{"app/prod", "shop/prod"}) {
+			t.Errorf("an unreadable project: %v, %v", got, err)
+		}
+	}
+	// A link to no directory that a uid claim names an environment under (a project's or an
+	// environment's disk not mounted) is unknown, never none: an environment there would read
+	// as gone, and --server-info would offer to remove what is left of it, its uid claim's file
+	// included. What it read comes with the error. One no claim names is a stray link, skipped:
+	// the root's top level is by default the deploy user's home.
+	for _, l := range []string{filepath.Join(root, "wiki"), filepath.Join(root, "app", "stage")} {
+		if err := os.Symlink(filepath.Join(elsewhere, "gone"), l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := paths(environments(root, nil, nil, ownedByMe)); !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
+		t.Errorf("stray links to no directory: %v", got)
+	}
+	for _, c := range []struct {
+		claim uids.Owner
+		link  string
+	}{{uids.Owner{Project: "wiki", Env: "prod"}, filepath.Join(root, "wiki")}, {uids.Owner{Project: "app", Env: "stage"}, filepath.Join(root, "app", "stage")}} {
+		claims := uids.StoreAt(root)
+		if _, err := claims.Lookup(c.claim); err != nil {
+			t.Fatal(err)
+		}
+		if envs, err := environments(root, nil, nil, ownedByMe); err == nil || !strings.Contains(err.Error(), c.link+" links to no directory") || len(envs) != 3 {
+			t.Errorf("a link to no directory a claim names: %v, %v", envs, err)
+		}
+		if err := os.Remove(filepath.Join(claims.Dir, c.claim.String())); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(c.link); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A project user's tree is never the deploy user's to read, a link there least of all:
 	// its environments come from what that user reads (--door-read), and nothing of the
@@ -749,11 +868,12 @@ func TestServerInfoEnvironments(t *testing.T) {
 		t.Fatal(err)
 	}
 	asked := ""
-	got = nil
-	for _, e := range environments(root, map[string]string{filepath.Join(root, "app"): "devopsy-app"}, func(user, tree string) []remote.Environment {
+	var got []string
+	envs, _ := environments(root, map[string]string{filepath.Join(root, "app"): "devopsy-app"}, func(user, tree string) []remote.Environment {
 		asked = user + " " + tree
 		return []remote.Environment{{Path: "app/prod", Status: "as its user\n"}}
-	}, ownedByMe) {
+	}, ownedByMe)
+	for _, e := range envs {
 		got = append(got, e.Path+"="+e.Status)
 	}
 	if asked != "devopsy-app "+filepath.Join(root, "app") || !slices.Contains(got, "app/prod=as its user\n") || slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, "app/stolen") }) {
@@ -761,12 +881,9 @@ func TestServerInfoEnvironments(t *testing.T) {
 	}
 	// A project user's tree outside the release root, in its own home by default, is read too.
 	tree := filepath.Join(t.TempDir(), "devopsy-shop", "shop")
-	got = nil
-	for _, e := range environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
+	got = paths(environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
 		return []remote.Environment{{Path: "shop/prod", Status: "as " + user + "\n"}}
-	}, ownedByMe) {
-		got = append(got, e.Path)
-	}
+	}, ownedByMe))
 	if !slices.Contains(got, "app/prod") || !slices.Contains(got, "shop/prod") {
 		t.Errorf("a project user's tree in its own home: %v", got)
 	}
@@ -855,9 +972,13 @@ func TestServerInfoOffersNoStatusInAProjectUsersTree(t *testing.T) {
 	info := remote.ServerInfo{Version: "0.53.0", Root: root}
 	// As serverFacts lists them: the tree read as its user, who answers a first release
 	// that failed, which --server-info warns of.
-	info.Environments = environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
+	envs, err := environments(root, map[string]string{tree: "devopsy-shop"}, func(user, tree string) []remote.Environment {
 		return []remote.Environment{{Path: "shop/prod", Status: "none\t20261027110000\n", User: ""}}
 	}, ownedByMe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Environments = envs
 	_, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
 	warned := false
 	for _, w := range warnings {
@@ -952,7 +1073,11 @@ func TestServerInfoReadsNoTreeOfARemovedProjectUser(t *testing.T) {
 	// environments the deploy user read itself.
 	walk := func() (asked int, own []string) {
 		owned := func(p string) bool { return p != tree }
-		for _, e := range environments(root, doorTrees(root), func(string, string) []remote.Environment { asked++; return nil }, owned) {
+		envs, err := environments(root, doorTrees(root), func(string, string) []remote.Environment { asked++; return nil }, owned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range envs {
 			if e.User == "" {
 				own = append(own, e.Path)
 			}

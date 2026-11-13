@@ -250,18 +250,23 @@ func runFreeUIDs(args []string) int {
 	if err := gone(); err != nil {
 		return failErr(err)
 	}
-	docker := func(args ...string) ([]byte, error) { return exec.Command(realDocker(), args...).Output() }
-	down := downIfLeft(docker, func(name string) error {
-		c := exec.Command(realDocker(), downArgs(name)...)
+	if err := freeUIDs(claimsStore(r.Root), env, gone, downByName(realDocker())); err != nil {
+		return failErr(err)
+	}
+	return 0
+}
+
+// downByName takes a compose name down as the deploy user, docker its client, while anything
+// is left of it (downIfLeft): a --destroy's free, and a project user's destroy.
+func downByName(docker string) func(name string) error {
+	out := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
+	return downIfLeft(out, func(name string) error {
+		c := exec.Command(docker, downArgs(name)...)
 		// From /, which holds no compose file of anyone's: compose looks for one in its
 		// directory and every parent.
 		c.Dir, c.Stdout, c.Stderr = "/", errOut, errOut
 		return c.Run()
 	})
-	if err := freeUIDs(claimsStore(r.Root), env, gone, down); err != nil {
-		return failErr(err)
-	}
-	return 0
 }
 
 // downIfLeft is a free's down that runs only while a container, volume or network still
@@ -297,7 +302,8 @@ func ownerUnder(root, base string) (uids.Owner, error) {
 
 // free answers "free <environment directory>": a project user's --destroy's last step, for an
 // environment of its tree that is gone, its owner read from where it was (ownerAt), never from
-// the caller's words, and its compose name taken down through the door's own checked down.
+// the caller's words, and its compose name taken down through the door's own checked down;
+// then its emptied mnt in the door's space goes.
 func (s *doorSide) free(base string) int {
 	env, err := s.ownerAt(base)
 	if err != nil {
@@ -332,6 +338,11 @@ func (s *doorSide) free(base string) int {
 	})
 	if err := freeUIDs(claimsStore(s.uidRoot), env, gone, down); err != nil {
 		return doorRefused(fmt.Errorf("refused: freeing the uid of %s: %w", name, err))
+	}
+	// Its mnt, which the --destroy emptied and left, goes once empty: rmdir fails on anything
+	// in it (a start's since the free, under a claim of its own), which then stays.
+	if err := syscall.Rmdir(s.policy.Mnt(name)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		report.Warn("the emptied " + s.policy.Mnt(name) + " stays: " + err.Error())
 	}
 	return 0
 }
@@ -421,8 +432,9 @@ func uidFacts(root string) (string, []remote.UIDClaim) {
 // staleUID says why claim c is left over, or nothing: an environment's whose environment is
 // on the server no more (removed without --destroy), a project's with no environment claim of
 // it left. A door project's tree is read as its user, which may answer nothing in time: with
-// none of its environments listed, its claims are taken for live.
-func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment, door []string) string {
+// none of its environments listed, its claims are taken for live. With envs read only in part
+// (unread), every environment's claim is.
+func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environment, unread bool, door []string) string {
 	o, err := uids.ParseOwner(c.Owner)
 	if err != nil {
 		return err.Error()
@@ -436,7 +448,7 @@ func staleUID(c remote.UIDClaim, all []remote.UIDClaim, envs []remote.Environmen
 			}
 			listed = listed || strings.HasPrefix(e.Path, o.Project+"/")
 		}
-		if slices.Contains(door, o.Project) && !listed {
+		if unread || slices.Contains(door, o.Project) && !listed {
 			return ""
 		}
 		return "no environment " + path + " on the server"

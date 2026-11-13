@@ -90,8 +90,8 @@ func endProjectUserWith(args []string, end func(string) error) int {
 
 // finishPendingRemoval does what a removal of who's left (remote.DoorRemovingFile) once its
 // end is done, as the end flag runs for keysSettle, whose script emptied the keys under their
-// lock: what the door kept for the project goes, then its entry and both marks. Nothing with
-// no such mark.
+// lock: what the door kept for the project goes, then both marks, its entry staying as a
+// removal keeps it. Nothing with no such mark.
 func finishPendingRemoval(who string) error {
 	data, err := os.ReadFile(remote.DoorRemovingFile(who))
 	if errors.Is(err, os.ErrNotExist) {
@@ -110,10 +110,7 @@ func finishPendingRemoval(who string) error {
 			return err
 		}
 	}
-	// Its entry too, which a removal cut after its marks leaves: the user is no project user
-	// once its removal is done, whichever way it was finished.
-	entry := filepath.Join(remote.DoorDir(), "users", who+".yaml")
-	for _, f := range []string{entry, remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
+	for _, f := range []string{remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

@@ -226,7 +226,15 @@ snapshots:
   mirror: false        # no environment keeps a mirror here, whatever it asks (default: each decides)
 firewall:
   metadata: block      # containers kept off the cloud's metadata services (block, the default), or not (allow)
+gc:
+  containers: 1d       # exited one-off containers older than this go (1d)
+  build_cache: 30d     # build cache unused this long goes, on every builder (30d)
 ```
+
+`gc:` is the ages `devopsy @<server> --gc` goes by: `containers` for
+the exited containers of `compose run` and the like, `build_cache` for
+the build cache of the server's Docker and of each project user's
+builder. Each is a duration (`36h`, `90m`) or a number of days (`7d`).
 
 `firewall: metadata:` is the server's, applied by its next
 `--server-setup` ([Servers](servers.md#--server-setup)): `block` keeps

@@ -81,8 +81,8 @@ func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 var doorVerbs = map[string]string{
 	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
-	"buildx": "--context-hash, local; --server-setup, the deploy user's", "info": "--server-info and --server-setup, the admin's", "system": "--server-info, the admin's",
-	"builder": "a hint to the admin", "not": "a message",
+	"buildx": "--context-hash, local; --server-setup and --gc, the deploy user's", "info": "--server-info and --server-setup, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
+	"builder": "--gc, the deploy user's", "container": "--gc, the deploy user's", "context": "--gc, the deploy user's", "not": "a message",
 }
 
 // TestDoorKnowsDevopsysDockerCommands fails when devopsy calls a Docker command the
@@ -889,15 +889,15 @@ func TestDoorRefusesWhatItDidNotMake(t *testing.T) {
 		t.Fatal(err)
 	}
 	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Others: []string{"shop-two"}}, real: docker}
-	mine := `["aaa","shop-prod","","devopsy-shop"]` + "\n" + `["bbb","","shop-dev","devopsy-shop"]` + "\n" +
-		`["ccc","other-prod","",""]` + "\n" + `["ddd","shop-two-prod","",""]` + "\n"
+	mine := `["aaa","shop-prod","","devopsy-shop","aaa-1"]` + "\n" + `["bbb","","shop-dev","devopsy-shop","bbb-1"]` + "\n" +
+		`["ccc","other-prod","","","ccc-1"]` + "\n" + `["ddd","shop-two-prod","","","ddd-1"]` + "\n"
 	for _, c := range []struct {
 		name, rows, want string
 	}{
 		{"the door's own, and others' under other names", mine, ""},
-		{"the deploy user's", mine + `["eee","shop-prod","",""]` + "\n", "shop-prod"},
-		{"another project user's", mine + `["fff","","shop-stage","devopsy-other"]` + "\n", "shop-stage"},
-		{"a label with spaces", mine + `["ggg","shop-prod","","devopsy-shop x"]` + "\n", "shop-prod"},
+		{"the deploy user's", mine + `["eee","shop-prod","","","eee-1"]` + "\n", "shop-prod"},
+		{"another project user's", mine + `["fff","","shop-stage","devopsy-other","fff-1"]` + "\n", "shop-stage"},
+		{"a label with spaces", mine + `["ggg","shop-prod","","devopsy-shop x","ggg-1"]` + "\n", "shop-prod"},
 	} {
 		if err := testfile.Write(rows, []byte(c.rows), 0o644); err != nil {
 			t.Fatal(err)

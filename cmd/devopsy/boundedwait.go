@@ -81,13 +81,19 @@ func tryFlock(f *os.File, how int) (bool, error) {
 	return err == nil, err
 }
 
-// ended is the error of a wait the bound, or its context, ended.
+// ended is the error of a wait the bound, or its context, ended: a waitEnded.
 func (w boundedWait) ended(bound time.Duration) error {
 	if w.held != "" {
-		return errors.New(w.what + " still held by " + w.held + " after " + boundWords(bound))
+		return waitEnded(w.what + " still held by " + w.held + " after " + boundWords(bound))
 	}
-	return errors.New(w.what + " did not end in " + boundWords(bound))
+	return waitEnded(w.what + " did not end in " + boundWords(bound))
 }
+
+// waitEnded is a wait that ended without what it waited for (boundedWait.ended), which a
+// caller that stops waiting after one (--gc) tells by errors.As.
+type waitEnded string
+
+func (e waitEnded) Error() string { return string(e) }
 
 // boundWords is a bound as a line says it: "a minute", "10 minutes", "30 seconds", else as
 // Go writes it.

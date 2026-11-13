@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -348,6 +349,52 @@ func TestBookmarkPrefix(t *testing.T) {
 	}
 	if bookmarkPrefix(long2) != p2 {
 		t.Errorf("not stable")
+	}
+}
+
+// A release's tags are a name's only anchored: its prefix, an id (a snapshot's s<id>), then the
+// end or -, so shop-stage's never take shop-stage-2's, nor the other way; a name over 94
+// characters by its cut prefix. Read back, a tag gives its name for display, the long one cut,
+// and a claim's hold or another tag none.
+func TestNamesTag(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("l", 100)
+	cut := strings.TrimSuffix(strings.TrimPrefix(bookmarkPrefix(long), "devopsy-"), "-")
+	for _, c := range []struct {
+		ref, name string
+		want      bool
+	}{
+		{"app:devopsy-shop-stage-20261101000000", "shop-stage", true},
+		{"app:devopsy-shop-stage-20261101000000-123456", "shop-stage", true},
+		{"app:devopsy-shop-stage-s20261101000000-a1b2", "shop-stage", true},
+		{"app:devopsy-shop-stage-20261101000000-fz9", "shop-stage", true},
+		{"registry.example.com:5000/app:devopsy-shop-stage-20261101000000", "shop-stage", true},
+		{"app:devopsy-shop-stage-2-20261101000000", "shop-stage", false},
+		{"app:devopsy-shop-stage-20261101000000", "shop-stage-2", false},
+		{"app:devopsy-shop-stage-2-20261101000000", "shop-stage-2", true},
+		{"app:devopsy-shop-stage-2026110100000", "shop-stage", false},
+		{"app:devopsy-shop-stage-202611010000001", "shop-stage", false},
+		{"app:devopsy-shop-stage-claim.abababababab", "shop-stage", false},
+		{"app:devopsy-shop-stage-20261101000000", "", false},
+		{"app:" + bookmarkPrefix(long) + "20261101000000", long, true},
+		{"app:" + bookmarkPrefix(long) + "20261101000000", long[:99] + "m", false},
+	} {
+		if got := NamesTag(c.ref, c.name); got != c.want {
+			t.Errorf("NamesTag(%q, %q) = %v", c.ref, c.name, got)
+		}
+	}
+	for ref, want := range map[string]string{
+		"app:devopsy-shop-stage-20261101000000":          "shop-stage",
+		"app:devopsy-shop-stage-2-s20261101000000-a1b2":  "shop-stage-2",
+		"app:devopsy-shop-stage-20261101000000-f3x":      "shop-stage",
+		"app:devopsy-shop-20261101000000-20261102000000": "shop-20261101000000",
+		"app:" + bookmarkPrefix(long) + "20261101000000": cut,
+		"app:devopsy-shop-claim.abababababab":            "",
+		"app:1.37":                                       "",
+	} {
+		if got, ok := NameOfTag(ref); got != want || ok != (want != "") {
+			t.Errorf("NameOfTag(%q) = %q %v, want %q", ref, got, ok, want)
+		}
 	}
 }
 
@@ -779,7 +826,8 @@ func assertKept(t *testing.T, d *fakeDocker, before map[string]string, log []str
 // A release going leaves every name of an image a container uses, so a
 // project outside devopsy running mariadb:11.4 keeps it although the
 // release ran the same image as mariadb:11: recorded, retried once the
-// container is gone.
+// container is gone, by a Set of the project's record alone (--gc's), whose
+// Retryable lists beforehand exactly what its Prune then removes.
 func TestRemoveLeavesUsedImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -796,10 +844,28 @@ func TestRemoveLeavesUsedImage(t *testing.T) {
 	if d.names["mariadb:11"] != "sha256:1" || d.names["mariadb:11.4"] != "sha256:1" {
 		t.Errorf("names of a used image went: %v\n%s", d.names, out.String())
 	}
+	if got := e.set.Retryable(); len(got) != 0 {
+		t.Errorf("retryable while a container uses the image: %+v", got)
+	}
 	d.containers = nil
-	e.set.Prune()
+	project := &Set{Docker: d, Left: e.set.Left, Out: &out}
+	var refs []string
+	for _, r := range project.Retryable() {
+		refs = append(refs, r.Ref)
+		if r.Image != "sha256:1" || r.Name != "app-prod" || r.Release != id {
+			t.Errorf("retryable %+v, want sha256:1 of app-prod's release %s", r, id)
+		}
+	}
+	slices.Sort(refs)
+	if !slices.Equal(refs, []string{"mariadb:11", "mariadb:11.4"}) {
+		t.Errorf("retryable %v, want both names", refs)
+	}
+	project.Prune()
 	if len(d.images) != 0 {
 		t.Errorf("not retried once the container went: %v\n%s", d.names, out.String())
+	}
+	if got := project.Retryable(); len(got) != 0 {
+		t.Errorf("retryable after the retry: %+v", got)
 	}
 }
 

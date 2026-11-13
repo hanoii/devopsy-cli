@@ -233,6 +233,15 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 			t.Errorf("%s warned %v, want %v", owner, stale[owner], want)
 		}
 	}
+	// With the environments not all read, an environment's claim is taken for live: blog's
+	// directory may be the one that failed.
+	info.EnvironmentsUnread = "open " + filepath.Join(root, "blog") + ": permission denied"
+	_, warnings = serverInfoSays(info, "", "", "0.53.0", time.Now())
+	for _, w := range warnings {
+		if strings.HasPrefix(w.msg, "env:blog:prod's uid claim is left") {
+			t.Errorf("with environments unread: %s", w.msg)
+		}
+	}
 }
 
 // A --destroy empties the door's mnt directory and leaves it: an empty one is no data left.
@@ -339,11 +348,19 @@ func TestDoorFreeTakesWhatItsPathSays(t *testing.T) {
 	if _, err := os.Stat(docker); err == nil {
 		t.Errorf("docker ran for a refused free")
 	}
+	// Its mnt, which its --destroy emptied and left, goes with the free.
+	mnt := side.policy.Mnt("shop-gone")
+	if err := os.MkdirAll(mnt, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if code := side.free(filepath.Join(tree, "gone")); code != 0 {
 		t.Errorf("a gone environment of its own, never claimed: %d", code)
 	}
 	if _, err := os.Stat(docker); err == nil {
 		t.Errorf("a free of what held no claim took a name down")
+	}
+	if _, err := os.Lstat(mnt); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the emptied mnt %s stays after the free: %v", mnt, err)
 	}
 }
 

@@ -3,6 +3,7 @@ package remote
 import (
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
@@ -15,7 +16,7 @@ const ProjectUsersFlag = "--project-users-step"
 
 // ProjectUsersScript runs ProjectUsersFlag with args on the server, after the prelude's checks.
 func ProjectUsersScript(t *Target, args []string) string {
-	return "set -eu\n" + basePrelude(t) + devopsyCall("", append([]string{ProjectUsersFlag}, args...), true) + "\n"
+	return "set -eu\n" + serverPrelude(t) + devopsyCall("", append([]string{ProjectUsersFlag}, args...), true) + "\n"
 }
 
 // DoorRebootMarker says sshd has not taken the door's drop-in yet: /run is emptied at boot,
@@ -90,10 +91,6 @@ var doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
   fi
 fi
 `
-
-// projectIDRange is useradd's options for a project user's uid and its group's gid, from
-// door.ProjectIDMin to door.ProjectIDMax.
-var projectIDRange = fmt.Sprintf("-K UID_MIN=%d -K UID_MAX=%d -K GID_MIN=%d -K GID_MAX=%d", door.ProjectIDMin, door.ProjectIDMax, door.ProjectIDMin, door.ProjectIDMax)
 
 // doorUserCheck refuses a Unix user that is there and no project user ($1 the user): one add
 // made is in the group, remove keeping it there, while any other is someone's account (the
@@ -202,13 +199,14 @@ func DoorDevopsyPath(p string) error {
 // DoorHostScript is what --project-users add does as root on the host, through the util
 // image (chroot into /host): the door's pieces when missing or different, each checked before
 // it lands (visudo, sshd -t), then the user, its home and its tree. Its arguments: the user,
-// the deploy user, the tree to make ("" for the home's default), and the release root the
-// project user's own config names ("" for none). The deploy user and root are never in the
+// the tree to make ("" for the home's default), the release root the project user's own
+// config names ("" for none), and the id a user made here takes, uid and gid ("" when the user
+// is there). The deploy user and root are never in the
 // group: sshd would then ignore their own keys. A drop-in written says "reboot" on stdout.
 func DoorHostScript(deploy, devopsy string) string {
 	return `set -eu
 umask 022
-user=$1 tree=$2 root=$3
+user=$1 tree=$2 root=$3 id=$4
 group=` + DoorGroup + `
 ` + hostGroup + `for u in root ` + Quote(deploy) + `; do
   if id -nG "$u" | tr ' ' '\n' | grep -qx "$group"; then
@@ -244,9 +242,26 @@ if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
 fi
 made=
 if ! id -u "$user" >/dev/null 2>&1; then
-  # Its ids from the project users' range, which no container of the door's runs as: a user
-  # made later never takes the uid of a container already running.
-  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 ` + projectIDRange + ` --create-home --shell ` + DoorShell + ` --groups "$group" "$user"
+  # Its uid and its group's gid one id of the project users' range, which no container of the
+  # door's runs as, given once (the deploy user's record): a user made later never takes the
+  # uid of a container already running, nor of what a removed user left on the host.
+  case $id in
+    '' | *[!0-9]*)
+      ` + echoLine(report.ErrorLevel, "no id given for $user, which a user made here takes") + `
+      exit 3 ;;
+  esac
+  # A group of its name a cut add left (or an admin's userdel on a host that keeps a user's
+  # group) is taken when it is that id's with no member (addProjectUser gives its gid then),
+  # else refused: a group of another's would be handed to the door.
+  if g=$(getent group "$user"); then
+    if [ "$(printf '%s\n' "$g" | cut -d: -f3)" != "$id" ] || [ -n "$(printf '%s\n' "$g" | cut -d: -f4)" ]; then
+      ` + echoLine(report.ErrorLevel, "a group $user is there already, and no project user's left: a project user's group is one --project-users add made") + `
+      exit 3
+    fi
+  else
+    groupadd -g "$id" "$user"
+  fi
+  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u "$id" -g "$id" --create-home --shell ` + DoorShell + ` --groups "$group" "$user"
   usermod -p '*' "$user"
   made=1
 fi
@@ -279,3 +294,74 @@ if [ -n "$made" ] && [ -n "$root" ]; then
 fi
 `
 }
+
+// DestroyAgain is kind (report.Fix or report.Hint) offering project's --project-users remove
+// --destroy under text by server, the address a server's command takes (Session.Server,
+// ServerRef locally), or words alone when there is none: the one way every line that names a
+// project user's destroy offers it.
+func DestroyAgain(kind func(string, ...string) report.Remedy, server, project, text, words string) report.Remedy {
+	if server == "" || !ValidName(project) {
+		return kind(words)
+	}
+	return kind(text, "devopsy @"+server+" --project-users remove "+project+" --destroy")
+}
+
+// DestroyAgainFix is the fix of a refusal over project's destroy that did not complete: run it
+// again, which completes it, then what then says ("" for nothing more).
+func DestroyAgainFix(server, project, then string) report.Remedy {
+	return DestroyAgain(report.Fix, server, project, "run its destroy again, which completes it"+then+":", "run its destroy again (--project-users remove with --destroy), which completes it"+then)
+}
+
+// DoorUserDeleteScript is a --project-users remove --destroy's host step, as root on the host
+// through the util image (chroot into /host), once nothing is left under the project's names:
+// the user's user manager's mask (DoorHostScript's), the user itself with its home (userdel
+// -r, only while it is there and a project user, for a rerun, what it says shown only when it
+// fails), the group of its name it left,
+// then the tree its entry names
+// and the home by the path the destroy's mark kept, should userdel have been cut after it
+// dropped the user and before the home went. Its arguments: the user, its uid, the tree ("" for
+// none: the home's <home>/<project>, which userdel takes) and the home ("" for none known). A
+// tree or a home is removed only when it is a directory, never through a link, and rm -rf
+// follows none inside it.
+var DoorUserDeleteScript = `set -eu
+user=$1 uid=$2 tree=$3 home=$4
+unit=/etc/systemd/system/user@$uid.service
+if [ -n "$uid" ] && [ -L "$unit" ] && [ "$(readlink "$unit")" = /dev/null ]; then rm -f "$unit"; fi
+if id -u "$user" >/dev/null 2>&1; then
+  if ! id -nG "$user" | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
+    ` + echoLine(report.ErrorLevel, "$user is no project user, not in "+DoorGroup+": left as it is") + `
+    exit 3
+  fi
+  # userdel says things that are no failure (a mail spool not found): its words show only
+  # when it fails, with its exit.
+  if said=$(userdel -r "$user" 2>&1 >/dev/null); then :; else
+    code=$?
+    printf '%s\n' "$said" >&2
+    exit "$code"
+  fi
+fi
+# The user's group, should userdel have left it (a host that keeps a user's group, a cut after
+# the user went): only when it is provably the project user's left, in the project users' range
+# with no member, since an add takes it back only then.
+if g=$(getent group "$user"); then
+  gid=$(printf '%s\n' "$g" | cut -d: -f3)
+  if [ -z "$(printf '%s\n' "$g" | cut -d: -f4)" ] && [ "$gid" -ge ` + strconv.Itoa(door.ProjectIDMin) + ` ] 2>/dev/null && [ "$gid" -le ` + strconv.Itoa(door.ProjectIDMax) + ` ]; then
+    groupdel "$user"
+  else
+    ` + echoLine(report.WarnLevel, "a group $user is there, with members or out of the project users' range: left as it is") + `
+  fi
+fi
+gone() {
+  if [ -L "$1" ]; then
+    ` + echoLine(report.ErrorLevel, "$1 is a link, left: a directory is what devopsy made there") + `
+    exit 3
+  fi
+  [ ! -d "$1" ] || rm -rf -- "$1"
+  if [ -e "$1" ]; then
+    ` + echoLine(report.ErrorLevel, "$1 is there, and no directory: left") + `
+    exit 3
+  fi
+}
+[ -z "$tree" ] || gone "$tree"
+[ -z "$home" ] || gone "$home"
+`

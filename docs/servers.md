@@ -39,8 +39,9 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--server-setup`, `--environments`, `--vars-project` and `--upgrade` (`--environments` and
-`--vars-project` with the checkout's project, or an alias's).
+`--server-setup`, `--gc`, `--environments`, `--vars-project` and
+`--upgrade` (`--environments` and `--vars-project` with the checkout's
+project, or an alias's).
 
 They take `@<server>` alone, or any target, whose server they use, with
 no instance needed. A bare name is still the project's environment or an
@@ -55,6 +56,7 @@ devopsy @prod --ssh-keys         # prod's server's, in the project
 devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 devopsy @vm1 --server-info       # what the server is, and what needs attention
 devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
+devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
 ```
 
 ## `--server-setup`
@@ -253,7 +255,8 @@ setup's items) comes once, after the last of them:
   the line says the reboot does it, and is no warning: nothing is lost by
   waiting, and the reboot's own line is the one that needs attention.
   Either way `--server-setup` is offered to restart Docker sooner;
-- a disk 90% full, or with less than 5 GB free;
+- a disk 90% full, or with less than 5 GB free, Docker's with
+  [`--gc`](#--gc) as its fix;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
@@ -285,6 +288,44 @@ fields may change before 1.0.0: the door's `firewall_wrong`,
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both
 kinds.
 
+It also shows, as information with a command to see to it, what may be
+dead or gone. devopsy removes none of it, and none of it makes the exit 3:
+
+- what [`--gc`](#--gc) would remove, counted (one-off containers,
+  release snapshots, image names a project's record left, dangling
+  images), with `--gc --dry-run` as its hint for the sizes and the
+  build cache, which only `--gc` reads;
+- images with a tag that no release holds and no container uses (tools
+  a project ran, the admin's own), with their size, `docker rmi` as the
+  hint;
+- what is left of an environment removed by hand, for a compose name
+  with no environment directory and no uid claim: its releases' image
+  names and a project user's builds, its containers, its volumes, its
+  snapshots under the server's `snapshots: root`, with the commands that
+  remove them (`docker compose -p <name> down`, `docker volume rm`,
+  `docker rmi`, `rm -rf`);
+- anonymous volumes no container uses (an image's `VOLUME` after a
+  `down` without `-v`, which may be a database's data), `docker volume
+  prune` as the hint, once checked;
+- a directory a `--destroy` cut off while it removed an environment left
+  (`<environment>.rm.<pid>`), with its size, and the `--destroy` that
+  resumes it;
+- a project user with no key whose project still holds anything its
+  destroy removes (uid claims, containers, volumes, data, images), with
+  `--project-users remove <project> --destroy` as the hint, or a key
+  added to take it back ([project users](project-users.md));
+- a project user whose `--project-users remove <project> --destroy` did
+  not complete, with that command, which completes it, as the hint, and
+  not as a project user with no key.
+
+What goes by an environment's absence is shown only when the release
+root lists environments and every one of them, and the uid claims, could
+be read: with the root's disk not mounted, every environment would look
+gone. Images and volumes of a compose project that is not a release's
+(the admin's own) are not shown. What of it could not be read (the
+images, the volumes, a part of `--gc`'s count) is a warning instead:
+unknown, never none.
+
 A sync or a snapshot under way is reported as information. So are the
 volumes the release root could be on, while it holds no project and is
 not on one, and the memory kdump keeps, with how to free it
@@ -294,6 +335,60 @@ It exits 3 when it warned, so CI can run it as a check: on a server never
 set up by `--server-setup`, it always does. `--json` prints the facts and
 the same lines as JSON on stdout, each with its fixes and hints
 (`remedies`), for scripts and agents.
+
+## `--gc`
+
+A release prunes what it owns and `--destroy` what its environment owns.
+`devopsy @vm1 --gc` removes, as the server's deploy user, what falls
+between and would otherwise stay: only what a record of devopsy's or
+Docker's own rule says can go, never something because its owner looks
+gone. In this order:
+
+- one-off containers (`compose run` and the like) that exited longer
+  ago than its `containers` age, of an environment of the deploy user's
+  or one under a project user's names. Their volumes stay: a database's
+  `compose run` keeps its data in an anonymous volume. One only created,
+  never started, stays too;
+- build cache unused for its `build_cache` age, on the server's Docker
+  and on each project user's builder, as `docker buildx prune -a
+  --filter until=` decides it. A project user's builder that is not
+  running keeps its cache;
+- release snapshots whose release is gone, as `--snapshots remove`
+  prunes them, for every environment of the deploy user's. An
+  environment whose snapshots are in use (a snapshot taken, a restore, a
+  removal) is skipped: whatever holds them prunes them;
+- the names in the deploy user's projects' records of names left that
+  can go now, as a release's pruning retries them (`--releases` lists a
+  project's record), then the dangling images no container uses, as
+  `docker image prune` finds them (never `-a`).
+
+It never removes a tagged image no release holds, a volume, a release, an
+environment, a project user's snapshots, the containers of a service, or
+anything of a release root that is not mounted, which lists nothing.
+[`--server-info`](#--server-info) shows what is left to look at, and the
+last line says so.
+
+It first lists what it would remove with sizes, in a session that changes
+nothing, then asks. A second session removes only what was listed,
+deciding each removal again as it goes, so a run cut off leaves only less
+to remove: what came to qualify between the list and the answer (a
+container that crossed its age, a release snapshot, build cache last used
+after the list's cutoff) stays for the next run. `--yes` removes what it
+finds, without listing or asking; without a terminal and without `--yes`
+it removes nothing. `--dry-run` lists only and asks nothing.
+
+The ages are the deploy user's `gc:` in its `config.yaml`, with their
+defaults ([Release settings](config.md#release-settings)).
+
+It exits 3 when something is left to remove: with `--dry-run`, anything
+it lists; otherwise what it skipped, could not remove or could not read.
+0 says nothing is, so a timer or a monitor can run it.
+
+```sh
+devopsy @vm1 --gc --dry-run   # what it would remove, with sizes
+devopsy @vm1 --gc             # the same, asked, then removed
+devopsy @vm1 --gc --yes       # removed without asking
+```
 
 ## uids
 

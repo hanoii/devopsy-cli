@@ -246,7 +246,10 @@ what `config.yaml` sets.
   made as the deploy user with `devopsy @devopsy@<server>: --project-users
   add <project>`, its keys `--ssh-keys --for <project> add <key>.pub`. A
   project user cannot edit its own keys. The first `add` on a server waits
-  for a reboot before project users log in.
+  for a reboot before project users log in. `--project-users remove
+  <project>` drops its keys and keeps the rest; `--destroy` after it
+  removes everything the user holds, its Unix user last, listed and asked
+  by the project's name first (`--yes` asks nothing).
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`
@@ -266,6 +269,18 @@ what `config.yaml` sets.
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
   and `--server-info` warns of what is not devopsy's.
+- What a server keeps that nothing of devopsy removes (old exited one-off
+  containers, unused build cache, release snapshots of releases gone,
+  names a project's record left, dangling images) goes with
+  `devopsy @<server> --gc`, as the deploy user: `--dry-run` lists it
+  with sizes and asks nothing, `--yes` removes without asking; exit 3
+  when something is left to remove; after an answer it removes only
+  what it listed. It never removes a tagged image no release holds, a
+  volume or a release: `--server-info` shows what may be dead or gone
+  (what `--gc` would free, images no release holds, what an environment
+  removed by hand left, unused anonymous volumes, a cut `--destroy`, a
+  project user with no key that still holds something), each with a
+  command as its hint, none removed and none an exit 3.
 - What devopsy checks on a server and does not set up (Docker, the tools,
   `/proc`'s `hidepid`, what project users need, the kernel's command line,
   the data on XFS)

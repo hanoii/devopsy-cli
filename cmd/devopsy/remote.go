@@ -252,6 +252,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--server-setup":
 		return runServerSetup(t, args[1:])
 
+	case "--gc":
+		return runGC(t, args[1:])
+
 	case "--status":
 		return runRemoteStatus(t, args[1:], color)
 

@@ -93,11 +93,12 @@ var Flags = []FlagGroup{
 	}},
 	{"Servers and SSH", []Flag{
 		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "a local SSH key pair, for CI"},
-		{Name: "--project-users", Args: "[list | add <project> | remove <project>]", Scope: Server, Desc: "project users, with no Docker socket"},
+		{Name: "--project-users", Args: "[list | add <project> | remove <project> [--destroy]]", Scope: Server, Desc: "project users, with no Docker socket"},
 		{Name: "--ssh-keys", Args: "[--for <project>] [list | add <file> | remove <key>]", Scope: Server, Desc: "keys of the deploy user, or a project user"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},
+		{Name: "--gc", Args: "[--dry-run] [--yes]", Scope: Server, Desc: "remove what nothing on the server owns:\nold one-offs and build cache, snapshots\nof releases gone, images left"},
 		{Name: howto.Flag, Args: "[<topic>|--all]", Scope: Local, Desc: "the steps, as root, for what devopsy\nchecks on a server and cannot set up"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
 	}},

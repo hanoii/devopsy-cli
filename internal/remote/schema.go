@@ -217,4 +217,12 @@ firewall:
   # --server-setup, and is refused where door: is set or the door's
   # firewall is loaded. Default: block.
   metadata: block
+
+# The ages devopsy @<server> --gc goes by, each a duration (36h, 90m) or
+# days (7d). Never from a project.
+gc:
+  # Exited one-off containers (compose run) older than this go. Default: 1d.
+  containers: 1d
+  # Build cache unused this long goes, on every builder. Default: 30d.
+  build_cache: 30d
 `

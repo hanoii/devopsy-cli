@@ -40,8 +40,10 @@ func TestDoorHostScript(t *testing.T) {
 		"AuthorizedKeysCommandUser deploy",
 		"visudo -cqf",
 		"sshd -t",
-		// No subordinate ids, for a user made here or one that was there.
-		"useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -K UID_MIN=50000 -K UID_MAX=59999 -K GID_MIN=50000 -K GID_MAX=59999 ",
+		// No subordinate ids, for a user made here or one that was there; its uid and its
+		// group's gid the one id the deploy user gave it, never one useradd picks.
+		`groupadd -g "$id" "$user"`,
+		`useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u "$id" -g "$id" `,
 		"for f in /etc/subuid /etc/subgid; do",
 		// The door's entrance for a project user, never over a real docker.
 		"ln -sfn '/opt/bin/devopsy' /usr/local/bin/docker",
@@ -61,7 +63,7 @@ func TestDoorHostScript(t *testing.T) {
 	for _, step := range []string{
 		"sshd would ignore its own keys", "is there already, and no project user", "is there already, and not $1's",
 		"is a real docker", "put /etc/sudoers.d/devopsy-projects 440 'visudo -cqf \"$1\"'", "put /usr/local/libexec/devopsy-authorized-keys 755 'sh -n \"$1\"'",
-		"if put /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "useradd ", "sshd -T -C", "/etc/cron.deny",
+		"if put /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "no id given for $user", "groupadd -g", "useradd ", "sshd -T -C", "/etc/cron.deny",
 		`if [ -n "$made" ] && [ -n "$root" ]; then`, `runuser -u "$user" -- sh -c`,
 	} {
 		i := strings.Index(s, step)
@@ -449,5 +451,141 @@ func TestDoorHostScriptStopsAtAPieceNotWritten(t *testing.T) {
 	}
 	if n < 3 {
 		t.Errorf("%d pieces put, want the sudoers rule, the keys command and the sshd drop-in at least", n)
+	}
+}
+
+// A destroy's host step deletes the project user only while it is there and in the project
+// users' group (a rerun finds it gone), saying what userdel says only when it fails, then the
+// tree and the home by their paths, each only as a directory: a link the user made there is
+// left, and so is what it points to.
+func TestDoorUserDeleteScript(t *testing.T) {
+	t.Parallel()
+	if out, err := exec.Command("sh", "-n", "-c", DoorUserDeleteScript).CombinedOutput(); err != nil {
+		t.Fatalf("sh -n: %v\n%s", err, out)
+	}
+	// groupLine is the user's group as getent gives it once the user is deleted, "" for none:
+	// a host that keeps a user's group leaves it.
+	groupLine := ""
+	groupGone := func() bool { return true }
+	fails := false
+	run := func(group string, tree, home string) (string, int, string) {
+		t.Helper()
+		bin, users := t.TempDir(), t.TempDir()
+		write(t, filepath.Join(users, "devopsy-shop"), "")
+		if fails {
+			write(t, filepath.Join(users, "fail"), "")
+		}
+		if groupLine != "" {
+			write(t, filepath.Join(users, "group-devopsy-shop"), groupLine)
+		}
+		groupGone = func() bool { return !fileThere(filepath.Join(users, "group-devopsy-shop")) }
+		for name, body := range map[string]string{
+			"id":       `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
+			"userdel": `[ ! -e "` + users + `/fail" ] || { echo "userdel: user $2 is currently used by process 1" >&2; exit 8; }
+[ "$1" = -r ] && rm "` + users + `/$2" && echo "userdel: $2 mail spool (/var/mail/$2) not found" >&2`,
+			"getent":   `[ "$1" = group ] && cat "` + users + `/group-$2" 2>/dev/null`,
+			"groupdel": `rm "` + users + `/group-$1"`,
+		} {
+			write(t, filepath.Join(bin, name), "#!/bin/sh\n"+body+"\n")
+			if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c := exec.Command("sh", "-c", DoorUserDeleteScript, "sh", "devopsy-shop", "59999", tree, home)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, _ := c.CombinedOutput()
+		gone := "deleted"
+		if _, err := os.Stat(filepath.Join(users, "devopsy-shop")); err == nil {
+			gone = "kept"
+		}
+		return string(out), c.ProcessState.ExitCode(), gone
+	}
+	dir := t.TempDir()
+	tree, home := filepath.Join(dir, "shop"), filepath.Join(dir, "devopsy-shop")
+	write(t, filepath.Join(tree, "prod", "db"), "x")
+	write(t, filepath.Join(home, ".profile"), "x")
+	// userdel's own words show only when it fails: a missing mail spool is no failure.
+	if out, code, user := run(DoorGroup, tree, home); code != 0 || user != "deleted" || fileThere(tree) || fileThere(home) || out != "" {
+		t.Errorf("a project user (%d): user %s, tree %v, home %v:\n%s", code, user, fileThere(tree), fileThere(home), out)
+	}
+	fails = true
+	if out, code, user := run(DoorGroup, "", ""); code != 8 || user != "kept" || out != "userdel: user devopsy-shop is currently used by process 1\n" {
+		t.Errorf("userdel failing (%d): user %s:\n%s", code, user, out)
+	}
+	fails = false
+	// Run again with nothing left, nothing fails.
+	if out, code, _ := run(DoorGroup, tree, home); code != 0 {
+		t.Errorf("run again (%d):\n%s", code, out)
+	}
+	if out, code, user := run("users", "", ""); code != 3 || user != "kept" || !strings.Contains(out, "is no project user") {
+		t.Errorf("no project user (%d): %s:\n%s", code, user, out)
+	}
+	// The group of its name userdel left goes when it is the project user's (in the range, no
+	// member), so an add takes no id for it again; another stays, said.
+	groupLine = "devopsy-shop:x:59999:\n"
+	if out, code, _ := run(DoorGroup, "", ""); code != 0 || !groupGone() {
+		t.Errorf("a group left by userdel (%d), gone %v:\n%s", code, groupGone(), out)
+	}
+	groupLine = "devopsy-shop:x:59999:alice\n"
+	if out, code, _ := run(DoorGroup, "", ""); code != 0 || groupGone() || !strings.Contains(out, "left as it is") {
+		t.Errorf("a group with a member (%d), gone %v:\n%s", code, groupGone(), out)
+	}
+	groupLine = ""
+	target := t.TempDir()
+	write(t, filepath.Join(target, "keep"), "x")
+	if err := os.Symlink(target, tree); err != nil {
+		t.Fatal(err)
+	}
+	if out, code, _ := run(DoorGroup, tree, ""); code != 3 || !strings.Contains(out, "is a link, left") || !fileThere(filepath.Join(target, "keep")) || !fileThere(tree) {
+		t.Errorf("a tree that is a link (%d):\n%s", code, out)
+	}
+}
+
+// An add's host step goes on from a group of the user's name left with no user (a step cut
+// between groupadd and useradd, an admin's userdel on a host that keeps a user's group), as it
+// does from a user that is there: groupadd refuses a name that is there, and every add after
+// would fail there, taking one more id of the range each time (takeProjectID). Only a group of
+// the id given and no member is the user's left; any other is refused, no user made.
+func TestDoorHostScriptGoesOnFromAGroupLeftWithNoUser(t *testing.T) {
+	t.Parallel()
+	script := DoorHostScript("deploy", "/opt/bin/devopsy")
+	from, to := strings.Index(script, "made=\n"), strings.Index(script, "  made=1\nfi\n")
+	if from < 0 || to < from {
+		t.Fatal("the script's making of the user was not found")
+	}
+	block := script[from : to+len("  made=1\nfi\n")]
+	run := func(group string) (string, int, bool) {
+		t.Helper()
+		bin, state := t.TempDir(), t.TempDir()
+		for name, body := range map[string]string{
+			// As the real ones: id fails for a user not there, groupadd refuses a name there (9),
+			// getent prints a group's line.
+			"id":       `[ "$1" = -u ] && [ -e "` + state + `/user-$2" ]`,
+			"getent":   `[ "$1" = group ] && cat "` + state + `/group-$2" 2>/dev/null`,
+			"groupadd": `for a; do g=$a; done; [ ! -e "` + state + `/group-$g" ] || { echo "groupadd: group '$g' already exists" >&2; exit 9; }; echo "$g:x:$2:" >"` + state + `/group-$g"`,
+			"useradd":  `for a; do u=$a; done; : >"` + state + `/user-$u"`,
+			"usermod":  `:`,
+		} {
+			write(t, filepath.Join(bin, name), "#!/bin/sh\n"+body+"\n")
+			if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write(t, filepath.Join(state, "group-devopsy-shop"), group)
+		c := exec.Command("sh", "-c", "set -eu\nuser=$1 id=$2 group="+DoorGroup+"\n"+block+"echo \"made=$made\"\n", "sh", "devopsy-shop", "50002")
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, _ := c.CombinedOutput()
+		return string(out), c.ProcessState.ExitCode(), fileThere(filepath.Join(state, "user-devopsy-shop"))
+	}
+	// The group an add cut after groupadd left, its gid the id given (addProjectUser's
+	// leftGroupID).
+	if out, code, made := run("devopsy-shop:x:50002:\n"); code != 0 || !strings.Contains(out, "made=1") || !made {
+		t.Errorf("an add over a group left with no user (%d), its user made %v:\n%s", code, made, out)
+	}
+	// One of another id, or with a member, is no project user's left: refused, no user made.
+	for _, g := range []string{"devopsy-shop:x:50001:\n", "devopsy-shop:x:50002:alice\n"} {
+		if out, code, made := run(g); code != 3 || made || !strings.Contains(out, "no project user's left") {
+			t.Errorf("an add over %q (%d), its user made %v:\n%s", g, code, made, out)
+		}
 	}
 }

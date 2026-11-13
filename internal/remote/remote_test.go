@@ -239,13 +239,18 @@ func allScripts() map[string]string {
 		"parent copy":     ParentEnvCopyScript(tg, "app/a/prod", ParentEnvHeader("vm1:a/prod", true), true),
 		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, ""),
 		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),
-		"keys read":       KeysReadScript(""),
+		"keys read":       KeysReadScript("", ""),
 		"status":          StatusScript(tg),
 		"server info":     ServerInfoScript(&Target{Host: "h"}),
-		"keys add":        KeysAddScript(""),
-		"keys remove":     KeysRemoveScript(""),
-		"keys for":        KeysRemoveScript("devopsy-shop") + KeysAddScript("devopsy-shop"),
+		"gc list":         GCScript(&Target{Host: "h"}, "list"),
+		"gc remove":       GCScript(&Target{Host: "h"}, "remove"),
+		"gc listed":       GCScript(&Target{Host: "h"}, "remove-listed"),
+		"keys add":        KeysAddScript("", ""),
+		"keys remove":     KeysRemoveScript("", ""),
+		"keys for":        KeysRemoveScript("devopsy-shop", "") + KeysAddScript("devopsy-shop", ""),
 		"project users":   ProjectUsersScript(&Target{Host: "h"}, []string{"add", "shop"}),
+		"user destroy":    ProjectUsersScript(&Target{Host: "h"}, []string{"remove", "shop", "--destroy", "--list"}),
+		"user delete":     DoorUserDeleteScript,
 		"destroy":         DestroyScript(tg, "app"),
 		"reload":          ReloadScript(tg, "app"),
 		"vars hint":       VarsHintScript(tg),
@@ -1770,6 +1775,30 @@ exit 0
 	}
 	if calls := readFile(filepath.Join(root, "calls")); !strings.Contains(calls, freed) {
 		t.Errorf("a destroy finding nothing does not free the claim:\n%s", calls)
+	}
+	// A part of its path linked to no directory is a disk not mounted, whose environment is
+	// back once it is: the destroy refuses, with the fix to mount it, and frees nothing. Linked
+	// to one, it finds nothing there and frees the claim.
+	disk := filepath.Join(t.TempDir(), "disk")
+	if err := os.Symlink(filepath.Join(disk, "c"), filepath.Join(root, "app", "c")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(DestroyScript(target("c"), ""), "TAG=ghi"); err == nil || !strings.Contains(out, "links to no directory") || !strings.Contains(out, "mount the disk") ||
+		strings.Contains(out, "nothing at") || strings.Contains(readFile(filepath.Join(root, "calls")), "--free-uids") {
+		t.Errorf("destroy through a link to no directory (%v):\n%s\n%s", err, out, readFile(filepath.Join(root, "calls")))
+	}
+	if err := os.MkdirAll(filepath.Join(disk, "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(DestroyScript(target("c"), ""), "TAG=ghi"); err != nil || !strings.Contains(out, "nothing at") ||
+		!strings.Contains(readFile(filepath.Join(root, "calls")), "--free-uids "+filepath.Join(root, "app", "c", "prod")+"\n") {
+		t.Errorf("destroy through a link to a directory with nothing in it (%v):\n%s", err, out)
+	}
+	if err := os.Remove(filepath.Join(root, "app", "c")); err != nil {
+		t.Fatal(err)
 	}
 
 	if !strings.Contains(out, "fetch of release 4 was interrupted") {
@@ -3685,5 +3714,25 @@ func TestCloseProject(t *testing.T) {
 	}
 	if out, err := run("gone"); err == nil || !strings.Contains(out, "--say error "+root+"/gone cannot be closed to other users") {
 		t.Errorf("one it cannot close (%v): %s", err, out)
+	}
+}
+
+// A server's script (--server-info, --gc), an environment's address included, exports no
+// environment's snapshot directory or base (images.SnapshotsEnv, images.BaseEnv): its devopsy
+// reads every environment's from the server's own settings, and one exported for the target's
+// path (for a server named alone, $root//snapshots) would be taken for every environment's. An
+// environment's script still exports them.
+func TestServerScriptsExportNoEnvironmentDirectories(t *testing.T) {
+	t.Parallel()
+	server := &Target{Host: "vm1"}
+	env := &Target{Host: "vm1", Name: "prod", Path: "shop/prod", Project: &Project{Name: "shop"}}
+	for what, s := range map[string]string{"@vm1: --server-info": ServerInfoScript(server), "@vm1:prod --server-info": ServerInfoScript(env),
+		"@vm1: --gc": GCScript(server, "list"), "@vm1:prod --gc": GCScript(env, "list")} {
+		if strings.Contains(s, images.SnapshotsEnv) || strings.Contains(s, images.BaseEnv) {
+			t.Errorf("%s exports an environment's directories:\n%s", what, s)
+		}
+	}
+	if s := SnapshotsScript(env, "shop"); !strings.Contains(s, "export "+images.SnapshotsEnv+`="$snaps" `+images.BaseEnv+`="$base"`) {
+		t.Errorf("an environment's script exports no directories:\n%s", s)
 	}
 }

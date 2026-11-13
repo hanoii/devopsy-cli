@@ -103,13 +103,14 @@ func ParseImage(out []byte) (Image, error) {
 		RepoTags    []string
 		RepoDigests []string
 		Created     string
+		Size        int64
 		Config      struct{ Labels map[string]string }
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &v); err != nil {
 		return Image{}, err
 	}
 	created, _ := time.Parse(time.RFC3339Nano, v.Created)
-	return Image{ID: v.ID, Digests: v.RepoDigests, Tags: v.RepoTags, Labels: v.Config.Labels, Created: created, Version: v.Config.Labels[VersionLabel]}, nil
+	return Image{ID: v.ID, Digests: v.RepoDigests, Tags: v.RepoTags, Labels: v.Config.Labels, Created: created, Version: v.Config.Labels[VersionLabel], Size: v.Size}, nil
 }
 
 func (d CLI) Pull(ref string) error {

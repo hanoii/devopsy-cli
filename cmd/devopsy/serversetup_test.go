@@ -661,7 +661,7 @@ func TestRestartLocksOnlyTheDeployUsersEnvironments(t *testing.T) {
 		t.Skip(project + " is this user's: no directory of another user's to hold an environment")
 	}
 	write(t, filepath.Join(base, "releases", ".keep"), "", 0o644)
-	if got := deployEnvBases(filepath.Dir(project)); slices.Contains(got, base) {
+	if got, _ := deployEnvBases(filepath.Dir(project)); slices.Contains(got, base) {
 		t.Errorf("an environment in %s, which another user owns, is among those whose lock a restart takes: %s", project, base)
 	}
 }

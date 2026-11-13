@@ -19,12 +19,12 @@ func TestHostRunArgs(t *testing.T) {
 		run  hostRun
 		want []string
 	}{
-		{"add", addUserRun("deploy", "/opt/bin/devopsy", "devopsy-shop", "/srv/shop", "/srv"),
+		{"add", addUserRun("deploy", "/opt/bin/devopsy", "devopsy-shop", "/srv/shop", "/srv", "50001"),
 			[]string{"run", "--rm", "--network", "none", "-v", "/:/host", "--pull", "never", remote.UtilImage,
-				"chroot", "/host", "/bin/sh", "-c", script, "sh", "devopsy-shop", "/srv/shop", "/srv"}},
-		{"add in the home", addUserRun("deploy", "/opt/bin/devopsy", "devopsy-shop", "", ""),
+				"chroot", "/host", "/bin/sh", "-c", script, "sh", "devopsy-shop", "/srv/shop", "/srv", "50001"}},
+		{"add in the home, its user there", addUserRun("deploy", "/opt/bin/devopsy", "devopsy-shop", "", "", ""),
 			[]string{"run", "--rm", "--network", "none", "-v", "/:/host", "--pull", "never", remote.UtilImage,
-				"chroot", "/host", "/bin/sh", "-c", script, "sh", "devopsy-shop", "", ""}},
+				"chroot", "/host", "/bin/sh", "-c", script, "sh", "devopsy-shop", "", "", ""}},
 		{"firewall read", firewallRun("read it", false),
 			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cgroupns", "host", "--cap-add", "NET_ADMIN", "--cap-add", "SYS_PTRACE", "-v", "/:/host:ro", "--pull", "never", remote.UtilImage,
 				"chroot", "/host", "/bin/sh", "-c", "read it"}},

@@ -4,7 +4,7 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 ## Files
 
-- A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:` and `snapshots: {root, max_keep, mirror}`); an unknown key is an error.
+- A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:`, `snapshots: {root, max_keep, mirror}`, `firewall: {metadata}` and `gc: {containers, build_cache}`); an unknown key is an error.
 - Never `~/.devopsy`: project discovery would take the home directory for a project.
 - `defaults:` gives environments `mode`, steps, `releases`, `snapshots`, `inherit` and `env`, merged: `env` key by key, `snapshots` by kind and key (`mergeSnapshots`); a `~` value removes the key (`KEY: ~`, `snapshots.manual.keep: ~`, `inherit: ~`), and `""` stays empty.
 - `config.local.yaml` replaces the project's top-level keys, but its `defaults:` and an environment of the same key (a pattern only over the same pattern) merge over the project's as `defaults:` do, `parent: ~` removing the parent (`mergeEnvironment`): a local file changing one key of an environment must not have to repeat the rest.
@@ -30,12 +30,12 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 - `parent:` names a concrete environment, never a pattern; a cycle, one naming itself included, is an error, since neither could be released first; `parent: ~` is no parent, as any key's null.
 - A parent resolves one level only, at the child's instance, its server from the usual variables, never from the child's (`ParentTarget`): a guessed server would copy the wrong data.
 - A parent that cannot be resolved goes into `ParentErr` instead of failing the load, so every other command works on the child; `DescribeTarget` resolves it leniently (internals/syncs.md for what fails with it).
-- An address a session carries (internals/sessions.md) is taken only within its cap and when it parses as an environment's, its server as `remote.ParseServer` takes one, which takes no control character (`remote.IsAddress`, `SessionFrom`), and dropped otherwise, never an error: it only names a command in a hint, and a hint then says its way out in words.
+- An address a session carries (internals/sessions.md) is taken only within its cap and when it parses as an environment's (a server's command's also as a server named alone), its server as `remote.ParseServer` takes one, which takes no control character (`remote.IsAddress`, `SessionFrom`), and dropped otherwise, never an error: it only names a command in a hint, and a hint then says its way out in words.
 - A target's `From` holds each value's origin, and `Env` every definition of a variable as it loads (`EnvDef`, `TraceEnv`), what `--debug env` prints.
 
 ## Release settings
 
-- A server's `releases:` (`root`, default the deploy user's home; `keep`, `max_keep`, default 5) and `snapshots:` (`root`, `max_keep`, `mirror`) are read by the hidden `--release-settings`, which every script asks first (`basePrelude`, `ReleaseSettings`): a laptop and CI then resolve the same paths.
+- A server's `releases:` (`root`, default the deploy user's home; `keep`, `max_keep`, default 5), `snapshots:` (`root`, `max_keep`, `mirror`) and `gc:` (`containers`, `build_cache`, each a Go duration or `<n>d` through `ParseAge`, default 1 day and 30 days) are read by the hidden `--release-settings`, which every script asks first (`basePrelude`, `ReleaseSettings`): a laptop and CI then resolve the same paths.
 - A project's `keep` is capped by the server's `max_keep`; `root` and `max_keep` in a project are errors.
 
 ## Secrets on a server

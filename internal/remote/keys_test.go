@@ -50,7 +50,7 @@ func TestKeysRemoveLast(t *testing.T) {
 	}
 	keys := filepath.Join(home, ".ssh", "authorized_keys")
 	remove := func(blob string) int {
-		cmd := exec.Command("sh", "-c", KeysRemoveScript(""))
+		cmd := exec.Command("sh", "-c", KeysRemoveScript("", ""))
 		cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
 		cmd.Stdin = strings.NewReader(blob + "\n")
 		_ = cmd.Run()
@@ -99,7 +99,7 @@ func TestKeysRemoveEndsTheUsersProcesses(t *testing.T) {
 	remove := func(user, blob string) (int, string) {
 		t.Helper()
 		os.Remove(calls)
-		cmd := exec.Command("sh", "-c", KeysRemoveScript(user))
+		cmd := exec.Command("sh", "-c", KeysRemoveScript(user, ""))
 		cmd.Env = []string{"HOME=" + home, "DEVOPSY_HOME=" + filepath.Join(home), "PATH=" + bin + ":/usr/bin:/bin"}
 		cmd.Stdin = strings.NewReader(blob + "\n")
 		out, _ := cmd.CombinedOutput()
@@ -224,7 +224,7 @@ func TestKeysRemoveEndIsAskedAgain(t *testing.T) {
 	remove := func(blob string) (int, string) {
 		t.Helper()
 		os.Remove(calls)
-		cmd := exec.Command("sh", "-c", KeysRemoveScript("devopsy-shop"))
+		cmd := exec.Command("sh", "-c", KeysRemoveScript("devopsy-shop", ""))
 		cmd.Env = []string{"HOME=" + home, "DEVOPSY_HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
 		cmd.Stdin = strings.NewReader(blob + "\n")
 		out, _ := cmd.CombinedOutput()
@@ -266,7 +266,7 @@ func TestKeysListingFinishesARemoval(t *testing.T) {
 	list := func() string {
 		t.Helper()
 		os.Remove(calls)
-		cmd := exec.Command("sh", "-c", KeysReadScript("devopsy-shop"))
+		cmd := exec.Command("sh", "-c", KeysReadScript("devopsy-shop", ""))
 		cmd.Env = []string{"HOME=" + home, "DEVOPSY_HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
 		out, _ := cmd.CombinedOutput()
 		got, _ := os.ReadFile(calls)

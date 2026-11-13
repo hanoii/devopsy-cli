@@ -519,7 +519,7 @@ func localServices(cwd string) ([]images.Service, error) {
 	return images.ParseComposeConfig(out.Bytes(), false)
 }
 
-// imagesShared takes the server's image lock shared (imagesLockAt),
+// imagesShared takes the server's image lock shared (imagesLock),
 // as a sync's img sync-check and sync-done do, for an import's check and
 // take-over of the export's history of its data, and a restore's pulls
 // and bookmarks: a removal elsewhere, which takes it exclusively, then
@@ -529,34 +529,60 @@ func imagesShared(ctx context.Context) (unlock func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	return imagesSharedAt(ctx, report.Default(), root, "", "")
+	return imagesLock{root: root, how: syscall.LOCK_SH}.take(ctx, report.Default())
 }
 
-// imagesSharedAt is imagesShared with the image lock in root, waiting through log, its
-// holder written as who doing what (imagesLockAt) when who is set: the door's claim, under
-// the deploy user's root, says itself there for a removal's wait.
-func imagesSharedAt(ctx context.Context, log *report.Logger, root, who, doing string) (unlock func(), err error) {
-	err = boundedWait{what: "the server's images", held: "a removal"}.wait(ctx, log, func() (bool, error) {
-		u, ok, err := imagesLockAt(root, syscall.LOCK_SH, who, doing)
+// imagesLock is a take of the server's image lock in root (remote.ImagesLock), shared or
+// exclusive (how, syscall.LOCK_SH or LOCK_EX), as the scripts' image_lock takes it: waited for
+// up to bound (waitBound when zero) and said (boundedWait), or never waited for (now:
+// errImagesBusy when held); its holder written as who doing what when who is set
+// (imagesLockAt), which a waiter's message reads. Exclusive, it holds only while Docker answers
+// (docker, "docker" when empty, its version): a removal goes by Docker's answers, and with none
+// every image would look gone.
+type imagesLock struct {
+	root       string
+	how        int
+	bound      time.Duration
+	now        bool
+	who, doing string
+	docker     string
+}
+
+// errImagesBusy is a take that never waits (imagesLock.now) finding the lock held.
+var errImagesBusy = errors.New("the server's images are in use")
+
+// take takes l, saying its wait through log.
+func (l imagesLock) take(ctx context.Context, log *report.Logger) (unlock func(), err error) {
+	try := func() (bool, error) {
+		u, ok, err := imagesLockAt(l.root, l.how, l.who, l.doing)
 		unlock = u
 		return ok, err
-	})
-	return unlock, err
-}
-
-// imagesLockNow takes the server's image lock (imagesLockAt) shared
-// or exclusively (syscall.LOCK_SH or LOCK_EX) when it is free at once:
-// ok false when busy. Only on a server: every caller runs in a release
-// there.
-func imagesLockNow(how int) (unlock func(), ok bool, err error) {
-	root, err := imagesRoot()
-	if err != nil {
-		return nil, false, err
 	}
-	return imagesLockAt(root, how, "", "")
+	// A shared take waits only for a removal, the one exclusive holder.
+	held := "a removal"
+	if l.how == syscall.LOCK_EX {
+		held = "a release, a claim or a removal"
+	}
+	if l.now {
+		ok, err := try()
+		switch {
+		case err != nil:
+			return nil, err
+		case !ok:
+			return nil, errImagesBusy
+		}
+	} else if err := (boundedWait{what: "the server's images", held: held, bound: l.bound}).wait(ctx, log, try); err != nil {
+		return nil, err
+	}
+	if l.how == syscall.LOCK_EX && exec.CommandContext(ctx, cmp.Or(l.docker, "docker"), "version").Run() != nil {
+		unlock()
+		return nil, errors.New("Docker is not answering")
+	}
+	return unlock, nil
 }
 
-// imagesLockAt is imagesLockNow with the lock in root (remote.ImagesLock). While it holds the
+// imagesLockAt takes the server's image lock in root (remote.ImagesLock) shared or
+// exclusively (how) when it is free at once: ok false when busy. While it holds the
 // lock, a holder named who writes remote.ImagesHolders/<pid> as the scripts' image_lock does
 // (remote.HolderLine), which a waiter's message reads: for messages only, so a write that
 // fails fails nothing.
@@ -1665,13 +1691,25 @@ func clearImportMark(base, name string) {
 	}
 }
 
-// readMark is the environment's mark at base, nil without one.
+// readMark is the environment's mark at base, nil without one or when it
+// does not read (markOf).
 func readMark(base string) *remote.Incomplete {
-	data, err := os.ReadFile(filepath.Join(base, remote.SyncIncompleteFile))
-	if err != nil {
-		return nil
+	m, _ := markOf(base)
+	return m
+}
+
+// markOf is the environment's mark at base, nil without one; an error
+// when it is there and does not read.
+func markOf(base string) (*remote.Incomplete, error) {
+	path := filepath.Join(base, remote.SyncIncompleteFile)
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("the environment's mark does not read: %w", err)
 	}
-	return remote.ParseMark(string(data))
+	return remote.ParseMark(string(data)), nil
 }
 
 // runResolved implements devopsy --import <service> --resolved on a

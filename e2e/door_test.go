@@ -1916,14 +1916,14 @@ echo "entry $(ls /home/devopsy/.config/devopsy/door/users/ 2>/dev/null | grep -c
 	if out, _ := root(host); out != made+"entry 1\n" {
 		t.Errorf("the host after add:\n%s\nwant:\n%sentry 1", out, made)
 	}
-	// remove takes its entry, never its Unix user, which holds a tree and data; and an add
-	// of a user that is there takes the subordinate ids it was given meanwhile, and lists
-	// it once more nowhere.
+	// remove keeps its entry, which holds its names and its tree, and its Unix user, which
+	// holds a tree and data; and an add of a user that is there takes the subordinate ids it
+	// was given meanwhile, and lists it once more nowhere.
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users remove "+project+" 2>&1"); code != 0 {
 		t.Fatalf("remove (%d): %s", code, out)
 	}
-	if out, _ := root(host); out != made+"entry 0\n" {
-		t.Errorf("the host after remove:\n%s\nwant:\n%sentry 0", out, made)
+	if out, _ := root(host); out != made+"entry 1\n" {
+		t.Errorf("the host after remove:\n%s\nwant:\n%sentry 1", out, made)
 	}
 	if out, code := root("echo " + user + ":100000:65536 | tee -a /etc/subuid >>/etc/subgid"); code != 0 {
 		t.Fatalf("subordinate ids for %s (%d): %s", user, code, out)
@@ -2157,7 +2157,7 @@ volumes:
 		t.Errorf("the control: the same key, the deploy user's to give (%d): %s", code, out)
 	}
 	// --server-info reads the door's host as root: its users, and the firewall add loaded.
-	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project users\n`).MatchString(out) || strings.Contains(out, "firewall") {
+	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project user\n`).MatchString(out) || strings.Contains(out, "firewall") {
 		t.Errorf("--server-info on a door server:\n%s", out)
 	}
 	// add refuses a name sharing compose names with a project there, and refuses while the
@@ -2553,9 +2553,10 @@ volumes:
 	}
 	check("--destroy of the child", "devopsy @dev --destroy --yes")
 	check("--destroy with data", "devopsy @prod --destroy --yes")
-	// The project's builder (its builds', its claims' settings) is the project's, never an
+	// The environment's mnt is emptied and then removed, by the door's free of its claim. The
+	// project's builder (its builds', its claims' settings) is the project's, never an
 	// environment's to remove.
-	if out, _ := doorRoot(t, "ls -A "+mnt+" 2>&1; docker volume ls -q | grep doorflow | grep -v '^buildx_buildkit_devopsy-'"); strings.TrimSpace(out) != "" {
+	if out, _ := doorRoot(t, "if test -e "+mnt+"; then echo "+mnt+" stays; ls -A "+mnt+"; fi; docker volume ls -q | grep doorflow | grep -v '^buildx_buildkit_devopsy-'"); strings.TrimSpace(out) != "" {
 		t.Errorf("after --destroy: %s", out)
 	}
 	must("a release after --destroy", "devopsy @prod --release")

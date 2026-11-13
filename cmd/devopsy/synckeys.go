@@ -127,15 +127,12 @@ func lockedKeys(file string, edit func([]string) ([]string, error)) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "."+filepath.Base(file)+".lock"), os.O_CREATE|os.O_WRONLY, 0o600)
+	lock, err := os.OpenFile(keysLockFile(file), os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	// A minute, as the --ssh-keys scripts wait for the same lock.
-	if err := (boundedWait{what: "another edit of " + file, bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
-		return tryFlock(lock, syscall.LOCK_EX)
-	}); err != nil {
+	if err := waitKeysLock(file, lock); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(file)
@@ -161,6 +158,41 @@ func lockedKeys(file string, edit func([]string) ([]string, error)) error {
 		return err
 	}
 	return os.Rename(tmp, file)
+}
+
+// keysLockFile is the lock beside a keys file, the --ssh-keys scripts' keysLock's.
+func keysLockFile(file string) string {
+	return filepath.Join(filepath.Dir(file), "."+filepath.Base(file)+".lock")
+}
+
+// waitKeysLock takes lock, file's, exclusive: a minute, as the --ssh-keys scripts wait for
+// the same lock.
+func waitKeysLock(file string, lock *os.File) error {
+	return (boundedWait{what: "another edit of " + file, bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
+		return tryFlock(lock, syscall.LOCK_EX)
+	})
+}
+
+// dropKeysLock removes the lock beside file, holding it, none when it is gone: a destroy's
+// last stretch, once its user is gone. Whoever waits on it meanwhile takes it after, and one
+// that opens it anew makes another; either finds the destroy's mark, or no such user, and
+// changes nothing.
+func dropKeysLock(file string) error {
+	lock, err := os.OpenFile(keysLockFile(file), os.O_WRONLY, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := waitKeysLock(file, lock); err != nil {
+		return err
+	}
+	if err := os.Remove(keysLockFile(file)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // syncKeyDirPrefix and the sync's id name the push's directory for its key, in the

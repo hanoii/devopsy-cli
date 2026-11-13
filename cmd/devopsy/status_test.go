@@ -119,10 +119,8 @@ disks        releases /srv, /: ext4, 50.0 GB free of 100.0 GB (50% used)
              docker /var/lib/docker: xfs, 2.0 GB free of 100.0 GB (98% used)
              docker /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
              to fix it:
-             see what Docker takes, then empty its build cache, on the server:
-             $ devopsy @vm1: --shell-host
-             $ docker system df
-             $ docker builder prune
+             remove what nothing on the server owns, listed first with its sizes:
+             $ devopsy @vm1: --gc
 containers
   app      running  up 3 hours (healthy)
   db       running  healthy
@@ -263,7 +261,7 @@ func TestStatusJSONCopyable(t *testing.T) {
 	}, "devopsy@[::1]:22:")
 	var text, js strings.Builder
 	r.print(&text, style{}, "", false)
-	if !strings.Contains(text.String(), "$ devopsy @'devopsy@[::1]:22:' --shell-host") {
+	if !strings.Contains(text.String(), "$ devopsy @'devopsy@[::1]:22:' --gc") {
 		t.Fatalf("the text's command is not quoted:\n%s", text.String())
 	}
 	r.print(&js, style{}, "", true)
@@ -277,7 +275,7 @@ func TestStatusJSONCopyable(t *testing.T) {
 			cmds = append(cmds, f.Cmds...)
 		}
 	}
-	if !slices.Contains(cmds, "devopsy @'devopsy@[::1]:22:' --shell-host") {
+	if !slices.Contains(cmds, "devopsy @'devopsy@[::1]:22:' --gc") {
 		t.Errorf("the JSON's commands, not copyable: %q", cmds)
 	}
 }

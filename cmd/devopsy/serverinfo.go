@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
@@ -305,17 +306,35 @@ func serverFacts() (remote.ServerInfo, error) {
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	info.Missing = missingTools(anyTool)
-	info.Containers = hostContainers()
 	trees := doorTrees(info.Root)
+	if info.Containers, err = hostContainers("docker", releaseDirs(info.Root, trees)); err != nil {
+		info.ContainersUnread = err.Error()
+	}
 	for _, who := range trees {
 		info.DoorProjects = append(info.DoorProjects, strings.TrimPrefix(who, "devopsy-"))
 	}
 	slices.Sort(info.DoorProjects)
-	info.Environments = environments(info.Root, trees, func(who, tree string) []remote.Environment {
+	if info.Environments, err = environments(info.Root, trees, func(who, tree string) []remote.Environment {
 		return treeEnvironments(who, tree, doorTreeWait)
-	}, ownedByMe)
+	}, ownedByMe); err != nil {
+		info.EnvironmentsUnread = err.Error()
+	}
 	info.UIDsDir, info.UIDs = uidFacts(info.Root)
+	if !asProjectUser() {
+		d, _ := remote.ServerDoor()
+		leftFacts(&info, r, d, trees)
+	}
 	return info, nil
+}
+
+// releaseDirs are where a release's compose project works: the release root, by its path and
+// its links resolved, and each project user's tree.
+func releaseDirs(root string, trees map[string]string) []string {
+	dirs := []string{root}
+	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+		dirs = append(dirs, real)
+	}
+	return append(dirs, slices.Sorted(maps.Keys(trees))...)
 }
 
 // systemFacts fills the machine's facts from /etc and /proc; what is
@@ -635,39 +654,83 @@ func tryReflink(dir string) string {
 }
 
 // hostContainers is every container, any state, with its compose
-// project and service, state and health, and its role and exports.
-func hostContainers() []remote.HostContainer {
-	out, err := exec.Command("docker", "ps", "-aq", "--no-trunc").Output()
+// project and service, state and health, its role and exports, its image
+// and when it exited, as docker (its command) lists them, each released
+// when compose worked under one of dirs: the one inspect of every
+// container --server-info makes. A list docker failed to give is an
+// error, with what it gave: unknown, never none.
+func hostContainers(docker string, dirs []string) ([]remote.HostContainer, error) {
+	out, err := exec.Command(docker, "ps", "-aq", "--no-trunc").Output()
 	if err != nil {
-		return nil
+		return nil, dockerFailed("docker ps", err)
 	}
 	ids := strings.Fields(string(out))
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
-	// A container gone since ps (a run --rm, a util container) fails
-	// inspect, which printed every other one all the same.
-	out, _ = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
-	return parseHostContainers(out)
+	out, err = inspectAll(docker, ids, "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{.Image}} {{json .State.FinishedAt}} {{json .Config.Labels}}")
+	return parseHostContainers(out, dirs), err
+}
+
+// inspectAll is docker (its command) run with args, an inspect, and every one of ids after
+// them, its output: one gone since its listing (a run --rm, a util container) fails it, which
+// printed every other all the same, and is none (onlyGone); any other failure is an error,
+// with what it printed.
+func inspectAll(docker string, ids []string, args ...string) ([]byte, error) {
+	cmd := exec.Command(docker, slices.Concat(args, ids)...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil && !onlyGone(stderr.String()) {
+		what := "docker " + strings.Join(args[:slices.Index(args, "inspect")+1], " ")
+		return out, errors.New(what + ": " + cmp.Or(strings.TrimSpace(stderr.String()), err.Error()))
+	}
+	return out, nil
+}
+
+// onlyGone says whether docker's stderr says only of objects not there: "No such container"
+// (the daemon), "No such object" (the CLI).
+func onlyGone(stderr string) bool {
+	for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
+		if !strings.Contains(strings.ToLower(line), "no such ") {
+			return false
+		}
+	}
+	return true
+}
+
+// dockerFailed is the error of what, a docker command run for its output, with its stderr.
+func dockerFailed(what string, err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(bytes.TrimSpace(ee.Stderr)) > 0 {
+		return errors.New(what + ": " + string(bytes.TrimSpace(ee.Stderr)))
+	}
+	return errors.New(what + ": " + err.Error())
 }
 
 // parseHostContainers reads lines of "<state> <exit code> <health or ->
-// <labels as JSON>".
-func parseHostContainers(out []byte) []remote.HostContainer {
+// <image id> <finish time as JSON> <labels as JSON>": a container whose
+// compose working directory is under one of dirs is a release's
+// (Released).
+func parseHostContainers(out []byte, dirs []string) []remote.HostContainer {
 	var cs []remote.HostContainer
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
-		f := strings.SplitN(sc.Text(), " ", 4)
-		if len(f) < 4 {
+		f := strings.SplitN(sc.Text(), " ", 6)
+		if len(f) < 6 {
 			continue
 		}
 		var labels map[string]string
-		if json.Unmarshal([]byte(f[3]), &labels) != nil {
+		if json.Unmarshal([]byte(f[5]), &labels) != nil {
 			continue
 		}
 		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"],
-			OneOff: labels["com.docker.compose.oneoff"] == "True"}
+			OneOff: labels["com.docker.compose.oneoff"] == "True", Image: f[3]}
+		_ = json.Unmarshal([]byte(f[4]), &c.Finished)
+		if wd := labels["com.docker.compose.project.working_dir"]; wd != "" {
+			c.Released = slices.ContainsFunc(dirs, func(d string) bool { return within(wd, d) })
+		}
 		c.ExitCode, _ = strconv.Atoi(f[1])
 		if f[2] != "-" {
 			c.Health = f[2]
@@ -694,10 +757,15 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 // its own files. Nor any project directory there it does not own (owned):
 // a project user's whose entry is gone (--project-users remove keeps its
 // Unix user and tree), or one the door's list names by another spelling.
-func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment, owned func(path string) bool) []remote.Environment {
+// A directory it cannot read is an error, with every environment it read.
+func environments(root string, trees map[string]string, readTree func(user, tree string) []remote.Environment, owned func(path string) bool) ([]remote.Environment, error) {
+	ps, err := ownProjects(root, trees, owned)
+	errs := []error{err}
 	var envs []remote.Environment
-	for _, p := range ownProjects(root, trees, owned) {
-		envs = append(envs, projectEnvironments(root, p)...)
+	for _, p := range ps {
+		got, err := projectEnvironments(root, p)
+		envs = append(envs, got...)
+		errs = append(errs, err)
 	}
 	// A project user's tree, in the release root or elsewhere (by default its own home).
 	for _, tree := range slices.Sorted(maps.Keys(trees)) {
@@ -707,29 +775,35 @@ func environments(root string, trees map[string]string, readTree func(user, tree
 		}
 		envs = append(envs, got...)
 	}
-	return envs
+	return envs, errors.Join(errs...)
 }
 
 // ownProjects are the project directories in root the deploy user walks: none of a project
 // user's tree (trees, by its path) and none it does not own (owned), whose files another user
 // may change.
-func ownProjects(root string, trees map[string]string, owned func(path string) bool) []string {
+func ownProjects(root string, trees map[string]string, owned func(path string) bool) ([]string, error) {
+	dirs, err := envDirs(root, root)
 	var out []string
-	for _, p := range envDirs(root) {
+	for _, p := range dirs {
 		if _, ok := trees[p]; !ok && owned(p) {
 			out = append(out, p)
 		}
 	}
-	return out
+	return out, err
 }
 
-// deployEnvBases are the deploy user's environments' directories in root (ownProjects).
-func deployEnvBases(root string) []string {
+// deployEnvBases are the deploy user's environments' directories in root (ownProjects), with
+// an error for a directory it could not read.
+func deployEnvBases(root string) ([]string, error) {
+	ps, err := ownProjects(root, doorTrees(root), ownedByMe)
+	errs := []error{err}
 	var out []string
-	for _, p := range ownProjects(root, doorTrees(root), ownedByMe) {
-		out = append(out, envBases(p)...)
+	for _, p := range ps {
+		bases, err := envBases(root, p)
+		out = append(out, bases...)
+		errs = append(errs, err)
 	}
-	return out
+	return out, errors.Join(errs...)
 }
 
 // ownedByMe says whether path, links resolved, is this user's own.
@@ -742,56 +816,123 @@ func ownedByMe(path string) bool {
 	return ok && int(st.Uid) == os.Getuid()
 }
 
-// envDirs are dir's directories, a link to one included: a project or an
-// environment moved to another disk and linked back is one, as the
-// scripts reach it.
-func envDirs(dir string) []string {
-	entries, _ := os.ReadDir(dir)
+// envDirs are dir's directories, under the release root root, a link to
+// one included: a project or an environment moved to another disk and
+// linked back is one, as the scripts reach it. A link resolving to
+// nothing is an error when a uid claim names an environment under it
+// (danglingClaimed): an environment's disk not mounted, what is there
+// would read as gone. Any other is a stray link, skipped: the root's top
+// level is by default the deploy user's home. A dir not there, or no
+// directory, holds none (a release root before its first release, a
+// project removed since its root was read); one it cannot read, or an
+// entry it cannot stat, is an error, with what it read.
+func envDirs(root, dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil, nil
+	}
 	var out []string
+	errs := []error{err}
 	for _, e := range entries {
 		if !projectDir(e.Name()) {
 			continue
 		}
-		if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {
-			out = append(out, filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		fi, err := os.Stat(path)
+		switch {
+		case err == nil && fi.IsDir():
+			out = append(out, path)
+		case errors.Is(err, os.ErrNotExist):
+			if li, lerr := os.Lstat(path); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+				errs = append(errs, danglingClaimed(root, path))
+			}
+		case err != nil:
+			errs = append(errs, err)
 		}
 	}
-	return out
+	return out, errors.Join(errs...)
 }
 
-// projectEnvironments are the environments of the project at p under root.
-func projectEnvironments(root, p string) []remote.Environment {
+// danglingClaimed is the error of path, a link to no directory under the release root root,
+// when a uid claim there names an environment under it (its project, and instance if any,
+// path's names), an environment's disk not mounted, else nil. Claims that do not read leave
+// it unknown, an error too.
+func danglingClaimed(root, path string) error {
+	unread := errors.New(path + " links to no directory, a disk not mounted perhaps")
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return unread
+	}
+	claims, err := uids.StoreAt(root).List()
+	if err != nil {
+		return fmt.Errorf("%w, and the uid claims do not read: %w", unread, err)
+	}
+	rel = filepath.ToSlash(rel)
+	for _, c := range claims {
+		if c.Bad != "" {
+			continue
+		}
+		at := c.Owner.Project
+		if c.Owner.Instance != "" {
+			at += "/" + c.Owner.Instance
+		}
+		if c.Owner.Env != "" {
+			at += "/" + c.Owner.Env
+		}
+		if at == rel || strings.HasPrefix(at, rel+"/") {
+			return unread
+		}
+	}
+	return nil
+}
+
+// projectEnvironments are the environments of the project at p under root, with an error for
+// a directory of it it could not read.
+func projectEnvironments(root, p string) ([]remote.Environment, error) {
+	bases, err := envBases(root, p)
 	var envs []remote.Environment
-	for _, dir := range envBases(p) {
+	for _, dir := range bases {
 		rel, _ := filepath.Rel(root, dir)
 		cmd := exec.Command("sh", "-c", remote.EnvStatus)
 		cmd.Env = append(os.Environ(), "base="+dir)
 		out, _ := cmd.Output()
 		envs = append(envs, remote.Environment{Path: filepath.ToSlash(rel), Status: string(out)})
 	}
-	return envs
+	return envs, err
 }
 
 // envBases are the directories of the project at p's environments, [<instance>/]<environment>
-// (a directory with releases/).
-func envBases(p string) []string {
-	var out []string
-	isEnv := func(dir string) bool {
+// (a directory with releases/), under the release root root, with an error for a directory it
+// could not read.
+func envBases(root, p string) ([]string, error) {
+	return envsUnder(root, p, func(dir string) bool {
 		fi, err := os.Stat(filepath.Join(dir, "releases"))
 		return err == nil && fi.IsDir()
-	}
-	for _, e := range envDirs(p) {
+	})
+}
+
+// envsUnder are the directories under the project at p in root, [<instance>/]<environment> as
+// devopsy lays them out, that isEnv takes for an environment's (a release root's, a snapshot
+// root's), an instance's looked into only when it is not one itself, with an error for a
+// directory it could not read.
+func envsUnder(root, p string, isEnv func(dir string) bool) ([]string, error) {
+	var out []string
+	dirs, err := envDirs(root, p)
+	errs := []error{err}
+	for _, e := range dirs {
 		if isEnv(e) {
 			out = append(out, e)
 			continue
 		}
-		for _, i := range envDirs(e) {
+		inner, err := envDirs(root, e)
+		errs = append(errs, err)
+		for _, i := range inner {
 			if isEnv(i) {
 				out = append(out, i)
 			}
 		}
 	}
-	return out
+	return out, errors.Join(errs...)
 }
 
 // doorTrees are the project users' trees under root, each to its user.
@@ -1088,7 +1229,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	if dr := info.Door; dr != nil {
-		row("door", fmt.Sprintf("%s, %d project users", dr.Space, dr.Users))
+		row("door", dr.Space+", "+plural(dr.Users, "project user"))
 		if dr.Unguarded != "" {
 			warn(dr.Unguarded+": the door refuses every request",
 				spaceFix(dr.Space))
@@ -1246,7 +1387,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			}
 		}
 	}
-	if len(holders) == 0 {
+	switch {
+	case info.ContainersUnread != "":
+		row("roles", "unknown")
+		warn("the containers could not be listed: " + oneLine(info.ContainersUnread))
+	case len(holders) == 0:
 		row("roles", "none")
 	}
 	for _, role := range sortedKeysOf(holders) {
@@ -1267,6 +1412,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	noFlock := slices.Contains(info.Missing, "flock")
 	if len(info.Environments) == 0 {
 		row("environments", "none")
+	}
+	if info.EnvironmentsUnread != "" {
+		key = "environments"
+		warn("not every environment could be read: " + oneLine(info.EnvironmentsUnread))
 	}
 	for _, env := range info.Environments {
 		h := parseStatus(env.Status)
@@ -1356,12 +1505,15 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			continue
 		}
 		row("uids", strconv.FormatUint(uint64(c.UID), 10)+"  "+c.Owner)
-		if why := staleUID(c, info.UIDs, info.Environments, info.DoorProjects); why != "" {
+		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" {
 			warn(c.Owner+"'s uid claim is left: "+why, rm())
 		}
 	}
-	return es
+	return append(es, leftEntries(info, host, ref)...)
 }
+
+// oneLine is text, an error's lines joined (errors.Join), on one line.
+func oneLine(text string) string { return strings.ReplaceAll(strings.TrimSpace(text), "\n", "; ") }
 
 // clockOffset says d, the server's clock less the local one, as
 // --server-info shows it: about 0.8 s behind local.
@@ -1444,10 +1596,12 @@ func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
 		return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
 	}
 	if has("docker") || has("containerd") {
+		// --gc, the one removal of what nothing on the server owns (old build cache, one-offs,
+		// dangling images), needs an address: on the server itself, it is words.
 		if ref == "" {
-			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
+			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then remove what nothing on this server owns with --gc, run on it from a checkout or an alias:", "docker system df"))
 		} else {
-			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+			use.fixes = append(use.fixes, report.Fix("remove what nothing on the server owns, listed first with its sizes:", "devopsy @"+ref+" --gc"))
 		}
 	}
 	if has("snapshots") || (has("releases") && snapshotRoot == "") {

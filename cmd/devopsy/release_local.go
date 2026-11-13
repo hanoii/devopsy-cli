@@ -420,10 +420,27 @@ func emptyMnt(ctx context.Context, projectDir string, c container) error {
 	if err != nil {
 		return err
 	}
+	return emptyAsRoot(ctx, real, mnt, c)
+}
+
+// emptyAsRoot empties real, a directory and no link, as root in remote.UtilImage, in the
+// container c, saying it as shown: what containers wrote there as other users included, real
+// itself kept. find follows no link inside.
+func emptyAsRoot(ctx context.Context, real, shown string, c container) error {
+	fi, err := os.Lstat(real)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("emptying %s: %s is no directory", shown, real)
+	}
+	if entries, err := os.ReadDir(real); err != nil || len(entries) == 0 {
+		return err
+	}
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	report.Info("emptying " + mnt)
+	report.Info("emptying " + shown)
 	if err := dockerRun(ctx, c, "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
 		return fmt.Errorf("emptying mnt: %w", err)
 	}

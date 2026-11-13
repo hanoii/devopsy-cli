@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // A compose name is a project user's by the door's rule (door.Policy's OwnName): a longer
@@ -33,22 +35,72 @@ func TestDoorNameOwner(t *testing.T) {
 		// A deploy user's project shop-eu, before its first release.
 		"shop-eu-stage": {"shop-eu", ""},
 	} {
-		if got := doorNameOwner(d, root, c.project, name); got != c.want {
-			t.Errorf("%s of %s: %q, want %q", name, c.project, got, c.want)
+		if got, err := doorNameOwner(d, root, c.project, name); got != c.want || err != nil {
+			t.Errorf("%s of %s: %q (%v), want %q", name, c.project, got, err, c.want)
 		}
 	}
-	if got := doorNameOwner(nil, root, "shop", "shop-stage"); got != "" {
-		t.Errorf("no door: %q", got)
+	if got, err := doorNameOwner(nil, root, "shop", "shop-stage"); got != "" || err != nil {
+		t.Errorf("no door: %q (%v)", got, err)
 	}
 	// A project in the release root holds its names too, the deploy user's own: one whose
 	// name extends a project user's is not that user's.
 	if err := os.Mkdir(filepath.Join(root, "shop-eu"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{"shop-eu-prod": "", "shop-eur-prod": "devopsy-shop", "shop-stage": "devopsy-shop"} {
-		if got := doorNameOwner(d, root, "shop", name); got != want {
-			t.Errorf("%s, beside the release root's shop-eu: %q, want %q", name, got, want)
+	// So does one linked there, its disk mounted or not: its name is what holds them.
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "shop-us")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "not-mounted"), filepath.Join(root, "shop-ca")); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"shop-eu-prod": "", "shop-eur-prod": "devopsy-shop", "shop-stage": "devopsy-shop", "shop-us-prod": "", "shop-ca-prod": ""} {
+		if got, err := doorNameOwner(d, root, "shop", name); got != want || err != nil {
+			t.Errorf("%s, beside the release root's shop-eu: %q (%v), want %q", name, got, err, want)
 		}
+	}
+	// A release root it cannot read is unknown, never a root with no project: a deploy
+	// project's names would read as a project user's. A missing one too, which a project user
+	// never sees (--project-users add makes the root first); with no project user, nothing of
+	// the root changes the answer.
+	gone := filepath.Join(t.TempDir(), "gone")
+	if got, err := doorNameOwner(d, gone, "shop-eu", "shop-eu-prod"); err == nil || !strings.Contains(err.Error(), gone) {
+		t.Errorf("a missing root: %q, %v", got, err)
+	}
+	if got, err := doorNameOwner(&remote.Door{}, gone, "shop", "shop-prod"); got != "" || err != nil {
+		t.Errorf("a missing root, no project user: %q, %v", got, err)
+	}
+	if os.Getuid() != 0 {
+		if err := os.Chmod(root, 0o300); err != nil {
+			t.Fatal(err)
+		}
+		_, err := doorNameOwner(d, root, "shop-eu", "shop-eu-prod")
+		if err := os.Chmod(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err == nil || !strings.Contains(err.Error(), root) {
+			t.Errorf("an unreadable root: %v", err)
+		}
+	}
+}
+
+// The door's other projects, which a project's names stop at (door.Policy.OwnName), are the
+// door's users' and the release root's but its own: a root that does not read is an error,
+// never none.
+func TestOtherProjects(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, p := range []string{"shop", "blog"} {
+		if err := os.Mkdir(filepath.Join(root, p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := remote.DoorUser{Project: "shop", Others: []string{"shop-admin"}}
+	if got, err := otherProjects(s, root); err != nil || strings.Join(got, " ") != "shop-admin blog" {
+		t.Errorf("others: %v, %v", got, err)
+	}
+	if got, err := otherProjects(s, filepath.Join(root, "gone")); err == nil {
+		t.Errorf("a missing root: %v", got)
 	}
 }
 
@@ -92,10 +144,10 @@ func TestDeployUserLeavesAProjectUsersNames(t *testing.T) {
 	}
 }
 
-// --project-users remove ends the project user's processes once its entry and keys are
-// gone, so the door answers no new call meanwhile: one it left running would outlive its
-// logins. What the door kept for it goes too (its registry logins, its claimed images'
-// record), another project's staying. A kill that fails fails the command, which says the
+// --project-users remove ends the project user's processes once its keys are gone, so the
+// door answers no new call meanwhile: one it left running would outlive its logins. What the
+// door kept for it goes too (its registry logins, its claimed images' record), another
+// project's staying, and its entry stays. A kill that fails fails the command, which says the
 // rest is done.
 //
 // Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
@@ -105,8 +157,8 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	var ended []string
 	end := func(fails error) func(string) error {
 		return func(who string) error {
-			if _, err := os.Stat(entry); err == nil {
-				t.Errorf("%s's processes ended while its entry stays", who)
+			if remote.KeysLeft(remote.DoorKeysFile(who)) {
+				t.Errorf("%s's processes ended while its keys stay", who)
 			}
 			ended = append(ended, who)
 			return fails
@@ -131,24 +183,24 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	if fileExists(logins) || fileExists(record) || fileExists(record+".lock") || !fileExists(theirs) {
 		t.Errorf("after remove: its logins %v, its images' record %v and its lock %v, another's logins %v", fileExists(logins), fileExists(record), fileExists(record+".lock"), fileExists(theirs))
 	}
-	if fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
+	// Its entry stays, holding its names and its tree.
+	if !fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
 		t.Errorf("after remove: its entry %v, its keys %v, its sync keys %v, another's keys %v", fileExists(entry), fileExists(keys), fileExists(syncKeys), fileExists(other))
 	}
 	ended = nil
-	write(t, entry, "project: shop\n", 0o600)
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(errors.New("no docker"))); code == 0 {
 		t.Error("a kill that failed passes")
 	}
 	if !fileExists(remote.DoorEndingFile("devopsy-shop")) {
 		t.Error("a kill that failed left no mark of the end pending")
 	}
-	// Asked again, its entry gone, the marked end completes and its mark goes.
+	// Asked again, the marked end completes and its mark goes.
 	ended = nil
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" || fileExists(remote.DoorEndingFile("devopsy-shop")) {
 		t.Errorf("a removal asked again after a failed end (exit %d) ended %q, its mark there %v", code, ended, fileExists(remote.DoorEndingFile("devopsy-shop")))
 	}
 	ended = nil
-	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code == 0 || len(ended) != 0 {
+	if code := removeProjectUser(nil, "shop", "devopsy-shop", filepath.Join(t.TempDir(), "devopsy-shop.yaml"), end(nil)); code == 0 || len(ended) != 0 {
 		t.Errorf("no such user (exit %d) ended %q", code, ended)
 	}
 }
@@ -376,7 +428,7 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 }
 
 // A project user whose Unix user is gone already runs nothing to end: its removal goes on to
-// its entry and keys rather than failing on the lookup.
+// what the door kept rather than failing on the lookup.
 func TestEndUserOfAUserGone(t *testing.T) {
 	t.Parallel()
 	if err := endUser("devopsy-nosuchuser-zz9"); err != nil {
@@ -495,5 +547,111 @@ func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
 	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add with no door (%d):\n%s", code, out)
+	}
+}
+
+// --project-users list says a project user with no key that still holds anything a plain
+// remove refuses for and its destroy removes (heldBy: its claims, the containers, volumes and
+// networks under its names, its mnts, images and door directories), each a detail, a
+// container by its name, with its destroy offered
+// by the session's server, in words with none. One with a key, or holding nothing, is no such
+// line, nor one whose destroy did not complete: its own line says how to complete it, by the
+// same address, and no key takes it back while its mark holds it.
+func TestProjectUsersListSaysKeyless(t *testing.T) {
+	t.Parallel()
+	home, root := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+t.TempDir()+"\n  users:\n    devopsy-shop: {project: shop}\n    devopsy-blog: {project: blog}\n    devopsy-wiki: {project: wiki}\n    devopsy-news: {project: news}\n    devopsy-mail: {project: mail}\n", 0o644)
+	write(t, filepath.Join(home, "door", "keys", "devopsy-blog"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o600)
+	// mail's destroy did not complete (remote.DoorDestroyingFile), its claim still there.
+	write(t, filepath.Join(home, "door", "keys", "devopsy-mail.destroying"), "mail\nhome /home/devopsy-mail\nuid 50000\n", 0o600)
+	for _, o := range []uids.Owner{{Project: "shop", Env: "prod"}, {Project: "blog", Env: "prod"}, {Project: "mail", Env: "prod"}} {
+		if _, err := uids.StoreAt(root).Lookup(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := t.TempDir()
+	// news holds only a volume, which a plain remove of it refuses for.
+	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
+case "$1 $2" in
+  'ps -a') echo '["c1c1c1c1","shop-stage","","","shop-stage-web-1"]'; echo '["c2","blog-dev","","","blog-dev-web-1"]'; echo '["c3","other-prod","","","other-prod-web-1"]' ;;
+  'volume ls') echo '["news-prod_db","news-prod"]' ;;
+esac
+`, 0o755)
+	out, code := runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, "--project-users-step", "list")
+	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds:\n"+
+		"devopsy: | the uid claims env:shop:prod\n"+
+		"devopsy: | the containers shop-stage-web-1\n"+
+		"devopsy: | a --project-users remove of shop with --destroy removes it with what it holds\n"+
+		"devopsy: | or a key added for it (--ssh-keys with --for) takes it back\n") ||
+		!strings.Contains(out, "devopsy: devopsy-news has no key and still holds:\ndevopsy: | the volumes news-prod_db\n") ||
+		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") ||
+		!strings.Contains(out, "devopsy-mail: the destroy of mail's project user did not complete") || strings.Contains(out, "devopsy-mail has") ||
+		!strings.Contains(out, "devopsy-blog\tproject blog\tno Unix user\t1 key\n") || !strings.Contains(out, "devopsy-shop\tproject shop\tno Unix user\t0 keys\n") {
+		t.Errorf("list (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", remote.ServerEnv + "=devopsy@vm1:"}, "--project-users-step", "list")
+	if code != 0 || !strings.Contains(out, "devopsy: | the containers shop-stage-web-1\n"+
+		"devopsy: | remove it with what it holds:\n"+
+		"devopsy: | $ devopsy @devopsy@vm1: --project-users remove shop --destroy\n") ||
+		!strings.Contains(out, "devopsy: | run it again, which completes it:\n"+
+			"devopsy: | $ devopsy @devopsy@vm1: --project-users remove mail --destroy\n") {
+		t.Errorf("list in a session (%d):\n%s", code, out)
+	}
+}
+
+// A project user's id is given once: the next past both the record's highest and the highest
+// of the range in passwd and group (ids outside it ignored), recorded before the user is
+// made, so an add after a removal never takes the removed user's uid, which its files left on
+// the host still carry; once the range is spent, add refuses.
+func TestTakeProjectID(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	record, passwd, group := filepath.Join(dir, "door", "uids-given"), filepath.Join(dir, "passwd"), filepath.Join(dir, "group")
+	write(t, passwd, "root:x:0:0::/root:/bin/sh\ndevopsy-shop:x:50000:50000::/home/devopsy-shop:/x\nnobody:x:65534:65534::/:/x\n", 0o644)
+	write(t, group, "devopsy-shop:x:50000:\ndevopsy-blog:x:50003:\n", 0o644)
+	take := func() int {
+		t.Helper()
+		n, err := takeProjectID(record, passwd, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := take(); n != 50004 || strings.TrimSpace(readString(record)) != "50004" {
+		t.Errorf("first id %d, recorded %q", n, readString(record))
+	}
+	// The user removed (its lines gone), its id stays given.
+	write(t, passwd, "root:x:0:0::/root:/bin/sh\n", 0o644)
+	write(t, group, "", 0o644)
+	if n := take(); n != 50005 {
+		t.Errorf("an id after the users went: %d", n)
+	}
+	write(t, record, fmt.Sprintf("%d\n", door.ProjectIDMax), 0o600)
+	if _, err := takeProjectID(record, passwd, group); err == nil || !strings.Contains(err.Error(), "was given once already") {
+		t.Errorf("a range spent: %v", err)
+	}
+}
+
+// A group of the user's name with no user, which an add cut after its groupadd leaves, gives
+// its gid to the next add, which then takes no new id; one with a member or out of the project
+// users' range is someone else's, and refused.
+func TestLeftGroupID(t *testing.T) {
+	t.Parallel()
+	group := filepath.Join(t.TempDir(), "group")
+	for _, c := range []struct {
+		file      string
+		gid       int
+		left, bad bool
+	}{
+		{file: "users:x:100:\n"},
+		{file: "users:x:100:\ndevopsy-shop:x:50002:\n", gid: 50002, left: true},
+		{file: "devopsy-shop:x:50002:alice\n", bad: true},
+		{file: "devopsy-shop:x:1001:\n", bad: true},
+	} {
+		write(t, group, c.file, 0o644)
+		gid, left, err := leftGroupID(group, "devopsy-shop")
+		if gid != c.gid || left != c.left || (err != nil) != c.bad || (c.bad && !strings.Contains(err.Error(), "no project user's left")) {
+			t.Errorf("%q: gid %d, left %v, %v", c.file, gid, left, err)
+		}
 	}
 }

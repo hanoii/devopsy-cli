@@ -28,10 +28,11 @@ func TestOperatorCommandIsTheSessions(t *testing.T) {
 	}
 }
 
-// What a session carries is taken only as devopsy writes it: a command within its cap, and
-// both addresses only when each parses as an environment's (an alias, a server with a port
-// or an IPv6 address, an instance), never a server alone, a word with a shell's characters
-// or one past its cap. What is not is dropped, never an error.
+// What a session carries is taken only as devopsy writes it: a command within its cap, both
+// addresses only when each parses as an environment's (an alias, a server with a port or an
+// IPv6 address, an instance), never a server alone, and the server's command's address as an
+// environment's or a server alone; never a word with a shell's characters or one past its cap.
+// What is not is dropped, never an error.
 func TestSessionFromTakesOnlyWhatParses(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -48,6 +49,13 @@ func TestSessionFromTakesOnlyWhatParses(t *testing.T) {
 		{map[string]string{AddressEnv: "prod", HintAddressEnv: "vm1;reboot:prod"}, Session{}},
 		{map[string]string{AddressEnv: "prod$(id)", HintAddressEnv: "prod"}, Session{}},
 		{map[string]string{CommandEnv: "devopsy " + strings.Repeat("x", commandMax), AddressEnv: strings.Repeat("a", addressMax+1), HintAddressEnv: "prod"}, Session{}},
+		// The address a server's command takes: a server named alone too, or an environment's.
+		{map[string]string{ServerEnv: "devopsy@vm1:2222:"}, Session{Server: "devopsy@vm1:2222:"}},
+		{map[string]string{ServerEnv: "devopsy@[2001:db8::1]:"}, Session{Server: "devopsy@[2001:db8::1]:"}},
+		{map[string]string{ServerEnv: "box"}, Session{Server: "box"}},
+		{map[string]string{ServerEnv: "vm1;reboot:"}, Session{}},
+		{map[string]string{ServerEnv: "vm1\nx:"}, Session{}},
+		{map[string]string{ServerEnv: strings.Repeat("a", addressMax) + ":"}, Session{}},
 	} {
 		if got := SessionFrom(getenv(c.env)); got != c.want {
 			t.Errorf("%v: %+v, want %+v", c.env, got, c.want)
@@ -95,5 +103,19 @@ func TestSessionAddressHoldsNoControlCharacter(t *testing.T) {
 			lines := report.Lines(report.WarnLevel, "a warning", nil, []report.Remedy{report.Fix("release again:", cmd)})
 			t.Errorf("%q is offered as a command:\n%s", a, strings.Join(lines, "\n"))
 		}
+	}
+}
+
+// A session on a server named alone carries its address for a server's command, and no
+// environment's; one on an environment carries both, as typed.
+func TestSessionExportsTheServer(t *testing.T) {
+	t.Parallel()
+	alone := sessionExports(&Target{Host: "devopsy@vm1"})
+	if !strings.Contains(alone, ServerEnv+"='devopsy@vm1:'; export "+ServerEnv+"\n") || strings.Contains(alone, AddressEnv) {
+		t.Errorf("a server named alone:\n%s", alone)
+	}
+	env := sessionExports(&Target{Host: "devopsy@vm1", Name: "prod", Alias: "box", Path: "shop/prod"})
+	if !strings.Contains(env, ServerEnv+"='box'; export "+ServerEnv+"\n") || !strings.Contains(env, AddressEnv+"='box'") {
+		t.Errorf("an environment:\n%s", env)
 	}
 }

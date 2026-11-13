@@ -114,12 +114,18 @@ func runReleaseSettings(args []string) int {
 			failErr(err)
 			return remote.SettingsRefusedExit
 		}
-		if who := doorNameOwner(d, r.Root, args[0], args[1]); who != "" {
+		who, err := doorNameOwner(d, r.Root, args[0], args[1])
+		if err != nil {
+			failErr(fmt.Errorf("cannot tell whether compose project %s is under a project user's names: %w", args[1], err))
+			return remote.SettingsRefusedExit
+		}
+		if who != "" {
 			failErr(&report.Failure{Msg: "compose project " + args[1] + " is under the names of project user " + who + " here: as the deploy user, devopsy would act on that user's containers and volumes",
 				Remedies: []report.Remedy{report.Fix("address it as that user, for example:", "DEVOPSY_SERVER="+who+"@<server> devopsy @<target> --release")}})
 			return remote.SettingsRefusedExit
 		}
 	}
-	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(), remote.Protocol, remote.FeaturesList())
+	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
+		remote.Protocol, remote.FeaturesList())
 	return 0
 }

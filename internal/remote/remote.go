@@ -572,7 +572,16 @@ const Protocol = 8
 // target's directory (its path under $root), and $snaps to where its
 // snapshots go, with $snap_max_keep (its snapshots:). The
 // server decides where releases live, so a laptop and CI always agree.
+// It exports the environment's directories for the images' rules only
+// for an environment: a server named alone has none, and $base is then
+// the root, which every devopsy the script runs would take for one.
 func basePrelude(t *Target) string {
+	envExport := ""
+	if t.Path != "" {
+		envExport = `# The images' rules count a snapshot's bookmarks as the environment's own.
+export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
+`
+	}
 	// The detached update check would inherit the scripts' locks (fds 8
 	// and 9) and hold them while it asks GitHub. The checks of the
 	// server's devopsy say so with a plain echo: it may lack --say.
@@ -596,9 +605,17 @@ snap_root=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_root=//p')
 snap_max_keep=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_max_keep=//p')
 snaps="$base/snapshots"
 [ -z "$snap_root" ] || snaps="$snap_root"/` + Quote(t.Path) + `
-# The images' rules count a snapshot's bookmarks as the environment's own.
-export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
-`
+` + envExport
+}
+
+// serverPrelude is basePrelude for a script of the server's (--gc, --server-info,
+// --project-users, --server-setup), which acts on no environment: t's path left out, even
+// for an environment's address, so that it exports none, which every devopsy it runs would
+// take for the one it acts on.
+func serverPrelude(t *Target) string {
+	s := *t
+	s.Path = ""
+	return basePrelude(&s)
 }
 
 // SettingsRefusedExit is --release-settings' exit when it refused the environment it was
@@ -2090,6 +2107,21 @@ func DestroyScript(t *Target, projectName string) string {
 	free := `devopsy ` + FreeUIDsFlag + ` "$base" || { devopsy --say error "the uid of $base is not freed: its --destroy frees it when run again"; exit 1; }
 `
 	return "set -eu\n" + basePrelude(t) + removeMoved + `if [ ! -d "$base" ]; then
+  # A part of $base's path under the root that is a link to no directory
+  # is a disk not mounted, its environment back once it is: nothing is
+  # freed. Anything else not there (containers of the name included: a
+  # cut destroy's rerun, an environment removed by hand) is nothing at it.
+  d_rel=${base#"$root"/}
+  d_at=$root
+  while [ -n "$d_rel" ]; do
+    d_at="$d_at/${d_rel%%/*}"
+    case $d_rel in */*) d_rel=${d_rel#*/} ;; *) d_rel= ;; esac
+    if [ -L "$d_at" ] && [ ! -d "$d_at" ]; then
+      devopsy --say error "$base is not there: $d_at links to no directory, a disk not mounted perhaps: nothing freed" "$d_at -> $(readlink "$d_at" || :)" ` + sayRemedies(report.Fix("mount the disk it is on, then run it again:", "devopsy @"+HintAddress(t)+" --destroy")) + `
+      exit 1
+    fi
+    [ -d "$d_at" ] || break
+  done
   devopsy --say info "nothing at $base"
   ` + free + `  exit 0
 fi

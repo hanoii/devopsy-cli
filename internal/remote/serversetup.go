@@ -28,7 +28,7 @@ const HostRootEnv = "DEVOPSY_INTERNAL_HOST_ROOT"
 // ServerSetupScript runs ServerSetupFlag with args on the server, after the prelude's checks,
 // refusing a project user (askedAsProjectUser): the server's setup is its deploy user's.
 func ServerSetupScript(t *Target, args []string) string {
-	return "set -eu\n" + basePrelude(t) + askedAsProjectUser + devopsyCall("", append([]string{ServerSetupFlag}, args...), true) + "\n"
+	return "set -eu\n" + serverPrelude(t) + askedAsProjectUser + devopsyCall("", append([]string{ServerSetupFlag}, args...), true) + "\n"
 }
 
 // The lines SetupRootScript prints on stdout, one per change.
