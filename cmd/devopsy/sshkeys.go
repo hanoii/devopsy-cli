@@ -69,16 +69,16 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		return code, err
 	}
-	list := func() ([]remote.AuthorizedKey, error) {
+	// list reads the keys; a code other than 0 is the script's exit, which said why (a
+	// refusal, a lock not taken) or ssh's, which says its own: the command's exit, nothing more
+	// to say, as add's and remove's.
+	list := func() ([]remote.AuthorizedKey, int, error) {
 		var buf bytes.Buffer
 		code, err := asked(remote.KeysReadScript(user, targetRef(t)), bytes.NewReader(nil), &buf)
-		if err != nil {
-			return nil, err
+		if err != nil || code != 0 {
+			return nil, code, err
 		}
-		if code != 0 {
-			return nil, fmt.Errorf("reading %s authorized keys failed (%d)", whose, code)
-		}
-		return remote.ParseAuthorizedKeys(buf.String()), nil
+		return remote.ParseAuthorizedKeys(buf.String()), 0, nil
 	}
 	add := func(k remote.AuthorizedKey) int {
 		if restricted {
@@ -121,12 +121,15 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if len(words) > 0 || restricted {
 			return fail(usage)
 		}
-		keys, err := list()
+		keys, code, err := list()
 		if err == errSaid {
 			return 1
 		}
 		if err != nil {
 			return fail(err.Error())
+		}
+		if code != 0 {
+			return code
 		}
 		where := "~/.ssh/authorized_keys of its deploy user"
 		if user != "" {
@@ -189,12 +192,15 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if len(words) != 1 || restricted {
 			return fail(usage)
 		}
-		keys, err := list()
+		keys, code, err := list()
 		if err == errSaid {
 			return 1
 		}
 		if err != nil {
 			return fail(err.Error())
+		}
+		if code != 0 {
+			return code
 		}
 		// A word that names nothing would match every fingerprint, and an empty one every key
 		// with no comment.
@@ -234,7 +240,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return fail(fp + " is " + t.Host + "'s last key: removing it would lock everyone out")
 		}
 		var buf bytes.Buffer
-		code, err := asked(remote.KeysRemoveScript(user, targetRef(t)), strings.NewReader(k.Blob+"\n"), &buf)
+		code, err = asked(remote.KeysRemoveScript(user, targetRef(t)), strings.NewReader(k.Blob+"\n"), &buf)
 		if err == errSaid {
 			return 1
 		}

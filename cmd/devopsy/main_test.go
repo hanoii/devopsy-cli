@@ -1592,6 +1592,14 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if out, code := run("", "--ssh-keys"); code == 0 || !strings.Contains(out, "needs a target") {
 		t.Errorf("list without a target (%d):\n%s", code, out)
 	}
+	// A refusal the server's script said is the one error, its exit the command's: a listing
+	// and the removal that lists first.
+	for _, args := range [][]string{{"list"}, {"remove", "op@laptop"}} {
+		out, code := run("", append([]string{"@prod", "--ssh-keys", "--for", "nope"}, args...)...)
+		if code != 3 || !strings.Contains(out, "devopsy: error: no project user devopsy-nope here\n") || strings.Count(out, "error:") != 1 {
+			t.Errorf("%v for no project user (%d):\n%s", args, code, out)
+		}
+	}
 	// A server alone is named back as <host>:, which copies as typed: a
 	// port or an IPv6 address would otherwise read as an environment.
 	for _, server := range []string{"devopsy@server:5369", "[2001:db8::1]:22"} {
