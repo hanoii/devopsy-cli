@@ -889,10 +889,41 @@ func (s *doorSide) inspectImage(ref string) (images.Image, error) {
 	return images.ParseImage(out)
 }
 
-// claimedImages reads a project user's record of claimed images (door.Policy.ImagesFile).
-func claimedImages(file string) []string {
+// claimed is a line of a project user's record of claimed images (door.Policy.ImagesFile):
+// an image's id and the plain names asked whose last claim landed on it (images.Familiar).
+type claimed struct {
+	id    string
+	names []string
+}
+
+// claimLines reads a project user's record of claimed images, a line each, its fields split
+// by tabs: one whose first is no image's id is no line of the door's, and is left out. A
+// record of ids alone, an older door's, reads as lines with no names.
+func claimLines(file string) []claimed {
 	data, _ := os.ReadFile(file)
-	return strings.Fields(string(data))
+	var lines []claimed
+	for _, l := range strings.Split(string(data), "\n") {
+		f := strings.Fields(l)
+		if len(f) == 0 || !strings.HasPrefix(f[0], "sha256:") {
+			continue
+		}
+		lines = append(lines, claimed{id: f[0], names: f[1:]})
+	}
+	return lines
+}
+
+// claimedImages reads a project user's record of claimed images: their ids
+// (door.Policy.Images) and each name to the id its last claim landed (door.Policy.Names).
+func claimedImages(file string) ([]string, map[string]string) {
+	var ids []string
+	names := map[string]string{}
+	for _, l := range claimLines(file) {
+		ids = append(ids, l.id)
+		for _, n := range l.names {
+			names[n] = l.id
+		}
+	}
+	return ids, names
 }
 
 // doorKnown is what devopsy's own util containers run.
@@ -1171,7 +1202,7 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 		Project: s.Project, User: who, UID: u.Uid, Space: s.Space, Tree: tree, Joinable: s.Joinable, Roles: s.Roles,
 		ForbiddenIDs: ids, Others: others,
 	}
-	p.Images = claimedImages(p.ImagesFile())
+	p.Images, p.Names = claimedImages(p.ImagesFile())
 	return p, nil
 }
 
@@ -1742,28 +1773,36 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 // other is anyone's on the server (another project's pull of a tag its registry moved, the
 // deploy user's build of a registry's name), so it goes pinned, <image>@<digest>
 // (images.Pin): an image of this project's (claimed by its id, or named by a hold of its
-// own) by its digest in the image's repository, as the devopsy.digest label chooses it,
-// read in one inspect; else claimed first, by the digest its claim loaded, a reference by an
-// index's digest included. A reference by digest the project has, or an id, is a pin already. An image not here yet is claimed too, with this
-// project's logins, and one still missing refuses the start: compose would pull or build it
-// after this check.
+// own), read where the record of its claims says (door.Policy.ImageRef), by its digest in the
+// image's repository, as the devopsy.digest label chooses it, read in one inspect; else
+// claimed first, by the digest its claim loaded, a reference by an index's digest included.
+// A reference by digest the project has, or an id, is a pin already. A plain name its claims'
+// record lacks, or whose image is gone, is claimed too, with this project's logins, and one
+// still missing refuses the start: compose would pull or build it after this check.
 func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
 	missing := fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
-	if image == doorKnown().Image || s.policy.OwnRef(image) {
+	read, own := s.policy.ImageRef(image, doorKnown())
+	if own {
 		img, err := s.inspectImage(image)
 		if err != nil || img.ID == "" {
 			return "", nil, missing
 		}
 		return img.ID, img.Labels, nil
 	}
-	img, err := s.inspectImage(image)
-	owned := err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
+	var img images.Image
+	owned := false
+	if read != "" {
+		var err error
+		img, err = s.inspectImage(read)
+		owned = err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
+	}
 	pinned := images.Pinned(image)
 	digest := ""
 	if owned && !pinned {
 		digest = images.DigestIn(img, image)
 	}
 	if !owned || !pinned && digest == "" {
+		var err error
 		if digest, img, err = s.claim(image, config); err != nil {
 			return "", nil, fmt.Errorf("%s: %w", svc, err)
 		}

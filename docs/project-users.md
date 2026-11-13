@@ -129,8 +129,11 @@ image with its own registry logins (the `auths` of its
 `~/.docker/config.json`), before it runs, inspects or tags it. A
 private image another project pulled stays out of its reach without a
 login, and a public one is fetched again for it. The door records what
-each project fetched, so later starts do not contact the registry, and
-compose runs the image by its digest (`nginx:1.27@sha256:...`).
+each project fetched, under the name it asked, so later starts do not
+contact the registry, and compose runs the image by its digest
+(`nginx:1.27@sha256:...`). A restart or a rollback runs the image the
+project last fetched for a tag, whatever the server's own name holds
+now, and fetches only when that image is gone.
 
 Docker's daemon never contacts a registry a project user names: the
 registry could send it, by a redirect or the address of a token, to

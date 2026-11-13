@@ -43,8 +43,15 @@ var testImages = [][]string{
 	// A name without a host is a registry's, whoever put it here (the deploy user's build).
 	{"sha256:abd", "shop-prod-web"},
 	{"sha256:ddd", "busybox:devopsy-blog-prod-20240101000000"},
-	{"sha256:eee", "postgres:16"},
+	// Claimed by this project as postgres:16 (its record), and under another name since.
+	{"sha256:eee", "postgres:16", "postgres:15", "postgres@sha256:eee"},
 	{"sha256:fff", "registry.example.com/blog/private:1"},
+	// The server's nginx:1.27 (the deploy user's pull of it), and this project's claim of the
+	// same tag, by its digest only.
+	{"sha256:ab1", "nginx:1.27"},
+	{"sha256:ee1", "nginx@sha256:ee1", "docker.io/library/nginx@sha256:ee1"},
+	// This project's claim of a tag no name here holds.
+	{"sha256:ee2", "registry.example.com/shop/app@sha256:ee2"},
 }
 
 // Image finds an image by id or name.
@@ -762,11 +769,17 @@ func TestDecideRunNarrowsAnRsync(t *testing.T) {
 // a pull), so another project's image, built or pulled with that project's logins, is
 // never this one's by being on disk: an inspect would read its Env, a tag would make it a
 // hold of this project's. A claim may not write another project's hold.
+//
+// A plain name is read only by the record of the project's last claim of it (Policy.Names),
+// by that image's digest, whatever the server's own name holds: another's image (the deploy
+// user's pull of the same tag), nothing, or an older image the project claimed, which would
+// beat its newer claim. A name the record lacks is claimed, even on an image the project owns.
 func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	t.Parallel()
 	p := testPolicy
 	p.Others = []string{"blog"}
-	p.Images = []string{"sha256:eee"}
+	p.Images = []string{"sha256:eee", "sha256:ee1", "sha256:ee2"}
+	p.Names = map[string]string{"postgres:16": "sha256:eee", "nginx:1.27": "sha256:ee1", "registry.example.com/shop/app:1": "sha256:ee2"}
 	claims := func(argv ...string) []string {
 		t.Helper()
 		a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
@@ -784,7 +797,7 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 		}
 	}
 	// (Another project's build name or hold is refused outright: TestClaimWritesNoHoldAndNoBuildName.)
-	for _, image := range []string{"sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123", "shop-prod-web", "sha256:abd", "blog-prod-web"} {
+	for _, image := range []string{"sha256:ccc", "registry.example.com/blog/private:1", "sha256:fff", "nginx:1", "sha256:0123", "shop-prod-web", "sha256:abd", "blog-prod-web", "postgres:15", "sha256:ab1"} {
 		if c := claims("image", "inspect", image); !slices.Equal(c, []string{image}) {
 			t.Errorf("another's or nobody's %s answered unclaimed: %v", image, c)
 		}
@@ -794,6 +807,22 @@ func TestDecideImagesItsOwnOrClaimed(t *testing.T) {
 	}
 	if c := claims("pull", "-q", "postgres:16"); !slices.Equal(c, []string{"postgres:16"}) {
 		t.Errorf("a pull is a claim: %v", c)
+	}
+	// By the record: the server's name on another's image, or on none, and the name asked in
+	// another spelling of it.
+	for image, id := range map[string]string{"nginx:1.27": "sha256:ee1", "docker.io/library/nginx:1.27": "sha256:ee1", "registry.example.com/shop/app:1": "sha256:ee2", "postgres:16": "sha256:eee"} {
+		for _, argv := range [][]string{{"image", "inspect", "--format", "{{.Id}}", image}, {"tag", image, "busybox:devopsy-shop-prod-20240101000001"}} {
+			a, err := Decide(argv, p, testDaemon, &fakeHost{}, testKnown)
+			if err != nil || len(a.Claims) != 0 || !slices.Contains(a.Docker, id) || slices.Contains(a.Docker, image) {
+				t.Errorf("%q, by the record %s: %+v (%v)", argv, id, a, err)
+			}
+		}
+	}
+	// The pull verb's skip under pull_policy missing goes by the record too.
+	for image, owned := range map[string]bool{"nginx:1.27": true, "registry.example.com/shop/app:1": true, "postgres:15": false, "nginx:1": false} {
+		if got := p.OwnsImage(testDaemon, image, testKnown); got != owned {
+			t.Errorf("%s the project's: %v, want %v", image, got, owned)
+		}
 	}
 	// A tag's source this project owns by its image (claimed, or named by a hold of its
 	// own) goes to Docker by the id the door read: the name is anyone's on the server to

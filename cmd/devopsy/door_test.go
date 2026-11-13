@@ -1103,7 +1103,8 @@ func plainManifest(name string) string {
 // A start runs an image of this project's by name (a build's, a hold of its own, devopsy's
 // util image: names only this project or the deploy user writes, under this project's
 // lock), or one it claims first: copied by the door's client with its own registry logins and
-// loaded, the id then recorded in its space, so the next start asks the registry nothing.
+// loaded, the id then recorded in its space with the name asked, so the next start reads that
+// name by the record, whatever the server's name holds, and asks the registry nothing.
 // One already on disk that another project claimed (a private one with that project's
 // login), or a name without a host the deploy user built (blog-prod-web, a registry's name to
 // the door), or an id alone, is refused when this project's claim of it fails, and another's
@@ -1163,8 +1164,9 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
 		t.Errorf("claimed by its pull (%v), pulled %v, goes to compose as %q, want %q:\n%s", err, pulled(), got, pin, readString(calls))
 	}
-	// Docker's containerd store names an image by its manifest's digest.
-	if got := readString(side.policy.ImagesFile()); got != p1+"\n" {
+	// Docker's containerd store names an image by its manifest's digest, and the record the
+	// name asked beside it, which the door reads that name by from then.
+	if got := readString(side.policy.ImagesFile()); got != p1+"\t"+private+":1\n" {
 		t.Errorf("the record: %q", got)
 	}
 	// The claim copied the manifest's digest, never the name, as the registry serves it, loaded
@@ -1183,9 +1185,11 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 			t.Errorf("a claim with no %q:\n%s", want, c)
 		}
 	}
-	side.policy.Images = claimedImages(side.policy.ImagesFile())
-	if got, err := start(private + ":1"); err != nil || pulled() || got != pin {
-		t.Errorf("claimed already (%v), copied again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	// Claimed already, its plain name still on another's image (sha256:p1, the store's): the
+	// start goes by the record, asking the registry nothing, not even the manifest's digest.
+	side.policy.Images, side.policy.Names = claimedImages(side.policy.ImagesFile())
+	if got, err := start(private + ":1"); err != nil || strings.Contains(readString(calls), "imagetools") || got != pin {
+		t.Errorf("claimed already (%v), goes to compose as %q, asking its registry:\n%s", err, got, readString(calls))
 	}
 	// A copy its registry spoiled (a blob not its hash): refused before anything loads,
 	// nothing recorded.
@@ -1265,6 +1269,40 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	}
 	if got := readString(side.policy.ImagesFile()); !strings.Contains(got, hh) || strings.Contains(got, "sha256:mmm") {
 		t.Errorf("the record after the swap holds the name's image, not the pull's: %q", got)
+	}
+	// Its image gone since (the project's pruning took its last name): the record's entry reads
+	// nothing, and the start claims it again.
+	store(private + ":1|sha256:p1|other.example.com/mirror@sha256:zz " + private + "@" + p1 + "||{}")
+	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
+		t.Errorf("a start after a pruning took its image (%v), pulled %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	}
+	// A plain name the project claimed onto an older image of its own, and claimed since onto a
+	// newer: the record's newer claim, never what the name holds.
+	store(
+		"registry.example.com/shop/web:3|sha256:o1|registry.example.com/shop/web@sha256:o1|registry.example.com/shop/web:3|{}",
+		"registry.example.com/shop/web@sha256:o1|sha256:o1|registry.example.com/shop/web@sha256:o1|registry.example.com/shop/web:3|{}",
+		"registry.example.com/shop/web@sha256:n1|sha256:n1|registry.example.com/shop/web@sha256:n1||{}",
+	)
+	side.policy.Images = append(side.policy.Images, "sha256:o1", "sha256:n1")
+	side.policy.Names["registry.example.com/shop/web:3"] = "sha256:n1"
+	if got, err := start("registry.example.com/shop/web:3"); err != nil || pulled() || got != "registry.example.com/shop/web:3@sha256:n1" {
+		t.Errorf("a name on an older claim (%v), pulled %v, goes to compose as %q, want its newer claim:\n%s", err, pulled(), got, readString(calls))
+	}
+	// Two services on one image in one file: the first's claim records it, and the second
+	// goes by that record, claimed once.
+	two := fakeManifest(t, dir, plainManifest("two"), "registry.example.com/two:1")
+	store()
+	os.Remove(calls)
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{
+		"a": map[string]any{"image": "registry.example.com/two:1"}, "b": map[string]any{"image": "registry.example.com/two:1"},
+	}}
+	if err := side.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil || strings.Count(readString(calls), "imagetools inspect ") != 1 {
+		t.Errorf("two services on one image (%v) claim it more than once:\n%s", err, readString(calls))
+	}
+	for _, svc := range []string{"a", "b"} {
+		if got := file["services"].(map[string]any)[svc].(map[string]any)["image"]; got != "registry.example.com/two:1@"+two {
+			t.Errorf("%s goes to compose as %v", svc, got)
+		}
 	}
 }
 
@@ -1677,7 +1715,7 @@ func doorComposeHelper(dir string) {
 		// As runDoor reads it from what its sudo kept (doorEnvironment).
 		asked: remote.SessionFrom(os.Getenv),
 	}
-	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	side.policy.Images, side.policy.Names = claimedImages(side.policy.ImagesFile())
 	// A work directory the request made before (TestDoorClaimCutBySignalLeavesNoWork).
 	if os.Getenv("DEVOPSY_TEST_DOOR_WORK") != "" {
 		if _, err := side.workDir(""); err != nil {

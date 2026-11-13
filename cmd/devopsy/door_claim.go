@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -30,7 +31,9 @@ import (
 )
 
 // claim makes ref this project's, with its registry logins (config, the caller's docker
-// config), its record of claimed images (door.Policy.Images, ImagesFile) saying so after: an
+// config), its record of claimed images (door.Policy.Images, Names, ImagesFile) saying so
+// after, by the image's id and the plain name asked (record), which the door then reads that
+// name by (door.Policy.ImageRef): an
 // image another project pulled with its own logins is this one's only once its own claim of
 // it goes through, a public one at the cost of one fetch. Docker's daemon contacts no
 // registry for it, which a registry the project names could send anywhere, another project's
@@ -41,7 +44,7 @@ import (
 // leaves Docker's containerd store as a pull by digest does. An image of that digest already
 // the project's, in the repository asked, is taken as it is (the skip). It gives the digest
 // and that image, read by that digest: the name is anyone's on the server to move right after,
-// so nothing reads it again.
+// so nothing reads it again, the record saying for the project what it is.
 func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	// Every claim's name is one the door may claim, whoever asked: a request and the pull verb
 	// refuse before anything runs, and this holds for every caller.
@@ -74,6 +77,9 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 		defer unlock()
 		if err := s.hold(pinned, m); err != nil {
 			return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
+		}
+		if err := s.recordHeld(pinned, m, ref, false); err != nil {
+			return "", images.Image{}, err
 		}
 		s.nameAsAsked(ref, pinned)
 		return m, img, nil
@@ -109,9 +115,7 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if err := s.hold(pinned, m); err != nil {
 		return "", images.Image{}, fmt.Errorf("refused: %s: %w", ref, err)
 	}
-	if err := s.record(img.ID); err != nil {
-		// Nothing claimed: the hold goes with it.
-		_ = s.docker("image", "rm", images.ClaimHold(images.RepoOf(pinned), s.policy.Project, m)).Run()
+	if err := s.recordHeld(pinned, m, ref, true); err != nil {
 		return "", images.Image{}, err
 	}
 	s.nameAsAsked(ref, pinned)
@@ -613,32 +617,76 @@ func writeLayout(w io.Writer, dir string, index []byte, blobs []string) error {
 	return t.Close()
 }
 
-// record adds id to this project's claimed images (Policy.ImagesFile), under the record's lock.
-func (s *doorSide) record(id string) error {
-	err := s.lockedRecord(func(ids []string) []string {
-		if slices.Contains(ids, id) {
-			return ids
-		}
-		return append(ids, id)
-	})
-	if err == nil && !slices.Contains(s.policy.Images, id) {
-		s.policy.Images = append(s.policy.Images, id)
+// recordHeld records the claim of ref, its image held (hold) by its digest m, as record does,
+// a load's (load) or a skip's: one whose record fails claimed nothing, and its hold goes with
+// it, else the hold would make the image the project's (OwnRef) with no claim recorded.
+func (s *doorSide) recordHeld(pinned, m, ref string, load bool) error {
+	err := s.record(m, ref, load)
+	if err != nil {
+		_ = s.docker("image", "rm", images.ClaimHold(images.RepoOf(pinned), s.policy.Project, m)).Run()
 	}
 	return err
 }
 
-// unrecord drops id from this project's claimed images, under the record's lock: a failed load
-// leaves the name it loaded, which a skip would otherwise take for the image claimed.
+// record records ref's claim on the image id in this project's record of claimed images
+// (Policy.ImagesFile), under the record's lock: the id, for a load (load), and ref's plain
+// name moved onto its line from any other (none for a reference by digest), for what the
+// door reads that name by after (door.Policy.ImageRef). A skip (not load) writes only a name
+// that moved, and never puts back an id a failed load dropped meanwhile (unrecord), which no
+// later claim may skip onto: that refuses the claim.
+func (s *doorSide) record(id, ref string, load bool) error {
+	name := ""
+	if !images.Pinned(ref) {
+		name = images.Familiar(ref)
+	}
+	if !load && (name == "" || s.policy.Names[name] == id) {
+		return nil
+	}
+	err := s.lockedRecord(func(lines []claimed) ([]claimed, error) {
+		for i := range lines {
+			lines[i].names = slices.DeleteFunc(lines[i].names, func(n string) bool { return n == name })
+		}
+		i := slices.IndexFunc(lines, func(l claimed) bool { return l.id == id })
+		if i < 0 {
+			if !load {
+				return nil, fmt.Errorf("refused: %s: a load that failed dropped its claim meanwhile", ref)
+			}
+			lines, i = append(lines, claimed{id: id}), len(lines)
+		}
+		if name != "" {
+			lines[i].names = append(lines[i].names, name)
+		}
+		return lines, nil
+	})
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(s.policy.Images, id) {
+		s.policy.Images = append(s.policy.Images, id)
+	}
+	if name != "" {
+		if s.policy.Names == nil {
+			s.policy.Names = map[string]string{}
+		}
+		s.policy.Names[name] = id
+	}
+	return nil
+}
+
+// unrecord drops id from this project's claimed images, the names on its line with it, under
+// the record's lock: a failed load leaves the name it loaded, which a skip would otherwise take
+// for the image claimed.
 func (s *doorSide) unrecord(id string) error {
 	s.policy.Images = slices.DeleteFunc(s.policy.Images, func(i string) bool { return i == id })
-	return s.lockedRecord(func(ids []string) []string {
-		return slices.DeleteFunc(ids, func(i string) bool { return i == id })
+	maps.DeleteFunc(s.policy.Names, func(_, i string) bool { return i == id })
+	return s.lockedRecord(func(lines []claimed) ([]claimed, error) {
+		return slices.DeleteFunc(lines, func(l claimed) bool { return l.id == id }), nil
 	})
 }
 
 // lockedRecord edits the project's record of claimed images under a flock beside it, written to
-// a file beside it and renamed over it, so a concurrent claim's id is never lost.
-func (s *doorSide) lockedRecord(edit func([]string) []string) error {
+// a file beside it and renamed over it, so a concurrent claim's line is never lost.
+func (s *doorSide) lockedRecord(edit func([]claimed) ([]claimed, error)) error {
 	file := s.policy.ImagesFile()
 	return s.whileAUser(func() error { return writeRecord(file, edit) })
 }
@@ -666,15 +714,19 @@ func (s *doorSide) whileAUser(write func() error) error {
 	return write()
 }
 
-// writeRecord writes file, a record of claimed images, as edit makes it, by rename.
-func writeRecord(file string, edit func([]string) []string) error {
-	ids := edit(claimedImages(file))
-	tmp := file + ".tmp"
-	data := ""
-	if len(ids) > 0 {
-		data = strings.Join(ids, "\n") + "\n"
+// writeRecord writes file, a record of claimed images, as edit makes it, by rename, and nothing
+// when edit fails.
+func writeRecord(file string, edit func([]claimed) ([]claimed, error)) error {
+	lines, err := edit(claimLines(file))
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(tmp, []byte(data), 0o600); err != nil {
+	var data strings.Builder
+	for _, l := range lines {
+		data.WriteString(strings.Join(append([]string{l.id}, l.names...), "\t") + "\n")
+	}
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, []byte(data.String()), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, file)

@@ -201,13 +201,28 @@ func TestDoorClaimThatDoesNotLoadLeavesNothing(t *testing.T) {
 	}
 	// The name the failed loads left is no skip.
 	os.Remove(filepath.Join(dir, "loadsays"))
-	if err := claim(private + ":1"); err != nil || !copied() || readString(side.policy.ImagesFile()) != d+"\n" {
+	if err := claim(private + ":1"); err != nil || !copied() || readString(side.policy.ImagesFile()) != d+"\t"+private+":1\n" {
 		t.Errorf("the claim after a failed load (%v), copied %v, recorded %q:\n%s", err, copied(), readString(side.policy.ImagesFile()), readString(calls))
 	}
 	// Its digest in another repository, which the registry serves there too.
 	fakeManifest(t, dir, plainManifest("private"), "registry.example.com/mirror:1")
 	if err := claim("registry.example.com/mirror:1"); err != nil || !copied() {
 		t.Errorf("the digest asked in another repository was taken without its claim (%v):\n%s", err, readString(calls))
+	}
+	// A skip never puts back an id a failed load dropped meanwhile (another request's, after
+	// this one read the record): the skip refuses, and its hold goes.
+	fakeManifest(t, dir, plainManifest("private"), private+":2")
+	write(t, side.policy.ImagesFile(), "", 0o600)
+	if err := claim(private + ":2"); err == nil || copied() || readString(side.policy.ImagesFile()) != "" || !strings.Contains(readString(calls), "image rm "+images.ClaimHold(private, "shop", d)+"\n") {
+		t.Errorf("a skip onto an id dropped meanwhile (%v), copied %v, recorded %q:\n%s", err, copied(), readString(side.policy.ImagesFile()), readString(calls))
+	}
+	// A failed load drops the id with the names its line holds.
+	side.policy.Images, side.policy.Names = []string{d}, map[string]string{private + ":1": d}
+	write(t, side.policy.ImagesFile(), d+"\t"+private+":1\n", 0o600)
+	write(t, filepath.Join(dir, "store"), "", 0o644)
+	write(t, filepath.Join(dir, "loadsays"), "Loaded image: registry.example.com/blog/other@"+d+"\n", 0o644)
+	if err := claim(private + ":1"); err == nil || readString(side.policy.ImagesFile()) != "" || side.policy.Names[private+":1"] != "" {
+		t.Errorf("a failed load (%v) keeps its id's names: %q %v", err, readString(side.policy.ImagesFile()), side.policy.Names)
 	}
 }
 
@@ -488,7 +503,7 @@ func TestDoorClaimFailedCopyKeepsTheRecord(t *testing.T) {
 	d := fakeManifest(t, dir, plainManifest("app"), app+":1")
 	fakeManifest(t, dir, plainManifest("app"), mirror+":1")
 	side := &doorSide{policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}, real: fake, imagesRoot: dir}
-	if _, _, err := side.claim(app+":1", filepath.Join(dir, "none.json")); err != nil || readString(side.policy.ImagesFile()) != d+"\n" {
+	if _, _, err := side.claim(app+":1", filepath.Join(dir, "none.json")); err != nil || readString(side.policy.ImagesFile()) != d+"\t"+app+":1\n" {
 		t.Fatalf("the control, a first claim (%v): %q", err, readString(side.policy.ImagesFile()))
 	}
 	// The mirror serves the manifest, then not its blobs.
@@ -499,7 +514,7 @@ func TestDoorClaimFailedCopyKeepsTheRecord(t *testing.T) {
 	if strings.Contains(readString(filepath.Join(dir, "calls")), "\nload "+mirror) {
 		t.Fatal("the control: the failed copy loaded")
 	}
-	if got := readString(side.policy.ImagesFile()); got != d+"\n" || !slices.Contains(side.policy.Images, d) {
+	if got := readString(side.policy.ImagesFile()); got != d+"\t"+app+":1\n" || !slices.Contains(side.policy.Images, d) {
 		t.Errorf("a copy that failed, nothing loaded, took the project's image %s out of its record: %q", d, got)
 	}
 }
@@ -545,20 +560,25 @@ func TestDoorPullKeepsAPresentImageUnderMissing(t *testing.T) {
 	repo := images.RepoOf(private)
 	write(t, filepath.Join(dir, "store"), private+"|"+d+"|"+repo+"@"+d+"|"+private+"|{}\n"+repo+"@"+d+"|"+d+"|"+repo+"@"+d+"|"+private+"|{}\n", 0o644)
 	side := door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space")}
-	write(t, side.ImagesFile(), d+"\n", 0o600)
 	// Its registry moved the tag since.
 	fakeManifest(t, dir, plainManifest("private2"), private)
 	file := `{"name":"shop-prod","services":{"web":{"image":"` + private + `","pull_policy":"missing","user":"10001:10001","security_opt":["no-new-privileges"]}}}`
-	c := exec.Command(os.Args[0], "-test.run", "^$")
-	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=pull", "DEVOPSY_TEST_DOOR_FILE="+file,
-		"DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	out, err := c.CombinedOutput()
-	var exit *exec.ExitError
-	if err != nil && !errors.As(err, &exit) {
-		t.Fatal(err)
-	}
-	if calls := readString(filepath.Join(dir, "calls")); strings.Contains(calls, "imagetools") {
-		t.Errorf("a pull under pull_policy missing of an image here asked its registry, as compose's does not (exit %d):\n%s\n%s", c.ProcessState.ExitCode(), out, calls)
+	// The project's record names it, the skip's whole proof; an older door's, of its id alone,
+	// does not, and the pull claims it then, as any plain name the record lacks.
+	for record, asks := range map[string]bool{d + "\t" + private + "\n": false, d + "\n": true} {
+		write(t, side.ImagesFile(), record, 0o600)
+		os.Remove(filepath.Join(dir, "calls"))
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=pull", "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		var exit *exec.ExitError
+		if err != nil && !errors.As(err, &exit) {
+			t.Fatal(err)
+		}
+		if calls := readString(filepath.Join(dir, "calls")); strings.Contains(calls, "imagetools") != asks {
+			t.Errorf("a pull under pull_policy missing of an image here, its record %q, asked its registry %v, want %v (exit %d):\n%s\n%s", record, !asks, asks, c.ProcessState.ExitCode(), out, calls)
+		}
 	}
 }
 
@@ -709,7 +729,7 @@ func TestDoorKeepsNothingOfAUserWithNoKey(t *testing.T) {
 		if body != "" {
 			write(t, keys, body, 0o600)
 		}
-		if err := side.record("sha256:" + strings.Repeat("ab", 32)); err == nil || !strings.Contains(err.Error(), "no key left") {
+		if err := side.record("sha256:"+strings.Repeat("ab", 32), "registry.example.com/app:1", true); err == nil || !strings.Contains(err.Error(), "no key left") {
 			t.Errorf("%s: the record written (%v)", name, err)
 		}
 		if _, err := (&doorSide{policy: side.policy, keysFile: keys}).writeLogins(config); err == nil {
@@ -729,7 +749,7 @@ func TestDoorKeepsNothingOfAUserWithNoKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	side.keysAt = at
-	if err := side.record("sha256:" + strings.Repeat("ab", 32)); err != nil {
+	if err := side.record("sha256:"+strings.Repeat("ab", 32), "registry.example.com/app:1", true); err != nil {
 		t.Errorf("the control: the record (%v)", err)
 	}
 	if _, err := (&doorSide{policy: side.policy, keysFile: keys, keysAt: at}).writeLogins(config); err != nil {
@@ -896,12 +916,22 @@ func TestDoorClaimHoldsItsImage(t *testing.T) {
 	if left, _ := os.ReadDir(filepath.Join(dir, remote.ImagesHolders)); len(left) > 0 {
 		t.Errorf("the claim's holder outlived it: %v", left)
 	}
-	// The skip: the image recorded, a claim holds it again.
+	// The skip: the image recorded, a claim holds it again, and writes the record only when
+	// the name asked moves onto it.
 	side.policy.Images = []string{d}
 	write(t, filepath.Join(dir, "store"), private+"@"+d+"|"+d+"|"+private+"@"+d+"||{}\n", 0o644)
 	os.Remove(calls)
+	record := side.policy.ImagesFile()
+	before, _ := os.Stat(record)
 	if _, _, err := side.claim(private+":1", filepath.Join(dir, "none.json")); err != nil || strings.Contains(readString(calls), "load ") || !strings.Contains(readString(calls), "tag "+private+"@"+d+" "+hold+"\n") {
 		t.Errorf("a skip (%v) does not hold the image:\n%s", err, readString(calls))
+	}
+	if after, err := os.Stat(record); err != nil || !os.SameFile(before, after) {
+		t.Errorf("a skip of a name already on its image wrote the record (%v): %q", err, readString(record))
+	}
+	fakeManifest(t, dir, plainManifest("private"), private+":2")
+	if _, _, err := side.claim(private+":2", filepath.Join(dir, "none.json")); err != nil || readString(record) != d+"\t"+private+":1\t"+private+":2\n" {
+		t.Errorf("a skip under another name (%v) records %q", err, readString(record))
 	}
 	// A record that fails after the hold: nothing claimed, the hold goes.
 	side.policy.Images = nil

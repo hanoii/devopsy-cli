@@ -567,10 +567,11 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 }
 
 // OwnsImage says whether ref is this project's image: devopsy's util image (known), a
-// name only this project writes (its build's or a hold of its own, OwnRef), an image
-// another of whose names is so, or one whose id the project claimed (Images). Any other is
-// claimed first (Action.Claims): fetched with this project's own registry logins, so an
-// image another project pulled with its own is never this one's by being on disk.
+// name only this project writes (its build's or a hold of its own, OwnRef), or the image
+// ImageRef reads it by when that is one the project claimed (Images) or another of whose
+// names only this project writes. Any other is claimed first (Action.Claims): fetched with
+// this project's own registry logins, so an image another project pulled with its own is
+// never this one's by being on disk.
 func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
 	_, owned := p.ownedImage(d, ref, known)
 	return owned
@@ -579,14 +580,39 @@ func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
 // ownedImage is OwnsImage, with the id it read when it read one ("" for a name only this
 // project writes, or devopsy's util image): what a request then acts on by id, read once.
 func (p Policy) ownedImage(d Daemon, ref string, known Known) (string, bool) {
-	if ref == known.Image || p.OwnRef(ref) {
+	read, own := p.ImageRef(ref, known)
+	if own {
 		return "", true
 	}
-	id, tags, err := d.Image(ref)
+	if read == "" {
+		return "", false
+	}
+	id, tags, err := d.Image(read)
 	if err != nil {
 		return "", false
 	}
 	return id, p.OwnsImageOf(id, tags)
+}
+
+// ImageRef is what the door reads ref's image by for this project, and whether ref is a name
+// only it writes (OwnRef) or devopsy's util image (known), taken as it is; "" is none, the
+// image to be claimed first. A reference by digest or an id (its prefix too) goes as it is,
+// and any other plain name only by the record of its last claim (Names), as that image by
+// its digest, so a stale entry, its image gone, fails its read and is claimed again: a plain
+// name is the server's (the deploy user's pull of the same tag, its local build, another
+// project's claim), and one left on an older image this project claimed would beat its
+// newer claim. What the door then reads there is the project's only once OwnsImageOf says so.
+func (p Policy) ImageRef(ref string, known Known) (string, bool) {
+	if ref == known.Image || p.OwnRef(ref) {
+		return ref, true
+	}
+	if images.Pinned(ref) || strings.HasPrefix(ref, "sha256:") {
+		return ref, false
+	}
+	if id := p.Names[images.Familiar(ref)]; id != "" {
+		return images.ByDigest(ref, id), false
+	}
+	return "", false
 }
 
 // OwnsImageOf says whether the image of id and tags, as one inspect read them, is this
