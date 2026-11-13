@@ -153,9 +153,16 @@ func doorSetupEntries(f setup.DoorFacts) []remote.StatusEntry {
 		}
 		same = "/proc hides each user's processes from the others (" + opts + "), set up outside devopsy and left as it is"
 	}
+	// An item refused is said by its refusal alone, never also as in sync.
+	refused := func(item string) bool {
+		return slices.ContainsFunc(f.Refusals, func(r setup.Refusal) bool { return r.Item == item })
+	}
+	if refused(setup.ItemProcesses) {
+		same = ""
+	}
 	add(setup.ItemProcesses, doorItemLines(f, setup.StepProcesses, true), same)
 	same = "door: space: " + f.Space
-	if slices.ContainsFunc(f.Refusals, func(r setup.Refusal) bool { return r.Item == setup.ItemConfig }) {
+	if refused(setup.ItemConfig) {
 		same = ""
 	}
 	add(setup.ItemConfig, doorItemLines(f, setup.StepConfig, true), same)

@@ -202,7 +202,7 @@ func TestProjectUsersSetupLeavesWhatIsSetByHand(t *testing.T) {
 	write(t, filepath.Join(host, "etc", "group"), "proc-seers:x:990:\n", 0o644)
 	out, code = s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy: error: processes: /proc hides other users' processes (hidepid=invisible, gid=990), and the deploy user is not in that group\n") ||
-		!strings.Contains(out, "put "+me.Username+" in the group proc-seers, as root") || fileExists(filepath.Join(host, setup.ProcUnit)) {
+		!strings.Contains(out, "put "+me.Username+" in the group proc-seers, as root") || fileExists(filepath.Join(host, setup.ProcUnit)) || strings.Contains(out, "left as it is") {
 		t.Errorf("another group (%d):\n%s", code, out)
 	}
 }
