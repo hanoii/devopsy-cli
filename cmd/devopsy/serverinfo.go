@@ -860,11 +860,18 @@ func projectEnvironments(root, p string) ([]remote.Environment, error) {
 // envBases are the directories of the project at p's environments, [<instance>/]<environment>
 // (a directory with releases/), with an error for a directory it could not read.
 func envBases(p string) ([]string, error) {
-	var out []string
-	isEnv := func(dir string) bool {
+	return envsUnder(p, func(dir string) bool {
 		fi, err := os.Stat(filepath.Join(dir, "releases"))
 		return err == nil && fi.IsDir()
-	}
+	})
+}
+
+// envsUnder are the directories under the project at p, [<instance>/]<environment> as devopsy
+// lays them out, that isEnv takes for an environment's (a release root's, a snapshot root's),
+// an instance's looked into only when it is not one itself, with an error for a directory it
+// could not read.
+func envsUnder(p string, isEnv func(dir string) bool) ([]string, error) {
+	var out []string
 	dirs, err := envDirs(p)
 	errs := []error{err}
 	for _, e := range dirs {

@@ -193,24 +193,12 @@ func snapshotEnvDirs(root string) []string {
 		})
 	}
 	var out []string
-	add := func(dir string) {
-		if rel, err := filepath.Rel(root, dir); err == nil {
-			out = append(out, filepath.ToSlash(rel))
-		}
-	}
 	ps, _ := envDirs(root)
 	for _, p := range ps {
-		es, _ := envDirs(p)
+		es, _ := envsUnder(p, holds)
 		for _, e := range es {
-			if holds(e) {
-				add(e)
-				continue
-			}
-			inner, _ := envDirs(e)
-			for _, i := range inner {
-				if holds(i) {
-					add(i)
-				}
+			if rel, err := filepath.Rel(root, e); err == nil {
+				out = append(out, filepath.ToSlash(rel))
 			}
 		}
 	}
