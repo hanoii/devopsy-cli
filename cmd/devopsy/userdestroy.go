@@ -190,7 +190,8 @@ var destroyLeaves = []string{
 // not a directory, until the host step began (never by the Unix user's absence: an admin may
 // have deleted it by hand), and the server's projects not read (serverProjects), which the
 // policy's names stop at. A root not mounted reads as no claims, and the destroy would end
-// with the data and claims coming back at the next mount.
+// with the data and claims coming back at the next mount. And a tree or a home the host step
+// would refuse to remove (removablePaths), which it would find only once the rest is gone.
 func (x *userDestroy) ready(m destroyMark, marked bool) error {
 	if err := x.withPolicy(); err != nil {
 		return err
@@ -200,6 +201,22 @@ func (x *userDestroy) ready(m destroyMark, marked bool) error {
 			return &report.Failure{Msg: x.tree + ", the tree " + x.who + "'s entry names, is not a directory (a disk not mounted, or removed by hand): nothing removed",
 				Remedies: []report.Remedy{report.Fix("mount the disk it is on, or make the directory again, then run it again")}}
 		}
+	}
+	home, _ := x.homeOf(m)
+	if err := x.removablePaths(x.tree, home); err != nil {
+		return fmt.Errorf("%w: nothing removed", err)
+	}
+	return nil
+}
+
+// removablePaths refuses a tree or a home ("" for none) the host step does not remove as root
+// (destroyablePath): ready's look before anything, and the host step's own again.
+func (x *userDestroy) removablePaths(tree, home string) error {
+	if tree != "" && !destroyablePath(tree, x.project) {
+		return fmt.Errorf("%s, the tree its entry names, is not a project's directory (%s under a parent)", tree, x.project)
+	}
+	if home != "" && !destroyablePath(home, x.who) {
+		return fmt.Errorf("%s, its home, is not a home of %s's", home, x.who)
 	}
 	return nil
 }
@@ -708,11 +725,8 @@ func (x *userDestroy) hostStep(m *destroyMark) error {
 	if _, err := strconv.ParseUint(uid, 10, 32); err != nil {
 		uid = ""
 	}
-	if tree != "" && !destroyablePath(tree, x.project) {
-		return fmt.Errorf("%s, the tree its entry names, is not a project's directory (%s under a parent): left", tree, x.project)
-	}
-	if home != "" && !destroyablePath(home, x.who) {
-		return fmt.Errorf("%s, its home, is not a home of %s's: left", home, x.who)
+	if err := x.removablePaths(tree, home); err != nil {
+		return fmt.Errorf("%w: left", err)
 	}
 	if !m.hostBegun {
 		m.hostBegun = true
