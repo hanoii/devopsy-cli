@@ -705,7 +705,7 @@ func TestLeftGroupID(t *testing.T) {
 func TestProjectUsersAskedAsAProjectUser(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
-	for _, words := range [][]string{nil, {"list"}} {
+	for _, words := range [][]string{nil, {"list"}, {"remove", "shop", "--destroy"}, {"remove", "shop", "--destroy", "--yes"}} {
 		out, code := s.run([]string{"FAKE_PROJECT_HOST=one"}, append([]string{"@devopsy@one:", "--project-users"}, words...)...)
 		want := strings.Join(append([]string{"@one: --project-users"}, words...), " ") + "\n"
 		if code != 1 || !strings.Contains(out, "project users are the server's deploy user's") || !strings.Contains(out, want) {

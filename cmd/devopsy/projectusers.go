@@ -41,30 +41,43 @@ func runProjectUsers(t *remote.Target, args []string) int {
 		return fail(usage)
 	}
 	if len(args) > 2 {
-		return runDestroyProjectUser(t, args[1], len(args) == 4)
+		return runDestroyProjectUser(t, args, len(args) == 4)
 	}
-	var out bytes.Buffer
-	code, err := remote.SSH(t, remote.ProjectUsersScript(t, args), bytes.NewReader(nil), &out, false)
+	code, err := projectUsersSession(context.Background(), t, args, args)
 	if err != nil {
 		return fail(err.Error())
 	}
+	return code
+}
+
+// projectUsersSession runs --project-users' step with words on t and prints what it printed,
+// unless it was asked as a project user, which it refuses (exit 1), naming the deploy user's
+// address with typed, the words as the operator typed them.
+func projectUsersSession(ctx context.Context, t *remote.Target, words, typed []string) (int, error) {
+	var out bytes.Buffer
+	code, err := remote.SSHContext(ctx, t, nil, remote.ProjectUsersScript(t, words), bytes.NewReader(nil), &out, false, nil)
+	if err != nil {
+		return code, err
+	}
 	if code == remote.AskedAsProjectUser {
-		refuseProjectUser(t, out.String(), "project users are the server's deploy user's", strings.Join(append([]string{"--project-users"}, args...), " "))
-		return 1
+		refuseProjectUser(t, out.String(), "project users are the server's deploy user's", strings.Join(append([]string{"--project-users"}, typed...), " "))
+		return 1, nil
 	}
 	os.Stdout.Write(out.Bytes())
-	return code
+	return code, nil
 }
 
 // runDestroyProjectUser is --project-users remove <project> --destroy [--yes]: a first session
 // lists what it removes, asked by the project's name typed (--yes: neither), and a second
 // removes, deciding everything again.
-func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
-	act := remote.ProjectUsersScript(t, []string{"remove", project, "--destroy"})
+func runDestroyProjectUser(t *remote.Target, typed []string, yes bool) int {
+	project := typed[1]
+	words := []string{"remove", project, "--destroy"}
+	act := remote.ProjectUsersScript(t, words)
 	if !yes {
 		// An older server refuses in this first session, before anything.
 		ctx := remote.WithAlsoNeeds(context.Background(), act)
-		code, err := remote.SSHContext(ctx, t, nil, remote.ProjectUsersScript(t, []string{"remove", project, "--destroy", "--list"}), bytes.NewReader(nil), os.Stdout, false, nil)
+		code, err := projectUsersSession(ctx, t, append(slices.Clone(words), "--list"), typed)
 		if err != nil {
 			return failErr(err)
 		}
@@ -76,7 +89,7 @@ func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
 			return failErr(err)
 		}
 	}
-	code, err := remote.SSH(t, act, bytes.NewReader(nil), os.Stdout, false)
+	code, err := projectUsersSession(context.Background(), t, words, typed)
 	if err != nil {
 		return failErr(err)
 	}
