@@ -292,7 +292,8 @@ setup's items) comes once, after the last of them:
   a missing `sudo`, `visudo` or `setfacl` (with none yet it is a line,
   not a warning);
 - on a server with project users, a `/proc` that shows them every other
-  user's processes, whose command lines can hold a secret ([setting up a
+  user's processes, whose command lines can hold a secret, or that hides
+  them another way `--project-users setup` refuses ([setting up a
   server](project-users.md#setting-up-a-server) has the mount that hides
   them; with no project user it is a line, not a warning);
 - a role held twice;

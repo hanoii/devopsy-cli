@@ -388,7 +388,7 @@ func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
 		f.DropInWithout = text != rd.dropinBare && string(have) == rd.dropinBare
 	}
-	readProcesses(h, f, refuse)
+	readProcesses(h, f)
 	return rd, nil
 }
 
@@ -499,54 +499,86 @@ func spaceMount(h setupHost, sp string) spaceAt {
 }
 
 // readProcesses judges /proc's hiding of every user's processes from the others: hidden
-// another way (no unit of devopsy's: an fstab line) it is in sync when its gid= names a group
-// the deploy user is in, else refused; devopsy's way wants the group devopsy-proc with the deploy
-// user in it, its unit with the group's number, enabled, /proc remounted so, and polkit's
-// drop-in where polkit is. Membership comes from the group file, never this process's groups,
-// which count from its login.
-func readProcesses(h setupHost, f *setup.DoorFacts, refuse func(item, stops, msg, fix string)) {
+// another way (no unit of devopsy's: an fstab line) it is judged by procHiding alone, as
+// --server-info and --project-users add judge it; devopsy's way wants the group devopsy-proc
+// with the deploy user in it, its unit with the group's number, enabled, /proc remounted so,
+// and polkit's drop-in where polkit is. Membership comes from the group file, never this
+// process's groups, which count from its login.
+func readProcesses(h setupHost, f *setup.DoorFacts) {
+	var refused *setup.Refusal
+	f.Processes, refused = procHidingAt(h, groupOf)
 	p := &f.Processes
-	mounts, _ := os.ReadFile(h.path(procMounts))
-	p.HidePID = procHidePID(string(mounts))
-	if m, ok := procMount(string(mounts)); ok {
-		p.GID, _ = m.opt("gid")
-	}
-	unitText, _ := os.ReadFile(h.path(setup.ProcUnit))
-	ours := unitText != nil
-	me := "the deploy user"
-	if u, err := user.Current(); err == nil {
-		me = u.Username
-	}
-	if !ours && setup.Hiding(p.HidePID) {
-		p.Other = true
-		if p.GID == "" {
-			refuse(setup.ItemProcesses, setup.RefusalProcesses, "/proc hides other users' processes (hidepid="+p.HidePID+") with no gid=, so the deploy user sees only its own",
-				"add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)")
-			return
-		}
-		name, gid, member := groupOf(p.GID, me)
-		p.Member = member
-		if !member {
-			fixes := "put the deploy user in the group whose number /proc's gid= is, as root"
-			if name != "" && gid == p.GID {
-				fixes = "put " + me + " in the group " + name + ", as root"
-			}
-			refuse(setup.ItemProcesses, setup.RefusalProcesses, "/proc hides other users' processes (hidepid="+p.HidePID+", gid="+p.GID+"), and the deploy user is not in that group", fixes)
+	if p.Other {
+		if refused != nil {
+			f.Refusals = append(f.Refusals, *refused)
 		}
 		return
 	}
-	if _, gid, member := groupOf(setup.ProcGroup, me); gid != "" {
+	unitText, _ := os.ReadFile(h.path(setup.ProcUnit))
+	if _, gid, member := groupOf(setup.ProcGroup, deployUserName()); gid != "" {
 		p.Group, p.Member = gid, member
 	}
 	p.Polkit = unitShow("polkit.service", "LoadState") == "loaded"
 	link, _ := os.Readlink(h.path(setup.ProcUnitLink))
 	f.Files = append(f.Files,
-		setup.FileFact{Item: setup.ItemProcesses, Path: setup.ProcUnit, InSync: p.Group != "" && string(unitText) == setup.ProcUnitText(p.Group), Missing: !ours},
+		setup.FileFact{Item: setup.ItemProcesses, Path: setup.ProcUnit, InSync: p.Group != "" && string(unitText) == setup.ProcUnitText(p.Group), Missing: unitText == nil},
 		setup.FileFact{Item: setup.ItemProcesses, Path: setup.ProcUnitLink, Link: setup.ProcUnit, InSync: link == setup.ProcUnit})
 	if p.Polkit {
 		have, err := os.ReadFile(h.path(setup.PolkitDropIn))
 		f.Files = append(f.Files, setup.FileFact{Item: setup.ItemProcesses, Path: setup.PolkitDropIn, InSync: string(have) == setup.PolkitDropInText(), Missing: err != nil})
 	}
+}
+
+// groupLookup is groupOf's shape, a parameter where a test gives its own groups.
+type groupLookup func(key, who string) (name, gid string, member bool)
+
+// procHidingAt is procHiding of the host at h: its mounts (procMounts), whether devopsy's unit
+// is there, the deploy user.
+func procHidingAt(h setupHost, groups groupLookup) (setup.ProcFact, *setup.Refusal) {
+	mounts, _ := os.ReadFile(h.path(procMounts))
+	_, err := os.Stat(h.path(setup.ProcUnit))
+	return procHiding(string(mounts), err == nil, deployUserName(), groups)
+}
+
+// procHiding is the one judgment of /proc's hiding of other users' processes, for
+// --project-users setup, --server-info and --project-users add: p as the mounts (a /proc/mounts
+// text) say it, and, where it hides them another way (ours false: no unit of devopsy's, which
+// the setup judges by its files), the refusal of one the deploy user (me, its groups looked up
+// by groups) does not see every process through: no gid=, or a gid= of a group it is not in.
+func procHiding(mounts string, ours bool, me string, groups groupLookup) (p setup.ProcFact, refused *setup.Refusal) {
+	p.HidePID = procHidePID(mounts)
+	if m, ok := procMount(mounts); ok {
+		p.GID, _ = m.opt("gid")
+	}
+	if ours || !setup.Hiding(p.HidePID) {
+		return p, nil
+	}
+	p.Other = true
+	refuse := func(msg, fix string) *setup.Refusal {
+		return &setup.Refusal{Item: setup.ItemProcesses, Stops: setup.RefusalProcesses, Message: msg, Fix: fix}
+	}
+	if p.GID == "" {
+		return p, refuse("/proc hides other users' processes (hidepid="+p.HidePID+") with no gid=, so the deploy user sees only its own",
+			"add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)")
+	}
+	name, gid, member := groups(p.GID, me)
+	if p.Member = member; member {
+		return p, nil
+	}
+	fix := "put the deploy user in the group whose number /proc's gid= is, as root"
+	if name != "" && gid == p.GID {
+		fix = "put " + me + " in the group " + name + ", as root"
+	}
+	return p, refuse("/proc hides other users' processes (hidepid="+p.HidePID+", gid="+p.GID+"), and the deploy user is not in that group", fix)
+}
+
+// deployUserName is this user's name, the deploy user's on a server, "the deploy user" where it
+// cannot be read.
+func deployUserName() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return "the deploy user"
 }
 
 // groupOf is the group key names (a name or a number) as the group file has it, through

@@ -244,16 +244,6 @@ func procHidePID(mounts string) string {
 	return "off"
 }
 
-// readHidePID is procHidePID of the mounts file at path, "" where it cannot be read (a system
-// with no /proc, macOS).
-func readHidePID(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return procHidePID(string(data))
-}
-
 // processesHidden says whether hidepid keeps a user from what other users' processes run, by
 // the one judgment (setup.Hiding).
 func processesHidden(hidepid string) bool { return setup.Hiding(hidepid) }
@@ -290,12 +280,18 @@ func processesShownNote(ref string) (msg string, hints []report.Remedy) {
 		projectUsersSetup(report.Hint, ref, howto.Processes)
 }
 
-// warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
-// shows project users every other user's processes, nothing where it hides them or cannot tell.
-func warnProcessesShown(l *report.Logger, mounts, ref string) {
-	if processesShown(readHidePID(mounts)) {
+// warnProcesses says on l what --project-users setup would of /proc at h (procHidingAt, groups
+// the group lookup): processesShownWarning where it shows project users every other user's
+// processes, the setup's refusal where it hides them another way the setup refuses, in the
+// setup's words, nothing where it hides them as the setup leaves them or cannot tell.
+func warnProcesses(l *report.Logger, h setupHost, ref string, groups groupLookup) {
+	p, refused := procHidingAt(h, groups)
+	switch {
+	case processesShown(p.HidePID):
 		msg, detail, fixes := processesShownWarning(ref)
 		l.Say(report.WarnLevel, msg, []string{detail}, fixes...)
+	case refused != nil:
+		l.Say(report.WarnLevel, refused.Message, nil, fixWords(*refused)...)
 	}
 }
 
@@ -351,7 +347,9 @@ func serverFacts() (remote.ServerInfo, error) {
 		info.Docker.Door = true
 		projectUserFacts(&info, askDoorFirewall)
 	} else {
-		info.HidePID = readHidePID(h.path(procMounts))
+		var p setup.ProcFact
+		p, info.ProcRefused = procHidingAt(h, groupOf)
+		info.HidePID = p.HidePID
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
 		if rd, err := readSetup(h, hd); err == nil {
@@ -1296,14 +1294,19 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// A warning only where a project user is there to read them: without one every login is
 	// the deploy user's or an admin's, and it is a line to know before adding one.
-	if processesShown(info.HidePID) {
-		if info.Door != nil && info.Door.Users > 0 {
-			msg, detail, fixes := processesShownWarning(ref)
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: fixes})
-		} else {
-			msg, hints := processesShownNote(ref)
-			note(msg, hints...)
-		}
+	users := info.Door != nil && info.Door.Users > 0
+	switch r := info.ProcRefused; {
+	case processesShown(info.HidePID) && users:
+		msg, detail, fixes := processesShownWarning(ref)
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: fixes})
+	case processesShown(info.HidePID):
+		msg, hints := processesShownNote(ref)
+		note(msg, hints...)
+	// /proc hidden another way, judged as --project-users setup judges it, in its words.
+	case r != nil && users:
+		warn(r.Message, fixWords(*r)...)
+	case r != nil:
+		note(r.Message, report.Hint(r.Fix))
 	}
 
 	if dr := info.Door; dr != nil {

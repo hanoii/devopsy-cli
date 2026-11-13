@@ -417,7 +417,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"any reboot takes it, one the server does by itself for /run/reboot-required included")
 	}
-	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts), ref)
+	warnProcesses(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}, ref, groupOf)
 	return 0
 }
 

@@ -397,10 +397,13 @@ func TestCloseDeployProjects(t *testing.T) {
 	}
 }
 
-// --project-users add, once it added a project user, warns of a host that shows that user
-// every other user's processes, in --server-info's words (processesShownWarning), once; it
-// says nothing where /proc hides them or where it cannot tell. The mounts are a file of the
-// test's, as the host root puts them, never the test machine's own /proc.
+// --project-users add, once it added a project user, warns of /proc as --project-users setup
+// judges it (procHiding): a host that shows that user every other user's processes, in
+// --server-info's words (processesShownWarning), and a /proc hidden another way the setup
+// refuses (no gid=, a gid= of a group the deploy user is not in), in the setup's words, each
+// once; it says nothing where /proc hides them as the setup leaves them or where it cannot
+// tell. The mounts are a file of the test's, as the host root puts them, never the test
+// machine's own /proc, and the groups the test's own.
 func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 	t.Parallel()
 	msg, detail, fixes := processesShownWarning("devopsy@one:")
@@ -410,24 +413,35 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 		"devopsy: | or set it up by hand, with the steps this prints:\ndevopsy: | $ "+howto.Command(howto.Processes)+"\n") {
 		t.Errorf("the warning's remedies:\n%s", warning)
 	}
+	me := deployUserName()
 	for _, c := range []struct {
 		name, mounts string // mounts "" writes no mounts file: another system
-		warns        bool
+		member       bool   // the deploy user in group 990
+		want         string
 	}{
-		{"shown", "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n", true},
-		{"hidden", "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n", false},
-		{"hidden, by number", "proc /proc proc rw,relatime,hidepid=2 0 0\n", false},
-		{"no /proc mount", "sysfs /sys sysfs rw 0 0\n", false},
-		{"another system", "", false},
+		{name: "shown", mounts: "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n", want: warning},
+		{name: "hidden", mounts: "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n", member: true},
+		{name: "hidden for a group the deploy user is not in", mounts: "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n",
+			want: "devopsy: warning: /proc hides other users' processes (hidepid=invisible, gid=990), and the deploy user is not in that group\ndevopsy: | to fix it:\ndevopsy: | put " + me + " in the group proc-seers, as root\n"},
+		{name: "hidden, by number, with no gid=", mounts: "proc /proc proc rw,relatime,hidepid=2 0 0\n",
+			want: "devopsy: warning: /proc hides other users' processes (hidepid=2) with no gid=, so the deploy user sees only its own\ndevopsy: | to fix it:\ndevopsy: | add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)\n"},
+		{name: "no /proc mount", mounts: "sysfs /sys sysfs rw 0 0\n"},
+		{name: "another system"},
 	} {
 		h := setupHost{root: t.TempDir()}
 		if c.mounts != "" {
 			write(t, h.path(procMounts), c.mounts, 0o644)
 		}
+		groups := func(key, who string) (string, string, bool) {
+			if key != "990" {
+				return "", "", false
+			}
+			return "proc-seers", "990", c.member && who == me
+		}
 		var out bytes.Buffer
-		warnProcessesShown(report.New(&out, false, 0), h.path(procMounts), "devopsy@one:")
-		if want := map[bool]string{true: warning}[c.warns]; out.String() != want {
-			t.Errorf("%s: said %q, want %q", c.name, out.String(), want)
+		warnProcesses(report.New(&out, false, 0), h, "devopsy@one:", groups)
+		if out.String() != c.want {
+			t.Errorf("%s: said %q, want %q", c.name, out.String(), c.want)
 		}
 	}
 }

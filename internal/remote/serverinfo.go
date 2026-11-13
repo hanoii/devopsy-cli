@@ -68,7 +68,10 @@ type ServerInfo struct {
 	// HidePID is /proc's hidepid as the kernel prints it in /proc/mounts, "off" for none, ""
 	// when unknown (no /proc mount there, a project user's facts).
 	HidePID string `json:"hidepid,omitempty"`
-	Disks   []Disk `json:"disks"`
+	// ProcRefused is --project-users setup's refusal of a /proc hidden another way, nil for none
+	// (procHiding, the one judgment of it).
+	ProcRefused *setup.Refusal `json:"proc_refused,omitempty"`
+	Disks       []Disk         `json:"disks"`
 	// Missing are the tools a server needs that are not there.
 	Missing []string `json:"missing,omitempty"`
 	// Containers are every container on the host, any state.

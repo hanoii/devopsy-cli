@@ -83,8 +83,8 @@ func TestServerFactsParsers(t *testing.T) {
 		}
 	}
 	// Another system, with no /proc (macOS): unknown, never said.
-	if got := readHidePID(filepath.Join(t.TempDir(), "proc", "mounts")); got != "" || processesShown(got) {
-		t.Errorf("no mounts file: %q", got)
+	if p, refused := procHidingAt(setupHost{root: t.TempDir()}, nil); p.HidePID != "" || refused != nil || processesShown(p.HidePID) {
+		t.Errorf("no mounts file: %+v, %v", p, refused)
 	}
 	cs := parseHostContainers([]byte("running 0 healthy sha256:t1 \"0001-01-01T00:00:00Z\" {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - sha256:t2 \"2026-01-01T00:00:00Z\" null\nexited 2 - sha256:t2 \"2026-01-01T00:00:00Z\" {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"), nil)
 	if len(cs) != 3 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[0].OneOff ||
@@ -206,6 +206,13 @@ func TestServerInfoReport(t *testing.T) {
 		{"door processes shown", func(i *remote.ServerInfo) {
 			i.Door, i.HidePID = &remote.DoorFacts{Space: "/space", Users: 2}, "off"
 		}, "", "/proc shows project users every other user's processes (no hidepid)\ntheir command lines can hold a secret|set the server up for project users:\n$ devopsy @vm1: --project-users setup"},
+		// A /proc hidden another way, judged as --project-users setup judges it, in its words.
+		{"door processes hidden with no gid=", func(i *remote.ServerInfo) {
+			i.Door = &remote.DoorFacts{Space: "/space", Users: 2}
+			var p setup.ProcFact
+			p, i.ProcRefused = procHiding("proc /proc proc rw,relatime,hidepid=2 0 0\n", false, "devopsy", nil)
+			i.HidePID = p.HidePID
+		}, "", "/proc hides other users' processes (hidepid=2) with no gid=, so the deploy user sees only its own|add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
