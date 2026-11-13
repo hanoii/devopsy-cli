@@ -326,7 +326,7 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 	}
 
 	// Volumes only while devopsy may name another root, judged once for them all.
-	if rootFixed(r, d) == nil {
+	if rootFixed(r, d, root) == nil {
 		f.Candidates = rootCandidates(h, hd, f.Root)
 	}
 	rd.door = d != nil
@@ -374,21 +374,30 @@ func emptyDir(dir string) bool {
 
 // nameReleaseRoot names root as releases: root in the deploy user's config
 // (setup.SetReleaseRoot), as the operator chose it, where rootTakes takes it; the root releases
-// live in already, as an apply cut after its write leaves it, is left as it is. A config it
-// cannot add the line to is refused, nothing changed, with the lines to put by hand.
+// live in already, as an apply cut after its write leaves it, is left as it is.
 func nameReleaseRoot(h setupHost, root string) error {
 	name, err := rootTakes(h, root)
 	if err != nil || !name {
 		return err
 	}
 	file := remote.UserConfigFile()
-	lines := strings.Split(strings.TrimSuffix(setup.ReleaseRootLines(root), "\n"), "\n")
 	if err := editConfig(file, func(have []byte) ([]byte, error) { return setup.SetReleaseRoot(have, root) }); err != nil {
-		return &report.Failure{Msg: "devopsy cannot name the release root in " + file + ", " + err.Error() + ": nothing changed", Details: lines,
-			Remedies: []report.Remedy{report.Fix("put the lines above in it by hand, then run --server-setup again")}}
+		return rootLinesFailure(file, root, err)
 	}
-	report.Info("named "+root+" the release root in "+file+": releases live there", lines...)
+	report.Info("named "+root+" the release root in "+file+": releases live there", rootLines(root)...)
 	return nil
+}
+
+// rootLines are the lines that name root as releases: root (setup.ReleaseRootLines), one each.
+func rootLines(root string) []string {
+	return strings.Split(strings.TrimSuffix(setup.ReleaseRootLines(root), "\n"), "\n")
+}
+
+// rootLinesFailure is a config at file that cannot take root's lines, err why, with the lines
+// to put there by hand.
+func rootLinesFailure(file, root string, err error) error {
+	return &report.Failure{Msg: "devopsy cannot name the release root in " + file + ", " + err.Error() + ": nothing changed", Details: rootLines(root),
+		Remedies: []report.Remedy{report.Fix("put the lines above in it by hand, then run --server-setup again")}}
 }
 
 // editConfig writes the deploy user's config at file as edit makes it of the text there (nil
@@ -474,7 +483,7 @@ func rootTakes(h setupHost, root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := rootFixed(r, d); err != nil {
+	if err := rootFixed(r, d, root); err != nil {
 		return false, err
 	}
 	if refusal := rootRefusal(h, root); refusal != nil {
@@ -485,13 +494,22 @@ func rootTakes(h setupHost, root string) (bool, error) {
 
 // rootFixed is the whole root's judgment, the server's, once per facts: why --server-setup
 // names no other root than r's, the release settings, nil when it may: the config names one,
-// or the release root holds something of devopsy's (rootHolds, with the door d, nil for none).
-func rootFixed(r remote.Releases, d *remote.Door) error {
+// or cannot take the lines (setup.SetReleaseRoot, root's for their words), or the release root
+// holds something of devopsy's (rootHolds, with the door d, nil for none).
+func rootFixed(r remote.Releases, d *remote.Door, root string) error {
 	refuse := func(why string) error {
 		return &report.Failure{Msg: why, Remedies: []report.Remedy{report.Fix("run --server-setup without --root")}}
 	}
+	file := remote.UserConfigFile()
 	if r.Named {
-		return refuse("releases: root in " + remote.UserConfigFile() + " names " + r.Root + " already, and only its admin changes it")
+		return refuse("releases: root in " + file + " names " + r.Root + " already, and only its admin changes it")
+	}
+	have, err := os.ReadFile(file)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if _, err := setup.SetReleaseRoot(have, root); err != nil {
+		return rootLinesFailure(file, root, err)
 	}
 	if current := resolveRoot(r.Root); rootHolds(current, d) {
 		return refuse("the release root " + current + " holds releases already (a project, its variables, a claim of the uids containers run as, or a project user), and they stay there")

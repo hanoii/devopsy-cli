@@ -4,163 +4,77 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
 
-// errRootThere is SetReleaseRoot's for a config whose releases: names a root already,
-// errRootEmpty its for one whose releases: root is left empty, which the loader reads as none;
-// errLineNotRead its for a text where the line put in its releases: block would not be read as
-// releases: root.
-var (
-	errRootThere   = errors.New("its releases: names a root already")
-	errRootEmpty   = errors.New("its releases: root: is left empty")
-	errLineNotRead = errors.New("a line put in its releases: would not be read as releases: root")
-)
+// ReleaseRootLines are the lines SetReleaseRoot appends for root.
+func ReleaseRootLines(root string) string { return configLines("releases", "root", root) }
 
-// ReleaseRootLines are the lines SetReleaseRoot adds for root to a config with no releases:,
-// root as YAML writes it (quoted where a plain word would read otherwise).
-func ReleaseRootLines(root string) string {
-	return "releases:\n  root: " + yamlScalar(root) + "\n"
-}
-
-// yamlScalar is s as one YAML scalar on one line: plain where YAML reads it back as s, else
-// double-quoted, whose escapes keep a newline on the line.
-func yamlScalar(s string) string {
-	out, err := yaml.Marshal(s)
-	if text := strings.TrimSuffix(string(out), "\n"); err == nil && !strings.Contains(text, "\n") {
-		return text
-	}
-	out, err = yaml.Marshal(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.DoubleQuotedStyle})
-	if err != nil {
-		return fmt.Sprintf("%q", s)
-	}
-	return strings.TrimSuffix(string(out), "\n")
-}
-
-// SetReleaseRoot is the config's text have (nil for no file) with releases: root: root added,
-// as text, the rest as it is (comments, order, line ends): ReleaseRootLines appended where the
-// config has no releases:, else a line root: put first in its releases: block, indented as the
-// block's first key and above the comment lines over it. The result is read back as the
-// loader reads it (the first YAML document, its top mapping by key) and refused unless it
-// reads as have did with releases: root: root and nothing else: a text whose YAML ends before
-// its last line, or a releases: that is no block mapping (a flow one, a value on its own
-// line), would take the line where nothing reads it, or as another setting. A text that is no
-// YAML, no mapping, or whose releases: has a root: (named, or left empty) is an error too: a
-// line there is the admin's to change.
+// SetReleaseRoot is the config's text have (nil for no file) with ReleaseRootLines appended
+// (appendSetting), refused where it has a releases: already, named or not: a line there is
+// the admin's to change.
 func SetReleaseRoot(have []byte, root string) ([]byte, error) {
-	key, releases, err := topEntry(have, "releases")
-	if err != nil {
-		return nil, err
+	return appendSetting(have, "releases", "root", root)
+}
+
+// configLines are a config's block key: holding sub: value alone, value as YAML writes it on
+// one line (quoted where a plain word would read otherwise).
+func configLines(key, sub, value string) string {
+	out, _ := yaml.Marshal(value)
+	return key + ":\n  " + sub + ": " + strings.TrimSuffix(string(out), "\n") + "\n"
+}
+
+// errNotRead is appendSetting's for a text the lines would land in unread.
+var errNotRead = errors.New("lines added at its end would not be read as part of its settings")
+
+// appendSetting is the config's text have (nil for no file) with key's block holding sub:
+// value (configLines) appended as text, the rest as it is (comments, order), in have's line
+// ends (appendLines). have is read as the config's loader reads it (remote's readConfigFile:
+// the first YAML document, its top mapping by key): a text that is no YAML or no mapping, or
+// that has key, is refused. So is a result where sub does not read back as value, a text whose
+// YAML ends before its last line (a flow mapping, an indented one, a ... or a second document)
+// taking the lines where nothing reads them.
+func appendSetting(have []byte, key, sub, value string) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(have, &doc); err != nil {
+		return nil, fmt.Errorf("it is no YAML devopsy reads (%w)", err)
 	}
-	var out []byte
-	switch {
-	case releases == nil:
-		out = appendLines(have, ReleaseRootLines(root))
-	case releases.Kind == yaml.MappingNode && releases.Style&yaml.FlowStyle == 0 && len(releases.Content) > 0:
-		for i := 0; i+1 < len(releases.Content); i += 2 {
-			if releases.Content[i].Value != "root" {
-				continue
+	if len(doc.Content) > 0 {
+		top := doc.Content[0]
+		if top.Kind != yaml.MappingNode {
+			return nil, errors.New("it is no YAML mapping")
+		}
+		for i := 0; i+1 < len(top.Content); i += 2 {
+			if top.Content[i].Value == key {
+				return nil, fmt.Errorf("it has a %s: already", key)
 			}
-			if emptyScalar(releases.Content[i+1]) {
-				return nil, errRootEmpty
-			}
-			return nil, errRootThere
 		}
-		lines := strings.SplitAfter(string(have), "\n")
-		first, keyLine := releases.Content[0], key.Line
-		if first.Line <= keyLine || first.Line > len(lines) {
-			return nil, errLineNotRead
-		}
-		// Above the comment lines over the block's first key, which are that key's.
-		at := first.Line
-		for at-1 > keyLine && strings.HasPrefix(strings.TrimSpace(lines[at-2]), "#") {
-			at--
-		}
-		line := strings.Repeat(" ", first.Column-1) + "root: " + yamlScalar(root) + lineEnd(have)
-		out = []byte(strings.Join(slices.Insert(lines, at-1, line), ""))
-	default:
-		return nil, errors.New("its releases: is no block mapping devopsy adds a line to")
 	}
-	if !readsWithRoot(have, out, root) {
-		if releases != nil {
-			return nil, errLineNotRead
-		}
+	out := appendLines(have, configLines(key, sub, value))
+	var top map[string]yaml.Node
+	if yaml.Unmarshal(out, &top) != nil {
+		return nil, errNotRead
+	}
+	var block map[string]string
+	if n, ok := top[key]; !ok || n.Decode(&block) != nil || block[sub] != value {
 		return nil, errNotRead
 	}
 	return out, nil
 }
 
-// topEntry is key's key and value in have's top mapping, read as the config's loader reads it
-// (the first YAML document), nil for none; an error for a text that is no YAML or no mapping.
-func topEntry(have []byte, key string) (k, v *yaml.Node, err error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(have, &doc); err != nil {
-		return nil, nil, fmt.Errorf("it is no YAML devopsy reads (%w)", err)
-	}
-	if len(doc.Content) == 0 {
-		return nil, nil, nil
-	}
-	top := doc.Content[0]
-	if top.Kind != yaml.MappingNode {
-		return nil, nil, errors.New("it is no YAML mapping")
-	}
-	for i := 0; i+1 < len(top.Content); i += 2 {
-		if top.Content[i].Value == key {
-			k, v = top.Content[i], top.Content[i+1]
-		}
-	}
-	return k, v, nil
-}
-
-// lineEnd is the line end have uses, CRLF where it holds one, else LF.
-func lineEnd(have []byte) string {
-	if bytes.Contains(have, []byte("\r\n")) {
-		return "\r\n"
-	}
-	return "\n"
-}
-
-// appendLines is have with lines (LF-ended) appended in have's line ends (lineEnd), after one
-// it lacks at its end.
+// appendLines is have with lines (LF-ended) appended in have's line ends, CRLF where it holds
+// one, after one it lacks at its end.
 func appendLines(have []byte, lines string) []byte {
-	eol := lineEnd(have)
+	eol := "\n"
+	if bytes.Contains(have, []byte("\r\n")) {
+		eol = "\r\n"
+	}
 	out := slices.Clone(have)
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, eol...)
 	}
 	return append(out, strings.ReplaceAll(lines, "\n", eol)...)
-}
-
-// emptyScalar says whether n is a scalar the config's loader reads as no value: none, "", ~ or
-// null.
-func emptyScalar(n *yaml.Node) bool {
-	return n.Kind == yaml.ScalarNode && (n.Tag == "!!null" || n.Value == "")
-}
-
-// readsWithRoot says whether after reads as before did with releases: root: root, and nothing
-// else changed, the first document's top mapping read as the config's loader reads it.
-func readsWithRoot(before, after []byte, root string) bool {
-	var was, is map[string]any
-	if yaml.Unmarshal(before, &was) != nil || yaml.Unmarshal(after, &is) != nil {
-		return false
-	}
-	rel, ok := is["releases"].(map[string]any)
-	if !ok || rel["root"] != root {
-		return false
-	}
-	delete(rel, "root")
-	if was == nil {
-		was = map[string]any{}
-	}
-	if _, ok := was["releases"]; !ok {
-		if len(rel) > 0 {
-			return false
-		}
-		delete(is, "releases")
-	}
-	return reflect.DeepEqual(was, is)
 }

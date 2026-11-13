@@ -229,9 +229,9 @@ already, it does nothing. With `--yes`, or without a terminal, and no
 `--root`, or with no volume offered, nothing is asked and the home is
 kept: the volumes are listed instead, each offered one with the `--server-setup --root` that names
 it, each other with why it is not offered and what to do. A
-`config.yaml` devopsy cannot add the line to (a `releases:` written as a
-flow mapping, a `root:` left empty) refuses with nothing changed,
-showing the lines to put there by hand.
+`config.yaml` that has a `releases:` already, with no `root:` or an
+empty one, is never asked about, and `--root` refuses with nothing
+changed, showing the lines to put there by hand.
 
 A second run changes nothing. What `--server-setup` applied, the values
 kept, the devopsy that last applied with no failure, and the one that

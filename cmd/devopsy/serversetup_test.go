@@ -970,24 +970,24 @@ func TestServerSetupOffersVolumesMountedAtBoot(t *testing.T) {
 	}
 }
 
-// A config devopsy cannot add releases: root to (a flow releases:, a root: left empty, which
-// the loader reads as none, so the question is open) refuses the apply with nothing changed,
-// the lines to put by hand said, an empty root: in words of its own.
+// A config devopsy cannot add releases: root to (any releases:, a flow one, one with a root:
+// left empty, which the loader reads as none) is found by the facts, which list no volume, so
+// nothing is asked; facts --root and apply --root refuse with nothing changed, the lines to put
+// by hand said.
 func TestServerSetupNamesNoRootInAConfigItCannotEdit(t *testing.T) {
 	t.Parallel()
 	s, _, vol, config := rootChoice(t)
-	for text, says := range map[string]string{
-		"releases: {keep: 3}\n":           "its releases: is no block mapping devopsy adds a line to",
-		"releases:\n  root:\n  keep: 3\n": "its releases: root: is left empty",
-	} {
+	for _, text := range []string{"releases: {keep: 3}\n", "releases:\n  root:\n  keep: 3\n", "releases:\n  keep: 3\n"} {
 		write(t, config, text, 0o644)
-		if f, out, code := setupFactsOf(s); code != 0 || !f.AsksRoot() {
-			t.Errorf("%q: facts (%d), asks %v\n%s", text, code, f.AsksRoot(), out)
+		if f, out, code := setupFactsOf(s); code != 0 || f.RootOpen() {
+			t.Errorf("%q: facts (%d), open %v\n%s", text, code, f.RootOpen(), out)
 		}
-		out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol)
-		if code != 1 || !strings.Contains(out, "devopsy: error: devopsy cannot name the release root in "+config+", "+says+": nothing changed\n") ||
-			!strings.Contains(out, "devopsy: |   root: "+vol+"\n") || readString(config) != text || fileExists(vol) {
-			t.Errorf("%q: the apply (%d), the config %q:\n%s", text, code, readString(config), out)
+		for _, step := range []string{"facts", "apply"} {
+			out, code := s.run(nil, remote.ServerSetupFlag, step, "--root", vol)
+			if code != 1 || !strings.Contains(out, "devopsy: error: devopsy cannot name the release root in "+config+", it has a releases: already: nothing changed\n") ||
+				!strings.Contains(out, "devopsy: |   root: "+vol+"\n") || readString(config) != text || fileExists(vol) {
+				t.Errorf("%q: %s --root (%d), the config %q:\n%s", text, step, code, readString(config), out)
+			}
 		}
 	}
 }

@@ -7,34 +7,23 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// --server-setup names the release root in the deploy user's config as text: appended where
-// the config has no releases:, put first in its releases: block where it has one, the rest
-// (comments, order, other keys) as it was, a path YAML would read otherwise quoted; a config
-// whose result would not read as releases: root added, or whose releases: has a root: (named,
-// or left empty), is refused and left alone.
+// --server-setup names the release root in the deploy user's config as text, appended as
+// AppendDoorConfig appends door:, the rest (comments, order, other keys, line ends) as it was,
+// a path YAML would read otherwise quoted; a config with a releases: already, a root: in it or
+// not, is refused and left alone, its lines the admin's.
 func TestSetReleaseRoot(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		have, root, want, err string
 	}{
-		"no file":        {"", "/srv", "releases:\n  root: /srv\n", ""},
-		"no releases":    {"# mine\nfirewall:\n  metadata: block\n", "/srv", "# mine\nfirewall:\n  metadata: block\nreleases:\n  root: /srv\n", ""},
-		"no newline":     {"snapshots:\n  root: /backups", "/srv", "snapshots:\n  root: /backups\nreleases:\n  root: /srv\n", ""},
-		"releases block": {"releases:\n    # how many\n    keep: 3 # mine\nsnapshots:\n  root: /b\n", "/srv", "releases:\n    root: /srv\n    # how many\n    keep: 3 # mine\nsnapshots:\n  root: /b\n", ""},
-		// A root left empty is none to the loader, and its line the admin's: refused in words of
-		// its own, never as a root named.
-		"root empty":     {"releases:\n  keep: 3\n  root:\n", "/srv", "", "root: is left empty"},
-		"root \"\"":      {"releases:\n  root: \"\" # none\n  keep: 3\n", "/srv", "", "root: is left empty"},
-		"root ~":         {"releases:\n  root: ~\n", "/srv", "", "root: is left empty"},
-		"crlf":           {"snapshots:\r\n  mirror: false\r\n", "/srv", "snapshots:\r\n  mirror: false\r\nreleases:\r\n  root: /srv\r\n", ""},
-		"a newline":      {"", "/mnt/a\nb", "releases:\n  root: \"/mnt/a\\nb\"\n", ""},
-		"a path quoted":  {"", "/mnt/a #b", "releases:\n  root: '/mnt/a #b'\n", ""},
-		"root named":     {"releases:\n  root: /home/devopsy\n", "/srv", "", "names a root already"},
-		"flow":           {"releases: {keep: 3}\n", "/srv", "", "no block mapping"},
-		"empty releases": {"releases:\n", "/srv", "", "no block mapping"},
-		"no mapping":     {"- a\n", "/srv", "", "no YAML mapping"},
-		"no YAML":        {"releases: [\n", "/srv", "", "no YAML devopsy reads"},
-		// A second document: lines appended land in it, which the loader never reads.
+		"no file":       {"", "/srv", "releases:\n  root: /srv\n", ""},
+		"no releases":   {"# mine\nfirewall:\n  metadata: block\n", "/srv", "# mine\nfirewall:\n  metadata: block\nreleases:\n  root: /srv\n", ""},
+		"crlf":          {"snapshots:\r\n  mirror: false\r\n", "/srv", "snapshots:\r\n  mirror: false\r\nreleases:\r\n  root: /srv\r\n", ""},
+		"a path quoted": {"", "/mnt/a #b", "releases:\n  root: '/mnt/a #b'\n", ""},
+		"a releases:":   {"releases:\n  keep: 3\n", "/srv", "", "it has a releases: already"},
+		"root empty":    {"releases:\n  root:\n", "/srv", "", "it has a releases: already"},
+		"root named":    {"releases:\n  root: /home/devopsy\n", "/srv", "", "it has a releases: already"},
+		"flow":          {"releases: {keep: 3}\n", "/srv", "", "it has a releases: already"},
 		"two documents": {"keep: 1\n---\nother: 2\n", "/srv", "", "would not be read"},
 	} {
 		got, err := SetReleaseRoot([]byte(c.have), c.root)
