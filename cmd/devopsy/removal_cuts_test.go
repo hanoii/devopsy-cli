@@ -355,6 +355,8 @@ func (c *removalCut) destroy(s *destroyServer, stopAfter int) int {
 		}
 		return &user.User{Username: who, Uid: "59999", Gid: "59999", HomeDir: s.home}, nil
 	}
+	// Every user of s's is in the project users' group, as its id says.
+	x.projectUser = func(string) bool { return true }
 	return x.run(false)
 }
 

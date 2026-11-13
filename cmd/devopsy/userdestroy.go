@@ -98,10 +98,12 @@ type userDestroy struct {
 	config bool
 	mark   string
 	// end ends the user's processes and builder (endUser), lookup looks a user up
-	// (user.Lookup), host runs a script as root on the host (hostRun.run).
-	end    func(who string) error
-	lookup func(who string) (*user.User, error)
-	host   func(r hostRun, stdout io.Writer) error
+	// (user.Lookup), projectUser says whether a user is in the project users' group
+	// (inDoorGroup), host runs a script as root on the host (hostRun.run).
+	end         func(who string) error
+	lookup      func(who string) (*user.User, error)
+	projectUser func(who string) bool
+	host        func(r hostRun, stdout io.Writer) error
 	// stopAfter cuts the run after that step, for TestRemovalCuts; 0 never.
 	stopAfter int
 }
@@ -120,7 +122,7 @@ func runUserDestroy(d *remote.Door, project, who, entry string, list bool) int {
 // root, with the host's own ways to end, look up and run as root.
 func newUserDestroy(d *remote.Door, project, who, entry, root string) *userDestroy {
 	return &userDestroy{d: d, project: project, who: who, entry: entry, root: root, store: claimsStore(root),
-		mark: remote.DoorDestroyingFile(who), end: endUser, lookup: user.Lookup,
+		mark: remote.DoorDestroyingFile(who), end: endUser, lookup: user.Lookup, projectUser: inDoorGroup,
 		host: func(h hostRun, stdout io.Writer) error {
 			return h.run(stdout, func(err error) error { return fmt.Errorf("the host step failed: %w", err) })
 		}}
@@ -198,11 +200,17 @@ var destroyLeaves = []string{
 // not a directory, until the host step began (never by the Unix user's absence: an admin may
 // have deleted it by hand), and the server's projects not read (serverProjects), which the
 // policy's names stop at. A root not mounted reads as no claims, and the destroy would end
-// with the data and claims coming back at the next mount. And a tree or a home the host step
-// would refuse to remove (removablePaths), which it would find only once the rest is gone.
+// with the data and claims coming back at the next mount. And what the host step
+// (remote.DoorUserDeleteScript) would refuse, which it would find only once the rest is gone:
+// a Unix user of that name outside the project users' group, a tree or a home it does not
+// remove as root (removablePaths), and, until the host step began, a home that is there as a
+// link or no directory.
 func (x *userDestroy) ready(m destroyMark, marked bool) error {
 	if err := x.withPolicy(); err != nil {
 		return err
+	}
+	if _, err := x.lookup(x.who); err == nil && !x.projectUser(x.who) {
+		return errors.New(x.who + " is no project user, not in " + remote.DoorGroup + ": nothing removed")
 	}
 	if x.tree != "" && !(marked && m.hostBegun) {
 		if fi, err := os.Lstat(x.tree); err != nil || !fi.IsDir() {
@@ -213,6 +221,13 @@ func (x *userDestroy) ready(m destroyMark, marked bool) error {
 	home, _ := x.homeOf(m)
 	if err := x.removablePaths(x.tree, home); err != nil {
 		return fmt.Errorf("%w: nothing removed", err)
+	}
+	if home != "" && !(marked && m.hostBegun) {
+		// Lstat: a link is no directory, and the host step removes nothing through one.
+		if fi, err := os.Lstat(home); err == nil && !fi.IsDir() {
+			return &report.Failure{Msg: home + ", " + x.who + "'s home, is a link or no directory, which the destroy never removes: nothing removed",
+				Remedies: []report.Remedy{report.Fix("remove it by hand, with what it links to if that is the user's, then run it again")}}
+		}
 	}
 	return nil
 }

@@ -629,8 +629,13 @@ nothing, and without a terminal it needs `--yes`.
 It refuses before removing anything when a name it found belongs to
 another project now (a claim of `shop`'s environment `eu-prod` is
 `shop-eu-prod`, which a project `shop-eu` may hold), when the tree its
-entry names is not a directory (a disk not mounted), and when the
-release root does not read. An image still used by a container stops
+entry names is not a directory (a disk not mounted), when that tree or
+the user's home is one it does not remove (a link, no directory, or a
+path not named for the project or the user), when a Unix user of that
+name is not in `devopsy-projects`, when the uid claims' directory is
+missing while containers or volumes are under the project's names (the
+release root's disk not mounted, perhaps), and when the release root
+does not read. An image still used by a container stops
 it, as does anything left once it is done, and the same command run
 again goes on from where it stopped: until it completes, the user takes
 no key, its keys cannot be listed or changed, and `--project-users add`

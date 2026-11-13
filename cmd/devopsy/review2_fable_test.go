@@ -19,21 +19,26 @@ import (
 // back passes it.
 func TestReview2DestroyRefusesAHomeItWillNotRemoveBeforeAnything(t *testing.T) {
 	t.Parallel()
+	dir := func(t *testing.T, home string) {
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for name, c := range map[string]struct {
-		home   func(t *testing.T, home string)
-		passes bool
+		home func(t *testing.T, home string)
+		// outside makes the Unix user one outside the project users' group, which the host
+		// step refuses as no project user.
+		outside bool
+		passes  bool
 	}{
-		"a directory": {func(t *testing.T, home string) {
-			if err := os.Mkdir(home, 0o700); err != nil {
-				t.Fatal(err)
-			}
-		}, true},
-		"a link to a directory": {func(t *testing.T, home string) {
+		"a directory": {home: dir, passes: true},
+		"a link to a directory": {home: func(t *testing.T, home string) {
 			if err := os.Symlink(t.TempDir(), home); err != nil {
 				t.Fatal(err)
 			}
-		}, false},
-		"a file": {func(t *testing.T, home string) { write(t, home, "", 0o600) }, false},
+		}},
+		"a file":                          {home: func(t *testing.T, home string) { write(t, home, "", 0o600) }},
+		"a user outside the door's group": {home: dir, outside: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -42,13 +47,14 @@ func TestReview2DestroyRefusesAHomeItWillNotRemoveBeforeAnything(t *testing.T) {
 			x := &userDestroy{d: &remote.Door{Space: t.TempDir()}, project: "shop", who: "devopsy-shop", root: t.TempDir(),
 				lookup: func(who string) (*user.User, error) {
 					return &user.User{Username: who, Uid: "59999", Gid: "59999", HomeDir: home}, nil
-				}}
+				},
+				projectUser: func(string) bool { return !c.outside }}
 			err := x.ready(destroyMark{}, false)
 			if c.passes && err != nil {
 				t.Errorf("a home that is a directory is refused: %v", err)
 			}
 			if !c.passes && err == nil {
-				t.Errorf("ready passes %s as the user's home, which the host step refuses once everything else is gone", name)
+				t.Errorf("ready passes %s, which the host step refuses once everything else is gone", name)
 			}
 		})
 	}
