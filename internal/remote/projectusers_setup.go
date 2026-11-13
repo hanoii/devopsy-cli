@@ -60,8 +60,9 @@ var safePath = `safe_path() {
 // /proc's unit enabled and run again (a oneshot that remains active runs again only by a
 // restart), polkit restarted. A mount goes only through systemd, never mount in the container:
 // a mount made in the container's namespace does not reach the host. Each file is put only when
-// it differs. A step that fails is said and the next independent one goes (the processes
-// beside a mount that failed), the run then exiting 6. Its arguments, in order: the host root,
+// it differs, and systemctl enable runs --quiet: the run says its own line per change, and
+// systemd's links made would show raw among devopsy's. A step that fails is said and the next
+// independent one goes (the processes beside a mount that failed), the run then exiting 6. Its arguments, in order: the host root,
 // the deploy user's uid:gid, the space, 1 to make or give it, 1 to set its mode, its unit's
 // path, the unit's text ("" to leave it), 1 to enable and start it, the drop-in's text ("" to
 // leave it), 1 for the processes, the deploy user, /proc's unit's text with setup.GIDMark for
@@ -119,7 +120,7 @@ if [ -n "$reload" ]; then
   sd daemon-reload >&2 || { ` + echoLine(report.ErrorLevel, "systemctl could not reload systemd from devopsy's container: nothing was mounted") + `; exit 6; }
 fi
 if [ -n "$mount" ]; then
-  if sd enable --now "${unit##*/}" >&2; then
+  if sd enable --quiet --now "${unit##*/}" >&2; then
     echo "` + DoorSetupMounted + ` $space"
   else
     ` + echoLine(report.ErrorLevel, "systemd did not mount $space", report.Hint("what it said, as root:", "journalctl -u $unit_word")) + `
@@ -134,7 +135,7 @@ reload=
   sd daemon-reload >&2 || :
 fi
 if [ -n "$procs" ]; then
-  if { sd enable ` + setup.ProcUnitName + ` && sd restart ` + setup.ProcUnitName + `; } >&2; then
+  if { sd enable --quiet ` + setup.ProcUnitName + ` && sd restart ` + setup.ProcUnitName + `; } >&2; then
     echo ` + DoorSetupHidden + `
     if [ -n "$restart_polkit" ]; then sd try-restart polkit.service >&2 || :; echo ` + DoorSetupPolkit + `; fi
   else

@@ -137,7 +137,7 @@
 - `/proc` is remounted by `devopsy-proc.service`, its text holding the group's number, which the root run reads once it made the group (`setup.GIDMark`), run again by a restart, since an active oneshot runs again by nothing else; polkit's drop-in goes only where `polkit.service` is loaded.
 - The deploy user's membership is read from the group file (`groupOf`, through `getent`), never from its process's groups, which count from its login, and the apply says that a session open meanwhile sees every process only once opened again.
 - The config is appended as text (`setup.AppendDoorConfig`) only where the file has no `door:` and the lines read back as `door: space:`, once the facts read again after the root run find the space made and mounted, whatever else of the run failed (each step judged by its own result), its two lines shown before the question.
-- One root run (`ProjectUsersSetupScript`, `doorSetupRun`): the host's root writable and its pids, for `systemctl`, no network and no capability added; every mount goes through systemd from the chroot (`daemon-reload`, `enable --now`), never `mount` in the container, whose namespace a mount would not leave.
+- One root run (`ProjectUsersSetupScript`, `doorSetupRun`): the host's root writable and its pids, for `systemctl`, no network and no capability added; every mount goes through systemd from the chroot (`daemon-reload`, `enable --now`), never `mount` in the container, whose namespace a mount would not leave; `enable` runs `--quiet`, the run saying its own line per change, never systemd's own lines.
 
 ## --server-setup-howto
 

@@ -17,7 +17,8 @@ import (
 // etc/group): the space made, its unit put, the group made with the deploy user in it, /proc's
 // unit put with the group's number, polkit's drop-in, then systemd reloaded, the space's unit
 // enabled and started, the drop-in put once the mount holds, systemd reloaded again, and
-// /proc's run again, a line per change; a second run
+// /proc's run again, a line per change and nothing of systemd's (its enable's links); a second
+// run
 // changes and says nothing but the mount and the remount it is asked for; systemd refusing a
 // mount fails the run, naming it, and offers journalctl with the unit's name as systemd has it,
 // its \x2d kept when the command is copied into a shell.
@@ -39,7 +40,9 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, text := range map[string]string{
-		"systemctl": "#!/bin/sh\nprintf '%s\\n' \"$SYSTEMD_IGNORE_CHROOT systemctl $*\" >>\"$CALLS\"\n[ -z \"${FAKE_SYSTEMCTL_FAILS:-}\" ] || exit 1\n",
+		// systemctl enable says each link it makes, as systemd does, unless --quiet.
+		"systemctl": "#!/bin/sh\nprintf '%s\\n' \"$SYSTEMD_IGNORE_CHROOT systemctl $*\" >>\"$CALLS\"\n[ -z \"${FAKE_SYSTEMCTL_FAILS:-}\" ] || exit 1\n" +
+			"case \" $* \" in *' --quiet '*) ;; *' enable '*) echo \"Created symlink '/etc/systemd/system/x' -> '/etc/systemd/system/y'.\" >&2 ;; esac\n",
 		"groupadd":  "#!/bin/sh\nmkdir -p \"$HOST/etc\"\necho \"$2:x:991:\" >>\"$HOST/etc/group\"\n",
 		"usermod":   "#!/bin/sh\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$HOST/etc/group\" >\"$HOST/etc/group.new\" && mv \"$HOST/etc/group.new\" \"$HOST/etc/group\"\n",
 		"getent":    "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$HOST/etc/group\" 2>/dev/null\n",
@@ -91,7 +94,7 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		t.Errorf("the group file: %q", g)
 	}
 	name := filepath.Base(unit)
-	wantCalls := "1 systemctl daemon-reload\n1 systemctl enable --now " + name + "\n1 systemctl daemon-reload\n1 systemctl enable devopsy-proc.service\n1 systemctl restart devopsy-proc.service\n1 systemctl try-restart polkit.service\n"
+	wantCalls := "1 systemctl daemon-reload\n1 systemctl enable --quiet --now " + name + "\n1 systemctl daemon-reload\n1 systemctl enable --quiet devopsy-proc.service\n1 systemctl restart devopsy-proc.service\n1 systemctl try-restart polkit.service\n"
 	if c := read(calls); c != wantCalls {
 		t.Errorf("calls:\n%s\nwant:\n%s", c, wantCalls)
 	}

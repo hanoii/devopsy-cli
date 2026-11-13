@@ -71,12 +71,12 @@ case "$*" in
 `+firewallUnitFake+`
   # A mount unit enabled and started: linked, and its Where= mounted with its options in the
   # host root's proc/mounts.
-  "enable --now "*.mount)
-    f="$h/etc/systemd/system/$3"
+  "enable --quiet --now "*.mount)
+    f="$h/etc/systemd/system/$4"
     mkdir -p "$h/etc/systemd/system/local-fs.target.wants" "$h/proc"
-    ln -sfn "/etc/systemd/system/$3" "$h/etc/systemd/system/local-fs.target.wants/$3"
+    ln -sfn "/etc/systemd/system/$4" "$h/etc/systemd/system/local-fs.target.wants/$4"
     echo "/dev/vda1 $(sed -n 's/^Where=//p' "$f") ext4 rw,$(sed -n 's/^Options=bind,//p' "$f"),relatime 0 0" >>"$h/proc/mounts" ;;
-  "enable devopsy-proc.service")
+  "enable --quiet devopsy-proc.service")
     mkdir -p "$h/etc/systemd/system/sysinit.target.wants"
     ln -sfn /etc/systemd/system/devopsy-proc.service "$h/etc/systemd/system/sysinit.target.wants/devopsy-proc.service" ;;
   # /proc remounted as its unit says, every other proc line on /proc dropped.
