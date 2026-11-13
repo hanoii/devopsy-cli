@@ -341,12 +341,18 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 			}
 			add("gc", "--gc would remove "+strings.Join(what, ", "), hint)
 		}
+		// What the count could not read is unknown, never none.
+		for _, u := range f.Unread {
+			warn("gc", "--gc's count could not read "+u)
+		}
 	}
 
 	switch {
 	case !dockerUp:
 	case info.ImagesUnread != "":
 		warn("images", "the images could not be listed: "+oneLine(info.ImagesUnread))
+	case info.ContainersUnread != "":
+		// Each image's containers are counted from that list: none of it reads as none.
 	default:
 		for _, img := range info.Images {
 			if slices.ContainsFunc(img.Tags, func(t string) bool {

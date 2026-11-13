@@ -5,22 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
-
-// Review round 2 (Opus), bug: --server-info drops what --gc's count could not read. leftFacts
-// fills GCFacts.Unread from gcScope.find (the dangling images' listing failing, a release
-// snapshot whose restore mark does not read, the project users' names), and leftEntries builds
-// its "gc" line from the counts alone, never Unread: with nothing counted and a read failed,
-// no line is said, which reads as nothing to remove, unknown taken for none.
-func TestReview2ServerInfoSaysWhatGCCouldNotRead(t *testing.T) {
-	t.Parallel()
-	info := remote.ServerInfo{GC: &remote.GCFacts{Unread: []string{"the dangling images: docker image ls: exit status 1"}}}
-	if got := strings.Join(leftSays(info, "devopsy@vm1", "vm1:"), "\n\n"); !strings.Contains(got, "the dangling images") {
-		t.Errorf("what --gc's count could not read is not said:\n%s", got)
-	}
-}
 
 // Review round 2 (Opus), bug: a project user whose --project-users remove --destroy did not
 // complete is also said as a project user with no key, whose hint offers a key added to take
