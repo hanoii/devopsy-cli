@@ -246,7 +246,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	out, code = runDevopsy(t, t.TempDir(), nil, "--version")
-	if code != 0 || !strings.Contains(out, "devopsy dev") || !strings.Contains(out, "docker compose") {
+	if code != 0 || !strings.Contains(out, "devopsy dev") || !strings.Contains(out, "\ndocker compose 5.5.0\ndocker buildx 0.38.2\n") {
 		t.Fatalf("--version outside a project (%d):\n%s", code, out)
 	}
 

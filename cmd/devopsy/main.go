@@ -134,6 +134,12 @@ func run() int {
 			} else {
 				fmt.Println("docker compose: not available")
 			}
+			// buildx answers with its module and commit around the version.
+			if out, err := exec.Command("docker", "buildx", "version").Output(); err == nil && versionOf(string(out)) != "" {
+				fmt.Printf("docker buildx %s\n", versionOf(string(out)))
+			} else {
+				fmt.Println("docker buildx: not available")
+			}
 			return 0
 		case "--upgrade":
 			return runUpgrade(args[1:], color)

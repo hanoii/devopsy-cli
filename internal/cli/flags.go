@@ -110,7 +110,7 @@ var Flags = []FlagGroup{
 		{Name: "--upgrade", Args: "[v]", Scope: Local, Desc: "this devopsy, to latest or v"},
 		{Name: "--completion", Args: "<shell>", Scope: Local, Desc: "shell completion: bash, zsh or fish"},
 		{Name: "--ai-skill", Args: "[--stub] [install [--global]]", Scope: Local, Desc: "the skill for agents: print it,\nor install it"},
-		{Name: "--version", Scope: Local, Desc: "devopsy's, docker's and compose's versions"},
+		{Name: "--version", Scope: Local, Desc: "versions of devopsy, docker, compose, buildx"},
 		{Name: "-v", Also: "-vv", Scope: Local, Desc: "first: what devopsy runs; -vv: scripts too"},
 		{Name: SSHOptionFlag, Args: "<key=value>", Scope: Local, Desc: "first, repeatable: an ssh -o for every\nsession this command opens"},
 		{Name: "--help", Also: "-h", Scope: LocalOrTarget, Desc: "this help; after a flag, its own"},
