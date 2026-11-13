@@ -283,7 +283,9 @@ What needs attention is a warning under the line it is about, with its
 fix; a fix that serves several lines in a row (`--server-setup` for the
 setup's items) comes once, after the last of them:
 
-- an older devopsy (`W0003`);
+- an older devopsy (`W0003`), or an older local one, which reads what
+  it does not know of the server's facts as missing, with `devopsy
+  --upgrade` as its fix;
 - a reboot the system asks for (`/run/reboot-required`, with the
   packages asking, devopsy among them when its setup or its door did,
   `W0004`);

@@ -1213,6 +1213,14 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if ref != "" && update.Newer(local, info.Version) {
 		forAdmin(report.OlderDevopsy, []string{"the server's " + info.Version + ", the local " + local}, report.Fix("", "devopsy @"+ref+" --upgrade"))
 	}
+	// The facts are judged here: an older local devopsy reads a field it does not know (a
+	// renamed one) as missing, and warns of what the server has. The fix is the operator's own,
+	// a project user's too.
+	if ref != "" && update.Newer(info.Version, local) {
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key,
+			Lines:    []string{"the local devopsy is older than the server's", "the server's " + info.Version + ", the local " + local + ": what the local one does not know of the server's facts reads as missing"},
+			Remedies: []report.Remedy{report.Fix("", "devopsy --upgrade")}})
+	}
 	row("releases", fmt.Sprintf("%s, keep %d (at most %d)", info.Root, info.Keep, info.MaxKeep))
 	snaps := "in each environment's directory"
 	if info.SnapshotRoot != "" {

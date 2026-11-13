@@ -192,6 +192,9 @@ func TestServerInfoReport(t *testing.T) {
 		want   string // the warning, then its fix after |
 	}{
 		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "W0003: the server's devopsy is older than the local one\nthe server's 0.53.0, the local 0.54.0|devopsy @vm1: --upgrade"},
+		// The local devopsy judges the server's facts, and an older one reads a field it does
+		// not know as missing (buildx's version, renamed, read as no buildx plugin).
+		{"older local devopsy", func(*remote.ServerInfo) {}, "0.52.0", "the local devopsy is older than the server's\nthe server's 0.53.0, the local 0.52.0: what the local one does not know of the server's facts reads as missing|$ devopsy --upgrade"},
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "W0004: the server needs a reboot\n/run/reboot-required, for linux-image-amd64|reboot it"},
 		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
