@@ -137,22 +137,25 @@ func runServerSetup(t *remote.Target, args []string) int {
 type setupAsker interface {
 	replace(p setup.PartFact) (bool, error)
 	confirm(question string, details ...string) (bool, error)
-	choose(question, detail string, choices []string) (int, error)
+	choose(question string, details, choices []string) (int, error)
 }
 
 // askRoot asks where releases live (setup.Facts.AsksRoot): the home (f.Root), first and
-// Enter's, or a volume offered, by its mount point. devopsy never picks a volume, since it
-// cannot tell what one is for.
+// Enter's, or a volume offered, by its mount point, the volumes not offered said with why.
+// devopsy never picks a volume, since it cannot tell what one is for.
 func askRoot(f setup.Facts, ask setupAsker) (string, error) {
 	roots := []string{f.Root}
 	choices := []string{f.Root + ", the deploy user's home"}
+	details := []string{"devopsy names a volume chosen as releases: root in " + f.ConfigFile + ", before the first release"}
 	for _, c := range f.Candidates {
-		if c.Why == "" {
-			roots = append(roots, c.MountPoint)
-			choices = append(choices, candidateWords(c))
+		if c.Why != "" {
+			details = append(details, candidateWords(c)+", not offered: "+c.Why)
+			continue
 		}
+		roots = append(roots, c.MountPoint)
+		choices = append(choices, candidateWords(c))
 	}
-	i, err := ask.choose("where do releases live?", "devopsy names a volume chosen as releases: root in "+f.ConfigFile+", before the first release", choices)
+	i, err := ask.choose("where do releases live?", details, choices)
 	if err != nil {
 		return "", err
 	}
@@ -265,11 +268,11 @@ func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
 
 // choose says the question with its detail and the choices numbered, and asks for one, Enter
 // the first; an answer that names none is asked again.
-func (a terminalAsker) choose(question, detail string, choices []string) (int, error) {
+func (a terminalAsker) choose(question string, details, choices []string) (int, error) {
 	if !atTerminal() {
 		return 0, a.noTerminal()
 	}
-	lines := []string{detail}
+	lines := slices.Clone(details)
 	for i, c := range choices {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, c))
 	}
@@ -401,12 +404,12 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix, sooner *r
 	return es
 }
 
-// volumeEntries are the volume hint while where releases live is open (setup.Facts.AsksRoot):
+// volumeEntries are the volume hint while where releases live is open (setup.Facts.RootOpen):
 // each volume the release root could be on, one not offered with why, then a hint per volume,
 // --server-setup --root on ref naming one offered (in words with ref ""), the fix of one not
 // offered, under volumes, or under key with volumes first when key is not "".
 func volumeEntries(f setup.Facts, ref, key string) []remote.StatusEntry {
-	if !f.AsksRoot() {
+	if !f.RootOpen() {
 		return nil
 	}
 	lines := []string{"releases live in the deploy user's home, " + f.Root + ", while releases: root names no other; volumes that could hold them:"}

@@ -465,8 +465,8 @@ func (a *scripted) replace(p setup.PartFact) (bool, error) {
 	return a.replaces[p.Name], nil
 }
 
-func (a *scripted) choose(q, detail string, choices []string) (int, error) {
-	a.asked = append(a.asked, strings.Join(append([]string{q, detail}, choices...), " | "))
+func (a *scripted) choose(q string, details, choices []string) (int, error) {
+	a.asked = append(a.asked, strings.Join(append(append([]string{q}, details...), choices...), " | "))
 	return a.choice, nil
 }
 
@@ -566,7 +566,7 @@ func TestAskRoot(t *testing.T) {
 		if err != nil || root != want {
 			t.Errorf("choice %d: %q, %v, want %q", choice, root, err, want)
 		}
-		if q := "where do releases live? | devopsy names a volume chosen as releases: root in /home/devopsy/.config/devopsy/config.yaml, before the first release | /home/devopsy, the deploy user's home | /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free) | /data (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)"; !slices.Equal(ask.asked, []string{q}) {
+		if q := "where do releases live? | devopsy names a volume chosen as releases: root in /home/devopsy/.config/devopsy/config.yaml, before the first release | /mnt/vol1 (ext4 on /dev/sdd, 0 B, 0 B free), not offered: nothing mounts /mnt/vol1 at boot | /home/devopsy, the deploy user's home | /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free) | /data (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)"; !slices.Equal(ask.asked, []string{q}) {
 			t.Errorf("asked %q", ask.asked)
 		}
 	}

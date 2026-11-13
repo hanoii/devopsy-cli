@@ -506,13 +506,18 @@ func TestServerInfoReport(t *testing.T) {
 	if es := volumeEntries(*info.Setup, "", "setup"); len(es) != 1 || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\nto keep releases on a volume, run --server-setup for this server, as its deploy user, with --root and its mount point\n" {
 		t.Errorf("locally: %+v", es)
 	}
+	// Every volume refused: the hint still says each one and why, with its fix and no --root.
+	only := *info.Setup
+	only.Candidates = only.Candidates[2:]
+	if es := volumeEntries(only, "vm1:", "setup"); len(es) != 1 || !strings.Contains(strings.Join(es[0].Lines, "\n"), "/mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot") || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\n" {
+		t.Errorf("none offered: %+v", es)
+	}
 	// A root the config names, one named by this run or a root holding releases is an answer:
-	// no volume hint, nor with every volume refused.
+	// no volume hint.
 	for name, change := range map[string]func(f *setup.Facts){
-		"named":        func(f *setup.Facts) { f.RootNamed = true },
-		"naming":       func(f *setup.Facts) { f.NamesRoot = true },
-		"releases":     func(f *setup.Facts) { f.Projects = true },
-		"none offered": func(f *setup.Facts) { f.Candidates = f.Candidates[2:] },
+		"named":    func(f *setup.Facts) { f.RootNamed = true },
+		"naming":   func(f *setup.Facts) { f.NamesRoot = true },
+		"releases": func(f *setup.Facts) { f.Projects = true },
 	} {
 		f := *info.Setup
 		change(&f)

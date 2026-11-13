@@ -208,7 +208,8 @@ While the deploy user's `config.yaml` names no `releases: root`, the
 home holds nothing released (no project, no claim of the uids containers
 run as, no project user) and a volume is offered, `--server-setup` asks
 where releases live: the home, first, or one of the volumes the root
-could be on, listed with their size and free space. A volume is offered
+could be on, listed with their size and free space, and each volume it
+does not offer with why. A volume is offered
 only where something mounts it at boot (`/etc/fstab`, a `.mount` unit):
 one mounted by hand or by `systemd-mount` is gone after a reboot, and
 releases would land on the disk under it. A volume chosen is named as
@@ -223,8 +224,8 @@ anything changes while the config names another root or the home holds
 something released, where the release root's check refuses it, or on a
 filesystem nothing mounts at boot; naming the root releases live in
 already, it does nothing. With `--yes`, or without a terminal, and no
-`--root`, nothing is asked and the home is kept: the volumes are listed
-instead, each offered one with the `--server-setup --root` that names
+`--root`, or with no volume offered, nothing is asked and the home is
+kept: the volumes are listed instead, each offered one with the `--server-setup --root` that names
 it, each other with why it is not offered and what to do. A
 `config.yaml` devopsy cannot add the line to (a `releases:` written as a
 flow mapping, a `root:` left empty) refuses with nothing changed,

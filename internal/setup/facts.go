@@ -148,9 +148,15 @@ func (f Facts) Changes() bool {
 	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
-// AsksRoot says whether where releases live is still open: the config names no root and none
-// is being named, nothing is released in the root, and a volume is offered. --server-setup
-// asks it then at a terminal, and the volume hint shows it where it is not asked.
+// RootOpen says whether where releases live is still open: the config names no root and none
+// is being named, nothing is released in the root, and a volume is listed, offered or not. The
+// volume hint shows then, where the question is not asked.
+func (f Facts) RootOpen() bool {
+	return !f.RootNamed && !f.NamesRoot && !f.Projects && len(f.Candidates) > 0
+}
+
+// AsksRoot says whether --server-setup asks where releases live, at a terminal: it is open
+// (RootOpen) and a volume is offered.
 func (f Facts) AsksRoot() bool {
-	return !f.RootNamed && !f.NamesRoot && !f.Projects && slices.ContainsFunc(f.Candidates, func(c Candidate) bool { return c.Why == "" })
+	return f.RootOpen() && slices.ContainsFunc(f.Candidates, func(c Candidate) bool { return c.Why == "" })
 }
