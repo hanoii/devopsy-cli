@@ -88,7 +88,7 @@ func TestRestoreDataFailureUndoesImages(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$1 ${2:-}" in
@@ -163,7 +163,7 @@ func TestRestoreDataReleasesLocksForRunStep(t *testing.T) {
 	}
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 case "$*" in
   "--release-steps release run")
     for l in .devopsy-snapshot.lock .devopsy-sync.lock; do

@@ -596,6 +596,7 @@ export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
   fi
 }
 root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
+images_dir=$(printf '%s\n' "$settings" | sed -n 's/^images=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
 base="$root"/` + Quote(t.Path) + `
@@ -1183,10 +1184,13 @@ const LogAnchor = report.Prefix + "from here, the server's own log (" + ServerLo
 // LogServerPart separates LogReadScript's two logs.
 const LogServerPart = "devopsy-internal-server-log"
 
-// ImagesLock is the server's image lock, under its release root: shared
-// while a release fetches and bookmarks its images or restores them,
-// exclusive while one removes them (releaseImages). Images are the
-// server's, shared by every project on it.
+// ImagesLock is a server user's image lock, in the directory its
+// --release-settings names (images=, $images_dir in a script): the deploy
+// user's release root, a project user's home. Shared while a release
+// fetches and bookmarks its images or restores them, exclusive while one
+// removes them (releaseImages). Images are the server's, shared by every
+// project on it; a project user's are kept from the deploy user's
+// removals by its claims' holds.
 const ImagesLock = ".devopsy-images.lock"
 
 // ImagesHolders is the directory where each holder of ImagesLock writes a
@@ -1252,7 +1256,7 @@ img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--add
 image_holders() {
   ih=
   ih_now=$(date +%s)
-  for ih_f in "$root/` + ImagesHolders + `"/*; do
+  for ih_f in "$images_dir/` + ImagesHolders + `"/*; do
     [ -f "$ih_f" ] || continue
     if ! kill -0 "${ih_f##*/}" 2>/dev/null; then
       rm -f "$ih_f"
@@ -1268,7 +1272,7 @@ image_holders() {
 image_lock() {
   il_opt=
   [ "$1" = shared ] && il_opt=-s
-  exec 8>"$root/` + ImagesLock + `"
+  exec 8>"$images_dir/` + ImagesLock + `"
   if ! flock -n $il_opt 8; then
     if [ "${3:-}" = now ]; then
       il_busy="the server's images are in use by $(image_holders)"
@@ -1293,11 +1297,11 @@ image_lock() {
     return 75
   fi
   # Only for messages: a full disk must not fail the lock.
-  mkdir -p "$root/` + ImagesHolders + `" 2>/dev/null || true
-  printf '%s %s %s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$2" 2>/dev/null >"$root/` + ImagesHolders + `/$$" || true
+  mkdir -p "$images_dir/` + ImagesHolders + `" 2>/dev/null || true
+  printf '%s %s %s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$2" 2>/dev/null >"$images_dir/` + ImagesHolders + `/$$" || true
 }
 image_unlock() {
-  rm -f "$root/` + ImagesHolders + `/$$" 2>/dev/null || true
+  rm -f "$images_dir/` + ImagesHolders + `/$$" 2>/dev/null || true
   exec 8>&-
 }
 `

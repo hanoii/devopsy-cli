@@ -36,7 +36,7 @@ var varsBin = sync.OnceValues(func() (string, error) {
 	if err := testfile.Write(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o555); err != nil {
 		return "", err
 	}
-	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n"
+	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"\n"
 	if err := testfile.Write(filepath.Join(bin, "devopsy"), []byte(settings), 0o555); err != nil {
 		return "", err
 	}
@@ -199,7 +199,7 @@ func TestInheritWriteMode(t *testing.T) {
 	modes := filepath.Join(root, "modes")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	// The guard copies stdin, then says what mode its output has.
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -ln "+in+" | cut -c1-10 >\""+modes+"\"; exit; fi\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -ln "+in+" | cut -c1-10 >\""+modes+"\"; exit; fi\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\" \""+root+"\"\n")
 	for _, f := range []string{"flock", "devopsy"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)
@@ -236,7 +236,7 @@ func TestVarsEditInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\" \""+root+"\"\n")
 	// cat fails on the edit's result, as a full disk would.
 	write(t, filepath.Join(bin, "cat"), "#!/bin/sh\ncase \"$*\" in *.tmp) exit 1 ;; esac\nexec /bin/cat \"$@\"\n")
 	for _, f := range []string{"flock", "devopsy", "cat"} {
