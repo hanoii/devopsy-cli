@@ -407,18 +407,30 @@ func editConfig(file string, edit func([]byte) ([]byte, error)) error {
 	return setup.WriteFile(file, text, mode)
 }
 
-// rootHolds says whether root holds what devopsy keeps of a release already: a project of the
-// deploy user's (deployEnvBases), a claim of any user's in its claims directory, or a project
-// user added to the door d (nil for none), whose tree was fixed at its add and whose uids are
-// claimed here. A root it cannot read in full is taken for one that holds them: nothing
-// offered to move it.
+// rootHolds says whether root holds anything devopsy makes there: in a project of the deploy
+// user's (ownProjects), at the project, an instance or an environment as devopsy lays them out
+// (envsUnder), a releases/ or shared/ directory or a .env (variables set before a first release
+// included); a claim of any user's in its claims directory; or a project user added to the door
+// d (nil for none), whose tree was fixed at its add and whose uids are claimed here. A root it
+// cannot read in full is taken for one that holds them: nothing offered to move it.
 func rootHolds(root string, d *remote.Door) bool {
 	if d != nil && len(d.Users) > 0 {
 		return true
 	}
-	bases, err := deployEnvBases(root)
-	if len(bases) > 0 || err != nil {
+	made := func(dir string) bool {
+		return slices.ContainsFunc([]string{"releases", "shared", ".env"}, func(name string) bool {
+			_, err := os.Lstat(filepath.Join(dir, name))
+			return err == nil
+		})
+	}
+	ps, err := ownProjects(root, doorTrees(root), ownedByMe)
+	if err != nil {
 		return true
+	}
+	for _, p := range ps {
+		if envs, err := envsUnder(root, p, made); made(p) || len(envs) > 0 || err != nil {
+			return true
+		}
 	}
 	claims, err := claimsStore(root).List()
 	return len(claims) > 0 || err != nil

@@ -1028,14 +1028,10 @@ func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
 	}
 }
 
-// A release root that holds an environment's variables, set before its first release
-// (--vars set makes the environment's directory and its shared/.env, with no releases/ yet),
-// holds what devopsy keeps of a release: nothing is asked and no other root named over them.
-//
-// BUG (review round 2): rootHolds counts only environments with releases/ (deployEnvBases),
-// uid claims and project users, so the question stays open, the volume hint offers --root, and
-// an apply names the volume: the variables stay in the home, where no release reads them, and
-// the first release runs without them (or lists them as missing again).
+// A release root that holds variables set before a first release (--vars set makes the
+// environment's directory and its shared/.env, with no releases/ yet; the project's and an
+// instance's are a .env of their own) holds what devopsy keeps of a release: nothing is asked
+// and no other root named over them, which would leave them where no release reads them.
 func TestServerSetupNamesNoRootOverVars(t *testing.T) {
 	t.Parallel()
 	s, _, vol, config := rootChoice(t)
@@ -1044,11 +1040,23 @@ func TestServerSetupNamesNoRootOverVars(t *testing.T) {
 	if out, code := s.run([]string{"COLOR=blue"}, "@prod", "--vars", "set", "COLOR"); code != 0 || !strings.Contains(readString(filepath.Join(home, "shop", "prod", "shared", ".env")), "COLOR=") {
 		t.Fatalf("--vars set before a first release (%d):\n%s", code, out)
 	}
-	if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || f.RootOpen() {
-		t.Errorf("facts (%d): asks %v, open %v over a release root that holds an environment's variables\n%s", code, f.AsksRoot(), f.RootOpen(), out)
+	held := func(what string) {
+		t.Helper()
+		if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || f.RootOpen() {
+			t.Errorf("%s: facts (%d): asks %v, open %v over a release root that holds them\n%s", what, code, f.AsksRoot(), f.RootOpen(), out)
+		}
+		if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
+			t.Errorf("%s: the apply (%d) named another root over them, the config:\n%s\n%s", what, code, readString(config), out)
+		}
 	}
-	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
-		t.Errorf("the apply (%d) named another root over the variables, the config:\n%s\n%s", code, readString(config), out)
+	held("an environment's variables")
+	// The project's and an instance's (--vars-project, --vars-instance), each a .env of its own.
+	for _, env := range []string{filepath.Join("shop", ".env"), filepath.Join("shop", "eu", ".env")} {
+		if err := os.RemoveAll(filepath.Join(home, "shop")); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(home, env), "COLOR=blue\n", 0o600)
+		held(env)
 	}
 }
 

@@ -205,9 +205,9 @@ in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
 While the deploy user's `config.yaml` names no `releases: root`, the
-home holds nothing released (no project, no claim of the uids containers
-run as, no project user) and a volume is offered, `--server-setup` asks
-where releases live: the home, first, or one of the volumes the root
+home holds nothing of devopsy's (no project, no variables set before a
+first release, no claim of the uids containers run as, no project user)
+and a volume is offered, `--server-setup` asks where releases live: the home, first, or one of the volumes the root
 could be on, listed with their size and free space, and each volume it
 does not offer with why. A volume is offered
 only where something mounts it at boot (`/etc/fstab`, a `.mount` unit):
@@ -221,7 +221,7 @@ nothing, and the next run asks again.
 `--root <dir>` gives the answer with no question, for `--yes` and CI:
 any directory (for example `/mnt/vol1/releases`). It is refused before
 anything changes while the config names another root or the home holds
-something released, where the release root's check refuses it, or on a
+something of devopsy's, where the release root's check refuses it, or on a
 filesystem nothing mounts at boot; naming the root releases live in
 already, it does nothing. With `--yes`, or without a terminal, and no
 `--root`, or with no volume offered, nothing is asked and the home is
