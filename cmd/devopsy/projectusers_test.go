@@ -585,7 +585,8 @@ esac
 		"devopsy: | or a key added for it (--ssh-keys with --for) takes it back\n") ||
 		!strings.Contains(out, "devopsy: devopsy-news has no key and still holds:\ndevopsy: | the volumes news-prod_db\n") ||
 		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") ||
-		!strings.Contains(out, "devopsy-mail: the destroy of mail's project user did not complete") || strings.Contains(out, "devopsy-mail has") {
+		!strings.Contains(out, "devopsy-mail: the destroy of mail's project user did not complete") || strings.Contains(out, "devopsy-mail has") ||
+		!strings.Contains(out, "devopsy-blog\tproject blog\tno Unix user\t1 key\n") || !strings.Contains(out, "devopsy-shop\tproject shop\tno Unix user\t0 keys\n") {
 		t.Errorf("list (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", remote.ServerEnv + "=devopsy@vm1:"}, "--project-users-step", "list")

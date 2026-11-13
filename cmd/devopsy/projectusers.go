@@ -137,7 +137,7 @@ func listProjectUsers(d *remote.Door) int {
 			if _, err := user.Lookup(name); err == nil {
 				exists = "user there"
 			}
-			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, keysOf(name))
+			fmt.Printf("%s\tproject %s\t%s\t%s\n", name, d.Users[name].Project, exists, plural(keysOf(name), "key"))
 		}
 		for _, k := range keylessUsers(d) {
 			report.Default().Say(report.InfoLevel, keptUserLine(k), k.Held, keptUserHints(k.Project, sessionServer())...)

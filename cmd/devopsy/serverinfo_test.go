@@ -178,6 +178,12 @@ func TestServerInfoReport(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("healthy: warnings %+v", warnings)
 	}
+	// A count says one in the singular.
+	one := healthy()
+	one.Door = &remote.DoorFacts{Space: "/space", Users: 1}
+	if out, _ := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "door          /space, 1 project user\n") {
+		t.Errorf("one project user:\n%s", out)
+	}
 
 	for _, c := range []struct {
 		name   string

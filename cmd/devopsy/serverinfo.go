@@ -1229,7 +1229,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	if dr := info.Door; dr != nil {
-		row("door", fmt.Sprintf("%s, %d project users", dr.Space, dr.Users))
+		row("door", dr.Space+", "+plural(dr.Users, "project user"))
 		if dr.Unguarded != "" {
 			warn(dr.Unguarded+": the door refuses every request",
 				spaceFix(dr.Space))

@@ -2157,7 +2157,7 @@ volumes:
 		t.Errorf("the control: the same key, the deploy user's to give (%d): %s", code, out)
 	}
 	// --server-info reads the door's host as root: its users, and the firewall add loaded.
-	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project users\n`).MatchString(out) || strings.Contains(out, "firewall") {
+	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project user\n`).MatchString(out) || strings.Contains(out, "firewall") {
 		t.Errorf("--server-info on a door server:\n%s", out)
 	}
 	// add refuses a name sharing compose names with a project there, and refuses while the
