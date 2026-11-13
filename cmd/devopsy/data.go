@@ -2233,7 +2233,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	}
 	if code == sshLost {
 		report.Say(report.ErrorLevel, lostSays(t, "", "the import of "+name+" may not be resolved there"), nil,
-			report.Hint("whether its mark is still there:", "devopsy @"+targetRef(t)+" --status"), report.Fix("", "devopsy @"+targetRef(t)+" --import "+name+" --resolved"))
+			report.Hint("this shows whether its mark is still there:", "devopsy @"+targetRef(t)+" --status"), report.Fix("", "devopsy @"+targetRef(t)+" --import "+name+" --resolved"))
 	}
 	return code
 }

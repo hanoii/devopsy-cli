@@ -2814,7 +2814,7 @@ func TestSyncHolderGone(t *testing.T) {
 	s.logs()
 	out, code := s.run([]string{"FAKE_SLOW_RSYNC=" + started, "FAKE_HOLDER_DIE=" + started}, "@dev", "--sync", "--yes")
 	docker, ssh := s.logs()
-	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @devopsy@one:dev --sync\ndevopsy: | see whether it does:\ndevopsy: | $ devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
+	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @devopsy@one:dev --sync\ndevopsy: | this shows whether it does:\ndevopsy: | $ devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("holder gone (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
 	// The push outlives devopsy's session: its restore may still be
