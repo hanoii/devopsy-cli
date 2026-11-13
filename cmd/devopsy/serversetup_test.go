@@ -1109,46 +1109,86 @@ func TestServerSetupRootWithoutTerminalKeepsRootInItsFix(t *testing.T) {
 	}
 }
 
-// At a terminal, --server-setup asks where releases live before it shows anything: Enter keeps
-// the home, names nothing and shows no volume hint, the rest asked as ever; a volume's number
-// is judged by a second facts session (facts --root), shown as the root the run names, and
-// named by the apply once the changes are confirmed, the root made there.
-func TestServerSetupAsksTheRootAtATerminal(t *testing.T) {
-	t.Parallel()
-	script, _ := exec.LookPath("script")
-	if runtime.GOOS != "linux" || script == "" {
-		t.Skip("needs util-linux's script, for a terminal")
+// atTerminalRun runs devopsy with args on s at a terminal, util-linux's script giving it a
+// pseudo-terminal fed answers, one line each, with its output and exit; the test is skipped
+// where there is no such script (macOS's takes other flags).
+func atTerminalRun(t *testing.T, s *syncSetup, answers string, args ...string) (string, int) {
+	t.Helper()
+	path, err := exec.LookPath("script")
+	if err != nil || runtime.GOOS != "linux" {
+		t.Skip("needs util-linux's script")
 	}
-	s, _, vol, config := rootChoice(t)
+	words := []string{remote.Quote(binary)}
+	for _, a := range args {
+		words = append(words, remote.Quote(a))
+	}
+	cmd := exec.Command(path, "-qec", strings.Join(words, " "), "/dev/null")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "NO_COLOR=1")
+	cmd.Stdin = strings.NewReader(answers)
+	out, _ := cmd.CombinedOutput()
+	return strings.ReplaceAll(string(out), "\r\n", "\n"), cmd.ProcessState.ExitCode()
+}
+
+// At a terminal, --server-setup asks where releases live before it shows anything, the home
+// first and Enter's. Enter keeps the home: no facts --root session, nothing named and no volume
+// hint. An answer naming no choice is asked again. A volume chosen is judged by a second facts
+// session, facts --root, shown as the root the run names and named by the apply once the
+// changes are confirmed, the root made there and Docker waiting for its mount; declined,
+// nothing is named. Once named, nothing is asked.
+func TestServerSetupAsksWhereReleasesLiveAtATerminal(t *testing.T) {
+	t.Parallel()
+	s, host, vol, config := rootChoice(t)
 	home := filepath.Dir(vol)
 	before := readString(config)
-	// answers are typed at a pseudo-terminal, a line per question.
 	at := func(answers string) (string, int) {
-		cmd := exec.Command(script, "-qec", remote.Quote(binary)+" @devopsy@one: --server-setup", "/dev/null")
-		cmd.Dir, cmd.Env, cmd.Stdin = s.project, s.env, strings.NewReader(answers)
-		out, _ := cmd.CombinedOutput()
-		return strings.ReplaceAll(string(out), "\r\n", "\n"), cmd.ProcessState.ExitCode()
+		return atTerminalRun(t, s, answers, "@devopsy@one:", "--server-setup")
 	}
+
 	out, code := at("\nn\n")
-	if code != 1 || !strings.Contains(out, "where do releases live?") || !strings.Contains(out, "1. "+home+", the deploy user's home") || !strings.Contains(out, "2. "+vol+" (xfs on /dev/sdb") ||
-		!strings.Contains(out, "apply these?") || !strings.Contains(out, "nothing changed") || strings.Contains(out, "to keep releases on") || strings.Contains(out, "names it as releases: root") ||
-		readString(config) != before || fileExists(vol) {
+	if code != 1 || strings.Count(out, "where do releases live?") != 1 || !strings.Contains(out, "devopsy: | 1. "+home+", the deploy user's home\n") ||
+		!strings.Contains(out, "devopsy: | 2. "+vol+" (xfs on /dev/sdb") || !strings.Contains(out, "apply these?") || !strings.Contains(out, "nothing changed") ||
+		strings.Contains(out, "to keep releases on") || strings.Contains(out, "names it as releases: root") || readString(config) != before || fileExists(vol) {
 		t.Fatalf("Enter, then no (%d), config %q:\n%s", code, readString(config), out)
 	}
-	_, ssh := s.logs()
-	if strings.Contains(ssh, "--root") {
-		t.Errorf("the home chosen ran a session with --root:\n%s", ssh)
+	if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
+		t.Errorf("the home chosen ran a second facts session:\n%s", ssh)
 	}
+
+	out, code = at("2\nn\n")
+	if _, ssh := s.logs(); code != 1 || !strings.Contains(out, "--server-setup names it as releases: root in "+config) || strings.Count(ssh, "\n") != 2 ||
+		strings.Contains(out, "named ") || readString(config) != before || fileExists(vol) {
+		t.Fatalf("a volume chosen, then no (%d), config %q:\n%s\nsessions:\n%s", code, readString(config), out, ssh)
+	}
+
 	out, code = at("0\n2\ny\ny\n")
-	if code != 0 || !strings.Contains(out, "answer with a number from 1 to 2") || !strings.Contains(out, "--server-setup names it as releases: root in "+config) ||
-		!strings.Contains(out, "devopsy: named "+vol+" the release root in "+config) || strings.Contains(out, "to keep releases on") || !fileExists(vol) {
-		t.Fatalf("the volume chosen (%d):\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "answer with a number from 1 to 2") || !strings.Contains(out, "devopsy: named "+vol+" the release root in "+config) ||
+		strings.Contains(out, "to keep releases on") || !fileExists(vol) {
+		t.Fatalf("a volume chosen (%d):\n%s", code, out)
 	}
 	if got := readString(config); got != before+"releases:\n  root: "+vol+"\n" {
 		t.Errorf("the config:\n%s", got)
 	}
+	if !strings.Contains(readString(filepath.Join(host, setup.MountsDropIn)), vol) {
+		t.Errorf("the mounts drop-in names no %s", vol)
+	}
 	if out, code := at(""); code != 0 || !strings.Contains(out, "nothing to change") || strings.Contains(out, "where do releases live?") {
 		t.Errorf("a second run (%d):\n%s", code, out)
+	}
+}
+
+// A root on a filesystem in memory (tmpfs, as Debian 13's /tmp, which tmp.mount mounts at every
+// boot from a unit file of its own) is refused, whatever mounts it: after a reboot the
+// filesystem is empty again, so every release on it would be gone.
+func TestServerSetupRefusesARootInMemory(t *testing.T) {
+	t.Parallel()
+	s, host, vol, _ := rootChoice(t)
+	tmp := filepath.Join(filepath.Dir(vol), "tmp")
+	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n3 1 0:30 / "+tmp+" rw,nosuid,nodev - tmpfs tmpfs rw\n", 0o644)
+	unit := setup.MountUnitName(tmp)
+	write(t, filepath.Join(host, "fragment."+unit), "/usr/lib/systemd/system/tmp.mount\n", 0o644)
+	if f, out, code := setupFactsOf(s, "--root", filepath.Join(tmp, "releases")); code != 1 || !strings.Contains(out, "devopsy: error: "+tmp+" is a tmpfs, in memory: it keeps nothing across a reboot") {
+		t.Errorf("facts --root in a tmpfs (%d), names %v:\n%s", code, f.NamesRoot, out)
 	}
 }
 
