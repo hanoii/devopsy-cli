@@ -807,10 +807,11 @@ func ownedByMe(path string) bool {
 // envDirs are dir's directories, a link to one included: a project or an
 // environment moved to another disk and linked back is one, as the
 // scripts reach it. A link resolving to nothing (a disk not mounted) is
-// none. A dir not there, or no directory, holds none (a release root
-// before its first release, a project removed since its root was read);
-// one it cannot read, or an entry it cannot stat, is an error, with what
-// it read.
+// an error, as --destroy takes one: what is there would read as gone. A
+// dir not there, or no directory, holds none (a release root before its
+// first release, a project removed since its root was read); one it
+// cannot read, or an entry it cannot stat, is an error, with what it
+// read.
 func envDirs(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
@@ -822,11 +823,16 @@ func envDirs(dir string) ([]string, error) {
 		if !projectDir(e.Name()) {
 			continue
 		}
-		fi, err := os.Stat(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		fi, err := os.Stat(path)
 		switch {
 		case err == nil && fi.IsDir():
-			out = append(out, filepath.Join(dir, e.Name()))
-		case err != nil && !errors.Is(err, os.ErrNotExist):
+			out = append(out, path)
+		case errors.Is(err, os.ErrNotExist):
+			if li, lerr := os.Lstat(path); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+				errs = append(errs, errors.New(path+" links to no directory, a disk not mounted perhaps"))
+			}
+		case err != nil:
 			errs = append(errs, err)
 		}
 	}

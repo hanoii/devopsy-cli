@@ -816,6 +816,18 @@ func TestServerInfoEnvironments(t *testing.T) {
 			t.Errorf("an unreadable project: %v, %v", got, err)
 		}
 	}
+	// A link to no directory (a disk not mounted) is unknown, never none: an environment there
+	// would read as gone, and --server-info would offer to remove what is left of it, its uid
+	// claim's file included. What it read comes with the error.
+	if err := os.Symlink(filepath.Join(elsewhere, "wiki"), filepath.Join(root, "wiki")); err != nil {
+		t.Fatal(err)
+	}
+	if envs, err := environments(root, nil, nil, ownedByMe); err == nil || !strings.Contains(err.Error(), filepath.Join(root, "wiki")+" links to no directory") || len(envs) != 3 {
+		t.Errorf("a link to no directory: %v, %v", envs, err)
+	}
+	if err := os.Remove(filepath.Join(root, "wiki")); err != nil {
+		t.Fatal(err)
+	}
 	// A project user's tree is never the deploy user's to read, a link there least of all:
 	// its environments come from what that user reads (--door-read), and nothing of the
 	// deploy user's is walked through a link the project user put there.
