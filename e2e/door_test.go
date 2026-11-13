@@ -1681,7 +1681,7 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 	}
 	for _, c := range []struct{ name, break_, says, put string }{
 		{"an ACCEPT ahead", "iptables -I OUTPUT 1 -j ACCEPT", "OUTPUT lets packets through before its jump to DEVOPSY-PROJECTS: -j ACCEPT", "devopsy @devopsy@doorsrv: --project-users add doorfw"},
-		{"emptied", "iptables -F DEVOPSY-PROJECTS", "DEVOPSY-PROJECTS is not devopsy's", "boot"},
+		{"emptied", "iptables -F DEVOPSY-PROJECTS", "DEVOPSY-PROJECTS differs from what devopsy loads", "boot"},
 	} {
 		if out, code := doorRoot(t, c.break_); code != 0 {
 			t.Fatalf("%s (%d): %s", c.name, code, out)

@@ -301,8 +301,8 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		}
 	}
 
-	have, _ := os.ReadFile(h.path(setup.SysctlFile))
-	f.Files = append(f.Files, setup.FileFact{Item: setup.ItemBuffers, Path: setup.SysctlFile, InSync: string(have) == setup.SysctlText()})
+	have, readErr := os.ReadFile(h.path(setup.SysctlFile))
+	f.Files = append(f.Files, setup.FileFact{Item: setup.ItemBuffers, Path: setup.SysctlFile, InSync: string(have) == setup.SysctlText(), Missing: readErr != nil})
 	for _, k := range setup.BufferKeys {
 		live, _ := os.ReadFile(h.path(setup.BufferPath(k)))
 		n, _ := strconv.ParseInt(strings.TrimSpace(string(live)), 10, 64)
@@ -682,7 +682,7 @@ func firewallFact(h setupHost, allow, door bool) *setup.FirewallFact {
 		case err != nil || statErr != nil:
 			differs = append(differs, p+" is missing")
 		case string(have) != f.Text:
-			differs = append(differs, p+" is not devopsy's")
+			differs = append(differs, p+" differs from what devopsy writes")
 		case fi.Mode().Perm() != f.Mode:
 			differs = append(differs, fmt.Sprintf("%s is mode %o, devopsy's %o", p, fi.Mode().Perm(), f.Mode))
 		}
@@ -1267,12 +1267,12 @@ func applySetup(h setupHost, a setupApply) int {
 	var left []string
 	for _, p := range again.facts.Parts {
 		if slices.Contains(putNames, p.Name) && p.State != setup.InSync {
-			left = append(left, "daemon.json's "+p.Name+" is still not devopsy's")
+			left = append(left, "daemon.json's "+p.Name+" still differs from devopsy's")
 		}
 	}
 	for _, x := range again.facts.Files {
 		if !x.InSync && (x.Item == setup.ItemBuffers && sysctlText != "" || x.Item == setup.ItemMounts && dropinText != "") {
-			left = append(left, x.Path+" is still not devopsy's")
+			left = append(left, x.Path+" still differs from what devopsy writes")
 		}
 	}
 	for _, b := range again.facts.Buffers {

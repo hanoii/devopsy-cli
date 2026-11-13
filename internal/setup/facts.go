@@ -97,7 +97,7 @@ func FactOf(s PartState) PartFact {
 }
 
 // FileFact is a file devopsy writes whole: in sync when it holds its text exactly, Missing
-// when it is not there (said only by the facts that word it so). With Link, it is a link that
+// when it is not there (fileWords). With Link, it is a link that
 // enables the unit Link names: in sync when it leads there.
 type FileFact struct {
 	Item    string `json:"item"`

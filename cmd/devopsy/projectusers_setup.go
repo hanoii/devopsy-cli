@@ -195,10 +195,8 @@ func doorItemLines(f setup.DoorFacts, s setup.Step, plan bool) []string {
 				}
 			case x.Item == setup.ItemMounts && f.DropInWithout:
 				say("Docker does not wait for the project users' directory at boot yet", "devopsy adds it to "+x.Path)
-			case x.Missing:
-				say(x.Path+" does not exist yet", "")
 			default:
-				say(x.Path+" differs from what devopsy writes", "")
+				say(fileWords(x), "")
 			}
 		}
 	}

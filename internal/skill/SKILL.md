@@ -276,7 +276,7 @@ what `config.yaml` sets.
   `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
-  and `--server-info` warns of what is not devopsy's.
+  and `--server-info` warns of what differs from devopsy's setup.
 - What a server keeps that nothing of devopsy removes (old exited one-off
   containers, unused build cache, release snapshots of releases gone,
   names a project's record left, dangling images) goes with

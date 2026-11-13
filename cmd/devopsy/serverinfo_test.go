@@ -309,7 +309,11 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup.Parts[1].State, i.Setup.Parts[1].Observed = setup.Changed, `{"live-restore":false}`
 		}, "",
 			`live-restore: {"live-restore":false}, someone else's; devopsy's {"live-restore":true}|devopsy @vm1: --server-setup`},
-		{"setup file", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Files[1].InSync = false }, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf is not devopsy's|devopsy @vm1: --server-setup"},
+		{"setup file", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Files[1].InSync = false }, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes|devopsy @vm1: --server-setup"},
+		{"setup file missing", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Files[1].InSync, i.Setup.Files[1].Missing = false, true
+		}, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf does not exist yet|devopsy @vm1: --server-setup"},
 		{"setup buffer", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Buffers[0].Live, i.Setup.Buffers[0].Low = 212992, true
@@ -324,8 +328,8 @@ func TestServerInfoReport(t *testing.T) {
 		{"setup firewall wiped", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallInSync, Door: true}
-			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}, nil)
-		}, "", "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --server-setup"},
+			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS differs from what devopsy loads"}, nil)
+		}, "", "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS differs from what devopsy loads|devopsy @vm1: --server-setup"},
 		// A project user's: what it can pass on to the server's admin, by its code, no remedy.
 		{"for the admin", func(i *remote.ServerInfo) {
 			i.Setup = nil
@@ -535,8 +539,8 @@ func TestServerInfoReport(t *testing.T) {
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	want := "setup         never set up by devopsy: --upgrade applies nothing here\n" +
 		"              Docker: Docker has no compose plugin\n              to fix it:\n              install Docker's compose plugin\n" +
-		"              socket buffers: /etc/sysctl.d/90-devopsy-net.conf is not devopsy's\n" +
-		"              mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf is not devopsy's\n" +
+		"              socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
+		"              mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
 		"              metadata firewall: containers reach the cloud's metadata services"
 	if !strings.Contains(out, want) || strings.Count(out, "$ devopsy @vm1: --server-setup") != 1 ||
 		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n              to fix it:\n              $ devopsy @vm1: --server-setup\n") {

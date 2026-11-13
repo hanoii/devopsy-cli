@@ -318,8 +318,18 @@ func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 	return es
 }
 
+// fileWords is a file devopsy writes whole as every command says it when it is not in sync:
+// missing, or its text another's, an older devopsy's included (a mounts drop-in naming the
+// root before a move).
+func fileWords(x setup.FileFact) string {
+	if x.Missing {
+		return x.Path + " does not exist yet"
+	}
+	return x.Path + " differs from what devopsy writes"
+}
+
 // setupItems are the setup's tunable items as --server-setup and --server-info show them, each
-// part as show says (setup.ShowSetup, setup.ShowInfo): what is not devopsy's one warning per
+// part as show says (setup.ShowSetup, setup.ShowInfo): what differs from devopsy's one warning per
 // item with fix (none when nil), each kept part and each set outside daemon.json a line,
 // pending as pendingWords says it with sooner its hint (none when nil). Each is under its item's key, or under key with
 // the item's name first when key is not "".
@@ -367,7 +377,7 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix, sooner *r
 	for _, x := range f.Files {
 		var lines []string
 		if !x.InSync {
-			lines = append(lines, x.Path+" is not devopsy's")
+			lines = append(lines, fileWords(x))
 		}
 		if x.Item == setup.ItemBuffers {
 			for _, b := range f.Buffers {

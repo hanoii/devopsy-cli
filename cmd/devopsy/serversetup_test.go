@@ -2718,7 +2718,7 @@ func TestFirewallSaysWhatDiffers(t *testing.T) {
 	write(t, filepath.Join(host, "/etc/systemd/system/devopsy-firewall.timer"), "# Written by devopsy (devopsy @<server> --project-users add).\n", 0o644)
 	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
 	for _, want := range []string{"metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it",
-		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " is not devopsy's",
+		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " differs from what devopsy writes",
 		remote.FirewallUnitLink + " does not enable " + remote.FirewallUnit, "/etc/systemd/system/devopsy-firewall.timer, an older install's, is still there"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q:\n%s", want, out)

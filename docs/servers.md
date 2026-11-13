@@ -143,17 +143,18 @@ What a server with project users needs beyond these is `--project-users
 setup`'s, which neither `--server-setup` nor `--upgrade` runs ([Project
 users](project-users.md#--project-users-setup)).
 
-It shows what is not devopsy's, then asks. `daemon.json` is merged: every
-other key stays as it is (a proxy's `proxies`, for example), and the file
-keeps its mode and owner, a link to it staying a link. A part someone else set is asked about, keep
-(Enter) or replace; a value kept is not asked again while it stays the
-same. To go back to devopsy's value, write it in `daemon.json` or remove
-the keys and answer replace. A part one of whose keys `docker.service`'s
-own flags set is left as it is and said, never asked about: putting it
-in the file too would keep Docker from starting. If `docker.service`
-starts Docker with another `--config-file`, `--server-setup` refuses. A `daemon.json` Docker
-would refuse (not a JSON object, a value of the wrong type) is refused,
-and never rewritten.
+It shows what differs from devopsy's setup, then asks. `daemon.json` is
+merged: every other key stays as it is (a proxy's `proxies`, for
+example), and the file keeps its mode and owner, a link to it staying a
+link. A part someone else set is asked about, keep (Enter) or replace; a
+value kept is not asked again while it stays the same. To go back to
+devopsy's value, write it in `daemon.json` or remove the keys and answer
+replace. A part one of whose keys `docker.service`'s own flags set is
+left as it is and said, never asked about: putting it in the file too
+would keep Docker from starting. If `docker.service` starts Docker with
+another `--config-file`, `--server-setup` refuses. A `daemon.json`
+Docker would refuse (not a JSON object, a value of the wrong type) is
+refused, and never rewritten.
 
 Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
 restart it now when the run changes the file or Docker has not taken it
@@ -297,7 +298,7 @@ setup's items) comes once, after the last of them:
 - Docker logs that grow without a limit, on a server whose devopsy does
   not judge its setup yet;
 - a server never set up by devopsy, on which `--upgrade` applies nothing,
-  and each item of the setup that is not devopsy's (a release root
+  and each item of the setup that differs from devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
   mounts drop-in, the metadata firewall, `W0001`), each fixed by
   `--server-setup`, or, where the setup refuses every step, by what it
