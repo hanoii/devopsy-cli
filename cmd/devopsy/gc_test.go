@@ -134,10 +134,11 @@ func TestGCOneOffs(t *testing.T) {
 	}
 }
 
-// The builders --gc goes over: the daemon's own by its records' times (docker system df), each
-// project user's project's under the door's BUILDX_CONFIG by buildctl in its container, one
-// not running kept and never asked, one with nothing old and a project with no builder left
-// out; one that does not read is an error, the rest listed.
+// The builders --gc goes over: the daemon's own by its records' times (docker system df), named
+// for the current Docker context (docker context show), as buildx names the docker driver's
+// builder, each project user's project's under the door's BUILDX_CONFIG by buildctl in its
+// container, one not running kept and never asked, one with nothing old and a project with no
+// builder left out; one that does not read is an error, the rest listed.
 func TestGCBuilders(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
@@ -153,6 +154,7 @@ func TestGCBuilders(t *testing.T) {
 	docker := filepath.Join(t.TempDir(), "docker")
 	write(t, docker, `#!/bin/sh
 case "$*" in
+  'context show') echo ctx1 ;;
   'system df -v --format {{json .}}') echo '{"BuildCache":`+df+`}' ;;
   'buildx ls --format json') [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; cat <<'EOF'
 `+ls+`
@@ -170,7 +172,7 @@ esac
 	}
 	g := &gcScope{docker: docker, now: now, ages: remote.ServerGC{BuildCache: 30 * 24 * time.Hour}, door: &remote.Door{Space: space, Users: users}}
 	bs, errs := g.builders()
-	want := []gcBuilder{{Records: 2, Size: 6060000}, {Name: "devopsy-blog", Project: "blog", Stopped: true}, {Name: "devopsy-shop", Project: "shop", Records: 1, Size: 3000}}
+	want := []gcBuilder{{Name: "ctx1", Records: 2, Size: 6060000}, {Name: "devopsy-blog", Project: "blog", Stopped: true}, {Name: "devopsy-shop", Project: "shop", Records: 1, Size: 3000}}
 	if !slices.Equal(bs, want) {
 		t.Errorf("builders %+v, want %+v", bs, want)
 	}
@@ -205,9 +207,10 @@ esac
 // came to qualify since (a one-off, a release snapshot, a name a project's record left, a
 // dangling image) stays, and the build cache goes by the listing's cutoff. --yes removes in
 // one session what it lists: the old one-off (never with -v), the daemon's old build cache by
-// prune's own rule, the release snapshot of a release gone, the name a project's record left,
-// then the dangling images; an environment whose snapshot lock is held is skipped and exits
-// 3, its snapshot kept for the next run; a project user is refused before anything.
+// prune's own rule on the builder its Docker context names, the release snapshot of a release
+// gone, the name a project's record left, then the dangling images; an environment whose
+// snapshot lock is held is skipped and exits 3, its snapshot kept for the next run; a project
+// user is refused before anything.
 func TestGC(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -233,8 +236,9 @@ case "$*" in
       echo '{"Id":"'"$c"'","Name":"/shop-prod-web-run-'"$n"'","SizeRw":12000000,"State":{"Status":"exited","FinishedAt":"2026-01-01T00:00:00Z"},"Config":{"Labels":{"com.docker.compose.project":"shop-prod","com.docker.compose.oneoff":"True"}}}'
     done; exit $rc ;;
   'rm '*) touch "`+state+`/rm-$2" ;;
+  'context show') echo ctx1 ;;
   'system df -v --format {{json .}}') echo '{"BuildCache":[{"ID":"a","Size":"1.5MB","LastUsedAt":"2026-01-01 00:00:00 +0000 UTC","InUse":"false","Shared":"false"}]}' ;;
-  'buildx prune --builder default -a -f --filter until='*) printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
+  'buildx prune --builder ctx1 -a -f --filter until='*) printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
   'image inspect --format {{.Id}} shop-web:'*) gone "$5" && { echo "Error: No such image: $5" >&2; exit 1; }; [ "$5" = shop-web:old ] && echo sha256:aaa || echo sha256:bbb ;;
   'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:aaa') echo shop-web:old ;;
   'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:bbb') echo shop-web:older ;;
@@ -302,7 +306,7 @@ esac
 	// pruned are the removals but the build cache's prune, and its until (0 for none).
 	pruned := func() ([]string, time.Duration) {
 		rs, until := removals(), time.Duration(0)
-		const prune = "buildx prune --builder default -a -f --filter until="
+		const prune = "buildx prune --builder ctx1 -a -f --filter until="
 		if i := slices.IndexFunc(rs, func(r string) bool { return strings.HasPrefix(r, prune) }); i >= 0 {
 			until, _ = time.ParseDuration(strings.TrimPrefix(rs[i], prune))
 			rs = slices.Delete(rs, i, i+1)

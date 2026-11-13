@@ -155,9 +155,10 @@ func (c gcOneOff) words(now time.Time) string {
 	return fmt.Sprintf("%s (%s), exited %s ago, %s", c.Name, c.Project, duration(now.Sub(c.Finished)), humanBytes(c.Size))
 }
 
-// gcBuilder is a builder's build cache unused for the age: the daemon's own (no Name), or a
-// project user's project's (Name, door.BuilderOf), which a stopped one keeps (Stopped).
-// Records is how many records go, Size what of them no image shares.
+// gcBuilder is a builder's build cache unused for the age, by its Name: the daemon's own (no
+// Project), named for the Docker context the listing read it through (daemonBuilder), or a
+// project user's project's (door.BuilderOf), which a stopped one keeps (Stopped). Records is
+// how many records go, Size what of them no image shares.
 type gcBuilder struct {
 	Name    string `json:"name,omitempty"`
 	Project string `json:"project,omitempty"`
@@ -167,7 +168,7 @@ type gcBuilder struct {
 }
 
 func (b gcBuilder) who() string {
-	if b.Name == "" {
+	if b.Project == "" {
 		return "the server's Docker"
 	}
 	return b.Name + " (" + b.Project + "'s builder)"
@@ -356,13 +357,13 @@ func runGCStep(args []string) int {
 }
 
 // only is what of p the listing listed too, each by its id: a one-off by its container's,
-// a builder by its name, unless the listing said its cache stays (Stopped), a release snapshot
+// a builder by its project and name (the daemon's by its context's), unless the listing said its cache stays (Stopped), a release snapshot
 // by its environment and id, a name left by its environment, name and image, a dangling image
 // by its id. What p could not read stays in.
 func (p gcPlan) only(listing gcPlan) gcPlan {
 	p.OneOffs = keepListed(p.OneOffs, listing.OneOffs, func(c gcOneOff) string { return c.ID })
 	p.Builders = keepListed(p.Builders, slices.DeleteFunc(slices.Clone(listing.Builders), func(b gcBuilder) bool { return b.Stopped }),
-		func(b gcBuilder) string { return b.Name })
+		func(b gcBuilder) string { return b.Project + "\x00" + b.Name })
 	p.Snapshots = keepListed(p.Snapshots, listing.Snapshots, gcSnapshot.key)
 	p.Left = keepListed(p.Left, listing.Left, func(l gcLeft) string { return leftKey(l.Retried) })
 	p.Dangling.Images = keepListed(p.Dangling.Images, listing.Dangling.Images, func(i gcImage) string { return i.ID })
@@ -557,8 +558,8 @@ func (g *gcScope) goes(status string, oneOff bool, c gcOneOff) bool {
 //   - a record stays while one built on it (its child) stays, and goes in the same prune as
 //     the last of them;
 //   - docker builder prune is buildx prune on the current builder (docker buildx use), which
-//     may be any; the daemon's own, of the docker driver, is named for its context, default
-//     (daemonBuilder), the one docker system df -v reads;
+//     may be any; the daemon's own, of the docker driver, is named for the current Docker
+//     context (docker context show, daemonBuilder), whose daemon docker system df -v reads;
 //   - on a docker-container builder that is not running (stopped, or made and never started),
 //     prune and du fail with "driver not running" and never start it;
 //   - du ignores --filter until, and prints its last use only in words ("2 weeks ago"):
@@ -569,9 +570,6 @@ func (g *gcScope) goes(status string, oneOff bool, c gcOneOff) bool {
 //
 // So --gc lists, per builder, the records prune -a --filter until removes (cacheGoing), and
 // leaves a builder not running as it is.
-
-// daemonBuilder is the daemon's own builder, the docker driver's of the default context.
-const daemonBuilder = "default"
 
 // cacheRecord is one record of a builder's build cache.
 type cacheRecord struct {
@@ -625,10 +623,15 @@ func cacheGoing(records []cacheRecord, now time.Time, age time.Duration) (n int,
 func (g *gcScope) builders() ([]gcBuilder, []error) {
 	var bs []gcBuilder
 	var errs []error
-	if rs, err := g.daemonCache(); err != nil {
+	name, err := g.daemonBuilder()
+	var rs []cacheRecord
+	if err == nil {
+		rs, err = g.daemonCache()
+	}
+	if err != nil {
 		errs = append(errs, fmt.Errorf("the build cache of the server's Docker: %w", err))
 	} else if n, size := cacheGoing(rs, g.now, g.ages.BuildCache); n > 0 {
-		bs = append(bs, gcBuilder{Records: n, Size: size})
+		bs = append(bs, gcBuilder{Name: name, Records: n, Size: size})
 	}
 	if g.door == nil || g.door.Space == "" || len(g.door.Users) == 0 {
 		return bs, errs
@@ -689,6 +692,21 @@ func (g *gcScope) doorBuilders() (map[string]builderNode, error) {
 		}
 	}
 	return nodes, nil
+}
+
+// daemonBuilder is the name of the daemon's own builder, the docker driver's, which buildx
+// names for the current Docker context (docker context show): the daemon docker system df -v
+// reads, never the deploy user's current builder (docker buildx use), which may be another's.
+func (g *gcScope) daemonBuilder() (string, error) {
+	out, err := exec.Command(g.docker, "context", "show").Output()
+	if err != nil {
+		return "", dockerFailed("docker context show", err)
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "", errors.New("docker context show named no context")
+	}
+	return name, nil
 }
 
 // daemonCache is the daemon's own builder's records, as the daemon gives them with their
@@ -887,10 +905,9 @@ func (g *gcScope) remove(p gcPlan) int {
 		if b.Stopped {
 			continue
 		}
-		// The daemon's own builder by its name, never the deploy user's current one (docker
-		// buildx use), which may be another's.
-		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", cmp.Or(b.Name, daemonBuilder), "-a", "-f", "--filter", until)
-		if b.Name != "" {
+		// Each builder by the name its listing gave, the daemon's its context's (daemonBuilder).
+		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
+		if b.Project != "" {
 			cmd.Env = g.buildxEnv()
 		}
 		log.Info("removing the build cache of " + b.who() + " unused for " + duration(g.ages.BuildCache))

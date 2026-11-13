@@ -82,7 +82,7 @@ var doorVerbs = map[string]string{
 	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
 	"buildx": "--context-hash, local; --server-setup and --gc, the deploy user's", "info": "--server-info and --server-setup, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
-	"builder": "--gc, the deploy user's", "container": "--gc, the deploy user's", "not": "a message",
+	"builder": "--gc, the deploy user's", "container": "--gc, the deploy user's", "context": "--gc, the deploy user's", "not": "a message",
 }
 
 // TestDoorKnowsDevopsysDockerCommands fails when devopsy calls a Docker command the
