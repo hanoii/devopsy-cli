@@ -331,8 +331,8 @@ func serverFacts() (remote.ServerInfo, error) {
 		return remote.ServerInfo{}, err
 	}
 	info := remote.ServerInfo{
-		Version: version, Protocol: remote.Protocol,
-		Root: r.Root, Keep: r.Keep, MaxKeep: r.MaxKeep,
+		Version: version,
+		Root:    r.Root, Keep: r.Keep, MaxKeep: r.MaxKeep,
 		SnapshotRoot: r.Snapshots.Root, SnapshotMaxKeep: r.Snapshots.MaxKeep, MirrorsOff: r.Snapshots.MirrorsOff(),
 		Arch: runtime.GOARCH, CPUs: runtime.NumCPU(),
 	}
@@ -1205,7 +1205,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	// devopsy and the release settings.
-	v := info.Version + ", protocol " + strconv.Itoa(info.Protocol)
+	v := info.Version
 	if local != info.Version {
 		v += " (local " + local + ")"
 	}

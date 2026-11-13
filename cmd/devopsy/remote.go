@@ -568,10 +568,10 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		// does not sync goes on.
 		if syncs && !cur.DataLabels {
 			msg := "the server's devopsy lacks what this needs (" + remote.DataCopyFeature + "): upgrade it (" + remote.UpgradeHint(t) + ")"
-			if os.Getenv(remote.ProtocolCheckEnv) != "warn" {
-				return failErr(&report.Failure{Msg: msg + ", or set " + remote.ProtocolCheckEnv + "=warn to go on at your own risk: nothing changed"})
+			if os.Getenv(remote.FeatureCheckEnv) != "warn" {
+				return failErr(&report.Failure{Msg: msg + ", or set " + remote.FeatureCheckEnv + "=warn to go on at your own risk: nothing changed"})
 			}
-			report.Warn(msg + ": going on anyway (" + remote.ProtocolCheckEnv + "=warn), and it may fail halfway")
+			report.Warn(msg + ": going on anyway (" + remote.FeatureCheckEnv + "=warn), and it may fail halfway")
 		}
 		if !noSync {
 			if from != "" && !syncFlag && !first {

@@ -92,10 +92,10 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 }
 
 // runReleaseSettings implements the hidden --release-settings [<project> <compose name>],
-// run first by every script on a server: the machine's releases: and snapshots: settings,
-// as key=value lines, the scripts' protocol it speaks (remote.Protocol) and the features
-// it has (remote.FeaturesList). Given an environment's project and compose name, it refuses
-// the deploy user one whose name is a project user's (doorNameOwner), before the script
+// run first by every script on a server: the machine's releases: and snapshots: settings
+// and the features it has (remote.FeaturesList), as key=value lines. Given an environment's
+// project and compose name, it refuses the deploy user one whose name is a project user's
+// (doorNameOwner), before the script
 // changes anything, with remote.SettingsRefusedExit: compose acts on a project by its name
 // alone, so a --destroy there takes that user's containers and volumes down.
 func runReleaseSettings(args []string) int {
@@ -130,7 +130,7 @@ func runReleaseSettings(args []string) int {
 		failErr(err)
 		return remote.SettingsRefusedExit
 	}
-	fmt.Printf("root=%s\nimages=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, images, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
-		remote.Protocol, remote.FeaturesList())
+	fmt.Printf("root=%s\nimages=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nfeatures=%s\n", r.Root, images, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
+		remote.FeaturesList())
 	return 0
 }

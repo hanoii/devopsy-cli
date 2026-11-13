@@ -682,7 +682,7 @@ func TestFormatReleases(t *testing.T) {
 func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"${FAKE_ROOT:-/nowhere}\" \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
+	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \"${FAKE_ROOT:-/nowhere}\" \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
 	if err := testfile.Write(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -866,7 +866,7 @@ func TestActivateSync(t *testing.T) {
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
 	// --sync-services prepare when told.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-}${DEVOPSY_INTERNAL_INHERIT_FILE:+ file=$DEVOPSY_INTERNAL_INHERIT_FILE}" >> "$FAKE_ROOT/calls"
 if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
@@ -1196,7 +1196,7 @@ func TestHolderArmedThroughRelease(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 echo "$*" >> "$FAKE_ROOT/calls"
 exit 0
 `)
@@ -1464,7 +1464,7 @@ func TestActivateImages(t *testing.T) {
 	// pull and build put the release's id in the image store, and fail
 	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
@@ -1688,7 +1688,7 @@ func TestImagesRemoved(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=1\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=1\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1953,7 +1953,7 @@ func TestActivateDataImages(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true","devopsy.data.version":"%s"}}}}' "$DB" "${DB#*:}" ;;
@@ -2031,7 +2031,7 @@ func TestSyncImagesNotInRunStep(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' ;;
@@ -2072,7 +2072,7 @@ func TestBookmarksPerRef(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("postgres:15", "postgres:16", "x@sha256:abc")+`' ;;
@@ -2124,7 +2124,7 @@ func TestFetchInterrupted(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -2336,7 +2336,7 @@ func fileExists(path string) bool {
 func TestActivatePruneFailed(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"; fi\nexit 0\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	root := t.TempDir()
@@ -2371,7 +2371,7 @@ func TestActivatePruneFailed(t *testing.T) {
 func TestLeftoverImagesRecord(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2701,7 +2701,7 @@ func TestAfterSwitchSurvives(t *testing.T) {
 	}
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
   "-- build --pull") id=$(pwd -P); id=${id%/code}; `+fakeFetchTag+`echo "${id##*/}" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
@@ -2857,7 +2857,7 @@ func TestActivateGoneAndNeighbours(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 case "$*" in
   fail) exit 3 ;;
   "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
@@ -2896,7 +2896,7 @@ exit 0
 func TestStatusLastSync(t *testing.T) {
 	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"; fi\nexit 0\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2932,7 +2932,7 @@ func TestStepTextQuoted(t *testing.T) {
 	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 case "$1" in deploy|prep) printf '%s|' "$@" >>"$FAKE_ROOT/args"; echo >>"$FAKE_ROOT/args" ;; esac
 exit 0
 `)
@@ -3075,7 +3075,7 @@ func TestWaitBeatWithoutWatcher(t *testing.T) {
 func TestImportMarkRefusals(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"; exit; fi\necho \"ran: $* (accepted: ${"+ImagesAcceptEnv+":-})\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\" \"$FAKE_ROOT\"; exit; fi\necho \"ran: $* (accepted: ${"+ImagesAcceptEnv+":-})\"\n")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	for _, f := range []string{"devopsy", "flock"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
@@ -3251,7 +3251,7 @@ func TestImgOptionsNeedDataImages(t *testing.T) {
 // devopsy's own compose file of the release it runs in holds
 // mariadb@$GONE, a digest its registry dropped.
 const oldHoldsFake = `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -3452,7 +3452,7 @@ func TestFetchInterruptedDuringNames(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -3602,7 +3602,7 @@ func TestRollbackModeByRecord(t *testing.T) {
 	// pull gets the registry's image, a build the release's own, each
 	// stored as the id of the release that got it.
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 echo "$id: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"

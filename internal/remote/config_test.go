@@ -626,7 +626,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=2\\nmax_keep=3\\nprotocol=8\\n' \""+root+"\" \""+root+"\"; exit; fi\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nimages=%s\\nkeep=2\\nmax_keep=3\\n' \""+root+"\" \""+root+"\"; exit; fi\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	run := func(tg *Target, id string) string {
@@ -893,7 +893,7 @@ func TestPreludeSnapshotDir(t *testing.T) {
 	tg := &Target{Path: "app/prod", Address: "vm1:prod"}
 	for root, want := range map[string]string{"": "/srv/app/prod/snapshots", "/mnt/backups": "/mnt/backups/app/prod"} {
 		bin := t.TempDir()
-		write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=/srv\\nkeep=5\\nmax_keep=5\\nsnapshot_root="+root+"\\nsnapshot_max_keep=7\\nprotocol=8\\n'\n")
+		write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=/srv\\nkeep=5\\nmax_keep=5\\nsnapshot_root="+root+"\\nsnapshot_max_keep=7\\n'\n")
 		os.Chmod(filepath.Join(bin, "devopsy"), 0o755)
 		cmd := exec.Command("sh", "-c", basePrelude(tg)+`echo "$snaps $snap_max_keep"`)
 		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))

@@ -511,7 +511,7 @@ already, `--upgrade` changes nothing there: what someone changed since
 (a drop-in removed, a file edited) is `--server-setup`'s to put back,
 and `--server-info` warns of it.
 
-`DEVOPSY_PROTOCOL_CHECK=warn` turns that stop into a warning and goes on,
+`DEVOPSY_FEATURE_CHECK=warn` turns that stop into a warning and goes on,
 at your own risk. It is for a local build ahead of the servers, when what
 you run may not need what the server's devopsy lacks.
 

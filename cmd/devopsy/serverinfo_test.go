@@ -128,7 +128,7 @@ func TestServerInfoReport(t *testing.T) {
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
 	healthy := func() remote.ServerInfo {
 		return remote.ServerInfo{
-			Version: "0.53.0", Protocol: 8, Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
+			Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
 			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
 			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
 			AppArmor: true, AppArmorParser: true,
@@ -156,7 +156,7 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
-		"devopsy       0.53.0, protocol 8\n",
+		"devopsy       0.53.0\n",
 		"releases      /home/devopsy, keep 5 (at most 5)",
 		"snapshots     in each environment's directory, keep at most 5",
 		"system        Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
@@ -1190,7 +1190,7 @@ func setUp(rootAction string) *setup.Facts {
 func TestServerInfoSaysAMissingToolOnce(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
-	info := remote.ServerInfo{Version: "0.53.0", Protocol: remote.Protocol, Root: "/home/devopsy", NTP: "yes", Missing: []string{"tar"}}
+	info := remote.ServerInfo{Version: "0.53.0", Root: "/home/devopsy", NTP: "yes", Missing: []string{"tar"}}
 	info.Setup = setUp("")
 	if r := toolsRefusalOf([]string{"tar"}); r != nil {
 		info.Setup.Refusals = []setup.Refusal{*r}

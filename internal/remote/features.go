@@ -8,13 +8,14 @@ import (
 )
 
 // featureFlags and namedFeatures are what a script may need from the
-// server's devopsy beyond Protocol: every devopsy flag a script calls, by
+// server's devopsy: every devopsy flag a script calls, by
 // its name (release-id for --release-id), and named behaviors of a flag
 // that came later. The server's devopsy reports its own in
 // --release-settings (features=), and a script's prelude refuses only on
 // one it needs and the server lacks, naming it (basePrelude): an older
-// server still runs every command that needs nothing new. Protocol stays
-// for what every script depends on (the prelude itself, --say).
+// server still runs every command that needs nothing new. A change every
+// script depends on (the prelude itself, --say) is a named feature found
+// in the prelude's text, which every script carries.
 //
 // A script's needs are found in its text (Needs), so they never drift
 // from what it calls; TestFeaturesCoverScripts fails on a flag a script
@@ -30,8 +31,7 @@ var featureFlags = []string{
 
 // namedFeatures are behaviors of a flag that came after it, each found
 // in a script by what it calls (for example a new word of
-// --sync-services): add one when a script starts calling it, rather than
-// raising Protocol.
+// --sync-services): add one when a script starts calling it.
 var namedFeatures = []struct {
 	Name string
 	Uses *regexp.Regexp

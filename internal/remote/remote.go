@@ -543,29 +543,11 @@ const removeMoved = `for m in "$base".rm.*; do
 done
 `
 
-// ProtocolCheckEnv set to warn turns the refusal of an older server's
-// devopsy into a warning, the command going on at the operator's risk
-// (a local build ahead of the servers): passed to every session
-// (SSHStreams).
-const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
-
-// Protocol is what every script needs from the server's devopsy, which
-// --release-settings reports (protocol=): raise it only for a change
-// every script depends on (the prelude, --say), or a format both sides
-// share that no script's text shows; a script calling something new needs
-// a feature instead (featureFlags, namedFeatures), so an older server
-// still runs the rest.
-// Either way it refuses before anything changes instead of failing
-// halfway. 1: --images; 2: --watch-session;
-// 3: --sync-services finish partial, settle, import <service> last,
-// --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
-// 5: --say; 6: --sync-services prepare first, --release-steps release, a
-// sync's done holding its id, a stream's spool named by it; 7: a sync's
-// record of its writers (the started file, taken by the holder, the
-// writers ended by finish partial and settle), --release-id, a
-// watcher's disarm on the session's next byte (<armed>.next); 8:
-// features= in --release-settings.
-const Protocol = 8
+// FeatureCheckEnv set to warn turns the refusal of a server's devopsy
+// lacking what a script needs into a warning, the command going on at the
+// operator's risk (a local build ahead of the servers): passed to every
+// session (SSHStreams).
+const FeatureCheckEnv = "DEVOPSY_FEATURE_CHECK"
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:), $base to the
@@ -623,29 +605,21 @@ func serverPrelude(t *Target) string {
 // given, having said why: the script then stops without a line of its own.
 const SettingsRefusedExit = 3
 
-// serverCheck refuses a server's devopsy older than Protocol, or lacking
-// a feature the script needs ($devopsy_needs, WithNeeds), before anything
-// else, naming @ref in the upgrade hint, and leaves its
-// --release-settings in $settings, which given t's project and compose
-// name refuses one that is not the server user's to act on. Its lines are
-// a plain echo: the server's devopsy may lack --say.
+// serverCheck refuses a server's devopsy lacking a feature the script
+// needs ($devopsy_needs, WithNeeds), before anything else, naming @ref in
+// the upgrade hint: one too old to list its features (features=) lacks
+// them all. It leaves its --release-settings in $settings, which given
+// t's project and compose name refuses one that is not the server user's
+// to act on. Its lines are a plain echo: the server's devopsy may lack
+// --say.
 func serverCheck(ref string, t *Target) string {
 	upgrade := report.Fix("upgrade it:", "devopsy @"+ref+" --upgrade")
-	risk := report.Fix("set " + ProtocolCheckEnv + "=warn to go on at your own risk")
+	risk := report.Fix("set " + FeatureCheckEnv + "=warn to go on at your own risk")
 	env := ""
 	if name := t.ComposeName(); name != "" {
 		env = " " + Quote(t.Project.Name) + " " + Quote(name)
 	}
 	return `settings=$(devopsy --release-settings` + env + `) || { [ $? = ` + strconv.Itoa(SettingsRefusedExit) + ` ] || ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings", upgrade) + `; exit 1; }
-server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
-if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
-  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway", upgrade) + `
-  else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs", upgrade, risk) + `
-    exit 1
-  fi
-fi
 # What this script calls that the server's devopsy lacks (Needs).
 server_features=" $(printf '%s\n' "$settings" | sed -n 's/^features=//p') "
 missing=
@@ -653,8 +627,8 @@ for f in ${` + needsEnv + `:-}; do
   case "$server_features" in *" $f "*) ;; *) missing="$missing${missing:+, }$f" ;; esac
 done
 if [ -n "$missing" ]; then
-  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway", upgrade) + `
+  if [ "${` + FeatureCheckEnv + `:-}" = warn ]; then
+    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+FeatureCheckEnv+"=warn), and it may fail halfway", upgrade) + `
   else
     ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing)", upgrade, risk) + `
     exit 1
@@ -781,7 +755,7 @@ echo "$id"
 }
 
 // ReleaseIDFlag is the hidden devopsy flag that prints a new release's
-// id (NextReleaseID) for the releases in a directory (Protocol 7).
+// id (NextReleaseID) for the releases in a directory.
 const ReleaseIDFlag = "--release-id"
 
 // ReleaseIDFormat is a release id: a UTC second, 20261019214911.
@@ -1745,9 +1719,9 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if TTY != "" {
 		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
 	}
-	if os.Getenv(ProtocolCheckEnv) == "warn" {
+	if os.Getenv(FeatureCheckEnv) == "warn" {
 		// Exported: the server's own devopsy calls check the same way.
-		script = "export " + ProtocolCheckEnv + "=warn\n" + script
+		script = "export " + FeatureCheckEnv + "=warn\n" + script
 	}
 	script = needs + script
 	// extra first: ssh keeps the first value, so a session's own option
