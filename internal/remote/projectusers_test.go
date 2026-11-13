@@ -147,12 +147,13 @@ func TestHostPut(t *testing.T) {
 		t.Error("the same piece was written again")
 	}
 	holds("the same piece again", "rule one\n")
-	if code, out := put("false", "rule two, broken\n"); code != 4 || !strings.Contains(out, "did not pass its check") {
+	// A check's words show only when it refuses (sudo-rs's visudo says "parsed OK" even with -q).
+	if code, out := put("echo near line 1 >&2; false", "rule two, broken\n"); code != 4 || !strings.Contains(out, "did not pass its check") || !strings.Contains(out, "near line 1") {
 		t.Errorf("a piece its check refuses (%d): %s", code, out)
 	}
 	holds("a piece its check refuses", "rule one\n")
-	if code, out := put("true", "rule two\n"); code != 0 {
-		t.Errorf("a piece that differs (%d): %s", code, out)
+	if code, out := put("echo parsed OK", "rule two\n"); code != 0 || out != "" {
+		t.Errorf("a piece that differs (%d): %q", code, out)
 	}
 	holds("a piece that differs", "rule two\n")
 	// The same text in another mode (a loader that lost its exec bit) gets its mode back,

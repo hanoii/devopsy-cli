@@ -143,7 +143,12 @@ var hostPut = `put() {
     case $2 in keep:*) ;; *) [ -L "$pf" ] || [ -z "$(find "$pf" -prune ! -perm "$2")" ] || chmod "$2" "$pf" ;; esac
     return 1
   fi
-  if ! sh -c "$3" sh "$tmp" >&2; then rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4; fi
+  # The check's own words only when it refuses: a tool that says it passed (sudo-rs's visudo,
+  # even with -q) would show raw among devopsy's lines.
+  if ! pc=$(sh -c "$3" sh "$tmp" 2>&1); then
+    [ -z "$pc" ] || printf '%s\n' "$pc" >&2
+    rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 did not pass its check") + `; exit 4
+  fi
   mv -f "$tmp" "$pf" || { rm -f "$tmp"; ` + echoLine(report.ErrorLevel, "$1 could not be written") + `; exit 5; }
 }
 `
