@@ -126,7 +126,7 @@ func runProjectUsersStep(args []string) int {
 }
 
 // listProjectUsers prints each project user: its project, whether its Unix user is there,
-// and how many keys it has; says each with no key that still holds environments (keylessOf);
+// and how many keys it has; says each with no key that still holds something (keylessUsers);
 // and whether sshd waits for a reboot to take the door.
 func listProjectUsers(d *remote.Door) int {
 	if d == nil || len(d.Users) == 0 {
@@ -139,9 +139,9 @@ func listProjectUsers(d *remote.Door) int {
 			}
 			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, keysOf(name))
 		}
-		for _, k := range keylessOf(d) {
+		for _, k := range keylessUsers(d) {
 			// The server named alone carries no address to a session: the way out in words.
-			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Names, ", "), nil,
+			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Held, "; "), nil,
 				report.Hint("removing "+k.Project+"'s project user with --project-users remove and --destroy removes them with it; "+keylessWords))
 		}
 	}
@@ -595,7 +595,7 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	// (its keys, which sshd takes from the keys file alone, its end, what the door kept) done
 	// here the same. Its line is the one record of its names: dropped while something is under
 	// them, nothing would destroy it any more.
-	if held, err := heldBy(d, project, who, entry); err != nil || len(held) > 0 {
+	if held, err := heldBy(d, project, who); err != nil || len(held) > 0 {
 		f := &report.Failure{Msg: who + "'s keys and processes are gone, and it still holds what is under its names, which its door: users: line in " + remote.UserConfigFile() + " is the one record of",
 			Details: held, Remedies: []report.Remedy{report.Fix("remove them with it first, with --project-users remove " + project + " --destroy, then drop the line")}}
 		if err != nil {
@@ -608,13 +608,15 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	return 1
 }
 
-// heldBy is what is under project's names on the server, as its destroy would find it.
-func heldBy(d *remote.Door, project, who, entry string) ([]string, error) {
+// heldBy is what of project's is still on the server, in words, as its destroy finds it and
+// checks at its end (userDestroy.left): what a plain remove of a door: users: line refuses for,
+// and a project user with no key is said to hold (keylessUsers).
+func heldBy(d *remote.Door, project, who string) ([]string, error) {
 	r, err := remote.ReleaseSettings()
 	if err != nil {
 		return nil, err
 	}
-	x := newUserDestroy(d, project, who, entry, r.Root)
+	x := newUserDestroy(d, project, who, "", r.Root)
 	if err := x.withPolicy(); err != nil {
 		return nil, err
 	}

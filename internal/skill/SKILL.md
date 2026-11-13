@@ -279,7 +279,7 @@ what `config.yaml` sets.
   `--server-info` shows what may be dead or gone (what `--gc` would
   free, images no release holds, what an environment removed by hand
   left, unused anonymous volumes, a cut `--destroy`, a project user with
-  no key that holds environments), each with a command as its hint,
+  no key that still holds something), each with a command as its hint,
   none removed and none an exit 3.
 - What devopsy checks on a server and does not set up (Docker, the tools,
   `/proc`'s `hidepid`, what project users need, the kernel's command line,

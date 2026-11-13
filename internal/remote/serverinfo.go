@@ -140,12 +140,14 @@ type RemovingDir struct {
 	Size int64  `json:"size"`
 }
 
-// KeylessUser is a project user with no key whose project still holds environments: the
-// compose names its uid claims and containers give, under its names.
+// KeylessUser is a project user with no key whose project still holds something on the server:
+// what, in words (its uid claims, the containers, volumes and networks under its names, its
+// mnts, image names and directories in the door's space), as a plain remove and a destroy find
+// it.
 type KeylessUser struct {
 	User    string   `json:"user"`
 	Project string   `json:"project"`
-	Names   []string `json:"names"`
+	Held    []string `json:"held,omitempty"`
 }
 
 // DockerFacts are the host's Docker, from docker info, docker compose
@@ -190,8 +192,8 @@ type DoorFacts struct {
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
 	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`
-	// Keyless are the project users with no key that still hold environments, read by the
-	// deploy user.
+	// Keyless are the project users with no key that still hold something, read by the deploy
+	// user.
 	Keyless []KeylessUser `json:"keyless,omitempty"`
 	// Destroying are the project users whose --project-users remove --destroy did not complete,
 	// each with its project, by the deploy user's marks.

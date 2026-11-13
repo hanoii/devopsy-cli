@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -79,7 +78,7 @@ func TestServerInfoLeft(t *testing.T) {
 		},
 		SnapshotDirs: []string{"shop/prod", "old/prod"},
 		Removing:     []remote.RemovingDir{{Path: "shop/eu/old.rm.123", Size: 3e6}},
-		Door:         &remote.DoorFacts{Space: "/space", Users: 1, Keyless: []remote.KeylessUser{{User: "devopsy-blog", Project: "blog", Names: []string{"blog-dev"}}}},
+		Door:         &remote.DoorFacts{Space: "/space", Users: 1, Keyless: []remote.KeylessUser{{User: "devopsy-blog", Project: "blog", Held: []string{"the uid claims env:blog:dev", "the volumes blog-dev_db"}}}},
 	}
 	want := []string{
 		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| its sizes, and the build cache it removes too:\n$ devopsy @vm1: --gc --dry-run",
@@ -94,7 +93,7 @@ func TestServerInfoLeft(t *testing.T) {
 			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-wiki-stage-20261101000000",
 		"volumes: 2 anonymous volumes no container uses (an image's VOLUME after a down without -v: a database's data, maybe)\n| once checked that none holds what is needed, remove them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker volume prune",
 		"environments: shop/eu/old.rm.123: left by a --destroy cut off while it removed shop/eu/old, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
-		"door: devopsy-blog has no key and still holds blog-dev\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys) takes it back",
+		"door: devopsy-blog has no key and still holds the uid claims env:blog:dev; the volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys) takes it back",
 	}
 	if got := leftSays(info, "devopsy@vm1", "vm1:"); !slices.Equal(got, want) {
 		t.Errorf("left:\n%s\n\nwant:\n%s", strings.Join(got, "\n\n"), strings.Join(want, "\n\n"))
@@ -143,22 +142,6 @@ func TestServerInfoLeft(t *testing.T) {
 	if !strings.Contains(says, "images: the images could not be listed: docker image ls: EOF") || !strings.Contains(says, "volumes: the volumes could not be listed") ||
 		strings.Contains(says, "busybox") || strings.Contains(says, "anonymous") || strings.Contains(says, "of its releases") {
 		t.Errorf("unread:\n%s", says)
-	}
-}
-
-// A project user with no key holds its environment claims' names and its containers' under its
-// names (never another project's that extends them), each once; with the server's projects not
-// read, its claims alone.
-func TestProjectHolds(t *testing.T) {
-	t.Parallel()
-	p := &door.Policy{Project: "blog", User: "devopsy-blog", Others: []string{"blog", "blog-x", "shop"}}
-	owners := []string{"env:blog:prod", "env:blog:eu:prod", "project:blog", "env:shop:prod", "env:blog:prod"}
-	projects := []string{"blog-dev", "blog-x-prod", "shop-prod", "", "blog-prod"}
-	if got := projectHolds("blog", p, owners, projects); !slices.Equal(got, []string{"blog-dev", "blog-eu-prod", "blog-prod"}) {
-		t.Errorf("holds %v", got)
-	}
-	if got := projectHolds("blog", nil, owners, projects); !slices.Equal(got, []string{"blog-eu-prod", "blog-prod"}) {
-		t.Errorf("without the projects: %v", got)
 	}
 }
 

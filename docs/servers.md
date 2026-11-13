@@ -309,10 +309,10 @@ dead or gone. devopsy removes none of it, and none of it makes the exit 3:
 - a directory a `--destroy` cut off while it removed an environment left
   (`<environment>.rm.<pid>`), with its size, and the `--destroy` that
   resumes it;
-- a project user with no key whose project still holds environments
-  (uid claims, containers), with `--project-users remove <project>
-  --destroy` as the hint, or a key added to take it back
-  ([project users](project-users.md));
+- a project user with no key whose project still holds anything its
+  destroy removes (uid claims, containers, volumes, data, images), with
+  `--project-users remove <project> --destroy` as the hint, or a key
+  added to take it back ([project users](project-users.md));
 - a project user whose `--project-users remove <project> --destroy` did
   not complete, with that command, which completes it, as the hint.
 

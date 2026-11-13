@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -52,7 +51,7 @@ func leftFacts(info *remote.ServerInfo, r remote.Releases, d *remote.Door, trees
 		info.SnapshotDirs = snapshotEnvDirs(r.Snapshots.Root)
 	}
 	if info.Door != nil && d != nil && len(d.Users) > 0 {
-		info.Door.Keyless = keylessUsers(d, r.Root, info.UIDs, info.Containers)
+		info.Door.Keyless = keylessUsers(d)
 	}
 	if info.Door != nil {
 		pending := destroysPending()
@@ -218,74 +217,31 @@ func snapshotEnvDirs(root string) []string {
 	return out
 }
 
-// keylessUsers are the project users with no key whose project still holds environments
-// (projectHolds), by the claims and containers read.
-func keylessUsers(d *remote.Door, root string, claims []remote.UIDClaim, containers []remote.HostContainer) []remote.KeylessUser {
-	var owners, projects []string
-	for _, c := range claims {
-		owners = append(owners, c.Owner)
-	}
-	for _, c := range containers {
-		projects = append(projects, c.Project)
-	}
-	others, err := serverProjects(doorProjects(d), root)
+// keylessUsers are the project users with no key whose project still holds something on the
+// server, for --server-info and --project-users list: what a plain remove refuses for and the
+// destroy's end checks (heldBy), a read that fails said among it, never taken for nothing.
+func keylessUsers(d *remote.Door) []remote.KeylessUser {
 	var out []remote.KeylessUser
 	for _, who := range slices.Sorted(maps.Keys(d.Users)) {
 		if keysOf(who) > 0 {
 			continue
 		}
-		var p *door.Policy
-		if err == nil {
-			p = &door.Policy{Project: d.Users[who].Project, User: who, Others: others}
+		project := d.Users[who].Project
+		held, err := heldBy(d, project, who)
+		if err != nil {
+			held = append(held, "what it holds, which did not read: "+oneLine(err.Error()))
 		}
-		if names := projectHolds(d.Users[who].Project, p, owners, projects); len(names) > 0 {
-			out = append(out, remote.KeylessUser{User: who, Project: d.Users[who].Project, Names: names})
+		if len(held) > 0 {
+			out = append(out, remote.KeylessUser{User: who, Project: project, Held: held})
 		}
 	}
 	return out
-}
-
-// keylessOf is keylessUsers as --project-users list reads them, on its own: the claims under
-// the release root and every container's compose project. A read that fails gives what the
-// rest says, a line of the list's alone.
-func keylessOf(d *remote.Door) []remote.KeylessUser {
-	r, err := remote.ReleaseSettings()
-	if err != nil {
-		return nil
-	}
-	_, claims := uidFacts(r.Root)
-	var cs []remote.HostContainer
-	if out, err := exec.Command("docker", "ps", "-a", "--format", `{{.Label "com.docker.compose.project"}}`).Output(); err == nil {
-		for _, p := range strings.Fields(string(out)) {
-			cs = append(cs, remote.HostContainer{Project: p})
-		}
-	}
-	return keylessUsers(d, r.Root, claims, cs)
 }
 
 // keysOf is how many keys project user who has.
 func keysOf(who string) int {
 	data, _ := os.ReadFile(remote.DoorKeysFile(who))
 	return len(remote.ParseAuthorizedKeys(string(data)))
-}
-
-// projectHolds are the compose names project still holds, sorted: its environment claims'
-// (owners, every claim's), and those of the containers (projects, each container's compose
-// project) under its names by p (door.Policy.OwnName), none of those when p is nil (the
-// server's projects did not read, so whose a name is cannot be told).
-func projectHolds(project string, p *door.Policy, owners, projects []string) []string {
-	var names []string
-	for _, o := range owners {
-		if c, err := uids.ParseOwner(o); err == nil && c.Env != "" && c.Project == project {
-			names = append(names, c.ComposeName())
-		}
-	}
-	for _, n := range projects {
-		if p != nil && n != "" && p.OwnName(n) {
-			names = append(names, n)
-		}
-	}
-	return slices.Compact(slices.Sorted(slices.Values(names)))
 }
 
 // keylessWords are the ways out of a project user with no key that holds environments, in
@@ -505,7 +461,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 			if ref != "" {
 				hints = []report.Remedy{report.Hint("remove it with what it holds:", "devopsy @"+ref+" --project-users remove "+k.Project+" --destroy"), report.Hint("or " + keylessWords)}
 			}
-			add("door", k.User+" has no key and still holds "+strings.Join(k.Names, ", "), hints...)
+			add("door", k.User+" has no key and still holds "+strings.Join(k.Held, "; "), hints...)
 		}
 		for _, u := range info.Door.Destroying {
 			hint := report.Hint("the same --project-users remove " + u.Project + " --destroy run again completes it")
