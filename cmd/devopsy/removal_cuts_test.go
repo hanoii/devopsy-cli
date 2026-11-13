@@ -439,7 +439,7 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 			if n == 1 {
 				for name, script := range map[string]string{"a listing": remote.KeysReadScript(who), "a key's add": remote.KeysAddScript(who)} {
 					out := c.script(script, cutKept)
-					if !strings.Contains(out, "--destroy of "+who+"'s did not complete") || !fileExists(c.destroying) || remote.KeysLeft(c.keys) {
+					if !strings.Contains(out, "--destroy of "+who+"'s did not complete") || !strings.Contains(out, "run its destroy again") || !fileExists(c.destroying) || remote.KeysLeft(c.keys) {
 						t.Errorf("%s of its keys over a destroy:\n%s", name, out)
 					}
 				}

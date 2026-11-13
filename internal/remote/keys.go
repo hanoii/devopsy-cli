@@ -169,7 +169,8 @@ func keysSettle(user string) string {
 		return ""
 	}
 	return `if [ -e "$f.destroying" ]; then
-  ` + echoLine(report.ErrorLevel, "a --project-users remove --destroy of "+user+"'s did not complete: its keys change no more, and the same command run again completes it") + `
+  ` + echoLine(report.ErrorLevel, "a --project-users remove --destroy of "+user+"'s did not complete: its keys change no more",
+		report.Fix("run its destroy again (--project-users remove with --destroy), which completes it")) + `
   exit 1
 fi
 if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
