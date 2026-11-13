@@ -81,7 +81,6 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 		if err := s.recordHeld(pinned, m, ref, false); err != nil {
 			return "", images.Image{}, err
 		}
-		s.nameAsAsked(ref, pinned)
 		return m, img, nil
 	}
 	unlock()
@@ -118,7 +117,6 @@ func (s *doorSide) claim(ref, config string) (string, images.Image, error) {
 	if err := s.recordHeld(pinned, m, ref, true); err != nil {
 		return "", images.Image{}, err
 	}
-	s.nameAsAsked(ref, pinned)
 	return m, img, nil
 }
 
@@ -154,14 +152,6 @@ func (s *doorSide) hold(pinned, m string) error {
 type registryFailure struct{ error }
 
 func (r registryFailure) Unwrap() error { return r.error }
-
-// nameAsAsked tags the name asked onto the image claimed, the registry's content checked under
-// it, so a start finds it here and asks the registry nothing.
-func (s *doorSide) nameAsAsked(ref, pinned string) {
-	if !images.Pinned(ref) {
-		_ = s.docker("tag", pinned, ref).Run()
-	}
-}
 
 // hostReady is the floor a claim needs (dockerFloor: the containerd image store and buildx)
 // for this door process, read once, its buildx the one that copies: read under the logins'

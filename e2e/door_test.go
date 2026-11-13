@@ -172,6 +172,22 @@ func doorAs(t *testing.T, user, script string) (string, int) {
 	return execIn(t, []string{"-u", user, "-w", "/", doorServer(t)}, script)
 }
 
+// doorClaimed is the id of the image user's last claim of ref landed on, by the door's record
+// of its claims (door.ImagesFileOf), "" for none: a claim writes no plain name, so the image a
+// project claimed is found by its record, never by the name.
+func doorClaimed(t *testing.T, user, ref string) string {
+	t.Helper()
+	out, _ := doorRoot(t, "awk -F'\\t' -v n='"+images.Familiar(ref)+"' '{for (i = 2; i <= NF; i++) if ($i == n) print $1}' "+doorSpace+"/images/"+user+" 2>/dev/null")
+	return strings.TrimSpace(out)
+}
+
+// doorRemoveClaims removes, by id, every image user's record says it claimed: a claim writes no
+// plain name to remove them by.
+func doorRemoveClaims(t *testing.T, user string) {
+	t.Helper()
+	doorRoot(t, "cut -f1 "+doorSpace+"/images/"+user+" 2>/dev/null | xargs -r docker image rm -f >/dev/null 2>&1; true")
+}
+
 // doorUser is doorUserOn the lane's door server.
 func doorUser(t *testing.T, project string) string { return doorUserOn(t, "doorsrv", project) }
 
@@ -1119,7 +1135,14 @@ docker image rm `+reg+`/private/app:1 >/dev/null
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("logged in, a private image (%d):\n%s", code, out)
 	}
-	doorRoot(t, "docker rm -f doorreg-prod-web-1; docker image rm -f "+reg+"/private/app:1")
+	// By its id: a claim leaves no plain name to remove it by.
+	app, _ := doorRoot(t, "docker inspect -f '{{.Image}}' doorreg-prod-web-1")
+	app = strings.TrimSpace(app)
+	if !strings.HasPrefix(app, "sha256:") {
+		t.Fatalf("the release's image: %q", app)
+	}
+	byDigest := reg + "/private/app@" + app
+	doorRoot(t, "docker rm -f doorreg-prod-web-1; docker image rm -f "+app)
 	plant := `set -e
 d=$HOME/cfg
 mkdir -p "$d/cli-plugins" "$HOME/planted"
@@ -1144,17 +1167,17 @@ sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose "$d/con
 	if out, _ := doorRoot(t, "cat /tmp/doorreg-ran"); strings.Contains(out, "devopsy\n") || strings.Contains(out, "root") {
 		t.Errorf("a project's plugin or helper ran as: %s", out)
 	}
-	if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' "+reg+"/private/app:1"); code != 0 {
+	if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' "+byDigest); code != 0 {
 		t.Errorf("the control: its logins were not taken (%d): %s", code, out)
 	}
-	doorRoot(t, "docker image rm -f "+reg+"/private/app:1")
+	doorRoot(t, "docker image rm -f "+app)
 	other := `cat >/tmp/doorregv.json <<'J'
 {"name":"doorregv-prod","services":{"web":{"image":"REG/private/app:1","user":"` + doorClaim(t, "doorregv", "prod") + `:` + doorClaim(t, "doorregv", "prod") + `","security_opt":["no-new-privileges"]}}}
 J
 mkdir -p ~/doorregv/prod
 sudo -n -u devopsy -g devopsy-door /usr/local/bin/devopsy --door compose ~/.docker/config.json /tmp/doorregv.json '' ~/doorregv/prod pull 2>&1`
 	doorAs(t, "devopsy-doorregv", strings.ReplaceAll(other, "REG", reg))
-	if _, code := doorRoot(t, "docker image inspect "+reg+"/private/app:1"); code == 0 {
+	if _, code := doorRoot(t, "docker image inspect "+byDigest); code == 0 {
 		t.Error("another project pulled by this one's login")
 	}
 }
@@ -1244,21 +1267,24 @@ docker run --rm `+reg+`/evil/b@`+digest+` cat /secret`); code != 0 || !strings.C
 	}
 }
 
-// A claim leaves Docker's store as a pull by that digest does, the id, the registry's digests
-// and the name asked alike, plus the project's claim hold (images.ClaimHold), which only its
-// bookmark or its pruning takes: for a Docker Hub short name (an index of several platforms
-// with attestation manifests), for a registry with a port, and for an image of zstd layers,
-// each then running with --pull never. Two claims of one image at once both hold, and record
-// it once. The control is root's own pull by the digest, once the claimed image is removed.
+// A claim leaves Docker's store as a pull by that digest does, the id and the registry's
+// digests alike, plus the project's claim hold (images.ClaimHold), which only its bookmark or
+// its pruning takes, and writes no plain name: the server's own stays where the deploy user's
+// pull left it, on the multi-platform index, with no containerd moby-dangling@ record of an
+// image a moved name left, and one absent stays absent, the record naming the claim instead.
+// For a Docker Hub short name (an index of several platforms with attestation manifests), for
+// a registry with a port, and for an image of zstd layers, each then running with --pull never
+// by its digest. Two claims of one image at once both hold, and record it once. The control is
+// root's own pull by the digest, once the claimed image is removed.
 func TestDoorClaimLandsAsAPull(t *testing.T) {
 	user := doorUser(t, "doorland")
 	reg := doorRegistry(t, "doorland-reg", "5041", false)
 	hub, plain, zstd := "busybox:1.36.1", reg+"/plain:1", reg+"/zstd:1"
 	t.Cleanup(func() {
-		for _, ref := range []string{hub, plain, zstd} {
-			doorRoot(t, "docker image rm -f $(docker image inspect -f '{{.Id}}' "+ref+" 2>/dev/null) >/dev/null 2>&1; true")
-		}
+		doorRemoveClaims(t, user)
+		doorRoot(t, "docker image rm -f "+hub+" >/dev/null 2>&1; true")
 	})
+	// The deploy user's own pull of the hub's tag, its index.
 	if out, code := doorRoot(t, `set -e
 docker pull -q busybox:1.37 >/dev/null
 printf 'FROM busybox:1.37\nRUN echo plain >/p\n' | docker build -q -t `+plain+` - >/dev/null
@@ -1266,7 +1292,7 @@ docker push -q `+plain+` >/dev/null && docker image rm `+plain+` >/dev/null
 d=$(mktemp -d) && printf 'FROM busybox:1.37\nRUN echo zstd >/z\n' >"$d/Dockerfile"
 docker buildx build -q --output type=image,name=`+zstd+`,push=true,compression=zstd,force-compression=true "$d" >/dev/null
 docker image rm `+zstd+` >/dev/null 2>&1 || true
-docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
+docker pull -q `+hub+` >/dev/null`); code != 0 {
 		t.Fatalf("the images (%d): %s", code, out)
 	}
 	type landed struct {
@@ -1285,6 +1311,13 @@ docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
 		slices.Sort(l.Tags)
 		return l
 	}
+	server := state(hub)
+	dangling := func() string {
+		t.Helper()
+		out, _ := doorRoot(t, "ctr -n moby images ls -q | grep -c '^moby-dangling@'")
+		return strings.TrimSpace(out)
+	}
+	danglingBefore := dangling()
 	for _, ref := range []string{hub, plain, zstd} {
 		id, code := doorAs(t, user, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1")
 		id = strings.TrimSpace(id)
@@ -1292,30 +1325,47 @@ docker image rm `+hub+` >/dev/null 2>&1 || true`); code != 0 {
 			t.Errorf("%s: the claim (%d): %s", ref, code, id)
 			continue
 		}
-		claimed := state(ref)
 		repo := ref[:strings.LastIndex(ref, ":")]
+		byDigest := repo + "@" + id
+		if got := doorClaimed(t, user, ref); got != id {
+			t.Errorf("%s: the record names it on %q, not the claimed %s", ref, got, id)
+		}
+		if ref == hub {
+			if got := state(hub); got.ID != server.ID || !slices.Equal(got.Tags, server.Tags) {
+				t.Errorf("%s: the claim moved the server's name from %+v to %+v", ref, server, got)
+			}
+			if got := dangling(); got != danglingBefore {
+				t.Errorf("%s: the claim left moby-dangling@ records, %s where there were %s", ref, got, danglingBefore)
+			}
+		} else if out, code := doorRoot(t, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1"); code == 0 {
+			t.Errorf("%s: the claim wrote the name asked: %s", ref, out)
+		}
+		claimed := state(byDigest)
 		hold := images.ClaimHold(repo, "doorland", id)
 		if i := slices.Index(claimed.Tags, hold); i < 0 {
 			t.Errorf("%s: a claim left no hold %s: %v", ref, hold, claimed.Tags)
 		} else {
 			claimed.Tags = slices.Delete(claimed.Tags, i, i+1)
 		}
-		if out, code := doorRoot(t, "docker run --rm --pull never "+ref+" sh -c 'cat /z 2>/dev/null || true'"); code != 0 || ref == zstd && !strings.Contains(out, "zstd") {
+		if out, code := doorRoot(t, "docker run --rm --pull never "+byDigest+" sh -c 'cat /z 2>/dev/null || true'"); code != 0 || ref == zstd && !strings.Contains(out, "zstd") {
 			t.Errorf("%s: the claimed image does not run (%d): %s", ref, code, out)
 		}
-		pulled, code := doorRoot(t, "set -e\ndocker image rm -f "+id+" >/dev/null\ndocker pull -q "+repo+"@"+id+" >/dev/null\ndocker tag "+repo+"@"+id+" "+ref)
+		pulled, code := doorRoot(t, "set -e\ndocker image rm -f "+id+" >/dev/null\ndocker pull -q "+byDigest+" >/dev/null")
 		if code != 0 {
 			t.Errorf("%s: the control's pull by digest (%d): %s", ref, code, pulled)
 			continue
 		}
-		if got := state(ref); !slices.Equal(got.Tags, claimed.Tags) || !slices.Equal(got.Digests, claimed.Digests) || got.ID != claimed.ID {
+		if got := state(byDigest); !slices.Equal(got.Tags, claimed.Tags) || !slices.Equal(got.Digests, claimed.Digests) || got.ID != claimed.ID {
 			t.Errorf("%s: a claim left, besides its hold,\n%+v\nwhere a pull by its digest leaves\n%+v", ref, claimed, got)
 		}
 	}
 	// Two at once, the image gone and its id still recorded. Its own image, so no container of
 	// another test's on the lane holds it.
-	id, _ := doorRoot(t, "docker image inspect -f '{{.Id}}' "+plain+" && docker image rm -f $(docker image inspect -f '{{.Id}}' "+plain+") >/dev/null")
-	id = strings.TrimSpace(strings.Split(id, "\n")[0])
+	id := doorClaimed(t, user, plain)
+	if id == "" {
+		t.Fatal("no claim of " + plain + " recorded")
+	}
+	doorRoot(t, "docker image rm -f "+id+" >/dev/null")
 	out, _ := doorAs(t, user, `a=0 b=0
 docker image inspect -f '{{.Id}}' `+plain+` >/tmp/doorland-a 2>&1 & p=$!
 docker image inspect -f '{{.Id}}' `+plain+` >/tmp/doorland-b 2>&1 & q=$!
@@ -1325,8 +1375,8 @@ echo "$a $b"; cat /tmp/doorland-a /tmp/doorland-b; rm -f /tmp/doorland-a /tmp/do
 	if !strings.HasPrefix(out, "0 0\n") {
 		t.Errorf("two claims at once:\n%s", out)
 	}
-	if got, _ := doorRoot(t, "grep -c '^"+id+"$' "+doorSpace+"/images/"+user); strings.TrimSpace(got) != "1" {
-		t.Errorf("the record holds %s %s times", id, strings.TrimSpace(got))
+	if got, _ := doorRoot(t, "grep -c '^"+id+"' "+doorSpace+"/images/"+user+"; grep -c '"+images.Familiar(plain)+"' "+doorSpace+"/images/"+user); strings.Join(strings.Fields(got), " ") != "1 1" {
+		t.Errorf("the record holds %s, and its name, %s times", id, strings.TrimSpace(got))
 	}
 }
 
@@ -1337,9 +1387,7 @@ func TestDoorClaimNeedsNoDaemonCerts(t *testing.T) {
 	user := doorUser(t, "doortrust")
 	reg := doorRegistryTrusted(t, "doortrust-reg", "5043", false, false)
 	ref := reg + "/app:1"
-	t.Cleanup(func() {
-		doorRoot(t, "docker image rm -f $(docker image inspect -f '{{.Id}}' "+ref+" 2>/dev/null) >/dev/null 2>&1; true")
-	})
+	t.Cleanup(func() { doorRemoveClaims(t, user) })
 	// Pushed by buildx's client, which trusts the host's store.
 	if out, code := doorRoot(t, "docker buildx imagetools create --tag "+ref+" busybox:1.37 >/dev/null 2>&1"); code != 0 {
 		t.Fatalf("the image (%d): %s", code, out)
@@ -1360,7 +1408,9 @@ func TestDoorDaemonContactsNoProjectsRegistry(t *testing.T) {
 	reg := doorRegistry(t, "doornodaemon-reg", "5016", false)
 	if out, code := doorRoot(t, `set -e
 docker pull -q busybox:1.37 >/dev/null
-for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+`/app:$v >/dev/null && docker image rm `+reg+`/app:$v >/dev/null; done`); code != 0 {
+printf 'FROM busybox:1.37\nRUN echo v1 >/v\n' | docker build -q -t `+reg+`/app:1 - >/dev/null
+docker tag busybox:1.37 `+reg+`/app:2
+for v in 1 2; do docker push -q `+reg+`/app:$v >/dev/null && docker image rm `+reg+`/app:$v >/dev/null; done`); code != 0 {
 		t.Fatalf("the images (%d): %s", code, out)
 	}
 	daemon := func() []string {
@@ -1392,9 +1442,17 @@ for v in 1 2; do docker tag busybox:1.37 `+reg+`/app:$v && docker push -q `+reg+
 	commitAll(t, dir)
 	release("a second release", "--release")
 	release("compose's pull", "pull")
-	doorRoot(t, "docker image rm -f "+reg+"/app:1 >/dev/null 2>&1; true")
-	release("a rollback, pulling its image back", "--rollback --yes")
+	// app:1's image, by its id: a claim leaves no plain name to remove it by.
 	user := "devopsy-doornodaemon"
+	if app1 := doorClaimed(t, user, reg+"/app:1"); app1 == "" {
+		t.Error("no claim of app:1 recorded")
+	} else if out, code := doorRoot(t, "docker image rm -f "+app1+" 2>&1"); code != 0 {
+		t.Errorf("app:1's image removed (%d): %s", code, out)
+	}
+	release("a rollback, pulling its image back", "--rollback --yes")
+	if out, _ := doorRoot(t, "docker exec doornodaemon-prod-web-1 cat /v 2>&1"); strings.TrimSpace(out) != "v1" {
+		t.Errorf("the rollback does not run app:1: %s", out)
+	}
 	doorAs(t, user, "printf x | docker login -u u --password-stdin "+reg+" >/dev/null 2>&1; docker image inspect "+reg+"/app:2 >/dev/null 2>&1")
 	// The registry moves app:2, root's push: the next release, the door's claims, takes it
 	// forward.

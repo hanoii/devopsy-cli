@@ -148,7 +148,10 @@ The image a fetch lands is tagged at once as the project's
 of its digest), so no other project's or the deploy user's pruning
 removes it before the release's own tag holds it. The release's tag
 then replaces it, and the project's next pruning removes any left
-over. The fetch loads the image while holding the server's images
+over, and with it an image the project fetched that none of its
+releases and no container holds. A fetch writes no other name: the
+server's own `busybox:1.37`, say, stays on the image the deploy user
+pulled or built. The fetch loads the image while holding the server's images
 shared, so a removal of the deploy user's waits for it, naming the
 project as claiming, and the fetch waits for a removal, saying
 `waiting for the server's images, held by a removal, up to 10
@@ -513,12 +516,10 @@ another server needs its project user there too ([Syncs](syncs.md#how-the-data-t
 On the server, the project user's `docker compose` and `docker` work
 for what is its own: its containers, images, volumes and networks.
 
-On a server with project users, leave the deploy user's own builds
-under the name compose gives them by default, from their compose
-project, rather than an `image:` a registry serves: a project user's
-pull of that name would replace the build with the registry's image.
 An image with no registry host is a name on Docker Hub, so the door
 fetches it like any other at a start, even with `pull_policy: never`.
+A deploy user's own build under that name stays as it is, and the
+project runs the registry's image.
 
 A project user's `docker compose pull` is the door's own: it fetches
 each service's image as above, skipping the project's own builds,

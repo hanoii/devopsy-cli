@@ -1170,17 +1170,22 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		t.Errorf("the record: %q", got)
 	}
 	// The claim copied the manifest's digest, never the name, as the registry serves it, loaded
-	// it under its canonical name by that digest,
-	// Docker's daemon asking no registry (no pull) and no builder building anything, and named
-	// it as asked.
+	// it under its canonical name by that digest, Docker's daemon asking no registry (no pull)
+	// and no builder building anything, and wrote no name but its hold: the name asked is the
+	// server's (here another's image), which the record answers for this project.
 	c := readString(calls)
+	for _, l := range strings.Split(c, "\n") {
+		if strings.HasPrefix(l, "tag ") && strings.HasSuffix(l, " "+private+":1") {
+			t.Errorf("a claim wrote the name asked, the server's: %s", l)
+		}
+	}
 	if strings.Contains(c, "\npull ") {
 		t.Errorf("a claim had Docker's daemon pull:\n%s", c)
 	}
 	if strings.Contains(c, "buildx build ") {
 		t.Errorf("a claim built on the project's builder:\n%s", c)
 	}
-	for _, want := range []string{"imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
+	for _, want := range []string{"imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + images.ClaimHold(private, "shop", p1) + "\n"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("a claim with no %q:\n%s", want, c)
 		}
