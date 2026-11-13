@@ -92,7 +92,7 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 }
 
 // runReleaseSettings implements the hidden --release-settings [<project> <compose name>],
-// run first by every script on a server: the machine's releases:, snapshots: and gc: settings,
+// run first by every script on a server: the machine's releases: and snapshots: settings,
 // as key=value lines, the scripts' protocol it speaks (remote.Protocol) and the features
 // it has (remote.FeaturesList). Given an environment's project and compose name, it refuses
 // the deploy user one whose name is a project user's (doorNameOwner), before the script
@@ -125,7 +125,7 @@ func runReleaseSettings(args []string) int {
 			return remote.SettingsRefusedExit
 		}
 	}
-	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\ngc_containers=%s\ngc_build_cache=%s\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
-		remote.AgeString(r.GC.Containers), remote.AgeString(r.GC.BuildCache), remote.Protocol, remote.FeaturesList())
+	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
+		remote.Protocol, remote.FeaturesList())
 	return 0
 }

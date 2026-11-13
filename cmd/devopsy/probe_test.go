@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// --release-settings prints the server's settings a script or the operator reads, gc:'s ages
-// among them, as the config writes them.
+// --release-settings prints the server's settings the scripts read, as the config writes them,
+// and nothing else of it (gc:'s ages are --gc's own to read).
 func TestReleaseSettingsPrints(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
@@ -19,9 +19,12 @@ func TestReleaseSettingsPrints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"root=" + home + "\n", "keep=3\n", "gc_containers=6h0m0s\n", "gc_build_cache=30d\n"} {
+	for _, want := range []string{"root=" + home + "\n", "keep=3\n"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("no %q in:\n%s", want, out)
 		}
+	}
+	if strings.Contains(string(out), "\ngc_") {
+		t.Errorf("gc: printed, which no script reads:\n%s", out)
 	}
 }

@@ -507,17 +507,12 @@ func TestReleaseSettings(t *testing.T) {
 	}
 }
 
-// An age is a Go duration or a number of days, written back the same way.
+// An age is a Go duration or a number of days.
 func TestAge(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]time.Duration{"1d": 24 * time.Hour, "30d": 30 * 24 * time.Hour, "36h": 36 * time.Hour, "90m": 90 * time.Minute, "1h30m": 90 * time.Minute} {
 		if got, err := ParseAge(in); err != nil || got != want {
 			t.Errorf("%s: %v %v", in, got, err)
-		}
-	}
-	for d, want := range map[time.Duration]string{24 * time.Hour: "1d", 30 * 24 * time.Hour: "30d", 36 * time.Hour: "36h0m0s", 90 * time.Minute: "1h30m0s"} {
-		if got := AgeString(d); got != want {
-			t.Errorf("%v: %q, want %q", d, got, want)
 		}
 	}
 	for _, bad := range []string{"", "d", "0d", "-1d", "1.5d", "1w", "0s", "-1h", "1d2h"} {

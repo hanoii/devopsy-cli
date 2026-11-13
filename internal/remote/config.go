@@ -492,14 +492,6 @@ func ParseAge(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// AgeString is an age as ParseAge reads it: in days when whole, else as Go writes it.
-func AgeString(d time.Duration) string {
-	if d > 0 && d%(24*time.Hour) == 0 {
-		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
-	}
-	return d.String()
-}
-
 // ServerFirewall is the user-level config's firewall: section, on a server: Metadata,
 // whether containers' packets to the cloud's metadata services are dropped
 // (MetadataBlock, the default) or let through (MetadataAllow).
