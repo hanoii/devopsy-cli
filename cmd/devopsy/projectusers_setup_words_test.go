@@ -39,13 +39,8 @@ func TestProjectUsersSetupReadyOnlyWhereAddGoes(t *testing.T) {
 }
 
 // A refusal of the directory door: space: names in the config offers a fix that works there:
-// another directory named is refused (devopsy never moves it), so the fix never says to name
-// one.
-//
-// Bug: the refusals of a path another user could swap (a link, a parent others own or may
-// write) and of a path with other characters say "name a directory ...", written for a
-// directory typed on the command; where the config names it, naming one is refused in turn,
-// and the admin is sent from one refusal to the other.
+// what to change of that directory, or to move it by hand and name the new path in the config,
+// never to name another directory, which is refused while the config names this one.
 func TestProjectUsersSetupFixForTheConfigsDirectory(t *testing.T) {
 	t.Parallel()
 	s, _, space := doorSetupServer(t)
@@ -54,13 +49,10 @@ func TestProjectUsersSetupFixForTheConfigsDirectory(t *testing.T) {
 	}
 	setupConfig(t, s, "door:\n  space: "+space+"\n")
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
-	if code != 1 || !strings.Contains(out, space+" is a symbolic link") {
-		t.Fatalf("a link the config names (%d):\n%s", code, out)
-	}
-	other := filepath.Join(filepath.Dir(space), "other")
-	named, _ := s.run(nil, "@devopsy@one:", "--project-users", "setup", other, "--yes")
-	if strings.Contains(out, "devopsy: | name a directory") && strings.Contains(named, "(door: space:), not "+other) {
-		t.Errorf("the fix says to name a directory, and one named is refused:\n%s\nwith %s named:\n%s", out, other, named)
+	if code != 1 || !strings.Contains(out, "devopsy: error: project users' directory: "+space+" is a symbolic link, and devopsy acts as root only on a path no other user can change\n"+
+		"devopsy: | to fix it:\ndevopsy: | make every part of its path a directory, none of them a link, each above it root's or the deploy user's and writable by no one else, "+
+		"or move it by hand to such a path and set door: space: in "+configFile(s)+" to that path\n") {
+		t.Errorf("a link the config names (%d):\n%s", code, out)
 	}
 }
 

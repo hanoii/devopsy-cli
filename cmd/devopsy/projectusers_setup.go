@@ -345,15 +345,29 @@ func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 	}
 	// The space as named: a link in its path refuses (swappable), so its one form is itself.
 	rd.space, f.Space = space, space
+	// A refusal's fix by where the directory came from: one named is fixed by naming another,
+	// one the config names by changing it, or moving it by hand and naming the new path there,
+	// since another directory named is refused while the config names this one.
+	fixFor := func(name, change, to string) string {
+		if d == nil || d.Space == "" {
+			return name
+		}
+		moved := "move it by hand to " + to + " and set door: space: in " + f.ConfigFile + " to that path"
+		if change == "" {
+			return moved
+		}
+		return change + ", or " + moved
+	}
 	if err := setup.PlainPath(space); err != nil {
-		refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), "name a directory with only letters, digits and . _ - /")
+		refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), fixFor("name a directory with only letters, digits and . _ - /", "", "a path with only letters, digits and . _ - /,"))
 	}
 	rd.unit, rd.unitText = setup.SpaceUnit(f.Space), setup.SpaceUnitText(f.Space)
 	if why := swappable(space, os.Getuid()); why != "" {
 		refuse(setup.ItemSpace, setup.RefusalSpace, why+", and devopsy acts as root only on a path no other user can change",
-			"name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link")
+			fixFor("name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link",
+				"make every part of its path a directory, none of them a link, each above it root's or the deploy user's and writable by no one else", "such a path"))
 	} else {
-		readSpace(h, &rd, refuse)
+		readSpace(h, &rd, refuse, fixFor("name another directory, or move this one aside", "make it a directory of the deploy user's", "a directory of the deploy user's"))
 	}
 
 	// Docker's wait at boot for the space, beside the release root's (mountsDropInWant): the
@@ -375,16 +389,15 @@ func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 	return rd, nil
 }
 
-// readSpace judges the door's space: a directory of the deploy user's, mode 0755, on a mount
+// readSpace judges the door's space, anew the fix of a directory refused: a directory of the deploy user's, mode 0755, on a mount
 // with nosuid and nodev, read from the host's mounts (whatever made it: an fstab line by hand
 // is in sync, and nothing of devopsy's goes beside it). One that exists with another owner, is
 // no directory, or is someone's mount without the two, refuses. One that holds files on no
 // mount of its own is bound on itself as any other: a bind of a directory on itself hides
 // nothing, so a space whose mount went (a boot where it failed) is mounted again.
-func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix string)) {
+func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix string), anew string) {
 	f := &rd.facts
 	sp := f.Space
-	anew := "name another directory, or move this one aside"
 	action, refused, fi := dirOwner("", sp, os.Getuid())
 	if refused != "" {
 		refuse(setup.ItemSpace, setup.RefusalSpace, refused, anew)

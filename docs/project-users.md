@@ -391,7 +391,9 @@ choice. It sets:
   whose path is a symbolic link, or under a directory another user owns
   or may write (`/tmp` included, unless the directory in it is already
   the deploy user's): devopsy acts on it as root, and another user could
-  swap it for a link to a system directory.
+  swap it for a link to a system directory. Where `door: space:` names
+  the directory refused, the fix says what to change of it, or to move
+  it by hand and set `door: space:` to its new path.
 - `door:` with `space:` in the deploy user's `config.yaml`, appended as
   text when the file has no `door:`, the rest of the file as it is, once
   the directory is made and mounted, whatever else of the run failed.
