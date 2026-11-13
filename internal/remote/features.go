@@ -129,6 +129,9 @@ var namedFeatures = []struct {
 	// --say's remedies (sayRemedies): an older --say would print
 	// "--fix" and each word after it as details.
 	{SayRemediesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `\b[^\n]* (` + SayFixFlag + `|` + SayHintFlag + `) "`)},
+	// The image lock in the directory --release-settings names (images=): an older server
+	// names none, and the lock would be taken at the filesystem's root.
+	{ImagesDirFeature, regexp.MustCompile(`\$images_dir/`)},
 	// --project-users setup: an older server's step would read the word as a usage error.
 	{ProjectUsersSetupFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + ProjectUsersFlag + `[ '\\]{1,8}setup\b`)},
 }
@@ -146,6 +149,9 @@ const UIDsFeature = "uids"
 // projectFeatures are named features a release needs for what its project
 // reads, never found in a script's text.
 var projectFeatures = []string{UIDsFeature}
+
+// ImagesDirFeature is --release-settings naming where the user's image lock is (images=).
+const ImagesDirFeature = "images-dir"
 
 // ProjectUsersSetupFeature is the named feature of --project-users setup.
 const ProjectUsersSetupFeature = "project-users-setup"

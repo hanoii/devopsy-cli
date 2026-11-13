@@ -125,7 +125,12 @@ func runReleaseSettings(args []string) int {
 			return remote.SettingsRefusedExit
 		}
 	}
-	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
+	images, err := imagesDir()
+	if err != nil {
+		failErr(err)
+		return remote.SettingsRefusedExit
+	}
+	fmt.Printf("root=%s\nimages=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nsnapshot_mirror=%t\nprotocol=%d\nfeatures=%s\n", r.Root, images, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, !r.Snapshots.MirrorsOff(),
 		remote.Protocol, remote.FeaturesList())
 	return 0
 }

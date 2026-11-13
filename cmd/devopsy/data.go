@@ -525,7 +525,7 @@ func localServices(cwd string) ([]images.Service, error) {
 // and bookmarks: a removal elsewhere, which takes it exclusively, then
 // never runs between them. Waits up to 10 minutes, saying so (boundedWait).
 func imagesShared(ctx context.Context) (unlock func(), err error) {
-	root, err := imagesRoot()
+	root, err := imagesDir()
 	if err != nil {
 		return nil, err
 	}

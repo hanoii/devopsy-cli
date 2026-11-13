@@ -72,7 +72,7 @@ const imagesFlag = "--images"
 // release root, the server's own setting (remote.ReleaseSettings), which
 // every environment of the project shares (remote's leftPath, for the
 // listing). No mode: each release's own record says its (images.ModeOf).
-// The image lock is in the same root (imagesLockAt).
+// The image lock is in imagesDir.
 func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 	root, err := imagesRoot()
 	if err != nil {
@@ -144,6 +144,21 @@ func imagesRoot() (string, error) {
 		return "", fmt.Errorf("the server's release settings: %w", err)
 	}
 	return r.Root, nil
+}
+
+// imagesDir is where this user's image lock and its holders are (remote.ImagesLock): a project
+// user's home, behind the door, else the release root (imagesRoot). A project user's release root
+// under releases: root is the deploy user's directory, where it can create nothing, and its home
+// is its own in every layout, the default one's root included.
+func imagesDir() (string, error) {
+	if behindDoor() {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("this user's home, where its image lock is: %w", err)
+		}
+		return home, nil
+	}
+	return imagesRoot()
 }
 
 // projectUnder is the project whose directory base is in, under root

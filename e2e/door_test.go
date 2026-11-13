@@ -1797,7 +1797,7 @@ func TestDoorFirewallHoldsUnderSubordinateIDs(t *testing.T) {
 // here as the test server's tmpfs is, and a release root of its own (a block volume), which
 // every project user enters to reach its tree there. A release closes its project's directory;
 // --project-users add closes those made before the server had project users. Another project
-// user's tree is closed too, and a project user still reaches its own.
+// user's tree is closed too, and a project user still reaches its own, and releases there.
 func TestDoorProjectUsersReadNoneOfTheDeployUsers(t *testing.T) {
 	deployProject := func(name, root string) {
 		t.Helper()
@@ -1854,6 +1854,23 @@ runuser -u devopsy -- sh -c 'umask 002 && mkdir -p "$1" && echo s3cret >"$1/read
 	}
 	if out, code := doorAs(t, peek, "ls "+root+"/doorlaypeek >/dev/null && touch "+root+"/doorlaypeek/mine 2>&1"); code != 0 {
 		t.Errorf("the control: %s does not reach its own tree (%d): %s", peek, code, out)
+	}
+
+	// A project user releases there, its image lock in its home, since it can create nothing
+	// in the release root; its --destroy --purge leaves its tree, the admin's to remove, with
+	// no tool's words (the purge's line when the tree holds a .env, in TestLeftoverImagesRecord).
+	rel := doorProject(t, "doorlayrel", "services:\n  web:\n"+doorService+"    command: [sleep, infinity]\n", nil)
+	if out, code := op(t, rel, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("a project user's release under %s (%d):\n%s", root, code, out)
+	}
+	if out, _ := doorRoot(t, "stat -c %U /home/devopsy-doorlayrel/"+remote.ImagesLock+" 2>&1"); strings.TrimSpace(out) != "devopsy-doorlayrel" {
+		t.Errorf("the project user's image lock: %s", out)
+	}
+	if out, code := op(t, rel, "devopsy @prod --destroy --yes --purge"); code != 0 || strings.Contains(out, "rmdir") || strings.Contains(out, "ermission denied") {
+		t.Errorf("a project user's purge under %s (%d):\n%s", root, code, out)
+	}
+	if out, code := doorRoot(t, "test -d "+root+"/doorlayrel && ! test -e "+root+"/doorlayrel/prod && ! test -e "+root+"/doorlayrel/.env"); code != 0 {
+		t.Errorf("the tree after the purge (%d): %s", code, out)
 	}
 }
 

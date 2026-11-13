@@ -1082,7 +1082,7 @@ func removeSnapshotDir(cwd, name string, p snapshotPaths, dir string, wait time.
 		}
 	}
 	// The image lock, exclusive, kept to the end.
-	root, err := imagesRoot()
+	root, err := imagesDir()
 	if err != nil {
 		return err
 	}
