@@ -575,7 +575,8 @@ esac
 `, 0o755)
 	out, code := runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, "--project-users-step", "list")
 	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds the uid claims env:shop:prod; the containers c1\n"+
-		"devopsy: | removing shop's project user with --project-users remove and --destroy removes them with it; a key added for it (--ssh-keys) takes it back\n") ||
+		"devopsy: | a --project-users remove of shop with --destroy removes it with what it holds\n"+
+		"devopsy: | or a key added for it (--ssh-keys with --for) takes it back\n") ||
 		!strings.Contains(out, "devopsy: devopsy-news has no key and still holds the volumes news-prod_db\n") ||
 		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") {
 		t.Errorf("list (%d):\n%s", code, out)

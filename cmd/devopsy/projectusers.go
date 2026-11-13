@@ -141,8 +141,7 @@ func listProjectUsers(d *remote.Door) int {
 		}
 		for _, k := range keylessUsers(d) {
 			// The server named alone carries no address to a session: the way out in words.
-			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Held, "; "), nil,
-				report.Hint("removing "+k.Project+"'s project user with --project-users remove and --destroy removes them with it; "+keylessWords))
+			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Held, "; "), nil, keptUserHints(k.Project, "")...)
 		}
 	}
 	// An end a key's or a user's removal began and did not see through (remote.DoorEndingFile),
@@ -161,8 +160,8 @@ func listProjectUsers(d *remote.Door) int {
 			"a removal asked again completes it, as does a listing or an edit of its keys while its Unix user is there")
 	}
 	for _, who := range slices.Sorted(maps.Keys(destroying)) {
-		report.Warn(who+": its --project-users remove "+destroying[who]+" --destroy did not complete, and the door answers it nothing",
-			"the same command run again completes it")
+		report.Default().Say(report.WarnLevel, who+": the destroy of "+destroying[who]+"'s project user did not complete, and the door answers it nothing", nil,
+			report.Hint("its destroy run again (--project-users remove with --destroy) completes it"))
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
@@ -281,8 +280,8 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	// would take what add writes now (its entry), so it goes first, its own refusal before any
 	// other's.
 	if fileExists(remote.DoorDestroyingFile(who)) {
-		report.Fail(errors.New("a --project-users remove "+project+" --destroy did not complete, and adding the user would undo it"),
-			report.Fix("run it again, which completes it, then add it"))
+		report.Fail(errors.New("the destroy of "+project+"'s project user did not complete, and adding the user would undo it"),
+			report.Fix("run its destroy again (--project-users remove with --destroy), which completes it, then add it"))
 		return 1
 	}
 	if fileExists(remote.DoorRemovingFile(who)) || fileExists(remote.DoorEndingFile(who)) {
@@ -402,8 +401,8 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 			return failErr(err)
 		}
 	}
-	report.Info("project user "+who+" for "+project+", its entry in "+entry,
-		"its keys: devopsy @<deploy user>@<server>: --ssh-keys --for "+project+" add <public key file>")
+	report.Default().Say(report.InfoLevel, "project user "+who+" for "+project+", its entry in "+entry, nil,
+		report.Hint("add its keys with --ssh-keys and --for, as its deploy user"))
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"any reboot takes it, one the server does by itself for /run/reboot-required included")
@@ -565,8 +564,8 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	removing, keys := remote.DoorRemovingFile(who), remote.DoorKeysFile(who)
 	// A destroy holds its marks until its last step: only it completes them.
 	if fileExists(remote.DoorDestroyingFile(who)) {
-		report.Fail(errors.New("a --project-users remove "+project+" --destroy did not complete"),
-			report.Fix("run it again, which completes it"))
+		report.Fail(errors.New("the destroy of "+project+"'s project user did not complete"),
+			report.Fix("run its destroy again (--project-users remove with --destroy), which completes it"))
 		return 1
 	}
 	// A user the config names, under door: users:, has no entry file (remote.ServerDoor).
@@ -597,7 +596,7 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	// them, nothing would destroy it any more.
 	if held, err := heldBy(d, project, who); err != nil || len(held) > 0 {
 		f := &report.Failure{Msg: who + "'s keys and processes are gone, and it still holds what is under its names, which its door: users: line in " + remote.UserConfigFile() + " is the one record of",
-			Details: held, Remedies: []report.Remedy{report.Fix("remove them with it first, with --project-users remove " + project + " --destroy, then drop the line")}}
+			Details: held, Remedies: []report.Remedy{report.Fix("remove them with it first, by its destroy (--project-users remove with --destroy), then drop the line")}}
 		if err != nil {
 			f.Details = append(f.Details, "what it holds did not read: "+err.Error())
 		}
@@ -648,11 +647,12 @@ func finishRemoval(d *remote.Door, project, who string, end func(who string) err
 	if err := endRemoval(d, project, who, end); err != nil {
 		return failErr(err)
 	}
-	stays := "its entry, Unix user, home and tree stay, holding its names: a key added for it (--ssh-keys --for " + project + ") takes it back, and --project-users remove " + project + " --destroy removes them all"
+	// The server named alone carries no address to a session: the ways out in words.
+	stays, hints := "its entry, Unix user, home and tree stay, holding its names", keptUserHints(project, "")
 	if _, err := user.Lookup(who); err != nil {
-		stays = "its entry stays, holding its names; its Unix user was gone already"
+		stays, hints = "its entry stays, holding its names; its Unix user was gone already", nil
 	}
-	report.Info("removed "+who+"'s keys and ended its processes: it logs in no more, and the door answers it no more", stays)
+	report.Default().Say(report.InfoLevel, "removed "+who+"'s keys and ended its processes: it logs in no more, and the door answers it no more", []string{stays}, hints...)
 	return 0
 }
 

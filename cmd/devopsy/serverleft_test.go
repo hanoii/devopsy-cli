@@ -93,7 +93,7 @@ func TestServerInfoLeft(t *testing.T) {
 			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-wiki-stage-20261101000000",
 		"volumes: 2 anonymous volumes no container uses (an image's VOLUME after a down without -v: a database's data, maybe)\n| once checked that none holds what is needed, remove them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker volume prune",
 		"environments: shop/eu/old.rm.123: left by a --destroy cut off while it removed shop/eu/old, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
-		"door: devopsy-blog has no key and still holds the uid claims env:blog:dev; the volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys) takes it back",
+		"door: devopsy-blog has no key and still holds the uid claims env:blog:dev; the volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
 	}
 	if got := leftSays(info, "devopsy@vm1", "vm1:"); !slices.Equal(got, want) {
 		t.Errorf("left:\n%s\n\nwant:\n%s", strings.Join(got, "\n\n"), strings.Join(want, "\n\n"))
@@ -105,7 +105,7 @@ func TestServerInfoLeft(t *testing.T) {
 		"| --gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too",
 		"| remove it once nothing needs it:\n$ docker rmi busybox:1.37",
 		"| a --destroy of shop/eu/old run again from shop's checkout resumes it",
-		"| removing blog's project user with --project-users remove and --destroy removes them with it; a key added for it (--ssh-keys) takes it back",
+		"| a --project-users remove of blog with --destroy removes it with what it holds\n| or a key added for it (--ssh-keys with --for) takes it back",
 	} {
 		if !strings.Contains(local, w) {
 			t.Errorf("local: no %q in:\n%s", w, local)

@@ -144,7 +144,7 @@ func (x *userDestroy) run(list bool) int {
 			return fail("no project user for " + x.project + " here")
 		}
 		if list {
-			report.Info("what was " + x.who + "'s is gone but its mark: the same command run again checks and removes it")
+			report.Default().Say(report.InfoLevel, "what was "+x.who+"'s is gone but its mark", nil, runAgain(report.Hint, "run it again, which checks and removes it:", "its destroy run again checks and removes it"))
 			return 0
 		}
 		return x.afterEntry()
@@ -165,7 +165,8 @@ func (x *userDestroy) run(list bool) int {
 	}
 	for i, step := range []func(*destroyMark) error{x.removal, x.names, x.projectClaims, x.images, x.doorDirs, x.endCheck, x.hostStep, x.last} {
 		if err := step(&m); err != nil {
-			report.Fail(err, report.Fix("the destroy stopped at "+userDestroySteps[i]+", "+x.who+" held by its mark meanwhile: once that is fixed, the same command run again goes on from what is left"))
+			report.Fail(err, runAgain(report.Fix, "the destroy stopped at "+userDestroySteps[i]+", "+x.who+" held by its mark meanwhile: once that is fixed, run it again, which goes on from what is left:",
+				"the destroy stopped at "+userDestroySteps[i]+", "+x.who+" held by its mark meanwhile: once that is fixed, its destroy run again goes on from what is left"))
 			return 1
 		}
 		if x.stopAfter == i+1 {
@@ -174,11 +175,18 @@ func (x *userDestroy) run(list bool) int {
 	}
 	if x.config {
 		report.Fail(errors.New(x.who+" is gone with all it held, and door: users: in "+remote.UserConfigFile()+" still names it"),
-			report.Fix("remove it there, then run the same command again, which removes its mark"))
+			runAgain(report.Fix, "remove it there, then run it again, which removes its mark:", "remove it there, then run its destroy again, which removes its mark"))
 		return 1
 	}
 	report.Info("removed "+x.who+" with all it held: its environments, data, images, tree, home and Unix user", destroyLeaves...)
 	return 0
+}
+
+// runAgain is kind offering the operator's command (remote.CommandEnv), which a session on the
+// server carries, under text, or words when it carries none: a server named alone carries no
+// address to build it from.
+func runAgain(kind func(string, ...string) report.Remedy, text, words string) report.Remedy {
+	return offer(kind, text, remote.SessionFrom(os.Getenv).Command, words)
 }
 
 // destroyLeaves is what a destroy leaves of a project user's, said with what it removes.

@@ -232,9 +232,16 @@ func keysOf(who string) int {
 	return len(remote.ParseAuthorizedKeys(string(data)))
 }
 
-// keylessWords are the ways out of a project user with no key that holds environments, in
-// words: its project's removal with them, a key to take it back.
-const keylessWords = "a key added for it (--ssh-keys) takes it back"
+// keptUserHints are the ways out of a project user with no key that still holds what is under
+// its names: its destroy, offered by the server's address ref ("" for none, the way in words),
+// and a key added, in words, since a key's command takes the deploy user's address and a file.
+func keptUserHints(project, ref string) []report.Remedy {
+	key := report.Hint("or a key added for it (--ssh-keys with --for) takes it back")
+	if ref == "" {
+		return []report.Remedy{report.Hint("a --project-users remove of " + project + " with --destroy removes it with what it holds"), key}
+	}
+	return []report.Remedy{report.Hint("remove it with what it holds:", "devopsy @"+ref+" --project-users remove "+project+" --destroy"), key}
+}
 
 // liveNames are the compose names of what is there, for every report that goes by an
 // absence: the release root's environment directories (the deploy user's, never a read of a
@@ -445,14 +452,10 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 
 	if info.Door != nil {
 		for _, k := range info.Door.Keyless {
-			hints := []report.Remedy{report.Hint("removing " + k.Project + "'s project user with --project-users remove and --destroy removes them with it; " + keylessWords)}
-			if ref != "" {
-				hints = []report.Remedy{report.Hint("remove it with what it holds:", "devopsy @"+ref+" --project-users remove "+k.Project+" --destroy"), report.Hint("or " + keylessWords)}
-			}
-			add("door", k.User+" has no key and still holds "+strings.Join(k.Held, "; "), hints...)
+			add("door", k.User+" has no key and still holds "+strings.Join(k.Held, "; "), keptUserHints(k.Project, ref)...)
 		}
 		for _, u := range info.Door.Destroying {
-			hint := report.Hint("the same --project-users remove " + u.Project + " --destroy run again completes it")
+			hint := report.Hint("its destroy run again (--project-users remove with --destroy) completes it")
 			if ref != "" && remote.ValidName(u.Project) {
 				hint = report.Hint("run it again, which completes it:", "devopsy @"+ref+" --project-users remove "+u.Project+" --destroy")
 			}

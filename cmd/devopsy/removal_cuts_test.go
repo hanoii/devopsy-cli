@@ -427,7 +427,7 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 			}
 			// The add refuses for the mark, before anything, its tools' check included: a host
 			// without sudo or setfacl would refuse it for those.
-			if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "add", "shop"); code == 0 || !strings.Contains(out, "--project-users remove shop --destroy did not complete") {
+			if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "add", "shop"); code == 0 || !strings.Contains(out, "the destroy of shop's project user did not complete") {
 				t.Errorf("an add over a destroy (%d):\n%s", code, out)
 			}
 			d, _ := remote.ServerDoor()
@@ -532,17 +532,24 @@ func TestUserDestroyRefusesBeforeAnything(t *testing.T) {
 // A destroy stops where an image name only the project writes is still used by a container (an
 // untag, never -f), holding the user by its mark, and run again once it is not, finishes. A
 // user under door: users: is destroyed the same, its mark kept until its admin drops the line,
-// which a run after that settles.
+// which a run after that settles. Its way to run again is the operator's command its session
+// carries (remote.CommandEnv), as a remedy, else words: a server named alone carries no
+// address to build one from.
 func TestUserDestroyStopsAtAnImageInUse(t *testing.T) {
 	t.Parallel()
 	c := newRemovalCutIn(t, t.TempDir())
 	s := c.destroyServer()
+	const again = "devopsy @vm1: --project-users remove shop --destroy --yes"
 	destroy := func(args ...string) (string, int) {
-		return runDevopsy(t, t.TempDir(), c.env(), append([]string{remote.ProjectUsersFlag, "remove", "shop", "--destroy"}, args...)...)
+		return runDevopsy(t, t.TempDir(), append(c.env(), remote.CommandEnv+"="+again), append([]string{remote.ProjectUsersFlag, "remove", "shop", "--destroy"}, args...)...)
 	}
 	inUse := filepath.Join(s.state, "inuse")
 	write(t, inUse, "busybox:devopsy-shop-prod-20261112000000\n", 0o600)
-	if out, code := destroy(); code != 1 || !strings.Contains(out, "image is in use") || !strings.Contains(out, "the destroy stopped at the images") || !fileExists(c.destroying) || !fileExists(s.tree) {
+	if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "remove", "shop", "--destroy"); code != 1 || !strings.Contains(out, "once that is fixed, its destroy run again goes on from what is left\n") || strings.Contains(out, "$ ") {
+		t.Fatalf("an image in use, its way on in words (%d):\n%s", code, out)
+	}
+	if out, code := destroy(); code != 1 || !strings.Contains(out, "image is in use") || !strings.Contains(out, "the destroy stopped at the images") || !fileExists(c.destroying) || !fileExists(s.tree) ||
+		!strings.Contains(out, "run it again, which goes on from what is left:\ndevopsy: | $ "+again+"\n") {
 		t.Fatalf("an image in use (%d), its mark %v, the tree %v:\n%s", code, fileExists(c.destroying), fileExists(s.tree), out)
 	}
 	if err := os.Remove(inUse); err != nil {
@@ -554,7 +561,8 @@ func TestUserDestroyStopsAtAnImageInUse(t *testing.T) {
 	}
 	config := filepath.Join(c.home, remote.ConfigFile)
 	write(t, config, readString(config)+"  users:\n    devopsy-shop: {project: shop, tree: "+s.tree+"}\n", 0o600)
-	if out, code := destroy(); code != 1 || !strings.Contains(out, "door: users: in "+config+" still names it") || !fileExists(c.destroying) {
+	if out, code := destroy(); code != 1 || !strings.Contains(out, "door: users: in "+config+" still names it") || !fileExists(c.destroying) ||
+		!strings.Contains(out, "remove it there, then run it again, which removes its mark:\ndevopsy: | $ "+again+"\n") {
 		t.Fatalf("a config user's destroy (%d), its mark %v:\n%s", code, fileExists(c.destroying), out)
 	}
 	write(t, config, "releases:\n  root: "+s.root+"\ndoor:\n  space: "+c.space+"\n", 0o600)
@@ -583,7 +591,7 @@ func TestRemovalOfAConfigUserNamesItsDestroyFirst(t *testing.T) {
 	config := filepath.Join(c.home, remote.ConfigFile)
 	write(t, config, readString(config)+"  users:\n    devopsy-shop: {project: shop, tree: "+s.tree+"}\n", 0o600)
 	out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "remove", "shop")
-	if code != 1 || !strings.Contains(out, "it still holds what is under its names") || !strings.Contains(out, "with --project-users remove shop --destroy, then drop the line") {
+	if code != 1 || !strings.Contains(out, "it still holds what is under its names") || !strings.Contains(out, "by its destroy (--project-users remove with --destroy), then drop the line") {
 		t.Errorf("holding its names (%d):\n%s", code, out)
 	}
 	if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "remove", "shop", "--destroy"); code != 1 || !strings.Contains(out, "still names it") {
