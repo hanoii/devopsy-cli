@@ -7,7 +7,7 @@ for the server's admin. `devopsy --server-setup-howto` lists the topics,
 devopsy offers for one of them names its command. It runs anywhere, needing
 no server, project or Docker.
 
-- [docker](#docker): a current Docker from its repository, compose and buildx
+- [docker](#docker): Docker with the containerd image store, buildx and compose
 - [tools](#tools): tar, flock and the other tools devopsy uses
 - [processes](#processes): /proc hiding every user's processes from the others
 - [project-users](#project-users): sudo and acl, then --project-users setup
@@ -17,7 +17,7 @@ no server, project or Docker.
 
 ## docker
 
-A current Docker, with its compose and buildx plugins
+Docker with the containerd image store, buildx and compose
 
 devopsy runs everything through the host's docker.service, as the deploy
 user, and never installs it. Every server runs Docker's containerd image
@@ -29,7 +29,7 @@ installed from its repository runs the containerd image store. One upgraded
 from an older version keeps the classic image store, and a distribution's
 own package may run it too: devopsy refuses it, and does not move a Docker
 from one store to the other. These steps are then for a new server, where
-the projects of that one are released.
+that one's projects are released.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. The
 deploy user is the Unix user devopsy logs in as, which must exist. A step's

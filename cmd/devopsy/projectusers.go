@@ -115,7 +115,7 @@ func runProjectUsersStep(args []string) int {
 		ref, args = args[1], args[2:]
 	}
 	if len(args) > 0 && args[0] == "setup" {
-		return runProjectUsersSetupStep(args[1:])
+		return runProjectUsersSetupStep(args[1:], ref)
 	}
 	if projectUsersArgs(args, true) != 0 {
 		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [--server <server>] [list | add <project> | remove <project> [--destroy [--list]] | setup ...]")
@@ -128,7 +128,7 @@ func runProjectUsersStep(args []string) int {
 		return listProjectUsers(d)
 	}
 	if d == nil || d.Space == "" {
-		report.Fail(errors.New("this server is not set up for project users: "+remote.UserConfigFile()+" has no \"door: space:\""),
+		report.Fail(errors.New("this server is not ready for project users: "+remote.UserConfigFile()+" has no \"door: space:\""),
 			projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		return 1
 	}

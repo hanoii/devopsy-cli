@@ -43,9 +43,9 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		// systemctl enable says each link it makes, as systemd does, unless --quiet.
 		"systemctl": "#!/bin/sh\nprintf '%s\\n' \"$SYSTEMD_IGNORE_CHROOT systemctl $*\" >>\"$CALLS\"\n[ -z \"${FAKE_SYSTEMCTL_FAILS:-}\" ] || exit 1\n" +
 			"case \" $* \" in *' --quiet '*) ;; *' enable '*) echo \"Created symlink '/etc/systemd/system/x' -> '/etc/systemd/system/y'.\" >&2 ;; esac\n",
-		"groupadd":  "#!/bin/sh\nmkdir -p \"$HOST/etc\"\necho \"$2:x:991:\" >>\"$HOST/etc/group\"\n",
-		"usermod":   "#!/bin/sh\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$HOST/etc/group\" >\"$HOST/etc/group.new\" && mv \"$HOST/etc/group.new\" \"$HOST/etc/group\"\n",
-		"getent":    "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$HOST/etc/group\" 2>/dev/null\n",
+		"groupadd": "#!/bin/sh\nmkdir -p \"$HOST/etc\"\necho \"$2:x:991:\" >>\"$HOST/etc/group\"\n",
+		"usermod":  "#!/bin/sh\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$HOST/etc/group\" >\"$HOST/etc/group.new\" && mv \"$HOST/etc/group.new\" \"$HOST/etc/group\"\n",
+		"getent":   "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$HOST/etc/group\" 2>/dev/null\n",
 		// The unit it is asked for, as it reaches it.
 		"journalctl": "#!/bin/sh\nprintf '%s\\n' \"$2\"\n",
 	} {

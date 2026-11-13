@@ -67,7 +67,7 @@ func runProjectUsersSetup(t *remote.Target, args []string) int {
 			report.Error(cmp.Or(refusedWords(f.Stopped()), "nothing changed"))
 			return 1
 		}
-		report.Info("nothing to change: " + t.Host + " is set up for project users")
+		report.Info("nothing to change: " + t.Host + " is ready for project users")
 		return 0
 	}
 	doorSetupNotes(f)
@@ -115,10 +115,10 @@ func projectUsersSetupArgs(args []string) (dir string, yes, ok bool) {
 // lines appended to the deploy user's config, and what hiding processes does to the server.
 func doorSetupNotes(f setup.DoorFacts) {
 	if f.Config != "" && f.Goes(setup.StepConfig) {
-		report.Info("the apply appends to "+f.ConfigFile+":", strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
+		report.Info("this adds to "+f.ConfigFile+":", strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
 	}
 	if f.Changes(setup.StepProcesses) && f.Goes(setup.StepProcesses) {
-		report.Info("hiding processes: each user sees only its own, the deploy user and "+setup.ProcGroup+" every one",
+		report.Info("once hidden, each user sees only its own processes; the deploy user and members of "+setup.ProcGroup+" see all",
 			"a tool running as another user that reads /proc (a monitoring agent) sees only its own processes until it is put in "+setup.ProcGroup)
 	}
 }
@@ -134,28 +134,36 @@ func doorSetupEntries(f setup.DoorFacts) []remote.StatusEntry {
 			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{same}})
 		}
 	}
-	add(setup.ItemSpace, doorItemLines(f, setup.StepSpace), f.Space+", on a mount with nosuid and nodev")
-	add(setup.ItemMounts, doorItemLines(f, setup.StepDoorDrop), "")
-	same := "/proc hides every user's processes from the others, " + setup.ProcGroup + " sees them all"
+	add(setup.ItemSpace, doorItemLines(f, setup.StepSpace, true), f.Space+", where devopsy keeps project users' data, is on a mount with nosuid and nodev")
+	add(setup.ItemMounts, doorItemLines(f, setup.StepDoorDrop, true), "")
+	same := "/proc hides each user's processes from the others; members of " + setup.ProcGroup + " see all"
 	if p := f.Processes; p.Other {
-		same = "/proc hides every user's processes from the others (hidepid=" + p.HidePID + ", gid=" + p.GID + "), set outside devopsy and left as it is"
+		same = "/proc hides each user's processes from the others (hidepid=" + p.HidePID + ", gid=" + p.GID + "), set up outside devopsy and left as it is"
 	}
-	add(setup.ItemProcesses, doorItemLines(f, setup.StepProcesses), same)
+	add(setup.ItemProcesses, doorItemLines(f, setup.StepProcesses, true), same)
 	same = "door: space: " + f.Space
 	if slices.ContainsFunc(f.Refusals, func(r setup.Refusal) bool { return r.Item == setup.ItemConfig }) {
 		same = ""
 	}
-	add(setup.ItemConfig, doorItemLines(f, setup.StepConfig), same)
+	add(setup.ItemConfig, doorItemLines(f, setup.StepConfig, true), same)
 	return es
 }
 
 // doorItemLines are what differs of step s's item in f, none when in sync: what the first
-// session shows and what an apply that did not hold names.
-func doorItemLines(f setup.DoorFacts, s setup.Step) []string {
+// session shows (plan, each with what devopsy does about it while the step goes) and what an
+// apply that did not hold names (only what differs).
+func doorItemLines(f setup.DoorFacts, s setup.Step, plan bool) []string {
 	if !f.Changes(s) {
 		return nil
 	}
+	does := plan && f.Goes(s)
 	var lines []string
+	say := func(what, act string) {
+		if does && act != "" {
+			what += ": " + act
+		}
+		lines = append(lines, what)
+	}
 	// A unit's link is said only beside its file in sync: a unit missing is enabled with it.
 	files := func(item string) {
 		for _, x := range f.Files {
@@ -163,28 +171,37 @@ func doorItemLines(f setup.DoorFacts, s setup.Step) []string {
 			case x.Item != item || x.InSync:
 			case x.Link != "":
 				if !slices.ContainsFunc(f.Files, func(u setup.FileFact) bool { return u.Path == x.Link && !u.InSync }) {
-					lines = append(lines, x.Path+" does not enable "+filepath.Base(x.Link)+": no boot starts it")
+					say(filepath.Base(x.Link)+" is not enabled, so no boot starts it", "devopsy enables it")
 				}
+			case x.Item == setup.ItemMounts && f.DropInWithout:
+				say("Docker does not wait for the project users' directory at boot yet", "devopsy adds it to "+x.Path)
 			case x.Missing:
-				lines = append(lines, x.Path+" is missing")
+				say(x.Path+" does not exist yet", "")
 			default:
-				lines = append(lines, x.Path+" is not devopsy's")
+				say(x.Path+" differs from what devopsy writes", "")
 			}
 		}
 	}
 	switch s {
 	case setup.StepSpace:
+		// The first line names what the directory is for.
+		name := f.Space + ", where devopsy keeps project users' data,"
+		named := func() string {
+			n := name
+			name = f.Space
+			return n
+		}
 		switch f.SpaceAction {
 		case setup.RootMake:
-			lines = append(lines, f.Space+" is missing: made, the deploy user's, mode 755")
+			say(named()+" does not exist", "devopsy makes it, owned by the deploy user, mode 755")
 		case setup.RootGive:
-			lines = append(lines, f.Space+" is root's: given to the deploy user")
+			say(named()+" is root's", "devopsy gives it to the deploy user")
 		}
 		if f.SpaceMode != "" {
-			lines = append(lines, f.Space+" is mode "+f.SpaceMode+": set to 755")
+			say(named()+" is mode "+f.SpaceMode, "devopsy sets it to 755")
 		}
 		if !f.Guarded {
-			lines = append(lines, f.Space+" is on no mount of its own with nosuid and nodev: bound on itself so, now and at every boot")
+			say(named()+" has no mount with nosuid and nodev", "devopsy bind-mounts it on itself with both, now and at every boot")
 		}
 		files(setup.ItemSpace)
 	case setup.StepDoorDrop:
@@ -194,26 +211,29 @@ func doorItemLines(f setup.DoorFacts, s setup.Step) []string {
 		switch {
 		case p.Hides():
 		case !setup.Hiding(p.HidePID):
-			lines = append(lines, "/proc shows every user's processes (no hidepid): hidden from the others, now and at every boot")
+			say("/proc shows each user's processes to every other user", "devopsy hides them, now and at every boot")
+		case p.GID == "":
+			say("/proc hides processes, and no group sees them all", "devopsy remounts it so members of "+setup.ProcGroup+" do")
 		default:
-			lines = append(lines, "/proc hides processes with gid="+cmp.Or(p.GID, "none")+", not "+setup.ProcGroup+"'s")
+			say("/proc hides processes, and group "+p.GID+" sees them all, not "+setup.ProcGroup, "devopsy remounts it so members of "+setup.ProcGroup+" do")
 		}
 		if p.Group == "" {
-			lines = append(lines, "no group "+setup.ProcGroup+": made, the group that sees every process, the deploy user in it")
+			say("the group "+setup.ProcGroup+" does not exist", "devopsy makes it, the group that sees every process, with the deploy user in it")
 		}
 		if !p.Member && p.Group != "" {
-			lines = append(lines, "the deploy user is not in "+setup.ProcGroup+": put in it")
+			say("the deploy user is not in "+setup.ProcGroup, "devopsy adds it")
 		}
 		files(setup.ItemProcesses)
 	case setup.StepConfig:
-		lines = append(lines, f.ConfigFile+" has no door: (the lines below are appended)")
+		say(f.ConfigFile+" does not name the project users' directory", "devopsy adds the two lines below")
 	}
 	return lines
 }
 
 // runProjectUsersSetupStep is ProjectUsersFlag's setup words, on the server as the deploy
-// user: facts prints the facts as JSON, apply applies them.
-func runProjectUsersSetupStep(args []string) int {
+// user: facts prints the facts as JSON, apply applies them, ref the server as its address named
+// it, "" without, for the command its last line offers.
+func runProjectUsersSetupStep(args []string, ref string) int {
 	h := setupHost{root: os.Getenv(remote.HostRootEnv)}
 	usage := "usage: devopsy " + remote.ProjectUsersFlag + " setup facts [<directory>] | setup apply [--said=<id>,...] [<directory>]"
 	if len(args) == 0 {
@@ -248,7 +268,7 @@ func runProjectUsersSetupStep(args []string) int {
 		fmt.Println(string(out))
 		return 0
 	case "apply":
-		return applyDoorSetup(h, dir, said)
+		return applyDoorSetup(h, dir, said, ref)
 	}
 	return fail(usage)
 }
@@ -290,7 +310,7 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 	docker := dockerFacts()
 	f.Refusals = append(f.Refusals, dockerAnswers(docker)...)
 	if docker.Error == "" {
-		f.Refusals = append(f.Refusals, hostRefusals(h, docker, "--project-users setup mounts the door's space and /proc with")...)
+		f.Refusals = append(f.Refusals, hostRefusals(h, docker, "--project-users setup mounts the project users' directory and /proc with")...)
 	}
 
 	// The space: the config's, else the one named, else devopsy's.
@@ -298,18 +318,18 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 	switch {
 	case d != nil && d.Space != "":
 		if dir != "" && filepath.Clean(dir) != filepath.Clean(d.Space) {
-			refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space is "+d.Space+" (door: space: in "+f.ConfigFile+"), not "+dir,
-				"leave the directory out, which sets up "+d.Space+": a space is moved by hand")
+			refuse(setup.ItemSpace, setup.RefusalSpace, f.ConfigFile+" names "+d.Space+" as the project users' directory (door: space:), not "+dir,
+				"leave the directory out to set up "+d.Space+", since devopsy never moves it")
 		}
 		space = filepath.Clean(d.Space)
 	case d != nil:
-		refuse(setup.ItemConfig, setup.RefusalSpace, f.ConfigFile+" has door: with no space: under it",
+		refuse(setup.ItemConfig, setup.RefusalSpace, f.ConfigFile+" has door: but no space: under it",
 			"add \"space: "+space+"\" under its door:, indented, then run it again")
 	default:
 		f.Config = setup.DoorConfigLines(space)
 		if have, err := os.ReadFile(f.ConfigFile); err == nil || errors.Is(err, os.ErrNotExist) {
 			if _, err := setup.AppendDoorConfig(have, space); err != nil {
-				refuse(setup.ItemConfig, setup.RefusalSpace, "devopsy cannot add the project users' directory to "+f.ConfigFile+": "+err.Error(),
+				refuse(setup.ItemConfig, setup.RefusalSpace, "devopsy cannot add the project users' directory to "+f.ConfigFile+", since "+err.Error(),
 					"add these two lines to its settings by hand, then run it again:\n"+strings.TrimSuffix(f.Config, "\n"))
 			}
 		}
@@ -318,12 +338,12 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 	f.Space = resolveRoot(space)
 	for _, p := range slices.Compact([]string{space, f.Space}) {
 		if err := setup.PlainPath(p); err != nil {
-			refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+err.Error(), "name a directory whose path has none")
+			refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), "name a directory with only letters, digits and . _ - /")
 		}
 	}
 	rd.unit, rd.unitText = setup.SpaceUnit(f.Space), setup.SpaceUnitText(f.Space)
 	if why := swappable(space, os.Getuid()); why != "" {
-		refuse(setup.ItemSpace, setup.RefusalSpace, why+": devopsy acts as root only on a path no other user can change",
+		refuse(setup.ItemSpace, setup.RefusalSpace, why+", and devopsy acts as root only on a path no other user can change",
 			"name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link")
 	} else {
 		readSpace(h, &rd, refuse)
@@ -341,6 +361,8 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 		rd.dropin = text
 		rd.dropinBare, _ = mountsDropInWant(h, r.Root, "", false)
 		f.Files = append(f.Files, mountsDropInFact(h, text))
+		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
+		f.DropInWithout = text != rd.dropinBare && string(have) == rd.dropinBare
 	}
 	readProcesses(h, f, refuse)
 	return rd, nil
@@ -356,7 +378,7 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 	f := &rd.facts
 	sp := f.Space
 	anew := "name another directory, or move this one aside"
-	action, refused, fi := dirOwner("the door's space", sp, os.Getuid())
+	action, refused, fi := dirOwner("", sp, os.Getuid())
 	if refused != "" {
 		refuse(setup.ItemSpace, setup.RefusalSpace, refused, anew)
 		return
@@ -379,8 +401,8 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 	switch {
 	case f.Guarded:
 	case point && !ours:
-		refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is a mount without nosuid and nodev, not devopsy's: devopsy puts no mount over it",
-			"mount it with nosuid and nodev where it is set (its /etc/fstab line, its unit)")
+		refuse(setup.ItemSpace, setup.RefusalSpace, sp+" is a mount of the server's own without nosuid and nodev, and devopsy puts no mount over another's",
+			"add nosuid and nodev to its mount where it is set (its line in /etc/fstab, or its unit)")
 	}
 }
 
@@ -477,7 +499,7 @@ func readProcesses(h setupHost, f *setup.DoorFacts, refuse func(item, stops, msg
 		p.Other = true
 		if p.GID == "" {
 			refuse(setup.ItemProcesses, setup.RefusalProcesses, "/proc hides other users' processes (hidepid="+p.HidePID+") with no gid=, so the deploy user sees only its own",
-				"add gid= a group the deploy user is in to /proc's options where they are set (its /etc/fstab line)")
+				"add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)")
 			return
 		}
 		name, gid, member := groupOf(p.GID, me)
@@ -524,7 +546,7 @@ func groupOf(key, who string) (name, gid string, member bool) {
 // the apply lock, the facts read again and their refusals said (but those said: their IDs),
 // one root run for the space, the drop-in and the processes, then the config, then the checks
 // again and what the operator should know.
-func applyDoorSetup(h setupHost, dir string, said []string) int {
+func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 	failures := 0
 	fail := func(msg string, details ...string) {
 		failures++
@@ -583,10 +605,15 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
 			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)), rd.dropinBare)
-		err := run.run(&out, func(err error) error { return fmt.Errorf("the setup's run as root: %w", err) })
+		err := run.run(&out, func(err error) error { return err })
 		sayDoorSetupLines(out.String(), me.Username)
-		if err != nil {
-			fail(err.Error())
+		var ee *exec.ExitError
+		switch {
+		case errors.As(err, &ee) && ee.ExitCode() == 6:
+			// The run's own failure, each said by the run.
+			failures++
+		case err != nil:
+			fail("devopsy could not run its setup as root: " + err.Error())
 		}
 	}
 	// Each step judged by its own result, read again: the config, the deploy user's own file,
@@ -600,12 +627,12 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 	if does(setup.StepConfig) {
 		switch {
 		case again.facts.Changes(setup.StepSpace):
-			fail("door: space: not added to " + f.ConfigFile + ": the door's space is not set up")
+			fail("devopsy did not add the project users' directory to " + f.ConfigFile + ", since the directory is not set up")
 		default:
 			if err := appendDoorConfig(f.ConfigFile, rd.space); err != nil {
-				fail("door: space: not added to " + f.ConfigFile + ": " + err.Error())
+				fail("devopsy could not add the project users' directory to " + f.ConfigFile + ": " + err.Error())
 			} else {
-				report.Info("named the door's space in "+f.ConfigFile, strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
+				report.Info("added the project users' directory to "+f.ConfigFile, strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
 				if again, err = readDoorSetup(h, dir); err != nil {
 					fail(err.Error())
 					return end()
@@ -619,7 +646,7 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 	var left []string
 	for _, s := range setup.DoorSteps {
 		if does(s) && (s != setup.StepConfig || !again.facts.Changes(setup.StepSpace)) {
-			left = append(left, doorItemLines(again.facts, s)...)
+			left = append(left, doorItemLines(again.facts, s, false)...)
 		}
 	}
 	if len(left) > 0 {
@@ -630,14 +657,19 @@ func applyDoorSetup(h setupHost, dir string, said []string) int {
 		dropInWaits(string(have) != rd.dropinBare)
 	}
 	if hasLine(out.String(), remote.DoorSetupMember) {
-		report.Info(me.Username+" is in "+setup.ProcGroup+" from its next login",
+		report.Info(me.Username+" sees every process from its next login",
 			"a session open now, a shared SSH connection's included, sees only its own processes until it is opened again")
 	}
 	if line := refusedWords(f.Stopped()); line != "" {
 		report.Error(line)
 	}
 	if !refused && failures == 0 {
-		report.Info("set up for project users: the first comes with --project-users add")
+		// The first project user's add, offered only while there is none.
+		var hints []report.Remedy
+		if d, err := remote.ServerDoor(); err == nil && (d == nil || len(d.Users) == 0) {
+			hints = append(hints, offer(report.Hint, "add a project's user:", addCommand(ref), "add a project's user with --project-users add for this server"))
+		}
+		report.Say(report.InfoLevel, "this server is ready for project users", nil, hints...)
 	}
 	return end()
 }
@@ -679,21 +711,30 @@ func sayDoorSetupLines(out, who string) {
 		case remote.SetupPut:
 			report.Info("put " + rest)
 		case remote.SetupMade:
-			report.Info("made the door's space " + rest)
+			report.Info("made the project users' directory " + rest)
 		case remote.SetupGave:
-			report.Info("gave the door's space " + rest + " to " + who)
+			report.Info("gave the project users' directory " + rest + " to " + who)
 		case remote.DoorSetupMode:
 			report.Info("set " + rest + " to mode 755")
 		case remote.DoorSetupGroup:
 			report.Info("made the group " + rest)
 		case remote.DoorSetupMember:
-			report.Info("put " + rest + " in " + setup.ProcGroup)
+			report.Info("added " + rest + " to " + setup.ProcGroup)
 		case remote.DoorSetupMounted:
-			report.Info("mounted " + rest + " on itself with nosuid and nodev")
+			report.Info("bind-mounted " + rest + " on itself with nosuid and nodev")
 		case remote.DoorSetupHidden:
-			report.Info("hid every user's processes from the others, " + setup.ProcGroup + " seeing them all")
+			report.Info("hid each user's processes from the others; members of " + setup.ProcGroup + " see all")
 		case remote.DoorSetupPolkit:
-			report.Info("restarted polkit, in " + setup.ProcGroup)
+			report.Info("restarted polkit so it sees every process")
 		}
 	}
+}
+
+// addCommand is --project-users add for the server as ref names it, "" without one: offered as
+// is, the project's name to type in its place.
+func addCommand(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	return "devopsy @" + ref + " --project-users add <project>"
 }

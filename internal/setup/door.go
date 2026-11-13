@@ -49,7 +49,7 @@ func PlainPath(p string) error {
 	}
 	for _, r := range p {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-/", r)) {
-			return fmt.Errorf("%s holds %q: only letters, digits and . _ - / are taken", p, r)
+			return fmt.Errorf("%s holds %q, and devopsy takes only letters, digits and . _ - /", p, r)
 		}
 	}
 	return nil
@@ -123,7 +123,7 @@ var errDoorThere = errors.New("it has a door: already")
 func AppendDoorConfig(have []byte, space string) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(have, &doc); err != nil {
-		return nil, fmt.Errorf("it is no YAML devopsy reads: %w", err)
+		return nil, fmt.Errorf("it is no YAML devopsy reads (%w)", err)
 	}
 	if len(doc.Content) > 0 {
 		top := doc.Content[0]
@@ -169,6 +169,9 @@ type DoorFacts struct {
 	SpaceMode   string `json:"space_mode,omitempty"`
 	// Guarded: the mount the space is on has nosuid and nodev now, whatever made it.
 	Guarded bool `json:"guarded"`
+	// DropInWithout: the mounts drop-in is as --server-setup writes it without the space, and
+	// devopsy's want adds the space: only Docker's wait for it at boot differs.
+	DropInWithout bool `json:"dropin_without,omitempty"`
 	// ConfigFile is the deploy user's config; Config the lines an apply appends to it, "" for
 	// none.
 	ConfigFile string `json:"config_file"`
@@ -198,7 +201,7 @@ type ProcFact struct {
 // The items --project-users setup sets besides the mounts drop-in (ItemMounts), each a
 // FileFact's item and a refusal's.
 const (
-	ItemSpace     = "door's space"
+	ItemSpace     = "project users' directory"
 	ItemProcesses = "processes"
 	ItemConfig    = "config"
 )
@@ -215,9 +218,9 @@ const (
 // The steps of --project-users setup's apply, in its order: the root run's (the space, the
 // drop-in, the processes), then the config, the deploy user's own file, once the space is.
 const (
-	StepSpace     Step = "the door's space"
-	StepDoorDrop  Step = "Docker's wait for the space"
-	StepProcesses Step = "processes hidden"
+	StepSpace     Step = "the project users' directory"
+	StepDoorDrop  Step = "Docker's wait at boot for that directory"
+	StepProcesses Step = "process hiding"
 	StepConfig    Step = "door: space: in the config"
 )
 

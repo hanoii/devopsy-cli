@@ -412,7 +412,7 @@ func TestServerInfoReport(t *testing.T) {
 		noted := len(warnings) == 1 && warnings[0].note && len(warnings[0].fixes) == 2 && warnings[0].fixes[0].Hint && warnings[0].fixes[1].Hint &&
 			warnings[0].msg == "/proc shows every user's processes (no hidepid), which matters once the server has project users" &&
 			warnings[0].fixes[0].Text == "set the server up for project users:" && slices.Equal(warnings[0].fixes[0].Cmds, []string{"devopsy @vm1: --project-users setup"}) &&
-			warnings[0].fixes[1].Text == "to set it by hand; this prints the steps:" && slices.Equal(warnings[0].fixes[1].Cmds, []string{howto.Command(howto.Processes)})
+			warnings[0].fixes[1].Text == "or set it up by hand, with the steps this prints:" && slices.Equal(warnings[0].fixes[1].Cmds, []string{howto.Command(howto.Processes)})
 		if c.note != noted || (!c.note && (len(warnings) != 0 || strings.Contains(out, "processes"))) {
 			t.Errorf("processes, %s: %+v\n%s", name, warnings, out)
 		}

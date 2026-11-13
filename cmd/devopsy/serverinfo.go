@@ -271,7 +271,7 @@ func projectUsersSetup(kind func(string, ...string) report.Remedy, ref string, t
 		cmd = "devopsy @" + ref + " --project-users setup"
 	}
 	return []report.Remedy{offer(kind, "set the server up for project users:", cmd, "run --project-users setup for this server, as its deploy user"),
-		stepsHint("to set it by hand", topic)}
+		byHandHint(topic)}
 }
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host

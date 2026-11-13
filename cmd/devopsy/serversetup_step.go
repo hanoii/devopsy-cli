@@ -107,7 +107,7 @@ func mountsDropInFact(h setupHost, text string) setup.FileFact {
 func dropInWaits(space bool) {
 	what := "the release root's filesystem"
 	if space {
-		what = "the release root's and the door's space's filesystems"
+		what = "the release root's filesystem and the project users' directory"
 	}
 	report.Info("Docker now waits for "+what+" before it starts", "this applies from Docker's next start and only matters at a boot: no restart is needed")
 }
@@ -506,12 +506,13 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 }
 
 // dirOwner judges a directory devopsy makes or gives to the deploy user (uid) at p, the release
-// root's and the door's space's alike, named so (what) in a refusal: missing, it is made
+// root's and the door's space's alike, named so (what, "" for p alone) in a refusal: missing, it is made
 // (setup.RootMake); uid's, it is in place (""); root's and empty, a filesystem's own lost+found
 // aside, it is given (setup.RootGive); anything else refuses, its words refused: root's with
 // files (a system's: /var, /opt), another user's, no directory, or what stat said. fi is p as
 // stat read it, nil when it is not there.
 func dirOwner(what, p string, uid int) (action, refused string, fi os.FileInfo) {
+	name := strings.TrimSpace(what + " " + p)
 	fi, err := os.Stat(p)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -519,7 +520,7 @@ func dirOwner(what, p string, uid int) (action, refused string, fi os.FileInfo) 
 	case err != nil:
 		return "", err.Error(), nil
 	case !fi.IsDir():
-		return "", what + " " + p + " is not a directory", fi
+		return "", name + " is not a directory", fi
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	switch {
@@ -528,13 +529,13 @@ func dirOwner(what, p string, uid int) (action, refused string, fi os.FileInfo) 
 	case st.Uid == 0 && emptyDir(p):
 		return setup.RootGive, "", fi
 	case st.Uid == 0:
-		return "", what + " " + p + " is root's and holds files: only an empty one is given to the deploy user, never a system directory", fi
+		return "", name + " is root's and holds files, and devopsy gives the deploy user only an empty one, never a system directory", fi
 	}
 	owner := strconv.Itoa(int(st.Uid))
 	if u, err := user.LookupId(owner); err == nil {
 		owner = u.Username
 	}
-	return "", what + " " + p + " is " + owner + "'s", fi
+	return "", name + " is " + owner + "'s", fi
 }
 
 // dockerSetup is what the setup reads of Docker beyond docker info: its service's

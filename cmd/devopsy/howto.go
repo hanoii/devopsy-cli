@@ -22,6 +22,12 @@ func stepsHint(what string, topic howto.Name) report.Remedy {
 	return report.Hint(what+stepsWords, howto.Command(topic))
 }
 
+// byHandHint offers a topic's steps as the other way to a fix that sets it up, said after it:
+// doing it by hand.
+func byHandHint(topic howto.Name) report.Remedy {
+	return report.Hint("or set it up by hand, with the steps this prints:", howto.Command(topic))
+}
+
 // stepsWords ends the text of a remedy that offers a topic's steps.
 const stepsWords = "; this prints the steps:"
 

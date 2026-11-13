@@ -404,10 +404,25 @@ func sayRefusalsOf(rs []setup.Refusal, missing []string, daemonError string, lev
 // end say it.
 func refusedLine(f setup.Facts) string { return refusedWords(f.Stopped()) }
 
-// refusedWords is refusedLine of the steps stopped, by name, "" for none.
+// refusedWords is refusedLine of the steps stopped, by name, "" for none: one sentence naming
+// what devopsy did not set up, each step as a sentence says it (stepPhrase).
 func refusedWords(stopped []string) string {
-	if len(stopped) > 0 {
-		return "not applied, refused: " + strings.Join(stopped, ", ")
+	words := make([]string, len(stopped))
+	for i, name := range stopped {
+		words[i] = cmp.Or(stepPhrase[name], name)
 	}
-	return ""
+	switch len(words) {
+	case 0:
+		return ""
+	case 1:
+		return "devopsy left " + words[0] + " as it is, since what it needs is refused above"
+	}
+	return "devopsy left " + joinAnd(words) + " as they are, since what they need is refused above"
+}
+
+// stepPhrase is a step's name in a sentence, where its name is an item's key with no article.
+var stepPhrase = map[string]string{
+	string(setup.StepBuffers):  "the " + setup.ItemBuffers,
+	string(setup.StepMounts):   "the " + setup.ItemMounts,
+	string(setup.StepFirewall): "the " + setup.FirewallItemName,
 }

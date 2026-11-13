@@ -46,23 +46,28 @@ func TestProjectUsersSetupYes(t *testing.T) {
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	unit := setup.SpaceUnit(space)
 	for _, want := range []string{
-		space + " is missing: made, the deploy user's, mode 755",
-		"bound on itself so, now and at every boot",
-		"/proc shows every user's processes (no hidepid): hidden from the others, now and at every boot",
-		"devopsy: the apply appends to " + configFile(s) + ":\ndevopsy: | door:\ndevopsy: |   space: " + space + "\n",
-		"a tool running as another user that reads /proc (a monitoring agent) sees only its own processes until it is put in devopsy-proc",
-		"devopsy: made the door's space " + space + "\n",
+		space + ", where devopsy keeps project users' data, does not exist: devopsy makes it, owned by the deploy user, mode 755\n",
+		space + " has no mount with nosuid and nodev: devopsy bind-mounts it on itself with both, now and at every boot\n",
+		unit + " does not exist yet\n",
+		setup.MountsDropIn + " does not exist yet\n",
+		"/proc shows each user's processes to every other user: devopsy hides them, now and at every boot\n",
+		"the group devopsy-proc does not exist: devopsy makes it, the group that sees every process, with the deploy user in it\n",
+		configFile(s) + " does not name the project users' directory: devopsy adds the two lines below\n",
+		"devopsy: this adds to " + configFile(s) + ":\ndevopsy: | door:\ndevopsy: |   space: " + space + "\n",
+		"devopsy: once hidden, each user sees only its own processes; the deploy user and members of devopsy-proc see all\n" +
+			"devopsy: | a tool running as another user that reads /proc (a monitoring agent) sees only its own processes until it is put in devopsy-proc\n",
+		"devopsy: made the project users' directory " + space + "\n",
 		"devopsy: put " + unit + "\n",
 		"devopsy: put " + setup.MountsDropIn + "\n",
 		"devopsy: made the group devopsy-proc\n",
-		"devopsy: put " + me.Username + " in devopsy-proc\n",
+		"devopsy: added " + me.Username + " to devopsy-proc\n",
 		"devopsy: put " + setup.ProcUnit + "\n",
-		"devopsy: mounted " + space + " on itself with nosuid and nodev\n",
-		"devopsy: hid every user's processes from the others, devopsy-proc seeing them all\n",
-		"devopsy: named the door's space in " + configFile(s) + "\n",
-		"devopsy: Docker now waits for the release root's and the door's space's filesystems before it starts\n",
-		"devopsy: " + me.Username + " is in devopsy-proc from its next login\ndevopsy: | a session open now, a shared SSH connection's included, sees only its own processes until it is opened again\n",
-		"devopsy: set up for project users",
+		"devopsy: bind-mounted " + space + " on itself with nosuid and nodev\n",
+		"devopsy: hid each user's processes from the others; members of devopsy-proc see all\n",
+		"devopsy: added the project users' directory to " + configFile(s) + "\n",
+		"devopsy: Docker now waits for the release root's filesystem and the project users' directory before it starts\n",
+		"devopsy: " + me.Username + " sees every process from its next login\ndevopsy: | a session open now, a shared SSH connection's included, sees only its own processes until it is opened again\n",
+		"devopsy: this server is ready for project users\ndevopsy: | add a project's user:\ndevopsy: | $ devopsy @devopsy@one: --project-users add <project>\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q (%d):\n%s", want, code, out)
@@ -90,7 +95,7 @@ func TestProjectUsersSetupYes(t *testing.T) {
 	}
 	s.logs()
 	out, code = s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
-	if _, sessions := s.logs(); code != 0 || !strings.Contains(out, "nothing to change: devopsy@one is set up for project users") || strings.Count(sessions, "\n") != 1 {
+	if _, sessions := s.logs(); code != 0 || !strings.Contains(out, "nothing to change: devopsy@one is ready for project users") || strings.Count(sessions, "\n") != 1 {
 		t.Errorf("a second run (%d):\n%s\nsessions:\n%s", code, out, sessions)
 	}
 }
@@ -130,7 +135,7 @@ func TestProjectUsersSetupRefusesWithoutTheToolsOrDocker(t *testing.T) {
 	}
 	out, code := s.run([]string{"PATH=" + pathWithout(t, bin, "sudo")}, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy: error: tools: no sudo in PATH, which project users need\ndevopsy: | to fix it:\ndevopsy: | install sudo and acl with the system's packages; this prints the steps:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") ||
-		!strings.Contains(out, "devopsy: error: not applied, refused: the door's space, Docker's wait for the space, processes hidden, door: space: in the config\n") || !unchanged() {
+		!strings.Contains(out, "devopsy: error: devopsy left the project users' directory, Docker's wait at boot for that directory, process hiding and door: space: in the config as they are, since what they need is refused above\n") || !unchanged() {
 		t.Errorf("no sudo (%d):\n%s", code, out)
 	}
 	out, code = s.run([]string{"FAKE_BUILDX_VERSION=0.29.1"}, "@devopsy@one:", "--project-users", "setup", space, "--yes")
@@ -141,7 +146,7 @@ func TestProjectUsersSetupRefusesWithoutTheToolsOrDocker(t *testing.T) {
 
 // A space and a /proc set up another way (an fstab line by hand: the mounts say it) are in
 // sync, whoever made them: nothing of devopsy's goes beside them, its drop-in aside, which names
-// the space so Docker waits for it.
+// the space so Docker waits for it, a drop-in of devopsy's without the space said as just that.
 func TestProjectUsersSetupLeavesWhatIsSetByHand(t *testing.T) {
 	t.Parallel()
 	s, host, space := doorSetupServer(t)
@@ -155,11 +160,15 @@ func TestProjectUsersSetupLeavesWhatIsSetByHand(t *testing.T) {
 	write(t, filepath.Join(host, "etc", "group"), "proc-seers:x:990:"+me.Username+"\n", 0o644)
 	write(t, filepath.Join(host, procMounts), "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n"+space+" "+space+" ext4 rw,nosuid,nodev,relatime 0 0\n", 0o644)
 	setupConfig(t, s, "door:\n  space: "+space+"\n")
+	// The drop-in as --server-setup writes it without the space: what differs is said as it is.
+	bare, _ := mountsDropInWant(setupHost{root: host}, s.root, "", false)
+	write(t, filepath.Join(host, setup.MountsDropIn), bare, 0o644)
 	config := readString(configFile(s))
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
-	if code != 0 || !strings.Contains(out, space+", on a mount with nosuid and nodev") ||
-		!strings.Contains(out, "/proc hides every user's processes from the others (hidepid=invisible, gid=990), set outside devopsy and left as it is") ||
-		!strings.Contains(out, "devopsy: put "+setup.MountsDropIn+"\n") || strings.Contains(out, "mounted") || strings.Contains(out, "hid every") {
+	if code != 0 || !strings.Contains(out, space+", where devopsy keeps project users' data, is on a mount with nosuid and nodev") ||
+		!strings.Contains(out, "Docker does not wait for the project users' directory at boot yet: devopsy adds it to "+setup.MountsDropIn+"\n") ||
+		!strings.Contains(out, "/proc hides each user's processes from the others (hidepid=invisible, gid=990), set up outside devopsy and left as it is") ||
+		!strings.Contains(out, "devopsy: put "+setup.MountsDropIn+"\n") || strings.Contains(out, "mounted") || strings.Contains(out, "hid each") {
 		t.Errorf("set by hand (%d):\n%s", code, out)
 	}
 	if fileExists(filepath.Join(host, setup.SpaceUnit(space))) || fileExists(filepath.Join(host, setup.ProcUnit)) || readString(configFile(s)) != config {
@@ -187,23 +196,23 @@ func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 		want    string
 	}{
 		"door: with no space:": {func(t *testing.T, s *syncSetup, space string) { setupConfig(t, s, "door:\n  vets: []\n") },
-			`has door: with no space: under it` + "\ndevopsy: | to fix it:\ndevopsy: | add \"space: %s\" under its door:, indented, then run it again\n"},
+			`has door: but no space: under it` + "\ndevopsy: | to fix it:\ndevopsy: | add \"space: %s\" under its door:, indented, then run it again\n"},
 		"another space": {func(t *testing.T, s *syncSetup, space string) { setupConfig(t, s, "door:\n  space: /srv/elsewhere\n") },
-			"door's space: the door's space is /srv/elsewhere (door: space: in "},
+			"project users' directory: " + "%C names /srv/elsewhere as the project users' directory (door: space:), not %s\ndevopsy: | to fix it:\ndevopsy: | leave the directory out to set up /srv/elsewhere, since devopsy never moves it\n"},
 		"a link for a space": {func(t *testing.T, s *syncSetup, space string) {
 			if err := os.Symlink(t.TempDir(), space); err != nil {
 				t.Fatal(err)
 			}
-		}, "door's space: %s is a symbolic link: devopsy acts as root only on a path no other user can change"},
+		}, "project users' directory: %s is a symbolic link, and devopsy acts as root only on a path no other user can change\ndevopsy: | to fix it:\ndevopsy: | name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link\n"},
 		"a parent others may write": {func(t *testing.T, s *syncSetup, space string) {
 			if err := os.Chmod(filepath.Dir(space), 0o777); err != nil {
 				t.Fatal(err)
 			}
-		}, "door's space: %s is under %P, which other users can write: devopsy acts as root only on a path no other user can change"},
+		}, "project users' directory: %s is under %P, which other users can write, and devopsy acts as root only on a path no other user can change"},
 		"a config read before its end": {func(t *testing.T, s *syncSetup, space string) {
 			write(t, configFile(s), "{releases: {root: "+s.root+"}}\n", 0o644)
 		},
-			"lines added at its end would not be read as part of its settings\ndevopsy: | to fix it:\ndevopsy: | add these two lines to its settings by hand, then run it again:\ndevopsy: | door:\ndevopsy: |   space: %s\n"},
+			"config: devopsy cannot add the project users' directory to %C, since lines added at its end would not be read as part of its settings\ndevopsy: | to fix it:\ndevopsy: | add these two lines to its settings by hand, then run it again:\ndevopsy: | door:\ndevopsy: |   space: %s\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -211,9 +220,9 @@ func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 			c.prepare(t, s, space)
 			config := readString(configFile(s))
 			out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-			want := strings.ReplaceAll(strings.ReplaceAll(c.want, "%s", space), "%P", filepath.Dir(space))
+			want := strings.NewReplacer("%s", space, "%P", filepath.Dir(space), "%C", configFile(s)).Replace(c.want)
 			if code != 1 || !strings.Contains(out, want) || fileExists(filepath.Join(host, setup.SpaceUnit(space))) || readString(configFile(s)) != config ||
-				!strings.Contains(out, "devopsy: error: not applied, refused: the door's space, Docker's wait for the space") ||
+				!strings.Contains(out, "devopsy: error: devopsy left the project users' directory") || !strings.Contains(out, "Docker's wait at boot for that directory") ||
 				!fileExists(filepath.Join(host, setup.ProcUnit)) {
 				t.Errorf("(%d), want %q:\n%s", code, want, out)
 			}
@@ -295,7 +304,7 @@ func TestProjectUsersSetupMountsItsSpaceAgain(t *testing.T) {
 	}
 	write(t, filepath.Join(host, procMounts), strings.Join(kept, "\n")+"\n", 0o644)
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", "--yes")
-	if code != 0 || !strings.Contains(out, "devopsy: mounted "+space+" on itself with nosuid and nodev\n") || strings.Contains(out, "holds files") {
+	if code != 0 || !strings.Contains(out, "devopsy: bind-mounted "+space+" on itself with nosuid and nodev\n") || strings.Contains(out, "holds files") {
 		t.Errorf("the space's mount gone (%d):\n%s", code, out)
 	}
 }
@@ -310,7 +319,7 @@ func TestProjectUsersSetupNamesTheSpaceBesideAFailedProc(t *testing.T) {
 	write(t, filepath.Join(bin, "systemctl-real"), readString(filepath.Join(bin, "systemctl")), 0o755)
 	write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\n[ \"$*\" != 'restart devopsy-proc.service' ] || exit 1\nexec \"$(dirname \"$0\")/systemctl-real\" \"$@\"\n", 0o755)
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-	if code != 1 || !strings.Contains(out, "systemd did not remount /proc") || !strings.Contains(out, "devopsy: mounted "+space+" on itself with nosuid and nodev\n") {
+	if code != 1 || !strings.Contains(out, "systemd did not remount /proc") || !strings.Contains(out, "devopsy: bind-mounted "+space+" on itself with nosuid and nodev\n") {
 		t.Fatalf("a /proc systemd does not remount (%d):\n%s", code, out)
 	}
 	if !strings.Contains(readString(configFile(s)), "door:\n  space: "+space+"\n") {
@@ -333,7 +342,7 @@ func TestProjectUsersSetupDropInWaitsForTheMount(t *testing.T) {
 	write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\ncase \"$*\" in enable*--now*.mount) exit 1 ;; esac\nexec \"$(dirname \"$0\")/systemctl-real\" \"$@\"\n", 0o755)
 	before := readString(configFile(s))
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-	if code != 1 || !strings.Contains(out, "systemd did not mount "+space) || !strings.Contains(out, "devopsy: hid every") {
+	if code != 1 || !strings.Contains(out, "systemd did not mount "+space) || !strings.Contains(out, "devopsy: hid each") {
 		t.Fatalf("a mount systemd refuses (%d):\n%s", code, out)
 	}
 	if got := readString(filepath.Join(host, setup.MountsDropIn)); strings.Contains(got, space) || !strings.Contains(got, "RequiresMountsFor="+s.root+"\n") {

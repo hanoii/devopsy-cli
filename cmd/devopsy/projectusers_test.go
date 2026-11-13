@@ -406,8 +406,8 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 	msg, detail, fixes := processesShownWarning("devopsy@one:")
 	warning := strings.Join(report.Lines(report.WarnLevel, msg, []string{detail}, fixes), "\n") + "\n"
 	// Its fix is the setup on the server as typed, by hand the processes topic.
-	if !strings.Contains(warning, "devopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n") ||
-		!strings.Contains(warning, "devopsy: | to set it by hand; this prints the steps:\ndevopsy: | $ "+howto.Command(howto.Processes)+"\n") {
+	if !strings.Contains(warning, "devopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n"+
+		"devopsy: | or set it up by hand, with the steps this prints:\ndevopsy: | $ "+howto.Command(howto.Processes)+"\n") {
 		t.Errorf("the warning's remedies:\n%s", warning)
 	}
 	for _, c := range []struct {
@@ -545,14 +545,15 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 	}
 }
 
-// --project-users add on a server with no door names the setting and the project-users topic,
-// whose steps make the door's directory and its config.
+// --project-users add on a server with no door names the setting, the setup as its fix, then
+// the project-users topic, whose steps make the door's directory and its config, as the other
+// way after it.
 func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	t.Parallel()
 	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "--server", "devopsy@one:", "add", "shop")
-	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") ||
-		!strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n") ||
-		!strings.Contains(out, "devopsy: | to set it by hand; this prints the steps:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") {
+	if code != 1 || !strings.Contains(out, "this server is not ready for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") ||
+		!strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n"+
+			"devopsy: | or set it up by hand, with the steps this prints:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add with no door (%d):\n%s", code, out)
 	}
 	// With no server named, the setup in words: never a placeholder.

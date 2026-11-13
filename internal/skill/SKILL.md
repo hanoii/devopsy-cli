@@ -244,9 +244,10 @@ what `config.yaml` sets.
   servers uses a key of its own, never the agent.
 - A project with a user of its own, no Docker socket (`devopsy-<project>`):
   the server set up for them once with `devopsy @devopsy@<server>:
-  --project-users setup` (the door's space on a mount with nosuid and
-  nodev, `door: space:` in the deploy user's config, every user's
-  processes hidden from the others; `sudo` and `acl` installed first),
+  --project-users setup` (the directory where devopsy keeps their data
+  on a mount with nosuid and nodev, `door: space:` in the deploy user's
+  config, each user's processes hidden from the others; `sudo` and `acl`
+  installed first),
   then each made as the deploy user with `devopsy @devopsy@<server>:
   --project-users add <project>`, its keys `--ssh-keys --for <project>
   add <key>.pub`. A project user cannot edit its own keys. The first
@@ -270,8 +271,8 @@ what `config.yaml` sets.
   refused where `door:` is set or the door's firewall is loaded; `--yes`
   loads or removes it too). A release refuses, before uploading, a server whose release
   root is missing or root's, that lacks `tar` or `flock`, or whose Docker is
-  below the floor every server runs (Docker's containerd image store,
-  buildx 0.33.0, compose 2.33.0), and warns
+  below what devopsy needs of Docker on every server (its containerd image
+  store, buildx 0.33.0, compose 2.33.0), and warns
   `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,

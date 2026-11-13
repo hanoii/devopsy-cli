@@ -16,13 +16,13 @@ const (
 var Topics = []Topic{
 	{
 		Name:    Docker,
-		Summary: "a current Docker from its repository, compose and buildx",
-		Title:   "A current Docker, with its compose and buildx plugins",
+		Summary: "Docker with the containerd image store, buildx and compose",
+		Title:   "Docker with the containerd image store, buildx and compose",
 		Why: "devopsy runs everything through the host's docker.service, as the deploy user, and never installs it. " +
 			"Every server runs Docker's containerd image store, buildx 0.33.0 or later and compose 2.33.0 or later: " +
 			"--server-setup, every release, --project-users setup and --project-users add refuse a Docker that does not answer, lacks its compose or buildx plugin, or runs below any of them, and --server-setup one that is not the host's service. " +
 			"A Docker installed from its repository runs the containerd image store. One upgraded from an older version keeps the classic image store, and a distribution's own package may run it too: devopsy refuses it, and does not move a Docker from one store to the other. " +
-			"These steps are then for a new server, where the projects of that one are released.",
+			"These steps are then for a new server, where that one's projects are released.",
 		Steps: []Step{
 			{"Add Docker's apt repository, as Docker's install guide says (https://docs.docker.com/engine/install/), since the distributions' own packages lag behind it. A list of it already there is removed first: apt refuses every source while two lists of it name different keys.", []string{
 				`for f in /etc/apt/sources.list.d/*; do if grep -qs download.docker.com "$f"; then rm -f "$f"; fi; done`,

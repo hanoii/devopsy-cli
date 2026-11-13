@@ -1265,21 +1265,22 @@ with no Docker socket. What it finds as docker is devopsy, which asks the
 deploy user's devopsy through sudo, and that one checks every request, so
 a project user's leaked key reaches its project and not the server or
 the others. Asked as the deploy user, the server named with its user
-(@devopsy@vm1:). The server needs sudo and acl first, which devopsy
-` + howto.Flag + ` project-users prints the steps for, then setup.
+(@devopsy@vm1:). The server needs sudo and acl first: devopsy
+` + howto.Flag + ` project-users prints how to install them.
+Then setup sets up the rest.
 
   --project-users           list them: project, whether the Unix user is
                             there, how many keys
   --project-users setup [<directory>]
-                            set the server up for them: the door's space
-                            (/var/lib/devopsy-door unless named) on a mount
-                            of its own with nosuid and nodev, at every boot,
-                            named as door: space: in the deploy user's
-                            config, and every user's processes hidden from
-                            the others. Shows what is missing and asks once
-                            (--yes asks nothing); a second run changes
-                            nothing. What is set another way (an fstab
-                            line) is left as it is.
+                            set the server up for them: the directory where
+                            devopsy keeps their data (/var/lib/devopsy-door
+                            unless named), bind-mounted with nosuid and
+                            nodev at every boot and named as door: space:
+                            in the deploy user's config, and each user's
+                            processes hidden from the others. Shows what is
+                            missing and asks once (--yes asks nothing); a
+                            second run changes nothing. What is set up
+                            another way (an fstab line) is left as it is.
   --project-users add <p>   make devopsy-<p>, its home and, with releases:
                             root elsewhere than the deploy user's home, its
                             tree there, and its entry in the deploy user's
