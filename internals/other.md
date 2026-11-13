@@ -1,6 +1,6 @@
 # Other features
 
-Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go`), `sshkeys.go`, `probe.go`, `update.go`, `skill.go`; `internal/complete/`, `internal/skill/`, `internal/probe/`, `internal/update/`, `internal/cli/contexthash.go`, `internal/cli/capabilities.go`, `internal/remote/keys.go`, `internal/remote/sshconfig.go`, `internal/remote/serverinfo.go`, `internal/remote/status.go`.
+Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go`), `gc.go`, `sshkeys.go`, `probe.go`, `update.go`, `skill.go`; `internal/complete/`, `internal/skill/`, `internal/probe/`, `internal/update/`, `internal/cli/contexthash.go`, `internal/cli/capabilities.go`, `internal/remote/keys.go`, `internal/remote/sshconfig.go`, `internal/remote/serverinfo.go`, `internal/remote/status.go`, `internal/remote/gc.go`.
 
 ## --status
 
@@ -29,7 +29,15 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 - Said, never warned: the classic image store (warned on a server with project users, as a Docker the door's claims refuse, `doorHostReady`), Docker's security options, and a sync or a snapshot under way; `EnvStatus`'s `busy` is ignored on a server without `flock`, where every lock reads held.
 - AppArmor is warned about only as a kernel with it and no `apparmor_parser` (looked for in sbin, outside the deploy user's PATH): `docker info` lists AppArmor whenever the kernel has it, and Docker then loads its profile with the parser, without which no container starts.
 - The server's setup is `--server-setup`'s facts from the same gatherer (`readSetup`, `ServerInfo.Setup`, nil from an older server, which shows nothing), worded by `setupInfoEntries` under one `setup` key, one warning per item with `--server-setup` as its fix (where the setup refuses every step, words pointing at the refusal instead, since `--server-setup` would change nothing), words locally; the json-file `max-size` warning goes wherever the logs part was judged.
-- A full disk's fix follows what is on it (Docker's cache, snapshots); the no-reflinks fix names the server's `snapshots: {mirror: false}` first when it refuses every mirror.
+- A full disk's fix follows what is on it (`--gc` for Docker's, words on the server itself, where `--gc` has no address; snapshots); the no-reflinks fix names the server's `snapshots: {mirror: false}` first when it refuses every mirror.
+
+## --gc
+
+- One sweep of what the server keeps that no release, `--destroy` or pruning removes, as the deploy user (`GCScript` refuses a project user, `askedAsProjectUser`), by a record of devopsy's or Docker's own rule and never by an owner's absence: what does not read is listed as not read and none of it removed, and a release root not mounted lists nothing.
+- In this order, each lock in the one order and every removal standing alone: exited one-offs (`com.docker.compose.oneoff=True`, exited by Docker's state, a created one having no finish time, and finished before `gc: containers`) of a listed environment, a deploy user's directory's compose name or one under a project user's names (`door.Policy.OwnName`), removed with `docker rm`, never `-f` or `-v`; build cache by `prune -a --filter until=` on the daemon's builder and each project user's (`door.BuilderOf`, the door's `BUILDX_CONFIG`), one not running left alone; release snapshots whose release is gone (`pruneGone`), each environment's snapshot lock taken only when free, a busy one skipped, the image lock taken by each removal itself, and after one wait for it ends, nothing more of snapshots or images; then the exclusive image lock once, for every deploy project's `Set.Retry` and one `PruneDangling`.
+- The list is its own session (`--gc-step list`, `gcPlan` as JSON, nothing changed), asked about locally, and a second session removes, finding everything again and deciding each removal again under its lock (`--gc-step remove`); `--yes` runs the second alone, `--dry-run` the first alone.
+- The build cache listed is what `prune -a --filter until=` removes (`cacheGoing`, from the daemon's `system df -v` and `buildctl du` in a builder's container, since `buildx du` ignores `until` and says its times in words): the facts are in `gc.go`'s comment.
+- Exit 3 (`gcLeftWarned`) when something is left to remove: what `--dry-run` lists, or what a removal skipped, did not remove or could not read; its last line hints `--server-info`.
 
 ## --ssh-keys
 

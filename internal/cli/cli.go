@@ -1075,6 +1075,42 @@ Examples:
   devopsy @vm1 --server-info
   devopsy @vm1 --server-info --json
 `,
+	"--gc": `Usage: devopsy @<server> --gc [--dry-run] [--yes]
+
+Removes, as the server's deploy user, what the server keeps that no
+release, --destroy or pruning removes, by a record of devopsy's or
+Docker's own rule, never because an owner looks gone. In this order:
+  one-offs        exited containers of compose run and the like, of an
+                  environment of the deploy user's or of a project user's
+                  names, finished more than gc: containers ago (a day),
+                  never their volumes
+  build cache     what Docker's own builder and each project user's
+                  builder last used more than gc: build_cache ago (30
+                  days); a builder not running keeps its cache
+  snapshots       release snapshots whose release is gone, as
+                  --snapshots remove prunes them; an environment whose
+                  snapshots are in use is skipped
+  images          the names each project's record of names left holds
+                  that can go now, as a release's pruning retries them,
+                  then the dangling images no container uses
+
+It lists what it would remove with sizes, asks, then removes, deciding
+each removal again: a run cut off leaves only less to remove. It never
+removes a tagged image no release holds, a volume, a release, an
+environment, or a project user's snapshots; --server-info shows what is
+left to look at. It exits 3 when something is left to remove (with
+--dry-run, what it lists), for scripts: 0 says nothing is.
+
+The ages are the deploy user's gc: in its config.yaml.
+
+Options:
+  --dry-run   list only, ask nothing
+  --yes       remove without listing or asking first
+
+Examples:
+  devopsy @vm1 --gc --dry-run
+  devopsy @vm1 --gc
+`,
 	"--server-setup": `Usage: devopsy @<server> --server-setup [--yes]
 
 Sets up the server for devopsy, as its deploy user, the server named with

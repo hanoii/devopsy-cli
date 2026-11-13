@@ -226,7 +226,7 @@ func TestServerInfoReport(t *testing.T) {
 		// apparmor_parser to load its profile (review).
 		{"no apparmor_parser", func(i *remote.ServerInfo) { i.AppArmorParser = false }, "", "no apparmor_parser: Docker cannot load its profile, so containers fail to start|install the apparmor package"},
 		{"unbounded logs", func(i *remote.ServerInfo) { i.Docker.LogOpts = nil }, "", "grow without a limit|max-size"},
-		{"full disk", func(i *remote.ServerInfo) { i.Disks[0].Free, i.Disks[0].Used = 4e9, 76e9 }, "", "/ is 95% full, 4.0 GB free|devopsy @vm1: --shell-host"},
+		{"full disk", func(i *remote.ServerInfo) { i.Disks[0].Free, i.Disks[0].Used = 4e9, 76e9 }, "", "/ is 95% full, 4.0 GB free|devopsy @vm1: --gc"},
 		{"little free", func(i *remote.ServerInfo) { i.Disks[0].Size, i.Disks[0].Free, i.Disks[0].Used = 9e9, 4.5e9, 4.5e9 }, "", "is 50% full, 4.5 GB free|"},
 		{"no reflinks", func(i *remote.ServerInfo) { i.Disks[0].Type, i.Disks[0].Reflinks = "ext4", "no" }, "", "(ext4) makes no reflinks|mirror: true} for the environments with large data, in their project's .devopsy/config.yaml"},
 		// The server's mirror: false refuses every project's (review).
@@ -453,7 +453,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.Disks[0].Free, info.Disks[0].Used = 4e9, 76e9
 	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
 	_, warnings = serverInfoSays(info, "", "", "0.54.0", now)
-	if len(warnings) != 2 || !strings.HasPrefix(fixText(warnings[0].fixes), "see what Docker takes, then empty its build cache:\n$ docker system df\n$ docker builder prune\n") ||
+	if len(warnings) != 2 || !strings.HasPrefix(fixText(warnings[0].fixes), "see what Docker takes, then remove what nothing on this server owns with --gc, run on it from a checkout or an alias:\n$ docker system df\n") ||
 		strings.Contains(fixText(warnings[0].fixes), "--shell-host") ||
 		fixText(warnings[1].fixes) != "\n$ cd /home/devopsy/shop/dev/current && devopsy --status\n" {
 		t.Errorf("local: %+v", warnings)

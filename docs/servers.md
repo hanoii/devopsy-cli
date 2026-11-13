@@ -39,7 +39,7 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--server-setup`, `--environments`, `--vars-project` and `--upgrade` (`--environments` and
+`--server-setup`, `--gc`, `--environments`, `--vars-project` and `--upgrade` (`--environments` and
 `--vars-project` with the checkout's project, or an alias's).
 
 They take `@<server>` alone, or any target, whose server they use, with
@@ -55,6 +55,7 @@ devopsy @prod --ssh-keys         # prod's server's, in the project
 devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 devopsy @vm1 --server-info       # what the server is, and what needs attention
 devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
+devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
 ```
 
 ## `--server-setup`
@@ -253,7 +254,8 @@ setup's items) comes once, after the last of them:
   the line says the reboot does it, and is no warning: nothing is lost by
   waiting, and the reboot's own line is the one that needs attention.
   Either way `--server-setup` is offered to restart Docker sooner;
-- a disk 90% full, or with less than 5 GB free;
+- a disk 90% full, or with less than 5 GB free, Docker's with
+  [`--gc`](#--gc) as its fix;
 - no reflinks;
 - a snapshot root on the same filesystem as the release root, which
   usually means the backup volume is not mounted;
@@ -294,6 +296,59 @@ It exits 3 when it warned, so CI can run it as a check: on a server never
 set up by `--server-setup`, it always does. `--json` prints the facts and
 the same lines as JSON on stdout, each with its fixes and hints
 (`remedies`), for scripts and agents.
+
+## `--gc`
+
+A release prunes what it owns and `--destroy` what its environment owns.
+`devopsy @vm1 --gc` removes, as the server's deploy user, what falls
+between and would otherwise stay: only what a record of devopsy's or
+Docker's own rule says can go, never something because its owner looks
+gone. In this order:
+
+- one-off containers (`compose run` and the like) that exited more than
+  a day ago, of an environment of the deploy user's or one under a
+  project user's names. Their volumes stay: a database's `compose run`
+  keeps its data in an anonymous volume. One only created, never
+  started, stays too;
+- build cache not used for 30 days, on the server's Docker and on each
+  project user's builder, as `docker buildx prune -a --filter until=`
+  decides it. A project user's builder that is not running keeps its
+  cache;
+- release snapshots whose release is gone, as `--snapshots remove`
+  prunes them, for every environment of the deploy user's. An
+  environment whose snapshots are in use (a snapshot taken, a restore, a
+  removal) is skipped: whatever holds them prunes them;
+- the names each project's record of names left holds that can go now,
+  as a release's pruning retries them (`--releases` lists the record),
+  then the dangling images no container uses (`docker image prune`,
+  never `-a`).
+
+It never removes a tagged image no release holds, a volume, a release, an
+environment, a project user's snapshots, the containers of a service, or
+anything of a release root that is not mounted, which lists nothing.
+[`--server-info`](#--server-info) shows what is left to look at, and the
+last line says so.
+
+It first lists what it would remove with sizes, in a session that changes
+nothing, then asks. A second session removes, finding everything again
+and deciding each removal again as it goes, so a run cut off leaves only
+less to remove. `--yes` removes without listing or asking; without a
+terminal and without `--yes` it removes nothing. `--dry-run` lists only
+and asks nothing.
+
+The ages are the deploy user's `gc:` in its `config.yaml`
+([config](config.md)): `containers` (a day) and `build_cache` (30
+days).
+
+It exits 3 when something is left to remove: with `--dry-run`, anything
+it lists; otherwise what it skipped, could not remove or could not read.
+0 says nothing is, so a timer or a monitor can run it.
+
+```sh
+devopsy @vm1 --gc --dry-run   # what it would remove, with sizes
+devopsy @vm1 --gc             # the same, asked, then removed
+devopsy @vm1 --gc --yes       # removed without asking
+```
 
 ## uids
 

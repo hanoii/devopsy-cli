@@ -91,6 +91,17 @@ func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
 		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
 }
 
+// projectImages is a Set of the project at dir's record of names left (images.LeftFile) alone,
+// none for an empty dir: no environment's, so it reads nothing of a release, which its retry
+// (Set.Retry) and the dangling prune need none of. For --gc, over every project.
+func projectImages(dir string, out io.Writer) *images.Set {
+	left := ""
+	if dir != "" {
+		left = filepath.Join(dir, images.LeftFile)
+	}
+	return &images.Set{Docker: images.CLI{}, Left: left, Out: out}
+}
+
 // copiedServices are the services a copy of rel writes (images.Set.Copied),
 // or with all a take: by the labels and what is there, as syncData and a
 // take go, the links in a bind source resolved as they do.

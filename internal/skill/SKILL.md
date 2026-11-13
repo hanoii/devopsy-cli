@@ -266,6 +266,13 @@ what `config.yaml` sets.
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
   and `--server-info` warns of what is not devopsy's.
+- What a server keeps that nothing of devopsy removes (old exited one-off
+  containers, unused build cache, release snapshots of releases gone,
+  names a project's record left, dangling images) goes with
+  `devopsy @<server> --gc`, as the deploy user: `--dry-run` lists it
+  with sizes and asks nothing, `--yes` removes without asking; exit 3
+  when something is left to remove. It never removes tagged images,
+  volumes or releases: `--server-info` shows what is left.
 - What devopsy checks on a server and does not set up (Docker, the tools,
   `/proc`'s `hidepid`, what project users need, the kernel's command line,
   the data on XFS)

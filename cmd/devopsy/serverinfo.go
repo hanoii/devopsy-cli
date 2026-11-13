@@ -1516,10 +1516,12 @@ func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
 		return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
 	}
 	if has("docker") || has("containerd") {
+		// --gc, the one removal of what nothing on the server owns (old build cache, one-offs,
+		// dangling images), needs an address: on the server itself, it is words.
 		if ref == "" {
-			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
+			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then remove what nothing on this server owns with --gc, run on it from a checkout or an alias:", "docker system df"))
 		} else {
-			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+			use.fixes = append(use.fixes, report.Fix("remove what nothing on the server owns, listed first with its sizes:", "devopsy @"+ref+" --gc"))
 		}
 	}
 	if has("snapshots") || (has("releases") && snapshotRoot == "") {

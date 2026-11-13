@@ -51,3 +51,5 @@ History, not rules: `internals/snapshots.md` wins where they differ.
 - What `startLeftDown` could not start stays in the record (decided 2026-11-04): it only warned, then `release-record done` and `snapshotRestored` removed the lines anyway, so with a run step that does not up every service nothing ever started those services. Found by cutting every docker call of an activation (`TestActivationCuts`). A restore's failure past its switch takes the containers down too, so a run step that does not up every service left those absent after the restore run again, which `compose start` cannot start: `startLeftDown` brings them up.
 
 - Errors in pruning (2026-11-12): `pruneGone` took any stat error of a release for the release gone, and an unreadable restore mark read as none, so its snapshot, the one a restore that did not complete runs again from, went. Both now keep the snapshots on an error.
+
+- `--gc` (2026-11-12): release snapshots of an environment that never takes another stayed, since only a holder of its snapshot lock prunes; `--gc` holds each environment's lock in turn when free and prunes through the same `pruneGone`.

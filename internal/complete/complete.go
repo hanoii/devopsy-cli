@@ -352,6 +352,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return flags([]Candidate{jsonCandidate, help})
 	case "--server-setup":
 		return flags([]Candidate{{"--yes", "keep what someone changed, restart Docker only with no container running", GroupDevopsy}, help})
+	case "--gc":
+		return flags([]Candidate{{"--dry-run", "list what it would remove, ask nothing", GroupDevopsy}, {"--yes", "remove without asking", GroupDevopsy}, help})
 	case "--ssh-keys":
 		switch {
 		case len(words) == 2:

@@ -104,7 +104,7 @@
 - The environment's `snapshots: manual: {keep}` (3) is sent by the operator (`DEVOPSY_INTERNAL_SNAPSHOT_KEEP`, and its `mirror:` as `DEVOPSY_INTERNAL_SNAPSHOT_MIRROR`), at most the server's `snapshots: max_keep` (5).
 - Pruning runs after each tar, under the snapshot lock, the image lock taken only when free (else the next take prunes).
 - `--snapshots remove` waits for the image lock, and refuses the snapshot a restore's mark names.
-- A changed `snapshots: root` leaves the old snapshots unseen, accepted: finding them would need a sweep of Docker's bookmarks, which removals never do.
+- A changed `snapshots: root` leaves the old snapshots unseen, accepted: finding them would need a sweep of Docker's bookmarks, which no removal does, `--gc` included, which goes by each environment's snapshots where the settings put them.
 - `--destroy` removes every snapshot, bookmarks first, the mirror as root, the snapshot root's directory too, and says how many.
 
 ## Release snapshots
@@ -121,7 +121,7 @@
 - Inside `fetch_release`, before its disarm, so that a session gone or a signal still cancels: the mirror's first pass beside the fetch (a background job, waited for), then `release-stopped`, which leaves the set stopped for the run step's `up` to start under the new code and names it in the new release's `devopsy-snapshot-stopped`, then `release-tar` detached (`setsid`, `nice`, its output to the release's server log, fd 6 alone kept).
 - `release-tar` makes the mirror's tars and, once the activation's pid is gone, prunes both kinds and every release snapshot whose release is gone (`pruneGone`, which `--snapshots remove` runs too), waiting up to 10 minutes for the image lock the activation held; it keeps the snapshot lock to its end, so a take or a removal meanwhile waits.
 - Every release snapshot counts towards `keep`, and a release tried again keeps its own: the one before a failed run step holds the only copy of the data from before it.
-- Only a holder of the snapshot lock prunes: a release removed by anything else (pruning, `--releases remove`, release snapshots since turned off) leaves its snapshot to the next take or removal, since an activation calling a snapshot step would make every release need a server with snapshots.
+- Only a holder of the snapshot lock prunes: a release removed by anything else (pruning, `--releases remove`, release snapshots since turned off) leaves its snapshot to the next take, removal or `--gc` (which takes each environment's lock only when free, `trySnapshotLock`, and prunes as `--snapshots remove` does, `pruneGone`), since an activation calling a snapshot step would make every release need a server with snapshots.
 - At the switch `release-record live` turns the `snapshot` lines into the release's `stop` lines, kept down by a mark and by a settle inside its own activation (`HeldStopsEnv`; any other settle starts them as leftovers, internals/syncs.md).
 - Once something started them, the run step or the restart of the release before, `release-record done` removes those lines, first starting what of them the run step left exited (`startLeftDown`, said, since a run step need not `up` every service), one whose container another image than the release's holds made again (`images.Recreate`, as `restoreServices` does).
 - What `startLeftDown` could not start stays in the record, past a release snapshot and past a restore, for whatever takes the lock next: the warning alone leaves it down for good.
