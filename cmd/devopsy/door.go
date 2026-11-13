@@ -1642,34 +1642,49 @@ func (s *doorSide) downProject(name string, flags []string) int {
 	return doorRefused(err)
 }
 
-// checkedDown is a down of this project's compose name by that name alone, checked: the name
-// the project's own (OwnName), its flags a down's, no container under it the door did not
-// make (foreign), the caller still asking; its command line (docker first) and environment,
-// for a run from /, which holds no compose file of anyone's: compose looks for one in its
-// directory and every parent, and a down by name runs with none. One check for the request
-// and for a --destroy's free.
-func (s *doorSide) checkedDown(name string, flags []string) ([]string, []string, error) {
-	if !s.policy.OwnName(name) {
-		return nil, nil, errors.New("refused: not this project's name: " + name)
-	}
-	argv := append([]string{"down"}, flags...)
-	if err := s.policy.CheckVerb(argv); err != nil {
-		return nil, nil, err
-	}
-	if err := s.foreign(); err != nil {
-		return nil, nil, err
-	}
-	env, err := s.composeEnv("", false)
+// checkedDown is a down of this project's compose name by that name alone, checked in
+// checkedProjectDown's order, its flags a down's, the caller still asking; its command line
+// (docker first) and environment, for a run from /, which holds no compose file of anyone's:
+// compose looks for one in its directory and every parent, and a down by name runs with none.
+// One check for the request and for a --destroy's free.
+func (s *doorSide) checkedDown(name string, flags []string) (argv, env []string, err error) {
+	down := append([]string{"down"}, flags...)
+	err = checkedProjectDown(s.policy, s.docker, name, func() error { return s.policy.CheckVerb(down) }, func() error {
+		if env, err = s.composeEnv("", false); err != nil {
+			return err
+		}
+		if err := os.Chdir("/"); err != nil {
+			return err
+		}
+		if err := s.stillAsked(); err != nil {
+			return fmt.Errorf("refused: %w", err)
+		}
+		argv = append([]string{"docker", "compose", "-p", name}, down...)
+		return nil
+	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, refusal(err)
 	}
-	if err := os.Chdir("/"); err != nil {
-		return nil, nil, err
+	return argv, env, nil
+}
+
+// checkedProjectDown is a down of a project user's compose name by that name alone, the door's
+// (checkedDown) and a destroy's (userDestroy.down), its checks in their one order: the name the
+// project's (Policy.OwnName), what its caller checks or clears next (the door's flags, the
+// destroy's removeLeft of devopsy's own containers of the name, which a cut sync or import
+// leaves writing into its mnt), no container under the project's names the door did not make
+// (foreignUnder, read through docker), then down.
+func checkedProjectDown(p door.Policy, docker func(args ...string) *exec.Cmd, name string, next, down func() error) error {
+	if !p.OwnName(name) {
+		return errors.New("refused: not this project's name: " + name)
 	}
-	if err := s.stillAsked(); err != nil {
-		return nil, nil, fmt.Errorf("refused: %w", err)
+	if err := next(); err != nil {
+		return err
 	}
-	return append([]string{"docker", "compose", "-p", name}, argv...), env, nil
+	if err := foreignUnder(p, docker); err != nil {
+		return err
+	}
+	return down()
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a
@@ -2139,16 +2154,34 @@ func containerLabels(c *exec.Cmd) (map[string]map[string]string, error) {
 }
 
 // foreign refuses while a container the door did not make for this user is under the
-// project's names (door.Policy.Foreign).
-func (s *doorSide) foreign() error {
-	all, err := containerLabels(s.docker(containerRows...))
+// project's names (foreignUnder).
+func (s *doorSide) foreign() error { return refusal(foreignUnder(s.policy, s.docker)) }
+
+// foreignUnder refuses while containers the door did not make are under p's project's names
+// (door.Policy.Foreign), every container read through docker, naming them (foreignError): what
+// the deploy user runs there stays out of the door's reach, for the door, add and a destroy.
+// A read that fails is an error.
+func foreignUnder(p door.Policy, docker func(args ...string) *exec.Cmd) error {
+	all, err := containerLabels(docker(containerRows...))
 	if err != nil {
-		return fmt.Errorf("refused: %v", err)
+		return err
 	}
-	if ids := s.policy.Foreign(all); len(ids) > 0 {
-		return foreignError(s.policy.Project, ids, all)
+	if ids := p.Foreign(all); len(ids) > 0 {
+		return foreignError(p.Project, ids, all)
 	}
 	return nil
+}
+
+// dockerCommand is a docker command as the deploy user runs it, for a check that reads Docker
+// (foreignUnder) outside the door.
+func dockerCommand(args ...string) *exec.Cmd { return exec.Command("docker", args...) }
+
+// refusal is err as the door says it, "refused: " first, a refusal's own words kept.
+func refusal(err error) error {
+	if err == nil || strings.HasPrefix(err.Error(), "refused: ") {
+		return err
+	}
+	return fmt.Errorf("refused: %w", err)
 }
 
 // foreignError names what holds a project's names outside the door, and how it goes.

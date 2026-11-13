@@ -570,36 +570,27 @@ func (x *userDestroy) names(*destroyMark) error {
 	return nil
 }
 
-// down takes the project's compose name down, with checkedDown's checks in its order: the name
-// the project's, devopsy's own containers of it gone (a sync or an import the end cut leaves a
-// root rsync writing into the mnt), none the door did not make under the project's names
-// (door.Policy.Foreign); then compose's down --volumes by name, and the name's mnt in the
+// down takes the project's compose name down, its name checked first naming whose it is
+// (ownName), then as the door's down is (checkedProjectDown), devopsy's own containers of it
+// removed first (removeLeft): compose's down --volumes by name, and the name's mnt in the
 // door's space emptied as root and removed.
 func (x *userDestroy) down(name string) error {
 	if err := x.ownName(name); err != nil {
 		return err
 	}
-	if err := removeLeft(name, ""); err != nil {
-		return err
-	}
-	all, err := containerLabels(exec.Command("docker", containerRows...))
-	if err != nil {
-		return err
-	}
-	if ids := x.policy.Foreign(all); len(ids) > 0 {
-		return foreignError(x.project, ids, all)
-	}
-	if err := downByName(realDocker())(name); err != nil {
-		return fmt.Errorf("taking %s down: %w", name, err)
-	}
-	mnt := x.policy.Mnt(name)
-	if _, err := os.Lstat(mnt); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err := emptyAsRoot(context.Background(), mnt, mnt, newContainer("destroy", name, strconv.Itoa(os.Getpid()), remote.TaskDestroy)); err != nil {
-		return err
-	}
-	return os.Remove(mnt)
+	return checkedProjectDown(x.policy, dockerCommand, name, func() error { return removeLeft(name, "") }, func() error {
+		if err := downByName(realDocker())(name); err != nil {
+			return fmt.Errorf("taking %s down: %w", name, err)
+		}
+		mnt := x.policy.Mnt(name)
+		if _, err := os.Lstat(mnt); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err := emptyAsRoot(context.Background(), mnt, mnt, newContainer("destroy", name, strconv.Itoa(os.Getpid()), remote.TaskDestroy)); err != nil {
+			return err
+		}
+		return os.Remove(mnt)
+	})
 }
 
 // projectClaims frees the project's claims with no environment claim left (Env ""), each under

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"slices"
@@ -332,15 +331,10 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 			report.Fix("a project gone from the release root ("+r.Root+") holds its name while its directory stays, its .env kept by --destroy: removed with its last environment's --destroy --purge"))
 		return 1
 	}
-	// What runs under the project's names stays out of the door's reach (door.Policy.Foreign),
-	// so a project the deploy user runs moves only once it is down.
-	all, err := containerLabels(exec.Command("docker", containerRows...))
-	if err != nil {
+	// What runs under the project's names stays out of the door's reach (foreignUnder), so a
+	// project the deploy user runs moves only once it is down.
+	if err := foreignUnder(door.Policy{Project: project, User: who, Others: projects}, dockerCommand); err != nil {
 		return failErr(err)
-	}
-	if ids := (door.Policy{Project: project, User: who, Others: projects}).Foreign(all); len(ids) > 0 {
-		report.Fail(foreignError(project, ids, all))
-		return 1
 	}
 	me, err := user.Current()
 	if err != nil {
