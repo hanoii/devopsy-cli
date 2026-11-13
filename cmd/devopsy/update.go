@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +27,7 @@ func runUpgrade(args []string, color bool) int {
 		return fail("usage: devopsy --upgrade [vX.Y.Z]")
 	}
 	if !update.IsRelease(version) {
-		return fail(fmt.Sprintf("devopsy %s is a development build: update its checkout instead", version))
+		return fail(developmentBuild())
 	}
 	exe, err := os.Executable()
 	if err == nil {
@@ -81,6 +82,55 @@ func runUpgrade(args []string, color bool) int {
 		report.Info(fmt.Sprintf("devopsy changed from %s to %s (%s)", version, v, exe))
 	}
 	return serverApply(exe)
+}
+
+// developmentBuild is why a development build replaces nothing: --upgrade and
+// --match-server-version.
+func developmentBuild() string {
+	return fmt.Sprintf("devopsy %s is a development build: update its checkout instead", version)
+}
+
+// runMatchServerVersion implements devopsy @<server> --match-server-version: the server's
+// devopsy --version in one session, then --upgrade to that release, older or newer, or
+// nothing when it is this one's.
+func runMatchServerVersion(t *remote.Target, args []string, color bool) int {
+	if len(args) > 0 {
+		return fail("usage: devopsy @<server> --match-server-version")
+	}
+	if !update.IsRelease(version) {
+		return fail(developmentBuild())
+	}
+	var out bytes.Buffer
+	code, err := remote.SSH(t, remote.VersionScript(), bytes.NewReader(nil), &out, false)
+	if err != nil {
+		return failErr(err)
+	}
+	if code != 0 {
+		return code
+	}
+	v, err := serverRelease(out.String())
+	if err != nil {
+		return fail(err.Error())
+	}
+	if v == version {
+		report.Info("devopsy " + version + " is the server's already")
+		return 0
+	}
+	return runUpgrade([]string{"v" + v}, color)
+}
+
+// serverRelease is the release a server's devopsy --version names on its first line
+// (devopsy 0.69.0), an error for a development build's, which no release matches.
+func serverRelease(out string) (string, error) {
+	line, _, _ := strings.Cut(out, "\n")
+	v, ok := strings.CutPrefix(strings.TrimSpace(line), "devopsy ")
+	switch {
+	case !ok || v == "":
+		return "", errors.New("the server's devopsy answered no version: " + line)
+	case !update.IsRelease(v):
+		return "", errors.New("the server's devopsy " + v + " is a development build, which no release matches")
+	}
+	return v, nil
 }
 
 // serverApply ends an upgrade: on a server devopsy set up, once per version (upgradeApplies),

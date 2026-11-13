@@ -169,7 +169,9 @@ it can, else `~/.local/bin` (`DEVOPSY_VERSION=v0.19.0` and
 `DEVOPSY_INSTALL_DIR` choose). `devopsy --upgrade [vX.Y.Z]` replaces the
 binary, with `sudo` when its directory is not yours. On servers set up
 with devopsy-server the directory is the deploy user's, and `devopsy
-@<server> --upgrade` upgrades a server from your machine.
+@<server> --upgrade` upgrades a server from your machine. `devopsy
+@<server> --match-server-version` makes yours the version the server
+runs, older or newer, for example in CI after installing.
 
 At a terminal, devopsy checks for a new release once a day in the
 background and says when there is one. It does not check in CI or in what

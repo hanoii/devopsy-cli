@@ -195,6 +195,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		}
 		return ssh(remote.UpgradeScript(args[1:]), nil, tty)
 
+	case "--match-server-version":
+		return runMatchServerVersion(t, args[1:], color)
+
 	case "--ssh-config":
 		if len(args) > 1 {
 			return fail("--ssh-config takes no arguments")

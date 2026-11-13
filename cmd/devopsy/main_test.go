@@ -308,7 +308,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	}
 	// Server commands, on a server named alone or not resolvable at all.
 	for _, addr := range []string{"vm1", "vm1:", "pr-1"} {
-		for _, sub := range []string{"--ssh-keys", "--ssh-config", "--environments", "--upgrade"} {
+		for _, sub := range []string{"--ssh-keys", "--ssh-config", "--environments", "--upgrade", "--match-server-version"} {
 			out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@"+addr, sub, "--help")
 			if code != 0 || !strings.Contains(out, "Usage: devopsy @<server> "+sub) {
 				t.Errorf("@%s %s --help (%d):\n%s", addr, sub, code, out)
