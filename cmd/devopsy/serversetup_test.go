@@ -2886,3 +2886,87 @@ func TestRootAskedIsOneTheApplyNames(t *testing.T) {
 		}
 	}
 }
+
+// Review round 2, edge: a root chosen that the second facts session refuses (here no
+// directory; on a server a volume that is root's and holds files) is said as an error with
+// its fix, and the question names what it stops, but planSetup then passes no --root, so the
+// apply judges the home, finds no refusal, applies the home's own steps (the mounts drop-in
+// the operator was told a refusal stops) and exits 0: the run ends as a setup with nothing
+// refused. A run that said a refusal fails, as the area's rule on refusals says.
+func TestRootChosenAndRefusedFailsTheRun(t *testing.T) {
+	t.Parallel()
+	s, _, vol, _ := rootChoice(t)
+	write(t, vol, "", 0o644)
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts", "--root", vol)
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 || len(f.Refused()) == 0 || f.RootNames() {
+		t.Fatalf("the control: facts --root refuse no root (%d, %v): %+v\n%s", code, err, f, out)
+	}
+	// The operator's side, as runServerSetup goes on: the question, then the apply it runs.
+	args, run, err := planSetup(f, false, &scripted{confirms: []bool{true, false}})
+	if err != nil || !run {
+		t.Fatalf("the control: no apply (%v, %v)", run, err)
+	}
+	var said []string
+	for _, r := range f.AllRefusals() {
+		said = append(said, r.ID())
+	}
+	if out, code := s.run(nil, append([]string{remote.ServerSetupFlag, "apply", "--said=" + strings.Join(said, ",")}, args...)...); code == 0 {
+		t.Errorf("the root chosen was refused, and the run ends 0 (apply %q):\n%s", args, out)
+	}
+}
+
+// Review round 2, edge: the volume hint decides by itself whether --server-setup asks (no
+// root named, a config that takes the line) instead of by setup.Facts.AsksRoot, so with no
+// step going (Docker refused) it says --server-setup without --yes asks which volume holds
+// releases, in --server-setup's own output and --server-info's, while that run asks nothing.
+// The hint says the question only where it is asked.
+func TestVolumeHintSaysTheQuestionOnlyWhereAsked(t *testing.T) {
+	t.Parallel()
+	f := setup.Facts{Root: "/home/devopsy", ConfigFile: "/home/devopsy/.config/devopsy/config.yaml",
+		Candidates: []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs"}},
+		Refusals:   []setup.Refusal{{Item: setup.RefusalDocker}}}
+	if !f.Hint() || f.AsksRoot() {
+		t.Fatalf("the control: hint %v, asks %v", f.Hint(), f.AsksRoot())
+	}
+	if says := slices.ContainsFunc(volumeHint(f), func(l string) bool { return strings.Contains(l, "--server-setup without --yes asks") }); says {
+		t.Errorf("--server-setup asks nothing here, and the hint says it asks:\n%s", strings.Join(volumeHint(f), "\n"))
+	}
+}
+
+// Review round 2, edge: whether the config takes the line is judged on its text alone, so a
+// config the deploy user cannot write (a link to a file in a directory that is not its own,
+// as a config kept by the admin elsewhere) is asked about, and the apply then fails at the
+// write, whatever the answer, the home included, with nothing else applied: only --yes or
+// an edit by hand gets such a server set up. What the facts ask about, the apply names (or
+// the facts do not ask).
+func TestRootAskedOfAConfigTheApplyCanWrite(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	s, _, vol, config := rootChoice(t)
+	kept := filepath.Join(filepath.Dir(vol), "kept")
+	write(t, filepath.Join(kept, "config.yaml"), "snapshots:\n  mirror: false\n", 0o644)
+	if err := os.Remove(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(kept, "config.yaml"), config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(kept, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(kept, 0o755) })
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 {
+		t.Fatalf("facts (%d, %v):\n%s", code, err, out)
+	}
+	if !f.AsksRoot() {
+		return
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 0 {
+		t.Errorf("asked, and the apply names no root (%d):\n%s", code, out)
+	}
+}
