@@ -393,6 +393,16 @@ func TestUserTargets(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "devopsy: error: --rollback needs a target\ndevopsy: | targets: main, vm1-traefik\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @<target> --rollback\n") {
 		t.Errorf("--rollback without a target (%d):\n%s", code, out)
 	}
+	// One that needs only a server asks for a server; in a session on a server, by its
+	// address, to run locally.
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--server-setup")
+	if code == 0 || !strings.Contains(out, "devopsy: error: --server-setup needs a server\ndevopsy: | targets: main, vm1-traefik\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @<server> --server-setup\n") {
+		t.Errorf("--server-setup without a server (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), append(withHome, remote.ServerEnv+"=devopsy@vm1:"), "--server-setup")
+	if code == 0 || !strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | run it locally, by this server's address:\ndevopsy: | $ devopsy @devopsy@vm1: --server-setup\n") {
+		t.Errorf("--server-setup without a server, in a session on one (%d):\n%s", code, out)
+	}
 	// --release without one runs in place, from defaults:, which this
 	// project has none of.
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--release")
@@ -1597,7 +1607,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if out, code := run("", "@prod", "--ssh-keys", "generate"); code == 0 || !strings.Contains(out, "--ssh-keys-generate") {
 		t.Errorf("generate with a target (%d):\n%s", code, out)
 	}
-	if out, code := run("", "--ssh-keys"); code == 0 || !strings.Contains(out, "needs a target") {
+	if out, code := run("", "--ssh-keys"); code == 0 || !strings.Contains(out, "--ssh-keys needs a server") {
 		t.Errorf("list without a target (%d):\n%s", code, out)
 	}
 	// A refusal the server's script said is the one error, its exit the command's: a listing

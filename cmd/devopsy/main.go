@@ -295,7 +295,9 @@ func run() int {
 		return runImport(cwd, args[1:], color)
 	}
 
-	// devopsy's flags for servers, used without a target.
+	// devopsy's flags for servers, used without a target. One that needs only a server
+	// (cli.ServerScope) asks for one; in a session on a server, its address, run locally:
+	// it runs over SSH, never on the machine it is typed on.
 	if slices.Contains(cli.RemoteOnly, args[0]) {
 		var names []string
 		projectDir, _ := cli.FindProjectDir(cwd)
@@ -306,7 +308,14 @@ func run() int {
 		if len(names) > 0 {
 			details = append(details, "targets: "+strings.Join(names, ", "))
 		}
-		return failErr(&report.Failure{Msg: args[0] + " needs a target", Details: details, Remedies: []report.Remedy{report.Fix("", "devopsy @<target> "+args[0])}})
+		need, fix := "a target", report.Fix("", "devopsy @<target> "+args[0])
+		if slices.Contains(cli.ServerScope, args[0]) {
+			need, fix = "a server", report.Fix("", "devopsy @<server> "+args[0])
+			if server := sessionServer(); server != "" {
+				fix = report.Fix("run it locally, by this server's address:", "devopsy @"+server+" "+args[0])
+			}
+		}
+		return failErr(&report.Failure{Msg: args[0] + " needs " + need, Details: details, Remedies: []report.Remedy{fix}})
 	}
 
 	plan, err := cli.Build(cwd, args, os.Environ())
