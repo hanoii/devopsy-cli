@@ -455,7 +455,7 @@ func rootCandidates(h setupHost, hd hostDocker, root string) []setup.Candidate {
 	var cs []setup.Candidate
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
 	for _, c := range setup.Candidates(string(mountinfo), h.path("/sys"), hd.facts.RootDir) {
-		if setup.OnCandidate(root, []setup.Candidate{c}) {
+		if setup.OnCandidate(root, c) {
 			continue
 		}
 		if _, size, free, _, err := statDisk(c.MountPoint); err == nil {

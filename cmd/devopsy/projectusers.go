@@ -359,7 +359,12 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	tree, root := projectTree(r.Root, me.HomeDir, project)
+	// With releases: root elsewhere than the deploy user's home (a block volume, say), the
+	// project's tree is there too, which only root may make the project user's.
+	tree, root := "", ""
+	if r.Root != me.HomeDir {
+		tree, root = filepath.Join(r.Root, project), r.Root
+	}
 	if err := remote.DoorDevopsyPath(devopsyPath()); err != nil {
 		return failErr(err)
 	}
@@ -703,15 +708,4 @@ func endRemoval(d *remote.Door, project, who string, end func(who string) error)
 		}
 	}
 	return nil
-}
-
-// projectTree is where a project user's tree goes, made by root, and the release root it is
-// in: with releases: root elsewhere than the deploy user's home (a block volume, say), the
-// project's tree is there too, which only root may make the project user's; none (both "")
-// for the home, by their one form (resolveRoot), as --server-setup names the home it offers.
-func projectTree(releaseRoot, home, project string) (tree, root string) {
-	if resolveRoot(releaseRoot) == resolveRoot(home) {
-		return "", ""
-	}
-	return filepath.Join(releaseRoot, project), releaseRoot
 }

@@ -92,7 +92,7 @@ a line it cannot read
 	if got := Candidates("22 1 0:31 / / rw - btrfs /dev/sda1 rw\n30 22 8:16 / /srv rw - xfs /dev/sdb rw\n", t.TempDir(), ""); len(got) != 1 {
 		t.Errorf("no sysfs: %+v", got)
 	}
-	if !OnCandidate("/srv/releases", want) || !OnCandidate("/srv", want) || OnCandidate("/srvx", want) || OnCandidate("/home/deploy", want) {
+	if !OnCandidate("/srv/releases", want[0]) || !OnCandidate("/srv", want[0]) || OnCandidate("/srvx", want[0]) || OnCandidate("/home/deploy", want[0]) {
 		t.Error("OnCandidate")
 	}
 }

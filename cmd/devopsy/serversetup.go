@@ -271,11 +271,8 @@ func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
 }
 
 // choose says the question with its detail and the choices numbered, and asks for one, Enter
-// the first; an answer that names none is asked again.
+// the first; an answer that names none is asked again. Its caller asks only at a terminal.
 func (a terminalAsker) choose(question string, details, choices []string) (int, error) {
-	if !atTerminal() {
-		return 0, a.noTerminal()
-	}
 	lines := slices.Clone(details)
 	for i, c := range choices {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, c))

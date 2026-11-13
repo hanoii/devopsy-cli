@@ -66,15 +66,8 @@ func Candidates(mountinfo, sysfs, dockerRoot string) []Candidate {
 	return out
 }
 
-// OnCandidate reports whether path (links resolved) is on one of cs.
-func OnCandidate(path string, cs []Candidate) bool {
-	for _, c := range cs {
-		if under(path, c.MountPoint) {
-			return true
-		}
-	}
-	return false
-}
+// OnCandidate reports whether path (links resolved) is on c.
+func OnCandidate(path string, c Candidate) bool { return under(path, c.MountPoint) }
 
 // MountOf is the mount in mountinfo (/proc/self/mountinfo's text) that path is on, its mount
 // point and filesystem: the longest mount point holding it, "" for none.
