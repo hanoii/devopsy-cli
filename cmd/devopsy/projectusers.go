@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -10,8 +11,10 @@ import (
 	"os/user"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
@@ -295,8 +298,22 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if len(closed) > 0 {
 		report.Info("closed to project users the deploy user's projects in " + r.Root + ": " + strings.Join(closed, ", "))
 	}
+	// An id given once (takeProjectID), and only to a user the host step makes: one there is
+	// taken as it is.
+	id := ""
+	if _, err := user.Lookup(who); errors.As(err, new(user.UnknownUserError)) {
+		h := setupHost{root: os.Getenv(remote.HostRootEnv)}
+		n, err := takeProjectID(projectIDsGiven(), h.path("/etc/passwd"), h.path("/etc/group"))
+		if err != nil {
+			report.Fail(fmt.Errorf("%w: no project user made", err))
+			return 1
+		}
+		id = strconv.Itoa(n)
+	} else if err != nil {
+		return failErr(err)
+	}
 	var out bytes.Buffer
-	if err := addUserRun(me.Username, devopsyPath(), who, tree, root).run(&out, func(err error) error {
+	if err := addUserRun(me.Username, devopsyPath(), who, tree, root, id).run(&out, func(err error) error {
 		return errors.New("making " + who + " failed: " + err.Error())
 	}); err != nil {
 		return fail(err.Error())
@@ -321,6 +338,66 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	}
 	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts))
 	return 0
+}
+
+// projectIDsGiven is the deploy user's record of the highest id --project-users add gave a
+// project user, in DoorDir.
+func projectIDsGiven() string { return filepath.Join(remote.DoorDir(), "uids-given") }
+
+// takeProjectID is the id the next project user and its group take, one number: past both the
+// highest the record gives and the highest of the project users' range (door.ProjectIDMin to
+// ProjectIDMax) that passwd and group hold, recorded before anything makes the user, under the
+// record's lock, its wait said and bounded. An id is never given twice: a project added after
+// another's removal would own what the removed user left on the host under its uid (a file
+// outside its tree, a snapshot root of its own). It refuses once the range is spent.
+func takeProjectID(record, passwd, group string) (int, error) {
+	if err := os.MkdirAll(filepath.Dir(record), 0o700); err != nil {
+		return 0, err
+	}
+	lock, err := os.OpenFile(record+".lock", os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	if err := (boundedWait{what: "another --project-users add", bound: time.Minute}).wait(context.Background(), report.Default(), func() (bool, error) {
+		return tryFlock(lock, syscall.LOCK_EX)
+	}); err != nil {
+		return 0, err
+	}
+	highest := door.ProjectIDMin - 1
+	data, err := os.ReadFile(record)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	if s := strings.TrimSpace(string(data)); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return 0, fmt.Errorf("%s, the ids given to project users, does not read: %q", record, s)
+		}
+		highest = max(highest, n)
+	}
+	for _, f := range []string{passwd, group} {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return 0, err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if fields := strings.Split(line, ":"); len(fields) >= 3 {
+				if n, err := strconv.Atoi(fields[2]); err == nil && n >= door.ProjectIDMin && n <= door.ProjectIDMax {
+					highest = max(highest, n)
+				}
+			}
+		}
+	}
+	next := highest + 1
+	if next > door.ProjectIDMax {
+		return 0, fmt.Errorf("every id of the project users' range, %d to %d, was given once already", door.ProjectIDMin, door.ProjectIDMax)
+	}
+	tmp := record + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(next)+"\n"), 0o600); err != nil {
+		return 0, err
+	}
+	return next, os.Rename(tmp, record)
 }
 
 // projectDir says whether a directory named name in a release root is a project's: none

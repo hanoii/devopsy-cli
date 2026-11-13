@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -569,5 +570,38 @@ func TestProjectUsersListSaysKeyless(t *testing.T) {
 		"devopsy: | removing shop's project user with --project-users remove and --destroy removes them with it; a key added for it (--ssh-keys) takes it back\n") ||
 		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") {
 		t.Errorf("list (%d):\n%s", code, out)
+	}
+}
+
+// A project user's id is given once: the next past both the record's highest and the highest
+// of the range in passwd and group (ids outside it ignored), recorded before the user is
+// made, so an add after a removal never takes the removed user's uid, which its files left on
+// the host still carry; once the range is spent, add refuses.
+func TestTakeProjectID(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	record, passwd, group := filepath.Join(dir, "door", "uids-given"), filepath.Join(dir, "passwd"), filepath.Join(dir, "group")
+	write(t, passwd, "root:x:0:0::/root:/bin/sh\ndevopsy-shop:x:50000:50000::/home/devopsy-shop:/x\nnobody:x:65534:65534::/:/x\n", 0o644)
+	write(t, group, "devopsy-shop:x:50000:\ndevopsy-blog:x:50003:\n", 0o644)
+	take := func() int {
+		t.Helper()
+		n, err := takeProjectID(record, passwd, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := take(); n != 50004 || strings.TrimSpace(readString(record)) != "50004" {
+		t.Errorf("first id %d, recorded %q", n, readString(record))
+	}
+	// The user removed (its lines gone), its id stays given.
+	write(t, passwd, "root:x:0:0::/root:/bin/sh\n", 0o644)
+	write(t, group, "", 0o644)
+	if n := take(); n != 50005 {
+		t.Errorf("an id after the users went: %d", n)
+	}
+	write(t, record, fmt.Sprintf("%d\n", door.ProjectIDMax), 0o600)
+	if _, err := takeProjectID(record, passwd, group); err == nil || !strings.Contains(err.Error(), "was given once already") {
+		t.Errorf("a range spent: %v", err)
 	}
 }

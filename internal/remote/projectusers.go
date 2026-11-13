@@ -5,7 +5,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -90,10 +89,6 @@ var doorTreeCheck = `if [ -n "$2" ] && { [ -e "$2" ] || [ -L "$2" ]; }; then
   fi
 fi
 `
-
-// projectIDRange is useradd's options for a project user's uid and its group's gid, from
-// door.ProjectIDMin to door.ProjectIDMax.
-var projectIDRange = fmt.Sprintf("-K UID_MIN=%d -K UID_MAX=%d -K GID_MIN=%d -K GID_MAX=%d", door.ProjectIDMin, door.ProjectIDMax, door.ProjectIDMin, door.ProjectIDMax)
 
 // doorUserCheck refuses a Unix user that is there and no project user ($1 the user): one add
 // made is in the group, remove keeping it there, while any other is someone's account (the
@@ -202,13 +197,14 @@ func DoorDevopsyPath(p string) error {
 // DoorHostScript is what --project-users add does as root on the host, through the util
 // image (chroot into /host): the door's pieces when missing or different, each checked before
 // it lands (visudo, sshd -t), then the user, its home and its tree. Its arguments: the user,
-// the deploy user, the tree to make ("" for the home's default), and the release root the
-// project user's own config names ("" for none). The deploy user and root are never in the
+// the tree to make ("" for the home's default), the release root the project user's own
+// config names ("" for none), and the id a user made here takes, uid and gid ("" when the user
+// is there). The deploy user and root are never in the
 // group: sshd would then ignore their own keys. A drop-in written says "reboot" on stdout.
 func DoorHostScript(deploy, devopsy string) string {
 	return `set -eu
 umask 022
-user=$1 tree=$2 root=$3
+user=$1 tree=$2 root=$3 id=$4
 group=` + DoorGroup + `
 ` + hostGroup + `for u in root ` + Quote(deploy) + `; do
   if id -nG "$u" | tr ' ' '\n' | grep -qx "$group"; then
@@ -244,9 +240,16 @@ if put ` + DoorSSHDropIn + ` 644 true ` + Quote(doorDropIn(deploy)) + `; then
 fi
 made=
 if ! id -u "$user" >/dev/null 2>&1; then
-  # Its ids from the project users' range, which no container of the door's runs as: a user
-  # made later never takes the uid of a container already running.
-  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 ` + projectIDRange + ` --create-home --shell ` + DoorShell + ` --groups "$group" "$user"
+  # Its uid and its group's gid one id of the project users' range, which no container of the
+  # door's runs as, given once (the deploy user's record): a user made later never takes the
+  # uid of a container already running, nor of what a removed user left on the host.
+  case $id in
+    '' | *[!0-9]*)
+      ` + echoLine(report.ErrorLevel, "no id given for $user, which a user made here takes") + `
+      exit 3 ;;
+  esac
+  groupadd -g "$id" "$user"
+  useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u "$id" -g "$id" --create-home --shell ` + DoorShell + ` --groups "$group" "$user"
   usermod -p '*' "$user"
   made=1
 fi

@@ -119,7 +119,8 @@ func firewallRun(script string, write bool) hostRun {
 	return hostRun{Write: write, Network: true, PID: true, Cgroup: true, NetAdmin: true, Ptrace: true, Script: script}
 }
 
-// addUserRun is --project-users add's host step (remote.DoorHostScript), with no network.
-func addUserRun(deploy, devopsy, who, tree, root string) hostRun {
-	return hostRun{Write: true, Script: remote.DoorHostScript(deploy, devopsy), Args: []string{who, tree, root}}
+// addUserRun is --project-users add's host step (remote.DoorHostScript), with no network: id
+// is what a user made there takes (takeProjectID), "" when it is there.
+func addUserRun(deploy, devopsy, who, tree, root, id string) hostRun {
+	return hostRun{Write: true, Script: remote.DoorHostScript(deploy, devopsy), Args: []string{who, tree, root, id}}
 }

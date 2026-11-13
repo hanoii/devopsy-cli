@@ -40,8 +40,10 @@ func TestDoorHostScript(t *testing.T) {
 		"AuthorizedKeysCommandUser deploy",
 		"visudo -cqf",
 		"sshd -t",
-		// No subordinate ids, for a user made here or one that was there.
-		"useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -K UID_MIN=50000 -K UID_MAX=59999 -K GID_MIN=50000 -K GID_MAX=59999 ",
+		// No subordinate ids, for a user made here or one that was there; its uid and its
+		// group's gid the one id the deploy user gave it, never one useradd picks.
+		`groupadd -g "$id" "$user"`,
+		`useradd -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u "$id" -g "$id" `,
 		"for f in /etc/subuid /etc/subgid; do",
 		// The door's entrance for a project user, never over a real docker.
 		"ln -sfn '/opt/bin/devopsy' /usr/local/bin/docker",
@@ -61,7 +63,7 @@ func TestDoorHostScript(t *testing.T) {
 	for _, step := range []string{
 		"sshd would ignore its own keys", "is there already, and no project user", "is there already, and not $1's",
 		"is a real docker", "put /etc/sudoers.d/devopsy-projects 440 'visudo -cqf \"$1\"'", "put /usr/local/libexec/devopsy-authorized-keys 755 'sh -n \"$1\"'",
-		"if put /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "useradd ", "sshd -T -C", "/etc/cron.deny",
+		"if put /etc/ssh/sshd_config.d/devopsy.conf 644 true", "if ! sshd -t; then", "put back as it was", "no id given for $user", "groupadd -g", "useradd ", "sshd -T -C", "/etc/cron.deny",
 		`if [ -n "$made" ] && [ -n "$root" ]; then`, `runuser -u "$user" -- sh -c`,
 	} {
 		i := strings.Index(s, step)

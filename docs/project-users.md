@@ -363,9 +363,12 @@ process is there and whose it is, never its command line.
    logs in; `--project-users` says so.
 
 `add` makes `devopsy-shop` with no password, a home closed to others,
-and ids from 50000 to 59999, which no container of the door's runs as,
-so a project user made later never shares a running container's uid.
-The deploy user's own containers stay out of that range too.
+and one id from 50000 to 59999 for its uid and its group, which no
+container of the door's runs as, so a project user made later never
+shares a running container's uid. The deploy user's own containers stay
+out of that range too. An id is never given twice: the deploy user
+records the highest it gave, so a project user added after another's
+removal never owns what that one left on the host.
 When the release root (`releases: root`) is outside the deploy user's
 home, it also makes the project's tree under that root. The project
 user's entry goes in the deploy user's config directory ([Shared
