@@ -275,12 +275,12 @@ what `config.yaml` sets.
   `devopsy @<server> --gc`, as the deploy user: `--dry-run` lists it
   with sizes and asks nothing, `--yes` removes without asking; exit 3
   when something is left to remove; after an answer it removes only
-  what it listed. It never removes tagged images, volumes or releases:
-  `--server-info` shows what may be dead or gone (what `--gc` would
-  free, images no release holds, what an environment removed by hand
-  left, unused anonymous volumes, a cut `--destroy`, a project user with
-  no key that still holds something), each with a command as its hint,
-  none removed and none an exit 3.
+  what it listed. It never removes a tagged image no release holds, a
+  volume or a release: `--server-info` shows what may be dead or gone
+  (what `--gc` would free, images no release holds, what an environment
+  removed by hand left, unused anonymous volumes, a cut `--destroy`, a
+  project user with no key that still holds something), each with a
+  command as its hint, none removed and none an exit 3.
 - What devopsy checks on a server and does not set up (Docker, the tools,
   `/proc`'s `hidepid`, what project users need, the kernel's command line,
   the data on XFS)
