@@ -168,7 +168,7 @@ if [ -n "$procs" ] && [ -n "$polkit" ]; then
   elif [ "$pe" -gt 1 ]; then proc_stop; fi
 fi
 if [ -n "$reload" ] && ! sd daemon-reload >&2; then
-  ` + echoLine(report.ErrorLevel, "systemd could not reload its units, so devopsy started none of its own") + `
+  ` + echoLine(report.ErrorLevel, "systemd could not reload its units, so devopsy started none of its own units") + `
   mount= procs= held= failed=1
 fi
 if [ -n "$mount" ]; then
@@ -191,7 +191,7 @@ if [ -n "$procs" ]; then
     echo ` + DoorSetupHidden + `
     if [ -n "$restart_polkit" ]; then
       if sd try-restart polkit.service >&2; then echo ` + DoorSetupPolkit + `; else
-        ` + echoLine(report.WarnLevel, "systemd did not restart polkit, which sees only its own processes until it restarts", report.Fix("as root:", "systemctl restart polkit.service")) + `
+        ` + echoLine(report.WarnLevel, "systemd did not restart polkit, which sees only its own processes until it restarts", report.Fix("restart it, as root:", "systemctl restart polkit.service")) + `
       fi
     fi
   else

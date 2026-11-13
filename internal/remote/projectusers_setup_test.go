@@ -41,7 +41,7 @@ func TestProjectUsersSetupScript(t *testing.T) {
 	}
 	for name, text := range map[string]string{
 		// systemctl enable says each link it makes, as systemd does, unless --quiet.
-		"systemctl": "#!/bin/sh\nprintf '%s\\n' \"$SYSTEMD_IGNORE_CHROOT systemctl $*\" >>\"$CALLS\"\n[ -z \"${FAKE_SYSTEMCTL_FAILS:-}\" ] || exit 1\n" +
+		"systemctl": "#!/bin/sh\nprintf '%s\\n' \"$SYSTEMD_IGNORE_CHROOT systemctl $*\" >>\"$CALLS\"\n[ -z \"${FAKE_SYSTEMCTL_FAILS:-}\" ] || exit 1\n[ \"${FAKE_SYSTEMCTL_FAILS_ON:-}\" != \"$*\" ] || exit 1\n" +
 			"case \" $* \" in *' --quiet '*) ;; *' enable '*) echo \"Created symlink '/etc/systemd/system/x' -> '/etc/systemd/system/y'.\" >&2 ;; esac\n",
 		"groupadd": "#!/bin/sh\nmkdir -p \"$HOST/etc\"\necho \"$2:x:991:\" >>\"$HOST/etc/group\"\n",
 		"usermod":  "#!/bin/sh\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$HOST/etc/group\" >\"$HOST/etc/group.new\" && mv \"$HOST/etc/group.new\" \"$HOST/etc/group\"\n",
@@ -131,6 +131,20 @@ func TestProjectUsersSetupScript(t *testing.T) {
 	sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin")
 	if got, err := sh.Output(); command == "" || err != nil || strings.TrimSpace(string(got)) != filepath.Base(unit) {
 		t.Errorf("the offered %q asks journalctl for %q, not %q (%v):\n%s", command, strings.TrimSpace(string(got)), filepath.Base(unit), err, out)
+	}
+	// systemd not reloading its units: none of devopsy's is started, said once, the drop-in put
+	// without the space.
+	out, code = run([]string{"FAKE_SYSTEMCTL_FAILS_ON=daemon-reload"}, filepath.Join(dir, "reload"), me, space, "", "", unit, setup.SpaceUnitText(space), "1", dropin, "1", "deploy", setup.ProcUnitText(setup.GIDMark), "", word, bare)
+	if code != DoorSetupSaid || strings.Count(out, "devopsy: error: ") != 1 || !strings.Contains(out, "devopsy: error: systemd could not reload its units, so devopsy started none of its own units\n") ||
+		strings.Contains(out, "mounted") || strings.Contains(out, "hidden") || read(filepath.Join(dir, "reload", setup.MountsDropIn)) != bare {
+		t.Errorf("a reload systemd refuses (%d):\n%s", code, out)
+	}
+	// polkit not restarted: a warning with the restart to run, the run going on, never said
+	// restarted.
+	out, code = run([]string{"FAKE_SYSTEMCTL_FAILS_ON=try-restart polkit.service"}, filepath.Join(dir, "polkit"), me, space, "", "", unit, "", "", "", "1", "deploy", setup.ProcUnitText(setup.GIDMark), setup.PolkitDropInText(), word, "")
+	if code != 0 || !strings.Contains(out, "hidden\n") || strings.Contains(out, "\npolkit\n") ||
+		!strings.Contains(out, "devopsy: warning: systemd did not restart polkit, which sees only its own processes until it restarts\ndevopsy: | to fix it:\ndevopsy: | restart it, as root:\ndevopsy: | $ systemctl restart polkit.service\n") {
+		t.Errorf("polkit not restarted (%d):\n%s", code, out)
 	}
 }
 
