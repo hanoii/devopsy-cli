@@ -127,7 +127,7 @@ func TestAppendDoorConfig(t *testing.T) {
 }
 
 // A space devopsy writes into a unit and the config is a plain path: absolute, clean, not /,
-// letters, digits and . _ - / only.
+// letters, digits and . _ - / only, each refusal saying plainly which.
 func TestPlainPath(t *testing.T) {
 	t.Parallel()
 	for _, p := range []string{DefaultSpace, "/srv/door_1.d"} {
@@ -135,9 +135,17 @@ func TestPlainPath(t *testing.T) {
 			t.Errorf("%s: %v", p, err)
 		}
 	}
-	for _, p := range []string{"srv/door", "/srv/../door", "/", "/srv/door two", "/srv/%h", `/srv/a\b`, "/srv/é"} {
-		if err := PlainPath(p); err == nil {
-			t.Errorf("%s taken", p)
+	for p, want := range map[string]string{
+		"srv/door":      "srv/door is not an absolute path",
+		"/srv/../door":  "/srv/../door is not written plainly, as /door",
+		"/":             "/ cannot be the directory",
+		"/srv/door two": `/srv/door two holds ' ', and devopsy takes only letters, digits and . _ - /`,
+		"/srv/%h":       `/srv/%h holds '%', and devopsy takes only letters, digits and . _ - /`,
+		`/srv/a\b`:      `/srv/a\b holds '\\', and devopsy takes only letters, digits and . _ - /`,
+		"/srv/é":        `/srv/é holds 'é', and devopsy takes only letters, digits and . _ - /`,
+	} {
+		if err := PlainPath(p); err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %s", p, err, want)
 		}
 	}
 }

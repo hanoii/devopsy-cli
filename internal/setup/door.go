@@ -45,8 +45,13 @@ const GIDMark = "@gid@"
 // other than as it is: absolute, clean, not /, and only letters, digits and . _ - / (a mount
 // unit's Where= takes no quoting, and its name escapes every other character).
 func PlainPath(p string) error {
-	if !path.IsAbs(p) || path.Clean(p) != p || p == "/" {
-		return fmt.Errorf("%s is not an absolute, clean path other than /", p)
+	switch {
+	case p == "/":
+		return errors.New("/ cannot be the directory")
+	case !path.IsAbs(p):
+		return fmt.Errorf("%s is not an absolute path", p)
+	case path.Clean(p) != p:
+		return fmt.Errorf("%s is not written plainly, as %s", p, path.Clean(p))
 	}
 	for _, r := range p {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-/", r)) {
