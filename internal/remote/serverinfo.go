@@ -68,7 +68,10 @@ type ServerInfo struct {
 	// HidePID is /proc's hidepid as the kernel prints it in /proc/mounts, "off" for none, ""
 	// when unknown (no /proc mount there, a project user's facts).
 	HidePID string `json:"hidepid,omitempty"`
-	Disks   []Disk `json:"disks"`
+	// ProcRefused is --project-users setup's refusal of a /proc hidden another way, nil for none
+	// (procHiding, the one judgment of it).
+	ProcRefused *setup.Refusal `json:"proc_refused,omitempty"`
+	Disks       []Disk         `json:"disks"`
 	// Missing are the tools a server needs that are not there.
 	Missing []string `json:"missing,omitempty"`
 	// Containers are every container on the host, any state.
@@ -159,8 +162,9 @@ type DockerFacts struct {
 	// nothing of Docker is read.
 	Door    bool   `json:"door,omitempty"`
 	Version string `json:"version,omitempty"`
+	// Compose and Buildx are the plugins' versions, "" for one that does not answer.
 	Compose string `json:"compose,omitempty"`
-	Buildx  bool   `json:"buildx"`
+	Buildx  string `json:"buildx_version,omitempty"`
 	// Name is the daemon's host name; Running what of daemon.json it runs with.
 	Name       string        `json:"name,omitempty"`
 	Running    setup.Visible `json:"running"`
@@ -183,10 +187,7 @@ type DoorFacts struct {
 	// Unguarded is why the space's mount takes setuid files or devices, the door then
 	// refusing every request; empty when it has nosuid and nodev.
 	Unguarded string `json:"unguarded,omitempty"`
-	// Docker is what of Docker the door lacks (the containerd image store, buildx's OCI
-	// layout), the door then refusing every claim; empty when it has both.
-	Docker string `json:"docker,omitempty"`
-	Users  int    `json:"users"`
+	Users     int    `json:"users"`
 	// Reboot: sshd takes the door at the next reboot (DoorRebootMarker).
 	Reboot bool `json:"reboot,omitempty"`
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the

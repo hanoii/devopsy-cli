@@ -212,8 +212,8 @@ type doorSide struct {
 	keysFile string
 	keysAt   os.FileInfo
 	// What a request reads once, for every claim and run it makes: the daemon's
-	// "<os> <architecture>" (platform), doorHostReady's answer (hostReady), the directory of
-	// its logins (logins) and its builder's environment (builder).
+	// "<os> <architecture>" (platform), the floor's answer (hostReady, dockerFloor), the
+	// directory of its logins (logins) and its builder's environment (builder).
 	daemonPlatform memo[string]
 	hostChecked    memo[struct{}]
 	loginsDir      memo[string]
@@ -960,8 +960,7 @@ func runDoor(args []string) int {
 	}
 	// From here every refusal is recorded, the space's own included.
 	doorLog = filepath.Join(policy.Space, "refused.log")
-	if err := spaceGuarded(policy.Space); err != nil {
-		report.Fail(err, spaceFix(policy.Space))
+	if err := refuseUnguarded(report.Default(), policy.Space); err != nil {
 		doorRecord(err.Error())
 		return 2
 	}
@@ -1106,16 +1105,36 @@ func (s *doorSide) stillAsked() error {
 	return nil
 }
 
+// guards is the one judgment of a mount that guards the door's space: it takes no setuid file
+// (nosuid) and no device node (nodev).
+func guards(nosuid, nodev bool) bool { return nosuid && nodev }
+
+// refuseUnguarded refuses, through l, a request on a door whose space is not guarded
+// (spaceGuarded), giving what the refusals' log records, nil when it is: the project user
+// asking can only pass it on, so it is told the code for the server's admin and no way out
+// (report.SpaceUnguarded), which the admin finds with its fix in --server-info.
+func refuseUnguarded(l *report.Logger, space string) error {
+	err := spaceGuarded(space)
+	if err != nil {
+		l.SayForAdmin(report.ErrorLevel, report.SpaceUnguarded)
+	}
+	return err
+}
+
 // spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a
 // container's setuid file crosses projects and a crafted tar reaches root, so the door does
-// nothing rather than half its promise.
+// nothing rather than half its promise. It asks the kernel of the path itself (statfs) at every
+// request, which no table's escaping or order can mislead, while --project-users setup reads
+// the host's /proc/mounts (spaceMount), under a host root in its tests, to tell also whose
+// mount the space is on (its own mount point or not), which statfs does not say; both judge
+// the options by guards, so they never disagree on what guarded means.
 func spaceGuarded(space string) error {
 	nosuid, nodev, err := mountGuards(space)
 	if err != nil {
-		return fmt.Errorf("refused: the door's space %s: %v", space, err)
+		return fmt.Errorf("the project users' directory %s: %v", space, err)
 	}
-	if !nosuid || !nodev {
-		return fmt.Errorf("refused: the door's space %s is not on a mount with nosuid and nodev", space)
+	if !guards(nosuid, nodev) {
+		return fmt.Errorf("the project users' directory %s is not on a mount with nosuid and nodev", space)
 	}
 	return nil
 }
@@ -1613,20 +1632,14 @@ func doorLimits() error {
 	return nil
 }
 
-// serviceContexts is the compose that first reads a build context service:<name> as another
-// service's build: one before reads it as a path in the project's directory, the project
-// user's to make, which its client then reads with the deploy user's rights.
-var serviceContexts = [3]int{2, 33, 0}
-
 // composeKnowsServiceContexts refuses a build with contexts (all service:<name>, CheckFile)
-// on a compose before serviceContexts, or one whose version cannot be read, the compose the
-// build's environment env runs.
+// on a compose below its floor (dockerFloors), which first reads service:<name> as another
+// service's build, or one whose version cannot be read: the compose the build's environment
+// env runs, one before reading it as a path in the project's directory, the project user's to
+// make, which its client then reads with the deploy user's rights.
 func (s *doorSide) composeKnowsServiceContexts(env []string) error {
-	c := s.docker("compose", "version", "--short")
-	c.Env = env
-	out, err := c.Output()
-	if v, ok := versionAtLeast(string(out), serviceContexts); err != nil || !ok {
-		return fmt.Errorf("refused: a build context needs compose %s or later, which reads service:<name> as another service's build (this server's: %q)", floorWords(serviceContexts), v)
+	if err := floorError(dockerFloor(s.real, env, floorCompose)); err != nil {
+		return fmt.Errorf("refused: a build with contexts: %w", err)
 	}
 	return nil
 }

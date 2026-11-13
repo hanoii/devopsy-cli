@@ -70,23 +70,31 @@ func runServerSetup(t *remote.Target, args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	if !run {
-		if refused {
-			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
-			return 1
-		}
+	// Nothing to change for the operator: said so, before an apply that only writes the record's
+	// floor note, which it does quietly, or in its place.
+	inSync := func() {
 		if f.Pending {
 			state, detail := pendingWords(f.PendingParts, f.Reboot)
 			report.Say(report.InfoLevel, "nothing to change, but Docker "+state, []string{detail}, soonerHint(targetRef(t)))
 		} else {
 			report.Info("nothing to change: " + t.Host + " is set up as devopsy wants it")
 		}
+	}
+	if !run {
+		if refused {
+			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
+			return 1
+		}
+		inSync()
 		return 0
 	}
 	// The refusals said here, by their identities: the apply says only one new since.
 	code, err = remote.SSH(t, remote.ServerSetupScript(t, append([]string{"apply", "--said=" + strings.Join(said, ",")}, applyArgs...)), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
 		return failErr(err)
+	}
+	if code == 0 && !refused && len(applyArgs) == 0 && !f.Changes() && !f.Records() && f.Record != "" {
+		inSync()
 	}
 	return code
 }
@@ -100,13 +108,15 @@ type setupAsker interface {
 // planSetup is what --server-setup asks and what its apply is then given: each changed part
 // kept or replaced (kept with yes), the rest confirmed once, then the restart, which yes asks
 // for only when no container runs, as the apply finds it. run says whether there is an apply at all: something to
-// put or record, an answer, a restart, or no record yet, which the first apply writes.
+// put or record, an answer, a restart, no record yet, which the first apply writes, or the
+// record's floor note to write or take off.
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
-	// Every step a root run: with none going (Docker refused), nothing goes at all.
+	// Every step a root run: with none going (Docker refused), nothing goes at all, but a
+	// floor note to take off, which the apply does.
 	if f.NoneGoes() {
-		return nil, false, nil
+		return nil, f.FloorNote, nil
 	}
 	parts := f.Parts
 	if !f.Goes(setup.StepParts) {
@@ -162,15 +172,21 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 			}
 		}
 	}
-	return args, changes || f.Records() || answers || restart || f.Record == "", nil
+	return args, changes || f.Records() || answers || restart || f.Record == "" || f.FloorNote, nil
 }
 
-// terminalAsker asks at the terminal, and fails without one, naming --yes.
-type terminalAsker struct{ t *remote.Target }
+// terminalAsker asks at the terminal, and fails without one, naming --yes: command is what
+// asks (--server-setup when ""), yes what --yes does in its place.
+type terminalAsker struct {
+	t            *remote.Target
+	command, yes string
+}
 
 func (a terminalAsker) noTerminal() error {
-	return &report.Failure{Msg: "--server-setup asks first, and there is no terminal to ask at",
-		Remedies: []report.Remedy{report.Fix("add --yes, which keeps every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says:", "devopsy @"+targetRef(a.t)+" --server-setup --yes")}}
+	command := cmp.Or(a.command, "--server-setup")
+	yes := cmp.Or(a.yes, "keeps every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says")
+	return &report.Failure{Msg: command + " asks first, and there is no terminal to ask at",
+		Remedies: []report.Remedy{report.Fix("add --yes, which "+yes+":", "devopsy @"+targetRef(a.t)+" "+command+" --yes")}}
 }
 
 func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
@@ -337,6 +353,13 @@ func firewallLine(fw *setup.FirewallFact) string {
 // is one: the fix they share, the tools topic's, is said once, after the last of them
 // (sharedLater). It returns the IDs of every refusal f has.
 func sayRefusals(f setup.Facts, level report.Level, said []string, tools bool) []string {
+	return sayRefusalsOf(f.AllRefusals(), f.Missing, f.DaemonError, level, said, tools)
+}
+
+// sayRefusalsOf is sayRefusals of refusals rs, the tools missing that refuse nothing, and
+// daemon.json's error ("" for none), for every command whose items refuse (--server-setup's,
+// --project-users setup's).
+func sayRefusalsOf(rs []setup.Refusal, missing []string, daemonError string, level report.Level, said []string, tools bool) []string {
 	var ids []string
 	var es []remote.StatusEntry
 	var levels []report.Level
@@ -345,21 +368,21 @@ func sayRefusals(f setup.Facts, level report.Level, said []string, tools bool) [
 		levels = append(levels, l)
 	}
 	addTools := func() {
-		for _, name := range f.Missing {
+		for _, name := range missing {
 			if msg, door := toolMissingWords(name); msg != "" && tools {
 				add(report.WarnLevel, toolsItem, msg, []report.Remedy{toolFix(door)})
 			}
 		}
 		tools = false
 	}
-	for _, r := range f.AllRefusals() {
+	for _, r := range rs {
 		ids = append(ids, r.ID())
 		if slices.Contains(said, r.ID()) {
 			continue
 		}
 		msg, fixes := refusalWords(r)
-		if r.Item == setup.RefusalDaemon && r.Message == f.DaemonError {
-			msg, fixes = daemonWords(f.DaemonError)
+		if r.Item == setup.RefusalDaemon && daemonError != "" && r.Message == daemonError {
+			msg, fixes = daemonWords(daemonError)
 		}
 		add(level, r.Item, msg, fixes)
 		if r.Item == toolsItem {
@@ -379,9 +402,27 @@ func sayRefusals(f setup.Facts, level report.Level, said []string, tools bool) [
 // refusedLine names what f's refusals stop that had a change to make (setup.Facts.Stopped),
 // "" when nothing: the first session's question, a run with nothing to apply and an apply's
 // end say it.
-func refusedLine(f setup.Facts) string {
-	if words := f.Stopped(); len(words) > 0 {
-		return "not applied, refused: " + strings.Join(words, ", ")
+func refusedLine(f setup.Facts) string { return refusedWords(f.Stopped()) }
+
+// refusedWords is refusedLine of the steps stopped, by name, "" for none: one sentence naming
+// what devopsy did not set up, each step as a sentence says it (stepPhrase).
+func refusedWords(stopped []string) string {
+	words := make([]string, len(stopped))
+	for i, name := range stopped {
+		words[i] = cmp.Or(stepPhrase[name], name)
 	}
-	return ""
+	switch len(words) {
+	case 0:
+		return ""
+	case 1:
+		return "devopsy left " + words[0] + " as it is, since what it needs is refused above"
+	}
+	return "devopsy left " + joinAnd(words) + " as they are, since what they need is refused above"
+}
+
+// stepPhrase is a step's name in a sentence, where its name is an item's key with no article.
+var stepPhrase = map[string]string{
+	string(setup.StepBuffers):  "the " + setup.ItemBuffers,
+	string(setup.StepMounts):   "the " + setup.ItemMounts,
+	string(setup.StepFirewall): "the " + setup.FirewallItemName,
 }

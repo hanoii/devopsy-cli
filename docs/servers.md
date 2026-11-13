@@ -59,6 +59,25 @@ devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
 devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
 ```
 
+## Docker
+
+Every server runs Docker from Docker's repository with its containerd
+image store, buildx 0.33.0 or later and compose 2.33.0 or later: the
+least devopsy needs of Docker, which these docs call its floor.
+`--server-setup`, every release before its upload, `--project-users
+setup` and `--project-users add` refuse a Docker below any of them, each
+with its fix, and `--server-info` warns of it. A release reads Docker for
+it only until `--server-setup` or `--upgrade` of the same devopsy
+release found Docker at its floor, which its record notes; a development
+build notes nothing and trusts no note, and a Docker that does not
+answer takes the note off. A Docker put back below the floor since is
+seen by `--server-info`, which always reads Docker, and by releases from
+the next devopsy on. A Docker upgraded from an older version keeps the
+classic image store, and a distribution's own package may run it too,
+which devopsy does not support: such a server's projects go to a new
+server whose Docker runs the containerd image store
+([`docker`](server-setup-howto.md#docker)).
+
 ## `--server-setup`
 
 `devopsy @devopsy@vm1: --server-setup` sets up what devopsy needs of a
@@ -67,8 +86,8 @@ root run through devopsy's util image, so the deploy user needs no sudo:
 the docker group can do as much already. It needs systemd, and checks
 first, refusing with what is missing, that the server has `tar` and
 `flock` and Docker answering with its compose and buildx plugins as the
-host's `docker.service`, and warns of the other tools a server needs
-when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers
+host's `docker.service`, at its floor ([Docker](#docker)), and warns of
+the other tools a server needs when missing (`setsid`, `script`, `mkfifo`, a `tail` that answers
 `--version`, and on a server with project users `sudo`, `visudo` and
 `setfacl`). It installs none of them: they are the admin's
 ([`--server-setup-howto`](#--server-setup-howto)). The release root
@@ -93,8 +112,9 @@ applies the rest, says what it did not apply and why, and exits 1:
   drop-in alone;
 - a missing `flock`, which the firewall's loader takes its lock with:
   the metadata firewall;
-- Docker without its compose or buildx plugin, or a missing `tar`, which
-  releases need: nothing of the setup, said all the same.
+- Docker without its compose or buildx plugin, below its floor, or a
+  missing `tar`, which releases need: nothing of the setup, said all the
+  same.
 
 It shows the differences and the refusals together, each refusal once,
 and its question covers what it will apply, naming what it will not. A
@@ -116,8 +136,12 @@ What it keeps as devopsy wants it:
 | `daemon.json`'s `live-restore` | `true` |
 | `daemon.json`'s `default-address-pools` | `172.16.0.0/12` and `192.168.0.0/16`, size 24 |
 | Socket buffers | `/etc/sysctl.d/90-devopsy-net.conf`, `net.core.rmem_max` and `wmem_max` at 7500000; a live value lower is raised, a higher one never lowered by a run (it sets 7500000 at each boot: a higher value goes in a sysctl file sorting after it). A container gets what the host allows here, and QUIC asks for more than the kernel's default: a Cloudflare Tunnel's connector warns and runs on smaller buffers without it. It changes nothing on a server with no such service |
-| Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, so Docker waits at boot for the volume it is on; putting it asks for no restart |
+| Mounts drop-in | `/etc/systemd/system/docker.service.d/devopsy-mounts.conf`, `RequiresMountsFor=` the release root, and the project users' directory where `door: space:` names one and it is mounted with `nosuid` and `nodev`, so Docker waits at boot for the volumes they are on; putting it asks for no restart |
 | Metadata firewall | packets from containers on Docker's bridges (`docker0`, `br-*`) to the cloud's metadata services (`169.254.0.0/16` and the providers' others) dropped, DNS there let through; with `door:` in the server's config, or the door's firewall loaded already, the door's chains too ([Project users](project-users.md#the-firewall)); by `/usr/local/libexec/devopsy-firewall`, loaded at boot (`devopsy-firewall.service`), by `--server-setup` and `--project-users add`, and with the door's at every start of Docker |
+
+What a server with project users needs beyond these is `--project-users
+setup`'s, which neither `--server-setup` nor `--upgrade` runs ([Project
+users](project-users.md#--project-users-setup)).
 
 It shows what is not devopsy's, then asks. `daemon.json` is merged: every
 other key stays as it is (a proxy's `proxies`, for example), and the file
@@ -186,9 +210,11 @@ space: `releases: root: <mount point>` in the deploy user's
 `config.yaml`, before the first release, puts releases there.
 
 A second run changes nothing. What `--server-setup` applied, the values
-kept, and the devopsy that last applied with no failure are recorded in
+kept, the devopsy that last applied with no failure, and the one that
+last found Docker at its floor ([Docker](#docker)) are recorded in
 `server.yaml` beside the deploy user's `config.yaml`: devopsy's record,
-never edited by hand. Its first run writes it.
+never edited by hand. Its first run writes it. A run whose only change
+is that note writes it and says there is nothing to change.
 
 ## `--server-setup-howto`
 
@@ -214,7 +240,8 @@ in `--shell-host`; anywhere else it refuses. It reports:
 - the system, with the memory the kernel keeps for Kexec HandOver and
   kdump, and whether its clock is synchronized and how far it is from the
   local one;
-- Docker: its image store, security options and logs;
+- Docker: its version, its compose's and buildx's, its image store,
+  security options and logs;
 - its setup as `--server-setup` judges it: whether devopsy set it up,
   where its record is, and the values someone else set that were kept;
 - the filesystems of the release root, Docker's and containerd's data,
@@ -237,8 +264,9 @@ setup's items) comes once, after the last of them:
   the kernel's allocations can run out while memory is free. `kho=off`
   frees it ([`kexec-handover`](server-setup-howto.md#kexec-handover));
 - a clock out of sync;
-- Docker not answering, or without its compose or buildx plugin, said
-  under Docker and not again under the setup;
+- Docker not answering, without its compose or buildx plugin, or below
+  its floor ([Docker](#docker)), said under Docker and not again under
+  the setup;
 - a kernel with AppArmor and no `apparmor_parser`, on which no container
   starts;
 - Docker logs that grow without a limit, on a server whose devopsy does
@@ -263,11 +291,9 @@ setup's items) comes once, after the last of them:
 - a tool the server needs, missing, and on a server with project users
   a missing `sudo`, `visudo` or `setfacl` (with none yet it is a line,
   not a warning);
-- on a server with project users, a Docker without its containerd image
-  store or buildx 0.33.0, on which the door refuses every image a project
-  user does not build ([project users](project-users.md));
 - on a server with project users, a `/proc` that shows them every other
-  user's processes, whose command lines can hold a secret ([setting up a
+  user's processes, whose command lines can hold a secret, or that hides
+  them another way `--project-users setup` refuses ([setting up a
   server](project-users.md#setting-up-a-server) has the mount that hides
   them; with no project user it is a line, not a warning);
 - a role held twice;

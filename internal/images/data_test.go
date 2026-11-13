@@ -1105,12 +1105,13 @@ func TestDataRestartHoldSurvivesFetch(t *testing.T) {
 	}
 }
 
-// The classic image store: a built image has no registry digest, so its
-// hold goes by the release's bookmark of it, never a digest; and a failed
-// release that built the service over a previous one that pulls it holds
-// by the previous release's bookmark in the build's repository, the pulled
-// name never retagged, the listing recording that image so the
-// previous release's bookmark keeps it once the failed one goes.
+// A built image's hold goes by the release's bookmark of it, never its
+// registry digest, which Docker's containerd store gives built images too;
+// and a failed release that built the service over a previous one that
+// pulls it holds by the previous release's bookmark in the build's
+// repository, the pulled name never retagged, the listing recording that
+// image so the previous release's bookmark keeps it once the failed one
+// goes.
 func TestDataRestartHoldBuilt(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1119,7 +1120,9 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 	r1, _ := m.release(false, builtDB("app-prod", "11.8"))
 	r2, _ := m.failRun(false, builtDB("app-prod", "12.1"))
 	failed, _ := match(readList(m.e.rel(r2)), entry{Service: "database"})
-	delete(d.digests, failed.ID)
+	if len(d.digests[failed.ID]) == 0 {
+		t.Fatalf("the build %s has no registry digest, which the containerd store gives it", failed.ID)
+	}
 	m.cur = r2
 	m.restart(r1, r2)
 	imgs, labels, held := composeFacts(m.e.rel(r1))
@@ -1128,7 +1131,7 @@ func TestDataRestartHoldBuilt(t *testing.T) {
 		t.Errorf("the held database's build is not reset:\n%s", text)
 	}
 	if !isBookmark(imgs["database"]) || fileImage(d, m.e.rel(r1), "database", "") != failed.ID || labels["database"] != failed.ID || held["database"] != r2 || m.runs("database") != failed.ID {
-		t.Errorf("classic store: image %q, label %q, held %q, runs %s, want %s", imgs["database"], labels["database"], held["database"], m.runs("database"), failed.ID)
+		t.Errorf("held by digest: image %q, label %q, held %q, runs %s, want %s", imgs["database"], labels["database"], held["database"], m.runs("database"), failed.ID)
 	}
 
 	p := newSim(t, d, "app-stage", &out)

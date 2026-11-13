@@ -277,7 +277,7 @@ func sameHost(a, b string) bool {
 func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog, color bool) int {
 	log := report.Default().Tee(rlog.Line)
 	partial := func() {
-		log.Say(report.WarnLevel, "@"+job.child.Address+" may hold a partial copy now", nil, remote.SeeHint(targetRef(job.child), "whether it does", "--status"), report.Fix("", "devopsy @"+remote.HintAddress(job.child)+" --sync"))
+		log.Say(report.WarnLevel, "@"+job.child.Address+" may hold a partial copy now", nil, report.Hint("this shows whether it does:", "devopsy @"+targetRef(job.child)+" --status"), report.Fix("", "devopsy @"+remote.HintAddress(job.child)+" --sync"))
 	}
 	// An *os.File, so the holder's ssh reads it directly: devopsy writes go
 	// or abort, and nothing waits on a copy if the holder ends first.

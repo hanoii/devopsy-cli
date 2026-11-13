@@ -67,23 +67,32 @@ var stepNeeds = map[Step][]string{
 
 // Refused is every item that refuses in f, a daemon.json devopsy cannot judge among them.
 func (f Facts) Refused() []string {
-	var items []string
-	for _, r := range f.Refusals {
-		if item := cmp.Or(r.Stops, r.Item); !slices.Contains(items, item) {
-			items = append(items, item)
-		}
-	}
+	items := refusedItems(f.Refusals)
 	if f.DaemonError != "" {
 		items = append(items, RefusalDaemon)
 	}
 	return items
 }
 
+// refusedItems is what refusals rs stop (each one's Stops, else its Item), each once.
+func refusedItems(rs []Refusal) []string {
+	var items []string
+	for _, r := range rs {
+		if item := cmp.Or(r.Stops, r.Item); !slices.Contains(items, item) {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 // Blocks is what in f stops step s: the refused items it needs, none when it goes.
-func (f Facts) Blocks(s Step) []string {
+func (f Facts) Blocks(s Step) []string { return blocks(f.Refused(), stepNeeds[s]) }
+
+// blocks is what of refused a step needing needs is stopped by.
+func blocks(refused, needs []string) []string {
 	var by []string
-	for _, item := range f.Refused() {
-		if slices.Contains(stepNeeds[s], item) {
+	for _, item := range refused {
+		if slices.Contains(needs, item) {
 			by = append(by, item)
 		}
 	}

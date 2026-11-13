@@ -155,14 +155,24 @@ func TestAll(t *testing.T) {
 // the deploy user is, and where a value to change is set.
 func TestText(t *testing.T) {
 	t.Parallel()
-	for _, words := range []string{"as root on the server", "Debian or Ubuntu with systemd", "The deploy user is the Unix user devopsy logs in as", "first line sets the values to change", "user=devopsy"} {
-		if !strings.Contains(asRoot, words) {
-			t.Errorf("the steps' opening does not say %q: %s", words, asRoot)
-		}
-	}
 	for _, tp := range Topics {
+		for _, words := range []string{"as root on the server", "Debian or Ubuntu with systemd", "The deploy user is the Unix user devopsy logs in as", "first line sets the values to change", "user=devopsy"} {
+			if !strings.Contains(tp.opening(), words) {
+				t.Errorf("%s: the steps' opening does not say %q: %s", tp.Name, words, tp.opening())
+			}
+		}
+		// A step that runs on the operator's machine says so, and so does the opening of a topic
+		// that has one, alone.
+		if strings.Contains(tp.opening(), locally) != slices.ContainsFunc(tp.Steps, Step.local) {
+			t.Errorf("%s: the opening says of steps run locally: %s", tp.Name, tp.opening())
+		}
+		for _, s := range tp.Steps {
+			if strings.Contains(s.Text, "operator's machine") && !s.local() {
+				t.Errorf("%s: a step run locally not starting with %q: %s", tp.Name, localStart, s.Text)
+			}
+		}
 		text := tp.Text()
-		if !strings.HasPrefix(text, "# "+tp.Title+"\n\n") || !strings.Contains(text, wrap(asRoot, "", "")) || !strings.Contains(text, "\nTo check it: ") {
+		if !strings.HasPrefix(text, "# "+tp.Title+"\n\n") || !strings.Contains(text, wrap(tp.opening(), "", "")) || !strings.Contains(text, "\nTo check it: ") {
 			t.Errorf("%s:\n%s", tp.Name, text)
 		}
 		var cmds []string

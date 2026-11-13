@@ -219,17 +219,30 @@ case "$*" in
   # (remote.HostRootEnv) as the script's first argument already says.
   "run --rm --network "*" -v /:/host"*" chroot /host /bin/sh -c "*)
     [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+    # FAKE_ROOT_RUN_FAILS: the run fails, Docker answering.
+    [ -z "${FAKE_ROOT_RUN_FAILS:-}" ] || { echo "the run failed" >&2; exit 125; }
     while [ "$1" != -c ]; do shift; done
     script=$2; shift 2
     # FAKE_CUT_AFTER_ROOT: the devopsy that ran it killed outright once it is done.
     [ -n "${FAKE_CUT_AFTER_ROOT:-}" ] || exec sh -c "$script" "$@"
     sh -c "$script" "$@"; kill -KILL "$PPID"; exit 137 ;;
-  # docker info: the host root's docker-info.json, when a test writes one.
+  # docker info: the host root's docker-info.json, when a test writes one, else no more than
+  # its image store. The store is the containerd one, at the floor (dockerFloors), unless the
+  # file names one or FAKE_CLASSIC_STORE: the classic one, as overlay2 says it.
   "info --format {{json .}}")
     [ ! -e "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-down" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
-    [ ! -f "${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json" ] || cat "$DEVOPSY_INTERNAL_HOST_ROOT/docker-info.json" ;;
-  # Compose's version, as the setup's Docker check reads it (FAKE_NO_COMPOSE: none).
-  "compose version --short") [ -n "${FAKE_NO_COMPOSE:-}" ] || echo 5.5.0 ;;
+    store='"DriverStatus":[["driver-type","io.containerd.snapshotter.v1"]]'
+    [ -z "${FAKE_CLASSIC_STORE:-}" ] || store='"DriverStatus":[["Backing Filesystem","extfs"]]'
+    info=${DEVOPSY_INTERNAL_HOST_ROOT:-/nonexistent}/docker-info.json
+    if [ ! -f "$info" ]; then echo "{$store}"
+    elif grep -q DriverStatus "$info"; then cat "$info"
+    else sed "s/^{/{$store,/" "$info"; fi ;;
+  # Compose's and buildx's versions, at the floor unless FAKE_COMPOSE_VERSION or
+  # FAKE_BUILDX_VERSION says another (FAKE_NO_COMPOSE, FAKE_NO_BUILDX: none).
+  "compose version --short") [ -n "${FAKE_NO_COMPOSE:-}" ] || echo "${FAKE_COMPOSE_VERSION:-5.5.0}" ;;
+  "buildx version")
+    [ -z "${FAKE_NO_BUILDX:-}" ] || { echo "docker: 'buildx' is not a docker command." >&2; exit 1; }
+    echo "github.com/docker/buildx v${FAKE_BUILDX_VERSION:-0.38.2} e25e2b7a4b6a" ;;
   # FAKE_RUNNING: the ids of the containers running.
   "ps -q") for c in ${FAKE_RUNNING:-}; do echo "$c"; done ;;
   *" config --format json")
@@ -2801,7 +2814,7 @@ func TestSyncHolderGone(t *testing.T) {
 	s.logs()
 	out, code := s.run([]string{"FAKE_SLOW_RSYNC=" + started, "FAKE_HOLDER_DIE=" + started}, "@dev", "--sync", "--yes")
 	docker, ssh := s.logs()
-	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | see whether it does:\ndevopsy: | $ devopsy @devopsy@one:dev --status\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @devopsy@one:dev --sync") || strings.Contains(out, "deploy in shop-dev") {
+	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @devopsy@one:dev --sync\ndevopsy: | this shows whether it does:\ndevopsy: | $ devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("holder gone (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
 	// The push outlives devopsy's session: its restore may still be

@@ -48,7 +48,7 @@ func TestCodedMessages(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
 	l := New(&b, false, 0)
-	l.WarnForAdmin(FirewallNotLoaded)
+	l.SayForAdmin(WarnLevel, FirewallNotLoaded)
 	l.SayCode(WarnLevel, FirewallNotLoaded, nil, Fix("", "devopsy @vm1: --server-setup"))
 	want := "devopsy: warning: W0001: the server's firewall is not loaded as devopsy loads it\n" +
 		"devopsy: | report W0001 to the server's admin\n" +

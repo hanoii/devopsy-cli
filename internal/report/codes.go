@@ -12,8 +12,13 @@ type Code struct {
 // the server's own firewall, an iptables -F, a failed load).
 var FirewallNotLoaded = Code{"W0001", "the server's firewall is not loaded as devopsy loads it"}
 
+// SpaceUnguarded: the door's space, the directory where devopsy keeps project users' data, is
+// not on a mount with nosuid and nodev (none, or one without them), so the door refuses every
+// request.
+var SpaceUnguarded = Code{"W0002", "the project users' directory is not on a mount with nosuid and nodev"}
+
 // Codes is the registry, every code once, which docs/codes.md lists.
-var Codes = []Code{FirewallNotLoaded}
+var Codes = []Code{FirewallNotLoaded, SpaceUnguarded}
 
 // CodeOf is the registry's code by its ID.
 func CodeOf(id string) (Code, bool) {
@@ -39,5 +44,6 @@ func (l *Logger) SayCode(lv Level, c Code, details []string, remedies ...Remedy)
 	l.Say(lv, c.Msg(), details, remedies...)
 }
 
-// WarnForAdmin warns of c to a reader who can only pass it on: Msg, then ForAdmin.
-func (l *Logger) WarnForAdmin(c Code) { l.Say(WarnLevel, c.Msg(), []string{c.ForAdmin()}) }
+// SayForAdmin says c at lv to a reader who can only pass it on: Msg, then ForAdmin, and no
+// remedy (a warning of what goes on, an error of what the reader's command could not do).
+func (l *Logger) SayForAdmin(lv Level, c Code) { l.Say(lv, c.Msg(), []string{c.ForAdmin()}) }

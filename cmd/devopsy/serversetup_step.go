@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
+	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
 // restartWait bounds the wait for Docker's restart to be confirmed, unless
@@ -62,6 +63,65 @@ type setupRead struct {
 	door bool
 	// fileVisible is what Docker shows once it takes the file; running what it shows now.
 	fileVisible, running setup.Visible
+	// floorMet: Docker answers, with both plugins, at its floor (dockerAnswers none), what
+	// the record's note says for a release (floorNote).
+	floorMet bool
+	// dropin is the mounts drop-in's text devopsy wants (mountsDropInWant), "" where refused,
+	// and space the door's space it names, "" for none (or none mounted).
+	dropin, space string
+}
+
+// mountsDropInWant is the mounts drop-in's text, from the release root and the door's space
+// (space "" for none), each in its one form (resolveRoot): the one function --server-setup and
+// --project-users setup want it by, so the two never fight. The space is in it only where it
+// is mounted with nosuid and nodev (spaceMount, on h's mounts) or the run mounts it (mounting,
+// --project-users setup's), since a RequiresMountsFor= of a mount that fails keeps Docker from
+// starting at the next boot: --server-setup passes the config's space, --project-users setup
+// the one the config names or the run names in it. A path a unit file cannot hold is a refusal
+// of the drop-in alone.
+func mountsDropInWant(h setupHost, root, space string, mounting bool) (string, *setup.Refusal) {
+	paths := []string{resolveRoot(root)}
+	if space != "" {
+		if sp := resolveRoot(space); mounting || spaceMount(h, sp).guarded {
+			paths = append(paths, sp)
+		}
+	}
+	text, err := setup.MountsDropInText(paths...)
+	if err == nil {
+		return text, nil
+	}
+	if _, rootErr := setup.MountsDropInText(paths[0]); rootErr != nil {
+		return "", &setup.Refusal{Item: setup.RefusalRoot, Message: "releases: root " + rootErr.Error(), Fix: "set releases: root in " + remote.UserConfigFile() + " to a path with none", Stops: setup.RefusalMountsPath}
+	}
+	return "", &setup.Refusal{Item: setup.ItemSpace, Message: "door: space: " + err.Error(), Fix: "set door: space: in " + remote.UserConfigFile() + " to a path with none", Stops: setup.RefusalMountsPath}
+}
+
+// mountsDropInFact is the mounts drop-in against text, devopsy's want.
+func mountsDropInFact(h setupHost, text string) setup.FileFact {
+	have, err := os.ReadFile(h.path(setup.MountsDropIn))
+	return setup.FileFact{Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: string(have) == text, Missing: err != nil}
+}
+
+// dropInWaits says what a mounts drop-in put changes (space: it names the door's space too),
+// and that it asks nothing.
+func dropInWaits(space bool) {
+	what := "the release root's filesystem"
+	if space {
+		what = "the release root's filesystem and the project users' directory"
+	}
+	report.Info("Docker now waits for "+what+" before it starts", "this applies from Docker's next start and only matters at a boot: no restart is needed")
+}
+
+// floorNote is the record's note of the devopsy that found Docker at its floor (setup.Record's
+// Floor), as an apply of this devopsy writes it: its version where it found the floor met,
+// none where it did not, and none from a development build, whose version names no one build
+// ("dev", or a checkout's git describe). A release of that version then asks Docker nothing
+// of the floor (serverReady).
+func floorNote(met bool) string {
+	if met && update.IsRelease(version) {
+		return version
+	}
+	return ""
 }
 
 // runServerSetupStep is remote.ServerSetupFlag on a server, as the deploy user: facts prints
@@ -186,6 +246,8 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	if rd.exists {
 		f.Record = recordPath
 	}
+	rd.floorMet = len(dockerAnswers(hd.facts)) == 0
+	f.FloorNote = rd.exists && rd.record.Floor != floorNote(rd.floorMet)
 	if d, visible, why := judgeDaemon(hd.daemon, hd.daemonErr); why != "" {
 		// A file Docker would refuse is judged no further: none of its parts is put.
 		f.DaemonError = why
@@ -205,11 +267,20 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 		ok, err := setup.BufferAtLeast(string(live))
 		f.Buffers = append(f.Buffers, setup.BufferFact{Key: k, Live: n, Low: err != nil || !ok})
 	}
-	if text, err := setup.MountsDropInText(f.Root); err != nil {
-		f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalRoot, Message: "releases: root " + err.Error(), Fix: "set releases: root in " + remote.UserConfigFile() + " to a path with none", Stops: setup.RefusalMountsPath})
+	d, err := remote.ServerDoor()
+	if err != nil {
+		return rd, err
+	}
+	space := ""
+	if d != nil && d.Space != "" && spaceMount(h, resolveRoot(d.Space)).guarded {
+		space = d.Space
+	}
+	rd.space = space
+	if text, refusal := mountsDropInWant(h, f.Root, space, false); refusal != nil {
+		f.Refusals = append(f.Refusals, *refusal)
 	} else {
-		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
-		f.Files = append(f.Files, setup.FileFact{Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: string(have) == text})
+		rd.dropin = text
+		f.Files = append(f.Files, mountsDropInFact(h, text))
 	}
 
 	mountinfo, _ := os.ReadFile(h.path("/proc/self/mountinfo"))
@@ -222,10 +293,6 @@ func readSetup(h setupHost, hd hostDocker) (setupRead, error) {
 	// A root it cannot read in full is taken for one with projects: no hint to move it.
 	bases, err := deployEnvBases(f.Root)
 	f.Projects = len(bases) > 0 || err != nil
-	d, err := remote.ServerDoor()
-	if err != nil {
-		return rd, err
-	}
 	rd.door = d != nil
 	// The door's tools only where the server has project users: without one they matter only
 	// to --project-users add, which refuses without them.
@@ -422,7 +489,8 @@ func toolsRefusalOf(missing []string) *setup.Refusal {
 
 // releaseRootCheck is the release root's required item: there, a directory, uid's (/ is
 // refused by remote.ReleaseSettings already). What --server-setup fixes is its action
-// (setup.RootMake, setup.RootGive); anything else refuses: not a directory, or another user's.
+// (setup.RootMake, setup.RootGive); anything else refuses (dirOwner), and a root that is /
+// through a link.
 func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	refuse := func(msg string) (string, *setup.Refusal) {
 		return "", &setup.Refusal{Item: setup.RefusalRoot, Message: msg, Fix: "set releases: root in " + remote.UserConfigFile() + " to a directory of the deploy user's, or move this one aside"}
@@ -430,29 +498,49 @@ func releaseRootCheck(root string, uid int) (string, *setup.Refusal) {
 	if resolveRoot(root) == "/" {
 		return refuse("the release root " + root + " is /, through a link: releases would sit among the system's own directories")
 	}
-	fi, err := os.Stat(root)
+	action, refused, _ := dirOwner("the release root", root, uid)
+	if refused != "" {
+		return refuse(refused)
+	}
+	return action, nil
+}
+
+// dirOwner judges a directory devopsy makes or gives to the deploy user (uid) at p, the release
+// root's and the door's space's alike, named so (what, "" for p alone) in a refusal: missing, it is made
+// (setup.RootMake); uid's, it is in place (""); root's and empty, a filesystem's own lost+found
+// aside, it is given (setup.RootGive); anything else refuses, its words refused: root's with
+// files (a system's: /var, /opt), another user's, no directory, or what stat said. fi is p as
+// stat read it, nil when it is not there.
+func dirOwner(what, p string, uid int) (action, refused string, fi os.FileInfo) {
+	name := strings.TrimSpace(what + " " + p)
+	fi, err := os.Stat(p)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return setup.RootMake, nil
+		return setup.RootMake, "", nil
 	case err != nil:
-		return refuse(err.Error())
+		return "", err.Error(), nil
 	case !fi.IsDir():
-		return refuse("the release root " + root + " is not a directory")
+		return "", name + " is not a directory", fi
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	switch {
 	case !ok, int(st.Uid) == uid:
-		return "", nil
-	case st.Uid == 0 && emptyDir(root):
-		return setup.RootGive, nil
+		return "", "", fi
+	case st.Uid == 0 && emptyDir(p):
+		return setup.RootGive, "", fi
 	case st.Uid == 0:
-		return refuse("the release root " + root + " is root's and holds files: only an empty one is given to the deploy user, never a system directory")
+		return "", name + " is root's and holds files, and devopsy gives the deploy user only an empty one, never a system directory", fi
 	}
-	owner := strconv.Itoa(int(st.Uid))
+	return "", name + " is " + ownerName(st.Uid) + "'s", fi
+}
+
+// ownerName is the user uid as a message names an owner: its name, else its number.
+func ownerName(uid uint32) string {
+	owner := strconv.FormatUint(uint64(uid), 10)
 	if u, err := user.LookupId(owner); err == nil {
-		owner = u.Username
+		return u.Username
 	}
-	return refuse("the release root " + root + " is " + owner + "'s")
+	return owner
 }
 
 // dockerSetup is what the setup reads of Docker beyond docker info: its service's
@@ -465,21 +553,31 @@ type dockerSetup struct {
 }
 
 // dockerFix is the way out of a Docker the setup refuses, by the docker topic's steps.
-const dockerFix = "install Docker, with its compose and buildx plugins, and start it, as root"
+const dockerFix = "install Docker, with its compose and buildx plugins, and start it"
 
-// dockerAnswers are the setup's refusals of what Docker answers itself (d, docker info as
-// read): no daemon answering, else no compose or no buildx plugin. --server-info says them
-// under docker, and not again under setup (setupInfoEntries).
+// dockerAnswers are the setup's refusals of what Docker answers itself (d, dockerFacts): no
+// daemon answering, else no compose or no buildx plugin, and each floor missed (floorMissed),
+// a plugin's only where it answers. --server-info says them under docker, and not again under
+// setup (setupInfoEntries); a release (serverReady) and --project-users add refuse on them.
+// The plugins and the floor stop no step of the setup: releases need them, and no step does.
 func dockerAnswers(d remote.DockerFacts) []setup.Refusal {
 	if d.Error != "" {
 		return []setup.Refusal{{Item: setup.RefusalDocker, Message: "Docker's daemon does not answer: " + d.Error, Fix: dockerFix, Howto: howto.Docker}}
 	}
 	var refusals []setup.Refusal
+	parts := []floorPart{floorStore}
 	if d.Compose == "" {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no compose plugin", Fix: dockerFix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+	} else {
+		parts = append(parts, floorCompose)
 	}
-	if !d.Buildx {
+	if d.Buildx == "" {
 		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "Docker has no buildx plugin", Fix: dockerFix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
+	} else {
+		parts = append(parts, floorBuildx)
+	}
+	for _, m := range floorMissed(floorRead{containerd: d.Containerd, buildx: d.Buildx, compose: d.Compose}, parts...) {
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: m.msg, Fix: m.floor.fix, Howto: howto.Docker, Stops: setup.RefusalPlugins})
 	}
 	return refusals
 }
@@ -496,11 +594,8 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 	}
 	// Whether Docker is this host's, judged with or without systemd, so its refusal and fix
 	// are said beside one of systemd's.
-	if !dockerHere(d) {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
-	}
-	if _, err := os.Stat(h.path("/run/systemd/system")); err != nil {
-		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "systemd is not this host's init, which --server-setup restarts Docker with"})
+	refusals = append(refusals, hostRefusals(h, d, "--server-setup restarts Docker with")...)
+	if !systemdHere(h) {
 		return ds, refusals
 	}
 	if state := systemctlShow("ActiveState"); state != "active" {
@@ -528,6 +623,26 @@ func setupDocker(h setupHost, d remote.DockerFacts) (dockerSetup, []setup.Refusa
 		ds.running = len(strings.Fields(string(ids)))
 	}
 	return ds, refusals
+}
+
+// hostRefusals refuse what a root run of the setup's needs of the host, Docker answering (d):
+// a Docker that is this host's, or the run's root container would act on another machine, and
+// systemd, which what says the setup needs it for.
+func hostRefusals(h setupHost, d remote.DockerFacts, what string) []setup.Refusal {
+	var refusals []setup.Refusal
+	if !dockerHere(d) {
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: " + d.Name + ")", Fix: "unset DOCKER_HOST and DOCKER_CONTEXT for the deploy user"})
+	}
+	if !systemdHere(h) {
+		refusals = append(refusals, setup.Refusal{Item: setup.RefusalDocker, Message: "systemd is not this host's init, which " + what})
+	}
+	return refusals
+}
+
+// systemdHere says whether systemd is the host's init.
+func systemdHere(h setupHost) bool {
+	_, err := os.Stat(h.path("/run/systemd/system"))
+	return err == nil
 }
 
 // judgeDaemon is daemon.json as read (data, err from readDaemonFile) parsed, with what Docker
@@ -613,20 +728,11 @@ func applySetup(h setupHost, a setupApply) int {
 		return end()
 	}
 	record := setup.RecordPath(remote.UserConfigFile())
-	if record == "" {
-		return failed("no home to keep devopsy's record of this server in")
-	}
-	if err := os.MkdirAll(filepath.Dir(record), 0o700); err != nil {
-		return failed(err.Error())
-	}
-	lock, err := os.OpenFile(setup.LockPath(record), os.O_CREATE|os.O_WRONLY, 0o600)
+	lock, err := applyLock(record)
 	if err != nil {
 		return failed(err.Error())
 	}
 	defer lock.Close()
-	if err := (boundedWait{what: "another --server-setup"}).wait(context.Background(), report.Default(), func() (bool, error) { return tryFlock(lock, syscall.LOCK_EX) }); err != nil {
-		return failed(err.Error())
-	}
 
 	rd, err := readSetup(h, readHostDocker(h))
 	if err != nil {
@@ -642,8 +748,16 @@ func applySetup(h setupHost, a setupApply) int {
 		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}
 	// Every step is a root run: with none going (Docker refused), nothing goes at all, no
-	// image built and no chains read for it, said as the first session says it.
+	// image built and no chains read for it, said as the first session says it; but the
+	// record's floor note, which a release trusts, never outlives the Docker it noted.
 	if f.NoneGoes() {
+		if f.FloorNote && !slices.Contains(f.Refused(), setup.RefusalRecord) {
+			r := rd.record
+			r.Floor = floorNote(rd.floorMet)
+			if err := setup.WriteRecord(record, r); err != nil {
+				fail(err.Error())
+			}
+		}
 		return failed(cmp.Or(refusedLine(f), "nothing changed"))
 	}
 	// The chains read as root (an apply may build the util image), so a wipe reads to load
@@ -710,7 +824,7 @@ func applySetup(h setupHost, a setupApply) int {
 		sysctlText = setup.SysctlText()
 	}
 	if file(setup.ItemMounts) && f.Goes(setup.StepMounts) {
-		dropinText, _ = setup.MountsDropInText(f.Root)
+		dropinText = rd.dropin
 	}
 	raise := f.Goes(setup.StepBuffers) && slices.ContainsFunc(f.Buffers, func(b setup.BufferFact) bool { return b.Low })
 	give := !a.upgrade && f.RootAction != "" && f.Goes(setup.StepRoot)
@@ -778,24 +892,30 @@ func applySetup(h setupHost, a setupApply) int {
 		asked := restart && !scriptExit(err) && (hasLine(out.String(), remote.SetupAsked) || before != "" && strings.TrimSpace(string(marker)) == before+" "+token)
 		queued = asked && !hasLine(out.String(), remote.SetupNoSystem)
 		sayRootLines(out.String(), putNames, f.Root)
-		if err != nil && !asked {
-			// The run puts in order and stops at a failed put, daemon.json's last: what it
-			// said it did went in; what failed is said, and the next steps go on.
-			fail(err.Error())
-			if !hasLine(out.String(), remote.SetupPut+" "+setup.DaemonFile) {
-				if len(a.answers) > 0 {
-					report.Warn("daemon.json was not put, so its answers are asked again at the next --server-setup")
-				}
-				put, putNames, daemonText, next, recorded = nil, nil, nil, rd.record, false
-			}
-			if !hasLine(out.String(), remote.SetupPut+" "+setup.SysctlFile) {
-				sysctlText = ""
-			}
-			if !hasLine(out.String(), remote.SetupPut+" "+setup.MountsDropIn) {
-				dropinText = ""
-			}
-			raise, give = raise && hasLine(out.String(), remote.SetupRaised), give && (hasLine(out.String(), remote.SetupMade+" "+f.Root) || hasLine(out.String(), remote.SetupGave+" "+f.Root))
+		// The run puts in order and stops at a failed put, daemon.json's last: what it said it did
+		// went in, and only that is judged again; what failed is said, and the next steps go on. A
+		// restart asked cut the run's words, never what it did.
+		runErr := err
+		if asked {
+			runErr = nil
 		}
+		did := func(went ...string) bool { return rootRunDid(true, runErr, out.String(), "", went...) }
+		if runErr != nil {
+			fail(err.Error())
+		}
+		if !did(remote.SetupPut + " " + setup.DaemonFile) {
+			if len(a.answers) > 0 {
+				report.Warn("daemon.json was not put, so its answers are asked again at the next --server-setup")
+			}
+			put, putNames, daemonText, next, recorded = nil, nil, nil, rd.record, false
+		}
+		if !did(remote.SetupPut + " " + setup.SysctlFile) {
+			sysctlText = ""
+		}
+		if !did(remote.SetupPut + " " + setup.MountsDropIn) {
+			dropinText = ""
+		}
+		raise, give = raise && did(remote.SetupRaised), give && did(remote.SetupMade+" "+f.Root, remote.SetupGave+" "+f.Root)
 	}
 	// The record follows the file, whatever the restart does next; none over a record
 	// devopsy could not read, which it says to remove.
@@ -889,12 +1009,18 @@ func applySetup(h setupHost, a setupApply) int {
 		fail("what was applied did not hold", left...)
 	}
 	// An apply with no failure notes the devopsy that made it, which --upgrade applies once:
-	// one a refusal stopped a change of is applied again.
-	if again.record.Version != version && failures == 0 && len(f.Stopped()) == 0 && !slices.Contains(f.Refused(), setup.RefusalRecord) {
+	// one a refusal stopped a change of is applied again. Every apply notes whether this
+	// devopsy found Docker at its floor, as its last read finds it (floorNote).
+	if !slices.Contains(f.Refused(), setup.RefusalRecord) {
 		r := again.record
-		r.Version = version
-		if err := setup.WriteRecord(record, r); err != nil {
-			fail(err.Error())
+		if failures == 0 && len(f.Stopped()) == 0 {
+			r.Version = version
+		}
+		r.Floor = floorNote(again.floorMet)
+		if r.Version != again.record.Version || r.Floor != again.record.Floor {
+			if err := setup.WriteRecord(record, r); err != nil {
+				fail(err.Error())
+			}
 		}
 	}
 	if again.facts.Pending && !queued && !hasLine(out.String(), remote.SetupMarked) {
@@ -902,12 +1028,33 @@ func applySetup(h setupHost, a setupApply) int {
 		report.Say(report.InfoLevel, "Docker "+state, []string{detail}, soonerHint(""))
 	}
 	if dropinText != "" && !queued {
-		report.Info("Docker now waits for the release root's filesystem before it starts", "this applies from Docker's next start and only matters at a boot: no restart is needed")
+		dropInWaits(rd.space != "")
 	}
 	if line := refusedLine(f); line != "" {
 		report.Say(sayLevel(a.upgrade), line, nil)
 	}
 	return end()
+}
+
+// applyLock takes the server's apply lock beside its record (setup.LockPath), bounded and
+// said: --server-setup's and --upgrade's applies and --project-users setup's hold it, so no two
+// change the server at once.
+func applyLock(record string) (*os.File, error) {
+	if record == "" {
+		return nil, errors.New("no home to keep devopsy's record of this server in")
+	}
+	if err := os.MkdirAll(filepath.Dir(record), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(setup.LockPath(record), os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := (boundedWait{what: "another setup of this server"}).wait(context.Background(), report.Default(), func() (bool, error) { return tryFlock(lock, syscall.LOCK_EX) }); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return lock, nil
 }
 
 // refusalWords is how every command says a refusal of the setup's: its item and message, its
@@ -942,16 +1089,19 @@ func sayLevel(upgrade bool) report.Level {
 	return report.ErrorLevel
 }
 
-// fixWords is a refusal's fix as a remedy, none when it has none: its text, and the command that
-// prints its topic's steps when it has one (setup.Refusal.Howto).
+// fixWords is a refusal's fix as a remedy, none when it has none: its text, and its command
+// (setup.Refusal.Command) or the command that prints its topic's steps (setup.Refusal.Howto)
+// when it has one.
 func fixWords(r setup.Refusal) []report.Remedy {
 	switch {
 	case r.Fix == "":
 		return nil
+	case r.Command != "":
+		return []report.Remedy{report.Fix(r.Fix, r.Command)}
 	case r.Howto == "":
 		return []report.Remedy{report.Fix(r.Fix)}
 	}
-	return []report.Remedy{report.Fix(r.Fix+":", howto.Command(r.Howto))}
+	return []report.Remedy{stepsFix(r.Fix, r.Howto)}
 }
 
 // rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,
@@ -1018,6 +1168,21 @@ func (w quietQueued) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return os.Stderr.Write(p)
+}
+
+// rootRunDid says whether a root run did a step it was asked (asked): every one asked when the
+// run went (err nil), else only one whose lines (out) say it went, one of went holding (hasLine),
+// and do not say it failed (failed, "" for a run that stops at its first failure): what a run did
+// not say it did is no "what was applied did not hold", and a failure it said is said once. Every
+// apply's check after its root run (--server-setup's, --project-users setup's) goes by it.
+func rootRunDid(asked bool, err error, out, failed string, went ...string) bool {
+	switch {
+	case !asked || err == nil:
+		return asked
+	case failed != "" && hasLine(out, failed):
+		return false
+	}
+	return slices.ContainsFunc(went, func(w string) bool { return hasLine(out, w) })
 }
 
 // hasLine says whether out holds the line word, alone or first.
@@ -1142,9 +1307,11 @@ func runServerReady(args []string) int {
 	return 0
 }
 
-// serverReady is what refuses a release on this server: the tools, the release root; nothing
-// for a project user (projectUser), whose tree --project-users add made and whose Docker is
-// the door.
+// serverReady is what refuses a release on this server: the tools, the release root, then
+// what Docker answers of itself (dockerReady), asked only where the record's note does not
+// say this devopsy found Docker at its floor (floorNoted); nothing for a project user
+// (projectUser), whose tree --project-users add made and whose Docker is the door. A release
+// never writes the record.
 func serverReady(root, ref string, projectUser bool) []error {
 	if projectUser {
 		return nil
@@ -1156,20 +1323,56 @@ func serverReady(root, ref string, projectUser bool) []error {
 	if err := releaseRootReady(root, "nothing released", ref); err != nil {
 		errs = append(errs, err)
 	}
+	if floorNoted() {
+		return errs
+	}
+	return append(errs, dockerReady("nothing released")...)
+}
+
+// floorNoted says whether the setup's record notes that this devopsy's apply found Docker at
+// its floor (floorNote): a record missing, unreadable or of another devopsy notes nothing, and
+// a development build trusts no note, another build's of the same name included.
+func floorNoted() bool {
+	if !update.IsRelease(version) {
+		return false
+	}
+	r, exists, err := setup.ReadRecord(setup.RecordPath(remote.UserConfigFile()))
+	return err == nil && exists && r.Floor == version
+}
+
+// dockerReady is the setup's required check of Docker's own answers (dockerAnswers of
+// dockerFacts: its daemon, its plugins, the floor), each refusal an error with its fix, what
+// goes undone said in nothing: a release and --project-users add refuse on it before anything
+// changes.
+func dockerReady(nothing string) []error {
+	var errs []error
+	for _, r := range dockerAnswers(dockerFacts()) {
+		errs = append(errs, &report.Failure{Msg: r.Message + ": " + nothing, Remedies: fixWords(r)})
+	}
 	return errs
 }
 
-// releaseRootReady refuses a release root that is not a directory of this user's
-// (releaseRootCheck), what goes undone said in nothing, with the fix: --server-setup on ref
-// (in words when "") when it makes or gives the root, else the check's own words.
-func releaseRootReady(root, nothing, ref string) error {
+// releaseRootRefusal is the release root's required item for what needs it as it is (a
+// release, --project-users add and setup): a directory of this user's (releaseRootCheck), nil
+// when it is; one --server-setup makes or gives has --server-setup on ref as its fix (in words
+// when ""), anything else the check's own.
+func releaseRootRefusal(root, ref string) *setup.Refusal {
 	action, refusal := releaseRootCheck(root, os.Getuid())
-	setUp := setupFix(ref, "set the server up:", "set the server up with --server-setup first, which makes it the deploy user's")
-	switch {
-	case refusal != nil:
-		return &report.Failure{Msg: refusal.Message + ": " + nothing, Remedies: fixWords(*refusal)}
-	case action != "":
-		return &report.Failure{Msg: rootWords(root, action) + ": " + nothing, Remedies: []report.Remedy{setUp}}
+	if refusal != nil || action == "" {
+		return refusal
+	}
+	r := &setup.Refusal{Item: setup.RefusalRoot, Message: rootWords(root, action), Fix: "set the server up with --server-setup first, which makes it the deploy user's"}
+	if ref != "" {
+		r.Fix, r.Command = "set the server up:", "devopsy @"+ref+" --server-setup"
+	}
+	return r
+}
+
+// releaseRootReady refuses a release root that is not a directory of this user's
+// (releaseRootRefusal), what goes undone said in nothing.
+func releaseRootReady(root, nothing, ref string) error {
+	if r := releaseRootRefusal(root, ref); r != nil {
+		return &report.Failure{Msg: r.Message + ": " + nothing, Remedies: fixWords(*r)}
 	}
 	return nil
 }

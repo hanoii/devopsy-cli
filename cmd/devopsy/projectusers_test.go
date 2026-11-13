@@ -397,32 +397,68 @@ func TestCloseDeployProjects(t *testing.T) {
 	}
 }
 
-// --project-users add, once it added a project user, warns of a host that shows that user
-// every other user's processes, in --server-info's words (processesShownWarning), once; it
-// says nothing where /proc hides them or where it cannot tell. The mounts are a file of the
-// test's, as the host root puts them, never the test machine's own /proc.
+// --project-users add, once it added a project user, warns of /proc as --project-users setup
+// judges it (procHiding): a host that shows that user every other user's processes, in
+// --server-info's words (processesShownWarning), and a /proc hidden another way the setup
+// refuses (no gid=, a gid= of a group the deploy user is not in), in the setup's words, each
+// once; it says nothing where /proc hides them as the setup leaves them or where it cannot
+// tell. The mounts are a file of the test's, as the host root puts them, never the test
+// machine's own /proc, and the groups the test's own.
 func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 	t.Parallel()
-	msg, detail, fix := processesShownWarning()
-	warning := strings.Join(report.Lines(report.WarnLevel, msg, []string{detail}, []report.Remedy{fix}), "\n") + "\n"
+	msg, detail, fixes := processesShownWarning("devopsy@one:")
+	warning := strings.Join(report.Lines(report.WarnLevel, msg, []string{detail}, fixes), "\n") + "\n"
+	// Its fix is the setup on the server as typed, by hand the processes topic.
+	if !strings.Contains(warning, "devopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n"+
+		"devopsy: | or set it up by hand, with the steps this prints:\ndevopsy: | $ "+howto.Command(howto.Processes)+"\n") {
+		t.Errorf("the warning's remedies:\n%s", warning)
+	}
+	me := deployUserName()
 	for _, c := range []struct {
 		name, mounts string // mounts "" writes no mounts file: another system
-		warns        bool
+		member       bool   // the deploy user in group 990
+		want         string
 	}{
-		{"shown", "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n", true},
-		{"hidden", "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n", false},
-		{"hidden, by number", "proc /proc proc rw,relatime,hidepid=2 0 0\n", false},
-		{"no /proc mount", "sysfs /sys sysfs rw 0 0\n", false},
-		{"another system", "", false},
+		{name: "shown", mounts: "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n", want: warning},
+		{name: "hidden", mounts: "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n", member: true},
+		{name: "hidden for a group the deploy user is not in", mounts: "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=990,hidepid=invisible 0 0\n",
+			want: "devopsy: warning: /proc hides other users' processes (hidepid=invisible, gid=990), and the deploy user is not in that group\ndevopsy: | to fix it:\ndevopsy: | put " + me + " in the group proc-seers, as root\n"},
+		{name: "hidden, by number, with no gid=", mounts: "proc /proc proc rw,relatime,hidepid=2 0 0\n",
+			want: "devopsy: warning: /proc hides other users' processes (hidepid=2) with no gid=, so the deploy user sees only its own\ndevopsy: | to fix it:\ndevopsy: | add gid= with a group the deploy user is in to /proc's options where they are set (its line in /etc/fstab)\n"},
+		{name: "no /proc mount", mounts: "sysfs /sys sysfs rw 0 0\n"},
+		{name: "another system"},
 	} {
 		h := setupHost{root: t.TempDir()}
 		if c.mounts != "" {
 			write(t, h.path(procMounts), c.mounts, 0o644)
 		}
+		groups := func(key, who string) (string, string, bool) {
+			if key != "990" {
+				return "", "", false
+			}
+			return "proc-seers", "990", c.member && who == me
+		}
 		var out bytes.Buffer
-		warnProcessesShown(report.New(&out, false, 0), h.path(procMounts))
-		if want := map[bool]string{true: warning}[c.warns]; out.String() != want {
-			t.Errorf("%s: said %q, want %q", c.name, out.String(), want)
+		warnProcesses(report.New(&out, false, 0), h, "devopsy@one:", groups)
+		if out.String() != c.want {
+			t.Errorf("%s: said %q, want %q", c.name, out.String(), c.want)
+		}
+	}
+}
+
+// --project-users add's last line names the user and its entry, and the way to its keys in
+// words, a key's file being the operator's to name, on the server as typed when the session
+// named it.
+func TestProjectUsersAddSaysTheWayToKeys(t *testing.T) {
+	t.Parallel()
+	for ref, want := range map[string]string{
+		"devopsy@one:": "devopsy: project user devopsy-shop for shop, its entry in /e\ndevopsy: | add its keys with --ssh-keys --for shop add and each public key's file, on @devopsy@one:\n",
+		"":             "devopsy: project user devopsy-shop for shop, its entry in /e\ndevopsy: | add its keys with --ssh-keys --for shop add and each public key's file\n",
+	} {
+		var out bytes.Buffer
+		sayAdded(report.New(&out, false, 0), "devopsy-shop", "shop", "/e", ref)
+		if out.String() != want {
+			t.Errorf("%q: said %q, want %q", ref, out.String(), want)
 		}
 	}
 }
@@ -540,13 +576,21 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 	}
 }
 
-// --project-users add on a server with no door names the setting and the project-users topic,
-// whose steps make the door's directory and its config.
+// --project-users add on a server with no door names the setting, the setup as its fix, then
+// the project-users topic, whose steps make the door's directory and its config, as the other
+// way after it.
 func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	t.Parallel()
-	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
-	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
+	out, code := runDevopsy(t, t.TempDir(), []string{remote.ServerEnv + "=devopsy@one:"}, remote.ProjectUsersFlag, "add", "shop")
+	if code != 1 || !strings.Contains(out, "this server is not ready for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") ||
+		!strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n"+
+			"devopsy: | or set it up by hand, with the steps this prints:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add with no door (%d):\n%s", code, out)
+	}
+	// With no server named, the setup in words: never a placeholder.
+	out, _ = runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
+	if !strings.Contains(out, "run --project-users setup for this server, as its deploy user\n") || strings.Contains(out, "@<") {
+		t.Errorf("add with no door, no server named:\n%s", out)
 	}
 }
 
@@ -652,6 +696,20 @@ func TestLeftGroupID(t *testing.T) {
 		gid, left, err := leftGroupID(group, "devopsy-shop")
 		if gid != c.gid || left != c.left || (err != nil) != c.bad || (c.bad && !strings.Contains(err.Error(), "no project user's left")) {
 			t.Errorf("%q: gid %d, left %v, %v", c.file, gid, left, err)
+		}
+	}
+}
+
+// Asked as a project user, --project-users names the deploy user's address with the words as
+// typed, none added: bare, the command offered ends at --project-users, so it copies as it is.
+func TestProjectUsersAskedAsAProjectUser(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	for _, words := range [][]string{nil, {"list"}, {"remove", "shop", "--destroy"}, {"remove", "shop", "--destroy", "--yes"}} {
+		out, code := s.run([]string{"FAKE_PROJECT_HOST=one"}, append([]string{"@devopsy@one:", "--project-users"}, words...)...)
+		want := strings.Join(append([]string{"@one: --project-users"}, words...), " ") + "\n"
+		if code != 1 || !strings.Contains(out, "project users are the server's deploy user's") || !strings.Contains(out, want) {
+			t.Errorf("%v (%d), want %q:\n%s", words, code, want, out)
 		}
 	}
 }

@@ -47,19 +47,23 @@ func BufferAtLeast(live string) (bool, error) {
 	return n >= BufferSize, nil
 }
 
-// MountsDropIn makes Docker wait at boot for the release root's mounts: containers
-// started before them write their bind mounts to the disk under them.
+// MountsDropIn makes Docker wait at boot for the release root's mounts, and the door's
+// space's: containers started before them write their bind mounts to the disk under them.
 const MountsDropIn = "/etc/systemd/system/docker.service.d/devopsy-mounts.conf"
 
-// MountsDropInText is MountsDropIn's text for the release root, whatever it is on: on /
-// the dependency is -.mount, always there. A root systemd cannot read in a unit file (a
-// control character, not UTF-8) is an error.
-func MountsDropInText(root string) (string, error) {
-	p, err := systemdPath(filepath.Clean(root))
-	if err != nil {
-		return "", err
+// MountsDropInText is MountsDropIn's text for paths (the release root, then the door's space
+// where there is one), whatever they are on: on / the dependency is -.mount, always there. A
+// path systemd cannot read in a unit file (a control character, not UTF-8) is an error.
+func MountsDropInText(paths ...string) (string, error) {
+	words := make([]string, len(paths))
+	for i, root := range paths {
+		p, err := systemdPath(filepath.Clean(root))
+		if err != nil {
+			return "", err
+		}
+		words[i] = p
 	}
-	return Header + "\n[Unit]\nRequiresMountsFor=" + p + "\n", nil
+	return Header + "\n[Unit]\nRequiresMountsFor=" + strings.Join(words, " ") + "\n", nil
 }
 
 // systemdPath is p as a unit file's path list takes it, read back as p: a separator, a

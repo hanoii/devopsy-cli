@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// TestRecordText keeps the record's text: the header, the devopsy that last applied here, Parts'
-// order, each value single-quoted canonical JSON, a part no longer wanted kept after them.
+// TestRecordText keeps the record's text: the header, the devopsy that last applied here, the one
+// that last found Docker at its floor, Parts' order, each value single-quoted canonical JSON, a part no longer wanted kept after them.
 func TestRecordText(t *testing.T) {
 	t.Parallel()
-	r := Record{Version: "0.65.0", Daemon: map[string]Entry{
+	r := Record{Version: "0.65.0", Floor: "0.66.0", Daemon: map[string]Entry{
 		"default-address-pools": {Kept: `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`},
 		"live-restore":          {Applied: `{"live-restore":true}`},
 		"logs":                  {Applied: `{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"}}`},
@@ -24,6 +24,7 @@ func TestRecordText(t *testing.T) {
 	want := `# Written by devopsy (--server-setup, --upgrade): what it applied here. A record, not
 # settings: change daemon.json, never this file.
 devopsy: 0.65.0
+docker-floor: 0.66.0
 daemon.json:
   logs:
     applied: '{"log-driver":"local","log-opts":{"max-file":"5","max-size":"20m"}}'
@@ -44,8 +45,9 @@ daemon.json:
 	if _, err := ParseRecord([]byte("daemon.json:\n  logs:\n    applied: '{}'\n    kept: '{}'\n")); err == nil {
 		t.Error("an entry both applied and kept read")
 	}
-	// No version line: none recorded, read as another devopsy's.
-	if r, err := ParseRecord([]byte("daemon.json:\n  logs:\n    applied: '{}'\n")); err != nil || r.Version != "" || r.Daemon["logs"].Applied != "{}" {
+	// No version line: none recorded, read as another devopsy's; no floor line, the floor
+	// never found met.
+	if r, err := ParseRecord([]byte("daemon.json:\n  logs:\n    applied: '{}'\n")); err != nil || r.Version != "" || r.Floor != "" || r.Daemon["logs"].Applied != "{}" {
 		t.Errorf("no version line: %+v, %v", r, err)
 	}
 }
@@ -91,6 +93,54 @@ func TestRecordFile(t *testing.T) {
 	}
 	if _, _, err := ReadRecord(path); err == nil {
 		t.Error("a broken record read")
+	}
+}
+
+// TestWriteFile keeps a whole file's write: by rename, its mode set, nothing left beside it
+// whether it went or failed, and a symbolic link written at the file it names, the link kept.
+func TestWriteFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(real), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("old\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "home", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "real", "config.yaml"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(link, []byte("new\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link is no link: %v", err)
+	}
+	if data, _ := os.ReadFile(real); string(data) != "new\n" {
+		t.Errorf("the file the link names: %q", data)
+	}
+	if fi, _ := os.Stat(real); fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v", fi.Mode())
+	}
+	// A rename that fails (a directory in the file's place) leaves nothing beside it.
+	if err := os.Remove(real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(link, []byte("new\n"), 0o600); err == nil {
+		t.Error("a write over a directory went")
+	}
+	for _, d := range []string{filepath.Dir(real), filepath.Dir(link)} {
+		if es, _ := os.ReadDir(d); len(es) != 1 {
+			t.Errorf("left in %s: %v", d, es)
+		}
 	}
 }
 

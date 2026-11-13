@@ -562,7 +562,7 @@ func TestDoorPullKeepsAPresentImageUnderMissing(t *testing.T) {
 	}
 }
 
-// A claim checks buildx's version (hostReady, doorHostReady) under the DOCKER_CONFIG its copy
+// A claim checks buildx's version (hostReady, dockerFloor) under the DOCKER_CONFIG its copy
 // runs with: Docker finds a plugin in $DOCKER_CONFIG/cli-plugins first, so the deploy user's own
 // ~/.docker could hold another buildx than the one that copies, and an older one there fails
 // the copy in words the floor is there to replace.

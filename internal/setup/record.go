@@ -47,25 +47,31 @@ const recordHeader = `# Written by devopsy (--server-setup, --upgrade): what it 
 type Record struct {
 	// Version is the devopsy that last applied here with no failure, "" for none recorded.
 	Version string
-	Daemon  map[string]Entry
+	// Floor is the devopsy whose apply last found Docker at its floor, "" for none: a release
+	// of that devopsy asks Docker nothing of it.
+	Floor  string
+	Daemon map[string]Entry
 }
 
-// The record's keys: daemon.json's parts, and the devopsy that last applied here.
+// The record's keys: daemon.json's parts, the devopsy that last applied here, and the one
+// that last found Docker at its floor.
 const (
 	recordDaemonKey  = "daemon.json"
 	recordVersionKey = "devopsy"
+	recordFloorKey   = "docker-floor"
 )
 
 // ParseRecord reads a record's text. An entry with both applied and kept is an error.
 func ParseRecord(data []byte) (Record, error) {
 	var doc struct {
 		Version string           `yaml:"devopsy"`
+		Floor   string           `yaml:"docker-floor"`
 		Daemon  map[string]Entry `yaml:"daemon.json"`
 	}
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return Record{}, err
 	}
-	r := Record{Version: doc.Version, Daemon: map[string]Entry{}}
+	r := Record{Version: doc.Version, Floor: doc.Floor, Daemon: map[string]Entry{}}
 	for name, e := range doc.Daemon {
 		if e.Applied != "" && e.Kept != "" {
 			return Record{}, fmt.Errorf("%s: %s: both applied and kept", recordDaemonKey, name)
@@ -110,6 +116,9 @@ func (r Record) Marshal() ([]byte, error) {
 	if r.Version != "" {
 		doc.Content = append(doc.Content, scalar(recordVersionKey, 0), scalar(r.Version, 0))
 	}
+	if r.Floor != "" {
+		doc.Content = append(doc.Content, scalar(recordFloorKey, 0), scalar(r.Floor, 0))
+	}
 	doc.Content = append(doc.Content, scalar(recordDaemonKey, 0), parts)
 	var b bytes.Buffer
 	b.WriteString(recordHeader)
@@ -145,10 +154,23 @@ func ReadRecord(path string) (r Record, exists bool, err error) {
 	return r, true, nil
 }
 
-// WriteRecord writes r at path, mode 0600, by rename: a reader sees the old record or
-// the new one, never part of one. Its directory is made when missing.
+// WriteRecord writes r at path, mode 0600, whole (WriteFile).
 func WriteRecord(path string, r Record) error {
 	data, err := r.Marshal()
+	if err != nil {
+		return err
+	}
+	return WriteFile(path, data, 0o600)
+}
+
+// WriteFile writes data at path whole, mode mode, by rename: a reader sees the old text or the
+// new, never part of one. A temporary file of its own beside it is written, synced and renamed
+// over it, and removed when any of that fails. A path that is a symbolic link is written at the
+// file it names, the link staying a link; the directory is made, 0700, when missing. Every file
+// a setup writes in the deploy user's config directory (the record, config.yaml's door:) goes
+// through it.
+func WriteFile(path string, data []byte, mode os.FileMode) error {
+	path, err := linkTarget(path)
 	if err != nil {
 		return err
 	}
@@ -156,13 +178,13 @@ func WriteRecord(path string, r Record) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, "."+RecordFile+".*")
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp) // gone once renamed
-	if err := f.Chmod(0o600); err != nil {
+	if err := f.Chmod(mode); err != nil {
 		f.Close()
 		return err
 	}
@@ -180,9 +202,30 @@ func WriteRecord(path string, r Record) error {
 	return os.Rename(tmp, path)
 }
 
+// linkTarget is the file path names once its symbolic links are followed, each relative one
+// from the link's own directory, path itself when it is no link or is not there.
+func linkTarget(path string) (string, error) {
+	p := path
+	for range 40 {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return p, nil
+		}
+		to, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(p), to)
+		}
+		p = to
+	}
+	return "", fmt.Errorf("%s: too many symbolic links", path)
+}
+
 // Set is r with part's entry set to e, for a decision's record.
 func (r Record) Set(part string, e Entry) Record {
-	out := Record{Version: r.Version, Daemon: make(map[string]Entry, len(r.Daemon)+1)}
+	out := Record{Version: r.Version, Floor: r.Floor, Daemon: make(map[string]Entry, len(r.Daemon)+1)}
 	for k, v := range r.Daemon {
 		out.Daemon[k] = v
 	}

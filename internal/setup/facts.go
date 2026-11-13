@@ -46,6 +46,9 @@ type Facts struct {
 	// Record is the record's path, "" while there is none: the server is not set up by
 	// devopsy yet.
 	Record string `json:"record,omitempty"`
+	// FloorNote: the record's note of the devopsy that found Docker at its floor (Record.Floor)
+	// is not what this read finds, so an apply writes it, or takes it off.
+	FloorNote bool `json:"floor_note,omitempty"`
 }
 
 // What an apply does to the release root.
@@ -62,6 +65,9 @@ type Refusal struct {
 	// Howto is the topic of devopsy --server-setup-howto that has the fix's steps, "" for none:
 	// the operator's devopsy offers its command after the fix's text (fixWords).
 	Howto howto.Name `json:"howto,omitempty"`
+	// Command is the fix's command, offered after its text, "" for none: a command of devopsy's
+	// on the server's address as its session named it, the text saying it in words without one.
+	Command string `json:"command,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
 	// file).
@@ -86,11 +92,15 @@ func FactOf(s PartState) PartFact {
 	return PartFact{Name: s.Part.Name, State: s.State, Observed: s.Observed, Kept: s.Entry.Kept, Want: s.Part.Want, Puts: d.Put, Records: d.Record != nil}
 }
 
-// FileFact is a file devopsy writes whole: in sync when it holds its text exactly.
+// FileFact is a file devopsy writes whole: in sync when it holds its text exactly, Missing
+// when it is not there (said only by the facts that word it so). With Link, it is a link that
+// enables the unit Link names: in sync when it leads there.
 type FileFact struct {
-	Item   string `json:"item"`
-	Path   string `json:"path"`
-	InSync bool   `json:"in_sync"`
+	Item    string `json:"item"`
+	Path    string `json:"path"`
+	InSync  bool   `json:"in_sync"`
+	Missing bool   `json:"missing,omitempty"`
+	Link    string `json:"link,omitempty"`
 }
 
 // BufferFact is a live socket buffer: Low when below BufferSize.

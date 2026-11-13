@@ -328,41 +328,109 @@ The door names what it refuses, and logs each refusal in
 
 ## Setting up a server
 
-A server needs `sudo` and `acl` installed (`sudo`, `visudo` and
-`setfacl`), the door's directory on a mount of its own, and a current
-Docker: its containerd image store, which Docker 29 uses by default on a
-fresh install, and buildx 0.33.0 or later. `add` refuses a server without
-them before it changes anything. On a server with project users,
+A server for project users needs `sudo` and `acl` installed (`sudo`,
+`visudo` and `setfacl`), which devopsy leaves to the admin, the Docker
+every server runs ([Docker](servers.md#docker)), a release root of the
+deploy user's, which `--server-setup` makes, and what
+`--project-users setup` sets. On a server with project users,
 `--server-info` and `--server-setup` warn of a missing `sudo`, `visudo`
 or `setfacl`; on one with none yet, `--server-info` notes it without a
 warning and `--server-setup` says nothing of it. The commands below
 address the server by its deploy user, `devopsy@vm1`.
 
-Every user's processes should be hidden from the others too: a process's
-command line names projects and paths, and a devopsy session's is its
-whole script, the operator's command in it. `devopsy
---server-setup-howto processes` prints the steps that hide them ([Server
-setup how-to](server-setup-howto.md#processes)). devopsy only checks it:
-`add`, and `--server-info` on a server with project users, warn when
-`/proc` has no `hidepid` of `invisible`, `ptraceable` or `noaccess`
-(`2`, `4` or `1` on an older kernel), and go on; on a server with none
-yet, `--server-info` says it without a warning. `noaccess` shows that a
-process is there and whose it is, never its command line.
-
-1. Set the server up for project users, as root: `devopsy
-   --server-setup-howto project-users` prints the steps ([Server setup
+1. Install `sudo` and `acl`, as root: `devopsy --server-setup-howto
+   project-users` prints the steps ([Server setup
    how-to](server-setup-howto.md#project-users)).
 
-2. Add the project user and its keys, locally:
+2. Set the server up, then set it up for project users, locally:
+
+   ```sh
+   devopsy @devopsy@vm1: --server-setup
+   devopsy @devopsy@vm1: --project-users setup
+   ```
+
+3. Add the project user and its keys, locally:
 
    ```sh
    devopsy @devopsy@vm1: --project-users add shop
    devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
    ```
 
-3. Reboot the server after the first `add`. sshd takes devopsy's part of
+4. Reboot the server after the first `add`. sshd takes devopsy's part of
    its configuration at the next boot, and until then no project user
    logs in; `--project-users` says so.
+
+### `--project-users setup`
+
+`devopsy @devopsy@vm1: --project-users setup [<directory>] [--yes]` runs
+as the deploy user, in two sessions as `--server-setup` does: it shows
+what is missing, asks once, applies, and checks again. `--yes` asks
+nothing, and without a terminal it fails naming `--yes`. A second run
+changes nothing. It refuses a server without `sudo`, `visudo` or
+`setfacl`, with a Docker below the floor, or whose release root is not a
+directory of the deploy user's (`--server-setup` makes it so), before
+anything changes, as `add` would refuse it.
+Neither `--server-setup` nor `--upgrade` runs it: project users are a
+choice. It sets:
+
+- The door's directory, `<space>`: `/var/lib/devopsy-door` unless the
+  command names another, or the one `door: space:` names already, in
+  which case another directory is refused (a space is moved by hand).
+  It is made the deploy user's, mode 755, and bound on itself with
+  `nosuid` and `nodev` now and at every boot by a mount unit of
+  devopsy's in `/etc/systemd/system`, named as `systemd-escape --path`
+  names it (`var-lib-devopsy\x2ddoor.mount`), never by a line in
+  `/etc/fstab`. Docker's mounts drop-in names it beside the release
+  root once it is mounted, so Docker starts after it at boot; a mount
+  that fails leaves it out, since Docker would not start at the next
+  boot on a mount that fails. A space whose mount went
+  (a boot where it failed) is mounted again, its files and all: a
+  directory bound on itself hides nothing. A space another user owns,
+  one root owns that holds files, one that is no directory, or someone's
+  mount without the two options is refused, and so is one any part of
+  whose path is a symbolic link, or under a directory another user owns
+  or may write (`/tmp` included, unless the directory in it is already
+  the deploy user's): devopsy acts on it as root, and another user could
+  swap it for a link to a system directory. Where `door: space:` names
+  the directory refused, the fix says what to change of it, or to move
+  it by hand and set `door: space:` to its new path.
+- `door:` with `space:` in the deploy user's `config.yaml`, appended as
+  text when the file has no `door:`, the rest of the file as it is, once
+  the directory is made and mounted, whatever else of the run failed.
+  The two lines are shown before the question. A `door:` with no
+  `space:` is refused, naming the line to add, and so is a file where
+  lines added at its end would not be read (its YAML ends before its
+  last line), naming the two lines to add by hand.
+- Every user's processes hidden from the others: a process's command
+  line names projects and paths, and a devopsy session's is its whole
+  script, the operator's command in it. The group `devopsy-proc` is
+  made, the deploy user put in it, and `devopsy-proc.service` remounts
+  `/proc` with `hidepid=invisible` and the group's number early at every
+  boot; where the server has polkit, a drop-in gives it the group. The
+  deploy user sees every process from its next login: a session open
+  during the setup, a shared SSH connection's included, sees only its
+  own until it is opened again. A tool that runs as another user and
+  reads `/proc` (a monitoring agent) sees only its own processes until
+  it is put in `devopsy-proc`.
+
+What is set another way is left as it is, judged by what the mounts
+say, never by whose file made it: a space already on a mount with
+`nosuid` and `nodev` (a line in `/etc/fstab`, by hand), or a `/proc`
+already hiding processes with `gid=` a group the deploy user is in.
+A `/proc` that hides them with no `gid=`, or for a group the deploy user
+is not in, is refused. The files devopsy writes for it start with
+`# Written by devopsy (--project-users setup).`
+
+`add`, and `--server-info` on a server with project users, warn when
+`/proc` has no `hidepid` of `invisible`, `ptraceable` or `noaccess`
+(`2`, `4` or `1` on an older kernel), or when it hides them another way
+the setup refuses, in the setup's words, and go on; on a server with
+none yet, `--server-info` says it without a warning. `noaccess` shows that a
+process is there and whose it is, never its command line. `add` on a
+server with no `door: space:`, or one not mounted `nosuid,nodev`, and
+`--server-info`'s warning of one not mounted so (`W0002`), offer
+`--project-users setup` as the fix, and the how-to's steps for doing it
+by hand.
 
 `add` makes `devopsy-shop` with no password, a home closed to others,
 and one id from 50000 to 59999 for its uid and its group, which no
@@ -384,6 +452,9 @@ checked before it lands: the `devopsy-projects` and `devopsy-door`
 groups, the door's sudo rules, a `docker` that is devopsy, sshd's part, which asks devopsy for a
 project user's keys, and the firewall. `add` refuses:
 
+- while the release root is not a directory of the deploy user's, which
+  `--server-setup` makes it;
+- while Docker is below its floor ([Docker](servers.md#docker));
 - while `<space>` is not mounted `nosuid,nodev`;
 - while the deploy user or root is in `devopsy-projects`, which would
   have sshd ignore their own keys;
@@ -415,9 +486,8 @@ containers, volumes and networks under its names, its data, image names
 and directories in the door's space), as `--server-info` does, and each
 whose `remove --destroy` did not complete, with that command, which
 completes it, instead. `--server-info` also checks that `<space>` is
-mounted `nosuid,nodev`, that Docker has the containerd image store and
-buildx 0.33.0, that other users' processes are hidden from project
-users, and whether sshd waits for a reboot.
+mounted `nosuid,nodev`, that other users' processes are hidden from
+project users, and whether sshd waits for a reboot.
 
 ## Releasing as a project user
 

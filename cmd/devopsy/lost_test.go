@@ -163,7 +163,10 @@ func TestLostResolvedSays(t *testing.T) {
 	if code != 255 {
 		t.Fatalf("the fake lost no session (%d):\n%s", code, errs)
 	}
-	if !strings.Contains(errs, "devopsy: error:") || !strings.Contains(errs, "$ "+"devopsy @devopsy@one:prod --import db --resolved") {
+	// Its fix first, then the hint that shows whether the fix is still needed, worded to read
+	// after it.
+	if !strings.Contains(errs, "devopsy: error:") || !strings.Contains(errs, "devopsy: | to fix it:\ndevopsy: | $ devopsy @devopsy@one:prod --import db --resolved\n"+
+		"devopsy: | this shows whether its mark is still there:\ndevopsy: | $ devopsy @devopsy@one:prod --status\n") {
 		t.Errorf("a --resolved whose session was lost (%d) said nothing of devopsy's:\n%s", code, errs)
 	}
 	// Its devopsy killed as it starts the record: the mark stays, said.

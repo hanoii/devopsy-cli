@@ -112,57 +112,6 @@ func TestProcessesStepKeepsFstab(t *testing.T) {
 	}
 }
 
-// The image store's step, its lines pasted one after the other, leaves daemon.json as it was
-// and restarts nothing when jq cannot rewrite it (a file that is no JSON, jq not installed);
-// with a jq that rewrites it, the file holds jq's output and Docker restarts once.
-func TestImageStoreStepKeepsDaemonJSONWhenJqFails(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	daemon := filepath.Join(dir, "daemon.json")
-	// A trailing comma: Docker's own parser refuses it too, but the file's other settings are
-	// the admin's to mend, not to lose.
-	before := "{\n  \"log-driver\": \"local\",\n  \"live-restore\": true,\n}\n"
-	if err := os.WriteFile(daemon, []byte(before), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	restarted := filepath.Join(dir, "restarted")
-	path := fakes(t, map[string]string{
-		"jq":        "echo 'jq: error: Objects must consist of key:value pairs' >&2\nexit 2\n",
-		"systemctl": "echo \"$*\" >> " + restarted + "\n",
-	}, "apt-get", "docker", "jq", "systemctl")
-	s := stepWith(t, ProjectUsers, "containerd-snapshotter")
-	// The step's first command shows the store, as the step says, before anything changes.
-	if s.Cmds[0] != `docker info --format '{{.DriverStatus}}'` {
-		t.Errorf("the image store's step starts with %q, not the command that shows the store", s.Cmds[0])
-	}
-	out := pasted(t, s, path, "/etc/docker/daemon.json", daemon)
-	got, err := os.ReadFile(daemon)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != before {
-		t.Errorf("a jq that failed left daemon.json as %q, want it untouched:\n%s", got, out)
-	}
-	if r, _ := os.ReadFile(restarted); len(r) > 0 {
-		t.Errorf("Docker restarted though daemon.json was not rewritten: %s", r)
-	}
-	// A jq that rewrites it: the file holds its output, Docker restarts, no file is left.
-	path = fakes(t, map[string]string{
-		"jq":        "echo '{\"features\":{\"containerd-snapshotter\":true}}'\n",
-		"systemctl": "echo \"$*\" >> " + restarted + "\n",
-	}, "apt-get", "docker", "jq", "systemctl")
-	out = pasted(t, s, path, "/etc/docker/daemon.json", daemon)
-	if got, _ := os.ReadFile(daemon); string(got) != "{\"features\":{\"containerd-snapshotter\":true}}\n" {
-		t.Errorf("a jq that succeeded left daemon.json as %q:\n%s", got, out)
-	}
-	if r, _ := os.ReadFile(restarted); string(r) != "restart docker\n" {
-		t.Errorf("Docker's restarts after a rewrite: %q", r)
-	}
-	if _, err := os.Stat(daemon + ".new"); err == nil {
-		t.Error("the step left daemon.json.new")
-	}
-}
-
 // The door's config step adds door: on a line of its own to a config that ends without a
 // newline, the file's last key kept as it was, and a second run changes nothing.
 func TestDoorConfigStepKeepsTheConfigsLastLine(t *testing.T) {
@@ -193,18 +142,19 @@ func TestDoorConfigStepKeepsTheConfigsLastLine(t *testing.T) {
 	}
 }
 
-// The project-users topic's buildx step upgrades buildx's package alone and restarts nothing:
-// an upgrade of docker-ce or containerd.io restarts Docker, which stops every container.
-func TestBuildxStepUpgradesOnlyBuildx(t *testing.T) {
+// The docker topic's plugins step upgrades buildx's and compose's packages alone and restarts
+// nothing: an upgrade of docker-ce or containerd.io restarts Docker, which stops every
+// container.
+func TestPluginsStepUpgradesOnlyThePlugins(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "log")
 	logged := "echo \"$(basename \"$0\") $*\" >> " + log + "\n"
 	path := fakes(t, map[string]string{"apt-get": logged, "systemctl": logged}, "apt-get", "systemctl")
-	out := pasted(t, stepWith(t, ProjectUsers, "docker-buildx-plugin"), path)
+	out := pasted(t, stepWith(t, Docker, "--only-upgrade"), path)
 	got, _ := os.ReadFile(log)
-	if want := "apt-get update\napt-get install -y --only-upgrade docker-buildx-plugin\n"; string(got) != want {
-		t.Errorf("the buildx step ran:\n%s\nwant:\n%s\n%s", got, want, out)
+	if want := "apt-get update\napt-get install -y --only-upgrade docker-buildx-plugin docker-compose-plugin\n"; string(got) != want {
+		t.Errorf("the plugins step ran:\n%s\nwant:\n%s\n%s", got, want, out)
 	}
 }
 

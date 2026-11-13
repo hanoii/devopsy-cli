@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -116,20 +117,20 @@ func toolMissingWords(name string) (msg string, door bool) {
 // (howto.Tools): the tools' refusal's fix (fixWords), a missing one's where it is warned of,
 // a hint where the door's is only noted. The refusal's and the warnings' are one text, so a
 // run says it once after the last of them (sharedLater).
-const toolsFixText = "install what is missing with the system's packages, as root"
+const toolsFixText = "install what is missing with the system's packages"
 
 // toolsFix is toolsFixText as a fix, as fixWords words the tools' refusal's.
-var toolsFix = report.Fix(toolsFixText+":", howto.Command(howto.Tools))
+var toolsFix = stepsFix(toolsFixText, howto.Tools)
 
 // doorToolsFixText is the way out of a door's tool missing (sudo, visudo, setfacl), which
 // only project users need, so by their topic's steps (howto.ProjectUsers), never the tools':
 // a fix where it is warned of or refused, a hint where it is only noted.
-const doorToolsFixText = "install sudo and acl with the system's packages, as root:"
+const doorToolsFixText = "install sudo and acl with the system's packages"
 
 // toolFix is the fix of a missing tool: the door's by doorToolsFixText, any other by toolsFix.
 func toolFix(door bool) report.Remedy {
 	if door {
-		return report.Fix(doorToolsFixText, howto.Command(howto.ProjectUsers))
+		return stepsFix(doorToolsFixText, howto.ProjectUsers)
 	}
 	return toolsFix
 }
@@ -146,9 +147,6 @@ func doorFacts(read string) *remote.DoorFacts {
 	if err := spaceGuarded(d.Space); err != nil {
 		f.Unguarded = err.Error()
 	}
-	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
-		f.Docker = err.Error()
-	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		f.Reboot = true
 	}
@@ -162,82 +160,138 @@ func doorFacts(read string) *remote.DoorFacts {
 // host root (setupHost) in tests.
 const procMounts = "/proc/mounts"
 
+// mountEntry is one line of a /proc/mounts text: where it is mounted, its type and options.
+type mountEntry struct {
+	point, fstype string
+	opts          []string
+}
+
+// parseMounts is a /proc/mounts text's mounts, in its order, each mount point as the kernel
+// escapes it (\040 a space, \011 a tab, \012 a newline, \134 a backslash) read back.
+func parseMounts(text string) []mountEntry {
+	var ms []mountEntry
+	for _, line := range strings.Split(text, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 {
+			continue
+		}
+		ms = append(ms, mountEntry{point: unescapeMount(f[1]), fstype: f[2], opts: strings.Split(f[3], ",")})
+	}
+	return ms
+}
+
+// unescapeMount reads back a field of /proc/mounts, whose \ooo is the byte of that octal.
+func unescapeMount(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+4 <= len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// mountOf is the mount path p is on: the last listed of the longest mount point holding it,
+// which a path there reaches.
+func mountOf(ms []mountEntry, p string) (mountEntry, bool) {
+	var found mountEntry
+	ok := false
+	for _, m := range ms {
+		in := m.point == "/" || p == m.point || strings.HasPrefix(p, strings.TrimSuffix(m.point, "/")+"/")
+		if in && (!ok || len(m.point) >= len(found.point)) {
+			found, ok = m, true
+		}
+	}
+	return found, ok
+}
+
+// opt is the mount's option key: its value after = ("" for a flag), and whether it is there.
+func (m mountEntry) opt(key string) (string, bool) {
+	for _, o := range m.opts {
+		if o == key {
+			return "", true
+		}
+		if v, ok := strings.CutPrefix(o, key+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// procMount is the proc mount on /proc in a /proc/mounts text, false with none.
+func procMount(mounts string) (mountEntry, bool) {
+	m, ok := mountOf(parseMounts(mounts), "/proc")
+	return m, ok && m.point == "/proc" && m.fstype == "proc"
+}
+
 // procHidePID is /proc's hidepid in mounts, a /proc/mounts text, as the kernel prints it
 // (invisible, noaccess or ptraceable since Linux 5.8, 2 or 1 before it), "off" for a /proc
 // with none, which the kernel then leaves out, and "" with no proc mount on /proc. The last
 // mount on /proc is the one a path there reaches.
 func procHidePID(mounts string) string {
-	hidepid := ""
-	for _, line := range strings.Split(mounts, "\n") {
-		f := strings.Fields(line)
-		if len(f) < 4 || f[1] != "/proc" {
-			continue
-		}
-		hidepid = ""
-		if f[2] != "proc" {
-			continue
-		}
-		hidepid = "off"
-		for _, o := range strings.Split(f[3], ",") {
-			if v, ok := strings.CutPrefix(o, "hidepid="); ok {
-				hidepid = v
-			}
-		}
-	}
-	return hidepid
-}
-
-// readHidePID is procHidePID of the mounts file at path, "" where it cannot be read (a system
-// with no /proc, macOS).
-func readHidePID(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	m, ok := procMount(mounts)
+	if !ok {
 		return ""
 	}
-	return procHidePID(string(data))
+	if v, ok := m.opt("hidepid"); ok {
+		return v
+	}
+	return "off"
 }
 
-// processesHidden says whether hidepid keeps a user from what other users' processes run:
-// invisible (2) and ptraceable (4) hide the processes, and noaccess (1) shows only that each is
-// there and whose, closing everything under /proc/<pid>, its command line included.
-func processesHidden(hidepid string) bool {
-	switch hidepid {
-	case "invisible", "2", "ptraceable", "4", "noaccess", "1":
-		return true
-	}
-	return false
-}
+// processesHidden says whether hidepid keeps a user from what other users' processes run, by
+// the one judgment (setup.Hiding).
+func processesHidden(hidepid string) bool { return setup.Hiding(hidepid) }
 
 // processesShown says whether hidepid, as procHidePID reads it, shows a project user every other
 // user's processes; "" is unknown (an older server's facts, no /proc mount), never said.
 func processesShown(hidepid string) bool { return hidepid != "" && !processesHidden(hidepid) }
 
-// processesFix is the way out of a /proc that shows every user's processes, the setting itself
-// with the command that prints its steps, never a tool that sets it: devopsy checks it and never
-// mounts /proc, the host's hardening being its admin's.
-const processesFix = "mount /proc with hidepid=invisible and gid= a group the deploy user is in, in /etc/fstab too, as root:"
+// projectUsersSetup is what --project-users setup sets offered as kind (report.Fix, else
+// report.Hint): the setup on ref, the server as typed, in words where it is "", then topic's
+// steps as a hint for doing it by hand.
+func projectUsersSetup(kind func(string, ...string) report.Remedy, ref string, topic howto.Name) []report.Remedy {
+	cmd := ""
+	if ref != "" {
+		cmd = "devopsy @" + ref + " --project-users setup"
+	}
+	return []report.Remedy{offer(kind, "set the server up for project users:", cmd, "run --project-users setup for this server, as its deploy user"),
+		byHandHint(topic)}
+}
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
-// that shows project users every other user's processes (processesShown).
-func processesShownWarning() (msg, detail string, fix report.Remedy) {
+// that shows project users every other user's processes (processesShown), its fixes on ref
+// (projectUsersSetup).
+func processesShownWarning(ref string) (msg, detail string, fixes []report.Remedy) {
 	return "/proc shows project users every other user's processes (no hidepid)",
 		"their command lines can hold a secret",
-		report.Fix(processesFix, howto.Command(howto.Processes))
+		projectUsersSetup(report.Fix, ref, howto.Processes)
 }
 
 // processesShownNote is the same on a server with no project user, where it only matters once
-// one is added.
-func processesShownNote() (msg string, hint report.Remedy) {
+// one is added: the setup a hint.
+func processesShownNote(ref string) (msg string, hints []report.Remedy) {
 	return "/proc shows every user's processes (no hidepid), which matters once the server has project users",
-		report.Hint(processesFix, howto.Command(howto.Processes))
+		projectUsersSetup(report.Hint, ref, howto.Processes)
 }
 
-// warnProcessesShown says processesShownWarning on l where the mounts file at mounts (procMounts)
-// shows project users every other user's processes, nothing where it hides them or cannot tell.
-func warnProcessesShown(l *report.Logger, mounts string) {
-	if processesShown(readHidePID(mounts)) {
-		msg, detail, fix := processesShownWarning()
-		l.Say(report.WarnLevel, msg, []string{detail}, fix)
+// warnProcesses says on l what --project-users setup would of /proc at h (procHidingAt, groups
+// the group lookup): processesShownWarning where it shows project users every other user's
+// processes, the setup's refusal where it hides them another way the setup refuses, in the
+// setup's words, nothing where it hides them as the setup leaves them or cannot tell.
+func warnProcesses(l *report.Logger, h setupHost, ref string, groups groupLookup) {
+	p, refused := procHidingAt(h, groups)
+	switch {
+	case processesShown(p.HidePID):
+		msg, detail, fixes := processesShownWarning(ref)
+		l.Say(report.WarnLevel, msg, []string{detail}, fixes...)
+	case refused != nil:
+		l.Say(report.WarnLevel, refused.Message, nil, fixWords(*refused)...)
 	}
 }
 
@@ -293,7 +347,9 @@ func serverFacts() (remote.ServerInfo, error) {
 		info.Docker.Door = true
 		projectUserFacts(&info, askDoorFirewall)
 	} else {
-		info.HidePID = readHidePID(h.path(procMounts))
+		var p setup.ProcFact
+		p, info.ProcRefused = procHidingAt(h, groupOf)
+		info.HidePID = p.HidePID
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
 		if rd, err := readSetup(h, hd); err == nil {
@@ -469,14 +525,10 @@ type hostDocker struct {
 	daemonErr error
 }
 
-// readHostDocker asks docker info and its plugins, and reads the daemon's configuration file,
-// its log-opts as --server-info shows them.
+// readHostDocker asks Docker of itself (dockerFacts), and reads the daemon's configuration
+// file, its log-opts as --server-info shows them.
 func readHostDocker(h setupHost) hostDocker {
-	hd := hostDocker{facts: dockerInfo()}
-	if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
-		hd.facts.Compose = strings.TrimSpace(string(out))
-	}
-	hd.facts.Buildx = exec.Command("docker", "buildx", "version").Run() == nil
+	hd := hostDocker{facts: dockerFacts()}
 	hd.daemon, hd.daemonErr = readDaemonFile(h)
 	if hd.daemonErr == nil {
 		var conf struct {
@@ -506,6 +558,29 @@ func containerdRoot(d remote.DockerFacts) string {
 		return "/var/lib/containerd"
 	}
 	return ""
+}
+
+// dockerFacts is what Docker answers of itself, as every check of it reads it (dockerAnswers):
+// docker info, and its compose's and buildx's versions, "" for a plugin that does not answer,
+// the three asked at once.
+func dockerFacts() remote.DockerFacts {
+	var d remote.DockerFacts
+	var compose, buildx string
+	var wg sync.WaitGroup
+	wg.Go(func() { d = dockerInfo() })
+	wg.Go(func() {
+		if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
+			compose = strings.TrimSpace(string(out))
+		}
+	})
+	wg.Go(func() {
+		if out, err := exec.Command("docker", "buildx", "version").Output(); err == nil {
+			buildx = versionOf(string(out))
+		}
+	})
+	wg.Wait()
+	d.Compose, d.Buildx = compose, buildx
+	return d
 }
 
 // dockerInfo is what docker info says, alone.
@@ -553,7 +628,7 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 		d.Cgroup = "v" + info.CgroupVersion
 	}
 	for _, s := range info.DriverStatus {
-		if s[0] == "driver-type" && s[1] == "io.containerd.snapshotter.v1" {
+		if s[0] == "driver-type" && s[1] == containerdStore {
 			d.Containerd = true
 		}
 	}
@@ -1173,11 +1248,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 	if info.KHOScratch > 0 {
 		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
-			report.Fix("kho=off on the kernel's command line, then a reboot, as root:", howto.Command(howto.KexecHandOver)))
+			stepsFix("kho=off on the kernel's command line, then a reboot", howto.KexecHandOver))
 	}
 	if info.CrashKernel > 0 {
 		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
-			report.Hint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot, as root:", howto.Command(howto.Kdump)))
+			stepsHint("without crash dumps: crashkernel= taken off the kernel's command line and kdump's service disabled, then a reboot", howto.Kdump))
 	}
 	if info.RebootRequired {
 		// Named by its flag, as what waits for it says it (pendingWords): devopsy among the
@@ -1219,24 +1294,26 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 
 	// A warning only where a project user is there to read them: without one every login is
 	// the deploy user's or an admin's, and it is a line to know before adding one.
-	if processesShown(info.HidePID) {
-		if info.Door != nil && info.Door.Users > 0 {
-			msg, detail, fix := processesShownWarning()
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: []report.Remedy{fix}})
-		} else {
-			note(processesShownNote())
-		}
+	users := info.Door != nil && info.Door.Users > 0
+	switch r := info.ProcRefused; {
+	case processesShown(info.HidePID) && users:
+		msg, detail, fixes := processesShownWarning(ref)
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: fixes})
+	case processesShown(info.HidePID):
+		msg, hints := processesShownNote(ref)
+		note(msg, hints...)
+	// /proc hidden another way, judged as --project-users setup judges it, in its words.
+	case r != nil && users:
+		warn(r.Message, fixWords(*r)...)
+	case r != nil:
+		note(r.Message, report.Hint(r.Fix))
 	}
 
 	if dr := info.Door; dr != nil {
 		row("door", dr.Space+", "+plural(dr.Users, "project user"))
 		if dr.Unguarded != "" {
-			warn(dr.Unguarded+": the door refuses every request",
-				spaceFix(dr.Space))
-		}
-		if dr.Docker != "" {
-			warn(dr.Docker+": the door refuses every image a project user does not build",
-				doorDockerFix)
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{report.SpaceUnguarded.Msg(), dr.Unguarded + ", so the door refuses every request"},
+				Remedies: projectUsersSetup(report.Fix, ref, howto.ProjectUsers)})
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
@@ -1266,6 +1343,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		parts := []string{d.Version}
 		if d.Compose != "" {
 			parts = append(parts, "compose "+d.Compose)
+		}
+		if d.Buildx != "" {
+			parts = append(parts, "buildx "+d.Buildx)
 		}
 		store := "classic image store"
 		if d.Containerd {
@@ -1344,7 +1424,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
-				reflinkFix(info.MirrorsOff), report.Hint("what data on XFS takes:", howto.Command(howto.XFS)))
+				reflinkFix(info.MirrorsOff), stepsHint("what data on XFS takes", howto.XFS))
 		}
 	}
 	if info.SnapshotRoot != "" && snapshotDisk >= 0 && snapshotDisk == release {
@@ -1360,7 +1440,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		switch msg, door := toolMissingWords(name); {
 		case msg == "":
 		case door && !projectUsers:
-			note(msg, report.Hint(doorToolsFixText, howto.Command(howto.ProjectUsers)))
+			note(msg, stepsHint(doorToolsFixText, howto.ProjectUsers))
 		default:
 			warn(msg, toolFix(door))
 		}

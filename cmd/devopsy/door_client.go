@@ -391,9 +391,9 @@ func runMntReady(args []string) int {
 			}
 			return 0
 		}
-		// The door itself said no, past sudo: not a server with no door.
-		if doorRefusedIt(err) {
-			report.Error("the door would not ready " + mnt + ": " + err.Error())
+		// The door itself said no, past sudo: not a server with no door. Its words are its
+		// own, a code for the admin among them.
+		if sayDoorRefusal(err) {
 			return 1
 		}
 	}
@@ -444,7 +444,9 @@ func doorRefusedIt(err error) bool {
 }
 
 // doorAsk asks the door something it answers on stdout. A question whose failure
-// has a plain way on says nothing of it: it is every server with no door.
+// has a plain way on says nothing of it: it is every server with no door. What a door
+// asked quietly said of its refusal is kept in the error (doorSaid), for the caller that
+// says it to pass on as it is (sayDoorRefusal).
 func doorAsk(say bool, args ...string) (string, error) {
 	c, err := doorCommand(args...)
 	if err != nil {
@@ -456,10 +458,30 @@ func doorAsk(say bool, args ...string) (string, error) {
 		c.Stderr = errOut
 	}
 	out, err := c.Output()
-	// What the door said, for the caller to say: it is a line of report's already.
 	if doorRefusedIt(err) && !say {
-		line := strings.TrimSpace(said.String())
-		err = fmt.Errorf("%s: %w", strings.TrimPrefix(line, report.Prefix+"error: "), err)
+		err = &doorSaid{lines: said.String(), err: err}
 	}
 	return strings.TrimSpace(string(out)), err
+}
+
+// doorSaid is a refusal of a door asked quietly: its lines as the door said them, through
+// report already (a code for the admin among them), and the ask's error.
+type doorSaid struct {
+	lines string
+	err   error
+}
+
+func (e *doorSaid) Error() string { return e.err.Error() }
+func (e *doorSaid) Unwrap() error { return e.err }
+
+// sayDoorRefusal passes on a quiet ask's refusal (doorSaid) as the door said it, untouched,
+// and says whether err was one: the door's lines are report's own, so a code's first line
+// stays the first and a detail keeps its one prefix.
+func sayDoorRefusal(err error) bool {
+	var said *doorSaid
+	if !errors.As(err, &said) {
+		return false
+	}
+	_, _ = errOut.Write([]byte(said.lines))
+	return true
 }

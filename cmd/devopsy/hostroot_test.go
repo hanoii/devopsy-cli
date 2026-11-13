@@ -41,6 +41,11 @@ func TestHostRunArgs(t *testing.T) {
 		{"setup", setupRun("", "1000:1000"),
 			[]string{"run", "--rm", "--network", "host", "--pid", "host", "--cap-add", "NET_ADMIN", "-v", "/:/host", "--pull", "never", remote.UtilImage,
 				"chroot", "/host", "/bin/sh", "-c", remote.SetupRootScript, "sh", "", "1000:1000"}},
+		// --project-users setup's: its pids for systemctl, through which every mount goes, no
+		// network and no capability added.
+		{"project users' setup", doorSetupRun("", "1000:1000"),
+			[]string{"run", "--rm", "--network", "none", "--pid", "host", "-v", "/:/host", "--pull", "never", remote.UtilImage,
+				"chroot", "/host", "/bin/sh", "-c", remote.ProjectUsersSetupScript, "sh", "", "1000:1000"}},
 	} {
 		if got := c.run.dockerArgs(); !slices.Equal(got, c.want) {
 			t.Errorf("%s:\n%q\nwant\n%q", c.name, got, c.want)

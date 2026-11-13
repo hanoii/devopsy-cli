@@ -139,7 +139,7 @@ var fakeBinOnce = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docker := "#!/bin/sh\n" + fakeRequired + "case \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  version) [ -z \"${FAKE_DOCKER_DOWN:-}\" ] || exit 1 ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
+	docker := "#!/bin/sh\n" + fakeRequired + "case \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  version) [ -z \"${FAKE_DOCKER_DOWN:-}\" ] || exit 1 ;;\n  # The floor (dockerFloors), as a release's --server-ready reads it.\n  'info --format {{json .}}') echo '{\"DriverStatus\":[[\"driver-type\",\"io.containerd.snapshotter.v1\"]]}'; exit 0 ;;\n  'compose version --short') echo 5.5.0; exit 0 ;;\n  'buildx version') echo 'github.com/docker/buildx v0.38.2 e25e2b7a4b6a'; exit 0 ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
 	if err := testfile.Write(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
 		return "", err
 	}
@@ -313,6 +313,14 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 			if code != 0 || !strings.Contains(out, "Usage: devopsy @<server> "+sub) {
 				t.Errorf("@%s %s --help (%d):\n%s", addr, sub, code, out)
 			}
+		}
+	}
+	// --project-users's words each print its help, the setup's included, which completion
+	// offers --help to.
+	for _, words := range [][]string{{"list", "--help"}, {"add", "--help"}, {"remove", "-h"}, {"setup", "--help"}, {"setup", "/srv/door", "--yes", "-h"}} {
+		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, append([]string{"@vm1:", "--project-users"}, words...)...)
+		if code != 0 || !strings.HasPrefix(out, "Usage: devopsy @<server> --project-users ") {
+			t.Errorf("--project-users %s (%d):\n%s", strings.Join(words, " "), code, out)
 		}
 	}
 	// An environment's command needs an environment.

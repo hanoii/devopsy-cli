@@ -11,6 +11,26 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
+// stepsFix is a fix whose command prints a topic's steps (howto.Command): what to set, then
+// that the command prints the steps, never "as root" before it, since the command only prints
+// and runs as anyone. stepsHint is the same as a hint.
+func stepsFix(what string, topic howto.Name) report.Remedy {
+	return report.Fix(what+stepsWords, howto.Command(topic))
+}
+
+func stepsHint(what string, topic howto.Name) report.Remedy {
+	return report.Hint(what+stepsWords, howto.Command(topic))
+}
+
+// byHandHint offers a topic's steps as the other way to a fix that sets it up, said after it:
+// doing it by hand.
+func byHandHint(topic howto.Name) report.Remedy {
+	return report.Hint("or set it up by hand, with the steps this prints:", howto.Command(topic))
+}
+
+// stepsWords ends the text of a remedy that offers a topic's steps.
+const stepsWords = "; this prints the steps:"
+
 // howtoUsage is the first line of --server-setup-howto's help.
 const howtoUsage = "Usage: devopsy " + howto.Flag + " [<topic>|" + howto.AllFlag + "]"
 

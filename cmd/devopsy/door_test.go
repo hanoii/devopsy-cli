@@ -23,6 +23,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 	"golang.org/x/sys/unix"
@@ -81,7 +82,7 @@ func TestDoorKnowsDevopsysUtilScripts(t *testing.T) {
 var doorVerbs = map[string]string{
 	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
-	"buildx": "--context-hash, local; --server-setup and --gc, the deploy user's", "info": "--server-info and --server-setup, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
+	"buildx": "--context-hash, local; --server-setup, --gc and the deploy user's --server-ready, the deploy user's", "info": "--server-info, --server-setup and the deploy user's --server-ready, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
 	"builder": "--gc, the deploy user's", "container": "--gc, the deploy user's", "context": "--gc, the deploy user's", "not": "a message",
 }
 
@@ -349,6 +350,26 @@ func TestRunMntReady(t *testing.T) {
 	}
 	if code := runMntReady(nil); code != 2 {
 		t.Errorf("no argument: %d", code)
+	}
+}
+
+// A refusal of the door's at --mnt-ready (W0002, an unguarded space) reaches a project user's
+// release as the door said it: its code the first line's, its detail with one prefix, no word
+// of the ask's own around it.
+func TestMntReadyPassesTheDoorsRefusalOn(t *testing.T) {
+	t.Parallel()
+	if reachesDocker() {
+		t.Skip("this user reaches Docker, so --mnt-ready asks no door")
+	}
+	var said strings.Builder
+	report.New(&said, false, 0).SayForAdmin(report.ErrorLevel, report.SpaceUnguarded)
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "said"), said.String(), 0o644)
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\ncat '"+filepath.Join(bin, "said")+"' >&2\nexit 2\n", 0o755)
+	dir := t.TempDir()
+	out, code := runDevopsy(t, dir, []string{"PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, remote.MntReadyFlag, dir)
+	if code != 1 || out != said.String() {
+		t.Errorf("the door's W0002 through --mnt-ready (%d):\n%s\nwant the door's lines as it said them:\n%s", code, out, said.String())
 	}
 }
 
@@ -817,8 +838,9 @@ func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
 }
 
 // The door's space on a mount that takes setuid files and devices lets a container's setuid
-// file cross projects and a crafted tar reach root, so the door does nothing there. A test's
-// temporary directory is on no such mount, mostly.
+// file cross projects and a crafted tar reach root, so the door does nothing there, and tells
+// the project user only a code to pass on to the admin. A test's temporary directory is on no
+// such mount, mostly.
 func TestDoorRefusesASpaceWithSetuid(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -831,6 +853,13 @@ func TestDoorRefusesASpaceWithSetuid(t *testing.T) {
 	}
 	if err := spaceGuarded(filepath.Join(t.TempDir(), "none")); err == nil {
 		t.Error("a space that is not there")
+	}
+	// The project user asking can only pass it on: the code for the server's admin and no way
+	// out, the refusals' log keeping what is wrong.
+	var b strings.Builder
+	if err := refuseUnguarded(report.New(&b, false, 0), dir); err == nil || !strings.Contains(err.Error(), dir) ||
+		b.String() != "devopsy: error: W0002: the project users' directory is not on a mount with nosuid and nodev\ndevopsy: | report W0002 to the server's admin\n" {
+		t.Errorf("the door's refusal (%v):\n%s", err, b.String())
 	}
 }
 
@@ -1486,7 +1515,7 @@ esac
 		return string(out), err
 	}
 	for _, version := range []string{"2.32.4", "v2.20.2", "garbage"} {
-		if out, err := run(version); err == nil || strings.Contains(out, "ARGS: ") || !strings.Contains(out, "a build context needs compose 2.33.0 or later") {
+		if out, err := run(version); err == nil || strings.Contains(out, "ARGS: ") || !strings.Contains(out, "a build with contexts: compose here ") || !strings.Contains(out, "devopsy needs 2.33.0 or later") {
 			t.Errorf("compose %s ran a build with a context (%v):\n%s", version, err, out)
 		}
 	}

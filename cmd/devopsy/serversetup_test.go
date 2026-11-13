@@ -3,11 +3,14 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -67,6 +70,24 @@ case "$*" in
     [ -z "${FAKE_RESTART_DOWN:-}" ] || : >"$h/docker-down"
     [ -n "${FAKE_RESTART_STUCK:-}${FAKE_RESTART_DOWN:-}" ] || { echo inv2 >"$h/invocation"; cp "$h/docker-info.after" "$h/docker-info.json"; } ;;
 `+firewallUnitFake+`
+  # A mount unit enabled and started: linked, and its Where= mounted with its options in the
+  # host root's proc/mounts.
+  "enable --quiet --now "*.mount)
+    f="$h/etc/systemd/system/$4"
+    mkdir -p "$h/etc/systemd/system/local-fs.target.wants" "$h/proc"
+    ln -sfn "/etc/systemd/system/$4" "$h/etc/systemd/system/local-fs.target.wants/$4"
+    echo "/dev/vda1 $(sed -n 's/^Where=//p' "$f") ext4 rw,$(sed -n 's/^Options=bind,//p' "$f"),relatime 0 0" >>"$h/proc/mounts" ;;
+  "enable --quiet devopsy-proc.service")
+    mkdir -p "$h/etc/systemd/system/sysinit.target.wants"
+    ln -sfn /etc/systemd/system/devopsy-proc.service "$h/etc/systemd/system/sysinit.target.wants/devopsy-proc.service" ;;
+  # /proc remounted as its unit says, every other proc line on /proc dropped.
+  "restart devopsy-proc.service")
+    g=$(sed -n 's/.*gid=\([0-9]*\).*/\1/p' "$h/etc/systemd/system/devopsy-proc.service")
+    mkdir -p "$h/proc"
+    { grep -v ' /proc proc ' "$h/proc/mounts" 2>/dev/null || :; echo "proc /proc proc rw,nosuid,nodev,noexec,relatime,gid=$g,hidepid=invisible 0 0"; } >"$h/proc/mounts.new"
+    mv "$h/proc/mounts.new" "$h/proc/mounts" ;;
+  # polkit there when the host root says so.
+  "show -p LoadState --value polkit.service") cat "$h/polkit" 2>/dev/null || echo not-found ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -100,8 +121,10 @@ esac
 `, 0o755)
 		write(t, filepath.Join(bin, c+"-restore"), "#!/bin/sh\ncat >\"$DEVOPSY_INTERNAL_HOST_ROOT/fw.$(basename \"$0\" -restore).chain\"\n", 0o755)
 	}
-	// The door's groups, in the host root's etc/group.
-	write(t, filepath.Join(bin, "getent"), "#!/bin/sh\ngrep \"^$2:\" \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null\n", 0o755)
+	// The door's groups, in the host root's etc/group, by name or number; usermod -aG adds a
+	// member there.
+	write(t, filepath.Join(bin, "getent"), "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null\n", 0o755)
+	write(t, filepath.Join(bin, "usermod"), "#!/bin/sh\nf=$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$f\" >\"$f.new\" && mv \"$f.new\" \"$f\"\n", 0o755)
 	write(t, filepath.Join(bin, "groupadd"), "#!/bin/sh\nmkdir -p \"$DEVOPSY_INTERNAL_HOST_ROOT/etc\"\ntouch \"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\"\necho \"$2:x:$((1000 + $(wc -l <\"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\" 2>/dev/null || echo 0) + 1)):\" >>\"$DEVOPSY_INTERNAL_HOST_ROOT/etc/group\"\n", 0o755)
 	if err := testfile.Flock(bin); err != nil {
 		t.Fatal(err)
@@ -184,7 +207,7 @@ func TestServerSetupWarnsOfToolsMissing(t *testing.T) {
 	out, code := s.run([]string{path}, "@devopsy@one:", "--server-setup", "--yes")
 	// mkfifo is the last of serverTools missing here: the fix follows it, and only it.
 	last := "devopsy: warning: the server has no mkfifo: no sync runs\n" +
-		"devopsy: | to fix it:\ndevopsy: | install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
+		"devopsy: | to fix it:\ndevopsy: | install what is missing with the system's packages; this prints the steps:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"
 	if code != 0 || !strings.Contains(out, last) || strings.Contains(out, "setfacl") ||
 		strings.Count(out, howto.Command(howto.Tools)) != 1 || !strings.Contains(out, "this server is set up by devopsy now") {
 		t.Errorf("tools missing (%d):\n%s", code, out)
@@ -329,10 +352,10 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 		"Docker down": {func(t *testing.T, host string) []string {
 			write(t, filepath.Join(host, "docker-down"), "", 0o644)
 			return nil
-		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it, as root:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
+		}, "Docker's daemon does not answer", "install Docker, with its compose and buildx plugins, and start it; this prints the steps:\ndevopsy: | $ " + howto.Command(howto.Docker) + "\n"},
 		"tar missing": {func(t *testing.T, host string) []string {
 			return []string{"PATH=" + pathWithout(t, filepath.Join(filepath.Dir(host), "bin"), "tar")}
-		}, "no tar in PATH", "install what is missing with the system's packages, as root:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
+		}, "no tar in PATH", "install what is missing with the system's packages; this prints the steps:\ndevopsy: | $ " + howto.Command(howto.Tools) + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -412,7 +435,7 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || !strings.Contains(out, "devopsy: warning: Docker: systemd is not this host's init") ||
-		!strings.Contains(out, "devopsy: warning: not applied, refused: "+string(setup.StepRoot)+", "+setup.FirewallItemName+"\n") || !strings.Contains(out, "run --server-setup for this server") {
+		!strings.Contains(out, "devopsy: warning: devopsy left the release root and the metadata firewall as they are, since what they need is refused above\n") || !strings.Contains(out, "run --server-setup for this server") {
 		t.Errorf("--upgrade on a failure (%d):\n%s", code, out)
 	}
 	if r, _, _ := setup.ReadRecord(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)); r.Version != "" {
@@ -563,16 +586,25 @@ func TestReleaseRootCheck(t *testing.T) {
 	if !emptyDir(lf) {
 		t.Error("a lost+found alone is no file of anyone's")
 	}
-	// Another user's: refused, by its name.
-	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || !strings.Contains(refusal.Message, "is ") {
+	// Another user's: refused, by its name, the one lookup (ownerName) swappable's refusal uses
+	// too, a number where the user has no name.
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || refusal.Message != "the release root "+dir+" is "+me.Username+"'s" {
 		t.Errorf("another user's: %+v", refusal)
+	}
+	if got := ownerName(4294967290); got != "4294967290" {
+		t.Errorf("a uid with no name: %q", got)
 	}
 }
 
 // --server-ready refuses a release on a server that lacks what every release needs, through
 // the real binary: a release root missing or root's (fixed by --server-setup, named as the
-// address named the server), one that is no directory, and a tool missing; a ready one says
-// nothing.
+// address named the server), one that is no directory, a tool missing, a Docker that does not
+// answer and each floor missed (dockerFloors), each fixed by the docker topic; a ready one
+// says nothing.
 func TestServerReady(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -585,34 +617,51 @@ func TestServerReady(t *testing.T) {
 	if err := os.Symlink(tar, filepath.Join(bin, "tar")); err != nil {
 		t.Fatal(err)
 	}
+	// The sync setup's docker, which answers the floor unless told otherwise.
+	shared, err := syncBinOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(shared, "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	down := t.TempDir()
+	write(t, filepath.Join(down, "docker-down"), "", 0o644)
 	file := filepath.Join(dir, "file")
 	write(t, file, "", 0o644)
-	ready := func(root, path string) (string, int) {
+	ready := func(root, path string, extra ...string) (string, int) {
 		t.Helper()
 		home := t.TempDir()
 		write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\n", 0o644)
 		c := exec.Command(binary, remote.ServerReadyFlag, "devopsy@vm1:")
-		c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + path}
+		c.Env = append([]string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + path, "DOCKER_LOG=" + filepath.Join(home, "docker.log")}, extra...)
 		out, _ := c.CombinedOutput()
 		return string(out), c.ProcessState.ExitCode()
 	}
+	const docker = "$ devopsy --server-setup-howto docker"
 	for _, c := range []struct {
 		root, path string
+		extra      []string
 		says       []string
 	}{
-		{dir, bin, nil},
-		{filepath.Join(dir, "missing"), bin, []string{"the release root " + filepath.Join(dir, "missing") + " is missing: nothing released", "$ devopsy @devopsy@vm1: --server-setup"}},
-		{"/", bin, []string{"releases: root must not be /", "nothing released"}},
-		{file, bin, []string{"the release root " + file + " is not a directory: nothing released"}},
-		{dir, filepath.Join(dir, "none"), []string{"no tar or flock in PATH, which every release needs: nothing released"}},
+		{dir, bin, nil, nil},
+		{filepath.Join(dir, "missing"), bin, nil, []string{"the release root " + filepath.Join(dir, "missing") + " is missing: nothing released", "$ devopsy @devopsy@vm1: --server-setup"}},
+		{"/", bin, nil, []string{"releases: root must not be /", "nothing released"}},
+		{file, bin, nil, []string{"the release root " + file + " is not a directory: nothing released"}},
+		{dir, filepath.Join(dir, "none"), nil, []string{"no tar or flock in PATH, which every release needs: nothing released"}},
+		{dir, bin, []string{remote.HostRootEnv + "=" + down}, []string{"error: Docker's daemon does not answer: docker info: Cannot connect to the Docker daemon: nothing released", docker}},
+		{dir, bin, []string{"FAKE_CLASSIC_STORE=1"}, []string{"error: Docker here uses the classic image store, and devopsy needs the containerd image store: nothing released\n", "set up Docker with the containerd image store, on a new server if this one already runs projects; this prints the steps:\ndevopsy: | " + docker}},
+		{dir, bin, []string{"FAKE_BUILDX_VERSION=0.29.1"}, []string{"error: buildx here is 0.29.1, and devopsy needs 0.33.0 or later: nothing released\n", "upgrade Docker's buildx plugin; this prints the steps:\ndevopsy: | " + docker}},
+		{dir, bin, []string{"FAKE_COMPOSE_VERSION=2.32.4"}, []string{"error: compose here is 2.32.4, and devopsy needs 2.33.0 or later: nothing released\n", "upgrade Docker's compose plugin; this prints the steps:\ndevopsy: | " + docker}},
+		{dir, bin, []string{"FAKE_NO_BUILDX=1"}, []string{"error: Docker has no buildx plugin: nothing released\n", docker}},
 	} {
-		out, code := ready(c.root, c.path)
+		out, code := ready(c.root, c.path, c.extra...)
 		if (code == 0) != (c.says == nil) {
-			t.Errorf("%s, PATH %s (%d):\n%s", c.root, c.path, code, out)
+			t.Errorf("%s, PATH %s, %q (%d):\n%s", c.root, c.path, c.extra, code, out)
 		}
 		for _, want := range c.says {
 			if !strings.Contains(out, want) {
-				t.Errorf("%s, PATH %s: no %q:\n%s", c.root, c.path, want, out)
+				t.Errorf("%s, PATH %s, %q: no %q:\n%s", c.root, c.path, c.extra, want, out)
 			}
 		}
 		if c.says == nil && out != "" {
@@ -719,23 +768,154 @@ func TestResolveRoot(t *testing.T) {
 	}
 }
 
-// A release to a server whose release root is missing is refused before its upload makes
-// anything: nothing of the root or the environment is there after it, and no lock was taken.
+// A release to a server whose release root is missing, or whose Docker misses a floor with no
+// record of this devopsy's noting it met (none, or another devopsy's), is refused before its
+// upload makes anything: nothing of the root or the environment is there after it, and no
+// lock was taken.
 func TestServerReadyRefusesAReleaseLeavingNothing(t *testing.T) {
 	t.Parallel()
-	s := newSyncSetup(t)
-	if err := os.Remove(s.root); err != nil {
+	for name, c := range map[string]struct {
+		env    []string
+		record string
+		says   string
+	}{
+		"no release root":             {nil, "", "the release root %s is missing: nothing released"},
+		"classic store":               {[]string{"FAKE_CLASSIC_STORE=1"}, "", "Docker here uses the classic image store"},
+		"old buildx":                  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "", "buildx here is 0.32.9, and devopsy needs 0.33.0 or later"},
+		"old compose":                 {[]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "", "compose here is 2.32.4, and devopsy needs 2.33.0 or later"},
+		"classic store, older record": {[]string{"FAKE_CLASSIC_STORE=1"}, "devopsy: 0.1.0\ndocker-floor: 0.1.0\n", "Docker here uses the classic image store"},
+		"old buildx, record unnoted":  {[]string{"FAKE_BUILDX_VERSION=0.32.9"}, "devopsy: " + version + "\n", "buildx here is 0.32.9"},
+		// A development build notes nothing and trusts no note, another one's of the same name
+		// (dev, a checkout's git describe) included.
+		"classic store, a dev build's note": {[]string{"FAKE_CLASSIC_STORE=1"}, "devopsy: " + version + "\ndocker-floor: " + version + "\n", "Docker here uses the classic image store"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			if c.record != "" {
+				write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), c.record, 0o600)
+			}
+			says := c.says
+			if c.env == nil {
+				if err := os.Remove(s.root); err != nil {
+					t.Fatal(err)
+				}
+				says = strings.Replace(says, "%s", s.root, 1)
+			}
+			out, code := s.run(c.env, "@prod", "--release")
+			if code == 0 || !strings.Contains(out, says) {
+				t.Errorf("(%d):\n%s", code, out)
+			}
+			if entries, _ := os.ReadDir(s.root); fileExists(s.root) != (c.env != nil) || len(entries) > 0 {
+				t.Errorf("the refused release made %s (%v):\n%s", s.root, entries, out)
+			}
+			if docker, _ := s.logs(); strings.Contains(docker, "flock") {
+				t.Errorf("the refused release took a lock:\n%s", docker)
+			}
+		})
+	}
+}
+
+// releaseBinary is devopsy built as a release is, its version releaseVersion (the floor note is
+// a release's alone), built once for the tests that need it, beside binary.
+var releaseBinary = sync.OnceValues(func() (string, error) {
+	out := binary + "-release"
+	build := exec.Command("go", "build", "-ldflags=-X main.version="+releaseVersion, "-o", out, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if msg, err := build.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("%v: %s", err, msg)
+	}
+	return out, nil
+})
+
+// releaseVersion is releaseBinary's version.
+const releaseVersion = "0.0.1"
+
+// asRelease makes s's server run releaseBinary as its devopsy: its bin's link replaced.
+func asRelease(t *testing.T, s *syncSetup) string {
+	t.Helper()
+	rel, err := releaseBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
-	out, code := s.run(nil, "@prod", "--release")
-	if code == 0 || !strings.Contains(out, "the release root "+s.root+" is missing: nothing released") || !strings.Contains(out, "--server-setup") {
-		t.Errorf("(%d):\n%s", code, out)
+	link := filepath.Join(filepath.Dir(s.root), "bin", "devopsy")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
 	}
-	if fileExists(s.root) {
-		t.Errorf("the refused release made %s:\n%s", s.root, out)
+	if err := os.Symlink(rel, link); err != nil {
+		t.Fatal(err)
 	}
-	if docker, _ := s.logs(); strings.Contains(docker, "flock") {
-		t.Errorf("the refused release took a lock:\n%s", docker)
+	return rel
+}
+
+// A release on a server whose record notes that this devopsy, a release build, found Docker at
+// its floor asks Docker nothing of it: the fake's log shows no docker info and no plugin's
+// version, and a Docker put back below the floor since is not seen (accepted: only a new
+// devopsy raises the floor); the release never writes the record.
+func TestServerReadyTrustsTheFloorNoted(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	rel := asRelease(t, s)
+	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+	text := "devopsy: " + releaseVersion + "\ndocker-floor: " + releaseVersion + "\n"
+	write(t, record, text, 0o600)
+	s.logs()
+	cmd := exec.Command(rel, remote.ServerReadyFlag, "one:")
+	cmd.Dir, cmd.Env = s.project, append(append([]string{}, s.env...), "FAKE_CLASSIC_STORE=1", "FAKE_BUILDX_VERSION=0.1.0")
+	if out, err := cmd.CombinedOutput(); err != nil || len(out) > 0 {
+		t.Errorf("--server-ready (%v):\n%s", err, out)
+	}
+	docker, _ := s.logs()
+	for _, call := range []string{" info --format", " buildx version", " compose version"} {
+		if strings.Contains(docker, call) {
+			t.Errorf("the floor was read though noted (%s):\n%s", call, docker)
+		}
+	}
+	if readString(record) != text {
+		t.Errorf("the release wrote the record:\n%s", readString(record))
+	}
+}
+
+// An apply of a release build notes the floor in the record by its version where its read
+// finds Docker at its floor, and takes the note off where it does not, so the next release
+// reads Docker again; a --server-setup with nothing else to change still applies for the note
+// alone, quietly, and ends saying there is nothing to change. Docker refused whole (not
+// answering) takes the note off too, by --server-setup and --upgrade's apply alike.
+func TestServerSetupNotesTheFloor(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	asRelease(t, s)
+	version := releaseVersion
+	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+	floor := func() string {
+		t.Helper()
+		r, _, err := setup.ReadRecord(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.Floor
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || floor() != version {
+		t.Fatalf("a first apply at the floor (%d), noted %q:\n%s", code, floor(), out)
+	}
+	if out, code := s.run([]string{"FAKE_COMPOSE_VERSION=2.32.4"}, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || floor() != "" || !strings.Contains(out, "compose here is 2.32.4") {
+		t.Errorf("an apply below the floor (%d), noted %q:\n%s", code, floor(), out)
+	}
+	s.logs()
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if _, sessions := s.logs(); code != 0 || floor() != version || !strings.HasSuffix(out, "\ndevopsy: nothing to change: devopsy@one is set up as devopsy wants it\n") || strings.Contains(out, "devopsy: put ") || strings.Count(sessions, "\n") != 2 {
+		t.Errorf("the floor met again, nothing else to change (%d), noted %q:\n%s", code, floor(), out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 0 || !strings.Contains(out, "nothing to change") {
+		t.Errorf("a second run in sync (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(host, "docker-down"), "", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes"); code != 1 || floor() != "" || !strings.Contains(out, "Docker's daemon does not answer") {
+		t.Errorf("Docker down, by --server-setup (%d), noted %q:\n%s", code, floor(), out)
+	}
+	write(t, record, "devopsy: "+version+"\ndocker-floor: "+version+"\n", 0o600)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || floor() != "" {
+		t.Errorf("Docker down, by --upgrade (%d), noted %q:\n%s", code, floor(), out)
 	}
 }
 
@@ -940,7 +1120,8 @@ func TestServerReadySkipsAProjectUser(t *testing.T) {
 }
 
 // --project-users add refuses, before anything else and before it changes anything, a release
-// root that is not the deploy user's directory, a project user's tree going there.
+// root that is not the deploy user's directory, a project user's tree going there, its fix
+// --server-setup on the server as the session named it.
 func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
@@ -952,9 +1133,9 @@ func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 		write(t, filepath.Join(tools, name), "#!/bin/sh\n", 0o755)
 	}
 	c := exec.Command(binary, remote.ProjectUsersFlag, "add", "shop")
-	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
+	c.Env = []string{remote.ServerEnv + "=devopsy@vm1:", "DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
 	out, _ := c.CombinedOutput()
-	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made") || fileExists(root) {
+	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made\ndevopsy: | to fix it:\ndevopsy: | set the server up:\ndevopsy: | $ devopsy @devopsy@vm1: --server-setup\n") || fileExists(root) {
 		t.Errorf("(%d):\n%s", c.ProcessState.ExitCode(), out)
 	}
 }
@@ -984,7 +1165,7 @@ func TestServerSetupApplyWaitsForAnother(t *testing.T) {
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for start := time.Now(); !strings.Contains(readString(outFile), "waiting for another --server-setup, up to 10 minutes"); time.Sleep(50 * time.Millisecond) {
+	for start := time.Now(); !strings.Contains(readString(outFile), "waiting for another setup of this server, up to 10 minutes"); time.Sleep(50 * time.Millisecond) {
 		if time.Since(start) > startWait {
 			t.Fatalf("no wait said:\n%s", readString(outFile))
 		}
@@ -992,7 +1173,7 @@ func TestServerSetupApplyWaitsForAnother(t *testing.T) {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Wait(); err != nil || !strings.Contains(readString(outFile), "done waiting for another --server-setup (") {
+	if err := c.Wait(); err != nil || !strings.Contains(readString(outFile), "done waiting for another setup of this server (") {
 		t.Errorf("%v:\n%s", err, readString(outFile))
 	}
 }
@@ -1693,11 +1874,10 @@ func TestServerReadyWarnsOfAWipedFirewall(t *testing.T) {
 	if out, docker := ready("FAKE_UTIL_MISSING=1"); strings.Contains(docker, "chroot /host") || strings.Contains(docker, "build ") || out != "" {
 		t.Errorf("no util image: a root run, a build, or words:\n%s\n%s", out, docker)
 	}
-	write(t, filepath.Join(host, "docker-down"), "", 0o644)
-	if out, _ := ready(); out != "" {
+	if out, _ := ready("FAKE_ROOT_RUN_FAILS=1"); out != "" {
 		t.Errorf("the read failing:\n%s", out)
 	}
-	if out, _ := ready("DEVOPSY_VERBOSE=1"); !strings.Contains(out, "debug: the firewall not checked") {
+	if out, _ := ready("FAKE_ROOT_RUN_FAILS=1", "DEVOPSY_VERBOSE=1"); !strings.Contains(out, "debug: the firewall not checked") {
 		t.Errorf("the read failing, at -v:\n%s", out)
 	}
 }
@@ -2089,7 +2269,7 @@ func TestServerSetupAppliesBesideARefusedRoot(t *testing.T) {
 	write(t, s.root, "a file\n", 0o644)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, remote.FirewallScript)) ||
-		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "not applied, refused: "+string(setup.StepRoot)+", "+string(setup.StepMounts)+"\n") {
+		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "devopsy left the release root and the mounts drop-in as they are, since what they need is refused above\n") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -2285,7 +2465,7 @@ func TestUpgradeWithEveryStepStoppedRunsNothing(t *testing.T) {
 	write(t, filepath.Join(host, "active-state"), "inactive\n", 0o644)
 	s.logs()
 	out, code := s.run([]string{"FAKE_UTIL_MISSING=1"}, remote.ServerSetupFlag, "apply", "--upgrade")
-	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: not applied, refused: ") || !strings.Contains(out, string(setup.StepParts)+", "+string(setup.StepRestart)+"\n") {
+	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: devopsy left ") || !strings.Contains(out, "daemon.json's parts and Docker's restart as they are, since what they need is refused above\n") {
 		t.Fatalf("(%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, remote.UtilImage) {
@@ -2332,7 +2512,7 @@ func TestPlanSetupNamesWhatIsRefused(t *testing.T) {
 	if _, _, err := planSetup(f, false, ask); err != nil || len(ask.asked) != 1 {
 		t.Fatalf("%v, asked %q", err, ask.asked)
 	}
-	if ask.asked[0] != "apply these? | not applied, refused: "+string(setup.StepParts)+", "+string(setup.StepRestart) {
+	if ask.asked[0] != "apply these? | devopsy left daemon.json's parts and Docker's restart as they are, since what they need is refused above" {
 		t.Errorf("the question: %q", ask.asked[0])
 	}
 	f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalDocker})
@@ -2358,14 +2538,14 @@ func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
 	}{
 		"daemon.json not judged": {func(t *testing.T, s *syncSetup, host string) {
 			write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
-		}, "devopsy leaves the file as it is", string(setup.StepParts) + ", " + string(setup.StepRestart)},
+		}, "devopsy leaves the file as it is", "daemon.json's parts and Docker's restart as they are, since what they need"},
 		"a root no unit holds": {func(t *testing.T, s *syncSetup, host string) {
 			root := filepath.Join(filepath.Dir(s.root), "re\tleases")
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			write(t, filepath.Join(filepath.Dir(s.root), "home", "config.yaml"), "releases:\n  root: \""+strings.ReplaceAll(root, "\t", `\t`)+"\"\n", 0o644)
-		}, "a unit file cannot hold", string(setup.StepMounts)},
+		}, "a unit file cannot hold", "the mounts drop-in as it is, since what it needs"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -2377,7 +2557,7 @@ func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
 			record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
 			write(t, record, "daemon.json: {}\n", 0o600)
 			out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
-			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: not applied, refused: "+c.stopped+"\n") {
+			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: devopsy left "+c.stopped+" is refused above\n") {
 				t.Errorf("(%d):\n%s", code, out)
 			}
 			if r, _, _ := setup.ReadRecord(record); r.Version != "" {

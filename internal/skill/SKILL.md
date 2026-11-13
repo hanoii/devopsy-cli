@@ -243,13 +243,19 @@ what `config.yaml` sets.
   `devopsy --ssh-option IdentityFile=<key> @t --release`. A sync across
   servers uses a key of its own, never the agent.
 - A project with a user of its own, no Docker socket (`devopsy-<project>`):
-  made as the deploy user with `devopsy @devopsy@<server>: --project-users
-  add <project>`, its keys `--ssh-keys --for <project> add <key>.pub`. A
-  project user cannot edit its own keys. The first `add` on a server waits
-  for a reboot before project users log in. `--project-users remove
-  <project>` drops its keys and keeps the rest; `--destroy` after it
-  removes everything the user holds, its Unix user last, listed and asked
-  by the project's name first (`--yes` asks nothing).
+  the server set up for them once with `devopsy @devopsy@<server>:
+  --project-users setup`, after `--server-setup` (the directory where devopsy keeps their data
+  on a mount with nosuid and nodev, `door: space:` in the deploy user's
+  config, each user's processes hidden from the others; `sudo` and `acl`
+  installed first),
+  then each made as the deploy user with `devopsy @devopsy@<server>:
+  --project-users add <project>`, its keys `--ssh-keys --for <project>
+  add <key>.pub`. A project user cannot edit its own keys. The first
+  `add` on a server waits for a reboot before project users log in.
+  `--project-users remove <project>` drops its keys and keeps the rest;
+  `--destroy` after it removes everything the user holds, its Unix user
+  last, listed and asked by the project's name first (`--yes` asks
+  nothing).
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`
@@ -264,7 +270,9 @@ what `config.yaml` sets.
   (`firewall: metadata: allow` in the deploy user's config turns it off,
   refused where `door:` is set or the door's firewall is loaded; `--yes`
   loads or removes it too). A release refuses, before uploading, a server whose release
-  root is missing or root's, or that lacks `tar` or `flock`, and warns
+  root is missing or root's, that lacks `tar` or `flock`, or whose Docker is
+  below what devopsy needs of Docker on every server (its containerd image
+  store, buildx 0.33.0, compose 2.33.0), and warns
   `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,

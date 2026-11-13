@@ -43,6 +43,18 @@ const (
 	SetupNoSystem = "nosystemctl" // systemctl refused from the chroot: marked instead
 )
 
+// hostDropIn puts the mounts drop-in, $dropin ("" to leave it), under $host_root, says so and
+// sets reload: --server-setup's root run and --project-users setup's (ProjectUsersSetupScript)
+// both keep it.
+var hostDropIn = `if [ -n "$dropin" ]; then
+  mkdir -p "$host_root` + path.Dir(setup.MountsDropIn) + `"
+  if put "$host_root` + setup.MountsDropIn + `" 644 true "$dropin"; then
+    echo "` + SetupPut + ` ` + setup.MountsDropIn + `"
+    reload=1
+  fi
+fi
+`
+
 // SetupRootScript is what an apply runs as root on the host, through the util image chrooted
 // into it (the system's files under $host_root, the release root as given), in this order:
 // the release root made and given to the deploy user; the sysctl file, the live buffers
@@ -83,15 +95,12 @@ if [ -n "$raise" ]; then
     if [ "$v" -lt ` + fmt.Sprint(setup.BufferSize) + ` ] && sysctl -qw "$k=` + fmt.Sprint(setup.BufferSize) + `"; then echo "` + SetupRaised + ` $k"; fi
   done
 fi
-if [ -n "$dropin" ]; then
-  mkdir -p "$host_root` + path.Dir(setup.MountsDropIn) + `"
-  if put "$host_root` + setup.MountsDropIn + `" 644 true "$dropin"; then
-    echo "` + SetupPut + ` ` + setup.MountsDropIn + `"
-    # systemd's view of docker.service, so it never says a drop-in changed on disk, whatever
-    # follows (a restart the daemon.json put after it may stop); a reload refused waits for
-    # the next boot.
-    SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
-  fi
+reload=
+` + hostDropIn + `if [ -n "$reload" ]; then
+  # systemd's view of docker.service, so it never says a drop-in changed on disk, whatever
+  # follows (a restart the daemon.json put after it may stop); a reload refused waits for
+  # the next boot.
+  SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload || :
 fi
 # daemon.json last of the puts: its check (dockerd's) is the one that refuses, and a put it
 # refuses ends the run with what came before put.

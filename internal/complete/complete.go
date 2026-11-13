@@ -354,6 +354,18 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return flags([]Candidate{{"--yes", "keep what someone changed, restart Docker only with no container running", GroupDevopsy}, help})
 	case "--gc":
 		return flags([]Candidate{{"--dry-run", "list what it would remove, ask nothing", GroupDevopsy}, {"--yes", "remove without asking", GroupDevopsy}, help})
+	case "--project-users":
+		switch {
+		case len(words) == 2:
+			return filter(Result{Candidates: []Candidate{
+				{"list", "the project users", GroupDevopsy},
+				{"add", "make a project's user", GroupDevopsy},
+				{"remove", "drop a project user's keys, or all it holds", GroupDevopsy},
+				{"setup", "set the server up for project users", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		case words[1] == "setup" && strings.HasPrefix(cur, "-"):
+			return filter(Result{Candidates: []Candidate{{"--yes", "apply what is missing without asking", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		}
+		return Result{Directive: DirectiveNoFileComp}
 	case "--ssh-keys":
 		switch {
 		case len(words) == 2:

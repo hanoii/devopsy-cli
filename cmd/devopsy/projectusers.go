@@ -23,37 +23,61 @@ import (
 )
 
 // runProjectUsers implements devopsy @<server> --project-users [list | add <project> |
-// remove <project>]: the server's project users, which have no Docker socket and ask the
-// deploy user's devopsy through the door. Its session runs the server's devopsy as the
-// deploy user (ProjectUsersFlag), which does the work there.
+// remove <project> | setup [<directory>] [--yes]]: the server's project users, which have no
+// Docker socket and ask the deploy user's devopsy through the door. Its session runs the
+// server's devopsy as the deploy user (ProjectUsersFlag), which does the work there; setup
+// has two (runProjectUsersSetup).
 func runProjectUsers(t *remote.Target, args []string) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project> [--destroy [--yes]]]"
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project> [--destroy [--yes]] | setup [<directory>] [--yes]]"
+	// Help wherever it is among the words, each word's included: it only prints.
+	if slices.Contains(args, "--help") || slices.Contains(args, "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
 		return 0
+	}
+	if len(args) > 0 && args[0] == "setup" {
+		return runProjectUsersSetup(t, args[1:])
 	}
 	if code := projectUsersArgs(args, false); code != 0 {
 		return fail(usage)
 	}
 	if len(args) > 2 {
-		return runDestroyProjectUser(t, args[1], len(args) == 4)
+		return runDestroyProjectUser(t, args, len(args) == 4)
 	}
-	code, err := remote.SSH(t, remote.ProjectUsersScript(t, args), bytes.NewReader(nil), os.Stdout, false)
+	code, err := projectUsersSession(context.Background(), t, args, args)
 	if err != nil {
 		return fail(err.Error())
 	}
 	return code
 }
 
+// projectUsersSession runs --project-users' step with words on t and prints what it printed,
+// unless it was asked as a project user, which it refuses (exit 1), naming the deploy user's
+// address with typed, the words as the operator typed them.
+func projectUsersSession(ctx context.Context, t *remote.Target, words, typed []string) (int, error) {
+	var out bytes.Buffer
+	code, err := remote.SSHContext(ctx, t, nil, remote.ProjectUsersScript(t, words), bytes.NewReader(nil), &out, false, nil)
+	if err != nil {
+		return code, err
+	}
+	if code == remote.AskedAsProjectUser {
+		refuseProjectUser(t, out.String(), "project users are the server's deploy user's", strings.Join(append([]string{"--project-users"}, typed...), " "))
+		return 1, nil
+	}
+	os.Stdout.Write(out.Bytes())
+	return code, nil
+}
+
 // runDestroyProjectUser is --project-users remove <project> --destroy [--yes]: a first session
 // lists what it removes, asked by the project's name typed (--yes: neither), and a second
 // removes, deciding everything again.
-func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
-	act := remote.ProjectUsersScript(t, []string{"remove", project, "--destroy"})
+func runDestroyProjectUser(t *remote.Target, typed []string, yes bool) int {
+	project := typed[1]
+	words := []string{"remove", project, "--destroy"}
+	act := remote.ProjectUsersScript(t, words)
 	if !yes {
 		// An older server refuses in this first session, before anything.
 		ctx := remote.WithAlsoNeeds(context.Background(), act)
-		code, err := remote.SSHContext(ctx, t, nil, remote.ProjectUsersScript(t, []string{"remove", project, "--destroy", "--list"}), bytes.NewReader(nil), os.Stdout, false, nil)
+		code, err := projectUsersSession(ctx, t, append(slices.Clone(words), "--list"), typed)
 		if err != nil {
 			return failErr(err)
 		}
@@ -65,7 +89,7 @@ func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
 			return failErr(err)
 		}
 	}
-	code, err := remote.SSH(t, act, bytes.NewReader(nil), os.Stdout, false)
+	code, err := projectUsersSession(context.Background(), t, words, typed)
 	if err != nil {
 		return failErr(err)
 	}
@@ -77,7 +101,7 @@ func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
 	return code
 }
 
-// projectUsersArgs says whether args are --project-users's: 0 when they are. Its destroy takes
+// projectUsersArgs says whether args are --project-users's but setup's: 0 when they are. Its destroy takes
 // --yes from the operator (step false), --list on the server (step), which only lists.
 func projectUsersArgs(args []string, step bool) int {
 	switch {
@@ -96,10 +120,15 @@ func projectUsersArgs(args []string, step bool) int {
 	return 2
 }
 
-// runProjectUsersStep is ProjectUsersFlag, on the server as the deploy user.
+// runProjectUsersStep is ProjectUsersFlag, on the server as the deploy user, the server as
+// its session names it (sessionServer) for the fixes it offers ("" without).
 func runProjectUsersStep(args []string) int {
+	ref := sessionServer()
+	if len(args) > 0 && args[0] == "setup" {
+		return runProjectUsersSetupStep(args[1:], ref)
+	}
 	if projectUsersArgs(args, true) != 0 {
-		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [list | add <project> | remove <project> [--destroy [--list]]]")
+		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [list | add <project> | remove <project> [--destroy [--list]] | setup ...]")
 	}
 	d, err := remote.ServerDoor()
 	if err != nil {
@@ -109,8 +138,8 @@ func runProjectUsersStep(args []string) int {
 		return listProjectUsers(d)
 	}
 	if d == nil || d.Space == "" {
-		report.Fail(errors.New("this server is not set up for project users: "+remote.UserConfigFile()+" has no \"door: space:\""),
-			report.Fix("set it to a directory of the deploy user's on a mount of its own, with nosuid and nodev; this prints the steps:", howto.Command(howto.ProjectUsers)))
+		report.Fail(errors.New("this server is not ready for project users: "+remote.UserConfigFile()+" has no \"door: space:\""),
+			projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		return 1
 	}
 	project := args[1]
@@ -122,7 +151,7 @@ func runProjectUsersStep(args []string) int {
 	if args[0] == "remove" {
 		return removeProjectUser(d, project, who, entry, endUser)
 	}
-	return addProjectUser(d, project, who, entry)
+	return addProjectUser(d, project, who, entry, ref)
 }
 
 // listProjectUsers prints each project user: its project, whether its Unix user is there,
@@ -239,16 +268,6 @@ func doorProjects(d *remote.Door) []string {
 	return ps
 }
 
-// doorDockerFix is the way out of a Docker the door refuses (doorHostReady), for --server-info and
-// --project-users add: its containerd image store and a current buildx, by the project-users
-// topic's steps.
-var doorDockerFix = report.Fix("move Docker to its containerd image store and a current buildx, as root:", howto.Command(howto.ProjectUsers))
-
-// spaceFix is how a door's space gets nosuid and nodev, the one way every refusal of it offers.
-func spaceFix(space string) report.Remedy {
-	return report.Fix("mount it so, for example with this line in /etc/fstab:", space+" "+space+" none bind,nosuid,nodev 0 0")
-}
-
 // doorNameOwner is the project user whose names compose project name sits under, by the
 // door's rule (door.Policy.OwnName) among the server's projects (serverProjects, root the
 // release root, and project, the target's own, whose directory a first release has yet to
@@ -274,7 +293,7 @@ func doorNameOwner(d *remote.Door, root, project, name string) (string, error) {
 	return "", nil
 }
 
-func addProjectUser(d *remote.Door, project, who, entry string) int {
+func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	// A removal of the user's, or a key's removal's end, not seen through: what settles it
 	// would take what add writes now (its entry), so it goes first, its own refusal before any
 	// other's.
@@ -300,20 +319,22 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	if err := releaseRootReady(r.Root, "no project user made", ""); err != nil {
+	if err := releaseRootReady(r.Root, "no project user made", ref); err != nil {
 		report.Fail(err)
 		return 1
 	}
 	if err := spaceGuarded(d.Space); err != nil {
-		report.Fail(err, spaceFix(d.Space))
+		report.Fail(&report.Failure{Msg: report.SpaceUnguarded.Msg(), Details: []string{err.Error() + ": no project user made"}}, projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		return 1
 	}
 	if err := staticSelf(); err != nil {
 		report.Fail(err, report.Fix("install a release of devopsy, which is static (install.sh)"))
 		return 1
 	}
-	if err := doorHostReady("docker", os.Environ(), ""); err != nil {
-		report.Fail(err, doorDockerFix)
+	if errs := dockerReady("no project user made"); len(errs) > 0 {
+		for _, err := range errs {
+			report.Fail(err)
+		}
 		return 1
 	}
 	if u, ok := d.Users[who]; ok && u.Project != project {
@@ -400,13 +421,12 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 			return failErr(err)
 		}
 	}
-	report.Default().Say(report.InfoLevel, "project user "+who+" for "+project+", its entry in "+entry, nil,
-		report.Hint("add its keys with --ssh-keys and --for, as its deploy user"))
+	sayAdded(report.Default(), who, project, entry, ref)
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"any reboot takes it, one the server does by itself for /run/reboot-required included")
 	}
-	warnProcessesShown(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}.path(procMounts))
+	warnProcesses(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}, ref, groupOf)
 	return 0
 }
 
@@ -491,6 +511,16 @@ func leftGroupID(group, who string) (gid int, left bool, err error) {
 		return n, true, nil
 	}
 	return 0, false, nil
+}
+
+// sayAdded says on l that add made project's user who, its entry at entry, with the way to its
+// keys in words, on ref as typed when there is one: the key's file is the operator's to name.
+func sayAdded(l *report.Logger, who, project, entry, ref string) {
+	keys := "add its keys with --ssh-keys --for " + project + " add and each public key's file"
+	if ref != "" {
+		keys += ", on @" + ref
+	}
+	l.Say(report.InfoLevel, "project user "+who+" for "+project+", its entry in "+entry, nil, report.Hint(keys))
 }
 
 // projectDir says whether a directory named name in a release root is a project's: none

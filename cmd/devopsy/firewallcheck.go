@@ -210,7 +210,7 @@ func warnDoorFirewallTo(l *report.Logger, ask func() (string, error)) {
 	case err != nil:
 		l.Debug("the firewall not asked: " + err.Error())
 	case answer == firewallWrong:
-		l.WarnForAdmin(report.FirewallNotLoaded)
+		l.SayForAdmin(report.WarnLevel, report.FirewallNotLoaded)
 	case answer != firewallRight:
 		l.Debug("the firewall not told: " + answer)
 	}

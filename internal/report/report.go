@@ -100,32 +100,28 @@ type Remedy struct {
 // "$ ", to copy. A line's fixes are alternatives (RemedyLines).
 func Fix(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds} }
 
-// Hint is a command worth knowing, said after a line's details: text
-// (perhaps empty), then cmds after "$ ". A line's hints are steps, in
-// order (RemedyLines).
+// Hint is a command worth knowing, said after a line's details and its
+// fixes: text (perhaps empty), then cmds after "$ ". A line's hints are
+// steps, in order (RemedyLines).
 func Hint(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: cmds, Hint: true} }
 
 // RemedyLines lays out rs, without a bar (a string of several lines
-// stays one), an empty one skipped: each hint's text then its commands,
-// in order; then the fixes, one under "to fix it:", more under "to fix
-// it, do one of these:", each numbered, a text of several lines under
-// its number.
+// stays one), an empty one skipped: the fixes first, one under "to fix
+// it:", more under "to fix it, do one of these:", each numbered, a text
+// of several lines under its number; then each hint's text and its
+// commands, in order. A fix is the way out of what the line says, so it
+// comes first wherever a caller puts it among the hints.
 func RemedyLines(rs []Remedy) []string {
 	var out []string
-	var fixes []Remedy
+	var fixes, hints []Remedy
 	for _, r := range rs {
-		if r.Text == "" && len(r.Cmds) == 0 {
-			continue // nothing to say (a bare --fix)
-		}
-		if !r.Hint {
+		switch {
+		case r.Text == "" && len(r.Cmds) == 0:
+			// nothing to say (a bare --fix)
+		case r.Hint:
+			hints = append(hints, r)
+		default:
 			fixes = append(fixes, r)
-			continue
-		}
-		if r.Text != "" {
-			out = append(out, r.Text)
-		}
-		for _, c := range r.Cmds {
-			out = append(out, cmdMark+c)
 		}
 	}
 	switch len(fixes) {
@@ -153,6 +149,14 @@ func RemedyLines(rs []Remedy) []string {
 			for _, c := range cmds {
 				out = append(out, indent+cmdMark+c)
 			}
+		}
+	}
+	for _, h := range hints {
+		if h.Text != "" {
+			out = append(out, h.Text)
+		}
+		for _, c := range h.Cmds {
+			out = append(out, cmdMark+c)
 		}
 	}
 	return out
