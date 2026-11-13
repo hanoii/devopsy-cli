@@ -1123,7 +1123,7 @@ func TestDoorRegistryLogins(t *testing.T) {
 mkdir -p /pusher
 printf s3cret | DOCKER_CONFIG=/pusher docker login -u alice --password-stdin `+reg+` >/dev/null 2>&1
 docker pull -q busybox:1.37 >/dev/null
-docker tag busybox:1.37 `+reg+`/private/app:1
+printf 'FROM busybox:1.37\nRUN echo private >/p\n' | docker build -q -t `+reg+`/private/app:1 - >/dev/null
 DOCKER_CONFIG=/pusher docker push -q `+reg+`/private/app:1 >/dev/null
 docker image rm `+reg+`/private/app:1 >/dev/null
 `); code != 0 {
@@ -1154,7 +1154,8 @@ docker image rm `+reg+`/private/app:1 >/dev/null
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("logged in, a private image (%d):\n%s", code, out)
 	}
-	// By its id: a claim leaves no plain name to remove it by.
+	// By its id: a claim leaves no plain name to remove it by. An image of its own, so no
+	// container of another test's on the lane holds it.
 	app, _ := doorRoot(t, "docker inspect -f '{{.Image}}' doorreg-prod-web-1")
 	app = strings.TrimSpace(app)
 	if !strings.HasPrefix(app, "sha256:") {
