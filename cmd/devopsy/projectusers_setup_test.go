@@ -175,9 +175,11 @@ func TestProjectUsersSetupLeavesWhatIsSetByHand(t *testing.T) {
 }
 
 // The space and the config refuse what devopsy does not change: a door: with no space: (the
-// line to add named), a directory other than the config's (a space is moved by hand), and a
-// config whose YAML ends before its last line (the two lines to add by hand named); each stops
-// the space's steps alone, /proc set up beside it.
+// line to add named), a directory other than the config's (a space is moved by hand), a space
+// that is a link or under a directory another user may write (either could be swapped for a link
+// to a system directory between the facts and the root run), and a config whose YAML ends
+// before its last line (the two lines to add by hand named); each stops the space's steps
+// alone, /proc set up beside it.
 func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -188,6 +190,16 @@ func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 			`has door: with no space: under it` + "\ndevopsy: | to fix it:\ndevopsy: | add \"space: %s\" under its door:, indented, then run it again\n"},
 		"another space": {func(t *testing.T, s *syncSetup, space string) { setupConfig(t, s, "door:\n  space: /srv/elsewhere\n") },
 			"door's space: the door's space is /srv/elsewhere (door: space: in "},
+		"a link for a space": {func(t *testing.T, s *syncSetup, space string) {
+			if err := os.Symlink(t.TempDir(), space); err != nil {
+				t.Fatal(err)
+			}
+		}, "door's space: %s is a symbolic link: devopsy acts as root only on a path no other user can change"},
+		"a parent others may write": {func(t *testing.T, s *syncSetup, space string) {
+			if err := os.Chmod(filepath.Dir(space), 0o777); err != nil {
+				t.Fatal(err)
+			}
+		}, "door's space: %s is under %P, which other users can write: devopsy acts as root only on a path no other user can change"},
 		"a config read before its end": {func(t *testing.T, s *syncSetup, space string) {
 			write(t, configFile(s), "{releases: {root: "+s.root+"}}\n", 0o644)
 		},
@@ -199,7 +211,7 @@ func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 			c.prepare(t, s, space)
 			config := readString(configFile(s))
 			out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-			want := strings.ReplaceAll(c.want, "%s", space)
+			want := strings.ReplaceAll(strings.ReplaceAll(c.want, "%s", space), "%P", filepath.Dir(space))
 			if code != 1 || !strings.Contains(out, want) || fileExists(filepath.Join(host, setup.SpaceUnit(space))) || readString(configFile(s)) != config ||
 				!strings.Contains(out, "devopsy: error: not applied, refused: the door's space, Docker's wait for the space") ||
 				!fileExists(filepath.Join(host, setup.ProcUnit)) {
@@ -332,5 +344,33 @@ func TestProjectUsersSetupDropInWaitsForTheMount(t *testing.T) {
 	}
 	if out, _ := s.run(nil, remote.ServerSetupFlag, "facts"); strings.Contains(out, `"item":"mounts drop-in","path":"`+setup.MountsDropIn+`","in_sync":false`) {
 		t.Errorf("--server-setup wants another drop-in:\n%s", out)
+	}
+}
+
+// A space's path is one no other user can change only with no link in it and every parent
+// root's or the deploy user's, writable by no one else but a sticky one holding the next part as
+// theirs: a sticky directory others may write lets them make a part not there yet, as a link.
+func TestSwappable(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sticky := filepath.Join(dir, "sticky")
+	if err := os.MkdirAll(filepath.Join(sticky, "mine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sticky, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]string{
+		filepath.Join(sticky, "mine"):         "",
+		filepath.Join(sticky, "mine", "door"): "",
+		filepath.Join(sticky, "door"):         filepath.Join(sticky, "door") + " is under " + sticky + ", which other users can write",
+		filepath.Join(dir, "new", "door"):     "",
+	} {
+		if got := swappable(p, os.Getuid()); got != want {
+			t.Errorf("%s: %q, want %q", p, got, want)
+		}
 	}
 }

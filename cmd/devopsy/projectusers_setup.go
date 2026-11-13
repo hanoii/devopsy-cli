@@ -322,7 +322,12 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 		}
 	}
 	rd.unit, rd.unitText = setup.SpaceUnit(f.Space), setup.SpaceUnitText(f.Space)
-	readSpace(h, &rd, refuse)
+	if why := swappable(space, os.Getuid()); why != "" {
+		refuse(setup.ItemSpace, setup.RefusalSpace, why+": devopsy acts as root only on a path no other user can change",
+			"name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link")
+	} else {
+		readSpace(h, &rd, refuse)
+	}
 
 	// Docker's wait at boot for the space, beside the release root's (mountsDropInWant): the
 	// space where the config names it or this run will, mounted or mounted by this run.
@@ -399,6 +404,58 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 		refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is a mount without nosuid and nodev, not devopsy's: devopsy puts no mount over it",
 			"mount it with nosuid and nodev where it is set (its /etc/fstab line, its unit)")
 	}
+}
+
+// swappable is why another user could swap a part of path p (the door's space, absolute and
+// clean) for a link between the facts and the root run, whose make, chown, chmod and mount
+// would then act on wherever the link leads, "" when none can: a part that is a link, a parent
+// owned by anyone but root or uid (the deploy user, root on the host through Docker already),
+// or one others may write, unless it is sticky and the part in it is there, no link, and root's
+// or uid's (a sticky directory lets no one else rename or remove it, /tmp's way). A part not
+// there yet is made by the root run under the last one there, so the walk ends at it. The root
+// run judges the same again right before it acts (remote.ProjectUsersSetupScript's safe_path).
+func swappable(p string, uid int) string {
+	trusted := func(fi os.FileInfo) string {
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid == 0 || int(st.Uid) == uid {
+			return ""
+		}
+		owner := strconv.Itoa(int(st.Uid))
+		if u, err := user.LookupId(owner); err == nil {
+			owner = u.Username
+		}
+		return owner
+	}
+	cur := "/"
+	for _, part := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+		next := filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		switch {
+		case err != nil:
+			return p + " is under " + cur + ", which devopsy cannot read: " + err.Error()
+		case fi.Mode()&os.ModeSymlink != 0:
+			return p + " is under a symbolic link, " + cur
+		case !fi.IsDir():
+			return p + " is under " + cur + ", which is no directory"
+		}
+		if owner := trusted(fi); owner != "" {
+			return p + " is under " + cur + ", which " + owner + " owns"
+		}
+		nfi, nerr := os.Lstat(next)
+		if fi.Mode().Perm()&0o022 != 0 {
+			if fi.Mode()&os.ModeSticky == 0 || nerr != nil || nfi.Mode()&os.ModeSymlink != 0 || trusted(nfi) != "" {
+				return p + " is under " + cur + ", which other users can write"
+			}
+		}
+		if nerr != nil {
+			return ""
+		}
+		cur = next
+	}
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return p + " is a symbolic link"
+	}
+	return ""
 }
 
 // spaceAt is the mount a space is on, as spaceMount reads it: whether there is one, and whether

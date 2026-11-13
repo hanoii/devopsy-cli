@@ -383,7 +383,11 @@ choice. It sets:
   (a boot where it failed) is mounted again, its files and all: a
   directory bound on itself hides nothing. A space another user owns,
   one root owns that holds files, one that is no directory, or someone's
-  mount without the two options is refused.
+  mount without the two options is refused, and so is one any part of
+  whose path is a symbolic link, or under a directory another user owns
+  or may write (`/tmp` included, unless the directory in it is already
+  the deploy user's): devopsy acts on it as root, and another user could
+  swap it for a link to a system directory.
 - `door:` with `space:` in the deploy user's `config.yaml`, appended as
   text when the file has no `door:`, the rest of the file as it is, once
   the directory is made and mounted, whatever else of the run failed.
