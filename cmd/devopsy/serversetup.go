@@ -159,7 +159,10 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	daemon := false
 	answers := false
 	// A root chosen and refused: the facts shown are that root's, so nothing goes on the home's.
-	if f.RootProposed && !f.RootNames() {
+	switch {
+	case f.RootProposed && f.NoneGoes():
+		return nil, false, errors.New("every step of the setup is refused, the release root " + f.Root + " not named: nothing changed")
+	case f.RootProposed && !f.RootNames():
 		return nil, false, &report.Failure{Msg: "the release root " + f.Root + " is refused: nothing changed",
 			Remedies: []report.Remedy{report.Fix("run --server-setup again and choose another")}}
 	}
@@ -398,6 +401,7 @@ func volumeHint(f setup.Facts) []string {
 	if f.AsksRoot() {
 		return append(lines, "--server-setup without --yes asks which one holds releases, before the first release")
 	}
+	// Not asked here (a config that takes no line, a step refused): the key, set by hand.
 	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
 }
 

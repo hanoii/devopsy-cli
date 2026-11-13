@@ -500,11 +500,17 @@ func TestServerInfoReport(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("set up: %+v", warnings)
 	}
-	// A root the config names: --server-setup asks nothing, so the hint names the key.
+	// A root the config names is an answer: no volume hint.
 	info.Setup.RootNamed = true
-	if out, _ = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there\n") {
-		t.Errorf("a root named, the hint:\n%s", out)
+	if out, _ = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); strings.Contains(out, "volumes:") {
+		t.Errorf("a root named, a hint:\n%s", out)
 	}
+	// Not asked (a config that takes no line): the hint names the key to set by hand.
+	info.Setup.RootNamed, info.Setup.ConfigRefuses = false, "its releases: is no block mapping devopsy adds a line to"
+	if out, _ = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there\n") {
+		t.Errorf("a config that takes no line, the hint:\n%s", out)
+	}
+	info.Setup.ConfigRefuses = ""
 	info.Docker.LogOpts = nil
 	info.Setup.Parts[0].State, info.Setup.Parts[0].Observed = setup.Changed, `{"log-driver":"json-file"}`
 	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !strings.Contains(warnings[0].msg, "logs: ") {

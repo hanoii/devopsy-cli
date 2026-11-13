@@ -66,8 +66,11 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 		at, replace, comment := 0, false, ""
 		for i := 0; i+1 < len(releases.Content); i += 2 {
 			if k, v := releases.Content[i], releases.Content[i+1]; k.Value == "root" {
-				if !emptyScalar(v) || v.Line != k.Line {
+				switch {
+				case !emptyScalar(v):
 					return nil, errRootThere
+				case v.Line != k.Line:
+					return nil, errLineNotRead
 				}
 				at, replace, comment = k.Line, true, cmp.Or(v.LineComment, k.LineComment)
 			}

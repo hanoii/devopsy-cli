@@ -150,17 +150,17 @@ func (f Facts) Changes() bool {
 	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
-// Hint says whether the volume hint goes with f: candidates, none of them the root's, no
-// project released there yet, and no root proposed (the answer to AsksRoot).
+// Hint says whether the volume hint goes with f: candidates, none of them the root's, nothing
+// released there yet, and no root proposed (the answer to AsksRoot) or named (the config's).
 func (f Facts) Hint() bool {
-	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates) && !f.RootProposed
+	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates) && !f.RootProposed && !f.RootNamed
 }
 
 // AsksRoot says whether --server-setup asks where releases live: where the hint goes (Hint),
 // the config names no root, so the root is the home and no release made it hold anything, the
 // config takes the line that names one, and a step goes, so an apply would name it.
 func (f Facts) AsksRoot() bool {
-	return f.Hint() && !f.RootNamed && f.ConfigRefuses == "" && !f.NoneGoes()
+	return f.Hint() && f.ConfigRefuses == "" && !f.NoneGoes()
 }
 
 // RootNames says whether an apply names the root proposed (RootProposed) in the config: only

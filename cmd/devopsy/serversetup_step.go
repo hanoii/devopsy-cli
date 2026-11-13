@@ -336,7 +336,8 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 	}
 
 	f.Candidates = rootCandidates(h, hd)
-	f.Projects = rootHolds(f.Root)
+	// Project users added hold releases too: their trees were fixed at their add.
+	f.Projects = rootHolds(f.Root) || d != nil && len(d.Users) > 0
 	rd.door = d != nil
 	// The door's tools only where the server has project users: without one they matter only
 	// to --project-users add, which refuses without them.
@@ -488,7 +489,7 @@ func rootNotAsked(f setup.Facts) string {
 	case f.RootNamed:
 		return "releases: root is named in " + f.ConfigFile + " already (" + f.Root + "), and only its admin changes it"
 	case f.Projects:
-		return "the release root " + f.Root + " holds releases already (a project, or a claim of the uids containers run as), and they stay there"
+		return "the release root " + f.Root + " holds releases already (a project, a claim of the uids containers run as, or a project user's), and they stay there"
 	case f.ConfigRefuses != "":
 		return f.ConfigFile + " takes no releases: root line from devopsy: " + f.ConfigRefuses
 	case f.NoneGoes():

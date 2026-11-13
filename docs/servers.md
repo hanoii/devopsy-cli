@@ -205,13 +205,16 @@ in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
 While the deploy user's `config.yaml` names no `releases: root`, and the
-home holds nothing released (no project, and no claim of the uids
-containers run as) and is on no volume of its own, `--server-setup`
+home holds nothing released (no project, no claim of the uids
+containers run as, no project user) and is on no volume of its own, and
+the config is one devopsy can add the line to, `--server-setup`
 asks where releases live: the home, or one of the volumes the root could
 be on, listed with their size and free space. It names the answer as
 `releases: root` in that `config.yaml`, adding the line and leaving the
 rest of the file as it is, then makes the root there and has Docker wait
-for its mount; once named, it asks no more. With `--yes` it asks
+for its mount; once named, it asks no more. A root chosen that it
+refuses (one another user owns, or root's with files) ends the run with
+nothing changed, to be run again and another chosen. With `--yes` it asks
 nothing, keeps the home and lists the volumes instead; `releases: root:
 <mount point>` in the deploy user's `config.yaml`, before the first
 release, puts releases there by hand.

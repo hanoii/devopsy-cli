@@ -781,10 +781,10 @@ func rootChoice(t *testing.T) (s *syncSetup, host, vol, config string) {
 }
 
 // --server-setup asks where releases live while the config names no root and the home holds
-// nothing released: without a terminal the question fails naming --yes. The root chosen is judged by facts --root as
-// the apply then names it: the apply writes it in the config first, as text, the admin's lines
-// kept, then makes the root there and has Docker wait for its mount, and a second run changes
-// nothing and asks nothing.
+// nothing released: without a terminal the question fails naming --yes. The root chosen is
+// judged by facts --root as the apply then names it: the apply writes it in the config first,
+// as text, the admin's lines kept, then makes the root there and has Docker wait for its
+// mount, and a second run changes nothing and asks nothing.
 func TestServerSetupNamesTheRootChosen(t *testing.T) {
 	t.Parallel()
 	s, host, vol, config := rootChoice(t)
@@ -853,12 +853,18 @@ func TestServerSetupRootChoiceRefusals(t *testing.T) {
 	// A project in the home: releases stay there.
 	project := filepath.Join(filepath.Dir(vol), "shop", "prod", "releases")
 	write(t, filepath.Join(project, ".keep"), "", 0o644)
-	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "holds releases already (a project, or a claim of the uids containers run as), and they stay there") || readString(config) != before {
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "holds releases already (a project, a claim of the uids containers run as, or a project user's), and they stay there") || readString(config) != before {
 		t.Errorf("a project in the home (%d):\n%s", code, out)
 	}
 	if err := os.RemoveAll(filepath.Join(filepath.Dir(vol), "shop")); err != nil {
 		t.Fatal(err)
 	}
+	// A project user added holds releases too, its tree fixed at its add.
+	write(t, config, before+"door:\n  space: "+t.TempDir()+"\n  users:\n    devopsy-shop: {project: shop}\n", 0o644)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || !strings.Contains(out, "or a project user's), and they stay there") {
+		t.Errorf("a project user added (%d):\n%s", code, out)
+	}
+	write(t, config, before, 0o644)
 	// Named already: the same root is done, another refused.
 	named := before + "releases:\n  root: " + vol + "\n"
 	write(t, config, named, 0o644)
@@ -887,14 +893,21 @@ func TestPlanSetupRefusesARootRefused(t *testing.T) {
 	}
 	noneGoes := setup.Facts{Root: "/srv", RootProposed: true, ConfigFile: "/home/devopsy/.config/devopsy/config.yaml", Record: "/r",
 		Refusals: []setup.Refusal{{Item: setup.RefusalDocker}}}
-	for name, f := range map[string]setup.Facts{"refused": refused, "no step goes": noneGoes} {
+	for name, c := range map[string]struct {
+		f    setup.Facts
+		says string
+	}{
+		"refused":      {refused, "the release root " + refused.Root + " is refused: nothing changed"},
+		"no step goes": {noneGoes, "every step of the setup is refused, the release root /srv not named: nothing changed"},
+	} {
+		f := c.f
 		for _, e := range setupEntries(f) {
 			if slices.ContainsFunc(e.Lines, func(l string) bool { return strings.Contains(l, "names it as releases: root") }) {
 				t.Errorf("%s: an entry promises the root is named: %q", name, e.Lines)
 			}
 		}
 		args, run, err := planSetup(f, false, &scripted{confirms: []bool{true, true}})
-		if run || args != nil || err == nil || !strings.Contains(err.Error(), "the release root "+f.Root+" is refused: nothing changed") {
+		if run || args != nil || err == nil || !strings.Contains(err.Error(), c.says) {
 			t.Errorf("%s: %q, run %v, %v", name, args, run, err)
 		}
 	}

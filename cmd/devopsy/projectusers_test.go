@@ -713,3 +713,29 @@ func TestProjectUsersAskedAsAProjectUser(t *testing.T) {
 		}
 	}
 }
+
+// A project user's tree goes in the release root where it is not the deploy user's home, the
+// two compared in their one form: a home behind a link, or with a trailing slash, named as the
+// root in its resolved form (as --server-setup names the home it offers) is the home still.
+func TestProjectTree(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(dir, "home")
+	if err := os.Symlink(real, home); err != nil {
+		t.Fatal(err)
+	}
+	resolved := resolveRoot(home)
+	for _, root := range []string{home, home + "/", resolved} {
+		if tree, r := projectTree(root, home, "shop"); tree != "" || r != "" {
+			t.Errorf("root %s, home %s: %q, %q", root, home, tree, r)
+		}
+	}
+	vol := filepath.Join(dir, "vol")
+	if tree, r := projectTree(vol, home, "shop"); tree != filepath.Join(vol, "shop") || r != vol {
+		t.Errorf("a volume: %q, %q", tree, r)
+	}
+}
