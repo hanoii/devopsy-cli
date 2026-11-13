@@ -2131,26 +2131,28 @@ func (s *doorSide) stream(st *door.Stream) int {
 // containerRows is what says whose each container is, one JSON array per line: a label's
 // value is anyone's to write, spaces included.
 var containerRows = []string{"ps", "-a", "--no-trunc", "--format",
-	`[{{json .ID}},{{json (.Label "com.docker.compose.project")}},{{json (.Label "devopsy.env")}},{{json (.Label "devopsy.door")}}]`}
+	`[{{json .ID}},{{json (.Label "com.docker.compose.project")}},{{json (.Label "devopsy.env")}},{{json (.Label "devopsy.door")}},{{json .Names}}]`}
 
-// containerLabels are the server's containers by id, with the labels that say whose they are.
-func containerLabels(c *exec.Cmd) (map[string]map[string]string, error) {
+// containerLabels are the server's containers by id, with the labels that say whose they are,
+// and each one's name, for what devopsy says of it.
+func containerLabels(c *exec.Cmd) (labels map[string]map[string]string, names map[string]string, err error) {
 	out, err := c.Output()
 	if err != nil {
-		return nil, fmt.Errorf("cannot read what runs: %v", err)
+		return nil, nil, fmt.Errorf("cannot read what runs: %v", err)
 	}
-	all := map[string]map[string]string{}
+	labels, names = map[string]map[string]string{}, map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
 		var row []string
-		if err := json.Unmarshal([]byte(line), &row); err != nil || len(row) != 4 {
-			return nil, fmt.Errorf("cannot read what runs: %q", line)
+		if err := json.Unmarshal([]byte(line), &row); err != nil || len(row) != 5 {
+			return nil, nil, fmt.Errorf("cannot read what runs: %q", line)
 		}
-		all[row[0]] = map[string]string{"com.docker.compose.project": row[1], "devopsy.env": row[2], door.DoorLabel: row[3]}
+		labels[row[0]] = map[string]string{"com.docker.compose.project": row[1], "devopsy.env": row[2], door.DoorLabel: row[3]}
+		names[row[0]] = row[4]
 	}
-	return all, nil
+	return labels, names, nil
 }
 
 // foreign refuses while a container the door did not make for this user is under the
@@ -2162,7 +2164,7 @@ func (s *doorSide) foreign() error { return refusal(foreignUnder(s.policy, s.doc
 // the deploy user runs there stays out of the door's reach, for the door, add and a destroy.
 // A read that fails is an error.
 func foreignUnder(p door.Policy, docker func(args ...string) *exec.Cmd) error {
-	all, err := containerLabels(docker(containerRows...))
+	all, _, err := containerLabels(docker(containerRows...))
 	if err != nil {
 		return err
 	}

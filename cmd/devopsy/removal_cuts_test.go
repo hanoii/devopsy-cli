@@ -306,7 +306,7 @@ func (c *removalCut) destroyServer() *destroyServer {
 	write(t, filepath.Join(s.root, "blog", "prod", "shared", "db"), "data\n", 0o600)
 	write(t, filepath.Join(s.home, ".profile"), "\n", 0o600)
 	write(t, filepath.Join(s.state, "users", "devopsy-shop"), "", 0o600)
-	write(t, filepath.Join(s.state, "containers"), "c1\tshop-prod\t\tdevopsy-shop\nc2\t\tshop-prod\t\nc3\tblog-prod\t\tdevopsy-blog\n", 0o600)
+	write(t, filepath.Join(s.state, "containers"), "c1\tshop-prod\t\tdevopsy-shop\tshop-prod-web-1\nc2\t\tshop-prod\t\tdevopsy-util-shop-prod-1\nc3\tblog-prod\t\tdevopsy-blog\tblog-prod-web-1\n", 0o600)
 	write(t, filepath.Join(s.state, "volumes"), "shop-prod_db\tshop-prod\nblog-prod_db\tblog-prod\n", 0o600)
 	write(t, filepath.Join(s.state, "networks"), "shop-prod_default\tshop-prod\nblog-prod_default\tblog-prod\n", 0o600)
 	write(t, filepath.Join(s.state, "images"), "sha256:a busybox:devopsy-shop-prod-20261112000000 1MB\n"+

@@ -258,6 +258,10 @@ func keysOf(who string) int {
 	return len(remote.ParseAuthorizedKeys(string(data)))
 }
 
+// keptUserLine is what says a project user with no key still holds what is under its names,
+// each held kind on a line of its own after it (KeylessUser.Held).
+func keptUserLine(k remote.KeylessUser) string { return k.User + " has no key and still holds:" }
+
 // keptUserHints are the ways out of a project user with no key that still holds what is under
 // its names: its destroy, offered by the server's address ref ("" for none, the way in words),
 // and a key added, in words, since a key's command takes the deploy user's address and a file.
@@ -493,7 +497,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 
 	if info.Door != nil {
 		for _, k := range info.Door.Keyless {
-			add("door", k.User+" has no key and still holds "+strings.Join(k.Held, "; "), keptUserHints(k.Project, ref)...)
+			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: "door", Lines: append([]string{keptUserLine(k)}, k.Held...), Remedies: keptUserHints(k.Project, ref)})
 		}
 		for _, u := range info.Door.Destroying {
 			add("door", u.User+": its --project-users remove --destroy did not complete, and the door answers it nothing", destroyPendingHint(ref, u.Project))

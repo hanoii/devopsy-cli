@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -264,7 +265,8 @@ type destroyFound struct {
 	// claims, the containers', volumes' and networks' labels and <space>/mnt give, sorted;
 	// claimNames those of the environment claims, which may be another's (checked).
 	names, claimNames []string
-	// containers, volumes and networks are those under its names, by id or name.
+	// containers, volumes and networks are those under its names, by name (a container with
+	// none by its id): what a destroy says of them, never what it removes them by.
 	containers, volumes, networks []string
 	// refs are the image names only it writes (door.Policy.OwnRef), its claim holds included.
 	refs []string
@@ -289,7 +291,7 @@ func (x *userDestroy) find() (destroyFound, error) {
 			f.claimNames = append(f.claimNames, c.Owner.ComposeName())
 		}
 	}
-	all, err := containerLabels(exec.Command("docker", containerRows...))
+	all, containerNames, err := containerLabels(exec.Command("docker", containerRows...))
 	if err != nil {
 		return f, err
 	}
@@ -301,7 +303,7 @@ func (x *userDestroy) find() (destroyFound, error) {
 			}
 		}
 		if hit {
-			f.containers = append(f.containers, id)
+			f.containers = append(f.containers, cmp.Or(containerNames[id], id))
 		}
 	}
 	for kind, list := range map[string]*[]string{"volume": &f.volumes, "network": &f.networks} {

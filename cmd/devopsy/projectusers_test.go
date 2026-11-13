@@ -552,7 +552,8 @@ func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 
 // --project-users list says a project user with no key that still holds anything a plain
 // remove refuses for and its destroy removes (heldBy: its claims, the containers, volumes and
-// networks under its names, its mnts, images and door directories), with its destroy offered
+// networks under its names, its mnts, images and door directories), each a detail, a
+// container by its name, with its destroy offered
 // by the session's server, in words with none. One with a key, or holding nothing, is no such
 // line, nor one whose destroy did not complete: its own line says how to complete it, by the
 // same address, and no key takes it back while its mark holds it.
@@ -572,21 +573,23 @@ func TestProjectUsersListSaysKeyless(t *testing.T) {
 	// news holds only a volume, which a plain remove of it refuses for.
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 case "$1 $2" in
-  'ps -a') echo '["c1","shop-stage","",""]'; echo '["c2","blog-dev","",""]'; echo '["c3","other-prod","",""]' ;;
+  'ps -a') echo '["c1c1c1c1","shop-stage","","","shop-stage-web-1"]'; echo '["c2","blog-dev","","","blog-dev-web-1"]'; echo '["c3","other-prod","","","other-prod-web-1"]' ;;
   'volume ls') echo '["news-prod_db","news-prod"]' ;;
 esac
 `, 0o755)
 	out, code := runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, "--project-users-step", "list")
-	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds the uid claims env:shop:prod; the containers c1\n"+
+	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds:\n"+
+		"devopsy: | the uid claims env:shop:prod\n"+
+		"devopsy: | the containers shop-stage-web-1\n"+
 		"devopsy: | a --project-users remove of shop with --destroy removes it with what it holds\n"+
 		"devopsy: | or a key added for it (--ssh-keys with --for) takes it back\n") ||
-		!strings.Contains(out, "devopsy: devopsy-news has no key and still holds the volumes news-prod_db\n") ||
+		!strings.Contains(out, "devopsy: devopsy-news has no key and still holds:\ndevopsy: | the volumes news-prod_db\n") ||
 		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") ||
 		!strings.Contains(out, "devopsy-mail: the destroy of mail's project user did not complete") || strings.Contains(out, "devopsy-mail has") {
 		t.Errorf("list (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", remote.ServerEnv + "=devopsy@vm1:"}, "--project-users-step", "list")
-	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds the uid claims env:shop:prod; the containers c1\n"+
+	if code != 0 || !strings.Contains(out, "devopsy: | the containers shop-stage-web-1\n"+
 		"devopsy: | remove it with what it holds:\n"+
 		"devopsy: | $ devopsy @devopsy@vm1: --project-users remove shop --destroy\n") ||
 		!strings.Contains(out, "devopsy: | run it again, which completes it:\n"+

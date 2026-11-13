@@ -140,7 +140,7 @@ func listProjectUsers(d *remote.Door) int {
 			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, keysOf(name))
 		}
 		for _, k := range keylessUsers(d) {
-			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Held, "; "), nil, keptUserHints(k.Project, sessionServer())...)
+			report.Default().Say(report.InfoLevel, keptUserLine(k), k.Held, keptUserHints(k.Project, sessionServer())...)
 		}
 	}
 	// An end a key's or a user's removal began and did not see through (remote.DoorEndingFile),
