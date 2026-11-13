@@ -511,3 +511,23 @@ func TestSwappable(t *testing.T) {
 		}
 	}
 }
+
+// The mounts drop-in wants the door's space only where it is mounted with nosuid and nodev,
+// and keeps it where devopsy's drop-in names it already and its mount is lost: the mount is
+// the space's to say and put back (--project-users setup), and a want without it would have
+// --server-info offer a --server-setup that leaves Docker not waiting for the space at boot.
+func TestMountsDropInKeepsALostSpace(t *testing.T) {
+	t.Parallel()
+	host, root, space := t.TempDir(), t.TempDir(), t.TempDir()
+	h := setupHost{root: host}
+	write(t, filepath.Join(host, procMounts), "/dev/vda1 / ext4 rw,relatime 0 0\n", 0o644)
+	bare, _ := setup.MountsDropInText(resolveRoot(root))
+	with, _ := setup.MountsDropInText(resolveRoot(root), resolveRoot(space))
+	if want, _ := mountsDropInWant(h, root, space, false); want != bare {
+		t.Errorf("a space never mounted, wanted:\n%s", want)
+	}
+	write(t, filepath.Join(host, setup.MountsDropIn), with, 0o644)
+	if want, _ := mountsDropInWant(h, root, space, false); want != with {
+		t.Errorf("a space whose mount is lost, wanted:\n%s", want)
+	}
+}

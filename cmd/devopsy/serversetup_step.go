@@ -76,13 +76,17 @@ type setupRead struct {
 // --project-users setup want it by, so the two never fight. The space is in it only where it
 // is mounted with nosuid and nodev (spaceMount, on h's mounts) or the run mounts it (mounting,
 // --project-users setup's), since a RequiresMountsFor= of a mount that fails keeps Docker from
-// starting at the next boot: --server-setup passes the config's space, --project-users setup
+// starting at the next boot, or where devopsy's drop-in names it already: a mount lost is the
+// space's to say and put back, and a want without it would take it out of what Docker waits for: --server-setup passes the config's space, --project-users setup
 // the one the config names or the run names in it. A path a unit file cannot hold is a refusal
 // of the drop-in alone.
 func mountsDropInWant(h setupHost, root, space string, mounting bool) (string, *setup.Refusal) {
 	paths := []string{resolveRoot(root)}
 	if space != "" {
-		if sp := resolveRoot(space); mounting || spaceMount(h, sp).guarded {
+		sp := resolveRoot(space)
+		with, err := setup.MountsDropInText(paths[0], sp)
+		have, _ := os.ReadFile(h.path(setup.MountsDropIn))
+		if mounting || spaceMount(h, sp).guarded || err == nil && string(have) == with {
 			paths = append(paths, sp)
 		}
 	}
