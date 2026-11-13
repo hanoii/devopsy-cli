@@ -143,6 +143,7 @@
 - The words say the project users' directory, never the door's space, but where the config key is meant (`door: space:`).
 - An apply with no failure ends on the server ready for project users, offering `--project-users add` by the session's address while the door has no user.
 - One root run (`ProjectUsersSetupScript`, `doorSetupRun`): the host's root writable and its pids, for `systemctl`, no network and no capability added; every mount goes through systemd from the chroot (`daemon-reload`, `enable --now`), never `mount` in the container, whose namespace a mount would not leave; `enable` runs `--quiet`, the run saying its own line per change, never systemd's own lines.
+- That run has no `set -e`: each command that fails, a `put`'s exit in its subshell included, fails its step alone, said, the rest of that step left and the other steps going on, and the run then exits `remote.DoorSetupSaid`, a code no tool returns through it, so a tool's own exit never passes for a failure devopsy worded.
 
 ## --server-setup-howto
 

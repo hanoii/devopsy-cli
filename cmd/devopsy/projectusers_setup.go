@@ -631,7 +631,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		err := run.run(io.MultiWriter(&out, &lineWriter{line: func(l string) { sayDoorSetupLines(l, me.Username) }}), func(err error) error { return err })
 		var ee *exec.ExitError
 		switch {
-		case errors.As(err, &ee) && ee.ExitCode() == 6:
+		case errors.As(err, &ee) && ee.ExitCode() == remote.DoorSetupSaid:
 			// The run's own failure, each said by the run.
 			failures++
 		case err != nil:

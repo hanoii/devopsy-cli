@@ -117,7 +117,7 @@ func TestProjectUsersSetupScript(t *testing.T) {
 	// systemd refusing the mount: the run fails, naming it, says no mount, and puts the drop-in
 	// without the space, which a mount that fails would keep Docker from starting at boot on.
 	out, code = run([]string{"FAKE_SYSTEMCTL_FAILS=1"}, host, me, space, "", "", unit, "", "1", dropin, "", "deploy", "", "", word, bare)
-	if code != 6 || !strings.Contains(out, "devopsy: error: systemd did not mount "+space+"\n") || strings.Contains(out, "mounted") ||
+	if code != DoorSetupSaid || !strings.Contains(out, "devopsy: error: systemd did not mount "+space+"\n") || strings.Contains(out, "mounted") ||
 		!strings.Contains(out, "put "+setup.MountsDropIn+"\n") || read(filepath.Join(host, setup.MountsDropIn)) != bare {
 		t.Errorf("a mount systemd refuses (%d):\n%s\nthe drop-in:\n%s", code, out, read(filepath.Join(host, setup.MountsDropIn)))
 	}
@@ -208,7 +208,7 @@ func TestProjectUsersSetupScriptSafePath(t *testing.T) {
 				}
 				return
 			}
-			if _, err := os.Lstat(filepath.Join(real, "door")); code != 6 || !refused || strings.Contains(string(out), "made ") || string(dropin) != bare || err == nil {
+			if _, err := os.Lstat(filepath.Join(real, "door")); code != DoorSetupSaid || !refused || strings.Contains(string(out), "made ") || string(dropin) != bare || err == nil {
 				t.Errorf("(%d):\n%s\nthe drop-in:\n%s", code, out, dropin)
 			}
 		})

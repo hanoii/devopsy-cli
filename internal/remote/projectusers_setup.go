@@ -2,6 +2,8 @@ package remote
 
 import (
 	"path"
+	"strconv"
+	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -49,6 +51,26 @@ var safePath = `safe_path() {
 }
 `
 
+// DoorSetupSaid is ProjectUsersSetupScript's exit once a step failed, each failure said by the
+// run: no tool's own, since the run catches every tool's failure into its step's, so a tool's
+// exit never reaches the run's and passes for a failure the run worded.
+const DoorSetupSaid = 90
+
+// hostPutAs is hostPut under another name, for a script that wraps it.
+func hostPutAs(name string) string { return name + strings.TrimPrefix(hostPut, "put") }
+
+// doorSetupPut is put for ProjectUsersSetupScript: hostPut's in a subshell, so a put that fails
+// (its check, its write) says why and exits 4 or 5, which ends only that subshell; the run is
+// marked failed and goes on. It succeeds when it put the file and fails otherwise, $pe saying
+// which: 1 for the same text, more for a failure.
+var doorSetupPut = hostPutAs("put_exits") + `put() {
+  pe=0
+  ( put_exits "$@" ) || pe=$?
+  [ "$pe" -le 1 ] || failed=1
+  return "$pe"
+}
+`
+
 // ProjectUsersSetupScript is what --project-users setup's apply runs as root on the host,
 // through the util image chrooted into it, its system files under $host_root and the space as
 // the host names it, in this order: the space made or given to the deploy user, its mode set
@@ -61,8 +83,10 @@ var safePath = `safe_path() {
 // restart), polkit restarted. A mount goes only through systemd, never mount in the container:
 // a mount made in the container's namespace does not reach the host. Each file is put only when
 // it differs, and systemctl enable runs --quiet: the run says its own line per change, and
-// systemd's links made would show raw among devopsy's. A step that fails is said and the next
-// independent one goes (the processes beside a mount that failed), the run then exiting 6. Its arguments, in order: the host root,
+// systemd's links made would show raw among devopsy's. It runs without set -e: every command
+// that fails is caught into its step's failure, said, the rest of that step left and the next
+// independent one going on (the processes beside a mount that failed), the run then exiting
+// DoorSetupSaid. Its arguments, in order: the host root,
 // the deploy user's uid:gid, the space, 1 to make or give it, 1 to set its mode, its unit's
 // path, the unit's text ("" to leave it), 1 to enable and start it, the drop-in's text ("" to
 // leave it), 1 for the processes, the deploy user, /proc's unit's text with setup.GIDMark for
@@ -72,52 +96,80 @@ var safePath = `safe_path() {
 // path (safe_path), else it is left, said, and the drop-in goes without it. systemd's name for
 // a path with a - holds a backslash (\x2d), which a shell drops from a word copied unquoted and
 // some shells' echo reads as an escape, so the unit's path is said with printf.
-var ProjectUsersSetupScript = `set -eu
+var ProjectUsersSetupScript = `set -u
 umask 022
 host_root=$1 owner=$2 space=$3 give=$4 mode=$5 unit=$6 unit_text=$7 mount=$8 dropin=$9 procs=${10}
 user=${11} proc_text=${12} polkit=${13} unit_word=${14} dropin_bare=${15}
 sd() { SYSTEMD_IGNORE_CHROOT=1 systemctl "$@"; }
-` + hostPut + safePath + `reload= failed= held=1
+` + doorSetupPut + safePath + `reload= failed= held=1
+# The space's step ends where it fails: no mount, and the drop-in without the space.
+space_stop() { give= mode= unit_text= mount= held= failed=1; }
 if [ -n "$give$mode$unit_text$mount" ] && ! safe_path; then
   ` + echoLine(report.ErrorLevel, "$space, or a directory above it, could be changed by another user: devopsy did not touch it") + `
-  give= mode= unit_text= mount= failed=1 held=
+  space_stop
 fi
-if [ -n "$give" ]; then
-  if [ ! -e "$space" ]; then install -d -m 755 "$space"; echo "` + SetupMade + ` $space"; fi
-  if [ -n "$(find "$space" -maxdepth 0 -user 0)" ]; then chown -h "$owner" "$space"; echo "` + SetupGave + ` $space"; fi
+if [ -n "$give" ] && [ ! -e "$space" ]; then
+  if install -d -m 755 "$space"; then echo "` + SetupMade + ` $space"; else
+    ` + echoLine(report.ErrorLevel, "devopsy could not make $space") + `
+    space_stop
+  fi
 fi
-if [ -n "$mode" ]; then chmod 755 "$space"; echo "` + DoorSetupMode + ` $space"; fi
+if [ -n "$give" ] && [ -n "$(find "$space" -maxdepth 0 -user 0)" ]; then
+  if chown -h "$owner" "$space"; then echo "` + SetupGave + ` $space"; else
+    ` + echoLine(report.ErrorLevel, "devopsy could not give $space to the deploy user") + `
+    space_stop
+  fi
+fi
+if [ -n "$mode" ]; then
+  if chmod 755 "$space"; then echo "` + DoorSetupMode + ` $space"; else
+    ` + echoLine(report.ErrorLevel, "devopsy could not set $space to mode 755") + `
+    space_stop
+  fi
+fi
 if [ -n "$unit_text" ]; then
   mkdir -p "$host_root${unit%/*}"
-  if put "$host_root$unit" 644 true "$unit_text"; then printf '%s\n' "` + SetupPut + ` $unit"; reload=1; fi
+  if put "$host_root$unit" 644 true "$unit_text"; then printf '%s\n' "` + SetupPut + ` $unit"; reload=1
+  elif [ "$pe" -gt 1 ]; then space_stop; fi
 fi
-restart_polkit=
+# The processes' step ends where it fails, the space's going on.
+restart_polkit= group=` + setup.ProcGroup + `
+proc_stop() { procs= failed=1; }
+if [ -n "$procs" ] && ! getent group "$group" >/dev/null; then
+  if groupadd --system "$group"; then echo "` + DoorSetupGroup + ` $group"; else
+    ` + echoLine(report.ErrorLevel, "devopsy could not make the group "+setup.ProcGroup) + `
+    proc_stop
+  fi
+fi
 if [ -n "$procs" ]; then
-  group=` + setup.ProcGroup + `
-  getent group "$group" >/dev/null || { groupadd --system "$group"; echo "` + DoorSetupGroup + ` $group"; }
   gid=$(getent group "$group" | cut -d: -f3)
   case $gid in ''|*[!0-9]*)
     ` + echoLine(report.ErrorLevel, "the group "+setup.ProcGroup+" has no number") + `
-    procs= failed=1 ;;
+    proc_stop ;;
   esac
 fi
+if [ -n "$procs" ] && ! getent group "$group" | cut -d: -f4 | tr , '\n' | grep -qxF "$user"; then
+  if usermod -aG "$group" "$user"; then echo "` + DoorSetupMember + ` $user"; else
+    ` + echoLine(report.ErrorLevel, "devopsy could not put $user in "+setup.ProcGroup) + `
+    proc_stop
+  fi
+fi
 if [ -n "$procs" ]; then
-  getent group "$group" | cut -d: -f4 | tr , '\n' | grep -qxF "$user" || { usermod -aG "$group" "$user"; echo "` + DoorSetupMember + ` $user"; }
   mkdir -p "$host_root` + path.Dir(setup.ProcUnit) + `"
   if put "$host_root` + setup.ProcUnit + `" 644 true "${proc_text%%` + setup.GIDMark + `*}$gid${proc_text#*` + setup.GIDMark + `}"; then
     echo "` + SetupPut + ` ` + setup.ProcUnit + `"
     reload=1
-  fi
-  if [ -n "$polkit" ]; then
-    mkdir -p "$host_root` + path.Dir(setup.PolkitDropIn) + `"
-    if put "$host_root` + setup.PolkitDropIn + `" 644 true "$polkit"; then
-      echo "` + SetupPut + ` ` + setup.PolkitDropIn + `"
-      reload=1 restart_polkit=1
-    fi
-  fi
+  elif [ "$pe" -gt 1 ]; then proc_stop; fi
 fi
-if [ -n "$reload" ]; then
-  sd daemon-reload >&2 || { ` + echoLine(report.ErrorLevel, "systemctl could not reload systemd from devopsy's container: nothing was mounted") + `; exit 6; }
+if [ -n "$procs" ] && [ -n "$polkit" ]; then
+  mkdir -p "$host_root` + path.Dir(setup.PolkitDropIn) + `"
+  if put "$host_root` + setup.PolkitDropIn + `" 644 true "$polkit"; then
+    echo "` + SetupPut + ` ` + setup.PolkitDropIn + `"
+    reload=1 restart_polkit=1
+  elif [ "$pe" -gt 1 ]; then proc_stop; fi
+fi
+if [ -n "$reload" ] && ! sd daemon-reload >&2; then
+  ` + echoLine(report.ErrorLevel, "systemd could not reload its units, so devopsy started none of its own") + `
+  mount= procs= held= failed=1
 fi
 if [ -n "$mount" ]; then
   if sd enable --quiet --now "${unit##*/}" >&2; then
@@ -137,11 +189,15 @@ fi
 if [ -n "$procs" ]; then
   if { sd enable --quiet ` + setup.ProcUnitName + ` && sd restart ` + setup.ProcUnitName + `; } >&2; then
     echo ` + DoorSetupHidden + `
-    if [ -n "$restart_polkit" ]; then sd try-restart polkit.service >&2 || :; echo ` + DoorSetupPolkit + `; fi
+    if [ -n "$restart_polkit" ]; then
+      if sd try-restart polkit.service >&2; then echo ` + DoorSetupPolkit + `; else
+        ` + echoLine(report.WarnLevel, "systemd did not restart polkit, which sees only its own processes until it restarts", report.Fix("as root:", "systemctl restart polkit.service")) + `
+      fi
+    fi
   else
     ` + echoLine(report.ErrorLevel, "systemd did not remount /proc", report.Hint("what it said, as root:", "journalctl -u "+setup.ProcUnitName)) + `
     failed=1
   fi
 fi
-[ -z "$failed" ] || exit 6
+[ -z "$failed" ] || exit ` + strconv.Itoa(DoorSetupSaid) + `
 `
