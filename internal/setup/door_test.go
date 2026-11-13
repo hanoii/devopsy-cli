@@ -33,9 +33,14 @@ func TestMountUnitName(t *testing.T) {
 
 // The units' texts are those tried by hand on Debian 13 and Ubuntu 26.04, each after devopsy's
 // header: the space bound on itself with nosuid and nodev at every boot; /proc remounted with
-// hidepid=invisible and the group's number early at every boot; polkit in the group.
+// hidepid=invisible and the group's number early at every boot; polkit in the group, by a
+// drop-in named for what it is for, a path of its own: a drop-in named for devopsy alone
+// (90-devopsy.conf) is one another tool may write with other text.
 func TestDoorUnitTexts(t *testing.T) {
 	t.Parallel()
+	if PolkitDropIn != "/etc/systemd/system/polkit.service.d/90-devopsy-proc.conf" {
+		t.Errorf("polkit's drop-in at %s", PolkitDropIn)
+	}
 	if got := SpaceUnitText(DefaultSpace); got != DoorHeader+`
 [Mount]
 What=/var/lib/devopsy-door

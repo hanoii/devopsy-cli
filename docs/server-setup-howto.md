@@ -172,7 +172,7 @@ user=devopsy).
    ```sh
    group=devopsy-proc
    mkdir -p /etc/systemd/system/polkit.service.d
-   printf '[Service]\nSupplementaryGroups=%s\n' "$group" > /etc/systemd/system/polkit.service.d/90-devopsy.conf
+   printf '[Service]\nSupplementaryGroups=%s\n' "$group" > /etc/systemd/system/polkit.service.d/90-devopsy-proc.conf
    systemctl daemon-reload
    systemctl try-restart polkit
    ```

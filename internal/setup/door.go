@@ -33,8 +33,9 @@ const (
 )
 
 // PolkitDropIn gives polkit the group, where the server has polkit: it reads its callers'
-// processes to answer them.
-const PolkitDropIn = unitDir + "/polkit.service.d/90-devopsy.conf"
+// processes to answer them. Its name is the group's, a path of its own: a drop-in named for
+// devopsy alone is one another tool may write.
+const PolkitDropIn = unitDir + "/polkit.service.d/90-" + ProcGroup + ".conf"
 
 // GIDMark stands for the group's number in ProcUnitText's text as the root run gets it: the
 // group may be made by that very run, which then puts its number there.
