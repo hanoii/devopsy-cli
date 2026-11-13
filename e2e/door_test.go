@@ -1416,8 +1416,12 @@ func TestDoorClaimNeedsNoDaemonCerts(t *testing.T) {
 	reg := doorRegistryTrusted(t, "doortrust-reg", "5043", false, false)
 	ref := reg + "/app:1"
 	t.Cleanup(func() { doorRemoveClaims(t, user) })
-	// Pushed by buildx's client, which trusts the host's store.
-	if out, code := doorRoot(t, "docker buildx imagetools create --tag "+ref+" busybox:1.37 >/dev/null 2>&1"); code != 0 {
+	// Built and pushed by a builder of root's with the project builders' config, its CA and the
+	// lane's mirror: no daemon certs.d either, and busybox through the mirror, since copying its
+	// index from Docker Hub reads each of its manifests, a pull each against Docker Hub's hourly
+	// limit, which the suite then ran out of.
+	t.Cleanup(func() { doorRoot(t, "docker buildx rm -f doortrust-push >/dev/null 2>&1; true") })
+	if out, code := doorRoot(t, "set -e\ndocker buildx create --name doortrust-push --driver docker-container --config "+doorSpace+"/buildx/buildkitd.default.toml >/dev/null\nprintf 'FROM busybox:1.37\\n' | docker buildx build -q --builder doortrust-push --output type=image,name="+ref+",push=true - 2>&1"); code != 0 {
 		t.Fatalf("the image (%d): %s", code, out)
 	}
 	if out, code := doorAs(t, user, "docker image inspect -f '{{.Id}}' "+ref+" 2>&1"); code != 0 {
