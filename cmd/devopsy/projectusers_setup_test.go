@@ -121,11 +121,16 @@ func TestProjectUsersSetupYes(t *testing.T) {
 
 // Without a terminal and without --yes, --project-users setup asks nothing and changes nothing,
 // naming --yes with the directory as typed; asked as a project user, it names the deploy user's
-// address instead.
+// address instead; a directory named by a relative path is a usage error that says it must be
+// absolute, nothing asked of the server.
 func TestProjectUsersSetupAsks(t *testing.T) {
 	t.Parallel()
 	s, host, space := doorSetupServer(t)
 	before := readString(configFile(s))
+	if out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", "door", "--yes"); code != 1 ||
+		out != "devopsy: error: usage: devopsy @devopsy@one: --project-users setup [<directory>] [--yes]\ndevopsy: | the directory must be an absolute path, not door\n" {
+		t.Errorf("a relative directory (%d):\n%s", code, out)
+	}
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space)
 	if code != 1 || !strings.Contains(out, "--project-users setup "+space+" asks first, and there is no terminal to ask at") ||
 		!strings.Contains(out, "$ devopsy @devopsy@one: --project-users setup "+space+" --yes") || fileExists(space) || readString(configFile(s)) != before {

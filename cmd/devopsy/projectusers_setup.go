@@ -32,7 +32,15 @@ import (
 func runProjectUsersSetup(t *remote.Target, args []string) int {
 	dir, yes, ok := projectUsersSetupArgs(args)
 	if !ok {
-		return fail("usage: devopsy @" + targetRef(t) + " --project-users setup [<directory>] [--yes]")
+		usage := "usage: devopsy @" + targetRef(t) + " --project-users setup [<directory>] [--yes]"
+		// A directory named as a relative path: said so, since it is a directory the usage takes.
+		for _, a := range args {
+			if a != "" && !strings.HasPrefix(a, "/") && !strings.HasPrefix(a, "-") {
+				report.Error(usage, "the directory must be an absolute path, not "+a)
+				return 1
+			}
+		}
+		return fail(usage)
 	}
 	step := []string{"setup", "facts"}
 	apply := []string{"setup", "apply"}
