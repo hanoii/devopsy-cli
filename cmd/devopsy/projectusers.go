@@ -314,7 +314,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 		return 1
 	}
 	if err := spaceGuarded(d.Space); err != nil {
-		report.Fail(err, projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
+		report.Fail(&report.Failure{Msg: report.SpaceUnguarded.Msg(), Details: []string{err.Error() + ": no project user made"}}, projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
 		return 1
 	}
 	if err := staticSelf(); err != nil {

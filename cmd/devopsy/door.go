@@ -960,8 +960,7 @@ func runDoor(args []string) int {
 	}
 	// From here every refusal is recorded, the space's own included.
 	doorLog = filepath.Join(policy.Space, "refused.log")
-	if err := spaceGuarded(policy.Space); err != nil {
-		report.Fail(err, report.Fix("the server's admin sets it up with --project-users setup, as its deploy user"))
+	if err := refuseUnguarded(report.Default(), policy.Space); err != nil {
 		doorRecord(err.Error())
 		return 2
 	}
@@ -1106,16 +1105,28 @@ func (s *doorSide) stillAsked() error {
 	return nil
 }
 
+// refuseUnguarded refuses, through l, a request on a door whose space is not guarded
+// (spaceGuarded), giving what the refusals' log records, nil when it is: the project user
+// asking can only pass it on, so it is told the code for the server's admin and no way out
+// (report.SpaceUnguarded), which the admin finds with its fix in --server-info.
+func refuseUnguarded(l *report.Logger, space string) error {
+	err := spaceGuarded(space)
+	if err != nil {
+		l.SayForAdmin(report.ErrorLevel, report.SpaceUnguarded)
+	}
+	return err
+}
+
 // spaceGuarded refuses a door whose space is not on a mount with nosuid and nodev: there a
 // container's setuid file crosses projects and a crafted tar reaches root, so the door does
 // nothing rather than half its promise.
 func spaceGuarded(space string) error {
 	nosuid, nodev, err := mountGuards(space)
 	if err != nil {
-		return fmt.Errorf("refused: the door's space %s: %v", space, err)
+		return fmt.Errorf("the project users' directory %s: %v", space, err)
 	}
 	if !nosuid || !nodev {
-		return fmt.Errorf("refused: the door's space %s is not on a mount with nosuid and nodev", space)
+		return fmt.Errorf("the project users' directory %s is not on a mount with nosuid and nodev", space)
 	}
 	return nil
 }

@@ -1309,8 +1309,8 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if dr := info.Door; dr != nil {
 		row("door", dr.Space+", "+plural(dr.Users, "project user"))
 		if dr.Unguarded != "" {
-			warn(dr.Unguarded+": the door refuses every request",
-				projectUsersSetup(report.Fix, ref, howto.ProjectUsers)...)
+			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{report.SpaceUnguarded.Msg(), dr.Unguarded + ", so the door refuses every request"},
+				Remedies: projectUsersSetup(report.Fix, ref, howto.ProjectUsers)})
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",

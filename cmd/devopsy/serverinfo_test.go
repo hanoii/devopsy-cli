@@ -195,8 +195,8 @@ func TestServerInfoReport(t *testing.T) {
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "the server needs a reboot (/run/reboot-required, for linux-image-amd64)|reboot it"},
 		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
-			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "refused: the door's space /space is not on a mount with nosuid and nodev"}
-		}, "", "the door refuses every request|set the server up for project users:\n$ devopsy @vm1: --project-users setup"},
+			i.Door = &remote.DoorFacts{Space: "/space", Unguarded: "the project users' directory /space is not on a mount with nosuid and nodev"}
+		}, "", "W0002: the project users' directory is not on a mount with nosuid and nodev\nthe project users' directory /space is not on a mount with nosuid and nodev, so the door refuses every request|set the server up for project users:\n$ devopsy @vm1: --project-users setup"},
 		{"door reboot", func(i *remote.ServerInfo) { i.Door = &remote.DoorFacts{Space: "/space", Reboot: true} }, "", "sshd takes the door at the next reboot|reboot it"},
 		{"door listeners", func(i *remote.ServerInfo) {
 			i.Door = &remote.DoorFacts{Space: "/space", Listeners: []string{"0.0.0.0:5432 (postgres)"}}
