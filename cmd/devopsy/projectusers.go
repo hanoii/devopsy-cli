@@ -49,7 +49,7 @@ func runProjectUsers(t *remote.Target, args []string) int {
 		return fail(err.Error())
 	}
 	if code == remote.AskedAsProjectUser {
-		refuseProjectUser(t, out.String(), "project users are the server's deploy user's", "--project-users "+strings.Join(args, " "))
+		refuseProjectUser(t, out.String(), "project users are the server's deploy user's", strings.Join(append([]string{"--project-users"}, args...), " "))
 		return 1
 	}
 	os.Stdout.Write(out.Bytes())

@@ -667,3 +667,17 @@ func TestLeftGroupID(t *testing.T) {
 		}
 	}
 }
+
+// Asked as a project user, --project-users names the deploy user's address with the words as
+// typed, none added: bare, the command offered ends at --project-users, so it copies as it is.
+func TestProjectUsersAskedAsAProjectUser(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	for _, words := range [][]string{nil, {"list"}} {
+		out, code := s.run([]string{"FAKE_PROJECT_HOST=one"}, append([]string{"@devopsy@one:", "--project-users"}, words...)...)
+		want := strings.Join(append([]string{"@one: --project-users"}, words...), " ") + "\n"
+		if code != 1 || !strings.Contains(out, "project users are the server's deploy user's") || !strings.Contains(out, want) {
+			t.Errorf("%v (%d), want %q:\n%s", words, code, want, out)
+		}
+	}
+}
