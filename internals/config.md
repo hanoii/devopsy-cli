@@ -4,7 +4,7 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 ## Files
 
-- A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:` and `snapshots: {root, max_keep, mirror}`); an unknown key is an error.
+- A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:`, `snapshots: {root, max_keep, mirror}`, `firewall: {metadata}` and `gc: {containers, build_cache}`); an unknown key is an error.
 - Never `~/.devopsy`: project discovery would take the home directory for a project.
 - `defaults:` gives environments `mode`, steps, `releases`, `snapshots`, `inherit` and `env`, merged: `env` key by key, `snapshots` by kind and key (`mergeSnapshots`); a `~` value removes the key (`KEY: ~`, `snapshots.manual.keep: ~`, `inherit: ~`), and `""` stays empty.
 - `config.local.yaml` replaces the project's top-level keys, but its `defaults:` and an environment of the same key (a pattern only over the same pattern) merge over the project's as `defaults:` do, `parent: ~` removing the parent (`mergeEnvironment`): a local file changing one key of an environment must not have to repeat the rest.
@@ -35,7 +35,7 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 ## Release settings
 
-- A server's `releases:` (`root`, default the deploy user's home; `keep`, `max_keep`, default 5) and `snapshots:` (`root`, `max_keep`, `mirror`) are read by the hidden `--release-settings`, which every script asks first (`basePrelude`, `ReleaseSettings`): a laptop and CI then resolve the same paths.
+- A server's `releases:` (`root`, default the deploy user's home; `keep`, `max_keep`, default 5), `snapshots:` (`root`, `max_keep`, `mirror`) and `gc:` (`containers`, `build_cache`, each a Go duration or `<n>d` through `ParseAge`, default 1 day and 30 days) are read by the hidden `--release-settings`, which every script asks first (`basePrelude`, `ReleaseSettings`): a laptop and CI then resolve the same paths.
 - A project's `keep` is capped by the server's `max_keep`; `root` and `max_keep` in a project are errors.
 
 ## Secrets on a server

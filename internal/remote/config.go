@@ -1,14 +1,18 @@
 package remote
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -446,10 +450,54 @@ type Releases struct {
 	// Keep is the default for projects; MaxKeep caps any project's.
 	Keep    int `yaml:"keep"`
 	MaxKeep int `yaml:"max_keep"`
-	// Snapshots is the machine's snapshots: section, Firewall its firewall: section
-	// (ReleaseSettings fills them in).
+	// Snapshots is the machine's snapshots: section, Firewall its firewall: section, GC its
+	// gc: section (ReleaseSettings fills them in).
 	Snapshots ServerSnapshots `yaml:"-"`
 	Firewall  ServerFirewall  `yaml:"-"`
+	GC        ServerGC        `yaml:"-"`
+}
+
+// ServerGC is the user-level config's gc: section, on a server: the ages of what --gc
+// removes. Containers is how long an exited one-off container stays, BuildCache how long
+// build cache unused stays, on every builder.
+type ServerGC struct {
+	Containers time.Duration
+	BuildCache time.Duration
+}
+
+// The gc: ages when the config sets none.
+const (
+	DefaultGCContainers = 24 * time.Hour
+	DefaultGCBuildCache = 30 * 24 * time.Hour
+)
+
+// ParseAge reads an age: a Go duration (36h, 90m) or a whole number of days (7d), more than
+// none.
+func ParseAge(s string) (time.Duration, error) {
+	var d time.Duration
+	var err error
+	if n, ok := strings.CutSuffix(s, "d"); ok {
+		var days int
+		days, err = strconv.Atoi(n)
+		d = time.Duration(days) * 24 * time.Hour
+		if err == nil && (days <= 0 || days > math.MaxInt64/int(24*time.Hour)) {
+			err = errors.New("out of range")
+		}
+	} else {
+		d, err = time.ParseDuration(s)
+	}
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("a duration (6h, 90m) or days (7d), not %q", s)
+	}
+	return d, nil
+}
+
+// AgeString is an age as ParseAge reads it: in days when whole, else as Go writes it.
+func AgeString(d time.Duration) string {
+	if d > 0 && d%(24*time.Hour) == 0 {
+		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
+	}
+	return d.String()
 }
 
 // ServerFirewall is the user-level config's firewall: section, on a server: Metadata,
@@ -489,6 +537,7 @@ type configFile struct {
 	releases      *Releases
 	snapshots     *ServerSnapshots
 	firewall      *ServerFirewall
+	gc            *ServerGC
 	door          *Door
 	defaults      *Target
 	defaultsNulls map[string]bool
@@ -573,6 +622,31 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: firewall: metadata: %s or %s, not %q", file, MetadataBlock, MetadataAllow, fw.Metadata)
 			}
 			f.firewall = &fw
+		case key == "gc" && !user:
+			return nil, fmt.Errorf("%s: gc: belongs to each server's user-level config (~/.config/devopsy/config.yaml there), never to a project", file)
+		case key == "gc":
+			gc := ServerGC{}
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				k, v := node.Content[i].Value, node.Content[i+1]
+				var to *time.Duration
+				switch k {
+				case "containers":
+					to = &gc.Containers
+				case "build_cache":
+					to = &gc.BuildCache
+				default:
+					return nil, fmt.Errorf("%s: gc: unknown key %q (containers, build_cache)", file, k)
+				}
+				if v.Kind != yaml.ScalarNode {
+					return nil, fmt.Errorf("%s: gc: %s: a duration (6h, 90m) or days (7d)", file, k)
+				}
+				d, err := ParseAge(v.Value)
+				if err != nil {
+					return nil, fmt.Errorf("%s: gc: %s: %w", file, k, err)
+				}
+				*to = d
+			}
+			f.gc = &gc
 		case key == "snapshots" && !user:
 			return nil, fmt.Errorf("%s: snapshots: goes under defaults: or an environment (snapshots: {manual: ...}); root and max_keep belong to each machine's user-level config", file)
 		case key == "snapshots":
@@ -1168,6 +1242,9 @@ func ReleaseSettings() (Releases, error) {
 		if f != nil && f.firewall != nil {
 			r.Firewall = *f.firewall
 		}
+		if f != nil && f.gc != nil {
+			r.GC = *f.gc
+		}
 	}
 	if r.Root == "" {
 		home, err := os.UserHomeDir()
@@ -1202,6 +1279,8 @@ func ReleaseSettings() (Releases, error) {
 	if r.Firewall.Metadata == "" {
 		r.Firewall.Metadata = MetadataBlock
 	}
+	r.GC.Containers = cmp.Or(r.GC.Containers, DefaultGCContainers)
+	r.GC.BuildCache = cmp.Or(r.GC.BuildCache, DefaultGCBuildCache)
 	if sr := r.Snapshots.Root; sr != "" {
 		if strings.HasPrefix(sr, "~/") || sr == "~" {
 			home, err := os.UserHomeDir()

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -475,6 +476,53 @@ func TestReleaseSettings(t *testing.T) {
 		write(t, filepath.Join(home, ConfigFile), conf)
 		if _, err := ReleaseSettings(); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v", conf, err)
+		}
+	}
+	// gc: the ages of what --gc removes, a Go duration or days, a day and 30 days by default,
+	// never a project's.
+	write(t, filepath.Join(home, ConfigFile), "releases:\n  keep: 2\n")
+	if r, err := ReleaseSettings(); err != nil || r.GC.Containers != 24*time.Hour || r.GC.BuildCache != 30*24*time.Hour {
+		t.Errorf("gc's defaults: %+v, %v", r.GC, err)
+	}
+	write(t, filepath.Join(home, ConfigFile), "gc:\n  containers: 6h\n  build_cache: 7d\n")
+	if r, err := ReleaseSettings(); err != nil || r.GC.Containers != 6*time.Hour || r.GC.BuildCache != 7*24*time.Hour {
+		t.Errorf("gc: %+v, %v", r.GC, err)
+	}
+	for conf, want := range map[string]string{
+		"gc:\n  images: 1d\n":        `gc: unknown key "images" (containers, build_cache)`,
+		"gc:\n  containers: soon\n":  `gc: containers: a duration (6h, 90m) or days (7d), not "soon"`,
+		"gc:\n  build_cache: -2d\n":  `gc: build_cache: a duration (6h, 90m) or days (7d), not "-2d"`,
+		"gc:\n  containers: 0s\n":    `gc: containers: a duration (6h, 90m) or days (7d), not "0s"`,
+		"gc:\n  containers: [1d]\n":  `gc: containers: a duration (6h, 90m) or days (7d)`,
+		"gc:\n  build_cache: 1.5d\n": `gc: build_cache: a duration (6h, 90m) or days (7d), not "1.5d"`,
+	} {
+		write(t, filepath.Join(home, ConfigFile), conf)
+		if _, err := ReleaseSettings(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v", conf, err)
+		}
+	}
+	write(t, project, "gc:\n  containers: 1d\n")
+	if _, err := readConfigFile(project, false); err == nil || !strings.Contains(err.Error(), "never to a project") {
+		t.Errorf("a project's gc: %v", err)
+	}
+}
+
+// An age is a Go duration or a number of days, written back the same way.
+func TestAge(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]time.Duration{"1d": 24 * time.Hour, "30d": 30 * 24 * time.Hour, "36h": 36 * time.Hour, "90m": 90 * time.Minute, "1h30m": 90 * time.Minute} {
+		if got, err := ParseAge(in); err != nil || got != want {
+			t.Errorf("%s: %v %v", in, got, err)
+		}
+	}
+	for d, want := range map[time.Duration]string{24 * time.Hour: "1d", 30 * 24 * time.Hour: "30d", 36 * time.Hour: "36h0m0s", 90 * time.Minute: "1h30m0s"} {
+		if got := AgeString(d); got != want {
+			t.Errorf("%v: %q, want %q", d, got, want)
+		}
+	}
+	for _, bad := range []string{"", "d", "0d", "-1d", "1.5d", "1w", "0s", "-1h", "1d2h"} {
+		if _, err := ParseAge(bad); err == nil {
+			t.Errorf("%q: no error", bad)
 		}
 	}
 }
