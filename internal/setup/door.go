@@ -167,7 +167,7 @@ var errNotRead = errors.New("lines added at its end would not be read as part of
 // --project-users setup: each item's state, its refusals, and the files devopsy writes whole
 // for it. The server's devopsy computes every state; the operator only words them.
 type DoorFacts struct {
-	// Space is the door's space in its one form (its links followed); SpaceAction what an
+	// Space is the door's space, taken as named (a link in its path refuses); SpaceAction what an
 	// apply does to the directory (RootMake, RootGive, "" for nothing), SpaceMode its mode
 	// when it is not 0755 ("" in place).
 	Space       string `json:"space"`

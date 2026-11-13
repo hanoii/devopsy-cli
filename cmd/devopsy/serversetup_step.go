@@ -531,11 +531,16 @@ func dirOwner(what, p string, uid int) (action, refused string, fi os.FileInfo) 
 	case st.Uid == 0:
 		return "", name + " is root's and holds files, and devopsy gives the deploy user only an empty one, never a system directory", fi
 	}
-	owner := strconv.Itoa(int(st.Uid))
+	return "", name + " is " + ownerName(st.Uid) + "'s", fi
+}
+
+// ownerName is the user uid as a message names an owner: its name, else its number.
+func ownerName(uid uint32) string {
+	owner := strconv.FormatUint(uint64(uid), 10)
 	if u, err := user.LookupId(owner); err == nil {
-		owner = u.Username
+		return u.Username
 	}
-	return "", name + " is " + owner + "'s", fi
+	return owner
 }
 
 // dockerSetup is what the setup reads of Docker beyond docker info: its service's

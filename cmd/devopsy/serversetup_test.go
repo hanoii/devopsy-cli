@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -585,9 +586,17 @@ func TestReleaseRootCheck(t *testing.T) {
 	if !emptyDir(lf) {
 		t.Error("a lost+found alone is no file of anyone's")
 	}
-	// Another user's: refused, by its name.
-	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || !strings.Contains(refusal.Message, "is ") {
+	// Another user's: refused, by its name, the one lookup (ownerName) swappable's refusal uses
+	// too, a number where the user has no name.
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, refusal := releaseRootCheck(dir, os.Getuid()+1); refusal == nil || refusal.Message != "the release root "+dir+" is "+me.Username+"'s" {
 		t.Errorf("another user's: %+v", refusal)
+	}
+	if got := ownerName(4294967290); got != "4294967290" {
+		t.Errorf("a uid with no name: %q", got)
 	}
 }
 

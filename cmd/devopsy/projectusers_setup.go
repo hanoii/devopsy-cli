@@ -453,16 +453,13 @@ func readSpace(h setupHost, rd *doorSetupRead, sm spaceAt, refuse func(item, sto
 // there yet is made by the root run under the last one there, so the walk ends at it. The root
 // run judges the same again right before it acts (remote.ProjectUsersSetupScript's safe_path).
 func swappable(p string, uid int) string {
+	// The owner of a part, "" for root or uid.
 	trusted := func(fi os.FileInfo) string {
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if !ok || st.Uid == 0 || int(st.Uid) == uid {
 			return ""
 		}
-		owner := strconv.Itoa(int(st.Uid))
-		if u, err := user.LookupId(owner); err == nil {
-			owner = u.Username
-		}
-		return owner
+		return ownerName(st.Uid)
 	}
 	cur := "/"
 	for _, part := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
