@@ -234,7 +234,7 @@ case "$*" in
     done; exit $rc ;;
   'rm '*) touch "`+state+`/rm-$2" ;;
   'system df -v --format {{json .}}') echo '{"BuildCache":[{"ID":"a","Size":"1.5MB","LastUsedAt":"2026-01-01 00:00:00 +0000 UTC","InUse":"false","Shared":"false"}]}' ;;
-  'builder prune -a -f --filter until='*) printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
+  'buildx prune --builder default -a -f --filter until='*) printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
   'image inspect --format {{.Id}} shop-web:'*) gone "$5" && { echo "Error: No such image: $5" >&2; exit 1; }; [ "$5" = shop-web:old ] && echo sha256:aaa || echo sha256:bbb ;;
   'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:aaa') echo shop-web:old ;;
   'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:bbb') echo shop-web:older ;;
@@ -302,7 +302,7 @@ esac
 	// pruned are the removals but the build cache's prune, and its until (0 for none).
 	pruned := func() ([]string, time.Duration) {
 		rs, until := removals(), time.Duration(0)
-		const prune = "builder prune -a -f --filter until="
+		const prune = "buildx prune --builder default -a -f --filter until="
 		if i := slices.IndexFunc(rs, func(r string) bool { return strings.HasPrefix(r, prune) }); i >= 0 {
 			until, _ = time.ParseDuration(strings.TrimPrefix(rs[i], prune))
 			rs = slices.Delete(rs, i, i+1)

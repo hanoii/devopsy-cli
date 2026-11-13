@@ -352,11 +352,13 @@ func runGCStep(args []string) int {
 }
 
 // only is what of p the listing listed too, each by its id: a one-off by its container's,
-// a builder by its name, a release snapshot by its environment and id, a name left by its
-// environment, name and image, a dangling image by its id. What p could not read stays in.
+// a builder by its name, unless the listing said its cache stays (Stopped), a release snapshot
+// by its environment and id, a name left by its environment, name and image, a dangling image
+// by its id. What p could not read stays in.
 func (p gcPlan) only(listing gcPlan) gcPlan {
 	p.OneOffs = keepListed(p.OneOffs, listing.OneOffs, func(c gcOneOff) string { return c.ID })
-	p.Builders = keepListed(p.Builders, listing.Builders, func(b gcBuilder) string { return b.Name })
+	p.Builders = keepListed(p.Builders, slices.DeleteFunc(slices.Clone(listing.Builders), func(b gcBuilder) bool { return b.Stopped }),
+		func(b gcBuilder) string { return b.Name })
 	p.Snapshots = keepListed(p.Snapshots, listing.Snapshots, gcSnapshot.key)
 	p.Left = keepListed(p.Left, listing.Left, func(l gcLeft) string { return leftKey(l.Retried) })
 	p.Dangling.Images = keepListed(p.Dangling.Images, listing.Dangling.Images, func(i gcImage) string { return i.ID })
@@ -527,7 +529,9 @@ func (g *gcScope) goes(status string, oneOff bool, c gcOneOff) bool {
 //     (regular records) go only with -a;
 //   - a record stays while one built on it (its child) stays, and goes in the same prune as
 //     the last of them;
-//   - docker builder prune is buildx prune on the builder named default, the daemon's own;
+//   - docker builder prune is buildx prune on the current builder (docker buildx use), which
+//     may be any; the daemon's own, of the docker driver, is named for its context, default
+//     (daemonBuilder), the one docker system df -v reads;
 //   - on a docker-container builder that is not running (stopped, or made and never started),
 //     prune and du fail with "driver not running" and never start it;
 //   - du ignores --filter until, and prints its last use only in words ("2 weeks ago"):
@@ -538,6 +542,9 @@ func (g *gcScope) goes(status string, oneOff bool, c gcOneOff) bool {
 //
 // So --gc lists, per builder, the records prune -a --filter until removes (cacheGoing), and
 // leaves a builder not running as it is.
+
+// daemonBuilder is the daemon's own builder, the docker driver's of the default context.
+const daemonBuilder = "default"
 
 // cacheRecord is one record of a builder's build cache.
 type cacheRecord struct {
@@ -849,9 +856,10 @@ func (g *gcScope) remove(p gcPlan) int {
 		if b.Stopped {
 			continue
 		}
-		cmd := exec.Command(g.docker, "builder", "prune", "-a", "-f", "--filter", until)
+		// The daemon's own builder by its name, never the deploy user's current one (docker
+		// buildx use), which may be another's.
+		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", cmp.Or(b.Name, daemonBuilder), "-a", "-f", "--filter", until)
 		if b.Name != "" {
-			cmd = exec.Command(g.docker, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 			cmd.Env = g.buildxEnv()
 		}
 		log.Info("removing the build cache of " + b.who() + " unused for " + duration(g.ages.BuildCache))
