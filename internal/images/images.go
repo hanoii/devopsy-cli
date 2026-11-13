@@ -143,6 +143,8 @@ type Image struct {
 	// Version is its org.opencontainers.image.version label: display
 	// only, never compared (images have no common version field).
 	Version string
+	// Size is its size as Docker counts it (Size): display only.
+	Size int64
 }
 
 // Modes, as a project's config names them: what fetches a release's
@@ -965,11 +967,16 @@ func appendNew(list []string, v string) []string {
 	return append(list, v)
 }
 
-// Prune retries the project's record, then removes the dangling images
-// removals left (docker image prune -f, server-wide: an untagged image
-// built by hand goes too).
+// Prune retries the project's record (Retry), then removes the dangling images
+// removals left (PruneDangling).
 func (s *Set) Prune() {
-	s.retry()
+	s.Retry()
+	s.PruneDangling()
+}
+
+// PruneDangling removes the dangling images no container uses (docker image prune -f,
+// server-wide: an untagged image built by hand goes too), saying what it freed.
+func (s *Set) PruneDangling() {
 	if freed, err := s.Docker.Prune(); err == nil && freed != "" && freed != "0B" {
 		s.say(report.InfoLevel, "dangling images pruned, %s freed", freed)
 	}
@@ -1013,7 +1020,7 @@ func (s *Set) leftAdd(ref, img, release string, err error) {
 
 // record appends a name to the project's record, once. One write with
 // O_APPEND, never a rewrite: environments of one project record beside
-// each other under the shared lock; only retry, alone under the lock,
+// each other under the shared lock; only Retry, alone under the lock,
 // rewrites it.
 func (s *Set) record(ref, img, release, why string) {
 	for _, l := range readLeft(s.Left) {
@@ -1041,39 +1048,25 @@ func (s *Set) record(ref, img, release, why string) {
 	}
 }
 
-// retry goes over the project's record: a line goes once its name is
-// gone, points to another image or is removed. A name a release holds
-// again stays recorded, since that release's removal only removes the
-// names it listed, and so does one whose image a container uses (taking
-// a name from it frees nothing). Any error but a missing image keeps the
-// line.
-func (s *Set) retry() {
+// Retry goes over the project's record (retried): a line goes once its name is gone, points
+// to another image or is removed; any other stays.
+func (s *Set) Retry() {
 	ls := readLeft(s.Left)
 	if len(ls) == 0 {
 		return
 	}
 	var keep []left
 	for _, l := range ls {
-		cur, err := s.Docker.ID(l.ref)
-		if errors.Is(err, ErrNoImage) {
-			continue
-		}
-		if err != nil {
+		switch s.retried(l) {
+		case leftKept:
 			keep = append(keep, l)
-			continue
+		case leftRemoved:
+			if err := s.Docker.Remove(l.ref); err != nil {
+				keep = append(keep, l)
+				continue
+			}
+			s.say(report.InfoLevel, "removed %s, left by release %s of %s", l.ref, l.release, l.name)
 		}
-		if cur != l.id {
-			continue
-		}
-		if !isBookmark(l.ref) && (s.held(l.id) || s.used(l.id)) {
-			keep = append(keep, l)
-			continue
-		}
-		if err := s.Docker.Remove(l.ref); err != nil {
-			keep = append(keep, l)
-			continue
-		}
-		s.say(report.InfoLevel, "removed %s, left by release %s of %s", l.ref, l.release, l.name)
 	}
 	if len(keep) == 0 {
 		os.Remove(s.Left)
@@ -1088,6 +1081,49 @@ func (s *Set) retry() {
 	}
 }
 
+// What Retry does with a line of the record (retried).
+const (
+	leftDropped = iota // its name is gone, or points to another image: the line goes
+	leftKept           // it stays recorded
+	leftRemoved        // its name is removed, then the line goes
+)
+
+// retried is what Retry does with the line l. A name a release holds again stays recorded,
+// since that release's removal only removes the names it listed, and so does one whose image
+// a container uses (taking a name from it frees nothing). Any error but a missing image keeps
+// the line.
+func (s *Set) retried(l left) int {
+	cur, err := s.Docker.ID(l.ref)
+	switch {
+	case errors.Is(err, ErrNoImage):
+		return leftDropped
+	case err != nil:
+		return leftKept
+	case cur != l.id:
+		return leftDropped
+	case !isBookmark(l.ref) && (s.held(l.id) || s.used(l.id)):
+		return leftKept
+	}
+	return leftRemoved
+}
+
+// Retried is a name of the record Retry would remove now: Ref on the image Image, left by
+// release Release of the environment Name.
+type Retried struct {
+	Ref, Image, Release, Name string
+}
+
+// Retryable are the names of the record Retry would remove now (retried), in its order.
+func (s *Set) Retryable() []Retried {
+	var out []Retried
+	for _, l := range readLeft(s.Left) {
+		if s.retried(l) == leftRemoved {
+			out = append(out, Retried{Ref: l.ref, Image: l.id, Release: l.release, Name: l.name})
+		}
+	}
+	return out
+}
+
 // held says whether a bookmark holds an image; when Docker cannot tell,
 // it does.
 func (s *Set) held(img string) bool {
@@ -1097,7 +1133,7 @@ func (s *Set) held(img string) bool {
 
 // leftBookmarks are the bookmarks the project's record holds, per image
 // they were recorded on: their release went, or no longer counts on
-// them, so they hold nothing (retry removes them). Taken for holders, a
+// them, so they hold nothing (Retry removes them). Taken for holders, a
 // release of the project running that image again kept its names for
 // them, and once the retry removed the bookmark the names outlived every
 // release (found by TestDataRandom).

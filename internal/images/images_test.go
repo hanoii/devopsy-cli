@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -779,7 +780,8 @@ func assertKept(t *testing.T, d *fakeDocker, before map[string]string, log []str
 // A release going leaves every name of an image a container uses, so a
 // project outside devopsy running mariadb:11.4 keeps it although the
 // release ran the same image as mariadb:11: recorded, retried once the
-// container is gone.
+// container is gone, by a Set of the project's record alone (--gc's), whose
+// Retryable lists beforehand exactly what its Prune then removes.
 func TestRemoveLeavesUsedImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -796,10 +798,28 @@ func TestRemoveLeavesUsedImage(t *testing.T) {
 	if d.names["mariadb:11"] != "sha256:1" || d.names["mariadb:11.4"] != "sha256:1" {
 		t.Errorf("names of a used image went: %v\n%s", d.names, out.String())
 	}
+	if got := e.set.Retryable(); len(got) != 0 {
+		t.Errorf("retryable while a container uses the image: %+v", got)
+	}
 	d.containers = nil
-	e.set.Prune()
+	project := &Set{Docker: d, Left: e.set.Left, Out: &out}
+	var refs []string
+	for _, r := range project.Retryable() {
+		refs = append(refs, r.Ref)
+		if r.Image != "sha256:1" || r.Name != "app-prod" || r.Release != id {
+			t.Errorf("retryable %+v, want sha256:1 of app-prod's release %s", r, id)
+		}
+	}
+	slices.Sort(refs)
+	if !slices.Equal(refs, []string{"mariadb:11", "mariadb:11.4"}) {
+		t.Errorf("retryable %v, want both names", refs)
+	}
+	project.Prune()
 	if len(d.images) != 0 {
 		t.Errorf("not retried once the container went: %v\n%s", d.names, out.String())
+	}
+	if got := project.Retryable(); len(got) != 0 {
+		t.Errorf("retryable after the retry: %+v", got)
 	}
 }
 
