@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // Bug (review round 2): a root run that never ran (the util image's container failing to
@@ -35,5 +38,28 @@ func TestProjectUsersSetupRefusedSpaceKeepsItsMount(t *testing.T) {
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	if code != 1 || !strings.Contains(out, "which other users can write") || strings.Contains(out, "has no mount with nosuid and nodev") {
 		t.Errorf("a refused space on a guarded mount (%d):\n%s", code, out)
+	}
+}
+
+// Bug (review round 2): the door's W0002 for an unguarded space reaches a project user's
+// release through --mnt-ready, which asks the door quietly (doorAsk(false, ...)) and folds what
+// the door said into one error of its own: the code's two lines become "the door would not
+// ready <mnt>: W0002: ...", then "devopsy: | devopsy: | report W0002 to the server's admin:
+// exit status 2", the detail kept inside the message with its prefix doubled, so the code is not
+// the first line's (SayForAdmin's form) and the detail reads broken.
+func TestMntReadyPassesTheDoorsCodeOn(t *testing.T) {
+	t.Parallel()
+	if reachesDocker() {
+		t.Skip("this user reaches Docker, so --mnt-ready asks no door")
+	}
+	var said strings.Builder
+	report.New(&said, false, 0).SayForAdmin(report.ErrorLevel, report.SpaceUnguarded)
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "said"), said.String(), 0o644)
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\ncat '"+filepath.Join(bin, "said")+"' >&2\nexit 2\n", 0o755)
+	dir := t.TempDir()
+	out, code := runDevopsy(t, dir, []string{"PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, remote.MntReadyFlag, dir)
+	if code != 1 || !strings.Contains(out, said.String()) || strings.Contains(out, "exit status 2") {
+		t.Errorf("the door's W0002 through --mnt-ready (%d):\n%s\nwant the door's lines as it said them:\n%s", code, out, said.String())
 	}
 }
