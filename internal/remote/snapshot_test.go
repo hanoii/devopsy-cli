@@ -102,7 +102,7 @@ esac
 case "$*" in
   "-- config --format json"|"-- --profile * config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" > "$FAKE_ROOT/images/mariadb:11" ;;
-  "-- build --pull") ` + fakeFetchTag + `echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
+  "-- build --pull") `+fakeFetchTag+`echo "$id" >"$FAKE_ROOT/images/${t:-app-prod-app}" ;;
 esac
 exit 0
 `)

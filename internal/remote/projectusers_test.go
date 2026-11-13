@@ -481,7 +481,7 @@ func TestDoorUserDeleteScript(t *testing.T) {
 		}
 		groupGone = func() bool { return !fileThere(filepath.Join(users, "group-devopsy-shop")) }
 		for name, body := range map[string]string{
-			"id":       `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
+			"id": `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
 			"userdel": `[ ! -e "` + users + `/fail" ] || { echo "userdel: user $2 is currently used by process 1" >&2; exit 8; }
 [ "$1" = -r ] && rm "` + users + `/$2" && echo "userdel: $2 mail spool (/var/mail/$2) not found" >&2`,
 			"getent":   `[ "$1" = group ] && cat "` + users + `/group-$2" 2>/dev/null`,
