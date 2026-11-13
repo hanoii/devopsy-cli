@@ -34,11 +34,12 @@ func configFile(s *syncSetup) string {
 	return filepath.Join(filepath.Dir(s.root), "home", remote.ConfigFile)
 }
 
-// --project-users setup --yes on a fresh server, in two sessions: the space made and bound on
+// --project-users setup --yes on a new server, in two sessions: the space made and bound on
 // itself with nosuid and nodev by a mount unit of devopsy's, Docker's mounts drop-in naming it
 // beside the release root, /proc hidden by devopsy-proc.service with the group's number, the
 // deploy user in the group (from its next login, said), and door: space: appended to the
-// config as text. A second run changes nothing and opens no second session.
+// config as text, a config that is a link written at the file it names, the link kept. A second
+// run changes nothing and opens no second session.
 func TestProjectUsersSetupYes(t *testing.T) {
 	t.Parallel()
 	s, host, space := doorSetupServer(t)
@@ -47,6 +48,14 @@ func TestProjectUsersSetupYes(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := readString(configFile(s))
+	real := filepath.Join(filepath.Dir(s.root), "dotfiles", "config.yaml")
+	write(t, real, before, 0o640)
+	if err := os.Remove(configFile(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, configFile(s)); err != nil {
+		t.Fatal(err)
+	}
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	unit := setup.SpaceUnit(space)
 	for _, want := range []string{
@@ -82,6 +91,12 @@ func TestProjectUsersSetupYes(t *testing.T) {
 	}
 	if got := readString(configFile(s)); got != before+"door:\n  space: "+space+"\n" {
 		t.Errorf("the config:\n%s", got)
+	}
+	if fi, err := os.Lstat(configFile(s)); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the config is no link now: %v", err)
+	}
+	if fi, _ := os.Stat(real); fi.Mode().Perm() != 0o640 {
+		t.Errorf("the config's mode: %v", fi.Mode())
 	}
 	if readString(filepath.Join(host, unit)) != setup.SpaceUnitText(space) {
 		t.Errorf("the space's unit:\n%s", readString(filepath.Join(host, unit)))

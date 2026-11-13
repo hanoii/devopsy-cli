@@ -23,10 +23,19 @@ func TestProjectUsersSetupRootRunThatNeverRan(t *testing.T) {
 		t.Errorf("a root run that never ran (%d):\n%s", code, out)
 	}
 	s, _, space = doorSetupServer(t)
-	// A directory where the config's new text is written: the write fails.
-	if err := os.Mkdir(configFile(s)+".new", 0o755); err != nil {
+	// The config a link to a file in a directory no one may write: the write fails.
+	shut := filepath.Join(filepath.Dir(s.root), "shut")
+	write(t, filepath.Join(shut, "config.yaml"), readString(configFile(s)), 0o644)
+	if err := os.Remove(configFile(s)); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink(filepath.Join(shut, "config.yaml"), configFile(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shut, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shut, 0o755) })
 	out, code = s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy: error: devopsy could not add the project users' directory to "+configFile(s)+": ") || strings.Contains(out, "what was applied did not hold") {
 		t.Errorf("a config that cannot be written (%d):\n%s", code, out)

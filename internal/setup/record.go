@@ -154,10 +154,23 @@ func ReadRecord(path string) (r Record, exists bool, err error) {
 	return r, true, nil
 }
 
-// WriteRecord writes r at path, mode 0600, by rename: a reader sees the old record or
-// the new one, never part of one. Its directory is made when missing.
+// WriteRecord writes r at path, mode 0600, whole (WriteFile).
 func WriteRecord(path string, r Record) error {
 	data, err := r.Marshal()
+	if err != nil {
+		return err
+	}
+	return WriteFile(path, data, 0o600)
+}
+
+// WriteFile writes data at path whole, mode mode, by rename: a reader sees the old text or the
+// new, never part of one. A temporary file of its own beside it is written, synced and renamed
+// over it, and removed when any of that fails. A path that is a symbolic link is written at the
+// file it names, the link staying a link; the directory is made, 0700, when missing. Every file
+// a setup writes in the deploy user's config directory (the record, config.yaml's door:) goes
+// through it.
+func WriteFile(path string, data []byte, mode os.FileMode) error {
+	path, err := linkTarget(path)
 	if err != nil {
 		return err
 	}
@@ -165,13 +178,13 @@ func WriteRecord(path string, r Record) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, "."+RecordFile+".*")
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp) // gone once renamed
-	if err := f.Chmod(0o600); err != nil {
+	if err := f.Chmod(mode); err != nil {
 		f.Close()
 		return err
 	}
@@ -187,6 +200,27 @@ func WriteRecord(path string, r Record) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// linkTarget is the file path names once its symbolic links are followed, each relative one
+// from the link's own directory, path itself when it is no link or is not there.
+func linkTarget(path string) (string, error) {
+	p := path
+	for range 40 {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return p, nil
+		}
+		to, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(p), to)
+		}
+		p = to
+	}
+	return "", fmt.Errorf("%s: too many symbolic links", path)
 }
 
 // Set is r with part's entry set to e, for a decision's record.

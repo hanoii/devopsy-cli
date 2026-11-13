@@ -96,6 +96,54 @@ func TestRecordFile(t *testing.T) {
 	}
 }
 
+// TestWriteFile keeps a whole file's write: by rename, its mode set, nothing left beside it
+// whether it went or failed, and a symbolic link written at the file it names, the link kept.
+func TestWriteFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(real), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("old\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "home", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "real", "config.yaml"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(link, []byte("new\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link is no link: %v", err)
+	}
+	if data, _ := os.ReadFile(real); string(data) != "new\n" {
+		t.Errorf("the file the link names: %q", data)
+	}
+	if fi, _ := os.Stat(real); fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v", fi.Mode())
+	}
+	// A rename that fails (a directory in the file's place) leaves nothing beside it.
+	if err := os.Remove(real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(link, []byte("new\n"), 0o600); err == nil {
+		t.Error("a write over a directory went")
+	}
+	for _, d := range []string{filepath.Dir(real), filepath.Dir(link)} {
+		if es, _ := os.ReadDir(d); len(es) != 1 {
+			t.Errorf("left in %s: %v", d, es)
+		}
+	}
+}
+
 // TestCutBeforeRecord keeps the order an apply writes in, the file then the record: an
 // apply cut between them leaves the part in sync whatever the record said before, so it
 // needs no record, and only a keep answer is lost.

@@ -720,7 +720,8 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 }
 
 // appendDoorConfig appends door: space: to the deploy user's config at file as text
-// (setup.AppendDoorConfig), by rename, the file's mode kept (0600 for one it makes).
+// (setup.AppendDoorConfig), whole (setup.WriteFile: by rename, a link written at the file it
+// names), the file's mode kept (0600 for one it makes).
 func appendDoorConfig(file, space string) error {
 	have, err := os.ReadFile(file)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -734,17 +735,7 @@ func appendDoorConfig(file, space string) error {
 	if fi, err := os.Stat(file); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		return err
-	}
-	tmp := file + ".new"
-	if err := os.WriteFile(tmp, text, mode); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmp, file)
+	return setup.WriteFile(file, text, mode)
 }
 
 // sayDoorSetupLines says what the root run changed, line by line
