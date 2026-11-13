@@ -336,7 +336,9 @@ func readDoorSetup(h setupHost, dir string) (doorSetupRead, error) {
 // readSpace judges the door's space: a directory of the deploy user's, mode 0755, on a mount
 // with nosuid and nodev, read from the host's mounts (whatever made it: an fstab line by hand
 // is in sync, and nothing of devopsy's goes beside it). One that exists with another owner, is
-// no directory, holds files and is not mounted, or is someone's mount without the two, refuses.
+// no directory, or is someone's mount without the two, refuses. One that holds files on no
+// mount of its own is bound on itself as any other: a bind of a directory on itself hides
+// nothing, so a space whose mount went (a boot where it failed) is mounted again.
 func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix string)) {
 	f := &rd.facts
 	sp := f.Space
@@ -391,8 +393,6 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 	case point && !ours:
 		refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" is a mount without nosuid and nodev, not devopsy's: devopsy puts no mount over it",
 			"mount it with nosuid and nodev where it is set (its /etc/fstab line, its unit)")
-	case exists && !point && !emptyDir(sp):
-		refuse(setup.ItemSpace, setup.RefusalSpace, "the door's space "+sp+" holds files and is on no mount of its own: a mount over it would hide them", "empty it, or "+anew)
 	}
 }
 

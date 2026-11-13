@@ -175,9 +175,8 @@ func TestProjectUsersSetupLeavesWhatIsSetByHand(t *testing.T) {
 }
 
 // The space and the config refuse what devopsy does not change: a door: with no space: (the
-// line to add named), a directory other than the config's (a space is moved by hand), and a
-// space that holds files on no mount of its own (a mount would hide them); each stops the
-// space's steps alone, /proc set up beside it.
+// line to add named) and a directory other than the config's (a space is moved by hand); each
+// stops the space's steps alone, /proc set up beside it.
 func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -188,8 +187,6 @@ func TestProjectUsersSetupRefusesTheSpace(t *testing.T) {
 			`has door: with no space: under it` + "\ndevopsy: | to fix it:\ndevopsy: | add \"space: %s\" under its door:, indented, then run it again\n"},
 		"another space": {func(t *testing.T, s *syncSetup, space string) { setupConfig(t, s, "door:\n  space: /srv/elsewhere\n") },
 			"door's space: the door's space is /srv/elsewhere (door: space: in "},
-		"files there": {func(t *testing.T, s *syncSetup, space string) { write(t, filepath.Join(space, "note"), "x\n", 0o644) },
-			"the door's space %s holds files and is on no mount of its own: a mount over it would hide them"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -261,11 +258,10 @@ func TestMountOf(t *testing.T) {
 	}
 }
 
-// Review, a bug: a space of devopsy's own whose mount is gone (its unit stopped, a boot where
-// it failed) while it holds the door's files is refused ("holds files and is on no mount of its
-// own: a mount over it would hide them", the fix to empty it), though the unit binds the
-// directory on itself, which hides nothing; the door then refuses every request and names
-// --project-users setup as the fix, which refuses in turn. The setup must mount it again.
+// A space whose mount went (its unit stopped, a boot where it failed) while it holds the door's
+// files is mounted again, never refused for its files: the unit binds the directory on itself,
+// which hides nothing, and the door names --project-users setup as the fix for an unguarded
+// space.
 func TestProjectUsersSetupMountsItsSpaceAgain(t *testing.T) {
 	t.Parallel()
 	s, host, space := doorSetupServer(t)

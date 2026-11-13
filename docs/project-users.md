@@ -377,10 +377,11 @@ choice. It sets:
   devopsy's in `/etc/systemd/system`, named as `systemd-escape --path`
   names it (`var-lib-devopsy\x2ddoor.mount`), never by a line in
   `/etc/fstab`. Docker's mounts drop-in names it beside the release
-  root, so Docker starts after it at boot. A space another user owns,
-  one that is no directory, one that holds files on no mount of its own
-  (a mount would hide them), or someone's mount without the two options
-  is refused.
+  root, so Docker starts after it at boot. A space whose mount went
+  (a boot where it failed) is mounted again, its files and all: a
+  directory bound on itself hides nothing. A space another user owns,
+  one root owns that holds files, one that is no directory, or someone's
+  mount without the two options is refused.
 - `door:` with `space:` in the deploy user's `config.yaml`, appended as
   text when the file has no `door:`, the rest of the file as it is. The
   two lines are shown before the question. A `door:` with no `space:`
