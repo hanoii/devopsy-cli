@@ -1897,8 +1897,29 @@ func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
 			t.Errorf("%s: compose gets %q, not the %s@%s the claim loaded:\n%s", image, got, repo, amd, readString(filepath.Join(dir, "store")))
 		}
 	}
-	if !strings.Contains(readString(side.policy.ImagesFile()), amd) {
-		t.Errorf("the claim recorded no %s: %q", amd, readString(side.policy.ImagesFile()))
+	if got := readString(side.policy.ImagesFile()); got != amd+"\t"+repo+"@"+idx+"\n" {
+		t.Errorf("the claim recorded %q, not %s with the index's pin", got, amd)
+	}
+	// Once claimed, a start reads the pin by the record, asking the registry nothing, and
+	// runs the same: so does one with the index here under its digest, not the project's (the
+	// deploy user's pull of it), which would otherwise claim again at every start.
+	for _, store := range []string{"", repo + "@" + idx + "|" + idx + "|" + repo + "@" + idx + "|" + repo + ":1|{}\n"} {
+		if store != "" {
+			write(t, filepath.Join(dir, "store"), store+readString(filepath.Join(dir, "store")), 0o644)
+		}
+		again := &doorSide{policy: side.policy, real: fake, imagesRoot: dir}
+		again.policy.Images, again.policy.Names = claimedImages(side.policy.ImagesFile())
+		for _, image := range []string{repo + ":1@" + idx, repo + "@" + idx} {
+			os.Remove(filepath.Join(dir, "calls"))
+			file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
+			if err := again.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
+			if want := strings.TrimSuffix(image, "@"+idx) + "@" + amd; got != want || strings.Contains(readString(filepath.Join(dir, "calls")), "imagetools") {
+				t.Errorf("%s claimed already, the index here %v: compose gets %q, want %q, asking the registry:\n%s", image, store != "", got, want, readString(filepath.Join(dir, "calls")))
+			}
+		}
 	}
 }
 

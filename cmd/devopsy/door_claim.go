@@ -619,16 +619,13 @@ func (s *doorSide) recordHeld(pinned, m, ref string, load bool) error {
 }
 
 // record records ref's claim on the image id in this project's record of claimed images
-// (Policy.ImagesFile), under the record's lock: the id, for a load (load), and ref's plain
-// name moved onto its line from any other (none for a reference by digest), for what the
-// door reads that name by after (door.Policy.ImageRef). A skip (not load) writes only a name
-// that moved, and never puts back an id a failed load dropped meanwhile (unrecord), which no
-// later claim may skip onto: that refuses the claim.
+// (Policy.ImagesFile), under the record's lock: the id, for a load (load), and ref's name
+// moved onto its line from any other (recordedName), for what the door reads that name by
+// after (door.Policy.ImageRef). A skip (not load) writes only a name that moved, and never
+// puts back an id a failed load dropped meanwhile (unrecord), which no later claim may skip
+// onto: that refuses the claim.
 func (s *doorSide) record(id, ref string, load bool) error {
-	name := ""
-	if !images.Pinned(ref) {
-		name = images.Familiar(ref)
-	}
+	name := recordedName(ref, id)
 	if !load && (name == "" || s.policy.Names[name] == id) {
 		return nil
 	}
@@ -661,6 +658,22 @@ func (s *doorSide) record(id, ref string, load bool) error {
 		s.policy.Names[name] = id
 	}
 	return nil
+}
+
+// recordedName is the name a claim of ref landing on the image id records (images.Familiar,
+// "" for none): a plain name, or a reference by an index's digest, which no image here goes by
+// once the claim loaded the platform's entry, its tag dropped; never one by id's own digest,
+// nor an id, which name the image already. An index's entry for the platform is a function of
+// the index's bytes, which its digest fixes and the claim checked, and of the daemon's
+// platform, so it never goes stale.
+func recordedName(ref, id string) string {
+	if !images.Pinned(ref) {
+		return images.Familiar(ref)
+	}
+	if _, digest, ok := strings.Cut(ref, "@"); ok && digest != id {
+		return images.Familiar(ref)
+	}
+	return ""
 }
 
 // unrecord drops id from this project's claimed images, the names on its line with it, under

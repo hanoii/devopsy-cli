@@ -1776,8 +1776,9 @@ func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
 // own), read where the record of its claims says (door.Policy.ImageRef), by its digest in the
 // image's repository, as the devopsy.digest label chooses it, read in one inspect; else
 // claimed first, by the digest its claim loaded, a reference by an index's digest included.
-// A reference by digest the project has, or an id, is a pin already. A plain name its claims'
-// record lacks, or whose image is gone, is claimed too, with this project's logins, and one
+// A reference by digest the project has, or an id, is a pin already, one by an index's digest
+// read through the record as a plain name is. A plain name its claims' record lacks, or whose
+// image is gone, is claimed too, with this project's logins, and one
 // still missing refuses the start: compose would pull or build it after this check.
 func (s *doorSide) startImage(svc, image, config string) (string, map[string]string, error) {
 	missing := fmt.Errorf("refused: %s: its image %s is not here: build or pull it first", svc, image)
@@ -1796,7 +1797,8 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 		img, err = s.inspectImage(read)
 		owned = err == nil && s.policy.OwnsImageOf(img.ID, img.Tags)
 	}
-	pinned := images.Pinned(image)
+	// A reference by digest, or an id, read as it is: a pin already.
+	pinned := read == image
 	digest := ""
 	if owned && !pinned {
 		digest = images.DigestIn(img, image)
@@ -1806,8 +1808,11 @@ func (s *doorSide) startImage(svc, image, config string) (string, map[string]str
 		if digest, img, err = s.claim(image, config); err != nil {
 			return "", nil, fmt.Errorf("%s: %w", svc, err)
 		}
-		// A pin by an index's digest goes by the entry the claim checked and loaded for the
-		// daemon's platform: no image here goes by the index's.
+	}
+	// A pin by an index's digest goes by the entry the claim checked and loaded for the
+	// daemon's platform, as its claim or the record of it says: no image here goes by the
+	// index's.
+	if digest != "" {
 		image, _, _ = strings.Cut(image, "@")
 	}
 	return images.Pin(image, digest), img.Labels, nil

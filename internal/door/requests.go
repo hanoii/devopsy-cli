@@ -596,21 +596,30 @@ func (p Policy) ownedImage(d Daemon, ref string, known Known) (string, bool) {
 
 // ImageRef is what the door reads ref's image by for this project, and whether ref is a name
 // only it writes (OwnRef) or devopsy's util image (known), taken as it is; "" is none, the
-// image to be claimed first. A reference by digest or an id (its prefix too) goes as it is,
-// and any other plain name only by the record of its last claim (Names), as that image by
-// its digest, so a stale entry, its image gone, fails its read and is claimed again: a plain
-// name is the server's (the deploy user's pull of the same tag, its local build, another
-// project's claim), and one left on an older image this project claimed would beat its
-// newer claim. What the door then reads there is the project's only once OwnsImageOf says so.
+// image to be claimed first. A plain name, or a reference by an index's digest, goes by the
+// record of the project's last claim of it (Names, the image by its digest, none when its id
+// is no longer one the project claimed), so a stale entry, its image gone, fails its read and
+// is claimed again: a plain name is the server's (the deploy user's pull of the same tag, its
+// local build, another project's claim), and one left on an older image this project claimed
+// would beat its newer claim; no image here goes by an index's digest once a claim loads the
+// platform's entry, and one that does is the deploy user's pull of the index. Any other
+// reference by digest, or an id (its prefix too), goes as it is; a plain name the record lacks
+// is claimed. What the door then reads there is the project's only once OwnsImageOf says so.
 func (p Policy) ImageRef(ref string, known Known) (string, bool) {
 	if ref == known.Image || p.OwnRef(ref) {
 		return ref, true
 	}
-	if images.Pinned(ref) || strings.HasPrefix(ref, "sha256:") {
+	if strings.HasPrefix(ref, "sha256:") {
 		return ref, false
 	}
-	if id := p.Names[images.Familiar(ref)]; id != "" {
+	if id, ok := p.Names[images.Familiar(ref)]; ok {
+		if !slices.Contains(p.Images, id) {
+			return "", false
+		}
 		return images.ByDigest(ref, id), false
+	}
+	if images.Pinned(ref) {
+		return ref, false
 	}
 	return "", false
 }
