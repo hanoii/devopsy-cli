@@ -353,6 +353,26 @@ func TestRunMntReady(t *testing.T) {
 	}
 }
 
+// A refusal of the door's at --mnt-ready (W0002, an unguarded space) reaches a project user's
+// release as the door said it: its code the first line's, its detail with one prefix, no word
+// of the ask's own around it.
+func TestMntReadyPassesTheDoorsRefusalOn(t *testing.T) {
+	t.Parallel()
+	if reachesDocker() {
+		t.Skip("this user reaches Docker, so --mnt-ready asks no door")
+	}
+	var said strings.Builder
+	report.New(&said, false, 0).SayForAdmin(report.ErrorLevel, report.SpaceUnguarded)
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "said"), said.String(), 0o644)
+	write(t, filepath.Join(bin, "sudo"), "#!/bin/sh\ncat '"+filepath.Join(bin, "said")+"' >&2\nexit 2\n", 0o755)
+	dir := t.TempDir()
+	out, code := runDevopsy(t, dir, []string{"PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, remote.MntReadyFlag, dir)
+	if code != 1 || out != said.String() {
+		t.Errorf("the door's W0002 through --mnt-ready (%d):\n%s\nwant the door's lines as it said them:\n%s", code, out, said.String())
+	}
+}
+
 // doorFakes puts on PATH a sudo that answers reads as a project user's tree would, a
 // setfacl that logs to the returned file, and a docker that logs its arguments, one per
 // line, to the other. Whoever uses it is serial: it sets PATH.

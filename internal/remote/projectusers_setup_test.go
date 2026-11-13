@@ -3,6 +3,7 @@ package remote
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,15 +14,18 @@ import (
 )
 
 // The project users' root script, on a host root of the test's with fakes of systemctl
-// (logging to calls, FAKE_SYSTEMCTL_FAILS), groupadd, usermod and getent (the host root's
-// etc/group): the space made, its unit put, the group made with the deploy user in it, /proc's
-// unit put with the group's number, polkit's drop-in, then systemd reloaded, the space's unit
-// enabled and started, the drop-in put once the mount holds, systemd reloaded again, and
-// /proc's run again, a line per change and nothing of systemd's (its enable's links); a second
-// run
-// changes and says nothing but the mount and the remount it is asked for; systemd refusing a
-// mount fails the run, naming it, and offers journalctl with the unit's name as systemd has it,
-// its \x2d kept when the command is copied into a shell.
+// (logging to calls, FAKE_SYSTEMCTL_FAILS, FAKE_SYSTEMCTL_FAILS_ON), groupadd and usermod
+// (FAKE_GROUPADD_FAILS, FAKE_USERMOD_FAILS) and getent (the host root's etc/group): the space
+// made, its unit put, the group made with the deploy user in it, /proc's unit put with the
+// group's number, polkit's drop-in, then systemd reloaded, the space's unit enabled and
+// started, the drop-in put once the mount holds, systemd reloaded again, and /proc's run again,
+// a line per change and nothing of systemd's (its enable's links); a second run changes and says
+// nothing but the mount and the remount it is asked for; systemd refusing a mount fails the
+// space alone, naming it, and offers journalctl with the unit's name as systemd has it, its
+// \x2d kept when the command is copied into a shell; a command of the processes' step that fails
+// (groupadd, usermod, a put that cannot write) fails the processes alone, the space mounted and
+// named in the drop-in all the same, said in devopsy's words; and a run with a failure exits
+// DoorSetupSaid, which no tool's exit reaches.
 func TestProjectUsersSetupScript(t *testing.T) {
 	t.Parallel()
 	if out, err := exec.Command("sh", "-n", "-c", ProjectUsersSetupScript).CombinedOutput(); err != nil {
@@ -43,9 +47,10 @@ func TestProjectUsersSetupScript(t *testing.T) {
 		// systemctl enable says each link it makes, as systemd does, unless --quiet.
 		"systemctl": "#!/bin/sh\nprintf '%s\\n' \"$SYSTEMD_IGNORE_CHROOT systemctl $*\" >>\"$CALLS\"\n[ -z \"${FAKE_SYSTEMCTL_FAILS:-}\" ] || exit 1\n[ \"${FAKE_SYSTEMCTL_FAILS_ON:-}\" != \"$*\" ] || exit 1\n" +
 			"case \" $* \" in *' --quiet '*) ;; *' enable '*) echo \"Created symlink '/etc/systemd/system/x' -> '/etc/systemd/system/y'.\" >&2 ;; esac\n",
-		"groupadd": "#!/bin/sh\nmkdir -p \"$HOST/etc\"\necho \"$2:x:991:\" >>\"$HOST/etc/group\"\n",
-		"usermod":  "#!/bin/sh\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$HOST/etc/group\" >\"$HOST/etc/group.new\" && mv \"$HOST/etc/group.new\" \"$HOST/etc/group\"\n",
-		"getent":   "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$HOST/etc/group\" 2>/dev/null\n",
+		"groupadd": "#!/bin/sh\n[ -z \"${FAKE_GROUPADD_FAILS:-}\" ] || exit 9\nmkdir -p \"$HOST/etc\"\necho \"$2:x:991:\" >>\"$HOST/etc/group\"\n",
+		// usermod exits 6 for a user it does not find, as one from LDAP.
+		"usermod": "#!/bin/sh\n[ -z \"${FAKE_USERMOD_FAILS:-}\" ] || { echo \"usermod: user '$3' does not exist\" >&2; exit 6; }\nawk -F: -v OFS=: -v g=\"$2\" -v u=\"$3\" '$1 == g { $4 = ($4 == \"\" ? u : $4 \",\" u) } { print }' \"$HOST/etc/group\" >\"$HOST/etc/group.new\" && mv \"$HOST/etc/group.new\" \"$HOST/etc/group\"\n",
+		"getent":  "#!/bin/sh\nawk -F: -v k=\"$2\" '$1 == k || $3 == k { print; f = 1 } END { exit !f }' \"$HOST/etc/group\" 2>/dev/null\n",
 		// The unit it is asked for, as it reaches it.
 		"journalctl": "#!/bin/sh\nprintf '%s\\n' \"$2\"\n",
 	} {
@@ -145,6 +150,38 @@ func TestProjectUsersSetupScript(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "hidden\n") || strings.Contains(out, "\npolkit\n") ||
 		!strings.Contains(out, "devopsy: warning: systemd did not restart polkit, which sees only its own processes until it restarts\ndevopsy: | to fix it:\ndevopsy: | restart it, as root:\ndevopsy: | $ systemctl restart polkit.service\n") {
 		t.Errorf("polkit not restarted (%d):\n%s", code, out)
+	}
+	// A command of the processes' step that fails before the mount, each on a host of its own.
+	for name, c := range map[string]struct {
+		env []string
+		// readOnly is a directory under the host root made unwritable: a put there fails.
+		readOnly, want string
+	}{
+		"usermod":  {env: []string{"FAKE_USERMOD_FAILS=1"}, want: "devopsy: error: devopsy could not put deploy in devopsy-proc\n"},
+		"groupadd": {env: []string{"FAKE_GROUPADD_FAILS=1"}, want: "devopsy: error: devopsy could not make the group devopsy-proc\n"},
+		"a put":    {readOnly: path.Dir(setup.PolkitDropIn), want: setup.PolkitDropIn + " could not be written\n"},
+	} {
+		h := filepath.Join(dir, "procs-"+strings.ReplaceAll(name, " ", "-"))
+		if c.readOnly != "" {
+			ro := filepath.Join(h, c.readOnly)
+			if err := os.MkdirAll(ro, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(ro, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(ro, 0o755) })
+		}
+		sp := filepath.Join(dir, "space-"+strings.ReplaceAll(name, " ", "-"))
+		with, err := setup.MountsDropInText(filepath.Join(dir, "srv"), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u := setup.SpaceUnit(sp)
+		out, code := run(append(c.env, "HOST="+h), h, me, sp, "1", "", u, setup.SpaceUnitText(sp), "1", with, "1", "deploy", setup.ProcUnitText(setup.GIDMark), setup.PolkitDropInText(), QuoteWord(filepath.Base(u)), bare)
+		if code != DoorSetupSaid || !strings.Contains(out, "mounted "+sp+"\n") || read(filepath.Join(h, setup.MountsDropIn)) != with || !strings.Contains(out, c.want) || strings.Contains(out, "hidden\n") {
+			t.Errorf("%s fails before the mount (%d):\n%s\nthe drop-in:\n%s", name, code, out, read(filepath.Join(h, setup.MountsDropIn)))
+		}
 	}
 }
 
