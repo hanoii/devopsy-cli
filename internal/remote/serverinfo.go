@@ -81,6 +81,69 @@ type ServerInfo struct {
 	// DoorProjects are the projects of the door's users, whose environments come from a read
 	// of their trees that may give none (a tree that does not answer in time).
 	DoorProjects []string `json:"door_projects,omitempty"`
+
+	// What may be dead or gone, read by the deploy user alone (none for a project user), each
+	// read's failure in its *Unread: unknown, never none.
+	// GC is what --gc would remove now, from its own listing.
+	GC *GCFacts `json:"gc,omitempty"`
+	// Images are the host's images with a tag (docker image ls), each with its size and how
+	// many containers use it (docker system df -v).
+	Images       []HostImage `json:"images,omitempty"`
+	ImagesUnread string      `json:"images_unread,omitempty"`
+	// Volumes are the host's volumes, as docker system df -v gives them.
+	Volumes       []HostVolume `json:"volumes,omitempty"`
+	VolumesUnread string       `json:"volumes_unread,omitempty"`
+	// Removing are the directories a --destroy cut off while it removed them left under the
+	// release root (<base>.rm.<pid>, that devopsy gone), each with its size.
+	Removing []RemovingDir `json:"removing,omitempty"`
+	// SnapshotDirs are the paths under the snapshot root (SnapshotRoot) that hold an
+	// environment's snapshots, <project>/[<instance>/]<environment>.
+	SnapshotDirs []string `json:"snapshot_dirs,omitempty"`
+}
+
+// GCFacts are what --gc lists, counted: its one-off containers, builders with build cache to
+// remove, release snapshots, images (names a record left and dangling ones), up to Size bytes,
+// and what it could not read.
+type GCFacts struct {
+	OneOffs   int      `json:"one_offs"`
+	Builders  int      `json:"builders"`
+	Snapshots int      `json:"snapshots"`
+	Images    int      `json:"images"`
+	Size      int64    `json:"size"`
+	Unread    []string `json:"unread,omitempty"`
+}
+
+// HostImage is an image with a tag: its id, every tag, Docker's size and how many containers
+// use it.
+type HostImage struct {
+	ID         string   `json:"id"`
+	Tags       []string `json:"tags"`
+	Size       int64    `json:"size,omitempty"`
+	Containers int      `json:"containers,omitempty"`
+}
+
+// HostVolume is a volume: its name, the compose project its label names, whether Docker made
+// it anonymous, how many containers use it, and its size.
+type HostVolume struct {
+	Name      string `json:"name"`
+	Project   string `json:"project,omitempty"`
+	Anonymous bool   `json:"anonymous,omitempty"`
+	Links     int    `json:"links,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+}
+
+// RemovingDir is a directory a cut --destroy left, its path under the release root.
+type RemovingDir struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// KeylessUser is a project user with no key whose project still holds environments: the
+// compose names its uid claims and containers give, under its names.
+type KeylessUser struct {
+	User    string   `json:"user"`
+	Project string   `json:"project"`
+	Names   []string `json:"names"`
 }
 
 // DockerFacts are the host's Docker, from docker info, docker compose
@@ -125,6 +188,9 @@ type DoorFacts struct {
 	// Listeners are the host's TCP listeners every container reaches (DoorListeners), from the
 	// firewall's root read.
 	Listeners []string `json:"listeners,omitempty"`
+	// Keyless are the project users with no key that still hold environments, read by the
+	// deploy user.
+	Keyless []KeylessUser `json:"keyless,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.
@@ -150,8 +216,11 @@ type HostContainer struct {
 	State   string `json:"state"`
 	Health  string `json:"health,omitempty"`
 	// ExitCode is an exited container's; OneOff a compose run's.
-	ExitCode int               `json:"exit_code,omitempty"`
-	OneOff   bool              `json:"one_off,omitempty"`
+	ExitCode int  `json:"exit_code,omitempty"`
+	OneOff   bool `json:"one_off,omitempty"`
+	// Released: its compose working directory is under the release root or a project user's
+	// tree, so a release's, never one of the admin's own.
+	Released bool              `json:"released,omitempty"`
 	Labels   map[string]string `json:"labels,omitempty"` // devopsy.role and devopsy.export.* only
 }
 

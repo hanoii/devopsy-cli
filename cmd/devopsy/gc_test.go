@@ -153,7 +153,7 @@ func TestGCBuilders(t *testing.T) {
 	docker := filepath.Join(t.TempDir(), "docker")
 	write(t, docker, `#!/bin/sh
 case "$*" in
-  'system df -v --format {{json .BuildCache}}') echo '`+df+`' ;;
+  'system df -v --format {{json .}}') echo '{"BuildCache":`+df+`}' ;;
   'buildx ls --format json') [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; cat <<'EOF'
 `+ls+`
 EOF
@@ -233,7 +233,7 @@ case "$*" in
       echo '{"Id":"'"$c"'","Name":"/shop-prod-web-run-'"$n"'","SizeRw":12000000,"State":{"Status":"exited","FinishedAt":"2026-01-01T00:00:00Z"},"Config":{"Labels":{"com.docker.compose.project":"shop-prod","com.docker.compose.oneoff":"True"}}}'
     done; exit $rc ;;
   'rm '*) touch "`+state+`/rm-$2" ;;
-  'system df -v --format {{json .BuildCache}}') echo '[{"ID":"a","Size":"1.5MB","LastUsedAt":"2026-01-01 00:00:00 +0000 UTC","InUse":"false","Shared":"false"}]' ;;
+  'system df -v --format {{json .}}') echo '{"BuildCache":[{"ID":"a","Size":"1.5MB","LastUsedAt":"2026-01-01 00:00:00 +0000 UTC","InUse":"false","Shared":"false"}]}' ;;
   'builder prune -a -f --filter until='*) printf 'ID\tRECLAIMABLE\nTotal:\t1.5MB\n' ;;
   'image inspect --format {{.Id}} shop-web:'*) gone "$5" && { echo "Error: No such image: $5" >&2; exit 1; }; [ "$5" = shop-web:old ] && echo sha256:aaa || echo sha256:bbb ;;
   'image inspect --format {{range .RepoTags}}{{println .}}{{end}} sha256:aaa') echo shop-web:old ;;

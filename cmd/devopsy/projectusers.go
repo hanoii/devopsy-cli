@@ -78,7 +78,8 @@ func runProjectUsersStep(args []string) int {
 }
 
 // listProjectUsers prints each project user: its project, whether its Unix user is there,
-// and how many keys it has; and whether sshd waits for a reboot to take the door.
+// and how many keys it has; says each with no key that still holds environments (keylessOf);
+// and whether sshd waits for a reboot to take the door.
 func listProjectUsers(d *remote.Door) int {
 	if d == nil || len(d.Users) == 0 {
 		report.Info("no project users on this server")
@@ -88,8 +89,12 @@ func listProjectUsers(d *remote.Door) int {
 			if _, err := user.Lookup(name); err == nil {
 				exists = "user there"
 			}
-			data, _ := os.ReadFile(remote.DoorKeysFile(name))
-			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, len(remote.ParseAuthorizedKeys(string(data))))
+			fmt.Printf("%s\tproject %s\t%s\t%d keys\n", name, d.Users[name].Project, exists, keysOf(name))
+		}
+		for _, k := range keylessOf(d) {
+			// The server named alone carries no address to a session: the way out in words.
+			report.Default().Say(report.InfoLevel, k.User+" has no key and still holds "+strings.Join(k.Names, ", "), nil,
+				report.Hint("removing "+k.Project+"'s project user with --project-users remove and --destroy removes them with it; "+keylessWords))
 		}
 	}
 	// An end a key's or a user's removal began and did not see through (remote.DoorEndingFile),

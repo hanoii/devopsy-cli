@@ -287,6 +287,36 @@ fields may change before 1.0.0: the door's `firewall_wrong`,
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both
 kinds.
 
+It also shows, as information with a command to see to it, what may be
+dead or gone. devopsy removes none of it, and none of it makes the exit 3:
+
+- what [`--gc`](#--gc) would remove, with its size, `--gc` as its hint;
+- images with a tag that no release holds and no container uses (tools
+  a project ran, the admin's own), with their size, `docker rmi` as the
+  hint;
+- what is left of an environment removed by hand, for a compose name
+  with no environment directory and no uid claim: its releases' image
+  names and a project user's builds, its containers, its volumes, its
+  snapshots under the server's `snapshots: root`, with the commands that
+  remove them (`docker compose -p <name> down`, `docker volume rm`,
+  `docker rmi`, `rm -rf`);
+- anonymous volumes no container uses (an image's `VOLUME` after a
+  `down` without `-v`, which may be a database's data), `docker volume
+  prune` as the hint, once checked;
+- a directory a `--destroy` cut off while it removed an environment left
+  (`<environment>.rm.<pid>`), with its size, and the `--destroy` that
+  resumes it;
+- a project user with no key whose project still holds environments
+  (uid claims, containers), with `--project-users remove <project>
+  --destroy` as the hint, or a key added to take it back
+  ([project users](project-users.md)).
+
+What goes by an environment's absence is shown only when the release
+root lists environments and every one of them, and the uid claims, could
+be read: with the root's disk not mounted, every environment would look
+gone. Images and volumes of a compose project that is not a release's
+(the admin's own) are not shown.
+
 A sync or a snapshot under way is reported as information. So are the
 volumes the release root could be on, while it holds no project and is
 not on one, and the memory kdump keeps, with how to free it

@@ -85,7 +85,7 @@ func TestServerFactsParsers(t *testing.T) {
 	if got := readHidePID(filepath.Join(t.TempDir(), "proc", "mounts")); got != "" || processesShown(got) {
 		t.Errorf("no mounts file: %q", got)
 	}
-	cs := parseHostContainers([]byte("running 0 healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - null\nexited 2 - {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"))
+	cs := parseHostContainers([]byte("running 0 healthy {\"com.docker.compose.project\":\"traefik-prod\",\"com.docker.compose.service\":\"traefik\",\"devopsy.role\":\"proxy\",\"devopsy.export.BASE_DOMAIN\":\"vm1.example.com\",\"traefik.http.routers.x.rule\":\"Host(`a`, `b`)\"}\nexited 1 - null\nexited 2 - {\"com.docker.compose.project\":\"shop-prod\",\"com.docker.compose.service\":\"app\",\"com.docker.compose.oneoff\":\"True\"}\n"), nil)
 	if len(cs) != 3 || cs[0].Project != "traefik-prod" || cs[0].Service != "traefik" || cs[0].Health != "healthy" || len(cs[0].Labels) != 2 || cs[0].Labels["devopsy.role"] != "proxy" || cs[0].OneOff ||
 		cs[1].State != "exited" || cs[1].Health != "" || cs[1].ExitCode != 1 || !cs[2].OneOff {
 		t.Errorf("containers: %+v", cs)
@@ -112,7 +112,7 @@ func TestHostContainers(t *testing.T) {
 	} {
 		docker := filepath.Join(t.TempDir(), "docker")
 		write(t, docker, "#!/bin/sh\n"+c.docker+"\n", 0o755)
-		cs, err := hostContainers(docker)
+		cs, err := hostContainers(docker, nil)
 		if len(cs) != c.want || (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
 			t.Errorf("%s: %+v, %v", name, cs, err)
 		}
@@ -633,8 +633,9 @@ func TestServerInfo(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(s.root, "shop", "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// What a --destroy cut off while removing an environment left (review).
-	if err := os.MkdirAll(filepath.Join(s.root, "shop", "old.rm.4242", "releases"), 0o755); err != nil {
+	// What a --destroy cut off while removing an environment left (review): no environment,
+	// said as what a --destroy run again resumes. Its pid is none a system gives.
+	if err := os.MkdirAll(filepath.Join(s.root, "shop", "old.rm.999999999", "releases"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(t.TempDir(), "bin")
@@ -651,7 +652,11 @@ case "$1 $2" in
   # (review: every container was dropped then).
   "inspect --format") echo 'running 0 - {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
     echo 'restarting 0 - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
+    # A release's container of an environment removed by hand: compose worked in the root.
+    echo 'exited 0 - {"com.docker.compose.project":"shop-gone","com.docker.compose.service":"web","com.docker.compose.project.working_dir":"`+s.root+`/shop/gone/releases/1/code"}'
     echo 'Error response from daemon: No such container: gone' >&2; exit 1 ;;
+  "system df") echo '{"Images":[{"ID":"sha256:t1","Size":"4.26MB","Containers":"0"}],"Volumes":[],"BuildCache":[]}'; exit 0 ;;
+  "image ls") echo 'sha256:t1 busybox:1.37'; exit 0 ;;
 esac
 exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 `, 0o755)
@@ -686,7 +691,16 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
 		}
 	}
-	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm") || strings.Contains(out, "has no tail") {
+	for _, want := range []string{
+		"images        busybox:1.37, 4.3 MB: no release holds it, nor any container uses it\n              remove it once nothing needs it, on the server:\n              $ devopsy @devopsy@one: --shell-host\n              $ docker rmi busybox:1.37",
+		"gone          shop-gone: no environment and no uid claim on the server, and left:\n              containers web (exited)",
+		"environments  shop/old.rm.999999999: left by a --destroy cut off while it removed shop/old, 0 B\n              run it again, which resumes it, in shop's checkout:\n              $ devopsy @devopsy@one:old --destroy",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in (%d):\n%s", want, code, out)
+		}
+	}
+	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm.999999999  ") || strings.Contains(out, "has no tail") {
 		t.Errorf("exit %d:\n%s", code, out)
 	}
 	// The fake ssh shares this clock: no first byte seen reads as days off.
@@ -713,6 +727,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		}
 	}
 	if code != serverInfoWarned || !r.Attention || r.Server != "devopsy@one:" || r.Facts.Root != s.root || len(r.Facts.Environments) == 0 ||
+		r.Facts.GC == nil || len(r.Facts.Images) != 1 || len(r.Facts.Removing) != 1 ||
 		!slices.Contains(fixes, "devopsy @devopsy@one:dev --status") {
 		t.Errorf("--json (%d): %+v", code, r)
 	}

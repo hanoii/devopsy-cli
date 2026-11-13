@@ -305,10 +305,10 @@ func serverFacts() (remote.ServerInfo, error) {
 	info.Door = doorFacts(read)
 	info.Disks = diskFacts(info.Root, info.Docker.RootDir, containerdRoot(info.Docker), info.SnapshotRoot, true)
 	info.Missing = missingTools(anyTool)
-	if info.Containers, err = hostContainers("docker"); err != nil {
+	trees := doorTrees(info.Root)
+	if info.Containers, err = hostContainers("docker", releaseDirs(info.Root, trees)); err != nil {
 		info.ContainersUnread = err.Error()
 	}
-	trees := doorTrees(info.Root)
 	for _, who := range trees {
 		info.DoorProjects = append(info.DoorProjects, strings.TrimPrefix(who, "devopsy-"))
 	}
@@ -319,7 +319,21 @@ func serverFacts() (remote.ServerInfo, error) {
 		info.EnvironmentsUnread = err.Error()
 	}
 	info.UIDsDir, info.UIDs = uidFacts(info.Root)
+	if !asProjectUser() {
+		d, _ := remote.ServerDoor()
+		leftFacts(&info, r, d, trees)
+	}
 	return info, nil
+}
+
+// releaseDirs are where a release's compose project works: the release root, by its path and
+// its links resolved, and each project user's tree.
+func releaseDirs(root string, trees map[string]string) []string {
+	dirs := []string{root}
+	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+		dirs = append(dirs, real)
+	}
+	return append(dirs, slices.Sorted(maps.Keys(trees))...)
 }
 
 // systemFacts fills the machine's facts from /etc and /proc; what is
@@ -640,9 +654,10 @@ func tryReflink(dir string) string {
 
 // hostContainers is every container, any state, with its compose
 // project and service, state and health, and its role and exports, as
-// docker (its command) lists them. A list docker failed to give is an
-// error, with what it gave: unknown, never none.
-func hostContainers(docker string) ([]remote.HostContainer, error) {
+// docker (its command) lists them, each released when compose worked
+// under one of dirs. A list docker failed to give is an error, with what
+// it gave: unknown, never none.
+func hostContainers(docker string, dirs []string) ([]remote.HostContainer, error) {
 	out, err := exec.Command(docker, "ps", "-aq", "--no-trunc").Output()
 	if err != nil {
 		return nil, dockerFailed("docker ps", err)
@@ -658,9 +673,9 @@ func hostContainers(docker string) ([]remote.HostContainer, error) {
 	// A container gone since ps (a run --rm, a util container) fails
 	// inspect, which printed every other one all the same.
 	if err != nil && !onlyGone(stderr.String()) {
-		return parseHostContainers(out), errors.New("docker inspect: " + cmp.Or(strings.TrimSpace(stderr.String()), err.Error()))
+		return parseHostContainers(out, dirs), errors.New("docker inspect: " + cmp.Or(strings.TrimSpace(stderr.String()), err.Error()))
 	}
-	return parseHostContainers(out), nil
+	return parseHostContainers(out, dirs), nil
 }
 
 // onlyGone says whether docker's stderr says only of objects not there: "No such container"
@@ -684,8 +699,9 @@ func dockerFailed(what string, err error) error {
 }
 
 // parseHostContainers reads lines of "<state> <exit code> <health or ->
-// <labels as JSON>".
-func parseHostContainers(out []byte) []remote.HostContainer {
+// <labels as JSON>": a container whose compose working directory is
+// under one of dirs is a release's (Released).
+func parseHostContainers(out []byte, dirs []string) []remote.HostContainer {
 	var cs []remote.HostContainer
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(nil, 1<<20)
@@ -700,6 +716,9 @@ func parseHostContainers(out []byte) []remote.HostContainer {
 		}
 		c := remote.HostContainer{State: f[0], Project: labels["com.docker.compose.project"], Service: labels["com.docker.compose.service"],
 			OneOff: labels["com.docker.compose.oneoff"] == "True"}
+		if wd := labels["com.docker.compose.project.working_dir"]; wd != "" {
+			c.Released = slices.ContainsFunc(dirs, func(d string) bool { return within(wd, d) })
+		}
 		c.ExitCode, _ = strconv.Atoi(f[1])
 		if f[2] != "-" {
 			c.Health = f[2]
@@ -1429,7 +1448,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			warn(c.Owner+"'s uid claim is left: "+why, rm())
 		}
 	}
-	return es
+	return append(es, leftEntries(info, host, ref)...)
 }
 
 // oneLine is text, an error's lines joined (errors.Join), on one line.

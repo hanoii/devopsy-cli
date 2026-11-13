@@ -302,6 +302,8 @@ type gcScope struct {
 	policies []door.Policy
 	// projects are the deploy user's project directories, bases its environments'.
 	projects, bases []string
+	// usage is docker system df -v once read (systemUsage).
+	usage *usageRead
 	// listedAt is when what remove removes was listed, the server's time: the build cache goes
 	// by the cutoff its listing had.
 	listedAt time.Time
@@ -656,21 +658,14 @@ func (g *gcScope) doorBuilders() (map[string]builderNode, error) {
 }
 
 // daemonCache is the daemon's own builder's records, as the daemon gives them with their
-// times (docker system df -v).
+// times (docker system df -v, systemUsage).
 func (g *gcScope) daemonCache() ([]cacheRecord, error) {
-	out, err := exec.Command(g.docker, "system", "df", "-v", "--format", "{{json .BuildCache}}").Output()
+	u, err := g.systemUsage()
 	if err != nil {
-		return nil, dockerFailed("docker system df", err)
-	}
-	var vs []struct {
-		ID, Parent, Size, LastUsedAt, CreatedAt string
-		InUse, Shared                           string
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &vs); err != nil {
-		return nil, fmt.Errorf("docker system df: %w", err)
+		return nil, err
 	}
 	var rs []cacheRecord
-	for _, v := range vs {
+	for _, v := range u.BuildCache {
 		r := cacheRecord{ID: v.ID, InUse: v.InUse == "true", Shared: v.Shared == "true", Size: parseDockerSize(v.Size)}
 		if v.Parent != "" {
 			r.Parents = []string{v.Parent}
@@ -679,6 +674,50 @@ func (g *gcScope) daemonCache() ([]cacheRecord, error) {
 		rs = append(rs, r)
 	}
 	return rs, nil
+}
+
+// systemUsage is docker system df -v, read once for the scope: what Docker counts per image,
+// volume and build cache record, the costliest of its reads (it sizes every volume), which
+// --server-info shares with the list.
+func (g *gcScope) systemUsage() (dockerUsage, error) {
+	if g.usage == nil {
+		u, err := readDockerUsage(g.docker)
+		g.usage = &usageRead{u, err}
+	}
+	return g.usage.dockerUsage, g.usage.err
+}
+
+// usageRead is a read of docker system df -v, with its error.
+type usageRead struct {
+	dockerUsage
+	err error
+}
+
+// dockerUsage is docker system df -v as its {{json .}} prints it: every value a string, sizes
+// in Docker's units (parseDockerSize). Images have one line each, by their first tag.
+type dockerUsage struct {
+	Images []struct {
+		ID, Size, Containers string
+	}
+	Volumes []struct {
+		Name, Labels, Links, Size string
+	}
+	BuildCache []struct {
+		ID, Parent, Size, LastUsedAt, CreatedAt string
+		InUse, Shared                           string
+	}
+}
+
+func readDockerUsage(docker string) (dockerUsage, error) {
+	var u dockerUsage
+	out, err := exec.Command(docker, "system", "df", "-v", "--format", "{{json .}}").Output()
+	if err != nil {
+		return u, dockerFailed("docker system df", err)
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &u); err != nil {
+		return u, fmt.Errorf("docker system df: %w", err)
+	}
+	return u, nil
 }
 
 // dockerTime is how docker's formats print a time (Go's time.Time.String).

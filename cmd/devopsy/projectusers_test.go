@@ -14,6 +14,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // A compose name is a project user's by the door's rule (door.Policy's OwnName): a longer
@@ -545,5 +546,28 @@ func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
 	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add with no door (%d):\n%s", code, out)
+	}
+}
+
+// --project-users list says a project user with no key that still holds environments (its
+// claims, the containers under its names), with its way out in words: the server named alone
+// gives the session no address. One with a key, or holding nothing, is no such line.
+func TestProjectUsersListSaysKeyless(t *testing.T) {
+	t.Parallel()
+	home, root := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\ndoor:\n  space: "+t.TempDir()+"\n  users:\n    devopsy-shop: {project: shop}\n    devopsy-blog: {project: blog}\n    devopsy-wiki: {project: wiki}\n", 0o644)
+	write(t, filepath.Join(home, "door", "keys", "devopsy-blog"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g op@laptop\n", 0o600)
+	for _, o := range []uids.Owner{{Project: "shop", Env: "prod"}, {Project: "blog", Env: "prod"}} {
+		if _, err := uids.StoreAt(root).Lookup(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "docker"), "#!/bin/sh\n[ \"$1 $2\" = 'ps -a' ] && { echo shop-stage; echo blog-dev; echo other-prod; }\n", 0o755)
+	out, code := runDevopsy(t, t.TempDir(), []string{"DEVOPSY_HOME=" + home, "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}, "--project-users-step", "list")
+	if code != 0 || !strings.Contains(out, "devopsy: devopsy-shop has no key and still holds shop-prod, shop-stage\n"+
+		"devopsy: | removing shop's project user with --project-users remove and --destroy removes them with it; a key added for it (--ssh-keys) takes it back\n") ||
+		strings.Contains(out, "devopsy-blog has") || strings.Contains(out, "devopsy-wiki has") {
+		t.Errorf("list (%d):\n%s", code, out)
 	}
 }
