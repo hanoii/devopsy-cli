@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -1103,7 +1104,8 @@ func plainManifest(name string) string {
 // A start runs an image of this project's by name (a build's, a hold of its own, devopsy's
 // util image: names only this project or the deploy user writes, under this project's
 // lock), or one it claims first: copied by the door's client with its own registry logins and
-// loaded, the id then recorded in its space, so the next start asks the registry nothing.
+// loaded, the id then recorded in its space with the name asked, so the next start reads that
+// name by the record, whatever the server's name holds, and asks the registry nothing.
 // One already on disk that another project claimed (a private one with that project's
 // login), or a name without a host the deploy user built (blog-prod-web, a registry's name to
 // the door), or an id alone, is refused when this project's claim of it fails, and another's
@@ -1163,29 +1165,37 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
 		t.Errorf("claimed by its pull (%v), pulled %v, goes to compose as %q, want %q:\n%s", err, pulled(), got, pin, readString(calls))
 	}
-	// Docker's containerd store names an image by its manifest's digest.
-	if got := readString(side.policy.ImagesFile()); got != p1+"\n" {
+	// Docker's containerd store names an image by its manifest's digest, and the record the
+	// name asked beside it, which the door reads that name by from then.
+	if got := readString(side.policy.ImagesFile()); got != p1+"\t"+private+":1\n" {
 		t.Errorf("the record: %q", got)
 	}
 	// The claim copied the manifest's digest, never the name, as the registry serves it, loaded
-	// it under its canonical name by that digest,
-	// Docker's daemon asking no registry (no pull) and no builder building anything, and named
-	// it as asked.
+	// it under its canonical name by that digest, Docker's daemon asking no registry (no pull)
+	// and no builder building anything, and wrote no name but its hold: the name asked is the
+	// server's (here another's image), which the record answers for this project.
 	c := readString(calls)
+	for _, l := range strings.Split(c, "\n") {
+		if strings.HasPrefix(l, "tag ") && strings.HasSuffix(l, " "+private+":1") {
+			t.Errorf("a claim wrote the name asked, the server's: %s", l)
+		}
+	}
 	if strings.Contains(c, "\npull ") {
 		t.Errorf("a claim had Docker's daemon pull:\n%s", c)
 	}
 	if strings.Contains(c, "buildx build ") {
 		t.Errorf("a claim built on the project's builder:\n%s", c)
 	}
-	for _, want := range []string{"imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + private + ":1\n"} {
+	for _, want := range []string{"imagetools create --prefer-index=false --tag oci-layout://", "\nload " + private + "@" + p1 + "\n", "\ntag " + private + "@" + p1 + " " + images.ClaimHold(private, "shop", p1) + "\n"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("a claim with no %q:\n%s", want, c)
 		}
 	}
-	side.policy.Images = claimedImages(side.policy.ImagesFile())
-	if got, err := start(private + ":1"); err != nil || pulled() || got != pin {
-		t.Errorf("claimed already (%v), copied again %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	// Claimed already, its plain name still on another's image (sha256:p1, the store's): the
+	// start goes by the record, asking the registry nothing, not even the manifest's digest.
+	side.policy.Images, side.policy.Names = claimedImages(side.policy.ImagesFile())
+	if got, err := start(private + ":1"); err != nil || strings.Contains(readString(calls), "imagetools") || got != pin {
+		t.Errorf("claimed already (%v), goes to compose as %q, asking its registry:\n%s", err, got, readString(calls))
 	}
 	// A copy its registry spoiled (a blob not its hash): refused before anything loads,
 	// nothing recorded.
@@ -1265,6 +1275,40 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	}
 	if got := readString(side.policy.ImagesFile()); !strings.Contains(got, hh) || strings.Contains(got, "sha256:mmm") {
 		t.Errorf("the record after the swap holds the name's image, not the pull's: %q", got)
+	}
+	// Its image gone since (the project's pruning took its last name): the record's entry reads
+	// nothing, and the start claims it again.
+	store(private + ":1|sha256:p1|other.example.com/mirror@sha256:zz " + private + "@" + p1 + "||{}")
+	if got, err := start(private + ":1"); err != nil || !pulled() || got != pin {
+		t.Errorf("a start after a pruning took its image (%v), pulled %v, goes to compose as %q:\n%s", err, pulled(), got, readString(calls))
+	}
+	// A plain name the project claimed onto an older image of its own, and claimed since onto a
+	// newer: the record's newer claim, never what the name holds.
+	store(
+		"registry.example.com/shop/web:3|sha256:o1|registry.example.com/shop/web@sha256:o1|registry.example.com/shop/web:3|{}",
+		"registry.example.com/shop/web@sha256:o1|sha256:o1|registry.example.com/shop/web@sha256:o1|registry.example.com/shop/web:3|{}",
+		"registry.example.com/shop/web@sha256:n1|sha256:n1|registry.example.com/shop/web@sha256:n1||{}",
+	)
+	side.policy.Images = append(side.policy.Images, "sha256:o1", "sha256:n1")
+	side.policy.Names["registry.example.com/shop/web:3"] = "sha256:n1"
+	if got, err := start("registry.example.com/shop/web:3"); err != nil || pulled() || got != "registry.example.com/shop/web:3@sha256:n1" {
+		t.Errorf("a name on an older claim (%v), pulled %v, goes to compose as %q, want its newer claim:\n%s", err, pulled(), got, readString(calls))
+	}
+	// Two services on one image in one file: the first's claim records it, and the second
+	// goes by that record, claimed once.
+	two := fakeManifest(t, dir, plainManifest("two"), "registry.example.com/two:1")
+	store()
+	os.Remove(calls)
+	file := map[string]any{"name": "shop-prod", "services": map[string]any{
+		"a": map[string]any{"image": "registry.example.com/two:1"}, "b": map[string]any{"image": "registry.example.com/two:1"},
+	}}
+	if err := side.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil || strings.Count(readString(calls), "imagetools inspect ") != 1 {
+		t.Errorf("two services on one image (%v) claim it more than once:\n%s", err, readString(calls))
+	}
+	for _, svc := range []string{"a", "b"} {
+		if got := file["services"].(map[string]any)[svc].(map[string]any)["image"]; got != "registry.example.com/two:1@"+two {
+			t.Errorf("%s goes to compose as %v", svc, got)
+		}
 	}
 }
 
@@ -1477,6 +1521,32 @@ func TestDoorClaimActsByDigest(t *testing.T) {
 	}
 }
 
+// An inspect of an id the project does not own answers as Docker does for an image gone,
+// there or not, and logs nothing: a removal asks after an image its own bookmark took (Docker
+// deletes an image with its last tag), which images.CLI reads as gone only by Docker's words,
+// and no claim of an id goes through. In a helper process (doorComposeHelper).
+func TestDoorAnswersAnIDItDoesNotOwnAsGone(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	doorImageFake(t, dir)
+	gone := "sha256:" + strings.Repeat("d8", 32)
+	c := exec.Command(os.Args[0], "-test.run", "^$")
+	c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"),
+		"DEVOPSY_TEST_DOOR_REQUEST=image inspect --format {{.Id}} "+gone)
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	err := c.Run()
+	if c.ProcessState == nil || c.ProcessState.ExitCode() != 1 || !strings.Contains(stderr.String(), "No such image: "+gone) {
+		t.Errorf("an inspect of an id gone (%v) says:\n%s", err, stderr.String())
+	}
+	if got := readString(filepath.Join(dir, "refused.log")); got != "" {
+		t.Errorf("logged as a refusal: %s", got)
+	}
+	if calls := readString(filepath.Join(dir, "calls")); strings.Contains(calls, "imagetools") {
+		t.Errorf("an id claimed:\n%s", calls)
+	}
+}
+
 // A build context reaches compose only when that compose reads service:<name> as another
 // service's build (v2.33.0 on): one before reads it as a path in the project's directory,
 // the project user's to make (a link to the deploy user's keys, another project's entries),
@@ -1677,7 +1747,7 @@ func doorComposeHelper(dir string) {
 		// As runDoor reads it from what its sudo kept (doorEnvironment).
 		asked: remote.SessionFrom(os.Getenv),
 	}
-	side.policy.Images = claimedImages(side.policy.ImagesFile())
+	side.policy.Images, side.policy.Names = claimedImages(side.policy.ImagesFile())
 	// A work directory the request made before (TestDoorClaimCutBySignalLeavesNoWork).
 	if os.Getenv("DEVOPSY_TEST_DOOR_WORK") != "" {
 		if _, err := side.workDir(""); err != nil {
@@ -1854,8 +1924,29 @@ func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
 			t.Errorf("%s: compose gets %q, not the %s@%s the claim loaded:\n%s", image, got, repo, amd, readString(filepath.Join(dir, "store")))
 		}
 	}
-	if !strings.Contains(readString(side.policy.ImagesFile()), amd) {
-		t.Errorf("the claim recorded no %s: %q", amd, readString(side.policy.ImagesFile()))
+	if got := readString(side.policy.ImagesFile()); got != amd+"\t"+repo+"@"+idx+"\n" {
+		t.Errorf("the claim recorded %q, not %s with the index's pin", got, amd)
+	}
+	// Once claimed, a start reads the pin by the record, asking the registry nothing, and
+	// runs the same: so does one with the index here under its digest, not the project's (the
+	// deploy user's pull of it), which would otherwise claim again at every start.
+	for _, store := range []string{"", repo + "@" + idx + "|" + idx + "|" + repo + "@" + idx + "|" + repo + ":1|{}\n"} {
+		if store != "" {
+			write(t, filepath.Join(dir, "store"), store+readString(filepath.Join(dir, "store")), 0o644)
+		}
+		again := &doorSide{policy: side.policy, real: fake, imagesRoot: dir}
+		again.policy.Images, again.policy.Names = claimedImages(side.policy.ImagesFile())
+		for _, image := range []string{repo + ":1@" + idx, repo + "@" + idx} {
+			os.Remove(filepath.Join(dir, "calls"))
+			file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
+			if err := again.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
+			if want := strings.TrimSuffix(image, "@"+idx) + "@" + amd; got != want || strings.Contains(readString(filepath.Join(dir, "calls")), "imagetools") {
+				t.Errorf("%s claimed already, the index here %v: compose gets %q, want %q, asking the registry:\n%s", image, store != "", got, want, readString(filepath.Join(dir, "calls")))
+			}
+		}
 	}
 }
 

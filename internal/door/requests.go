@@ -95,6 +95,8 @@ type Action struct {
 	Stream *Stream
 	// Output is the answer when Docker is empty.
 	Output string
+	// Said is what goes to stderr then, as Docker would say it.
+	Said string
 	// Exit is the exit code when Docker is empty.
 	Exit int
 	// Claims are images the project must claim before Docker runs: each fetched by the door
@@ -281,6 +283,9 @@ func Decide(argv []string, p Policy, d Daemon, h Host, known Known) (*Action, er
 		if owned && id != "" {
 			a.Docker = []string{"tag", id, args[1]}
 		}
+		if !owned && isID(args[0]) {
+			return noImage(args[0]), nil
+		}
 		if !owned {
 			if err := p.Claimable(args[0]); err != nil {
 				return nil, err
@@ -459,6 +464,8 @@ func decideImage(args []string, p Policy, d Daemon, known Known) (*Action, error
 			case owned && id != "":
 				a.Docker = append(a.Docker, id)
 				continue
+			case !owned && isID(t):
+				return noImage(t), nil
 			case !owned:
 				if err := p.Claimable(t); err != nil {
 					return nil, err
@@ -567,10 +574,11 @@ func decideUtilBuild(args []string, known Known) (*Action, error) {
 }
 
 // OwnsImage says whether ref is this project's image: devopsy's util image (known), a
-// name only this project writes (its build's or a hold of its own, OwnRef), an image
-// another of whose names is so, or one whose id the project claimed (Images). Any other is
-// claimed first (Action.Claims): fetched with this project's own registry logins, so an
-// image another project pulled with its own is never this one's by being on disk.
+// name only this project writes (its build's or a hold of its own, OwnRef), or the image
+// ImageRef reads it by when that is one the project claimed (Images) or another of whose
+// names only this project writes. Any other is claimed first (Action.Claims): fetched with
+// this project's own registry logins, so an image another project pulled with its own is
+// never this one's by being on disk.
 func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
 	_, owned := p.ownedImage(d, ref, known)
 	return owned
@@ -579,14 +587,59 @@ func (p Policy) OwnsImage(d Daemon, ref string, known Known) bool {
 // ownedImage is OwnsImage, with the id it read when it read one ("" for a name only this
 // project writes, or devopsy's util image): what a request then acts on by id, read once.
 func (p Policy) ownedImage(d Daemon, ref string, known Known) (string, bool) {
-	if ref == known.Image || p.OwnRef(ref) {
+	read, own := p.ImageRef(ref, known)
+	if own {
 		return "", true
 	}
-	id, tags, err := d.Image(ref)
+	if read == "" {
+		return "", false
+	}
+	id, tags, err := d.Image(read)
 	if err != nil {
 		return "", false
 	}
 	return id, p.OwnsImageOf(id, tags)
+}
+
+// ImageRef is what the door reads ref's image by for this project, and whether ref is a name
+// only it writes (OwnRef) or devopsy's util image (known), taken as it is; "" is none, the
+// image to be claimed first. A plain name, or a reference by an index's digest, goes by the
+// record of the project's last claim of it (Names, the image by its digest, none when its id
+// is no longer one the project claimed), so a stale entry, its image gone, fails its read and
+// is claimed again: a plain name is the server's (the deploy user's pull of the same tag, its
+// local build, another project's claim), and one left on an older image this project claimed
+// would beat its newer claim; no image here goes by an index's digest once a claim loads the
+// platform's entry, and one that does is the deploy user's pull of the index. Any other
+// reference by digest, or an id (its prefix too), goes as it is; a plain name the record lacks
+// is claimed. What the door then reads there is the project's only once OwnsImageOf says so.
+func (p Policy) ImageRef(ref string, known Known) (string, bool) {
+	if ref == known.Image || p.OwnRef(ref) {
+		return ref, true
+	}
+	if isID(ref) {
+		return ref, false
+	}
+	if id, ok := p.Names[images.Familiar(ref)]; ok {
+		if !slices.Contains(p.Images, id) {
+			return "", false
+		}
+		return images.ByDigest(ref, id), false
+	}
+	if images.Pinned(ref) {
+		return ref, false
+	}
+	return "", false
+}
+
+// isID says whether ref is an image's id, or its prefix, which no registry serves to claim.
+func isID(ref string) bool { return strings.HasPrefix(ref, "sha256:") }
+
+// noImage is Docker's answer for an image by an id this project does not own, there or not:
+// no claim of an id goes through, and a refusal of one that is there would tell the project
+// another's image is on the server. A removal reads it as gone, as it reads an image Docker
+// deleted with its last tag (a bookmark of the project's, a claimed image's last name).
+func noImage(id string) *Action {
+	return &Action{Said: "Error response from daemon: No such image: " + id + "\n", Exit: 1}
 }
 
 // OwnsImageOf says whether the image of id and tags, as one inspect read them, is this

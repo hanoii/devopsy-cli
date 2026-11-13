@@ -44,6 +44,10 @@ type Policy struct {
 	// Images are the ids of images the project claimed (Action.Claims), the door's
 	// record in its space (ImagesFile).
 	Images []string
+	// Names are the plain names the project's claims last landed, each on the id of its
+	// image (images.Familiar's name to the id), from the same record: what a plain name
+	// is for this project (ImageRef), whatever the server's own name holds.
+	Names map[string]string
 	// UIDs are what a container of the request's environment may run as, its uid and gid
 	// both: its own claim's and its project's (DEVOPSY_UID, DEVOPSY_PROJECT_UID), read from
 	// the server's claims. A compose file is its branch's code, so it gets no other
@@ -54,8 +58,9 @@ type Policy struct {
 	ProjectUIDs []uint32
 }
 
-// ImagesFile is the door's record of a project user's claimed images, one id a line, in
-// its space: the deploy user's, never the project user's to write.
+// ImagesFile is the door's record of a project user's claimed images, in its space: a line
+// an image's id, then, each after a tab, the plain names asked whose last claim landed on it
+// (Images, Names). The deploy user's, never the project user's to write.
 func (p Policy) ImagesFile() string { return ImagesFileOf(p.Space, p.Project) }
 
 // OwnName says whether a compose name is this project's (<project>-...), and
