@@ -571,17 +571,20 @@ names is refused before it goes live.
 
 ## Removing a project user
 
-`--project-users remove shop` drops its entry and keys, so it can no
-longer log in or use the door, then ends every process it runs and
-removes its builder and the builder's network:
+`--project-users remove shop` drops its keys, so it can no longer log
+in or use the door, then ends every process it runs and removes its
+builder and the builder's network:
 
 ```sh
 devopsy @devopsy@vm1: --project-users remove shop
 ```
 
-Its Unix user, home and tree stay. So do its environments' containers
-and volumes, which `--destroy` takes first. What the door kept for it,
-its registry logins and the record of the images it claimed, goes too.
+Its entry stays, so its compose names stay its own and no deploy
+project takes them, and so do its Unix user, home and tree, its
+environments' containers and volumes, which `--destroy` takes first. A
+key added for it (`--ssh-keys --for shop add`) takes it back. What the
+door kept for it, its registry logins and the record of the images it
+claimed, goes.
 
 If the end of its processes fails (Docker restarting, say), the removal
 says so and stays marked: the door answers the user nothing and sshd

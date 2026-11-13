@@ -66,7 +66,7 @@ func newRemovalCut(t *testing.T) *removalCut {
 
 // userRemovalSteps are a user's removal's writes, in order (removeProjectUser, finishRemoval),
 // each applied to a removalCut by hand as the removal makes it.
-var userRemovalSteps = []string{"its mark", "its end's mark", "the entry", "the keys", "the end", "what was kept", "the end's mark gone"}
+var userRemovalSteps = []string{"its mark", "its end's mark", "the keys", "the end", "what was kept", "the end's mark gone"}
 
 // cutAfter applies the first n of userRemovalSteps.
 func (c *removalCut) cutAfter(n int) {
@@ -78,8 +78,6 @@ func (c *removalCut) cutAfter(n int) {
 			err = os.WriteFile(c.removing, []byte("shop\n"), 0o600)
 		case "its end's mark":
 			err = os.WriteFile(c.ending, nil, 0o600)
-		case "the entry":
-			err = os.Remove(c.entry)
 		case "the keys":
 			err = os.WriteFile(c.keys, nil, 0o600)
 		case "the end":
@@ -118,10 +116,14 @@ func (c *removalCut) fakeEnd(who string) error {
 	return err
 }
 
-// removedLeft is what a removed user still has that it must not: nil once its removal is done.
+// removedLeft is what a removed user still has that it must not, and its entry if it lost it,
+// which a removal keeps: nil once its removal is done.
 func (c *removalCut) removedLeft() []string {
 	var left []string
-	for name, f := range map[string]string{"its entry": c.entry, "its sync keys": c.syncKeys, "its logins": c.logins, "its record": c.record,
+	if !fileExists(c.entry) {
+		left = append(left, "no entry, which holds its names")
+	}
+	for name, f := range map[string]string{"its sync keys": c.syncKeys, "its logins": c.logins, "its record": c.record,
 		"its record's lock": c.record + ".lock", "its end's mark": c.ending, "its removal's mark": c.removing} {
 		if fileExists(f) {
 			left = append(left, name)
@@ -141,8 +143,8 @@ func (c *removalCut) removedLeft() []string {
 // A user's removal cut after any of its writes (a session gone, a failure) is finished by every
 // way of settling it, whichever comes first: a removal asked again, a listing of the user's
 // keys, a key's removal of a key the user had: once it is, the removed user has nothing left
-// (no keys sshd takes, no sync key, no logins, no record, no marks) and its processes were
-// ended. A key's removal cut alone is settled by a listing as a key's: the user ended, its
+// but its entry (no keys sshd takes, no sync key, no logins, no record, no marks) and its processes were
+// ended, its entry kept. A key's removal cut alone is settled by a listing as a key's: the user ended, its
 // other keys and what the door kept for it staying. The cuts are built on disk as the removal
 // leaves them (every write atomic), the settling runs the real keys scripts with this test's
 // devopsy for the end flag, the kill aside.

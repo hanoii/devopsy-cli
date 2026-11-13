@@ -1281,9 +1281,9 @@ as root (its project-users topic).
                             are flat, so shop's admin-prod is shop-admin's
                             prod.
   --project-users remove <p>
-                            drop devopsy-<p>'s entry and keys: it logs in no
-                            more and the door answers it no more. Its Unix
-                            user, home and tree stay.
+                            drop devopsy-<p>'s keys: it logs in no more and
+                            the door answers it no more. Its entry, holding
+                            its names, its Unix user, home and tree stay.
 
 Its keys are --ssh-keys --for <project>.
 

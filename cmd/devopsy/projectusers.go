@@ -384,61 +384,52 @@ func removeKept(space, project string) error {
 	return nil
 }
 
-// removeProjectUser takes who's entry and keys, then ends its processes (end): the door
-// answers it no more first, so nothing it runs meanwhile gets a new call through.
+// removeProjectUser takes who's keys, then ends its processes (end): the door answers it no
+// more first, so nothing it runs meanwhile gets a new call through. Its entry stays: a removed
+// project user is one with no key, as a fresh add leaves it, its names its own
+// (doorNameOwner), so no deploy project takes them while what it left is there, and its tree
+// known; a key added takes it back. Asked again, it does it all again.
 func removeProjectUser(d *remote.Door, project, who, entry string, end func(who string) error) int {
 	ending, removing := remote.DoorEndingFile(who), remote.DoorRemovingFile(who)
 	keys := remote.DoorKeysFile(who)
-	if _, err := os.Stat(entry); err != nil {
-		// A removal before that did not see itself through (its own mark, never a key's
-		// removal's): asked again, it does what is left, its keys first, the entry being gone.
+	// A user the config names, under door: users:, has no entry file (remote.ServerDoor).
+	inConfig := false
+	if d != nil && !fileExists(entry) {
+		_, inConfig = d.Users[who]
+	}
+	if !fileExists(entry) && !inConfig {
+		// A removal that did not see itself through, whose user's door: users: line went since:
+		// asked again, it does what is left, its keys first.
 		if _, err := os.Lstat(removing); err == nil {
 			if err := lockedKeys(keys, func([]string) ([]string, error) { return nil, nil }); err != nil {
 				return failErr(err)
 			}
 			return finishRemoval(d, project, who, end)
 		}
-		// A user the config names: its entry is the admin's to drop, and everything else of a
-		// removal (its keys, which sshd takes from the keys file alone, its end, what the door
-		// kept) is the door's, done here the same, so following the words below leaves nothing.
-		if d != nil {
-			if _, ok := d.Users[who]; ok {
-				if err := lockedKeys(keys, func([]string) ([]string, error) {
-					if err := os.WriteFile(removing, []byte(project+"\n"), 0o600); err != nil {
-						return nil, err
-					}
-					return nil, os.WriteFile(ending, nil, 0o600)
-				}); err != nil {
-					return failErr(err)
-				}
-				if code := finishRemoval(d, project, who, end); code != 0 {
-					return code
-				}
-				report.Fail(errors.New(who+"'s keys and processes are gone, and door: users: in "+remote.UserConfigFile()+" still names it"),
-					report.Fix("remove it there"))
-				return 1
-			}
-		}
 		return fail("no project user for " + project + " here")
 	}
 	// Under the keys' lock, in one stretch: the removal's mark (remote.DoorRemovingFile, with
-	// its project) and its end's, the entry and the keys, so a key's removal meanwhile, which
-	// holds that lock for its end, finds them all or none, and clears only its own mark. A
-	// failure or a cut session past here leaves the marks, which a removal asked again, or the
-	// next edit or listing of the user's keys, finish, the door answering the user nothing
-	// meanwhile.
+	// its project) and its end's, and the keys, so a key's removal meanwhile, which holds that
+	// lock for its end, finds them all or none, and clears only its own mark. A failure or a
+	// cut session past here leaves the marks, which a removal asked again, or the next edit or
+	// listing of the user's keys, finish, the door answering the user nothing meanwhile.
 	if err := lockedKeys(keys, func([]string) ([]string, error) {
 		if err := os.WriteFile(removing, []byte(project+"\n"), 0o600); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(ending, nil, 0o600); err != nil {
-			return nil, err
-		}
-		return nil, os.Remove(entry)
+		return nil, os.WriteFile(ending, nil, 0o600)
 	}); err != nil {
 		return failErr(err)
 	}
-	return finishRemoval(d, project, who, end)
+	if code := finishRemoval(d, project, who, end); code != 0 || !inConfig {
+		return code
+	}
+	// A user the config names: its entry is the admin's to drop, everything else of a removal
+	// (its keys, which sshd takes from the keys file alone, its end, what the door kept) done
+	// here the same.
+	report.Fail(errors.New(who+"'s keys and processes are gone, and door: users: in "+remote.UserConfigFile()+" still names it"),
+		report.Fix("remove it there"))
+	return 1
 }
 
 // finishRemoval ends who's processes (end), clears the end's mark, and removes what the door
@@ -447,7 +438,7 @@ func finishRemoval(d *remote.Door, project, who string, end func(who string) err
 	// It ends before anything else may fail: what it left running must not outlive a removal
 	// that stopped halfway.
 	if err := endProjectUser(who, end); err != nil {
-		report.Fail(errors.New("removed "+who+"'s entry and keys, but "+err.Error()),
+		report.Fail(errors.New("removed "+who+"'s keys, but "+err.Error()),
 			report.Fix("ask for the removal again once that is fixed: the end is marked, and the door answers "+who+" nothing meanwhile"))
 		return 1
 	}
@@ -465,10 +456,10 @@ func finishRemoval(d *remote.Door, project, who string, end func(who string) err
 			return failErr(err)
 		}
 	}
-	stays := "its Unix user, home and tree stay"
+	stays := "its entry, Unix user, home and tree stay, holding its names: a key added for it (--ssh-keys --for " + project + ") takes it back"
 	if _, err := user.Lookup(who); err != nil {
-		stays = "its Unix user was gone already"
+		stays = "its entry stays, holding its names; its Unix user was gone already"
 	}
-	report.Info("removed "+who+"'s entry and keys, and ended its processes: it logs in no more, and the door answers it no more", stays)
+	report.Info("removed "+who+"'s keys and ended its processes: it logs in no more, and the door answers it no more", stays)
 	return 0
 }

@@ -143,10 +143,10 @@ func TestDeployUserLeavesAProjectUsersNames(t *testing.T) {
 	}
 }
 
-// --project-users remove ends the project user's processes once its entry and keys are
-// gone, so the door answers no new call meanwhile: one it left running would outlive its
-// logins. What the door kept for it goes too (its registry logins, its claimed images'
-// record), another project's staying. A kill that fails fails the command, which says the
+// --project-users remove ends the project user's processes once its keys are gone, so the
+// door answers no new call meanwhile: one it left running would outlive its logins. What the
+// door kept for it goes too (its registry logins, its claimed images' record), another
+// project's staying, and its entry stays. A kill that fails fails the command, which says the
 // rest is done.
 //
 // Not parallel: it sets DEVOPSY_HOME (t.Setenv), where the user's keys are.
@@ -156,8 +156,8 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	var ended []string
 	end := func(fails error) func(string) error {
 		return func(who string) error {
-			if _, err := os.Stat(entry); err == nil {
-				t.Errorf("%s's processes ended while its entry stays", who)
+			if remote.KeysLeft(remote.DoorKeysFile(who)) {
+				t.Errorf("%s's processes ended while its keys stay", who)
 			}
 			ended = append(ended, who)
 			return fails
@@ -182,24 +182,24 @@ func TestRemoveProjectUserEndsItsProcesses(t *testing.T) {
 	if fileExists(logins) || fileExists(record) || fileExists(record+".lock") || !fileExists(theirs) {
 		t.Errorf("after remove: its logins %v, its images' record %v and its lock %v, another's logins %v", fileExists(logins), fileExists(record), fileExists(record+".lock"), fileExists(theirs))
 	}
-	if fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
+	// Its entry stays, holding its names and its tree.
+	if !fileExists(entry) || fileExists(keys) || fileExists(syncKeys) || !fileExists(other) {
 		t.Errorf("after remove: its entry %v, its keys %v, its sync keys %v, another's keys %v", fileExists(entry), fileExists(keys), fileExists(syncKeys), fileExists(other))
 	}
 	ended = nil
-	write(t, entry, "project: shop\n", 0o600)
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(errors.New("no docker"))); code == 0 {
 		t.Error("a kill that failed passes")
 	}
 	if !fileExists(remote.DoorEndingFile("devopsy-shop")) {
 		t.Error("a kill that failed left no mark of the end pending")
 	}
-	// Asked again, its entry gone, the marked end completes and its mark goes.
+	// Asked again, the marked end completes and its mark goes.
 	ended = nil
 	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code != 0 || strings.Join(ended, " ") != "devopsy-shop" || fileExists(remote.DoorEndingFile("devopsy-shop")) {
 		t.Errorf("a removal asked again after a failed end (exit %d) ended %q, its mark there %v", code, ended, fileExists(remote.DoorEndingFile("devopsy-shop")))
 	}
 	ended = nil
-	if code := removeProjectUser(nil, "shop", "devopsy-shop", entry, end(nil)); code == 0 || len(ended) != 0 {
+	if code := removeProjectUser(nil, "shop", "devopsy-shop", filepath.Join(t.TempDir(), "devopsy-shop.yaml"), end(nil)); code == 0 || len(ended) != 0 {
 		t.Errorf("no such user (exit %d) ended %q", code, ended)
 	}
 }
@@ -427,7 +427,7 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 }
 
 // A project user whose Unix user is gone already runs nothing to end: its removal goes on to
-// its entry and keys rather than failing on the lookup.
+// what the door kept rather than failing on the lookup.
 func TestEndUserOfAUserGone(t *testing.T) {
 	t.Parallel()
 	if err := endUser("devopsy-nosuchuser-zz9"); err != nil {
