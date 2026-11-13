@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1013,6 +1014,55 @@ func TestServerSetupAsksNoRootOverClaims(t *testing.T) {
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
 		t.Errorf("the apply (%d) named another root over the claims, the config:\n%s\n%s", code, readString(config), out)
+	}
+}
+
+// A volume that holds releases already (one attached from another server, its projects and its
+// claims directory on it) is offered and named as any other: the root is the deploy user's, so
+// nothing is made or given, and the uid claims on it are the server's from then on, each
+// environment keeping the uid that owns its data, with no claims directory made in the home.
+func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
+	t.Parallel()
+	s, host, _, config := rootChoice(t)
+	home := filepath.Dir(s.root)
+	// Outside the home: a directory in it would read as a project of the home's.
+	vol := filepath.Join(t.TempDir(), "vol")
+	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n", 0o644)
+	write(t, filepath.Join(vol, "shop", "prod", "releases", ".keep"), "", 0o644)
+	owner := uids.Owner{Project: "shop", Env: "prod"}
+	// The environment's uid as its first server claimed it, pushed off its hashed slot.
+	was := owner.Plain() + 1
+	if err := os.MkdirAll(filepath.Join(vol, uids.DirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(strconv.FormatUint(uint64(was), 10), filepath.Join(vol, uids.DirName, owner.String())); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, remote.ServerSetupFlag, "facts")
+	var f setup.Facts
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 || !f.AsksRoot() {
+		t.Fatalf("facts (%d, %v): asks %v\n%s", code, err, f.AsksRoot(), out)
+	}
+	out, code = s.run(nil, remote.ServerSetupFlag, "facts", "--root", vol)
+	f = setup.Facts{}
+	if err := json.Unmarshal([]byte(out[max(strings.Index(out, "{"), 0):]), &f); err != nil || code != 0 || !f.RootNames() || f.RootAction != "" {
+		t.Fatalf("facts --root (%d, %v): names %v, action %q\n%s", code, err, f.RootNames(), f.RootAction, out)
+	}
+	out, code = s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol, "--restart")
+	if code != 0 || !strings.Contains(out, "devopsy: named "+vol+" the release root") || strings.Contains(out, "the release root "+vol) {
+		t.Fatalf("apply --root (%d), made or gave a root that is the deploy user's:\n%s", code, out)
+	}
+	if got := readString(config); !strings.HasSuffix(got, "releases:\n  root: "+vol+"\n") {
+		t.Errorf("the config:\n%s", got)
+	}
+	if uid, err := claimsStore(vol).Lookup(owner); err != nil || uid != was {
+		t.Errorf("%s is %d (%v) on the volume named, %d as its data is owned", owner, uid, err, was)
+	}
+	if fileExists(filepath.Join(home, uids.DirName)) {
+		t.Errorf("a claims directory in the home, %s, which releases never lived in", filepath.Join(home, uids.DirName))
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, owner.String()) || !strings.Contains(out, "shop/prod") {
+		t.Errorf("--server-info (%d) shows no claim or environment of the volume's:\n%s", code, out)
 	}
 }
 
