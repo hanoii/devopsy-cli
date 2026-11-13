@@ -362,12 +362,15 @@ func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 		refuse(setup.ItemSpace, setup.RefusalSpace, err.Error(), fixFor("name a directory with only letters, digits and . _ - /", "", "a path with only letters, digits and . _ - /,"))
 	}
 	rd.unit, rd.unitText = setup.SpaceUnit(f.Space), setup.SpaceUnitText(f.Space)
+	// The mount the space is on, read before any refusal of it: a refused space is said as it is.
+	sm := spaceMount(h, space)
+	f.Guarded = sm.guarded
 	if why := swappable(space, os.Getuid()); why != "" {
 		refuse(setup.ItemSpace, setup.RefusalSpace, why+", and devopsy acts as root only on a path no other user can change",
 			fixFor("name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link",
 				"make every part of its path a directory, none of them a link, each above it root's or the deploy user's and writable by no one else", "such a path"))
 	} else {
-		readSpace(h, &rd, refuse, fixFor("name another directory, or move this one aside", "make it a directory of the deploy user's", "a directory of the deploy user's"))
+		readSpace(h, &rd, sm, refuse, fixFor("name another directory, or move this one aside", "make it a directory of the deploy user's", "a directory of the deploy user's"))
 	}
 
 	// Docker's wait at boot for the space, beside the release root's (mountsDropInWant): the
@@ -389,13 +392,14 @@ func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 	return rd, nil
 }
 
-// readSpace judges the door's space, anew the fix of a directory refused: a directory of the deploy user's, mode 0755, on a mount
+// readSpace judges the door's space, sm the mount it is on (spaceMount), anew the fix of a
+// directory refused: a directory of the deploy user's, mode 0755, on a mount
 // with nosuid and nodev, read from the host's mounts (whatever made it: an fstab line by hand
 // is in sync, and nothing of devopsy's goes beside it). One that exists with another owner, is
 // no directory, or is someone's mount without the two, refuses. One that holds files on no
 // mount of its own is bound on itself as any other: a bind of a directory on itself hides
 // nothing, so a space whose mount went (a boot where it failed) is mounted again.
-func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix string), anew string) {
+func readSpace(h setupHost, rd *doorSetupRead, sm spaceAt, refuse func(item, stops, msg, fix string), anew string) {
 	f := &rd.facts
 	sp := f.Space
 	action, refused, fi := dirOwner("", sp, os.Getuid())
@@ -407,8 +411,6 @@ func readSpace(h setupHost, rd *doorSetupRead, refuse func(item, stops, msg, fix
 	if fi != nil && fi.Mode().Perm() != 0o755 {
 		f.SpaceMode = strconv.FormatUint(uint64(fi.Mode().Perm()), 8)
 	}
-	sm := spaceMount(h, sp)
-	f.Guarded = sm.guarded
 	point := sm.found && sm.m.point == sp
 	unitText, _ := os.ReadFile(h.path(rd.unit))
 	ours := unitText != nil
