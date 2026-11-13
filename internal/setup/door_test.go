@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // A mount unit's name is systemd-escape --path's: slashes as -, a - and every character but
@@ -97,6 +99,35 @@ func TestAppendDoorConfig(t *testing.T) {
 	}
 	if got, err := AppendDoorConfig(nil, DefaultSpace); err != nil || string(got) != lines {
 		t.Errorf("no file (nil): %q, %v", got, err)
+	}
+}
+
+// Review, a bug: AppendDoorConfig checks only the first YAML document's top keys and never
+// reads its result back, so a config whose first document ends before the appended lines (a
+// flow mapping, a mapping indented, a ... end marker, a second --- document) takes door:
+// space: where the loader (yaml.Unmarshal, the first document) never reads it: the apply says
+// it named the space, its check finds no door:, and every run appends the lines again. The
+// lines appended must read back as door: space:, or the text be refused.
+func TestAppendDoorConfigReadsBack(t *testing.T) {
+	t.Parallel()
+	for name, have := range map[string]string{
+		"a flow mapping":     "{releases: {root: /srv}}\n",
+		"a mapping indented": "  releases:\n    root: /srv\n",
+		"an end marker":      "releases:\n  root: /srv\n...\n",
+		"two documents":      "---\nreleases:\n  root: /srv\n---\nother: 1\n",
+	} {
+		got, err := AppendDoorConfig([]byte(have), DefaultSpace)
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Door struct {
+				Space string `yaml:"space"`
+			} `yaml:"door"`
+		}
+		if err := yaml.Unmarshal(got, &doc); err != nil || doc.Door.Space != DefaultSpace {
+			t.Errorf("%s: appended, and the config reads door: space: %q (%v):\n%s", name, doc.Door.Space, err, got)
+		}
 	}
 }
 
