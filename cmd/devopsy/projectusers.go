@@ -108,17 +108,14 @@ func projectUsersArgs(args []string, step bool) int {
 }
 
 // runProjectUsersStep is ProjectUsersFlag, on the server as the deploy user, the server as
-// its address named it after --server, for the fixes it offers ("" without).
+// its session names it (sessionServer) for the fixes it offers ("" without).
 func runProjectUsersStep(args []string) int {
-	ref := ""
-	if len(args) >= 2 && args[0] == "--server" {
-		ref, args = args[1], args[2:]
-	}
+	ref := sessionServer()
 	if len(args) > 0 && args[0] == "setup" {
 		return runProjectUsersSetupStep(args[1:], ref)
 	}
 	if projectUsersArgs(args, true) != 0 {
-		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [--server <server>] [list | add <project> | remove <project> [--destroy [--list]] | setup ...]")
+		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [list | add <project> | remove <project> [--destroy [--list]] | setup ...]")
 	}
 	d, err := remote.ServerDoor()
 	if err != nil {

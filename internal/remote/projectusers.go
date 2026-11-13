@@ -15,10 +15,9 @@ import (
 const ProjectUsersFlag = "--project-users-step"
 
 // ProjectUsersScript runs ProjectUsersFlag with args on the server, after the prelude's checks,
-// naming the server as its address names it (ServerRef) for the fixes it offers, and refusing a
-// project user (askedAsProjectUser): project users are their deploy user's.
+// refusing a project user (askedAsProjectUser): project users are their deploy user's.
 func ProjectUsersScript(t *Target, args []string) string {
-	return "set -eu\n" + serverPrelude(t) + askedAsProjectUser + devopsyCall("", append([]string{ProjectUsersFlag, "--server", ServerRef(t)}, args...), true) + "\n"
+	return "set -eu\n" + serverPrelude(t) + askedAsProjectUser + devopsyCall("", append([]string{ProjectUsersFlag}, args...), true) + "\n"
 }
 
 // DoorRebootMarker says sshd has not taken the door's drop-in yet: /run is emptied at boot,

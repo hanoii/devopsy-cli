@@ -581,7 +581,7 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 // way after it.
 func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	t.Parallel()
-	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "--server", "devopsy@one:", "add", "shop")
+	out, code := runDevopsy(t, t.TempDir(), []string{remote.ServerEnv + "=devopsy@one:"}, remote.ProjectUsersFlag, "add", "shop")
 	if code != 1 || !strings.Contains(out, "this server is not ready for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") ||
 		!strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | set the server up for project users:\ndevopsy: | $ devopsy @devopsy@one: --project-users setup\n"+
 			"devopsy: | or set it up by hand, with the steps this prints:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") {

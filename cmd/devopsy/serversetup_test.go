@@ -1132,8 +1132,8 @@ func TestProjectUsersAddRefusesARootNotReady(t *testing.T) {
 	for _, name := range []string{"sudo", "visudo", "setfacl"} {
 		write(t, filepath.Join(tools, name), "#!/bin/sh\n", 0o755)
 	}
-	c := exec.Command(binary, remote.ProjectUsersFlag, "--server", "devopsy@vm1:", "add", "shop")
-	c.Env = []string{"DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
+	c := exec.Command(binary, remote.ProjectUsersFlag, "add", "shop")
+	c.Env = []string{remote.ServerEnv + "=devopsy@vm1:", "DEVOPSY_HOME=" + home, "HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin"}
 	out, _ := c.CombinedOutput()
 	if c.ProcessState.ExitCode() != 1 || !strings.Contains(string(out), "the release root "+root+" is missing: no project user made\ndevopsy: | to fix it:\ndevopsy: | set the server up:\ndevopsy: | $ devopsy @devopsy@vm1: --server-setup\n") || fileExists(root) {
 		t.Errorf("(%d):\n%s", c.ProcessState.ExitCode(), out)
