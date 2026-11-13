@@ -1126,9 +1126,10 @@ Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
                         root's and empty (releases: root in the deploy
                         user's config.yaml, else its home, never /);
-                        while the config names none and nothing is
-                        released, asked first: the home or a volume
-                        mounted at boot, a volume named in config.yaml
+                        while the config has no releases: and the home
+                        holds nothing of devopsy's, asked first: the
+                        home or a volume mounted at boot, a volume named
+                        in config.yaml
   daemon.json           rotated logs (log-driver local), live-restore,
                         and /24 address pools, merged in: every other key
                         stays. A value someone else set is asked about,
@@ -1164,9 +1165,9 @@ Options:
                  container runs, and load the metadata firewall (or remove
                  it, for allow)
   --root <dir>   where releases live, in place of the question: named as
-                 releases: root in config.yaml; refused once a release
-                 root holds releases, on a filesystem nothing mounts at
-                 boot, or in memory (tmpfs)
+                 releases: root in config.yaml; refused once the release
+                 root holds something of devopsy's, on a filesystem
+                 nothing mounts at boot, or in memory (tmpfs)
 
 Examples:
   devopsy @devopsy@vm1: --server-setup
