@@ -754,8 +754,8 @@ func destroyablePath(p, base string) bool {
 	return filepath.IsAbs(p) && filepath.Clean(p) == p && filepath.Base(p) == base && filepath.Dir(p) != "/"
 }
 
-// last removes the entry, then the mark: a cut between them leaves the mark alone, which a run
-// again settles (afterEntry). A user under door: users: keeps its mark until its admin drops
+// last removes the entry, then the keys' locks, then the mark: a cut between them leaves the
+// mark alone, which a run again settles (afterEntry). A user under door: users: keeps its mark until its admin drops
 // its line.
 func (x *userDestroy) last(*destroyMark) error {
 	if x.config {
@@ -764,7 +764,22 @@ func (x *userDestroy) last(*destroyMark) error {
 	if err := os.Remove(x.entry); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := dropUserLocks(x.who); err != nil {
+		return err
+	}
 	return os.Remove(x.mark)
+}
+
+// dropUserLocks removes the locks beside who's keys and sync keys (dropKeysLock), which the
+// removal, the end and the keys scripts take while the user is there: before the mark, which
+// keeps whoever takes one meanwhile from changing anything.
+func dropUserLocks(who string) error {
+	for _, f := range []string{remote.DoorKeysFile(who), remote.DoorSyncKeysFile(who)} {
+		if err := dropKeysLock(f); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // afterEntry settles a mark whose user is no longer an entry or a door: users: line: it checks
@@ -789,6 +804,9 @@ func (x *userDestroy) afterEntry() int {
 		report.Fail(errors.New(x.who+"'s destroy did not complete, and its entry or door: users: line is gone: left "+strings.Join(left, "; ")),
 			report.Fix("once what is left is known to be no longer "+x.project+"'s, remove "+x.mark+" by hand"))
 		return 1
+	}
+	if err := dropUserLocks(x.who); err != nil {
+		return failErr(err)
 	}
 	if err := os.Remove(x.mark); err != nil {
 		return failErr(err)

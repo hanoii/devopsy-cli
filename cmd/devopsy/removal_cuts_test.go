@@ -366,6 +366,7 @@ func (c *removalCut) destroyedLeft(s *destroyServer) []string {
 	var left []string
 	for name, f := range map[string]string{"its entry": c.entry, "its sync keys": c.syncKeys, "its logins": c.logins, "its record": c.record,
 		"its end's mark": c.ending, "its removal's mark": c.removing, "its destroy's mark": c.destroying,
+		"its keys' lock": filepath.Join(filepath.Dir(c.keys), ".devopsy-shop.lock"), "its sync keys' lock": filepath.Join(filepath.Dir(c.syncKeys), ".devopsy-shop.lock"),
 		"its tree": s.tree, "its home": s.home, "its Unix user": filepath.Join(s.state, "users", "devopsy-shop"),
 		"its mnt": filepath.Join(c.space, "mnt", "shop-prod"), "its mnt with no claim": filepath.Join(c.space, "mnt", "shop-stage"),
 		"its sealed copies": filepath.Join(c.space, "sealed", "shop"), "its clones": filepath.Join(c.space, "clones", "shop"), "its work": filepath.Join(c.space, "work", "shop-1")} {
@@ -404,7 +405,7 @@ func (c *removalCut) destroyedLeft(s *destroyServer) []string {
 
 // A project user's destroy cut after any of its steps (each stands alone) is finished by the
 // same command run again: once it is, nothing of the user's is left (its entry and marks, its
-// keys, its claims, what is under its names, its mnts, images and door directories, its tree,
+// keys and their locks, its claims, what is under its names, its mnts, images and door directories, its tree,
 // home and Unix user), and nothing of another project's is gone. Until then its mark holds the
 // user: sshd takes no key of its, the keys' scripts refuse it (a listing would settle the
 // removal's marks under it, a key added let it in), and add and a plain removal refuse, naming
@@ -465,6 +466,10 @@ func TestRemovalCutsOfADestroy(t *testing.T) {
 			t.Fatal("a cut destroy passed")
 		}
 		if err := os.Remove(c.entry); err != nil {
+			t.Fatal(err)
+		}
+		// Cut after the keys' lock went too: the run again takes the sync keys' alone.
+		if err := os.Remove(filepath.Join(filepath.Dir(c.keys), ".devopsy-shop.lock")); err != nil {
 			t.Fatal(err)
 		}
 		if code := c.destroy(s, 0); code != 0 {
