@@ -2553,9 +2553,10 @@ volumes:
 	}
 	check("--destroy of the child", "devopsy @dev --destroy --yes")
 	check("--destroy with data", "devopsy @prod --destroy --yes")
-	// The project's builder (its builds', its claims' settings) is the project's, never an
+	// The environment's mnt is emptied and then removed, by the door's free of its claim. The
+	// project's builder (its builds', its claims' settings) is the project's, never an
 	// environment's to remove.
-	if out, _ := doorRoot(t, "ls -A "+mnt+" 2>&1; docker volume ls -q | grep doorflow | grep -v '^buildx_buildkit_devopsy-'"); strings.TrimSpace(out) != "" {
+	if out, _ := doorRoot(t, "if test -e "+mnt+"; then echo "+mnt+" stays; ls -A "+mnt+"; fi; docker volume ls -q | grep doorflow | grep -v '^buildx_buildkit_devopsy-'"); strings.TrimSpace(out) != "" {
 		t.Errorf("after --destroy: %s", out)
 	}
 	must("a release after --destroy", "devopsy @prod --release")
