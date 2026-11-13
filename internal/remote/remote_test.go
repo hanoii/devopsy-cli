@@ -2402,6 +2402,17 @@ func TestLeftoverImagesRecord(t *testing.T) {
 	if out := run(LeftoverScript(tg, false)); strings.TrimSpace(out) != "" || fileExists(filepath.Join(root, "app")) {
 		t.Errorf("an empty level: %q, left: %v", out, fileExists(filepath.Join(root, "app")))
 	}
+	// A level in a directory this user cannot change (a project user's tree, which root made in
+	// the deploy user's release root) is emptied and stays, said so, with no tool's words.
+	write(t, filepath.Join(root, "app", ".env"), "")
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+	if out := run(LeftoverScript(tg, true)); strings.Contains(out, "rmdir") || !strings.Contains(out, "emptied "+filepath.Join(root, "app")+", which stays") ||
+		fileExists(filepath.Join(root, "app", ".env")) || !fileExists(filepath.Join(root, "app")) {
+		t.Errorf("a purge in a directory not this user's:\n%s", out)
+	}
 }
 
 // A release fetched again whose listing changed loses the bookmarks the

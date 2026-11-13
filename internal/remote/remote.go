@@ -2235,7 +2235,14 @@ func LeftoverScript(t *Target, remove bool) string {
 		act = `if [ -s "$d/` + ImagesLeftFile + `" ]; then
   devopsy --say warning "forgetting the images $d's removals left: $(cut -f 4 "$d/` + ImagesLeftFile + `" | tr '\n' ' ')"
 fi
-rm -f "$d/.env" "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp" && rmdir "$d" && devopsy --say info "removed $d"`
+rm -f "$d/.env" "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp"
+# A level in a directory this user cannot change stays: a project user's tree, which root made
+# in the deploy user's release root, is its admin's to remove.
+if [ -w "${d%/*}" ]; then
+  rmdir "$d" && devopsy --say info "removed $d"
+else
+  devopsy --say info "emptied $d, which stays: the directory it is in is not this user's"
+fi`
 	}
 	s := "set -eu\n" + basePrelude(t) + "child=.env\n"
 	for i := len(t.Levels) - 1; i >= 0; i-- {

@@ -420,7 +420,9 @@ refuses instead: mount the disk, then run it again.
 The project's and the instance's `.env` stay, since their environments
 share them. When no environment is left in their directory, `--purge`
 removes them too (at a terminal devopsy asks; otherwise a warning says
-how), even once the environment is already gone.
+how), even once the environment is already gone. A project user's
+project directory under a `releases: root` of the deploy user's is
+emptied and stays, since only the server's admin can remove it.
 
 ## Reloads
 
