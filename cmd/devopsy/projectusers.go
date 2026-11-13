@@ -28,13 +28,16 @@ import (
 // deploy user's devopsy through the door. Its session runs the server's devopsy as the
 // deploy user (ProjectUsersFlag), which does the work there.
 func runProjectUsers(t *remote.Target, args []string) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project>]"
+	usage := "usage: devopsy @" + targetRef(t) + " --project-users [list | add <project> | remove <project> [--destroy [--yes]]]"
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
 		return 0
 	}
-	if code := projectUsersArgs(args); code != 0 {
+	if code := projectUsersArgs(args, false); code != 0 {
 		return fail(usage)
+	}
+	if len(args) > 2 {
+		return runDestroyProjectUser(t, args[1], len(args) == 4)
 	}
 	code, err := remote.SSH(t, remote.ProjectUsersScript(t, args), bytes.NewReader(nil), os.Stdout, false)
 	if err != nil {
@@ -43,21 +46,61 @@ func runProjectUsers(t *remote.Target, args []string) int {
 	return code
 }
 
-// projectUsersArgs says whether args are --project-users's: 0 when they are.
-func projectUsersArgs(args []string) int {
+// runDestroyProjectUser is --project-users remove <project> --destroy [--yes]: a first session
+// lists what it removes, asked by the project's name typed (--yes: neither), and a second
+// removes, deciding everything again.
+func runDestroyProjectUser(t *remote.Target, project string, yes bool) int {
+	act := remote.ProjectUsersScript(t, []string{"remove", project, "--destroy"})
+	if !yes {
+		// An older server refuses in this first session, before anything.
+		ctx := remote.WithAlsoNeeds(context.Background(), act)
+		code, err := remote.SSHContext(ctx, t, nil, remote.ProjectUsersScript(t, []string{"remove", project, "--destroy", "--list"}), bytes.NewReader(nil), os.Stdout, false, nil)
+		if err != nil {
+			return failErr(err)
+		}
+		if code != 0 {
+			return code
+		}
+		if err := typeToGoOn("this removes "+door.UserOf(project)+" with all it holds, as listed: its keys, its environments' containers, volumes and data, its images, its tree, its home and its Unix user, and runs no destroy: step of "+project+"'s",
+			project, "nothing removed", false); err != nil {
+			return failErr(err)
+		}
+	}
+	code, err := remote.SSH(t, act, bytes.NewReader(nil), os.Stdout, false)
+	if err != nil {
+		return failErr(err)
+	}
+	if code == sshLost {
+		// Each step stands alone, the user held by the destroy's mark meanwhile.
+		report.Say(report.ErrorLevel, lostSays(t, "", "the destroy may have stopped halfway there, "+door.UserOf(project)+" held by its mark"), nil,
+			report.Fix("", "devopsy @"+targetRef(t)+" --project-users remove "+project+" --destroy"))
+	}
+	return code
+}
+
+// projectUsersArgs says whether args are --project-users's: 0 when they are. Its destroy takes
+// --yes from the operator (step false), --list on the server (step), which only lists.
+func projectUsersArgs(args []string, step bool) int {
 	switch {
 	case len(args) == 0, len(args) == 1 && args[0] == "list":
 		return 0
 	case len(args) == 2 && (args[0] == "add" || args[0] == "remove") && remote.ValidName(args[1]):
 		return 0
+	case len(args) == 3 || len(args) == 4:
+		if args[0] != "remove" || !remote.ValidName(args[1]) || args[2] != "--destroy" {
+			return 2
+		}
+		if len(args) == 3 || (step && args[3] == "--list") || (!step && args[3] == "--yes") {
+			return 0
+		}
 	}
 	return 2
 }
 
 // runProjectUsersStep is ProjectUsersFlag, on the server as the deploy user.
 func runProjectUsersStep(args []string) int {
-	if projectUsersArgs(args) != 0 {
-		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [list | add <project> | remove <project>]")
+	if projectUsersArgs(args, true) != 0 {
+		return fail("usage: devopsy " + remote.ProjectUsersFlag + " [list | add <project> | remove <project> [--destroy [--list]]]")
 	}
 	d, err := remote.ServerDoor()
 	if err != nil {
@@ -74,6 +117,9 @@ func runProjectUsersStep(args []string) int {
 	project := args[1]
 	who := door.UserOf(project)
 	entry := filepath.Join(remote.DoorDir(), "users", who+".yaml")
+	if args[0] == "remove" && len(args) > 2 {
+		return runUserDestroy(d, project, who, entry, len(args) == 4)
+	}
 	if args[0] == "remove" {
 		return removeProjectUser(d, project, who, entry, endUser)
 	}
@@ -104,18 +150,40 @@ func listProjectUsers(d *remote.Door) int {
 	// the user listed or not: the door answers it nothing until it completes.
 	ending, _ := filepath.Glob(remote.DoorEndingFile("*"))
 	removing, _ := filepath.Glob(remote.DoorRemovingFile("*"))
+	destroying := destroysPending()
 	pending := map[string]bool{}
 	for _, f := range append(ending, removing...) {
-		pending[strings.TrimSuffix(strings.TrimSuffix(filepath.Base(f), ".ending"), ".removing")] = true
+		if who := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(f), ".ending"), ".removing"); destroying[who] == "" {
+			pending[who] = true
+		}
 	}
 	for _, who := range slices.Sorted(maps.Keys(pending)) {
 		report.Warn(who+": a removal it had did not complete, and the door answers it nothing until it does",
 			"a removal asked again completes it, as does a listing or an edit of its keys while its Unix user is there")
 	}
+	for _, who := range slices.Sorted(maps.Keys(destroying)) {
+		report.Warn(who+": its --project-users remove "+destroying[who]+" --destroy did not complete, and the door answers it nothing",
+			"the same command run again completes it")
+	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
 	}
 	return 0
+}
+
+// destroysPending are the project users whose --project-users remove --destroy did not
+// complete (remote.DoorDestroyingFile), each with its project ("?" when its mark does not read).
+func destroysPending() map[string]string {
+	marks, _ := filepath.Glob(remote.DoorDestroyingFile("*"))
+	out := map[string]string{}
+	for _, f := range marks {
+		who := strings.TrimSuffix(filepath.Base(f), ".destroying")
+		out[who] = "?"
+		if m, ok, err := readDestroyMark(f); err == nil && ok {
+			out[who] = m.project
+		}
+	}
+	return out
 }
 
 // projectNameClash is why project may not be added beside the others: compose names are
@@ -219,6 +287,11 @@ func addProjectUser(d *remote.Door, project, who, entry string) int {
 	}
 	// A removal of the user's, or a key's removal's end, not seen through: what settles it
 	// would take what add writes now (its entry), so it goes first.
+	if fileExists(remote.DoorDestroyingFile(who)) {
+		report.Fail(errors.New("a --project-users remove "+project+" --destroy did not complete, and adding the user would undo it"),
+			report.Fix("run it again, which completes it, then add it"))
+		return 1
+	}
 	if fileExists(remote.DoorRemovingFile(who)) || fileExists(remote.DoorEndingFile(who)) {
 		report.Fail(errors.New("a removal of "+who+"'s did not complete, and finishing it would undo this add"),
 			report.Fix("ask for the removal again, which finishes it, or list the user's keys if only a key was being removed, then add it"))
@@ -467,8 +540,13 @@ func removeKept(space, project string) error {
 // (doorNameOwner), so no deploy project takes them while what it left is there, and its tree
 // known; a key added takes it back. Asked again, it does it all again.
 func removeProjectUser(d *remote.Door, project, who, entry string, end func(who string) error) int {
-	ending, removing := remote.DoorEndingFile(who), remote.DoorRemovingFile(who)
-	keys := remote.DoorKeysFile(who)
+	removing, keys := remote.DoorRemovingFile(who), remote.DoorKeysFile(who)
+	// A destroy holds its marks until its last step: only it completes them.
+	if fileExists(remote.DoorDestroyingFile(who)) {
+		report.Fail(errors.New("a --project-users remove "+project+" --destroy did not complete"),
+			report.Fix("run it again, which completes it"))
+		return 1
+	}
 	// A user the config names, under door: users:, has no entry file (remote.ServerDoor).
 	inConfig := false
 	if d != nil && !fileExists(entry) {
@@ -485,17 +563,7 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 		}
 		return fail("no project user for " + project + " here")
 	}
-	// Under the keys' lock, in one stretch: the removal's mark (remote.DoorRemovingFile, with
-	// its project) and its end's, and the keys, so a key's removal meanwhile, which holds that
-	// lock for its end, finds them all or none, and clears only its own mark. A failure or a
-	// cut session past here leaves the marks, which a removal asked again, or the next edit or
-	// listing of the user's keys, finish, the door answering the user nothing meanwhile.
-	if err := lockedKeys(keys, func([]string) ([]string, error) {
-		if err := os.WriteFile(removing, []byte(project+"\n"), 0o600); err != nil {
-			return nil, err
-		}
-		return nil, os.WriteFile(ending, nil, 0o600)
-	}); err != nil {
+	if err := markRemoval(project, who, nil); err != nil {
 		return failErr(err)
 	}
 	if code := finishRemoval(d, project, who, end); code != 0 || !inConfig {
@@ -503,40 +571,89 @@ func removeProjectUser(d *remote.Door, project, who, entry string, end func(who 
 	}
 	// A user the config names: its entry is the admin's to drop, everything else of a removal
 	// (its keys, which sshd takes from the keys file alone, its end, what the door kept) done
-	// here the same.
-	report.Fail(errors.New(who+"'s keys and processes are gone, and door: users: in "+remote.UserConfigFile()+" still names it"),
+	// here the same. Its line is the one record of its names: dropped while something is under
+	// them, nothing would destroy it any more.
+	if held, err := heldBy(d, project, who, entry); err != nil || len(held) > 0 {
+		f := &report.Failure{Msg: who + "'s keys and processes are gone, and it still holds what is under its names, which its door: users: line in " + remote.UserConfigFile() + " is the one record of",
+			Details: held, Remedies: []report.Remedy{report.Fix("remove them with it first, with --project-users remove " + project + " --destroy, then drop the line")}}
+		if err != nil {
+			f.Details = append(f.Details, "what it holds did not read: "+err.Error())
+		}
+		return failErr(f)
+	}
+	report.Fail(errors.New(who+"'s keys and processes are gone, nothing is under its names, and door: users: in "+remote.UserConfigFile()+" still names it"),
 		report.Fix("remove it there"))
 	return 1
 }
 
-// finishRemoval ends who's processes (end), clears the end's mark, and removes what the door
-// kept for it: the part of a removal that a failure lets it ask again.
+// heldBy is what is under project's names on the server, as its destroy would find it.
+func heldBy(d *remote.Door, project, who, entry string) ([]string, error) {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return nil, err
+	}
+	x := newUserDestroy(d, project, who, entry, r.Root)
+	if err := x.withPolicy(); err != nil {
+		return nil, err
+	}
+	return x.left()
+}
+
+// markRemoval is a removal's first stretch, under the keys' lock: also first (a destroy's own
+// mark, nil for none), the removal's mark (remote.DoorRemovingFile, with its project) and its
+// end's, and the keys emptied, so a key's removal meanwhile, which holds that lock for its end,
+// finds them all or none, and clears only its own mark. A failure or a cut session past here
+// leaves the marks, which a removal asked again, or the next edit or listing of the user's
+// keys, finish, the door answering the user nothing meanwhile.
+func markRemoval(project, who string, also func() error) error {
+	return lockedKeys(remote.DoorKeysFile(who), func([]string) ([]string, error) {
+		if also != nil {
+			if err := also(); err != nil {
+				return nil, err
+			}
+		}
+		if err := os.WriteFile(remote.DoorRemovingFile(who), []byte(project+"\n"), 0o600); err != nil {
+			return nil, err
+		}
+		return nil, os.WriteFile(remote.DoorEndingFile(who), nil, 0o600)
+	})
+}
+
+// finishRemoval is endRemoval, then says what stays.
 func finishRemoval(d *remote.Door, project, who string, end func(who string) error) int {
+	if err := endRemoval(d, project, who, end); err != nil {
+		return failErr(err)
+	}
+	stays := "its entry, Unix user, home and tree stay, holding its names: a key added for it (--ssh-keys --for " + project + ") takes it back, and --project-users remove " + project + " --destroy removes them all"
+	if _, err := user.Lookup(who); err != nil {
+		stays = "its entry stays, holding its names; its Unix user was gone already"
+	}
+	report.Info("removed "+who+"'s keys and ended its processes: it logs in no more, and the door answers it no more", stays)
+	return 0
+}
+
+// endRemoval ends who's processes (end), clears the end's mark, and removes what the door
+// kept for it: the part of a removal that a failure lets it ask again.
+func endRemoval(d *remote.Door, project, who string, end func(who string) error) error {
 	// It ends before anything else may fail: what it left running must not outlive a removal
 	// that stopped halfway.
 	if err := endProjectUser(who, end); err != nil {
-		report.Fail(errors.New("removed "+who+"'s keys, but "+err.Error()),
-			report.Fix("ask for the removal again once that is fixed: the end is marked, and the door answers "+who+" nothing meanwhile"))
-		return 1
+		return &report.Failure{Msg: "removed " + who + "'s keys, but " + err.Error(),
+			Remedies: []report.Remedy{report.Fix("ask for the removal again once that is fixed: the end is marked, and the door answers " + who + " nothing meanwhile")}}
 	}
 	// What the door kept for it: its registry logins and the record of the images it claimed,
 	// under the record's lock (doorSide.whileAUser), so a door request past its sudo before
 	// the removal, which writes them only while the user has a key, brings neither back.
 	if d != nil && d.Space != "" {
 		if err := removeKept(d.Space, project); err != nil {
-			return failErr(err)
+			return err
 		}
 	}
 	// Its marks last, the removal's after the end's: what is left until then is done again.
 	for _, f := range []string{remote.DoorEndingFile(who), remote.DoorRemovingFile(who)} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return failErr(err)
+			return err
 		}
 	}
-	stays := "its entry, Unix user, home and tree stay, holding its names: a key added for it (--ssh-keys --for " + project + ") takes it back"
-	if _, err := user.Lookup(who); err != nil {
-		stays = "its entry stays, holding its names; its Unix user was gone already"
-	}
-	report.Info("removed "+who+"'s keys and ended its processes: it logs in no more, and the door answers it no more", stays)
-	return 0
+	return nil
 }

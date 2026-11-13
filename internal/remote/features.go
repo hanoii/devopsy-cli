@@ -120,6 +120,9 @@ var namedFeatures = []struct {
 	// parent would start it unlabeled, and a write could outlive its
 	// sync; an older child finds it by its name, still the same.
 	{ContainerLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push\b`)},
+	// --project-users remove <project> --destroy: an older server's step refuses the modifier
+	// as usage, naming no upgrade.
+	{ProjectUserDestroyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + ProjectUsersFlag + `[ '\\]{1,8}remove[ '\\]{1,8}[a-z0-9-]+[ '\\]{1,8}--destroy\b`)},
 	// --say --since (sayTook): an older --say would print "--since" as
 	// the message, and the rest as details.
 	{SaySinceFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `[ '\\]{1,8}info[ '\\]{1,8}` + SaySinceFlag + `\b`)},
@@ -127,6 +130,9 @@ var namedFeatures = []struct {
 	// "--fix" and each word after it as details.
 	{SayRemediesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}` + SayFlag + `\b[^\n]* (` + SayFixFlag + `|` + SayHintFlag + `) "`)},
 }
+
+// ProjectUserDestroyFeature is --project-users remove <project> --destroy's named feature.
+const ProjectUserDestroyFeature = "project-user-destroy"
 
 // UIDsFeature is the server's devopsy giving every release's load its uids
 // (DEVOPSY_UID, DEVOPSY_PROJECT_UID) from its claims. No script calls it:

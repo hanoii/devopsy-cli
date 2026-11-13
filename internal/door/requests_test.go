@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
@@ -992,6 +993,22 @@ func TestClaimableTakesOnlyADockerReference(t *testing.T) {
 	} {
 		if a, err := decide(t, argv...); err == nil {
 			t.Errorf("%q: not refused, claims %q", argv, a.Claims)
+		}
+	}
+}
+
+// A project's claim hold, <repo>:devopsy-<project>-claim.<12 hex> (images.ClaimHold), is one of
+// the names only it writes (OwnRef), so a destroy of the project's user, which removes by
+// OwnRef, takes its claim holds with its bookmarks; another project's are not.
+func TestOwnRefTakesItsClaimHolds(t *testing.T) {
+	t.Parallel()
+	p := Policy{Project: "shop", User: "devopsy-shop", Others: []string{"shop-eu", "blog"}}
+	if hold := images.ClaimHold("busybox", "shop", "sha256:0123456789abcdef"); !p.OwnRef(hold) {
+		t.Errorf("its claim hold %s is not its own", hold)
+	}
+	for _, project := range []string{"blog", "shop-eu"} {
+		if hold := images.ClaimHold("busybox", project, "sha256:0123456789abcdef"); p.OwnRef(hold) {
+			t.Errorf("%s's claim hold %s is shop's", project, hold)
 		}
 	}
 }

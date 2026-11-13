@@ -180,7 +180,9 @@ and its tree, the steps of an older release among them, which a
 rollback runs, and it could start environments of its own under the
 project's names. After a leak, treat all of it as changed: release the
 project again, remove the older releases (`--releases remove`),
-`--destroy` any environment you did not release, and reset the home.
+`--destroy` any environment you did not release, and reset the home, or
+start over: `--project-users remove shop --destroy` removes the user
+with all it holds, and `add` makes it anew.
 
 ### The firewall
 
@@ -583,11 +585,10 @@ devopsy @devopsy@vm1: --project-users remove shop
 ```
 
 Its entry stays, so its compose names stay its own and no deploy
-project takes them, and so do its Unix user, home and tree, its
-environments' containers and volumes, which `--destroy` takes first. A
-key added for it (`--ssh-keys --for shop add`) takes it back. What the
-door kept for it, its registry logins and the record of the images it
-claimed, goes.
+project takes them, and so do its Unix user, home and tree, and its
+environments' containers and volumes. A key added for it (`--ssh-keys
+--for shop add`) takes it back. What the door kept for it, its registry
+logins and the record of the images it claimed, goes.
 
 If the end of its processes fails (Docker restarting, say), the removal
 says so and stays marked: the door answers the user nothing and sshd
@@ -596,10 +597,47 @@ does a listing of the user's keys (`--ssh-keys --for shop`) while its
 Unix user is there. `--project-users` lists any removal left so, and
 `--project-users add` of that project refuses until it is finished. A
 user under `door: users:` in the config is removed the same way, then
-named for its admin to drop from there.
+named for its admin to drop from there once nothing is under its names;
+while something is, the removal names `--destroy` first, since that line
+is the one record of them.
 
-Removing a project user clears nothing a leaked key left in its home:
-delete and recreate the home too.
+### Removing everything it holds
+
+`--destroy` after it removes the user, then everything it holds, and
+its Unix user last:
+
+```sh
+devopsy @devopsy@vm1: --project-users remove shop --destroy
+```
+
+It goes by the deploy user's own records, never by reading the user's
+tree or running anything of it, so no `destroy:` step of the project
+runs: the uid claims of its environments, the containers, volumes and
+networks under its compose names with their data in the door's space,
+the images only it names (its releases' bookmarks, its builds, its
+claims), its sealed copies, clones and work directories, its tree, its
+home and its Unix user. It lists them first, the tree and home with
+their sizes, and asks you to type the project's name; `--yes` asks
+nothing, and without a terminal it needs `--yes`.
+
+It refuses before removing anything when a name it found belongs to
+another project now (a claim of `shop`'s environment `eu-prod` is
+`shop-eu-prod`, which a project `shop-eu` may hold), when the tree its
+entry names is not a directory (a disk not mounted), and when the
+release root does not read. An image still used by a container stops
+it, as does anything left once it is done, and the same command run
+again goes on from where it stopped: until it completes, the user takes
+no key, its keys cannot be listed or changed, and `--project-users add`
+refuses. `--project-users` and `--server-info` show a destroy left so.
+
+It leaves the snapshots under a `snapshots: root` of the user's own
+outside its tree, which the deploy user holds no record of, and the
+user's lines in `/etc/cron.deny` and `/etc/at.deny`. The uid it had is
+never given to another project user.
+
+Removing a project user without `--destroy` clears nothing a leaked key
+left in its home: delete and recreate the home too, or remove it with
+`--destroy` and add it again.
 
 ## What it costs
 

@@ -246,7 +246,10 @@ what `config.yaml` sets.
   made as the deploy user with `devopsy @devopsy@<server>: --project-users
   add <project>`, its keys `--ssh-keys --for <project> add <key>.pub`. A
   project user cannot edit its own keys. The first `add` on a server waits
-  for a reboot before project users log in.
+  for a reboot before project users log in. `--project-users remove
+  <project>` drops its keys and keeps the rest; `--destroy` after it
+  removes everything the user holds, its Unix user last, listed and asked
+  by the project's name first (`--yes` asks nothing).
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`

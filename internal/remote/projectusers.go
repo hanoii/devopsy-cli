@@ -282,3 +282,38 @@ if [ -n "$made" ] && [ -n "$root" ]; then
 fi
 `
 }
+
+// DoorUserDeleteScript is a --project-users remove --destroy's host step, as root on the host
+// through the util image (chroot into /host), once nothing is left under the project's names:
+// the user's user manager's mask (DoorHostScript's), the user itself with its home (userdel
+// -r, only while it is there and a project user, for a rerun), then the tree its entry names
+// and the home by the path the destroy's mark kept, should userdel have been cut after it
+// dropped the user and before the home went. Its arguments: the user, its uid, the tree ("" for
+// none: the home's <home>/<project>, which userdel takes) and the home ("" for none known). A
+// tree or a home is removed only when it is a directory, never through a link, and rm -rf
+// follows none inside it.
+var DoorUserDeleteScript = `set -eu
+user=$1 uid=$2 tree=$3 home=$4
+unit=/etc/systemd/system/user@$uid.service
+if [ -n "$uid" ] && [ -L "$unit" ] && [ "$(readlink "$unit")" = /dev/null ]; then rm -f "$unit"; fi
+if id -u "$user" >/dev/null 2>&1; then
+  if ! id -nG "$user" | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
+    ` + echoLine(report.ErrorLevel, "$user is no project user, not in "+DoorGroup+": left as it is") + `
+    exit 3
+  fi
+  userdel -r "$user"
+fi
+gone() {
+  if [ -L "$1" ]; then
+    ` + echoLine(report.ErrorLevel, "$1 is a link, left: a directory is what devopsy made there") + `
+    exit 3
+  fi
+  [ ! -d "$1" ] || rm -rf -- "$1"
+  if [ -e "$1" ]; then
+    ` + echoLine(report.ErrorLevel, "$1 is there, and no directory: left") + `
+    exit 3
+  fi
+}
+[ -z "$tree" ] || gone "$tree"
+[ -z "$home" ] || gone "$home"
+`

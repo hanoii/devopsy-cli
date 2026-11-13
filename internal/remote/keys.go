@@ -160,11 +160,19 @@ flock -w 60 9 || { ` + echoLine(report.ErrorLevel, "another edit of $f did not e
 // "$f.removing"), before anything else of that user's keys: a removal's keys go here, under
 // this lock, and the end (EndProjectUserFlag) does the rest, what the door kept for a removal
 // included. It runs again until it completes.
+//
+// A user's --project-users remove --destroy (DoorDestroyingFile, "$f.destroying") is refused
+// first: settling would clear the marks it holds until its last step, and a key added would
+// let in a user it is removing.
 func keysSettle(user string) string {
 	if user == "" {
 		return ""
 	}
-	return `if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
+	return `if [ -e "$f.destroying" ]; then
+  ` + echoLine(report.ErrorLevel, "a --project-users remove --destroy of "+user+"'s did not complete: its keys change no more, and the same command run again completes it") + `
+  exit 1
+fi
+if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
   if [ -e "$f.removing" ]; then : >"$f.tmp" && mv -f "$f.tmp" "$f"; fi
   devopsy ` + EndProjectUserFlag + ` ` + Quote(user) + ` || { ` + echoLine(report.ErrorLevel, "the end of "+user+"'s processes a removal began did not complete: ask again") + `; exit 1; }
   rm -f "$f.ending"
@@ -176,7 +184,7 @@ fi
 func KeysReadScript(user string) string {
 	settle := ""
 	if user != "" {
-		settle = `if [ -e "$f.ending" ] || [ -e "$f.removing" ]; then
+		settle = `if [ -e "$f.ending" ] || [ -e "$f.removing" ] || [ -e "$f.destroying" ]; then
 ` + keysLock + keysSettle(user) + `fi
 `
 	}
@@ -317,6 +325,17 @@ func DoorEndingFile(user string) string {
 // while it is there.
 func DoorRemovingFile(user string) string {
 	return DoorKeysFile(user) + ".removing"
+}
+
+// DoorDestroyingFile marks a project user's --project-users remove --destroy until its last
+// step: its project on its first line, written under the keys' lock with the removal's own
+// marks, then the user's home and uid while the user can be looked up (home <path>, uid <n>),
+// and "host step begun" before its host step deletes the user. While it is there sshd takes
+// no key of the user's, the keys scripts refuse the user (keysSettle), add refuses, and a
+// plain removal says to run the destroy again: whatever settled the user would clear the marks
+// the destroy holds, or let in a user it is removing.
+func DoorDestroyingFile(user string) string {
+	return DoorKeysFile(user) + ".destroying"
 }
 
 // DoorSyncKeysFile is a project user's sync keys (SyncKeyLine), apart from its keys: the

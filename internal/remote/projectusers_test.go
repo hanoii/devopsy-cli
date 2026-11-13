@@ -453,3 +453,57 @@ func TestDoorHostScriptStopsAtAPieceNotWritten(t *testing.T) {
 		t.Errorf("%d pieces put, want the sudoers rule, the keys command and the sshd drop-in at least", n)
 	}
 }
+
+// A destroy's host step deletes the project user only while it is there and in the project
+// users' group (a rerun finds it gone), then the tree and the home by their paths, each only as
+// a directory: a link the user made there is left, and so is what it points to.
+func TestDoorUserDeleteScript(t *testing.T) {
+	t.Parallel()
+	if out, err := exec.Command("sh", "-n", "-c", DoorUserDeleteScript).CombinedOutput(); err != nil {
+		t.Fatalf("sh -n: %v\n%s", err, out)
+	}
+	run := func(group string, tree, home string) (string, int, string) {
+		t.Helper()
+		bin, users := t.TempDir(), t.TempDir()
+		write(t, filepath.Join(users, "devopsy-shop"), "")
+		for name, body := range map[string]string{
+			"id":      `case "$1" in -u) [ -e "` + users + `/$2" ] ;; -nG) echo "$2 ` + group + `" ;; esac`,
+			"userdel": `[ "$1" = -r ] && rm "` + users + `/$2"`,
+		} {
+			write(t, filepath.Join(bin, name), "#!/bin/sh\n"+body+"\n")
+			if err := os.Chmod(filepath.Join(bin, name), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c := exec.Command("sh", "-c", DoorUserDeleteScript, "sh", "devopsy-shop", "59999", tree, home)
+		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, _ := c.CombinedOutput()
+		gone := "deleted"
+		if _, err := os.Stat(filepath.Join(users, "devopsy-shop")); err == nil {
+			gone = "kept"
+		}
+		return string(out), c.ProcessState.ExitCode(), gone
+	}
+	dir := t.TempDir()
+	tree, home := filepath.Join(dir, "shop"), filepath.Join(dir, "devopsy-shop")
+	write(t, filepath.Join(tree, "prod", "db"), "x")
+	write(t, filepath.Join(home, ".profile"), "x")
+	if out, code, user := run(DoorGroup, tree, home); code != 0 || user != "deleted" || fileThere(tree) || fileThere(home) {
+		t.Errorf("a project user (%d): user %s, tree %v, home %v:\n%s", code, user, fileThere(tree), fileThere(home), out)
+	}
+	// Run again with nothing left, nothing fails.
+	if out, code, _ := run(DoorGroup, tree, home); code != 0 {
+		t.Errorf("run again (%d):\n%s", code, out)
+	}
+	if out, code, user := run("users", "", ""); code != 3 || user != "kept" || !strings.Contains(out, "is no project user") {
+		t.Errorf("no project user (%d): %s:\n%s", code, user, out)
+	}
+	target := t.TempDir()
+	write(t, filepath.Join(target, "keep"), "x")
+	if err := os.Symlink(target, tree); err != nil {
+		t.Fatal(err)
+	}
+	if out, code, _ := run(DoorGroup, tree, ""); code != 3 || !strings.Contains(out, "is a link, left") || !fileThere(filepath.Join(target, "keep")) || !fileThere(tree) {
+		t.Errorf("a tree that is a link (%d):\n%s", code, out)
+	}
+}

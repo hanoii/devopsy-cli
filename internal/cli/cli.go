@@ -1256,7 +1256,8 @@ Examples:
   devopsy @prod --status
   devopsy @prod --status --json
 `,
-	"--project-users": `Usage: devopsy @<server> --project-users [list | add <project> | remove <project>]
+	"--project-users": `Usage: devopsy @<server> --project-users [list | add <project> |
+                                     remove <project> [--destroy [--yes]]]
 
 A server's project users: one Unix user per project, devopsy-<project>,
 with no Docker socket. What it finds as docker is devopsy, which asks the
@@ -1284,6 +1285,14 @@ as root (its project-users topic).
                             drop devopsy-<p>'s keys: it logs in no more and
                             the door answers it no more. Its entry, holding
                             its names, its Unix user, home and tree stay.
+  --project-users remove <p> --destroy [--yes]
+                            the same, then everything devopsy-<p> holds, by
+                            the deploy user's own records: its environments'
+                            containers, volumes and data, its uid claims,
+                            its images, its tree, its home and its Unix
+                            user, listed and asked first by <p> typed (--yes
+                            asks nothing). No destroy: step of <p>'s runs. A
+                            run cut off finishes when run again.
 
 Its keys are --ssh-keys --for <project>.
 

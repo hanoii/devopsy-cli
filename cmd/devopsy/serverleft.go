@@ -51,6 +51,12 @@ func leftFacts(info *remote.ServerInfo, r remote.Releases, d *remote.Door, trees
 	if info.Door != nil && d != nil && len(d.Users) > 0 {
 		info.Door.Keyless = keylessUsers(d, r.Root, info.UIDs, info.Containers)
 	}
+	if info.Door != nil {
+		pending := destroysPending()
+		for _, who := range slices.Sorted(maps.Keys(pending)) {
+			info.Door.Destroying = append(info.Door.Destroying, remote.KeylessUser{User: who, Project: pending[who]})
+		}
+	}
 }
 
 // facts are the plan counted, for --server-info: what --gc would remove, up to its size.
@@ -493,6 +499,13 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 				hints = []report.Remedy{report.Hint("remove it with what it holds:", "devopsy @"+ref+" --project-users remove "+k.Project+" --destroy"), report.Hint("or " + keylessWords)}
 			}
 			add("door", k.User+" has no key and still holds "+strings.Join(k.Names, ", "), hints...)
+		}
+		for _, u := range info.Door.Destroying {
+			hint := report.Hint("the same --project-users remove " + u.Project + " --destroy run again completes it")
+			if ref != "" && remote.ValidName(u.Project) {
+				hint = report.Hint("run it again, which completes it:", "devopsy @"+ref+" --project-users remove "+u.Project+" --destroy")
+			}
+			add("door", u.User+": its --project-users remove --destroy did not complete, and the door answers it nothing", hint)
 		}
 	}
 	return es

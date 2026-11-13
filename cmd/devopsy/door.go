@@ -1095,6 +1095,9 @@ func (s *doorSide) stillAsked() error {
 	if s.keysAt == nil || !os.SameFile(now, s.keysAt) || !now.ModTime().Equal(s.keysAt.ModTime()) || now.Size() != s.keysAt.Size() {
 		return errors.New(s.policy.User + "'s keys changed during this request: ask again")
 	}
+	if _, err := os.Lstat(remote.DoorDestroyingFile(s.policy.User)); err == nil {
+		return errors.New(s.policy.User + " is being removed with all it holds")
+	}
 	for _, mark := range []string{remote.DoorEndingFile(s.policy.User), remote.DoorRemovingFile(s.policy.User)} {
 		if _, err := os.Lstat(mark); err == nil {
 			return errors.New("a removal of " + s.policy.User + "'s did not complete: the next listing or edit of its keys completes it")

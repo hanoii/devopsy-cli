@@ -5,22 +5,25 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/door"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // removalCut is a server as a removal cut after some of its writes leaves it, and the ways to
 // settle it: every write of a removal is atomic, so a session cut anywhere leaves one of the
 // states these build, cumulatively, in the order a removal writes them.
 type removalCut struct {
-	t                                                       *testing.T
-	home, space, bin, ended                                 string
-	entry, keys, syncKeys, logins, record, ending, removing string
+	t                                                                   *testing.T
+	home, space, bin, ended                                             string
+	entry, keys, syncKeys, logins, record, ending, removing, destroying string
 }
 
 const (
@@ -37,14 +40,22 @@ func newRemovalCut(t *testing.T) *removalCut {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
+	return newRemovalCutIn(t, home)
+}
+
+// newRemovalCutIn is newRemovalCut with its config in home (DEVOPSY_HOME), unset: for a test
+// that runs devopsy's binary on it.
+func newRemovalCutIn(t *testing.T, home string) *removalCut {
+	t.Helper()
 	c := &removalCut{t: t, home: home, space: t.TempDir(), bin: t.TempDir()}
 	c.ended = filepath.Join(c.bin, "ended")
 	who := door.UserOf("shop")
-	c.entry = filepath.Join(remote.DoorDir(), "users", who+".yaml")
-	c.keys, c.syncKeys = remote.DoorKeysFile(who), remote.DoorSyncKeysFile(who)
+	doorDir := filepath.Join(home, "door")
+	c.entry = filepath.Join(doorDir, "users", who+".yaml")
+	c.keys, c.syncKeys = filepath.Join(doorDir, "keys", who), filepath.Join(doorDir, "sync-keys", who)
 	c.logins = filepath.Join(door.LoginsDirOf(c.space, "shop"), "config.json")
 	c.record = door.ImagesFileOf(c.space, "shop")
-	c.ending, c.removing = remote.DoorEndingFile(who), remote.DoorRemovingFile(who)
+	c.ending, c.removing, c.destroying = c.keys+".ending", c.keys+".removing", c.keys+".destroying"
 	write(t, filepath.Join(home, remote.ConfigFile), "door:\n  space: "+c.space+"\n", 0o600)
 	write(t, c.entry, "project: shop\n", 0o600)
 	write(t, c.keys, cutRemoved+cutKept, 0o600)
@@ -214,4 +225,441 @@ func TestRemovalCuts(t *testing.T) {
 				readString(c.ended), fileExists(c.ending), remote.KeysLeft(c.keys), fileExists(c.logins), fileExists(c.record), fileExists(c.entry), out)
 		}
 	})
+}
+
+// destroyDocker is a docker that keeps a server's containers, volumes, networks and images in
+// files of its state directory (STATE, written in), as --project-users remove --destroy reads and
+// removes them: compose's down by name takes what carries the project's label, a root util
+// container's find or rm runs on its bind's source, and a host step's script runs as it is, its
+// paths the test's, userdel and id faked in the same bin by the users in STATE/users.
+const destroyDocker = `S=STATE
+echo "$*" >>"$S/calls"
+all="$*"
+rows() { awk -F'	' '{ s = "["; for (i = 1; i <= NF; i++) s = s (i > 1 ? "," : "") "\"" $i "\""; print s "]" }' "$S/$1"; }
+drop() { awk -F'	' -v col="$2" -v v="$3" '$col != v' "$S/$1" >"$S/$1.tmp" && mv "$S/$1.tmp" "$S/$1"; }
+case "$1 ${2:-}" in
+  "version "*) exit 0 ;;
+  "image inspect") echo "sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit 0 ;;
+  "buildx "*|"network inspect") exit 1 ;;
+  "ps -a")
+    case "$*" in
+      *label=devopsy.env=*) v=${all##*=}; awk -F'	' -v v="$v" '$3 == v { print $1 }' "$S/containers" ;;
+      *label=com.docker.compose.project=*) v=${all##*=}; awk -F'	' -v v="$v" '$2 == v { print $1 }' "$S/containers" ;;
+      *) rows containers ;;
+    esac ;;
+  "ps -aq")
+    case "$*" in
+      *label=devopsy.env=*) v=${all##*=}; awk -F'	' -v v="$v" '$3 == v { print $1 }' "$S/containers" ;;
+      *) v=${all##*=}; awk -F'	' -v v="$v" '$2 == v { print $1 }' "$S/containers" ;;
+    esac ;;
+  "rm -f") shift 2; for id in "$@"; do drop containers 1 "$id"; done ;;
+  "volume ls"|"network ls")
+    kind=${1}s
+    case "$*" in
+      *--filter*) v=${all##*=}; awk -F'	' -v v="$v" '$2 == v { print $1 }' "$S/$kind" ;;
+      *) rows "$kind" ;;
+    esac ;;
+  "compose -p") drop containers 2 "$3"; drop volumes 2 "$3"; drop networks 2 "$3" ;;
+  "image ls") cat "$S/images" ;;
+  "image rm")
+    if grep -qxF "$3" "$S/inuse" 2>/dev/null; then echo "image is in use" >&2; exit 1; fi
+    awk -v v="$3" '$2 != v' "$S/images" >"$S/images.tmp" && mv "$S/images.tmp" "$S/images" ;;
+  "run --rm")
+    src= rest=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -v) src=${2%%:*}; shift ;;
+        chroot) shift 3; exec /bin/sh "$@" ;;
+        find) exec find "$src" -mindepth 1 -delete ;;
+        rm) exec rm -rf "$src/${3#/w/}" ;;
+      esac
+      shift
+    done
+    exit 1 ;;
+  *) echo "unknown docker $*" >&2; exit 1 ;;
+esac
+`
+
+// destroyServer is a server a removalCut's project user holds things on, and another
+// project's beside them: its release root with the user's tree and their uid claims, its
+// containers, volumes and networks, the door's mnts, sealed copies, clones and work
+// directories, its images, the user's home and Unix user.
+type destroyServer struct {
+	root, state, tree, home string
+}
+
+// destroyServer gives c's user, shop's, what a destroy removes, and blog what it must leave.
+// Its docker, userdel and id are fakes in c's bin.
+func (c *removalCut) destroyServer() *destroyServer {
+	t := c.t
+	t.Helper()
+	s := &destroyServer{root: t.TempDir(), state: t.TempDir(), home: filepath.Join(t.TempDir(), "devopsy-shop")}
+	s.tree = filepath.Join(s.root, "shop")
+	write(t, filepath.Join(c.home, remote.ConfigFile), "releases:\n  root: "+s.root+"\ndoor:\n  space: "+c.space+"\n", 0o600)
+	write(t, c.entry, "project: shop\ntree: "+s.tree+"\n", 0o600)
+	for _, o := range []uids.Owner{{Project: "shop", Env: "prod"}, {Project: "blog", Env: "prod"}} {
+		if _, _, err := uids.StoreAt(s.root).LookupPair(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(s.tree, "prod", "shared", "db"), "data\n", 0o600)
+	write(t, filepath.Join(s.root, "blog", "prod", "shared", "db"), "data\n", 0o600)
+	write(t, filepath.Join(s.home, ".profile"), "\n", 0o600)
+	write(t, filepath.Join(s.state, "users", "devopsy-shop"), "", 0o600)
+	write(t, filepath.Join(s.state, "containers"), "c1\tshop-prod\t\tdevopsy-shop\nc2\t\tshop-prod\t\nc3\tblog-prod\t\tdevopsy-blog\n", 0o600)
+	write(t, filepath.Join(s.state, "volumes"), "shop-prod_db\tshop-prod\nblog-prod_db\tblog-prod\n", 0o600)
+	write(t, filepath.Join(s.state, "networks"), "shop-prod_default\tshop-prod\nblog-prod_default\tblog-prod\n", 0o600)
+	write(t, filepath.Join(s.state, "images"), "sha256:a busybox:devopsy-shop-prod-20261112000000 1MB\n"+
+		"sha256:b "+images.ClaimHold("busybox", "shop", "sha256:0123456789abcdef")+" 1MB\n"+
+		"sha256:c "+images.DoorBuild("shop-prod", "web")+":latest 2MB\n"+
+		"sha256:d busybox:devopsy-blog-prod-20261112000000 1MB\nsha256:e busybox:1.37 1MB\n", 0o600)
+	// An mnt with no claim (a first release cut in its upload) is the project's too.
+	for _, d := range []string{"mnt/shop-prod/db", "mnt/shop-stage", "mnt/blog-prod/db", "sealed/shop/x", "clones/shop/y", "work/shop-1/z", "sealed/blog/x", "work/blog-1/z"} {
+		write(t, filepath.Join(c.space, d, "f"), "\n", 0o600)
+	}
+	fakes := map[string]string{
+		"docker":  strings.ReplaceAll(destroyDocker, "STATE", s.state),
+		"userdel": `[ "$1" = -r ] && rm -f ` + s.state + `/users/"$2"`,
+		"id": `case "$1" in
+  -nG) if [ -n "${2:-}" ]; then echo "$2 ` + remote.DoorGroup + `"; else echo devopsy; fi ;;
+  -u) if [ -z "${2:-}" ]; then /usr/bin/id -u; elif [ -e ` + s.state + `/users/"$2" ]; then echo 59999; else exit 1; fi ;;
+  *) exit 1 ;;
+esac`,
+	}
+	for name, body := range fakes {
+		if err := testfile.Write(filepath.Join(c.bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+// env is what devopsy's binary runs with on c's server: its config and its fakes.
+func (c *removalCut) env() []string {
+	return []string{"DEVOPSY_HOME=" + c.home, "PATH=" + c.bin + ":/usr/bin:/bin"}
+}
+
+// destroy runs the user's destroy on s as the server's step does, cut after step stopAfter
+// (0 for none), its end c's and its user looked up in s's users.
+func (c *removalCut) destroy(s *destroyServer, stopAfter int) int {
+	c.t.Helper()
+	d, err := remote.ServerDoor()
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	x := newUserDestroy(d, "shop", "devopsy-shop", c.entry, s.root)
+	x.end, x.stopAfter = c.fakeEnd, stopAfter
+	x.lookup = func(who string) (*user.User, error) {
+		if !fileExists(filepath.Join(s.state, "users", who)) {
+			return nil, user.UnknownUserError(who)
+		}
+		return &user.User{Username: who, Uid: "59999", Gid: "59999", HomeDir: s.home}, nil
+	}
+	return x.run(false)
+}
+
+// destroyedLeft is what a destroyed user still has, or another project lost: nil once its
+// destroy is done.
+func (c *removalCut) destroyedLeft(s *destroyServer) []string {
+	var left []string
+	for name, f := range map[string]string{"its entry": c.entry, "its sync keys": c.syncKeys, "its logins": c.logins, "its record": c.record,
+		"its end's mark": c.ending, "its removal's mark": c.removing, "its destroy's mark": c.destroying,
+		"its tree": s.tree, "its home": s.home, "its Unix user": filepath.Join(s.state, "users", "devopsy-shop"),
+		"its mnt": filepath.Join(c.space, "mnt", "shop-prod"), "its mnt with no claim": filepath.Join(c.space, "mnt", "shop-stage"),
+		"its sealed copies": filepath.Join(c.space, "sealed", "shop"), "its clones": filepath.Join(c.space, "clones", "shop"), "its work": filepath.Join(c.space, "work", "shop-1")} {
+		if _, err := os.Lstat(f); err == nil {
+			left = append(left, name)
+		}
+	}
+	if claims, err := uids.StoreAt(s.root).ListOf("shop"); err != nil || len(claims) > 0 {
+		left = append(left, fmt.Sprintf("its claims %v %v", claims, err))
+	}
+	for _, f := range []string{"containers", "volumes", "networks", "images"} {
+		data := readString(filepath.Join(s.state, f))
+		for _, l := range strings.Split(data, "\n") {
+			if strings.Contains(l, "shop") {
+				left = append(left, f+": "+l)
+			}
+		}
+		if !strings.Contains(data, "blog") {
+			left = append(left, "blog's "+f+" gone")
+		}
+	}
+	var taken bytes.Buffer
+	if authorizedKeysOf(&taken, "devopsy-shop") != 0 || strings.Contains(taken.String(), "ssh-") {
+		left = append(left, "keys sshd takes")
+	}
+	for _, f := range []string{filepath.Join(s.root, "blog", "prod", "shared", "db"), filepath.Join(c.space, "mnt", "blog-prod", "db"), filepath.Join(c.space, "sealed", "blog"), filepath.Join(c.space, "work", "blog-1")} {
+		if !fileExists(f) {
+			left = append(left, "blog's "+f+" gone")
+		}
+	}
+	if claims, _ := uids.StoreAt(s.root).ListOf("blog"); len(claims) != 2 {
+		left = append(left, fmt.Sprintf("blog's claims %v", claims))
+	}
+	return left
+}
+
+// A project user's destroy cut after any of its steps (each stands alone) is finished by the
+// same command run again: once it is, nothing of the user's is left (its entry and marks, its
+// keys, its claims, what is under its names, its mnts, images and door directories, its tree,
+// home and Unix user), and nothing of another project's is gone. Until then its mark holds the
+// user: sshd takes no key of its, the keys' scripts refuse it (a listing would settle the
+// removal's marks under it, a key added let it in), and add and a plain removal refuse, naming
+// the destroy. A cut between the entry's removal and its mark's is settled by a run that checks
+// what is left (afterEntry).
+//
+// Not parallel: it sets DEVOPSY_HOME and PATH (newRemovalCut, t.Setenv), which the destroy's
+// in-process run reads, cut after a step.
+func TestRemovalCutsOfADestroy(t *testing.T) {
+	who := door.UserOf("shop")
+	for n := 1; n < len(userDestroySteps); n++ {
+		t.Run("cut after "+userDestroySteps[n-1], func(t *testing.T) {
+			c := newRemovalCut(t)
+			s := c.destroyServer()
+			t.Setenv("PATH", c.bin+":/usr/bin:/bin")
+			if code := c.destroy(s, n); code == 0 {
+				t.Fatal("a cut destroy passed")
+			}
+			var taken bytes.Buffer
+			if authorizedKeysOf(&taken, who) != 0 || taken.Len() > 0 {
+				t.Errorf("sshd takes %q", taken.String())
+			}
+			d, _ := remote.ServerDoor()
+			if code := addProjectUser(d, "shop", who, c.entry); code == 0 {
+				t.Error("an add over a destroy passed")
+			}
+			if code := removeProjectUser(d, "shop", who, c.entry, c.fakeEnd); code == 0 {
+				t.Error("a plain removal over a destroy passed")
+			}
+			if n == 1 {
+				for name, script := range map[string]string{"a listing": remote.KeysReadScript(who), "a key's add": remote.KeysAddScript(who)} {
+					out := c.script(script, cutKept)
+					if !strings.Contains(out, "--destroy of "+who+"'s did not complete") || !fileExists(c.destroying) || remote.KeysLeft(c.keys) {
+						t.Errorf("%s of its keys over a destroy:\n%s", name, out)
+					}
+				}
+			}
+			if code := c.destroy(s, 0); code != 0 {
+				t.Errorf("run again: exit %d", code)
+			}
+			if left := c.destroyedLeft(s); len(left) > 0 {
+				t.Errorf("left %v\n%s", left, readString(filepath.Join(s.state, "calls")))
+			}
+		})
+	}
+	t.Run("cut after the entry's removal", func(t *testing.T) {
+		c := newRemovalCut(t)
+		s := c.destroyServer()
+		t.Setenv("PATH", c.bin+":/usr/bin:/bin")
+		if code := c.destroy(s, len(userDestroySteps)-1); code == 0 {
+			t.Fatal("a cut destroy passed")
+		}
+		if err := os.Remove(c.entry); err != nil {
+			t.Fatal(err)
+		}
+		if code := c.destroy(s, 0); code != 0 {
+			t.Errorf("run again: exit %d", code)
+		}
+		if left := c.destroyedLeft(s); len(left) > 0 {
+			t.Errorf("left %v", left)
+		}
+	})
+}
+
+// A destroy refuses before anything, a rerun too, when a name it found is not the project's (a
+// claim env:shop:eu-prod gives shop-eu-prod, which a deploy project shop-eu holds now),
+// naming both, when the tree its entry names is not a directory (a disk not mounted, or removed
+// by hand), when the claims' directory is missing while containers are under its names, and
+// when the release root does not read: nothing of the user's or another's is touched, its keys
+// included.
+func TestUserDestroyRefusesBeforeAnything(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		spoil func(c *removalCut, s *destroyServer)
+		says  string
+	}{
+		"a claim's name another project's": {func(c *removalCut, s *destroyServer) {
+			if _, _, err := uids.StoreAt(s.root).LookupPair(uids.Owner{Project: "shop", Env: "eu-prod"}); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(s.root, "shop-eu", "prod", "x"), "", 0o600)
+		}, "shop-eu-prod, a name of shop's claims, is under shop-eu's names now"},
+		"the tree not there": {func(c *removalCut, s *destroyServer) {
+			if err := os.RemoveAll(s.tree); err != nil {
+				t.Fatal(err)
+			}
+		}, ", the tree devopsy-shop's entry names, is not a directory"},
+		"the tree a link": {func(c *removalCut, s *destroyServer) {
+			if err := os.RemoveAll(s.tree); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(t.TempDir(), s.tree); err != nil {
+				t.Fatal(err)
+			}
+		}, ", the tree devopsy-shop's entry names, is not a directory"},
+		"the claims' directory missing": {func(c *removalCut, s *destroyServer) {
+			if err := os.RemoveAll(filepath.Join(s.root, uids.DirName)); err != nil {
+				t.Fatal(err)
+			}
+		}, "is not there, and containers or volumes are under shop's names"},
+		"a release root that does not read": {func(c *removalCut, s *destroyServer) {
+			write(t, filepath.Join(c.home, remote.ConfigFile), "releases:\n  root: "+filepath.Join(s.root, "gone")+"\ndoor:\n  space: "+c.space+"\n", 0o600)
+		}, "the release root, which holds the server's projects, does not read"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRemovalCutIn(t, t.TempDir())
+			s := r.destroyServer()
+			c.spoil(r, s)
+			before := readString(filepath.Join(s.state, "containers")) + readString(filepath.Join(s.state, "images"))
+			for _, args := range [][]string{{"--list"}, {}} {
+				out, code := runDevopsy(t, t.TempDir(), r.env(), append([]string{remote.ProjectUsersFlag, "remove", "shop", "--destroy"}, args...)...)
+				if code != 1 || !strings.Contains(out, c.says) || !strings.Contains(out, "nothing removed") {
+					t.Errorf("%v (%d):\n%s", args, code, out)
+				}
+			}
+			if !remote.KeysLeft(r.keys) || fileExists(r.destroying) || fileExists(r.removing) || !fileExists(r.logins) || !fileExists(s.home) ||
+				readString(filepath.Join(s.state, "containers"))+readString(filepath.Join(s.state, "images")) != before {
+				t.Errorf("a refused destroy changed something: keys %v, its mark %v, its logins %v", remote.KeysLeft(r.keys), fileExists(r.destroying), fileExists(r.logins))
+			}
+		})
+	}
+}
+
+// A destroy stops where an image name only the project writes is still used by a container (an
+// untag, never -f), holding the user by its mark, and run again once it is not, finishes. A
+// user under door: users: is destroyed the same, its mark kept until its admin drops the line,
+// which a run after that settles.
+func TestUserDestroyStopsAtAnImageInUse(t *testing.T) {
+	t.Parallel()
+	c := newRemovalCutIn(t, t.TempDir())
+	s := c.destroyServer()
+	destroy := func(args ...string) (string, int) {
+		return runDevopsy(t, t.TempDir(), c.env(), append([]string{remote.ProjectUsersFlag, "remove", "shop", "--destroy"}, args...)...)
+	}
+	inUse := filepath.Join(s.state, "inuse")
+	write(t, inUse, "busybox:devopsy-shop-prod-20261112000000\n", 0o600)
+	if out, code := destroy(); code != 1 || !strings.Contains(out, "image is in use") || !strings.Contains(out, "the destroy stopped at the images") || !fileExists(c.destroying) || !fileExists(s.tree) {
+		t.Fatalf("an image in use (%d), its mark %v, the tree %v:\n%s", code, fileExists(c.destroying), fileExists(s.tree), out)
+	}
+	if err := os.Remove(inUse); err != nil {
+		t.Fatal(err)
+	}
+	// Moved under door: users: in the config, its entry file gone.
+	if err := os.Remove(c.entry); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(c.home, remote.ConfigFile)
+	write(t, config, readString(config)+"  users:\n    devopsy-shop: {project: shop, tree: "+s.tree+"}\n", 0o600)
+	if out, code := destroy(); code != 1 || !strings.Contains(out, "door: users: in "+config+" still names it") || !fileExists(c.destroying) {
+		t.Fatalf("a config user's destroy (%d), its mark %v:\n%s", code, fileExists(c.destroying), out)
+	}
+	write(t, config, "releases:\n  root: "+s.root+"\ndoor:\n  space: "+c.space+"\n", 0o600)
+	if out, code := destroy(); code != 0 || fileExists(c.destroying) {
+		t.Errorf("its line dropped, run again (%d), its mark %v:\n%s", code, fileExists(c.destroying), out)
+	}
+	// The binary looks no user up: the home its mark would name stays.
+	if err := os.RemoveAll(s.home); err != nil {
+		t.Fatal(err)
+	}
+	if left := c.destroyedLeft(s); len(left) > 0 {
+		t.Errorf("left %v", left)
+	}
+}
+
+// A plain removal of a user under door: users: names its line to drop only when nothing is
+// under its names: the line is the one record of them, and dropped first, nothing would
+// destroy them any more. Otherwise it names the destroy first.
+func TestRemovalOfAConfigUserNamesItsDestroyFirst(t *testing.T) {
+	t.Parallel()
+	c := newRemovalCutIn(t, t.TempDir())
+	s := c.destroyServer()
+	if err := os.Remove(c.entry); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(c.home, remote.ConfigFile)
+	write(t, config, readString(config)+"  users:\n    devopsy-shop: {project: shop, tree: "+s.tree+"}\n", 0o600)
+	out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "remove", "shop")
+	if code != 1 || !strings.Contains(out, "it still holds what is under its names") || !strings.Contains(out, "with --project-users remove shop --destroy, then drop the line") {
+		t.Errorf("holding its names (%d):\n%s", code, out)
+	}
+	if out, code := runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "remove", "shop", "--destroy"); code != 1 || !strings.Contains(out, "still names it") {
+		t.Fatalf("its destroy (%d):\n%s", code, out)
+	}
+	if err := os.Remove(c.destroying); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runDevopsy(t, t.TempDir(), c.env(), remote.ProjectUsersFlag, "remove", "shop")
+	if code != 1 || !strings.Contains(out, "nothing is under its names, and door: users: in "+config+" still names it") {
+		t.Errorf("holding nothing (%d):\n%s", code, out)
+	}
+}
+
+// --project-users remove <project> --destroy lists in a first session what it would remove, by
+// the deploy user's own records, with sizes, saying that no destroy: step runs, and asks by the
+// project's name, refusing with no terminal and removing nothing; --yes asks nothing and
+// removes it all in one session.
+func TestProjectUsersDestroyAsksFirst(t *testing.T) {
+	t.Parallel()
+	c := newRemovalCutIn(t, t.TempDir())
+	s := c.destroyServer()
+	// The session runs the server's devopsy, this one.
+	if err := os.Remove(filepath.Join(c.bin, "devopsy")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(binary, filepath.Join(c.bin, "devopsy")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(c.bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	env := append(c.env(), "DEVOPSY_SSH_COMMAND="+filepath.Join(c.bin, "fakessh"), "HOME="+t.TempDir())
+	out, code := runDevopsy(t, t.TempDir(), env, "@devopsy@server:", "--project-users", "remove", "shop", "--destroy")
+	for _, want := range []string{"uid claims\tenv:shop:prod (", "compose names\tshop-prod, shop-stage\n", "under them\t2 containers, 1 volume, 1 network\n",
+		"images\t3 names, ", "door's space\t" + filepath.Join(c.space, "sealed", "shop"), "tree\t" + s.tree + " (", "no destroy: step of shop's runs",
+		"devopsy: error: nothing removed: no terminal to confirm it on", "add --yes to go on without asking"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("asked with no terminal (%d), no %q:\n%s", code, want, out)
+		}
+	}
+	if code != 1 || !remote.KeysLeft(c.keys) || fileExists(c.destroying) {
+		t.Fatalf("asked with no terminal (%d), something removed: keys %v, its mark %v", code, remote.KeysLeft(c.keys), fileExists(c.destroying))
+	}
+	if out, code := runDevopsy(t, t.TempDir(), env, "@devopsy@server:", "--project-users", "remove", "shop", "--destroy", "--yes"); code != 0 || strings.Contains(out, "compose names\t") {
+		t.Fatalf("--yes (%d):\n%s", code, out)
+	}
+	// The binary looks no user up: the home its mark would name stays.
+	if err := os.RemoveAll(s.home); err != nil {
+		t.Fatal(err)
+	}
+	if left := c.destroyedLeft(s); len(left) > 0 {
+		t.Errorf("left %v", left)
+	}
+}
+
+// The operator's --project-users takes --destroy only after remove <project>, and --yes only
+// after it; the server's step takes --list there instead, which only lists.
+func TestProjectUsersArgs(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args        []string
+		local, step bool
+	}{
+		{[]string{}, true, true},
+		{[]string{"list"}, true, true},
+		{[]string{"add", "shop"}, true, true},
+		{[]string{"remove", "shop", "--destroy"}, true, true},
+		{[]string{"remove", "shop", "--destroy", "--yes"}, true, false},
+		{[]string{"remove", "shop", "--destroy", "--list"}, false, true},
+		{[]string{"add", "shop", "--destroy"}, false, false},
+		{[]string{"remove", "shop", "--yes"}, false, false},
+		{[]string{"remove", "Shop", "--destroy"}, false, false},
+		{[]string{"remove", "shop", "--destroy", "--yes", "--list"}, false, false},
+	} {
+		if got := projectUsersArgs(c.args, false) == 0; got != c.local {
+			t.Errorf("%v locally: %v", c.args, got)
+		}
+		if got := projectUsersArgs(c.args, true) == 0; got != c.step {
+			t.Errorf("%v on the server: %v", c.args, got)
+		}
+	}
 }

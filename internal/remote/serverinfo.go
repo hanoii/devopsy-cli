@@ -191,6 +191,9 @@ type DoorFacts struct {
 	// Keyless are the project users with no key that still hold environments, read by the
 	// deploy user.
 	Keyless []KeylessUser `json:"keyless,omitempty"`
+	// Destroying are the project users whose --project-users remove --destroy did not complete,
+	// each with its project, by the deploy user's marks.
+	Destroying []KeylessUser `json:"destroying,omitempty"`
 }
 
 // Disk is one filesystem and the paths that matter on it.

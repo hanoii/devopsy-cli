@@ -34,7 +34,8 @@ func authorizedKeysOf(w io.Writer, who string) int {
 	// A removal of the user's not seen through (remote.DoorRemovingFile): no key at all, its
 	// keys being what it is to lose; a key's removal's end pending (DoorEndingFile): its keys
 	// kept, none of its sync keys, which the removed key could have added and the end drops.
-	if fileExists(remote.DoorRemovingFile(who)) {
+	// A destroy of the user's (remote.DoorDestroyingFile), none either: it removes the user.
+	if fileExists(remote.DoorRemovingFile(who)) || fileExists(remote.DoorDestroyingFile(who)) {
 		return 0
 	}
 	if code := printAuthorizedKeys(w, remote.DoorKeysFile(who)); code != 0 {
