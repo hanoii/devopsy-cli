@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -249,17 +250,34 @@ func runFreeUIDs(args []string) int {
 	if err := gone(); err != nil {
 		return failErr(err)
 	}
-	down := func(name string) error {
+	docker := func(args ...string) ([]byte, error) { return exec.Command(realDocker(), args...).Output() }
+	down := downIfLeft(docker, func(name string) error {
 		c := exec.Command(realDocker(), downArgs(name)...)
 		// From /, which holds no compose file of anyone's: compose looks for one in its
 		// directory and every parent.
 		c.Dir, c.Stdout, c.Stderr = "/", errOut, errOut
 		return c.Run()
-	}
+	})
 	if err := freeUIDs(claimsStore(r.Root), env, gone, down); err != nil {
 		return failErr(err)
 	}
 	return 0
+}
+
+// downIfLeft is a free's down that runs only while a container, volume or network still
+// carries compose's project label of the name: the destroy's own down took the rest, and
+// compose's down by name with nothing left says "No resource found to remove" in its own
+// words. A listing that fails reads as something left, so the down runs.
+func downIfLeft(docker func(args ...string) ([]byte, error), down func(name string) error) func(name string) error {
+	return func(name string) error {
+		f := "label=com.docker.compose.project=" + name
+		for _, args := range [][]string{{"ps", "-aq", "--filter", f}, {"volume", "ls", "-q", "--filter", f}, {"network", "ls", "-q", "--filter", f}} {
+			if out, err := docker(args...); err != nil || len(bytes.TrimSpace(out)) > 0 {
+				return down(name)
+			}
+		}
+		return nil
+	}
 }
 
 // ownerUnder is the owner of the environment directory base under the release root root:
@@ -302,7 +320,8 @@ func (s *doorSide) free(base string) int {
 	if s.uidRoot == "" {
 		return doorRefused(errors.New("refused: the server has no uid claims"))
 	}
-	down := func(name string) error {
+	docker := func(args ...string) ([]byte, error) { return s.docker(args...).Output() }
+	down := downIfLeft(docker, func(name string) error {
 		argv, env, err := s.checkedDown(name, []string{"--volumes", "--remove-orphans"})
 		if err != nil {
 			return err
@@ -310,7 +329,7 @@ func (s *doorSide) free(base string) int {
 		c := exec.Command(s.real, argv[1:]...)
 		c.Env, c.Dir, c.Stdout, c.Stderr = env, "/", os.Stderr, os.Stderr
 		return c.Run()
-	}
+	})
 	if err := freeUIDs(claimsStore(s.uidRoot), env, gone, down); err != nil {
 		return doorRefused(fmt.Errorf("refused: freeing the uid of %s: %w", name, err))
 	}

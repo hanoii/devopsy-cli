@@ -497,3 +497,47 @@ func TestFreeUIDsDownsNothingNeverClaimed(t *testing.T) {
 		t.Errorf("an environment that never claimed a uid took down %s", strings.Join(downs, ", "))
 	}
 }
+
+// A free's down runs only while something still carries the compose name: with nothing left,
+// compose's down by name says "No resource found to remove" in its own words. A listing that
+// fails reads as something left.
+func TestFreeDownOnlyWhatIsLeft(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		left map[string]string
+		fail bool
+		down bool
+	}{
+		{name: "nothing left"},
+		{name: "a container", left: map[string]string{"ps": "abc\n"}, down: true},
+		{name: "a volume", left: map[string]string{"volume": "shop-prod_data\n"}, down: true},
+		{name: "a network", left: map[string]string{"network": "def\n"}, down: true},
+		{name: "a listing that fails", fail: true, down: true},
+	} {
+		var asked []string
+		docker := func(args ...string) ([]byte, error) {
+			asked = append(asked, strings.Join(args, " "))
+			if c.fail {
+				return nil, errors.New("no daemon")
+			}
+			return []byte(c.left[args[0]]), nil
+		}
+		downs := 0
+		err := downIfLeft(docker, func(name string) error {
+			if name != "shop-prod" {
+				t.Errorf("%s: down of %s", c.name, name)
+			}
+			downs++
+			return nil
+		})("shop-prod")
+		if err != nil || (downs == 1) != c.down {
+			t.Errorf("%s: %d downs, %v", c.name, downs, err)
+		}
+		for _, a := range asked {
+			if !strings.Contains(a, "--filter label=com.docker.compose.project=shop-prod") {
+				t.Errorf("%s: listed %q", c.name, a)
+			}
+		}
+	}
+}
