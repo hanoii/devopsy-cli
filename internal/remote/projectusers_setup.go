@@ -18,6 +18,9 @@ const (
 	DoorSetupMounted = "mounted" // mounted <space>: its unit enabled and started
 	DoorSetupHidden  = "hidden"  // /proc remounted by its unit
 	DoorSetupPolkit  = "polkit"  // polkit restarted with the group
+	// A step that failed, said by the run: what it did of that step is not judged again.
+	DoorSetupSpaceFailed = "failed space"
+	DoorSetupProcsFailed = "failed processes"
 )
 
 // safePath is safe_path, which says whether no user but root and the deploy user ($owner's uid)
@@ -103,7 +106,7 @@ user=${11} proc_text=${12} polkit=${13} unit_word=${14} dropin_bare=${15}
 sd() { SYSTEMD_IGNORE_CHROOT=1 systemctl "$@"; }
 ` + doorSetupPut + safePath + `reload= failed= held=1
 # The space's step ends where it fails: no mount, and the drop-in without the space.
-space_stop() { give= mode= unit_text= mount= held= failed=1; }
+space_stop() { give= mode= unit_text= mount= held= failed=1; echo "` + DoorSetupSpaceFailed + `"; }
 if [ -n "$give$mode$unit_text$mount" ] && ! safe_path; then
   ` + echoLine(report.ErrorLevel, "$space, or a directory above it, could be changed by another user: devopsy did not touch it") + `
   space_stop
@@ -133,7 +136,7 @@ if [ -n "$unit_text" ]; then
 fi
 # The processes' step ends where it fails, the space's going on.
 restart_polkit= group=` + setup.ProcGroup + `
-proc_stop() { procs= failed=1; }
+proc_stop() { procs= failed=1; echo "` + DoorSetupProcsFailed + `"; }
 if [ -n "$procs" ] && ! getent group "$group" >/dev/null; then
   if groupadd --system "$group"; then echo "` + DoorSetupGroup + ` $group"; else
     ` + echoLine(report.ErrorLevel, "devopsy could not make the group "+setup.ProcGroup) + `
@@ -169,14 +172,16 @@ if [ -n "$procs" ] && [ -n "$polkit" ]; then
 fi
 if [ -n "$reload" ] && ! sd daemon-reload >&2; then
   ` + echoLine(report.ErrorLevel, "systemd could not reload its units, so devopsy started none of its own units") + `
-  mount= procs= held= failed=1
+  [ -z "$mount" ] || space_stop
+  [ -z "$procs" ] || proc_stop
+  held=
 fi
 if [ -n "$mount" ]; then
   if sd enable --quiet --now "${unit##*/}" >&2; then
     echo "` + DoorSetupMounted + ` $space"
   else
     ` + echoLine(report.ErrorLevel, "systemd did not mount $space", report.Hint("what it said, as root:", "journalctl -u $unit_word")) + `
-    failed=1 held=
+    space_stop
   fi
 fi
 [ -n "$held" ] || dropin=$dropin_bare
@@ -196,7 +201,7 @@ if [ -n "$procs" ]; then
     fi
   else
     ` + echoLine(report.ErrorLevel, "systemd did not remount /proc", report.Hint("what it said, as root:", "journalctl -u "+setup.ProcUnitName)) + `
-    failed=1
+    proc_stop
   fi
 fi
 [ -z "$failed" ] || exit ` + strconv.Itoa(DoorSetupSaid) + `

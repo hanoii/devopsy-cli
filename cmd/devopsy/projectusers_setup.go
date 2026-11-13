@@ -623,37 +623,50 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		return failErr(err)
 	}
 	var out bytes.Buffer
+	var runErr error
 	if space || dropin != "" || procs {
 		owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		run := doorSetupRun(h.root, owner, f.Space, flag(space && f.SpaceAction != ""), flag(space && f.SpaceMode != ""), rd.unit, unitText, flag(mount),
 			dropin, flag(procs), me.Username, procText, polkit, remote.QuoteWord(filepath.Base(rd.unit)), rd.dropinBare)
 		// Each line said as the run prints it, in order with what the run says itself.
-		err := run.run(io.MultiWriter(&out, &lineWriter{line: func(l string) { sayDoorSetupLines(l, me.Username) }}), func(err error) error { return err })
+		runErr = run.run(io.MultiWriter(&out, &lineWriter{line: func(l string) { sayDoorSetupLines(l, me.Username) }}), func(err error) error { return err })
 		var ee *exec.ExitError
 		switch {
-		case errors.As(err, &ee) && ee.ExitCode() == remote.DoorSetupSaid:
+		case errors.As(runErr, &ee) && ee.ExitCode() == remote.DoorSetupSaid:
 			// The run's own failure, each said by the run.
 			failures++
-		case err != nil:
-			fail("devopsy could not run its setup as root: " + err.Error())
+		case runErr != nil:
+			fail("devopsy could not run its setup as root: " + runErr.Error())
 		}
+	}
+	// What the run did of each step, by its lines: only that is judged again, and a failure the
+	// run said is said once.
+	did := map[setup.Step]bool{
+		setup.StepSpace: rootRunDid(space, runErr, out.String(), remote.DoorSetupSpaceFailed, remote.SetupMade+" "+f.Space, remote.SetupGave+" "+f.Space,
+			remote.DoorSetupMode+" "+f.Space, remote.SetupPut+" "+rd.unit, remote.DoorSetupMounted+" "+f.Space),
+		setup.StepDoorDrop: rootRunDid(dropin != "", runErr, out.String(), "", remote.SetupPut+" "+setup.MountsDropIn),
+		setup.StepProcesses: rootRunDid(procs, runErr, out.String(), remote.DoorSetupProcsFailed, remote.DoorSetupGroup, remote.DoorSetupMember,
+			remote.SetupPut+" "+setup.ProcUnit, remote.SetupPut+" "+setup.PolkitDropIn, remote.DoorSetupHidden),
 	}
 	// Each step judged by its own result, read again: the config, the deploy user's own file,
 	// last, once the space it names is made and mounted, whatever else of the run failed (the
-	// processes).
+	// processes). One the space keeps waiting is said in the run's last words.
 	again, err := readDoorSetup(h, dir, ref)
 	if err != nil {
 		fail(err.Error())
 		return end()
 	}
+	var waits []string
 	if does(setup.StepConfig) {
 		switch {
 		case again.facts.Changes(setup.StepSpace):
-			fail("devopsy did not add the project users' directory to " + f.ConfigFile + ", since the directory is not set up")
+			failures++
+			waits = append(waits, "door: space: is not added to "+f.ConfigFile+" while the project users' directory is not set up")
 		default:
 			if err := appendDoorConfig(f.ConfigFile, rd.space); err != nil {
 				fail("devopsy could not add the project users' directory to " + f.ConfigFile + ": " + err.Error())
 			} else {
+				did[setup.StepConfig] = true
 				report.Info("added the project users' directory to "+f.ConfigFile, strings.Split(strings.TrimSuffix(f.Config, "\n"), "\n")...)
 				if again, err = readDoorSetup(h, dir, ref); err != nil {
 					fail(err.Error())
@@ -663,14 +676,13 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		}
 	}
 
-	// The checks again: what was applied must read in sync now, a refused step's left aside,
-	// and the config's when it was not added (said).
+	// The checks again: what was applied must read in sync now, what the run did not do or said
+	// failed, a refused step's and a config not added (said) left aside.
 	var left []string
-	// A drop-in that lacks only the space is the space's own failure, said by its lines.
 	for _, s := range setup.DoorSteps {
 		switch {
-		case !does(s):
-		case s == setup.StepConfig && again.facts.Changes(setup.StepSpace):
+		case !did[s]:
+		// A drop-in that lacks only the space is the space's own failure, said by its lines.
 		case s == setup.StepDoorDrop && again.facts.DropInWithout:
 		default:
 			left = append(left, doorItemLines(again.facts, s, false)...)
@@ -687,8 +699,12 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		report.Info(me.Username+" sees every process from its next login",
 			"a session open now, a shared SSH connection's included, sees only its own processes until it is opened again")
 	}
-	if line := refusedWords(f.Stopped()); line != "" {
-		report.Error(line)
+	// What the apply left waiting is said in its last words.
+	switch line := refusedWords(f.Stopped()); {
+	case line != "":
+		report.Error(line, waits...)
+	case len(waits) > 0:
+		report.Error("this server is not ready for project users", waits...)
 	}
 	if !refused && failures == 0 {
 		// The first project user's add, offered only while there is none.

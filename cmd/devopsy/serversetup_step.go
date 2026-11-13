@@ -887,24 +887,30 @@ func applySetup(h setupHost, a setupApply) int {
 		asked := restart && !scriptExit(err) && (hasLine(out.String(), remote.SetupAsked) || before != "" && strings.TrimSpace(string(marker)) == before+" "+token)
 		queued = asked && !hasLine(out.String(), remote.SetupNoSystem)
 		sayRootLines(out.String(), putNames, f.Root)
-		if err != nil && !asked {
-			// The run puts in order and stops at a failed put, daemon.json's last: what it
-			// said it did went in; what failed is said, and the next steps go on.
-			fail(err.Error())
-			if !hasLine(out.String(), remote.SetupPut+" "+setup.DaemonFile) {
-				if len(a.answers) > 0 {
-					report.Warn("daemon.json was not put, so its answers are asked again at the next --server-setup")
-				}
-				put, putNames, daemonText, next, recorded = nil, nil, nil, rd.record, false
-			}
-			if !hasLine(out.String(), remote.SetupPut+" "+setup.SysctlFile) {
-				sysctlText = ""
-			}
-			if !hasLine(out.String(), remote.SetupPut+" "+setup.MountsDropIn) {
-				dropinText = ""
-			}
-			raise, give = raise && hasLine(out.String(), remote.SetupRaised), give && (hasLine(out.String(), remote.SetupMade+" "+f.Root) || hasLine(out.String(), remote.SetupGave+" "+f.Root))
+		// The run puts in order and stops at a failed put, daemon.json's last: what it said it did
+		// went in, and only that is judged again; what failed is said, and the next steps go on. A
+		// restart asked cut the run's words, never what it did.
+		runErr := err
+		if asked {
+			runErr = nil
 		}
+		did := func(went ...string) bool { return rootRunDid(true, runErr, out.String(), "", went...) }
+		if runErr != nil {
+			fail(err.Error())
+		}
+		if !did(remote.SetupPut + " " + setup.DaemonFile) {
+			if len(a.answers) > 0 {
+				report.Warn("daemon.json was not put, so its answers are asked again at the next --server-setup")
+			}
+			put, putNames, daemonText, next, recorded = nil, nil, nil, rd.record, false
+		}
+		if !did(remote.SetupPut + " " + setup.SysctlFile) {
+			sysctlText = ""
+		}
+		if !did(remote.SetupPut + " " + setup.MountsDropIn) {
+			dropinText = ""
+		}
+		raise, give = raise && did(remote.SetupRaised), give && did(remote.SetupMade+" "+f.Root, remote.SetupGave+" "+f.Root)
 	}
 	// The record follows the file, whatever the restart does next; none over a record
 	// devopsy could not read, which it says to remove.
@@ -1157,6 +1163,21 @@ func (w quietQueued) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return os.Stderr.Write(p)
+}
+
+// rootRunDid says whether a root run did a step it was asked (asked): every one asked when the
+// run went (err nil), else only one whose lines (out) say it went, one of went holding (hasLine),
+// and do not say it failed (failed, "" for a run that stops at its first failure): what a run did
+// not say it did is no "what was applied did not hold", and a failure it said is said once. Every
+// apply's check after its root run (--server-setup's, --project-users setup's) goes by it.
+func rootRunDid(asked bool, err error, out, failed string, went ...string) bool {
+	switch {
+	case !asked || err == nil:
+		return asked
+	case failed != "" && hasLine(out, failed):
+		return false
+	}
+	return slices.ContainsFunc(went, func(w string) bool { return hasLine(out, w) })
 }
 
 // hasLine says whether out holds the line word, alone or first.

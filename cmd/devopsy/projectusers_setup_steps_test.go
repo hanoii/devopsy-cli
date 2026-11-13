@@ -10,17 +10,26 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// Bug (review round 2): a root run that never ran (the util image's container failing to
-// start) applied nothing, yet the apply's check after it says "what was applied did not hold",
-// naming every item, beside the run's own error and the config's: applyDoorSetup judges again
-// every step it meant to do, where --server-setup's apply (applySetup) drops from its check what
-// a failed root run did not say it put.
+// Each failure of an apply is said once: a root run that never ran (the util image's container
+// failing to start) is said as that alone, nothing it was asked judged again as "did not hold",
+// the config it left waiting said in the run's last words; a config that cannot be written is
+// said as that alone, never again as a config that does not name the directory.
 func TestProjectUsersSetupRootRunThatNeverRan(t *testing.T) {
 	t.Parallel()
 	s, _, space := doorSetupServer(t)
 	out, code := s.run([]string{"FAKE_ROOT_RUN_FAILS=1"}, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-	if code != 1 || !strings.Contains(out, "devopsy could not run its setup as root") || strings.Contains(out, "what was applied did not hold") {
+	if code != 1 || !strings.Contains(out, "devopsy: error: devopsy could not run its setup as root: ") || strings.Contains(out, "what was applied did not hold") || strings.Count(out, "devopsy: error: ") != 2 ||
+		!strings.Contains(out, "devopsy: error: this server is not ready for project users\ndevopsy: | door: space: is not added to "+configFile(s)+" while the project users' directory is not set up\n") {
 		t.Errorf("a root run that never ran (%d):\n%s", code, out)
+	}
+	s, _, space = doorSetupServer(t)
+	// A directory where the config's new text is written: the write fails.
+	if err := os.Mkdir(configFile(s)+".new", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
+	if code != 1 || !strings.Contains(out, "devopsy: error: devopsy could not add the project users' directory to "+configFile(s)+": ") || strings.Contains(out, "what was applied did not hold") {
+		t.Errorf("a config that cannot be written (%d):\n%s", code, out)
 	}
 }
 

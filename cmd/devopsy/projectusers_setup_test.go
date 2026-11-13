@@ -349,7 +349,9 @@ func TestProjectUsersSetupDropInWaitsForTheMount(t *testing.T) {
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	// Said in the order it happened, the mount's failure once, its drop-in no failure of its own.
 	made, failed := strings.Index(out, "devopsy: made the project users' directory "+space+"\n"), strings.Index(out, "systemd did not mount "+space)
-	if code != 1 || failed < 0 || made < 0 || made > failed || !strings.Contains(out, "devopsy: hid each") || strings.Contains(out, "Docker does not wait") {
+	if code != 1 || failed < 0 || made < 0 || made > failed || !strings.Contains(out, "devopsy: hid each") || strings.Contains(out, "Docker does not wait") ||
+		strings.Count(out, "devopsy: error: ") != 2 || strings.Contains(out, "what was applied did not hold") ||
+		!strings.HasSuffix(out, "devopsy: error: this server is not ready for project users\ndevopsy: | door: space: is not added to "+configFile(s)+" while the project users' directory is not set up\n") {
 		t.Fatalf("a mount systemd refuses (%d):\n%s", code, out)
 	}
 	if got := readString(filepath.Join(host, setup.MountsDropIn)); strings.Contains(got, space) || !strings.Contains(got, "RequiresMountsFor="+s.root+"\n") {
