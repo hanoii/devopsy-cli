@@ -178,6 +178,9 @@ type DoorFacts struct {
 	// mounts nothing.
 	Guarded      bool `json:"guarded"`
 	SpaceMounted bool `json:"space_mounted,omitempty"`
+	// SpaceUnjudged: the space was refused before it was judged (its path one others could
+	// swap), so what its step would change is not known, and counts as a change it stops.
+	SpaceUnjudged bool `json:"space_unjudged,omitempty"`
 	// DropInWithout: the mounts drop-in is as --server-setup writes it without the space, and
 	// devopsy's want adds the space: only Docker's wait for it at boot differs.
 	DropInWithout bool `json:"dropin_without,omitempty"`
@@ -287,7 +290,7 @@ func (f DoorFacts) Applies() bool {
 func (f DoorFacts) Changes(s Step) bool {
 	switch s {
 	case StepSpace:
-		return f.SpaceAction != "" || f.SpaceMode != "" || f.Mounts()
+		return f.SpaceUnjudged || f.SpaceAction != "" || f.SpaceMode != "" || f.Mounts()
 	case StepDoorDrop:
 		return f.FilesDiffer(ItemMounts)
 	case StepProcesses:

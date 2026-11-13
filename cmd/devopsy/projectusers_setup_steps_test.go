@@ -54,7 +54,8 @@ func TestProjectUsersSetupRefusedSpaceKeepsItsMount(t *testing.T) {
 	}
 	write(t, filepath.Join(host, procMounts), "/dev/vda1 / ext4 rw,relatime 0 0\n/dev/vdb "+parent+" ext4 rw,nosuid,nodev,relatime 0 0\n", 0o644)
 	out, code := s.run(nil, "@devopsy@one:", "--project-users", "setup", space, "--yes")
-	if code != 1 || !strings.Contains(out, "which other users can write") || strings.Contains(out, "has no mount with nosuid and nodev") {
+	if code != 1 || !strings.Contains(out, "which other users can write") || strings.Contains(out, "has no mount with nosuid and nodev") ||
+		!strings.Contains(out, "devopsy: error: devopsy left the project users' directory, ") {
 		t.Errorf("a refused space on a guarded mount (%d):\n%s", code, out)
 	}
 }

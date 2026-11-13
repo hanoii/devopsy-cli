@@ -381,6 +381,7 @@ func readDoorSetup(h setupHost, dir, ref string) (doorSetupRead, error) {
 	sm := spaceMount(h, space)
 	f.Guarded = sm.guarded
 	if why := swappable(space, os.Getuid()); why != "" {
+		f.SpaceUnjudged = true
 		refuse(setup.ItemSpace, setup.RefusalSpace, why+", and devopsy acts as root only on a path no other user can change",
 			fixFor("name a directory whose every parent is root's or the deploy user's, writable by no one else, and none of them a link",
 				"make every part of its path a directory, none of them a link, each above it root's or the deploy user's and writable by no one else", "such a path"))
