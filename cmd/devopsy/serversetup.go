@@ -158,6 +158,11 @@ func candidateWords(c setup.Candidate) string {
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
+	// A root chosen and refused: the facts shown are that root's, so nothing goes on the home's.
+	if f.RootProposed && !f.RootNames() {
+		return nil, false, &report.Failure{Msg: "the release root " + f.Root + " is refused: nothing changed",
+			Remedies: []report.Remedy{report.Fix("run --server-setup again and choose another")}}
+	}
 	// Every step a root run: with none going (Docker refused), nothing goes at all, but a
 	// floor note to take off, which the apply does.
 	if f.NoneGoes() {
@@ -390,7 +395,7 @@ func volumeHint(f setup.Facts) []string {
 	for _, c := range f.Candidates {
 		lines = append(lines, candidateWords(c))
 	}
-	if !f.RootNamed && f.ConfigRefuses == "" {
+	if f.AsksRoot() {
 		return append(lines, "--server-setup without --yes asks which one holds releases, before the first release")
 	}
 	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")

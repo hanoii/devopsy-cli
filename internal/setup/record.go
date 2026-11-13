@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"slices"
@@ -204,6 +205,27 @@ func WriteFile(path string, data []byte, mode os.FileMode) error {
 
 // linkTarget is the file path names once its symbolic links are followed, each relative one
 // from the link's own directory, path itself when it is no link or is not there.
+// Writable says why WriteFile could not write path, nil when it could: its directory, or the
+// nearest one of its parents there, as the link path names leads (linkTarget), is one this
+// process may write in, which a rename over the file needs whatever the file's own mode.
+func Writable(path string) error {
+	target, err := linkTarget(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
+	for {
+		if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	if err := unix.Access(dir, unix.W_OK); err != nil {
+		return fmt.Errorf("%s: its directory %s is not this user's to write in (%v)", path, dir, err)
+	}
+	return nil
+}
+
 func linkTarget(path string) (string, error) {
 	p := path
 	for range 40 {

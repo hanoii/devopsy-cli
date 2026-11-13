@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"reflect"
@@ -11,8 +12,13 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// errRootThere is SetReleaseRoot's for a config whose releases: names a root already.
-var errRootThere = errors.New("its releases: names a root already")
+// errRootThere is SetReleaseRoot's for a config whose releases: names a root already;
+// errLineNotRead its for a text where the line put in its releases: block would not be read
+// as releases: root.
+var (
+	errRootThere   = errors.New("its releases: names a root already")
+	errLineNotRead = errors.New("a line put in its releases: would not be read as releases: root")
+)
 
 // ReleaseRootLines are the lines SetReleaseRoot adds for root to a config with no releases:,
 // root as YAML writes it (quoted where a plain word would read otherwise).
@@ -77,20 +83,24 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 		out = append(out, strings.ReplaceAll(ReleaseRootLines(root), "\n", eol)...)
 	case releases.Kind == yaml.MappingNode && releases.Style&yaml.FlowStyle == 0 && len(releases.Content) > 0:
 		lines := strings.SplitAfter(string(have), "\n")
-		at, replace := 0, false
+		at, replace, comment := 0, false, ""
 		for i := 0; i+1 < len(releases.Content); i += 2 {
 			if k, v := releases.Content[i], releases.Content[i+1]; k.Value == "root" {
 				if !emptyScalar(v) || v.Line != k.Line {
 					return nil, errRootThere
 				}
-				at, replace = k.Line, true
+				at, replace, comment = k.Line, true, cmp.Or(v.LineComment, k.LineComment)
 			}
 		}
 		first := releases.Content[0]
 		if first.Line <= keyLine || first.Line > len(lines) {
-			return nil, errNotRead
+			return nil, errLineNotRead
 		}
-		line := strings.Repeat(" ", first.Column-1) + "root: " + yamlScalar(root) + eol
+		line := strings.Repeat(" ", first.Column-1) + "root: " + yamlScalar(root)
+		if comment != "" {
+			line += " " + comment
+		}
+		line += eol
 		if replace {
 			lines[at-1] = line
 		} else {
@@ -106,6 +116,9 @@ func SetReleaseRoot(have []byte, root string) ([]byte, error) {
 		return nil, errors.New("its releases: is no block mapping devopsy adds a line to")
 	}
 	if !readsWithRoot(have, out, root) {
+		if releases != nil {
+			return nil, errLineNotRead
+		}
 		return nil, errNotRead
 	}
 	return out, nil

@@ -23,7 +23,7 @@ func TestSetReleaseRoot(t *testing.T) {
 		"releases block": {"releases:\n    # how many\n    keep: 3 # mine\nsnapshots:\n  root: /b\n", "/srv", "releases:\n    root: /srv\n    # how many\n    keep: 3 # mine\nsnapshots:\n  root: /b\n", ""},
 		// A root left empty is none to the loader: its line is the one named.
 		"root empty":     {"releases:\n  keep: 3\n  root:\n", "/srv", "releases:\n  keep: 3\n  root: /srv\n", ""},
-		"root \"\"":      {"releases:\n  root: \"\" # none\n  keep: 3\n", "/srv", "releases:\n  root: /srv\n  keep: 3\n", ""},
+		"root \"\"":      {"releases:\n  root: \"\" # none\n  keep: 3\n", "/srv", "releases:\n  root: /srv # none\n  keep: 3\n", ""},
 		"root ~":         {"releases:\n  root: ~\n", "/srv", "releases:\n  root: /srv\n", ""},
 		"crlf":           {"snapshots:\r\n  mirror: false\r\n", "/srv", "snapshots:\r\n  mirror: false\r\nreleases:\r\n  root: /srv\r\n", ""},
 		"a newline":      {"", "/mnt/a\nb", "releases:\n  root: \"/mnt/a\\nb\"\n", ""},

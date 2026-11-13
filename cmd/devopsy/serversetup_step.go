@@ -138,14 +138,18 @@ func runServerSetupStep(args []string) int {
 	if len(args) > 0 && args[0] == "facts" {
 		proposed := ""
 		switch {
-		case len(args) == 3 && args[1] == "--root":
+		case len(args) == 3 && args[1] == "--root" && args[2] != "":
 			proposed = args[2]
 		case len(args) != 1:
 			return fail("usage: devopsy " + remote.ServerSetupFlag + " facts [--root <path>]")
 		}
 		hd := readHostDocker(h)
 		if proposed != "" {
-			if err := rootProposal(h, hd, proposed); err != nil {
+			home, err := readSetup(h, hd)
+			if err != nil {
+				return failErr(err)
+			}
+			if err := rootProposal(home.facts, proposed); err != nil {
 				return failErr(err)
 			}
 		}
@@ -202,8 +206,8 @@ func parseApply(args []string) (setupApply, error) {
 		case "--said":
 			a.said = []string{}
 		case "--root":
-			if i+1 >= len(args) || args[i+1] == "" {
-				return a, errors.New("--root needs a path")
+			if i+1 >= len(args) || args[i+1] == "" || a.root != "" {
+				return a, errors.New("--root takes one path, once")
 			}
 			a.root = args[i+1]
 			i++
@@ -260,6 +264,9 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		have, err := os.ReadFile(f.ConfigFile)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			_, err = setup.SetReleaseRoot(have, r.Root)
+		}
+		if err == nil {
+			err = setup.Writable(f.ConfigFile)
 		}
 		if err != nil {
 			f.ConfigRefuses = err.Error()
@@ -386,7 +393,11 @@ func nameReleaseRoot(h setupHost, hd hostDocker, root string) error {
 	if r.Named && resolveRoot(r.Root) == resolveRoot(root) {
 		return nil
 	}
-	if err := rootProposal(h, hd, root); err != nil {
+	home, err := readSetup(h, hd)
+	if err != nil {
+		return err
+	}
+	if err := rootProposal(home.facts, root); err != nil {
 		return err
 	}
 	// Named only where nothing refuses it, as the facts the operator saw judged it.
@@ -437,15 +448,10 @@ func rootCandidates(h setupHost, hd hostDocker) []setup.Candidate {
 }
 
 // rootProposal refuses a release root proposed for the config (facts --root, apply --root)
-// that --server-setup would not ask about (setup.Facts.AsksRoot, judged by the facts as read
-// with no root proposed), or one it would not offer: the home or a volume the root could be
+// that --server-setup would not ask about (setup.Facts.AsksRoot, of f, the facts as read with
+// no root proposed), or one it would not offer: the home or a volume the root could be
 // on, by their one form (resolveRoot). The operator only chooses among those.
-func rootProposal(h setupHost, hd hostDocker, proposed string) error {
-	rd, err := readSetup(h, hd)
-	if err != nil {
-		return err
-	}
-	f := rd.facts
+func rootProposal(f setup.Facts, proposed string) error {
 	if !f.AsksRoot() {
 		return errors.New("--server-setup asks for no release root here: " + rootNotAsked(f))
 	}
@@ -474,7 +480,7 @@ func rootNotAsked(f setup.Facts) string {
 	case f.ConfigRefuses != "":
 		return f.ConfigFile + " takes no releases: root line from devopsy: " + f.ConfigRefuses
 	case f.NoneGoes():
-		return "what is refused above stops every step of the setup"
+		return "every step of the setup is refused"
 	case len(f.Candidates) == 0:
 		return "the server has no volume the release root could be on"
 	}
