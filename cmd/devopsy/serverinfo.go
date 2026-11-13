@@ -1796,5 +1796,6 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 		line(remote.StatusWarning, msg, fixes...)
 	}
 	sooner := soonerHint(ref)
-	return append(es, setupItems(f, setup.ShowInfo, &fix, &sooner, "setup")...)
+	es = append(es, setupItems(f, setup.ShowInfo, &fix, &sooner, "setup")...)
+	return append(es, volumeEntries(f, ref, "setup")...)
 }

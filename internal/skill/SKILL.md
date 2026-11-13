@@ -262,7 +262,7 @@ what `config.yaml` sets.
   line that checks the same locally. A custom domain is a CNAME to the
   environment's wildcard URL.
 - A new server is set up for devopsy as its deploy user with
-  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing; a refusal stops only what needs it, the rest applied, exit 1):
+  `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing; a refusal stops only what needs it, the rest applied, exit 1; on a fresh server it asks where releases live, the home or a volume mounted at boot, a volume named as `releases: root`; `--root <dir>` answers it with no question, for `--yes` and CI):
   Docker's `daemon.json` (rotated logs, live-restore, address pools),
   socket buffers, the release root, Docker waiting at boot for its
   mounts, and containers on Docker's bridges kept off the cloud's
@@ -276,7 +276,7 @@ what `config.yaml` sets.
   `W0001` (docs/codes.md) where devopsy's firewall is not loaded as devopsy
   loads it, a project user's release with a line to pass to the admin. Once set up,
   `--upgrade` applies the setup once per devopsy version, asking nothing,
-  and `--server-info` warns of what is not devopsy's.
+  and `--server-info` warns of what differs from devopsy's setup.
 - What a server keeps that nothing of devopsy removes (old exited one-off
   containers, unused build cache, release snapshots of releases gone,
   names a project's record left, dangling images) goes with

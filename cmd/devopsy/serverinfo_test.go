@@ -309,7 +309,11 @@ func TestServerInfoReport(t *testing.T) {
 			i.Setup.Parts[1].State, i.Setup.Parts[1].Observed = setup.Changed, `{"live-restore":false}`
 		}, "",
 			`live-restore: {"live-restore":false}, someone else's; devopsy's {"live-restore":true}|devopsy @vm1: --server-setup`},
-		{"setup file", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Files[1].InSync = false }, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf is not devopsy's|devopsy @vm1: --server-setup"},
+		{"setup file", func(i *remote.ServerInfo) { i.Setup = setUp(""); i.Setup.Files[1].InSync = false }, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes|devopsy @vm1: --server-setup"},
+		{"setup file missing", func(i *remote.ServerInfo) {
+			i.Setup = setUp("")
+			i.Setup.Files[1].InSync, i.Setup.Files[1].Missing = false, true
+		}, "", "/etc/systemd/system/docker.service.d/devopsy-mounts.conf does not exist yet|devopsy @vm1: --server-setup"},
 		{"setup buffer", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Buffers[0].Live, i.Setup.Buffers[0].Low = 212992, true
@@ -324,8 +328,8 @@ func TestServerInfoReport(t *testing.T) {
 		{"setup firewall wiped", func(i *remote.ServerInfo) {
 			i.Setup = setUp("")
 			i.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallInSync, Door: true}
-			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS is not devopsy's"}, nil)
-		}, "", "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS is not devopsy's|devopsy @vm1: --server-setup"},
+			i.Setup.Firewall.Chains([]string{"iptables: DEVOPSY-PROJECTS differs from what devopsy loads"}, nil)
+		}, "", "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\niptables: DEVOPSY-PROJECTS differs from what devopsy loads|devopsy @vm1: --server-setup"},
 		// A project user's: what it can pass on to the server's admin, by its code, no remedy.
 		{"for the admin", func(i *remote.ServerInfo) {
 			i.Setup = nil
@@ -484,22 +488,35 @@ func TestServerInfoReport(t *testing.T) {
 	}
 
 	// Set up by devopsy: where its record is, a kept part said and never warned, the volume
-	// hint a line; the logs part covering json-file without max-size, said once. Locally, the
-	// fix is words, with no address to name.
+	// hint its lines, one not offered with why, and a hint per volume offered on the address;
+	// the logs part covering json-file without max-size, said once.
 	info = healthy()
 	info.Setup = setUp("")
 	info.Setup.Parts[2].State, info.Setup.Parts[2].Observed = setup.Kept, `{"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}`
-	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9}}
+	info.Setup.Candidates = []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9},
+		{MountPoint: "/mnt/vol 2", Source: "/dev/sdc", FSType: "ext4", Size: 50e9, Free: 49e9},
+		{MountPoint: "/mnt/vol3", Source: "/dev/sdd", FSType: "ext4", Size: 10e9, Free: 9e9, Refusal: &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts /mnt/vol3 at boot", Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{"setup         by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `              daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
-		"              volumes: the release root is on no volume of its own; volumes that could hold it:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n"} {
+		"              volumes: releases live in the deploy user's home, /home/devopsy, while releases: root names no other; volumes that could hold them:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n              /mnt/vol 2 (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)\n              /mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("set up: no %q in:\n%s", want, out)
 		}
 	}
-	if len(warnings) != 0 {
+	if len(warnings) != 1 || !warnings[0].note || fixText(warnings[0].fixes) != "to keep releases on /srv:\n$ devopsy @vm1: --server-setup --root /srv\nto keep releases on /mnt/vol 2:\n$ devopsy @vm1: --server-setup --root '/mnt/vol 2'\nfor /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\n" {
 		t.Errorf("set up: %+v", warnings)
 	}
+	// Locally, with no address to name, the hint is words.
+	if es := volumeEntries(*info.Setup, "", "setup"); len(es) != 1 || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\nto keep releases on a volume, run --server-setup for this server, as its deploy user, with --root and its mount point\n" {
+		t.Errorf("locally: %+v", es)
+	}
+	// Every volume refused: the hint still says each one and why, with its fix and no --root.
+	only := *info.Setup
+	only.Candidates = only.Candidates[2:]
+	if es := volumeEntries(only, "vm1:", "setup"); len(es) != 1 || !strings.Contains(strings.Join(es[0].Lines, "\n"), "/mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot") || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\n" {
+		t.Errorf("none offered: %+v", es)
+	}
+	info.Setup.Candidates = nil
 	info.Docker.LogOpts = nil
 	info.Setup.Parts[0].State, info.Setup.Parts[0].Observed = setup.Changed, `{"log-driver":"json-file"}`
 	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !strings.Contains(warnings[0].msg, "logs: ") {
@@ -522,8 +539,8 @@ func TestServerInfoReport(t *testing.T) {
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 	want := "setup         never set up by devopsy: --upgrade applies nothing here\n" +
 		"              Docker: Docker has no compose plugin\n              to fix it:\n              install Docker's compose plugin\n" +
-		"              socket buffers: /etc/sysctl.d/90-devopsy-net.conf is not devopsy's\n" +
-		"              mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf is not devopsy's\n" +
+		"              socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
+		"              mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
 		"              metadata firewall: containers reach the cloud's metadata services"
 	if !strings.Contains(out, want) || strings.Count(out, "$ devopsy @vm1: --server-setup") != 1 ||
 		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n              to fix it:\n              $ devopsy @vm1: --server-setup\n") {

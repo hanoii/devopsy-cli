@@ -1111,7 +1111,7 @@ Examples:
   devopsy @vm1 --gc --dry-run
   devopsy @vm1 --gc
 `,
-	"--server-setup": `Usage: devopsy @<server> --server-setup [--yes]
+	"--server-setup": `Usage: devopsy @<server> --server-setup [--yes] [--root <dir>]
 
 Sets up the server for devopsy, as its deploy user, the server named with
 its user (@devopsy@vm1:): root's steps go through devopsy's util image.
@@ -1125,7 +1125,11 @@ the steps, as root, for what it checks and does not set up.
 Then it shows what is not as devopsy wants it, and asks:
   the release root      made when missing, given to the deploy user when
                         root's and empty (releases: root in the deploy
-                        user's config.yaml, else its home, never /)
+                        user's config.yaml, else its home, never /);
+                        while the config has no releases: and the home
+                        holds nothing of devopsy's, asked first: the
+                        home or a volume mounted at boot, a volume named
+                        in config.yaml
   daemon.json           rotated logs (log-driver local), live-restore,
                         and /24 address pools, merged in: every other key
                         stays. A value someone else set is asked about,
@@ -1156,13 +1160,19 @@ A second run changes nothing. What it applied is recorded in server.yaml
 beside the deploy user's config.yaml, which marks the server set up.
 
 Options:
-  --yes   ask nothing: keep every value someone changed, restart Docker
-          only when no container runs, and load the metadata firewall
-          (or remove it, for allow)
+  --yes          ask nothing: keep the release root where it is and every
+                 value someone changed, restart Docker only when no
+                 container runs, and load the metadata firewall (or remove
+                 it, for allow)
+  --root <dir>   where releases live, in place of the question: named as
+                 releases: root in config.yaml; refused once the release
+                 root holds something of devopsy's, on a filesystem
+                 nothing mounts at boot, or in memory (tmpfs)
 
 Examples:
   devopsy @devopsy@vm1: --server-setup
   devopsy @devopsy@vm1: --server-setup --yes
+  devopsy @devopsy@vm1: --server-setup --root /mnt/vol1/releases --yes
 `,
 	"--ssh-config": `Usage: devopsy @<server> --ssh-config
 

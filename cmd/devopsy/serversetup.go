@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -20,49 +21,86 @@ import (
 // errDeclined is an answer of no: nothing changed, said.
 var errDeclined = errors.New("nothing changed")
 
-// runServerSetup implements devopsy @<server> --server-setup [--yes]: the server's setup as
-// devopsy wants it, in two sessions as the deploy user. The first reads the facts, which the
-// server's devopsy judges; the operator shows what differs and asks; the second applies,
-// under the server's apply lock, what the answers say.
+// runServerSetup implements devopsy @<server> --server-setup [--yes] [--root <dir>]: the
+// server's setup as devopsy wants it, in two sessions as the deploy user, three with a volume
+// chosen for releases. The first reads the facts, which the server's devopsy judges, for the
+// root --root names where it is given, and again for a volume chosen where it asks where
+// releases live; the operator shows what differs and asks; the last applies, under the
+// server's apply lock, what the answers say.
 func runServerSetup(t *remote.Target, args []string) int {
-	yes := false
-	for _, a := range args {
-		switch a {
-		case "--yes":
+	yes, root := false, ""
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--yes":
 			yes = true
-		case "--help", "-h":
+		case a == "--root" && i+1 < len(args) && args[i+1] != "" && root == "":
+			root = args[i+1]
+			i++
+		case a == "--help" || a == "-h":
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--server-setup"]))
 			return 0
 		default:
-			return fail("usage: devopsy @" + targetRef(t) + " --server-setup [--yes]")
+			return fail("usage: devopsy @" + targetRef(t) + " --server-setup [--yes] [--root <dir>]")
 		}
 	}
 	// An older server refuses in this first session, before anything: it carries the apply's
 	// needs too.
 	ctx := remote.WithAlsoNeeds(context.Background(), remote.ServerSetupScript(t, []string{"apply"}))
-	var out bytes.Buffer
-	code, err := remote.SSHContext(ctx, t, nil, remote.ServerSetupScript(t, []string{"facts"}), bytes.NewReader(nil), &out, false, nil)
-	if err != nil {
-		return failErr(err)
+	facts := func(ctx context.Context, args ...string) (setup.Facts, int) {
+		var f setup.Facts
+		var out bytes.Buffer
+		code, err := remote.SSHContext(ctx, t, nil, remote.ServerSetupScript(t, append([]string{"facts"}, args...)), bytes.NewReader(nil), &out, false, nil)
+		if err != nil {
+			return f, failErr(err)
+		}
+		if code == remote.AskedAsProjectUser {
+			refuseProjectUser(t, out.String(), "the server's setup is its deploy user's", "--server-setup")
+			return f, 1
+		}
+		if code != 0 {
+			return f, code
+		}
+		if err := json.Unmarshal(out.Bytes(), &f); err != nil {
+			return f, fail("the server's setup facts: " + err.Error())
+		}
+		return f, 0
 	}
-	if code == remote.AskedAsProjectUser {
-		refuseProjectUser(t, out.String(), "the server's setup is its deploy user's", "--server-setup")
-		return 1
+	var rootArgs []string
+	if root != "" {
+		rootArgs = []string{"--root", root}
 	}
+	f, code := facts(ctx, rootArgs...)
 	if code != 0 {
 		return code
 	}
-	var f setup.Facts
-	if err := json.Unmarshal(out.Bytes(), &f); err != nil {
-		return fail("the server's setup facts: " + err.Error())
+	// Where releases live, asked at a terminal while it is open (setup.Facts.AsksRoot), before
+	// anything is shown, --root answering it: a volume chosen is judged by facts --root, as the
+	// apply that names it first then reads it, and the home names nothing.
+	// Without a terminal, a question fails offering the run's own command with --yes.
+	ask := terminalAsker{t: t, command: "--server-setup", yes: "keeps the release root where it is and " + yesKeeps}
+	if root != "" {
+		ask.command, ask.yes = "--server-setup --root "+remote.QuoteWord(root), "keeps "+yesKeeps
+	}
+	answered := root != ""
+	if f.AsksRoot() && !yes && !answered && atTerminal() {
+		answered = true
+		chosen, err := askRoot(f, ask)
+		if err != nil {
+			return failErr(err)
+		}
+		if chosen != f.Root {
+			if f, code = facts(context.Background(), "--root", chosen); code != 0 {
+				return code
+			}
+		}
 	}
 	// The differences and the refusals together: a refusal stops only the steps that need
 	// what it refuses (setup.Facts.Goes), the rest applied.
-	es := setupEntries(f)
+	es := setupEntries(f, targetRef(t), !answered)
 	newEntryTable(os.Stdout, styleFor(os.Stdout), es).print(es)
 	said := sayRefusals(f, report.ErrorLevel, nil, true)
 	refused := len(f.Refused()) > 0
-	applyArgs, run, err := planSetup(f, yes, terminalAsker{t: t})
+	applyArgs, run, err := planSetup(f, yes, ask)
 	if err == errDeclined {
 		report.Error("nothing changed")
 		return 1
@@ -99,10 +137,39 @@ func runServerSetup(t *remote.Target, args []string) int {
 	return code
 }
 
-// setupAsker asks what --server-setup asks: keep or replace a changed part, yes or no.
+// setupAsker asks what --server-setup asks: keep or replace a changed part, yes or no, and
+// one of several choices (its index).
 type setupAsker interface {
 	replace(p setup.PartFact) (bool, error)
 	confirm(question string, details ...string) (bool, error)
+	choose(question string, details, choices []string) (int, error)
+}
+
+// askRoot asks where releases live (setup.Facts.AsksRoot): the home (f.Root), first and
+// Enter's, or a volume offered, by its mount point, the volumes not offered said with why.
+// devopsy never picks a volume, since it cannot tell what one is for.
+func askRoot(f setup.Facts, ask setupAsker) (string, error) {
+	roots := []string{f.Root}
+	choices := []string{f.Root + ", the deploy user's home"}
+	details := []string{"devopsy names a volume chosen as releases: root in " + f.ConfigFile + ", before the first release"}
+	for _, c := range f.Candidates {
+		if c.Refusal != nil {
+			details = append(details, candidateWords(c)+", not offered: "+c.Refusal.Message)
+			continue
+		}
+		roots = append(roots, c.MountPoint)
+		choices = append(choices, candidateWords(c))
+	}
+	i, err := ask.choose("where do releases live?", details, choices)
+	if err != nil {
+		return "", err
+	}
+	return roots[i], nil
+}
+
+// candidateWords is a volume the release root could be on, as the hint and the question say it.
+func candidateWords(c setup.Candidate) string {
+	return fmt.Sprintf("%s (%s on %s, %s, %s free)", c.MountPoint, c.FSType, c.Source, humanBytes(c.Size), humanBytes(c.Free))
 }
 
 // planSetup is what --server-setup asks and what its apply is then given: each changed part
@@ -113,8 +180,8 @@ type setupAsker interface {
 func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool, err error) {
 	daemon := false
 	answers := false
-	// Every step a root run: with none going (Docker refused), nothing goes at all, but a
-	// floor note to take off, which the apply does.
+	// Every step a root run: with none going (Docker refused), nothing goes at all, a root
+	// chosen named neither, but a floor note to take off, which the apply does.
 	if f.NoneGoes() {
 		return nil, f.FloorNote, nil
 	}
@@ -139,7 +206,11 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 			answers = true
 		}
 	}
-	changes := f.Changes() || daemon
+	// A root chosen is named in the config, a change confirmed with the rest.
+	if f.NamesRoot {
+		args = append(args, "--root", f.Root)
+	}
+	changes := f.Changes() || daemon || f.NamesRoot
 	if changes && !yes {
 		var not []string
 		if line := refusedLine(f); line != "" {
@@ -175,18 +246,20 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	return args, changes || f.Records() || answers || restart || f.Record == "" || f.FloorNote, nil
 }
 
-// terminalAsker asks at the terminal, and fails without one, naming --yes: command is what
-// asks (--server-setup when ""), yes what --yes does in its place.
+// yesKeeps is what --server-setup --yes keeps and does in place of its questions, after
+// "keeps".
+const yesKeeps = "every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says"
+
+// terminalAsker asks at the terminal, and fails without one, naming --yes: command is the
+// run's own (its flag and arguments), which asks, yes what --yes does in its place.
 type terminalAsker struct {
 	t            *remote.Target
 	command, yes string
 }
 
 func (a terminalAsker) noTerminal() error {
-	command := cmp.Or(a.command, "--server-setup")
-	yes := cmp.Or(a.yes, "keeps every value someone changed, restarts Docker only with no container running, and loads or removes the metadata firewall as the config says")
-	return &report.Failure{Msg: command + " asks first, and there is no terminal to ask at",
-		Remedies: []report.Remedy{report.Fix("add --yes, which "+yes+":", "devopsy @"+targetRef(a.t)+" "+command+" --yes")}}
+	return &report.Failure{Msg: a.command + " asks first, and there is no terminal to ask at",
+		Remedies: []report.Remedy{report.Fix("add --yes, which "+a.yes+":", "devopsy @"+targetRef(a.t)+" "+a.command+" --yes")}}
 }
 
 func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
@@ -195,6 +268,26 @@ func (a terminalAsker) replace(p setup.PartFact) (bool, error) {
 	}
 	answer := strings.ToLower(report.Default().Ask(stdinReader, "daemon.json's "+p.Name+": keep its value, or replace it with devopsy's? [keep/replace]"))
 	return answer == "r" || answer == "replace", nil
+}
+
+// choose says the question with its detail and the choices numbered, and asks for one, Enter
+// the first; an answer that names none is asked again. Its caller asks only at a terminal.
+func (a terminalAsker) choose(question string, details, choices []string) (int, error) {
+	lines := slices.Clone(details)
+	for i, c := range choices {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, c))
+	}
+	report.Info(question, lines...)
+	for {
+		answer := report.Default().Ask(stdinReader, fmt.Sprintf("which one? [1-%d, Enter for 1]", len(choices)))
+		if answer == "" {
+			return 0, nil
+		}
+		if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(choices) {
+			return n - 1, nil
+		}
+		report.Warn("answer with a number from 1 to " + strconv.Itoa(len(choices)))
+	}
 }
 
 func (a terminalAsker) confirm(question string, details ...string) (bool, error) {
@@ -208,19 +301,37 @@ func (a terminalAsker) confirm(question string, details ...string) (bool, error)
 }
 
 // setupEntries are what --server-setup shows before it asks, as --status shows entries: the
-// release root, then its items (setupItems).
-func setupEntries(f setup.Facts) []remote.StatusEntry {
+// release root, then its items (setupItems), then with hint the volume hint (volumeEntries)
+// on ref.
+func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 	root := remote.StatusEntry{Level: remote.StatusInfo, Key: "release root", Lines: []string{f.Root}}
 	if f.RootAction != "" {
 		root.Lines[0] = rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's"
 	}
-	return append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, nil, "")...)
+	if f.NamesRoot && !f.NoneGoes() {
+		root.Lines = append(root.Lines, "--server-setup names it as releases: root in "+f.ConfigFile)
+	}
+	es := append([]remote.StatusEntry{root}, setupItems(f, setup.ShowSetup, nil, nil, "")...)
+	if hint {
+		es = append(es, volumeEntries(f, ref, "")...)
+	}
+	return es
+}
+
+// fileWords is a file devopsy writes whole as every command says it when it is not in sync:
+// missing, or its text another's, an older devopsy's included (a mounts drop-in naming the
+// root before a move).
+func fileWords(x setup.FileFact) string {
+	if x.Missing {
+		return x.Path + " does not exist yet"
+	}
+	return x.Path + " differs from what devopsy writes"
 }
 
 // setupItems are the setup's tunable items as --server-setup and --server-info show them, each
-// part as show says (setup.ShowSetup, setup.ShowInfo): what is not devopsy's one warning per
+// part as show says (setup.ShowSetup, setup.ShowInfo): what differs from devopsy's one warning per
 // item with fix (none when nil), each kept part and each set outside daemon.json a line,
-// pending as pendingWords says it with sooner its hint (none when nil), the volume hint a line. Each is under its item's key, or under key with
+// pending as pendingWords says it with sooner its hint (none when nil). Each is under its item's key, or under key with
 // the item's name first when key is not "".
 func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix, sooner *report.Remedy, key string) []remote.StatusEntry {
 	var es []remote.StatusEntry
@@ -266,7 +377,7 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix, sooner *r
 	for _, x := range f.Files {
 		var lines []string
 		if !x.InSync {
-			lines = append(lines, x.Path+" is not devopsy's")
+			lines = append(lines, fileWords(x))
 		}
 		if x.Item == setup.ItemBuffers {
 			for _, b := range f.Buffers {
@@ -301,20 +412,43 @@ func setupItems(f setup.Facts, show func(setup.State) setup.Show, fix, sooner *r
 	if fw := f.Firewall; fw != nil && fw.Unread != "" {
 		entry(remote.StatusInfo, firewallItem, "its chains could not be read as root: "+fw.Unread)
 	}
-	if f.Hint() {
-		entry(remote.StatusInfo, "volumes", volumeHint(f)...)
-	}
 	return es
 }
 
-// volumeHint is the volume hint's lines: each volume the release root could be on, then how
-// to put releases there.
-func volumeHint(f setup.Facts) []string {
-	lines := []string{"the release root is on no volume of its own; volumes that could hold it:"}
-	for _, c := range f.Candidates {
-		lines = append(lines, fmt.Sprintf("%s (%s on %s, %s, %s free)", c.MountPoint, c.FSType, c.Source, humanBytes(c.Size), humanBytes(c.Free)))
+// volumeEntries are the volume hint while where releases live is open (setup.Facts.RootOpen):
+// each volume the release root could be on, one not offered with why, then a hint per volume,
+// --server-setup --root on ref naming one offered (in words with ref ""), the fix of one not
+// offered, under volumes, or under key with volumes first when key is not "".
+func volumeEntries(f setup.Facts, ref, key string) []remote.StatusEntry {
+	if !f.RootOpen() {
+		return nil
 	}
-	return append(lines, "releases: root: <mount point> in the deploy user's config.yaml, before the first release, puts releases there")
+	lines := []string{"releases live in the deploy user's home, " + f.Root + ", while releases: root names no other; volumes that could hold them:"}
+	var hints []report.Remedy
+	words := false
+	for _, c := range f.Candidates {
+		switch {
+		case c.Refusal != nil:
+			lines = append(lines, candidateWords(c)+", not offered: "+c.Refusal.Message)
+			for _, fix := range fixWords(*c.Refusal) {
+				hints = append(hints, report.Hint("for "+c.MountPoint+", "+fix.Text, fix.Cmds...))
+			}
+		case ref == "":
+			lines = append(lines, candidateWords(c))
+			words = true
+		default:
+			lines = append(lines, candidateWords(c))
+			hints = append(hints, report.Hint("to keep releases on "+c.MountPoint+":", "devopsy @"+ref+" --server-setup --root "+remote.QuoteWord(c.MountPoint)))
+		}
+	}
+	if words {
+		hints = append(hints, report.Hint("to keep releases on a volume, run --server-setup for this server, as its deploy user, with --root and its mount point"))
+	}
+	e := remote.StatusEntry{Level: remote.StatusInfo, Key: "volumes", Lines: lines, Remedies: hints}
+	if key != "" {
+		e.Key, e.Lines[0] = key, "volumes: "+lines[0]
+	}
+	return []remote.StatusEntry{e}
 }
 
 // firewallLines are what every command says of a metadata firewall whose state changes it

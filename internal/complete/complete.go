@@ -351,7 +351,14 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--status", "--server-info":
 		return flags([]Candidate{jsonCandidate, help})
 	case "--server-setup":
-		return flags([]Candidate{{"--yes", "keep what someone changed, restart Docker only with no container running", GroupDevopsy}, help})
+		// --root takes a directory on the server, which nothing here can list.
+		if i := slices.Index(words, "--root"); i == len(words)-2 {
+			return Result{Directive: DirectiveNoFileComp}
+		} else if i > 0 {
+			words = slices.Delete(slices.Clone(words), i+1, i+2)
+		}
+		return flags([]Candidate{{"--yes", "keep what someone changed, restart Docker only with no container running", GroupDevopsy},
+			{"--root", "where releases live: a directory, named as releases: root", GroupDevopsy}, help})
 	case "--gc":
 		return flags([]Candidate{{"--dry-run", "list what it would remove, ask nothing", GroupDevopsy}, {"--yes", "remove without asking", GroupDevopsy}, help})
 	case "--project-users":

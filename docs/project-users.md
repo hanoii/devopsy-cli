@@ -249,7 +249,7 @@ loaded.
 `--server-info` reads the chains as root and warns, in its setup's
 metadata firewall line, with `--server-setup` as the fix, when:
 
-- a chain is not devopsy's, nothing jumps to it, or a rule ahead of
+- a chain differs from devopsy's, nothing jumps to it, or a rule ahead of
   devopsy's jump lets packets through (a reload of the server's own
   firewall, an `iptables -F`);
 - Docker's daemon is in no cgroup of its own, so nothing covers it,

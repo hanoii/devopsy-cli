@@ -445,8 +445,10 @@ var (
 // Releases is the releases: section of the user-level config: settings of
 // the machine releases land on.
 type Releases struct {
-	// Root is where releases live: relative paths resolve against it.
-	Root string `yaml:"root"`
+	// Root is where releases live: relative paths resolve against it. Named: the config names
+	// it, which ReleaseSettings fills in (the home's otherwise).
+	Root  string `yaml:"root"`
+	Named bool   `yaml:"-"`
 	// Keep is the default for projects; MaxKeep caps any project's.
 	Keep    int `yaml:"keep"`
 	MaxKeep int `yaml:"max_keep"`
@@ -1215,6 +1217,18 @@ func LoadProject(projectDir string) (*Project, error) {
 	return p, nil
 }
 
+// ReleaseRootError is why root cannot be releases: root, nil when it can: a path not
+// absolute, or /, which every command refuses.
+func ReleaseRootError(root string) error {
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("releases: root must be an absolute directory: %s", root)
+	}
+	if filepath.Clean(root) == "/" {
+		return errors.New("releases: root must not be /: releases would sit among the system's own directories")
+	}
+	return nil
+}
+
 // ReleaseSettings are the user-level config's releases: with defaults: the
 // root (the home directory), keep and max_keep (DefaultKeep). keep is
 // capped at max_keep.
@@ -1238,6 +1252,7 @@ func ReleaseSettings() (Releases, error) {
 			r.GC = *f.gc
 		}
 	}
+	r.Named = r.Root != ""
 	if r.Root == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -1252,11 +1267,8 @@ func ReleaseSettings() (Releases, error) {
 		}
 		r.Root = filepath.Join(home, strings.TrimPrefix(r.Root, "~"))
 	}
-	if !filepath.IsAbs(r.Root) {
-		return r, fmt.Errorf("releases: root must be an absolute directory: %s", r.Root)
-	}
-	if filepath.Clean(r.Root) == "/" {
-		return r, errors.New("releases: root must not be /: releases would sit among the system's own directories")
+	if err := ReleaseRootError(r.Root); err != nil {
+		return r, err
 	}
 	if r.MaxKeep == 0 {
 		r.MaxKeep = DefaultKeep

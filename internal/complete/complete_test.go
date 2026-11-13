@@ -119,7 +119,10 @@ func TestComplete(t *testing.T) {
 		{[]string{"@prod", "--releases", ""}, []string{"remove", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--status", ""}, []string{"--json", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--server-info", ""}, []string{"--json", "--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--server-setup", ""}, []string{"--yes", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--server-setup", ""}, []string{"--yes", "--root", "--help"}, nil, DirectiveNoFileComp},
+		// --root's directory is the server's: nothing offered for it, the flags again after it.
+		{[]string{"@prod", "--server-setup", "--root", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--server-setup", "--root", "/mnt/vol1", ""}, []string{"--yes"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--gc", ""}, []string{"--dry-run", "--yes", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--gc", "--dry-run", ""}, []string{"--yes"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", "remove", ""}, []string{"failed", "--yes", "--help"}, nil, DirectiveNoFileComp},

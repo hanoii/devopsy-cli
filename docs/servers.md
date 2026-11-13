@@ -143,17 +143,18 @@ What a server with project users needs beyond these is `--project-users
 setup`'s, which neither `--server-setup` nor `--upgrade` runs ([Project
 users](project-users.md#--project-users-setup)).
 
-It shows what is not devopsy's, then asks. `daemon.json` is merged: every
-other key stays as it is (a proxy's `proxies`, for example), and the file
-keeps its mode and owner, a link to it staying a link. A part someone else set is asked about, keep
-(Enter) or replace; a value kept is not asked again while it stays the
-same. To go back to devopsy's value, write it in `daemon.json` or remove
-the keys and answer replace. A part one of whose keys `docker.service`'s
-own flags set is left as it is and said, never asked about: putting it
-in the file too would keep Docker from starting. If `docker.service`
-starts Docker with another `--config-file`, `--server-setup` refuses. A `daemon.json` Docker
-would refuse (not a JSON object, a value of the wrong type) is refused,
-and never rewritten.
+It shows what differs from devopsy's setup, then asks. `daemon.json` is
+merged: every other key stays as it is (a proxy's `proxies`, for
+example), and the file keeps its mode and owner, a link to it staying a
+link. A part someone else set is asked about, keep (Enter) or replace; a
+value kept is not asked again while it stays the same. To go back to
+devopsy's value, write it in `daemon.json` or remove the keys and answer
+replace. A part one of whose keys `docker.service`'s own flags set is
+left as it is and said, never asked about: putting it in the file too
+would keep Docker from starting. If `docker.service` starts Docker with
+another `--config-file`, `--server-setup` refuses. A `daemon.json`
+Docker would refuse (not a JSON object, a value of the wrong type) is
+refused, and never rewritten.
 
 Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
 restart it now when the run changes the file or Docker has not taken it
@@ -204,10 +205,35 @@ metadata firewall (or removes it, for `allow`), so a new server set up
 in one command gets devopsy's address pools before its first release
 makes networks, and the firewall. Without a terminal it needs `--yes`.
 
-While the release root holds no project and is not on a volume of its
-own, it lists the volumes it could be on, with their size and free
-space: `releases: root: <mount point>` in the deploy user's
-`config.yaml`, before the first release, puts releases there.
+While the deploy user's `config.yaml` names no `releases: root`, the
+home holds nothing of devopsy's (no project, no variables set before a
+first release, no claim of the uids containers run as, no project user)
+and a volume is offered, `--server-setup` asks where releases live: the
+home, first, or one of the volumes the root could be on, listed with
+their size and free space, and each volume it does not offer with why. A
+volume is offered only where something mounts it at boot (`/etc/fstab`,
+a `.mount` unit): one mounted by hand or by `systemd-mount` is gone
+after a reboot, and releases would land on the disk under it. A volume
+chosen is named as `releases: root` in that `config.yaml`, added to its
+`releases:` or appended as a new one, the rest of the file left as it
+is, then the root is made there and Docker waits for its mount; once
+named, nothing is asked. The home chosen writes nothing, and the next
+run asks again.
+
+`--root <dir>` gives the answer with no question, for `--yes` and CI:
+any directory (for example `/mnt/vol1/releases`); naming the root
+releases live in already, it does nothing. It is refused before anything
+changes while `config.yaml` names a `releases: root` or the home holds
+something of devopsy's, where the release root's check refuses it, on a
+filesystem nothing mounts at boot, under a mount point mounted at boot
+and not mounted now, or in memory (`tmpfs`, `ramfs`), which keeps
+nothing across a reboot. A `config.yaml` devopsy cannot add the line to
+(a `releases:` written as a flow mapping, a `root:` left empty) refuses
+every volume, each with the setting to make by hand. With `--yes`, or
+without a terminal, and no `--root`, or with no volume offered, nothing
+is asked and the home is kept: the volumes are listed instead, each
+offered one with the `--server-setup --root` that names it, each other
+with why it is not offered and what to do.
 
 A second run changes nothing. What `--server-setup` applied, the values
 kept, the devopsy that last applied with no failure, and the one that
@@ -272,7 +298,7 @@ setup's items) comes once, after the last of them:
 - Docker logs that grow without a limit, on a server whose devopsy does
   not judge its setup yet;
 - a server never set up by devopsy, on which `--upgrade` applies nothing,
-  and each item of the setup that is not devopsy's (a release root
+  and each item of the setup that differs from devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
   mounts drop-in, the metadata firewall, `W0001`), each fixed by
   `--server-setup`, or, where the setup refuses every step, by what it
@@ -353,8 +379,8 @@ images, the volumes, a part of `--gc`'s count) is a warning instead:
 unknown, never none.
 
 A sync or a snapshot under way is reported as information. So are the
-volumes the release root could be on, while it holds no project and is
-not on one, and the memory kdump keeps, with how to free it
+volumes the release root could be on, while `--server-setup` may still
+name another root, and the memory kdump keeps, with how to free it
 ([`kdump`](server-setup-howto.md#kdump)), since crash dumps are a choice.
 
 It exits 3 when it warned, so CI can run it as a check: on a server never

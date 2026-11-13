@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,13 +22,15 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
 // setupServer is newSyncSetup's server with a host root (remote.HostRootEnv) for
 // --server-setup: systemd, Docker as this host's docker.service (docker-info.json), the live
 // buffers low, and fakes of systemctl (a restart takes docker-info.after, a new
 // InvocationID; devopsy-firewall.service's start runs the loader, its result kept in fwresult
-// until the unit runs again, as systemd keeps it), dockerd, sysctl, iptables and flock.
+// until the unit runs again, as systemd keeps it; a mount unit's file is what fragment.<unit>
+// says, none for a unit no test names), dockerd, sysctl, iptables and flock.
 func setupServer(t *testing.T) (*syncSetup, string) {
 	t.Helper()
 	s := newSyncSetup(t)
@@ -88,6 +92,12 @@ case "$*" in
     mv "$h/proc/mounts.new" "$h/proc/mounts" ;;
   # polkit there when the host root says so.
   "show -p LoadState --value polkit.service") cat "$h/polkit" 2>/dev/null || echo not-found ;;
+  # A mount unit's file as a test writes it in fragment.<unit> (fails: systemctl answers
+  # nothing), else none, as systemd answers for a unit it has no file of.
+  "show -p FragmentPath --value "*.mount)
+    f="$h/fragment.$5"
+    [ "$(cat "$f" 2>/dev/null)" != fails ] || exit 1
+    [ ! -f "$f" ] || cat "$f" ;;
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "dockerd"), "#!/bin/sh\necho 'configuration OK'\n", 0o755)
@@ -447,12 +457,18 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 type scripted struct {
 	replaces map[string]bool
 	confirms []bool
+	choice   int
 	asked    []string
 }
 
 func (a *scripted) replace(p setup.PartFact) (bool, error) {
 	a.asked = append(a.asked, "replace "+p.Name)
 	return a.replaces[p.Name], nil
+}
+
+func (a *scripted) choose(q string, details, choices []string) (int, error) {
+	a.asked = append(a.asked, strings.Join(append(append([]string{q}, details...), choices...), " | "))
+	return a.choice, nil
 }
 
 func (a *scripted) confirm(q string, details ...string) (bool, error) {
@@ -516,10 +532,58 @@ func TestPlanSetup(t *testing.T) {
 		// --yes passes the restart's condition, which the apply judges under its locks.
 		{"--yes, no container", facts("", 0, false, setup.Devopsys, setup.InSync, setup.Changed), true, &scripted{}, []string{"--keep", sum, "--restart-idle"}, true, nil, nil},
 		{"--yes, containers running", facts("/r", 1, false, setup.Devopsys), true, &scripted{}, []string{"--restart-idle"}, true, nil, nil},
+		// A root chosen (facts --root) is a change confirmed with the rest, the apply told it;
+		// with no step going (Docker refused), nothing is named, and the next run asks again.
+		{"root chosen", func() setup.Facts { f := facts("/r", 0, false, setup.InSync); f.NamesRoot = true; return f }(), false,
+			&scripted{confirms: []bool{true}}, []string{"--root", "/srv"}, true, []string{"apply these?"}, nil},
+		{"root chosen, declined", func() setup.Facts { f := facts("/r", 0, false, setup.InSync); f.NamesRoot = true; return f }(), false,
+			&scripted{confirms: []bool{false}}, nil, false, []string{"apply these?"}, errDeclined},
+		{"root chosen, no step going", func() setup.Facts {
+			f := facts("/r", 0, false, setup.InSync)
+			f.NamesRoot, f.Refusals = true, []setup.Refusal{{Item: setup.RefusalDocker}}
+			return f
+		}(), false, &scripted{}, nil, false, nil, nil},
 	} {
 		args, run, err := planSetup(c.f, c.yes, c.ask)
 		if !slices.Equal(args, c.args) || run != c.run || err != c.err || !slices.Equal(c.ask.asked, c.asked) {
 			t.Errorf("%s: %q, run %v, %v; asked %q\nwant %q, run %v, %v; asked %q", c.name, args, run, err, c.ask.asked, c.args, c.run, c.err, c.asked)
+		}
+	}
+}
+
+// Where releases live is asked as a choice of the home, first, and each volume offered by its
+// mount point, the config file named in the question; the answer is the root. It is asked while
+// a volume is offered, the home on a volume of its own or not.
+func TestAskRoot(t *testing.T) {
+	t.Parallel()
+	f := setup.Facts{Root: "/home/devopsy", ConfigFile: "/home/devopsy/.config/devopsy/config.yaml",
+		Candidates: []setup.Candidate{{MountPoint: "/srv", Source: "/dev/sdb", FSType: "xfs", Size: 100e9, Free: 99e9},
+			{MountPoint: "/mnt/vol1", Source: "/dev/sdd", FSType: "ext4", Refusal: &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts /mnt/vol1 at boot"}},
+			{MountPoint: "/data", Source: "/dev/sdc", FSType: "ext4", Size: 50e9, Free: 49e9}}}
+	for choice, want := range []string{"/home/devopsy", "/srv", "/data"} {
+		ask := &scripted{choice: choice}
+		root, err := askRoot(f, ask)
+		if err != nil || root != want {
+			t.Errorf("choice %d: %q, %v, want %q", choice, root, err, want)
+		}
+		if q := "where do releases live? | devopsy names a volume chosen as releases: root in /home/devopsy/.config/devopsy/config.yaml, before the first release | /mnt/vol1 (ext4 on /dev/sdd, 0 B, 0 B free), not offered: nothing mounts /mnt/vol1 at boot | /home/devopsy, the deploy user's home | /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free) | /data (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)"; !slices.Equal(ask.asked, []string{q}) {
+			t.Errorf("asked %q", ask.asked)
+		}
+	}
+	for name, c := range map[string]struct {
+		change func(*setup.Facts)
+		asks   bool
+	}{
+		"fresh": {func(*setup.Facts) {}, true},
+		// The home on a volume of its own: that volume is no candidate, the others are.
+		"home on a volume": {func(f *setup.Facts) { f.Root = "/home/devopsy"; f.Candidates = f.Candidates[1:] }, true},
+		"none offered":     {func(f *setup.Facts) { f.Candidates = f.Candidates[1:2] }, false},
+		"no volume":        {func(f *setup.Facts) { f.Candidates = nil }, false},
+	} {
+		g := f
+		c.change(&g)
+		if g.AsksRoot() != c.asks {
+			t.Errorf("%s: asks %v", name, !c.asks)
 		}
 	}
 }
@@ -712,6 +776,431 @@ func TestRestartLocksOnlyTheDeployUsersEnvironments(t *testing.T) {
 	write(t, filepath.Join(base, "releases", ".keep"), "", 0o644)
 	if got, _ := deployEnvBases(filepath.Dir(project)); slices.Contains(got, base) {
 		t.Errorf("an environment in %s, which another user owns, is among those whose lock a restart takes: %s", project, base)
+	}
+}
+
+// rootChoice is setupServer's server with no releases: root named, the home the root then, and a
+// volume the root could be on at vol (a mount of its own in the host root's mountinfo, on
+// another disk than /'s, mounted at boot by an /etc/fstab line, its unit's file the
+// generator's), not made yet; config is the deploy user's config.
+func rootChoice(t *testing.T) (s *syncSetup, host, vol, config string) {
+	t.Helper()
+	s, host = setupServer(t)
+	tmp := filepath.Dir(s.root)
+	vol, config = filepath.Join(tmp, "vol"), filepath.Join(tmp, "home", "config.yaml")
+	write(t, config, "# the admin's\nsnapshots:\n  mirror: false\n", 0o644)
+	mountedAtBoot(t, host, vol)
+	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n", 0o644)
+	return s, host, vol, config
+}
+
+// mountedAtBoot gives the fake systemctl in host a mount unit with a file for point, as an
+// /etc/fstab line makes one through its generator.
+func mountedAtBoot(t *testing.T, host, point string) {
+	t.Helper()
+	unit := setup.MountUnitName(point)
+	write(t, filepath.Join(host, "fragment."+unit), "/run/systemd/generator/"+unit+"\n", 0o644)
+}
+
+// setupFactsOf is the setup's facts as s's server prints them (facts, then args), with the
+// session's output and exit.
+func setupFactsOf(s *syncSetup, args ...string) (setup.Facts, string, int) {
+	s.t.Helper()
+	out, code := s.run(nil, append([]string{remote.ServerSetupFlag, "facts"}, args...)...)
+	var f setup.Facts
+	if i := strings.Index(out, "{"); code == 0 && (i < 0 || json.Unmarshal([]byte(out[i:]), &f) != nil) {
+		s.t.Fatalf("facts %q: no JSON in:\n%s", args, out)
+	}
+	return f, out, code
+}
+
+// --server-setup asks where releases live while it is open: without a terminal it keeps the
+// home, names nothing and shows each volume with --server-setup --root on its address, the
+// other questions failing as they do. --root names a volume with no question: facts --root
+// judges it as the apply then names it, the apply writes it in the config first, as text, the
+// admin's lines kept, then makes the root there and has Docker wait for its mount, and a
+// second run changes nothing and asks nothing.
+func TestServerSetupNamesTheRootChosen(t *testing.T) {
+	t.Parallel()
+	s, host, vol, config := rootChoice(t)
+	before := readString(config)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup")
+	if code != 1 || !strings.Contains(out, "--server-setup asks first, and there is no terminal to ask at") || !strings.Contains(out, "$ devopsy @devopsy@one: --server-setup --root "+vol+"\n") || readString(config) != before {
+		t.Errorf("no terminal (%d), config %q:\n%s", code, readString(config), out)
+	}
+	f, out, code := setupFactsOf(s)
+	if code != 0 || !f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].MountPoint != vol || f.Candidates[0].Refusal != nil {
+		t.Fatalf("facts (%d): asks %v, %+v\n%s", code, f.AsksRoot(), f.Candidates, out)
+	}
+	f, out, code = setupFactsOf(s, "--root", vol)
+	if code != 0 || !f.NamesRoot || f.Root != vol || f.RootAction != setup.RootMake || f.AsksRoot() || f.ConfigFile != config {
+		t.Fatalf("facts --root (%d): %+v\n%s", code, f, out)
+	}
+	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--root", vol, "--yes")
+	if code != 0 || !strings.Contains(out, "--server-setup names it as releases: root in "+config) || !strings.Contains(out, "devopsy: named "+vol+" the release root in "+config+": releases live there") ||
+		strings.Contains(out, "to keep releases on") || !fileExists(vol) {
+		t.Fatalf("--server-setup --root (%d):\n%s", code, out)
+	}
+	if got := readString(config); got != before+"releases:\n  root: "+vol+"\n" {
+		t.Errorf("the config:\n%s", got)
+	}
+	if !strings.Contains(readString(filepath.Join(host, setup.MountsDropIn)), vol) {
+		t.Errorf("the mounts drop-in names no %s:\n%s", vol, readString(filepath.Join(host, setup.MountsDropIn)))
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-setup"); code != 0 || !strings.Contains(out, "nothing to change") || strings.Contains(out, "volumes") {
+		t.Errorf("a second run (%d):\n%s", code, out)
+	}
+}
+
+// A root the config does not name is judged by one function (rootTakes), facts --root and
+// apply --root alike refusing with why and its fix before anything changes: a path not clean,
+// one while the release root holds a project or a project user, one the release root's check
+// refuses (no directory here, root's with files on a server), and another root while the
+// config names one. The root releases live in, named or not, is nothing to do and writes
+// nothing; --upgrade takes no root.
+func TestServerSetupRootChoiceRefusals(t *testing.T) {
+	t.Parallel()
+	const newDir = "name a new directory in it with --root, which --server-setup makes"
+	s, _, vol, config := rootChoice(t)
+	home := filepath.Dir(vol)
+	before := readString(config)
+	refused := func(name, root, says string) {
+		t.Helper()
+		was := readString(config)
+		for _, step := range []string{"facts", "apply"} {
+			if out, code := s.run(nil, remote.ServerSetupFlag, step, "--root", root); code != 1 || !strings.Contains(out, "devopsy: error: "+says) || readString(config) != was {
+				t.Errorf("%s, %s (%d):\n%s", name, step, code, out)
+			}
+		}
+	}
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
+	if code != 0 || readString(config) != before || !strings.Contains(out, "to keep releases on "+vol+":") {
+		t.Errorf("--yes (%d), config %q:\n%s", code, readString(config), out)
+	}
+	refused("not clean", vol+"/", "a release root is an absolute path, clean")
+	// A path no unit file holds is refused first, before the config is read for its lines.
+	refused("a control character", vol+"\nb", `the release root "`+vol+`\nb": a control character, which a unit file cannot hold`)
+	if f, out, code := setupFactsOf(s, "--root", home); code != 0 || f.NamesRoot || f.Root != home {
+		t.Errorf("facts --root of the home (%d): %+v\n%s", code, f, out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", home); code != 0 || readString(config) != before || strings.Contains(out, "named ") {
+		t.Errorf("apply --root of the home (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade", "--root", vol); code == 0 || !strings.Contains(out, "takes no answer, no root and no restart") {
+		t.Errorf("--upgrade --root (%d):\n%s", code, out)
+	}
+	// No directory: not offered, and refused.
+	write(t, vol, "", 0o644)
+	if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].Refusal == nil || !strings.Contains(f.Candidates[0].Refusal.Message, "is not a directory") || f.Candidates[0].Refusal.Fix == "" {
+		t.Errorf("a file at the volume (%d): %+v\n%s", code, f.Candidates, out)
+	}
+	refused("no directory", vol, "the release root "+vol+" is not a directory")
+	// Each refusal of the release root's check keeps its own fix; only a directory of root's
+	// with files takes a new directory in it, named with --root.
+	fixed := func(name, root, fix string) {
+		t.Helper()
+		if out, _ := s.run(nil, remote.ServerSetupFlag, "facts", "--root", root); !strings.Contains(out, "devopsy: | "+fix) || strings.Contains(out, "through a link") ||
+			fix != newDir && strings.Contains(out, newDir) {
+			t.Errorf("%s: no fix %q:\n%s", name, fix, out)
+		}
+	}
+	fixed("no directory", vol, "set releases: root in "+config+" to a directory of the deploy user's")
+	if os.Getuid() != 0 {
+		fixed("root's with files", "/usr", newDir)
+	}
+	// / in ReleaseSettings' own words, as every command refuses it.
+	refused("/", "/", "releases: root must not be /: releases would sit among the system's own directories")
+	if err := os.Remove(vol); err != nil {
+		t.Fatal(err)
+	}
+	// A project in the home: releases stay there.
+	write(t, filepath.Join(home, "shop", "prod", "releases", ".keep"), "", 0o644)
+	refused("a project in the home", vol, "the release root "+home+" holds releases already")
+	if err := os.RemoveAll(filepath.Join(home, "shop")); err != nil {
+		t.Fatal(err)
+	}
+	// A project user added holds releases too, its tree fixed at its add.
+	write(t, config, before+"door:\n  space: "+t.TempDir()+"\n  users:\n    devopsy-shop: {project: shop}\n", 0o644)
+	refused("a project user added", vol, "the release root "+home+" holds releases already")
+	// Named already: the same root is nothing to do, another refused.
+	named := before + "releases:\n  root: " + vol + "\n"
+	write(t, config, named, 0o644)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 0 || readString(config) != named || strings.Contains(out, "named ") {
+		t.Errorf("the root named already (%d):\n%s", code, out)
+	}
+	refused("another root, one named", home, "releases: root in "+config+" names "+vol+" already")
+}
+
+// A volume nothing mounts at boot is never offered, and a root on it is refused, as systemd
+// says it (its mount unit's FragmentPath): mounted by hand (no file) or by systemd-mount (a
+// transient unit), with the fix, and one systemctl says nothing of, as not known. /etc/fstab's
+// mount (its generator's unit) is offered, and a root on / alone is always mounted.
+func TestServerSetupOffersVolumesMountedAtBoot(t *testing.T) {
+	t.Parallel()
+	s, host, vol, _ := rootChoice(t)
+	unit := setup.MountUnitName(vol)
+	for name, c := range map[string]struct{ fragment, says, fix, command string }{
+		"by hand":       {"", "nothing mounts " + vol + " at boot", "add it to /etc/fstab, as root, then reload systemd:", "systemctl daemon-reload"},
+		"systemd-mount": {"/run/systemd/transient/" + unit + "\n", "nothing mounts " + vol + " at boot", "add it to /etc/fstab, as root, then reload systemd:", "systemctl daemon-reload"},
+		"not known":     {"fails", "devopsy cannot tell whether " + vol + " is mounted at boot", "", ""},
+	} {
+		write(t, filepath.Join(host, "fragment."+unit), c.fragment, 0o644)
+		f, out, code := setupFactsOf(s)
+		if code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].Refusal == nil || !strings.HasPrefix(f.Candidates[0].Refusal.Message, c.says) || f.Candidates[0].Refusal.Fix != c.fix || f.Candidates[0].Refusal.Command != c.command {
+			t.Errorf("%s: facts (%d), asks %v: %+v\n%s", name, code, f.AsksRoot(), f.Candidates, out)
+		}
+		if out, code := s.run(nil, remote.ServerSetupFlag, "facts", "--root", filepath.Join(vol, "releases")); code != 1 || !strings.Contains(out, "devopsy: error: "+c.says) {
+			t.Errorf("%s: a root under it (%d):\n%s", name, code, out)
+		}
+	}
+	mountedAtBoot(t, host, vol)
+	if f, out, code := setupFactsOf(s); code != 0 || !f.AsksRoot() {
+		t.Errorf("fstab's (%d): asks %v, %+v\n%s", code, f.AsksRoot(), f.Candidates, out)
+	}
+	under := filepath.Join(filepath.Dir(vol), "releases")
+	if f, out, code := setupFactsOf(s, "--root", under); code != 0 || !f.NamesRoot || f.Root != under {
+		t.Errorf("a root on / (%d): %+v\n%s", code, f, out)
+	}
+	// A root under a mount point a unit with a file names, not mounted now (an fstab line with
+	// nofail whose disk did not attach): refused, since releases would land on the disk under it
+	// and hide once it mounts.
+	data := filepath.Join(filepath.Dir(vol), "data")
+	mountedAtBoot(t, host, data)
+	if out, code := s.run(nil, remote.ServerSetupFlag, "facts", "--root", filepath.Join(data, "releases")); code != 1 ||
+		!strings.Contains(out, "devopsy: error: "+data+" is mounted at boot (/run/systemd/generator/"+setup.MountUnitName(data)+"), and not mounted now") {
+		t.Errorf("a root under a mount point not mounted (%d):\n%s", code, out)
+	}
+}
+
+// A config with a releases: block takes releases: root in it, so the facts ask and an apply
+// names the volume there. One devopsy cannot add root: to (a flow releases:, one with a root:
+// left empty, which the loader reads as none) still lists each volume, each with why it is not
+// offered and the setting to make by hand, so nothing is asked and the hint says why; facts
+// --root and apply --root refuse with the same words and nothing changed.
+func TestServerSetupNamesTheRootInTheConfigsReleases(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	for _, text := range []string{"releases: {keep: 3}\n", "releases:\n  root:\n  keep: 3\n"} {
+		write(t, config, text, 0o644)
+		why := "devopsy cannot name " + vol + " the release root in " + config + ", "
+		fix := "set releases: root to " + vol + " in " + config + " by hand, then run --server-setup again"
+		f, out, code := setupFactsOf(s)
+		if code != 0 || f.AsksRoot() || len(f.Candidates) != 1 || f.Candidates[0].Refusal == nil ||
+			!strings.HasPrefix(f.Candidates[0].Refusal.Message, why) || f.Candidates[0].Refusal.Fix != fix {
+			t.Errorf("%q: facts (%d), asks %v, the volumes %+v\n%s", text, code, f.AsksRoot(), f.Candidates, out)
+		}
+		for _, step := range []string{"facts", "apply"} {
+			out, code := s.run(nil, remote.ServerSetupFlag, step, "--root", vol)
+			if code != 1 || !strings.Contains(out, "devopsy: error: "+why) || !strings.Contains(out, "devopsy: | "+fix+"\n") ||
+				readString(config) != text || fileExists(vol) {
+				t.Errorf("%q: %s --root (%d), the config %q:\n%s", text, step, code, readString(config), out)
+			}
+		}
+	}
+	write(t, config, "releases:\n  keep: 3\n", 0o644)
+	if f, out, code := setupFactsOf(s); code != 0 || !f.AsksRoot() {
+		t.Errorf("a releases: block: facts (%d), asks %v\n%s", code, f.AsksRoot(), out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 0 || readString(config) != "releases:\n  root: "+vol+"\n  keep: 3\n" {
+		t.Errorf("a releases: block: apply --root (%d), the config %q:\n%s", code, readString(config), out)
+	}
+}
+
+// A release root whose claims directory holds a claim holds releases (a project user's, whose
+// tree is in its own home): the facts ask nothing about it, and an apply names no other root
+// over it, so its claims never stay behind in a root releases left.
+func TestServerSetupAsksNoRootOverClaims(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	before := readString(config)
+	claims := uids.Store{Dir: filepath.Join(filepath.Dir(vol), uids.DirName)}
+	if _, _, err := claims.LookupPair(uids.Owner{Project: "shop", Env: "prod"}); err != nil {
+		t.Fatal(err)
+	}
+	if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() {
+		t.Errorf("facts (%d): asks %v over a claims directory that holds a claim\n%s", code, f.AsksRoot(), out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
+		t.Errorf("the apply (%d) named another root over the claims, the config:\n%s\n%s", code, readString(config), out)
+	}
+}
+
+// A volume that holds releases already (one attached from another server, its projects and its
+// claims directory on it) is offered and named as any other: the root is the deploy user's, so
+// nothing is made or given, and the uid claims on it are the server's from then on, each
+// environment keeping the uid that owns its data, with no claims directory made in the home.
+func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
+	t.Parallel()
+	s, host, _, config := rootChoice(t)
+	home := filepath.Dir(s.root)
+	// Outside the home: a directory in it would read as a project of the home's.
+	vol := filepath.Join(t.TempDir(), "vol")
+	mountedAtBoot(t, host, vol)
+	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n", 0o644)
+	write(t, filepath.Join(vol, "shop", "prod", "releases", ".keep"), "", 0o644)
+	owner := uids.Owner{Project: "shop", Env: "prod"}
+	// The environment's uid as its first server claimed it, pushed off its hashed slot.
+	was := owner.Plain() + 1
+	if err := os.MkdirAll(filepath.Join(vol, uids.DirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(strconv.FormatUint(uint64(was), 10), filepath.Join(vol, uids.DirName, owner.String())); err != nil {
+		t.Fatal(err)
+	}
+	f, out, code := setupFactsOf(s)
+	if code != 0 || !f.AsksRoot() {
+		t.Fatalf("facts (%d): asks %v\n%s", code, f.AsksRoot(), out)
+	}
+	f, out, code = setupFactsOf(s, "--root", vol)
+	if code != 0 || !f.NamesRoot || f.RootAction != "" {
+		t.Fatalf("facts --root (%d): names %v, action %q\n%s", code, f.NamesRoot, f.RootAction, out)
+	}
+	out, code = s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol, "--restart")
+	if code != 0 || !strings.Contains(out, "devopsy: named "+vol+" the release root") || strings.Contains(out, "the release root "+vol) {
+		t.Fatalf("apply --root (%d), made or gave a root that is the deploy user's:\n%s", code, out)
+	}
+	if got := readString(config); !strings.HasSuffix(got, "releases:\n  root: "+vol+"\n") {
+		t.Errorf("the config:\n%s", got)
+	}
+	if uid, err := claimsStore(vol).Lookup(owner); err != nil || uid != was {
+		t.Errorf("%s is %d (%v) on the volume named, %d as its data is owned", owner, uid, err, was)
+	}
+	if fileExists(filepath.Join(home, uids.DirName)) {
+		t.Errorf("a claims directory in the home, %s, which releases never lived in", filepath.Join(home, uids.DirName))
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, owner.String()) || !strings.Contains(out, "shop/prod") {
+		t.Errorf("--server-info (%d) shows no claim or environment of the volume's:\n%s", code, out)
+	}
+}
+
+// A release root that holds variables set before a first release (--vars set makes the
+// environment's directory and its shared/.env, with no releases/ yet; the project's and an
+// instance's are a .env of their own) holds what devopsy keeps of a release: nothing is asked
+// and no other root named over them, which would leave them where no release reads them.
+func TestServerSetupNamesNoRootOverVars(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	home := filepath.Dir(vol)
+	before := readString(config)
+	if out, code := s.run([]string{"COLOR=blue"}, "@prod", "--vars", "set", "COLOR"); code != 0 || !strings.Contains(readString(filepath.Join(home, "shop", "prod", "shared", ".env")), "COLOR=") {
+		t.Fatalf("--vars set before a first release (%d):\n%s", code, out)
+	}
+	held := func(what string) {
+		t.Helper()
+		if f, out, code := setupFactsOf(s); code != 0 || f.AsksRoot() || f.RootOpen() {
+			t.Errorf("%s: facts (%d): asks %v, open %v over a release root that holds them\n%s", what, code, f.AsksRoot(), f.RootOpen(), out)
+		}
+		if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol); code != 1 || readString(config) != before {
+			t.Errorf("%s: the apply (%d) named another root over them, the config:\n%s\n%s", what, code, readString(config), out)
+		}
+	}
+	held("an environment's variables")
+	// The project's and an instance's (--vars-project, --vars-instance), each a .env of its own.
+	for _, env := range []string{filepath.Join("shop", ".env"), filepath.Join("shop", "eu", ".env")} {
+		if err := os.RemoveAll(filepath.Join(home, "shop")); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(home, env), "COLOR=blue\n", 0o600)
+		held(env)
+	}
+}
+
+// --server-setup --root without --yes and without a terminal fails on its question naming
+// --yes, and the command it offers is the run's own with --yes, the --root asked for kept,
+// never said to keep the release root where it is.
+func TestServerSetupRootWithoutTerminalKeepsRootInItsFix(t *testing.T) {
+	t.Parallel()
+	s, _, vol, config := rootChoice(t)
+	before := readString(config)
+	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--root", vol)
+	if code != 1 || !strings.Contains(out, "--server-setup --root "+vol+" asks first, and there is no terminal to ask at") || readString(config) != before {
+		t.Fatalf("--root, no terminal (%d), config %q:\n%s", code, readString(config), out)
+	}
+	if !strings.Contains(out, "$ devopsy @devopsy@one: --server-setup --root "+vol+" --yes\n") || strings.Contains(out, "keeps the release root where it is") {
+		t.Errorf("the fix drops --root %s, or says --yes keeps the release root where it is:\n%s", vol, out)
+	}
+}
+
+// atTerminalRun runs devopsy with args on s at a terminal, util-linux's script giving it a
+// pseudo-terminal fed answers, one line each, with its output and exit; the test is skipped
+// where there is no such script (macOS's takes other flags).
+func atTerminalRun(t *testing.T, s *syncSetup, answers string, args ...string) (string, int) {
+	t.Helper()
+	path, err := exec.LookPath("script")
+	if err != nil || runtime.GOOS != "linux" {
+		t.Skip("needs util-linux's script")
+	}
+	words := []string{remote.Quote(binary)}
+	for _, a := range args {
+		words = append(words, remote.Quote(a))
+	}
+	cmd := exec.Command(path, "-qec", strings.Join(words, " "), "/dev/null")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "NO_COLOR=1")
+	cmd.Stdin = strings.NewReader(answers)
+	out, _ := cmd.CombinedOutput()
+	return strings.ReplaceAll(string(out), "\r\n", "\n"), cmd.ProcessState.ExitCode()
+}
+
+// At a terminal, --server-setup asks where releases live before it shows anything, the home
+// first and Enter's. Enter keeps the home: no facts --root session, nothing named and no volume
+// hint. An answer naming no choice is asked again. A volume chosen is judged by a second facts
+// session, facts --root, shown as the root the run names and named by the apply once the
+// changes are confirmed, the root made there and Docker waiting for its mount; declined,
+// nothing is named. Once named, nothing is asked.
+func TestServerSetupAsksWhereReleasesLiveAtATerminal(t *testing.T) {
+	t.Parallel()
+	s, host, vol, config := rootChoice(t)
+	home := filepath.Dir(vol)
+	before := readString(config)
+	at := func(answers string) (string, int) {
+		return atTerminalRun(t, s, answers, "@devopsy@one:", "--server-setup")
+	}
+
+	out, code := at("\nn\n")
+	if code != 1 || strings.Count(out, "where do releases live?") != 1 || !strings.Contains(out, "devopsy: | 1. "+home+", the deploy user's home\n") ||
+		!strings.Contains(out, "devopsy: | 2. "+vol+" (xfs on /dev/sdb") || !strings.Contains(out, "apply these?") || !strings.Contains(out, "nothing changed") ||
+		strings.Contains(out, "to keep releases on") || strings.Contains(out, "names it as releases: root") || readString(config) != before || fileExists(vol) {
+		t.Fatalf("Enter, then no (%d), config %q:\n%s", code, readString(config), out)
+	}
+	if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
+		t.Errorf("the home chosen ran a second facts session:\n%s", ssh)
+	}
+
+	out, code = at("2\nn\n")
+	if _, ssh := s.logs(); code != 1 || !strings.Contains(out, "--server-setup names it as releases: root in "+config) || strings.Count(ssh, "\n") != 2 ||
+		strings.Contains(out, "named ") || readString(config) != before || fileExists(vol) {
+		t.Fatalf("a volume chosen, then no (%d), config %q:\n%s\nsessions:\n%s", code, readString(config), out, ssh)
+	}
+
+	out, code = at("0\n2\ny\ny\n")
+	if code != 0 || !strings.Contains(out, "answer with a number from 1 to 2") || !strings.Contains(out, "devopsy: named "+vol+" the release root in "+config) ||
+		strings.Contains(out, "to keep releases on") || !fileExists(vol) {
+		t.Fatalf("a volume chosen (%d):\n%s", code, out)
+	}
+	if got := readString(config); got != before+"releases:\n  root: "+vol+"\n" {
+		t.Errorf("the config:\n%s", got)
+	}
+	if !strings.Contains(readString(filepath.Join(host, setup.MountsDropIn)), vol) {
+		t.Errorf("the mounts drop-in names no %s", vol)
+	}
+	if out, code := at(""); code != 0 || !strings.Contains(out, "nothing to change") || strings.Contains(out, "where do releases live?") {
+		t.Errorf("a second run (%d):\n%s", code, out)
+	}
+}
+
+// A root on a filesystem in memory (tmpfs, as Debian 13's /tmp, which tmp.mount mounts at every
+// boot from a unit file of its own) is refused, whatever mounts it: after a reboot the
+// filesystem is empty again, so every release on it would be gone.
+func TestServerSetupRefusesARootInMemory(t *testing.T) {
+	t.Parallel()
+	s, host, vol, _ := rootChoice(t)
+	tmp := filepath.Join(filepath.Dir(vol), "tmp")
+	write(t, filepath.Join(host, "proc", "self", "mountinfo"), "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / "+vol+" rw,relatime - xfs /dev/sdb rw\n3 1 0:30 / "+tmp+" rw,nosuid,nodev - tmpfs tmpfs rw\n", 0o644)
+	unit := setup.MountUnitName(tmp)
+	write(t, filepath.Join(host, "fragment."+unit), "/usr/lib/systemd/system/tmp.mount\n", 0o644)
+	if f, out, code := setupFactsOf(s, "--root", filepath.Join(tmp, "releases")); code != 1 || !strings.Contains(out, "devopsy: error: "+tmp+" is a tmpfs, in memory: it keeps nothing across a reboot") {
+		t.Errorf("facts --root in a tmpfs (%d), names %v:\n%s", code, f.NamesRoot, out)
 	}
 }
 
@@ -2229,7 +2718,7 @@ func TestFirewallSaysWhatDiffers(t *testing.T) {
 	write(t, filepath.Join(host, "/etc/systemd/system/devopsy-firewall.timer"), "# Written by devopsy (devopsy @<server> --project-users add).\n", 0o644)
 	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
 	for _, want := range []string{"metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it",
-		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " is not devopsy's",
+		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " differs from what devopsy writes",
 		remote.FirewallUnitLink + " does not enable " + remote.FirewallUnit, "/etc/systemd/system/devopsy-firewall.timer, an older install's, is still there"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q:\n%s", want, out)

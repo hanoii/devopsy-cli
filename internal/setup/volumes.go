@@ -16,6 +16,9 @@ type Candidate struct {
 	// Size and Free are the caller's, from the filesystem, in bytes.
 	Size int64 `json:"size,omitempty"`
 	Free int64 `json:"free,omitempty"`
+	// Refusal is why the volume is not offered for the root, with its fix, the caller's, nil
+	// for one offered.
+	Refusal *Refusal `json:"refusal,omitempty"`
 }
 
 // skipped are the mount points no candidate is on or under, besides Docker's root.
@@ -63,14 +66,18 @@ func Candidates(mountinfo, sysfs, dockerRoot string) []Candidate {
 	return out
 }
 
-// OnCandidate reports whether path (links resolved) is on one of cs.
-func OnCandidate(path string, cs []Candidate) bool {
-	for _, c := range cs {
-		if under(path, c.MountPoint) {
-			return true
+// OnCandidate reports whether path (links resolved) is on c.
+func OnCandidate(path string, c Candidate) bool { return under(path, c.MountPoint) }
+
+// MountOf is the mount in mountinfo (/proc/self/mountinfo's text) that path is on, its mount
+// point and filesystem: the longest mount point holding it, "" for none.
+func MountOf(mountinfo, path string) (point, fstype string) {
+	for _, m := range parseMountinfo(mountinfo) {
+		if under(path, m.point) && len(m.point) >= len(point) {
+			point, fstype = m.point, m.fstype
 		}
 	}
-	return false
+	return point, fstype
 }
 
 // mount is one line of mountinfo.

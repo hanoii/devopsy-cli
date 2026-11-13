@@ -92,7 +92,29 @@ a line it cannot read
 	if got := Candidates("22 1 0:31 / / rw - btrfs /dev/sda1 rw\n30 22 8:16 / /srv rw - xfs /dev/sdb rw\n", t.TempDir(), ""); len(got) != 1 {
 		t.Errorf("no sysfs: %+v", got)
 	}
-	if !OnCandidate("/srv/releases", want) || !OnCandidate("/srv", want) || OnCandidate("/srvx", want) || OnCandidate("/home/deploy", want) {
+	if !OnCandidate("/srv/releases", want[0]) || !OnCandidate("/srv", want[0]) || OnCandidate("/srvx", want[0]) || OnCandidate("/home/deploy", want[0]) {
 		t.Error("OnCandidate")
+	}
+}
+
+// A path's mount is the one at the longest mount point in mountinfo holding it, a mount
+// point's own, one escaped by the kernel read back, and / for a path on no other, with its
+// filesystem; none with no mount at all.
+func TestMountOf(t *testing.T) {
+	t.Parallel()
+	mountinfo := "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:16 / /mnt/vol1 rw - xfs /dev/sdb rw\n3 1 8:32 / /mnt/vol\\0402 rw - ext4 /dev/sdc rw\n"
+	for path, want := range map[string]string{
+		"/mnt/vol1/releases": "/mnt/vol1 xfs",
+		"/mnt/vol1":          "/mnt/vol1 xfs",
+		"/mnt/vol10":         "/ ext4",
+		"/mnt/vol 2/r":       "/mnt/vol 2 ext4",
+		"/home/devopsy":      "/ ext4",
+	} {
+		if point, fstype := MountOf(mountinfo, path); point+" "+fstype != want {
+			t.Errorf("%s: %q %q, want %q", path, point, fstype, want)
+		}
+	}
+	if point, fstype := MountOf("", "/srv"); point != "" || fstype != "" {
+		t.Errorf("no mounts: %q %q", point, fstype)
 	}
 }

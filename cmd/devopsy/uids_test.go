@@ -558,3 +558,58 @@ func TestFreeDownOnlyWhatIsLeft(t *testing.T) {
 		}
 	}
 }
+
+// A release root moved as docs/config.md says, the claims directory (uids.DirName, dot-named
+// under the root) moved with the projects' directories, keeps every environment's uid, even
+// two whose hashed slots collide, whichever starts first after the move: each runs as the uid
+// that owns its data.
+func TestReleaseRootMoveKeepsUIDs(t *testing.T) {
+	t.Parallel()
+	// Two environments of one project whose hashed slots collide.
+	var first, second uids.Owner
+	seen := map[uint32]uids.Owner{}
+	for i := 0; i < 1_000_000 && first.Env == ""; i++ {
+		o, err := uids.EnvOwner("shop", "", "e"+strconv.Itoa(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other, ok := seen[o.Plain()]; ok {
+			first, second = other, o
+		}
+		seen[o.Plain()] = o
+	}
+	if first.Env == "" {
+		t.Fatal("no two environments' slots collide")
+	}
+	tmp := t.TempDir()
+	old, moved := filepath.Join(tmp, "old"), filepath.Join(tmp, "new")
+	was := map[uids.Owner]uint32{}
+	for _, o := range []uids.Owner{first, second} {
+		write(t, filepath.Join(old, o.Project, o.Env, "releases", ".keep"), "", 0o644)
+		uid, _, err := claimsStore(old).LookupPair(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		was[o] = uid
+	}
+	// The doc's steps: the environments stopped, the projects' directories and the claims
+	// directory moved under the new root, root: changed, then each started again, here the
+	// second first.
+	if err := os.MkdirAll(moved, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"shop", uids.DirName} {
+		if err := os.Rename(filepath.Join(old, name), filepath.Join(moved, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, o := range []uids.Owner{second, first} {
+		uid, _, err := claimsStore(moved).LookupPair(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uid != was[o] {
+			t.Errorf("%s runs as %d after the move, %d before, its data's owner", o, uid, was[o])
+		}
+	}
+}

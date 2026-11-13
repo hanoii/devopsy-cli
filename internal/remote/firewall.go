@@ -617,7 +617,7 @@ func firewallWrong(read string, withDoor bool, gid, doorGid string) []string {
 			}
 			// A chain two jumps lead to is checked once.
 			if !slices.Contains(checked, j.chain) && !slices.Equal(got, firewallRules(f, j.chain)) {
-				wrong = append(wrong, f.cmd+": "+j.chain+" is not devopsy's")
+				wrong = append(wrong, f.cmd+": "+j.chain+" differs from what devopsy loads")
 			}
 			checked = append(checked, j.chain)
 			if why := jumpedFirst(t, j); why != "" {

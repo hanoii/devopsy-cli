@@ -39,10 +39,14 @@ type Facts struct {
 	// through its restart.
 	Running     int  `json:"running"`
 	LiveRestore bool `json:"live_restore"`
-	// Candidates are the volumes the root could be on; Projects whether the root holds a
-	// project's environment already.
+	// Candidates are the volumes the root could be on, each offered or not (Candidate.Refusal,
+	// the path's or the config's), none while devopsy names no other root (the config names one,
+	// or the root holds something of devopsy's).
 	Candidates []Candidate `json:"candidates,omitempty"`
-	Projects   bool        `json:"projects"`
+	// NamesRoot: an apply with --root names Root as releases: root in the deploy user's config
+	// (ConfigFile) first (facts --root of a root releases do not live in yet).
+	NamesRoot  bool   `json:"names_root,omitempty"`
+	ConfigFile string `json:"config_file,omitempty"`
 	// Record is the record's path, "" while there is none: the server is not set up by
 	// devopsy yet.
 	Record string `json:"record,omitempty"`
@@ -65,8 +69,8 @@ type Refusal struct {
 	// Howto is the topic of devopsy --server-setup-howto that has the fix's steps, "" for none:
 	// the operator's devopsy offers its command after the fix's text (fixWords).
 	Howto howto.Name `json:"howto,omitempty"`
-	// Command is the fix's command, offered after its text, "" for none: a command of devopsy's
-	// on the server's address as its session named it, the text saying it in words without one.
+	// Command is the fix's command, offered after its text, "" for none (for example devopsy's
+	// on the server's address as its session named it, the text saying it in words without one).
 	Command string `json:"command,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
@@ -93,7 +97,7 @@ func FactOf(s PartState) PartFact {
 }
 
 // FileFact is a file devopsy writes whole: in sync when it holds its text exactly, Missing
-// when it is not there (said only by the facts that word it so). With Link, it is a link that
+// when it is not there (fileWords). With Link, it is a link that
 // enables the unit Link names: in sync when it leads there.
 type FileFact struct {
 	Item    string `json:"item"`
@@ -142,8 +146,13 @@ func (f Facts) Changes() bool {
 	return slices.ContainsFunc(f.Changing(), func(s Step) bool { return s != StepRestart && f.Goes(s) })
 }
 
-// Hint says whether the volume hint goes with f: candidates, none of them the root's, and
-// no project released there yet.
-func (f Facts) Hint() bool {
-	return len(f.Candidates) > 0 && !f.Projects && !OnCandidate(f.Root, f.Candidates)
+// RootOpen says whether where releases live is still open: a volume is listed, offered or
+// not, which the server lists only while devopsy may name another root. The volume hint shows
+// then, where the question is not asked.
+func (f Facts) RootOpen() bool { return len(f.Candidates) > 0 }
+
+// AsksRoot says whether --server-setup asks where releases live, at a terminal: a volume is
+// offered.
+func (f Facts) AsksRoot() bool {
+	return slices.ContainsFunc(f.Candidates, func(c Candidate) bool { return c.Refusal == nil })
 }
