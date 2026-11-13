@@ -610,6 +610,14 @@ in the job run `devopsy --ssh-option IdentityFile="$DEVOPSY_SSH_KEY"
 @prod --release`, or load it into an agent. To rotate it, generate another, add it, then
 remove the old one.
 
+For CI's known hosts file (`UserKnownHostsFile` in
+`DEVOPSY_SSH_COMMAND`, [CI](#ci)), run `ssh-keyscan <server>` locally
+and check its fingerprints against the ones the server prints:
+
+```sh
+for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done
+```
+
 ## Project users
 
 A project can have a Unix user of its own with no access to Docker's
