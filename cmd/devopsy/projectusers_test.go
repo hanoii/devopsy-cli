@@ -493,7 +493,7 @@ func TestProjectUsersAddRefusesWithoutTheDoorsTools(t *testing.T) {
 func TestProjectUsersAddWithoutADoorNamesItsSteps(t *testing.T) {
 	t.Parallel()
 	out, code := runDevopsy(t, t.TempDir(), nil, remote.ProjectUsersFlag, "add", "shop")
-	if code != 1 || !strings.Contains(out, "this server has no door: no door: space: in ") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
+	if code != 1 || !strings.Contains(out, "this server is not set up for project users: ") || !strings.Contains(out, " has no \"door: space:\"\n") || !strings.Contains(out, "$ "+howto.Command(howto.ProjectUsers)+"\n") {
 		t.Errorf("add with no door (%d):\n%s", code, out)
 	}
 }

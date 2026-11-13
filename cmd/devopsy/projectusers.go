@@ -64,8 +64,8 @@ func runProjectUsersStep(args []string) int {
 		return listProjectUsers(d)
 	}
 	if d == nil || d.Space == "" {
-		report.Fail(errors.New("this server has no door: no door: space: in "+remote.UserConfigFile()),
-			report.Fix("give it one in that file, a directory of the deploy user's on a mount of its own with nosuid and nodev, as root:", howto.Command(howto.ProjectUsers)))
+		report.Fail(errors.New("this server is not set up for project users: "+remote.UserConfigFile()+" has no \"door: space:\""),
+			report.Fix("set it to a directory of the deploy user's on a mount of its own, with nosuid and nodev; this prints the steps:", howto.Command(howto.ProjectUsers)))
 		return 1
 	}
 	project := args[1]
