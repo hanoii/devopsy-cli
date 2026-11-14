@@ -37,11 +37,8 @@ var kept = []struct{ file, line string }{
 	{"docs/local.md", ""},
 	{"docs/project-users.md", ""},
 	{"docs/releases.md", ""},
-	{"docs/server-setup-howto.md", ""},
 	{"docs/servers.md", ""},
 	{"docs/syncs.md", ""},
-	{"internal/howto/howto.go", ""},
-	{"internal/howto/topics.go", ""},
 	{"internal/skill/SKILL.md", ""},
 	{"README.md", ""},
 }
