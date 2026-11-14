@@ -384,7 +384,9 @@ func TestServerSetupApplySaysWhatTheFirstSessionDidNot(t *testing.T) {
 	}
 }
 
-// pathWithout is a PATH holding every command of bin and the test's PATH but tools, as links.
+// pathWithout is a PATH holding every command of bin and the test's PATH but tools, as links,
+// and every release tool of serverTools but tools, so that only tools are missing whatever the
+// host lacks (macOS has no setsid, and no tail answering --version without GNU's).
 func pathWithout(t *testing.T, bin string, tools ...string) string {
 	t.Helper()
 	path := t.TempDir()
@@ -395,6 +397,25 @@ func pathWithout(t *testing.T, bin string, tools ...string) string {
 				_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(path, e.Name()))
 			}
 		}
+	}
+	// Stand-ins for the host's missing ones: setsid runs its command, tail answers
+	// --version and is the host's otherwise.
+	stubs := map[string]string{
+		"setsid": "#!/bin/sh\n[ \"$1\" != -w ] || shift\nexec \"$@\"\n",
+		"tail":   "#!/bin/sh\n[ \"$1\" != --version ] || { echo 'tail (fake)'; exit 0; }\nexec /usr/bin/tail \"$@\"\n",
+	}
+	for _, st := range serverTools {
+		p := filepath.Join(path, st.name)
+		if st.door || slices.Contains(tools, st.name) || (fileExists(p) && (st.name != "tail" || exec.Command(p, "--version").Run() == nil)) {
+			continue
+		}
+		stub, ok := stubs[st.name]
+		if !ok {
+			t.Fatalf("this host has no %s, which the server's tests need", st.name)
+		}
+		// The link goes first: written through, it would change the host's own tail.
+		_ = os.Remove(p)
+		write(t, p, stub, 0o755)
 	}
 	return path
 }
