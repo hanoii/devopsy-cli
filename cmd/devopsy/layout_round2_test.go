@@ -69,3 +69,21 @@ func TestReviewLongGoneNameIsNoLineOfALiveEnvironmentNamedGone(t *testing.T) {
 		}
 	}
 }
+
+// Review round 2, bug: goneKeyMax keeps a long gone name from widening every key in one of
+// the places a gone name is keyed only: a claim left while what else is left cannot be read
+// is keyed by its full name, and so is a gone name of no project on the server, its own
+// heading; either moves the value column of the whole report.
+func TestReviewLongGoneNamesWidenNoKey(t *testing.T) {
+	t.Parallel()
+	unlooked := releasedAt(nil, "env:shop:a-feature-branch-name")
+	ownHeading := releasedAt([]string{"shop/prod"})
+	ownHeading.Containers = []remote.HostContainer{{Project: "oldproject-production", Service: "web", State: "exited", Released: true}}
+	for name, info := range map[string]remote.ServerInfo{"a claim left, the rest unlooked": unlooked, "a name of no project": ownHeading} {
+		out := reportAt(info)
+		// The column of a report whose keys are server's own: snapshots and two spaces, indented.
+		if !strings.Contains(out, "\n  devopsy    0.53.0\n") {
+			t.Errorf("%s: a long gone name widened the key column:\n%s", name, out)
+		}
+	}
+}
