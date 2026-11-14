@@ -785,7 +785,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	for _, want := range []string{
 		"\nleftovers\n",
-		"  images  busybox:1.37  4.3 MB\n          no release holds it, nor any container uses it\n          remove it once nothing needs it, on the server:\n          $ devopsy @devopsy@one: --shell-host\n          $ docker rmi busybox:1.37",
+		"  images     busybox:1.37  4.3 MB\n             no release holds it, nor any container uses it\n             remove it once nothing needs it, on the server:\n             $ devopsy @devopsy@one: --shell-host\n             $ docker rmi busybox:1.37",
 		"\n    gone     gone, no environment and no uid claim on the server, and left: containers web (exited)\n",
 		"\n    old      a --destroy cut off while it removed it left old.rm.999999999, 0 B\n             run it again, which resumes it, in shop's checkout:\n             $ devopsy @devopsy@one:old --destroy",
 	} {

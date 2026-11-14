@@ -82,9 +82,10 @@ func printJSON(w io.Writer, v any) error {
 // lines never do, each message whole on its line as the code writes it.
 const reportWidth = 100
 
-// entryTable prints entries on w in st, their keys in a column: one
-// column per section, two spaces after its longest key, the key "" of
-// an entry with no section sized on es and more.
+// entryTable prints entries on w in st, their keys in a column two
+// spaces after the longest: one for every section of a report (each
+// section's values start where the others' do), another for the entries
+// with no section, sized on theirs and more.
 type entryTable struct {
 	w    io.Writer
 	st   style
@@ -101,9 +102,20 @@ func newEntryTable(w io.Writer, st style, es []remote.StatusEntry, more ...strin
 	for _, k := range more {
 		t.cols[""] = max(t.cols[""], utf8.RuneCountInString(k)+2)
 	}
+	sections := 0
 	for _, l := range layOut(es) {
 		if l.kind == lineEntry && l.key != "" {
 			t.cols[l.section] = max(t.cols[l.section], l.indent+utf8.RuneCountInString(l.key)+2)
+		}
+	}
+	for sec, w := range t.cols {
+		if sec != "" {
+			sections = max(sections, w)
+		}
+	}
+	for sec := range t.cols {
+		if sec != "" {
+			t.cols[sec] = sections
 		}
 	}
 	t.col = t.cols[""]

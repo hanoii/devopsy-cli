@@ -26,8 +26,9 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 	}
 }
 
-// A report in sections: a section's heading after a blank line, its own
-// key column; a project's heading, its rows indented under it, their
+// A report in sections: a section's heading after a blank line, one key
+// column for every section, so each section's values start where the
+// others' do; a project's heading, its rows indented under it, their
 // cells aligned across projects; a warning marked "! " in its indent,
 // which no key column widens; cells under one key outside a project
 // aligned with each other; prose past reportWidth wrapped at a word to
@@ -67,13 +68,13 @@ func TestEntryTableSections(t *testing.T) {
 	newEntryTable(&b, style{}, es).print(es)
 	want := `
 server
-  system  Linux
-  disks   /  xfs
-!         / is 95% full
-          to fix it:
-          $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
-  setup   a line long enough to wrap at a word once it runs past the report's width, which it does
-          here
+  system     Linux
+  disks      /  xfs
+!            / is 95% full
+             to fix it:
+             $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
+  setup      a line long enough to wrap at a word once it runs past the report's width, which it
+             does here
 
 projects
   app        project uid 1
@@ -85,11 +86,11 @@ projects
     dev      gone                             x
 
 leftovers
-  images  busybox:1.37  4.3 MB
-          alpine:3      8.0 MB
-          no release holds them
-          remove them:
-          $ docker rmi busybox:1.37 alpine:3
+  images     busybox:1.37  4.3 MB
+             alpine:3      8.0 MB
+             no release holds them
+             remove them:
+             $ docker rmi busybox:1.37 alpine:3
 `
 	if b.String() != want {
 		t.Errorf("sections:\n%s\nwant:\n%s", b.String(), want)
