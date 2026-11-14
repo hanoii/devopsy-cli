@@ -189,7 +189,7 @@ func TestEntryRowMovesItsLastCellWhole(t *testing.T) {
 	t.Parallel()
 	cells := []string{"released 10 min ago by somebody@a-long-runner-name.example.com", "3 of 3 running", "uid 2091094815", "a sync or an export from it"}
 	es := []remote.StatusEntry{
-		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Key: "shop", Lines: []string{"project uid 1"}},
+		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Head: true, Key: "shop", Lines: []string{"project uid 1"}},
 		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Key: "prod", Lines: []string{remote.CellsJoined(cells...)}, Cells: cells},
 	}
 	var b bytes.Buffer

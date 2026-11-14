@@ -155,9 +155,10 @@ type laidLine struct {
 	indent  int
 	key     string // shown on this line only
 	mark    bool   // a warning's first line, "! " in its indent
-	value   string // a row of cells: all but its last, padded
-	last    string // a row of cells: its last
-	hang    int    // a remedy's text: where a part cut from it goes on
+	value   string
+	cells   []string // a row of cells, as they show
+	widths  []int    // a row of cells: its run's widths, of all but its last
+	hang    int      // a remedy's text: where a part cut from it goes on
 	level   string
 	group   bool // the key is its project's name, the line its heading's
 }
@@ -166,8 +167,8 @@ type laidLine struct {
 // on each change of section, a project's heading on each change of
 // group when its first entry is not one of the heading's (Head), a key
 // on the first line of each run of it, a warning's first line marked,
-// the cells aligned with their run's (cellWidths), a column empty in
-// every row of its run left out, each key, name and line quoted as
+// a row of cells with its run's widths (cellWidths), each key, name,
+// line and cell quoted as
 // report.Copyable quotes it. Remedies a later entry of the same key
 // shares are laid out once, after the last entry holding them
 // (sharedLater): one command that fixes several lines is offered once.
@@ -191,7 +192,7 @@ func layOut(es []remote.StatusEntry) []laidLine {
 		case e.Section != "":
 			indent = 2
 		}
-		newKey := newGroup || e.Key != prev.Key || e.Head != prev.Head
+		newKey := newGroup || e.Key != prev.Key || e.Name != prev.Name || e.Head != prev.Head
 		key := report.Copyable(e.Key)
 		if e.Head {
 			key = report.Copyable(e.Group)
@@ -203,14 +204,10 @@ func layOut(es []remote.StatusEntry) []laidLine {
 				line.key, line.group = key, e.Head
 			}
 			if j == 0 && len(e.Cells) > 0 {
-				var b strings.Builder
-				for k, c := range e.Cells[:len(e.Cells)-1] {
-					// A column empty in every row of its run takes no room.
-					if w := widths[i][k]; w > 0 {
-						b.WriteString(pad(report.Copyable(c), w) + "  ")
-					}
+				for _, c := range e.Cells {
+					line.cells = append(line.cells, report.Copyable(c))
 				}
-				line.value, line.last = b.String(), report.Copyable(e.Cells[len(e.Cells)-1])
+				line.widths = widths[i]
 			}
 			out = append(out, line)
 		}
@@ -275,7 +272,7 @@ func cellWidths(es []remote.StatusEntry) map[int][]int {
 // would move every line whenever a warning shows), a highlight's bold,
 // each command bold; in a section, prose past the width wraps at a word
 // to its column (wrapAt), and a row of cells past it moves its last
-// cell whole to a line of its own at the column.
+// cell whole to a line of its own at the column (cellRow).
 func (t entryTable) print(es []remote.StatusEntry) {
 	for _, l := range layOut(es) {
 		col := t.cols[l.section]
@@ -303,14 +300,13 @@ func (t entryTable) print(es []remote.StatusEntry) {
 				// The project's name in its color, its facts as any line's.
 				key = indent + t.st.name(l.key) + key[len(indent)+len(l.key):]
 			}
-			var parts []string
-			switch {
-			case l.last == "":
-				parts = wrapAt(l.value, col, t.width, 0, wrap)
-			case wrap && l.value != "" && col+utf8.RuneCountInString(l.value+l.last) > t.width:
-				parts = []string{l.value, l.last}
-			default:
-				parts = []string{l.value + l.last}
+			parts := wrapAt(l.value, col, t.width, 0, wrap)
+			if len(l.cells) > 0 {
+				room := -1
+				if wrap {
+					room = t.width - col
+				}
+				parts = cellRow(l.cells, l.widths, room)
 			}
 			for k, part := range parts {
 				if k > 0 {
@@ -334,6 +330,56 @@ func (t entryTable) print(es []remote.StatusEntry) {
 			}
 		}
 	}
+}
+
+// cellRow is a row of cells as its lines: each cell but the last that
+// holds anything padded to its run's width (widths), a column empty in
+// every row of its run left out, nothing after that last; with a room
+// (-1 for none), a cell is padded only while the row still fits it, and
+// a row whose own cells do not fit moves its last whole to a line of
+// its own. A row is never cut at a word.
+func cellRow(cells []string, widths []int, room int) []string {
+	last := len(cells) - 1
+	for last > 0 && cells[last] == "" {
+		last--
+	}
+	shown := func(k int) bool { return k < len(widths) && widths[k] > 0 }
+	// own is the width of cells from..to as they are, two spaces between.
+	own := func(from, to int) int {
+		n := 0
+		for k := from; k <= to; k++ {
+			if k == to || shown(k) {
+				n += utf8.RuneCountInString(cells[k]) + 2
+			}
+		}
+		return max(0, n-2)
+	}
+	move := room >= 0 && last > 0 && own(0, last) > room
+	end := last
+	if move {
+		end = last - 1
+	}
+	var b strings.Builder
+	pos := 0
+	for k := 0; k < last; k++ {
+		if !shown(k) {
+			continue
+		}
+		cell := cells[k]
+		rest := 0
+		if k < end {
+			rest = own(k+1, end) + 2
+		}
+		if room < 0 || pos+widths[k]+rest <= room {
+			cell = pad(cell, widths[k])
+		}
+		b.WriteString(cell + "  ")
+		pos += utf8.RuneCountInString(cell) + 2
+	}
+	if move {
+		return []string{strings.TrimRight(b.String(), " "), cells[last]}
+	}
+	return []string{b.String() + cells[last]}
 }
 
 // wrapAt is line cut at words into parts that fit width from column col

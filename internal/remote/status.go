@@ -54,7 +54,9 @@ const StatusNoContainer = "none"
 // ways to act on it. Section and Group place it in a report laid out in
 // parts (--server-info's server, projects, leftovers; a project in
 // projects), empty in a flat one; Head marks a line of its group's
-// heading, shown under the group's name; Cells are its first line's
+// heading, shown under the group's name; Name is what a row is of when
+// its key does not say it (a gone environment's long name, keyed gone),
+// a row of its own apart from another of the same key; Cells are its first line's
 // cells, a row aligned with the others of its run, Lines[0] holding them
 // joined.
 type StatusEntry struct {
@@ -63,6 +65,7 @@ type StatusEntry struct {
 	Group    string          `json:"group,omitempty"`
 	Head     bool            `json:"head,omitempty"`
 	Key      string          `json:"key"`
+	Name     string          `json:"name,omitempty"`
 	Lines    []string        `json:"lines"`
 	Cells    []string        `json:"cells,omitempty"`
 	Remedies []report.Remedy `json:"remedies,omitempty"`
