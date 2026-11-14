@@ -306,16 +306,34 @@ func liveNames(info remote.ServerInfo) (live map[string]bool, stale map[string]r
 		if c.Bad != "" && c.Name == info.UIDsDir {
 			return nil, nil, false // the claims did not read
 		}
-		o, err := uids.ParseOwner(c.Owner)
-		switch {
-		case err != nil || o.Env == "":
-		case staleUID(c, info.UIDs, info.Environments, false, info.DoorProjects) != "":
-			stale[o.ComposeName()] = c
-		default:
-			live[o.ComposeName()] = true
+	}
+	stale = staleClaims(info)
+	for _, c := range info.UIDs {
+		if o, err := uids.ParseOwner(c.Owner); err == nil && o.Env != "" {
+			if _, left := stale[o.ComposeName()]; !left {
+				live[o.ComposeName()] = true
+			}
 		}
 	}
 	return live, stale, true
+}
+
+// staleClaims are the environment uid claims staleUID judges left, by compose name.
+func staleClaims(info remote.ServerInfo) map[string]remote.UIDClaim {
+	stale := map[string]remote.UIDClaim{}
+	for _, c := range info.UIDs {
+		if o, err := uids.ParseOwner(c.Owner); err == nil && o.Env != "" &&
+			staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects) != "" {
+			stale[o.ComposeName()] = c
+		}
+	}
+	return stale
+}
+
+// claimKey is where claim c's environment is shown: its project, and its key there.
+func claimKey(c remote.UIDClaim) (project, key string) {
+	o, _ := uids.ParseOwner(c.Owner)
+	return o.Project, filepath.ToSlash(filepath.Join(o.Instance, o.Env))
 }
 
 // goneEnv is what is left of a compose name with no environment: its claim when one is left.
@@ -437,7 +455,19 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 		}
 	}
 
-	if live, stale, ok := liveNames(info); ok && dockerUp {
+	live, stale, ok := liveNames(info)
+	if !ok || !dockerUp {
+		// What else is left cannot be looked for: each claim left is said alone, never as all
+		// there is.
+		left := staleClaims(info)
+		for _, name := range slices.Sorted(maps.Keys(left)) {
+			c := left[name]
+			project, key := claimKey(c)
+			inProject(project, key, false, []string{"gone, its uid claim " + strconv.FormatUint(uint64(c.UID), 10) + " is left"},
+				onServer("remove it by hand once nothing of it is left:", "rm "+remote.QuoteWord(claimPath(info.UIDsDir, c))))
+		}
+	}
+	if ok && dockerUp {
 		gone := map[string]*goneEnv{}
 		of := func(name string) *goneEnv {
 			if gone[name] == nil {
@@ -503,9 +533,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 			hint := "an environment removed by hand: remove what is left once none of it is needed:"
 			if c := g.claim; c != nil {
 				// Known by its claim: its project and its key as its owner says them.
-				if o, err := uids.ParseOwner(c.Owner); err == nil {
-					project, key = o.Project, filepath.ToSlash(filepath.Join(o.Instance, o.Env))
-				}
+				project, key = claimKey(*c)
 				uid := strconv.FormatUint(uint64(c.UID), 10)
 				// Its claim last: freed while anything of it is left, its uid could go to
 				// another environment with these files still owned by it.

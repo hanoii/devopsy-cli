@@ -400,7 +400,8 @@ The rest is the server's, under `leftovers`:
 What goes by an environment's absence is shown only when the release
 root lists environments and every one of them, and the uid claims, could
 be read: with the root's disk not mounted, every environment would look
-gone. Images and volumes of a compose project that is not a release's
+gone. A uid claim whose environment is gone is said all the same, alone,
+since nothing else of it could be looked for. Images and volumes of a compose project that is not a release's
 (the admin's own) are not shown. What of it could not be read (the
 images, the volumes, a part of `--gc`'s count) is a warning instead:
 unknown, never none.

@@ -146,8 +146,11 @@ func TestServerInfoLeft(t *testing.T) {
 
 	// What goes by an absence is made only when the release root lists environments, all read,
 	// and the claims read: with the root's disk not mounted, every environment reads as gone.
+	// Found by what is left of it; a claim left is said whatever reads (TestServerInfoGoneClaimUnlookedStaysSaid).
 	isGone := func(i remote.ServerInfo) bool {
-		return slices.ContainsFunc(leftSays(i, "devopsy@vm1", "vm1:"), func(s string) bool { return strings.Contains(s, ": gone, ") })
+		return slices.ContainsFunc(leftSays(i, "devopsy@vm1", "vm1:"), func(s string) bool {
+			return strings.Contains(s, ", and left: ") || strings.Contains(s, "only its uid claim")
+		})
 	}
 	for name, change := range map[string]func(*remote.ServerInfo){
 		"no root environment": func(i *remote.ServerInfo) { i.Environments = i.Environments[4:] },
@@ -302,5 +305,29 @@ func TestServerInfoGoneClaimSaysWhatIsLeft(t *testing.T) {
 	out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
 	if strings.Contains(out, "only its uid claim") && !strings.Contains(out, "web (exited)") {
 		t.Errorf("shop-pr-1's container is left, and the report says only its claim is:\n%s", out)
+	}
+}
+
+// A claim whose environment is gone never goes unsaid: when what else is left cannot be looked
+// for (no environment listed, Docker down), it is a gone row of its own with its removal,
+// never "only its uid claim", since nothing else was looked for.
+func TestServerInfoGoneClaimUnlookedStaysSaid(t *testing.T) {
+	t.Parallel()
+	base := remote.ServerInfo{
+		UIDsDir: "/home/devopsy/.devopsy-uids",
+		UIDs:    []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "env:shop:pr-1"}},
+	}
+	for name, change := range map[string]func(*remote.ServerInfo){
+		"no environment listed": func(*remote.ServerInfo) {},
+		"docker down": func(i *remote.ServerInfo) {
+			i.Environments, i.Docker.Error = []remote.Environment{{Path: "shop/prod"}}, "docker info: Cannot connect"
+		},
+	} {
+		i := base
+		change(&i)
+		want := "shop pr-1: gone, its uid claim 1000002 is left\n| remove it by hand once nothing of it is left, on the server:\n$ devopsy @vm1: --shell-host\n$ rm /home/devopsy/.devopsy-uids/env:shop:pr-1"
+		if got := leftSays(i, "devopsy@vm1", "vm1:"); !slices.Contains(got, want) {
+			t.Errorf("%s: no row of the claim:\n%s", name, strings.Join(got, "\n\n"))
+		}
 	}
 }
