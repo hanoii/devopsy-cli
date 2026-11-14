@@ -111,8 +111,8 @@ func runInPlace(root, phase string, a []string) int {
 // runLocalDestroy is --destroy without a target, in place, after asking
 // for the project's name (--yes skips it): defaults:' destroy step, when
 // there is one, then what runDestroyData takes down. Nothing else: on a
-// server devopsy then removes the environment's directory, which locally
-// is the checkout.
+// server devopsy then removes the environment's directory, which without
+// a target is the checkout.
 func runLocalDestroy(cwd string, args []string, color bool) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--destroy"]))
@@ -164,7 +164,7 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 
 // destroyStep is what --destroy runs first in projectDir: in a release
 // (a server's), the destroy: step of the environment it was made for, as
-// its own config says; locally defaults:' destroy:. Maybe none.
+// its own config says; without a target defaults:' destroy:. Maybe none.
 func destroyStep(projectDir string) ([]string, error) {
 	if cli.InRelease(projectDir) {
 		t, err := remote.ReleaseEnvironment(projectDir)

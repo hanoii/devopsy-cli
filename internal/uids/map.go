@@ -66,7 +66,7 @@ func (m Map) Args() []string {
 // failed pass is looked at again, mapping nothing: a file the service removed meanwhile has
 // no owner to fix, so only something left on a mapped uid fails it, or a look that fails
 // itself. Only files, directories and links: a device node keeps its owner. $2 of "-" maps
-// nothing (a bind mount locally on macOS, whose owners Docker fakes).
+// nothing (a bind mount in the local environment on macOS, whose owners Docker fakes).
 var MapScript = func() string {
 	env, project := mapRanges()
 	return fmt.Sprintf(`map_ids() {

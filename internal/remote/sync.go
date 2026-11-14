@@ -469,9 +469,9 @@ var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
-// import once complete. Locally, --import's temporary file under
-// .devopsy/ starts with it too. Every file a sync leaves in $base starts
-// with .devopsy-sync.
+// import once complete. Without a target, --import's temporary file
+// under .devopsy/ starts with it too. Every file a sync leaves in $base
+// starts with .devopsy-sync.
 const StreamSpoolPrefix = ".devopsy-sync.stream."
 
 // StreamSpool is service's spool file for sync id in the environment

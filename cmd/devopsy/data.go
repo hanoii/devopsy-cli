@@ -37,9 +37,9 @@ import (
 
 // --export and --import: one service's data, the way its devopsy.data
 // copy label says (custom through the data capability's export and
-// import, volumes as a tar of its entries of mnt), locally or in a target's current
-// release (ExportScript, ImportScript run the same code there), with what
-// devopsy.data.stop says stopped meanwhile (cli.DataStops).
+// import, volumes as a tar of its entries of mnt), without a target or in a
+// target's current release (ExportScript, ImportScript run the same code there),
+// with what devopsy.data.stop says stopped meanwhile (cli.DataStops).
 
 // dataService finds name among services, with data a copy carries: a
 // service without any, or whose copy is none, has nothing to move.
@@ -487,7 +487,8 @@ func runExport(cwd string, args []string, color bool) int {
 }
 
 // exportRecord is what an mnt export of name records of the images that
-// ran on its data: its release's on a target, its container's locally.
+// ran on its data: its release's on a target, its container's without a
+// target.
 func exportRecord(cwd, projectDir, name string) string {
 	if !cli.InRelease(projectDir) {
 		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut,
@@ -641,7 +642,8 @@ func tarRecord(spool string) string {
 
 // importSpool is where --import keeps stdin until it is complete: in a
 // release, the environment directory's StreamSpool (what a sync uses);
-// locally a temporary file under .devopsy/, which releases never upload.
+// without a target a temporary file under .devopsy/, which releases
+// never upload.
 func importSpool(projectDir, name string) (*os.File, error) {
 	if cli.InRelease(projectDir) {
 		base := filepath.Dir(filepath.Dir(projectDir))
@@ -1062,9 +1064,9 @@ func extractEntries(ctx context.Context, cwd, mnt, spool string, entries []tarEn
 // file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
 // each, in the util container c, which mounts the file read-only, its
 // owners then mapped by m, the environment's own uids (ownMap). An entry
-// locally on macOS is not mapped: Docker fakes a bind mount's owners
-// there, and its file sharing may refuse the chown, where a volume is
-// Docker's own.
+// on macOS without a target is not mapped: Docker fakes a bind mount's
+// owners there, and its file sharing may refuse the chown, where a
+// volume is Docker's own.
 func extractEntry(ctx context.Context, cwd, mnt, tarFile string, e tarEntry, c container, project string, services []cli.SyncService, m uids.Map) error {
 	var mount string
 	var err error
@@ -1130,7 +1132,7 @@ func readyEntry(mnt string, e tarEntry) error {
 
 // runImport implements devopsy --import <service> [--accept-image
 // <service>] [--yes] [--resolved]: stdin, spooled to a file until complete, into the service. --yes is
-// what a target's session passes after asking: locally nothing asks.
+// what a target's session passes after asking: without a target nothing asks.
 //
 // Nothing is replaced until the data has fully arrived. Before the first
 // write a failure restores what was stopped; from it (devopsy asks Docker
@@ -1139,8 +1141,8 @@ func readyEntry(mnt string, e tarEntry) error {
 // mark, IncompleteImport) and what was stopped is recorded, both before
 // the write, and a failure keeps it all down, the imported service and
 // what depends on it stopped too, until a complete import of that
-// service or --resolved. Locally there is no mark: the error says what
-// stays down.
+// service or --resolved. Without a target there is no mark: the error says
+// what stays down.
 func runImport(cwd string, args []string, color bool) int {
 	if len(args) >= 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[cli.ImportFlag]))
@@ -1151,8 +1153,8 @@ func runImport(cwd string, args []string, color bool) int {
 		return fail(err.Error())
 	}
 	// On a server the operator's --accept-image comes as
-	// remote.ImagesAcceptEnv; locally nothing is held, so nothing to
-	// accept.
+	// remote.ImagesAcceptEnv; without a target nothing is held, so
+	// nothing to accept.
 	if len(accept) > 0 {
 		return fail(cli.ImportFlag + " --accept-image is for a target, whose data services are checked against their data's history: without one nothing is checked")
 	}
@@ -1179,7 +1181,8 @@ func runImport(cwd string, args []string, color bool) int {
 		return fail(err.Error() + ": nothing imported")
 	}
 	// On a target the import keeps a mark and a record next to the
-	// release (none locally: a release in place has nothing to guard).
+	// release (none without a target: a release in place has nothing
+	// to guard).
 	onTarget := cli.InRelease(projectDir)
 	base := filepath.Dir(cwd)
 	var prior syncRecord
@@ -1474,8 +1477,8 @@ func importEntries(entries []tarEntry, s cli.SyncService, services []cli.SyncSer
 		}
 		// Its links may lead anywhere, but none may make a bind
 		// source lead out of its entry: Docker follows it on the host
-		// (an import's own check as a restore's, locally too, where
-		// no mounts check runs).
+		// (an import's own check as a restore's, without a target
+		// too, where no mounts check runs).
 		if entries[i].volume == nil {
 			if err := linkAtBind(t, services); err != nil {
 				return nil, errors.New("the tar has " + err.Error() + ": nothing imported")
@@ -1546,9 +1549,9 @@ func (r importRun) write(ctx context.Context) error {
 	err = extractEntries(ctx, r.cwd, r.tar.mnt, r.spool, r.tar.entries, cname, composeName(r.cwd), r.services, r.uidMap)
 	// What it extracted goes to its owner before the import counts
 	// as complete: a tar made anywhere carries its maker's owners.
-	// Not locally on macOS, as localMnt: Docker Desktop's file
-	// sharing may refuse the chown, and both it and OrbStack let
-	// any container user write the Mac's files anyway.
+	// Not on macOS without a target, as localMnt: Docker Desktop's
+	// file sharing may refuse the chown, and both it and OrbStack
+	// let any container user write the Mac's files anyway.
 	if err == nil && (r.onTarget || runtime.GOOS != "darwin") {
 		err = ownMnt(ctx, r.tar.mnt, ownedEntries(r.owners, r.tar.names), cname.with("-owners"))
 	}
@@ -1717,7 +1720,7 @@ func markOf(base string) (*remote.Incomplete, error) {
 // did not complete, and the data as it is now is accepted. It checks the
 // mark again, ends a writer a killed devopsy left, starts what the
 // record holds and only once all of it is healthy removes the mark and
-// the record. Locally there is neither: refused.
+// the record. Without a target there is neither: refused.
 func runResolved(cwd, name string) int {
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {

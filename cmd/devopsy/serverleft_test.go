@@ -39,10 +39,10 @@ func leftSays(info remote.ServerInfo, host, ref string) []string {
 // shop-stage-2's nor the other way, a name over 94 characters by its cut prefix; a project
 // user's builds; a release's containers; volumes of such a name only, never of the admin's own
 // compose projects; snapshots under the snapshot root), dangling anonymous volumes, a cut
-// --destroy's directory, and a project user with no key that holds environments. Locally the
-// hints say in words what needs an address. A read that failed (the images, the volumes, what
-// --gc's count could not read, the containers an image's use is counted from) is said or
-// leaves its lines out, never taken for none.
+// --destroy's directory, and a project user with no key that holds environments. Without a
+// target the hints say in words what needs an address. A read that failed (the images, the
+// volumes, what --gc's count could not read, the containers an image's use is counted from) is
+// said or leaves its lines out, never taken for none.
 func TestServerInfoLeft(t *testing.T) {
 	t.Parallel()
 	long := "shop-" + strings.Repeat("e", 95)
@@ -101,7 +101,7 @@ func TestServerInfoLeft(t *testing.T) {
 		t.Errorf("left:\n%s\n\nwant:\n%s", strings.Join(got, "\n\n"), strings.Join(want, "\n\n"))
 	}
 
-	// Locally, what needs an address in words, the commands run here.
+	// Without a target, what needs an address in words, the commands run here.
 	local := strings.Join(leftSays(info, "", ""), "\n\n")
 	for _, w := range []string{
 		"| --gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too",

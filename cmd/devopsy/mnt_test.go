@@ -131,8 +131,8 @@ func TestMntOwnersRelease(t *testing.T) {
 	// An mnt import on a target gives what it extracted to its owner,
 	// before it counts as complete, in a container that mounts that
 	// entry alone, labeled so that a leftover import's end removes it
-	// (remote.TaskImport). Locally on macOS it gives nothing away
-	// (TestExportImport).
+	// (remote.TaskImport). Without a target, on macOS, it gives
+	// nothing away (TestExportImport).
 	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@dev", "--import", "app", "--yes")
 	docker, _ = s.logs()
 	if code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") || !regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --label devopsy.env=shop-dev --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy.internal/util:5 sh -c set -eu`).MatchString(docker) {
@@ -337,8 +337,8 @@ func TestMntOwnersReset(t *testing.T) {
 // (it heals a volume Docker made first). A mount of it without nocopy, by
 // any service, refuses the release before the switch: Docker would fill
 // it from the image and give its root the image's owner. A chown the
-// volume's driver refuses fails the step with words. Locally, before a
-// start, the same on macOS as on Linux, and a mount without nocopy
+// volume's driver refuses fails the step with words. Without a target,
+// before a start, the same on macOS as on Linux, and a mount without nocopy
 // refuses the start.
 func TestMntOwnersVolume(t *testing.T) {
 	t.Parallel()
@@ -377,7 +377,8 @@ func TestMntOwnersVolume(t *testing.T) {
 	}
 	s.logs()
 
-	// Locally, on macOS as on Linux: made and its root given before compose starts.
+	// Without a target, on macOS as on Linux: made and its root given before
+	// compose starts.
 	compose := filepath.Join(s.dot, "compose.yaml")
 	out, code = s.run(nocopy, "up", "-d")
 	docker, _ := s.logs()
@@ -419,7 +420,7 @@ func TestMntOwnersInherited(t *testing.T) {
 	}
 }
 
-// Locally, before compose starts anything, an owned entry missing is
+// Without a target, before compose starts anything, an owned entry missing is
 // made, and on Linux an entry not its
 // owner's is given away in a util container, only then; on macOS (Docker Desktop, OrbStack) ownership is
 // never checked. A command that starts nothing reads no labels.
@@ -463,9 +464,10 @@ func TestMntOwnersLocal(t *testing.T) {
 	// An owned entry that is a symbolic link (an entry shared between
 	// worktrees, a database on another disk) is a warning naming it, left
 	// as it is, and the command goes on: Docker mounts what it points to,
-	// the developer's choice locally (review of 2026-10-23, round 3:
-	// makeEntry refused it and every up failed before compose; on a
-	// server the mounts check refuses one before the switch).
+	// the developer's choice in the local environment (review of
+	// 2026-10-23, round 3: makeEntry refused it and every up failed
+	// before compose; on a server the mounts check refuses one before the
+	// switch).
 	os.RemoveAll(filepath.Join(s.dot, "mnt"))
 	elsewhere := filepath.Join(t.TempDir(), "storage")
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {

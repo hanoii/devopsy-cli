@@ -11,8 +11,8 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
-// runVarsScript runs a --vars script locally, as sh on a server would, with
-// a no-op flock (macOS has none) and root as the release root the fake
+// runVarsScript runs a --vars script in the test, as sh on a server would,
+// with a no-op flock (macOS has none) and root as the release root the fake
 // server devopsy reports.
 func runVarsScript(t *testing.T, root, script, stdin string) string {
 	t.Helper()

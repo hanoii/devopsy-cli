@@ -64,10 +64,10 @@ type Plan struct {
 	// are masked.
 	Verbose []string
 	// Starts is set for a compose command that starts containers
-	// (startingCommands) locally: the caller reads the labels and readies
-	// mnt's owned entries (MntOwnerLabel) first. Never in a release on a
-	// server, where --mnt-owners gives them away at each switch, nor for
-	// --dry-run, which starts nothing.
+	// (startingCommands) without a target: the caller reads the labels
+	// and readies mnt's owned entries (MntOwnerLabel) first. Never in a
+	// release on a server, where --mnt-owners gives them away at each
+	// switch, nor for --dry-run, which starts nothing.
 	Starts bool
 	// StartsInRelease is set for such a command, or cp (which mounts bind
 	// sources afresh), in a release on a server:
@@ -1435,7 +1435,8 @@ Where each runs:
 			run, _ := ReadCommandRun(path)
 			typed := c
 			if run.RunsLocal() {
-				// The prefix is an address: say it still runs locally.
+				// The prefix is an address: say it still runs on the
+				// operator's machine.
 				typed += " " + RunsLocallyNote
 			}
 			helpLine(&b, run.Scope().prefix(), typed, CommandDescription(path))
@@ -1561,7 +1562,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	// COMPOSE_PROJECT_NAME is always set, so commands and compose agree on
 	// it: releases write it into devopsy-target.env (<project>[-<instance>]-<environment>);
-	// locally it is the config's project, else compose's name:, else the
+	// without a target it is the config's project, else compose's name:, else the
 	// directory containing .devopsy (compose would take .devopsy itself).
 	project, err := remote.LoadProject(projectDir)
 	if err != nil {

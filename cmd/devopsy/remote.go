@@ -281,9 +281,10 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return runRemoteRelease(cwd, t, projectName, projectDir, projectEnv, args, color)
 
 	default:
-		// A local command that needs an address runs locally, given it as
-		// typed; one that takes none fails locally, before connecting: the
-		// server's devopsy would refuse it too, once connected.
+		// A local command that needs an address runs on the operator's
+		// machine, given it as typed; one that takes none fails on the
+		// operator's machine, before connecting: the server's devopsy
+		// would refuse it too, once connected.
 		if dir := commandsDir(t, projectDir); dir != "" && slices.Contains(cli.CustomCommands(dir), args[0]) {
 			run, err := cli.CheckCommand(dir, args[0], cli.Addressed)
 			if err != nil {
@@ -361,8 +362,8 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 		return fail(missingSteps(t, kind))
 	}
 	// A release carries its reload: and destroy: steps too, which run
-	// on the server: a command that only runs locally fails them only
-	// once they run, past a reload's checks.
+	// on the server: a command that only runs on the operator's
+	// machine fails them only once they run, past a reload's checks.
 	scoped := []*remote.Steps{steps}
 	if !rollback {
 		scoped = append(scoped, &remote.Steps{Run: t.Reload}, &remote.Steps{Run: t.Destroy})
@@ -791,8 +792,8 @@ func commandsDir(t *remote.Target, projectDir string) string {
 }
 
 // checkStepScopes refuses steps naming a project command where its ## Run:
-// and ## Needs: say it does not run, before anything changes: local steps run locally,
-// the others on the server.
+// and ## Needs: say it does not run, before anything changes: local steps run on the
+// operator's machine, the others on the server.
 func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 	cmds := cli.CustomCommands(projectDir)
 	check := func(step string, onTarget bool) error {

@@ -32,11 +32,11 @@ const gcLeftWarned = serverInfoWarned
 
 // runGC implements devopsy @<server> --gc [--dry-run] [--yes]: what the server keeps that no
 // release, --destroy or pruning removes, listed with its sizes in a session of its own
-// (gcScope.find), asked about locally, then removed by a second session, given the listing,
-// which removes only what it listed and still goes, deciding each removal again under its lock
-// (gcScope.remove): what came to go between the listing and the answer was never confirmed.
-// --yes runs the second alone, removing what it finds; --dry-run the first alone, asking
-// nothing.
+// (gcScope.find), asked about on the operator's machine, then removed by a second session,
+// given the listing, which removes only what it listed and still goes, deciding each removal
+// again under its lock (gcScope.remove): what came to go between the listing and the answer
+// was never confirmed. --yes runs the second alone, removing what it finds; --dry-run the
+// first alone, asking nothing.
 func runGC(t *remote.Target, args []string) int {
 	dry, yes := false, false
 	for _, a := range args {

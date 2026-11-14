@@ -2048,7 +2048,7 @@ func parseChildUIDs(out string) (uids.Map, error) {
 
 // ownMap is the uid map of the environment at cwd, the receiving side of a copy: its own
 // two uids as its load gives them (cli.UIDEnv, cli.ProjectUIDEnv; in a release the
-// server's claims, locally the plain hashes under the caller's).
+// server's claims, without a target the plain hashes under the caller's).
 func ownMap(cwd string) (uids.Map, error) {
 	envUID, projectUID, err := cli.LoadedUIDs(cwd, os.Environ())
 	if err != nil {

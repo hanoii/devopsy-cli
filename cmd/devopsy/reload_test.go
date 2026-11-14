@@ -231,7 +231,8 @@ func TestVarsApply(t *testing.T) {
 }
 
 // A release refuses, before its upload, a reload: step naming a command
-// that only runs locally: the server runs it, past a reload's checks.
+// that only runs on the operator's machine: the server runs it, past a
+// reload's checks.
 func TestReloadStepScope(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)

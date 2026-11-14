@@ -17,8 +17,8 @@ import (
 const probeUsage = "usage: devopsy --probe [--ip <server ip>] <host>..."
 
 // runProbe implements `devopsy --probe [--ip <server ip>] <host>...`: DNS,
-// the certificate and HTTPS of each host, checked locally. Exits 1 when any host
-// has a problem, so it works as a smoke test.
+// the certificate and HTTPS of each host, checked from the operator's machine.
+// Exits 1 when any host has a problem, so it works as a smoke test.
 func runProbe(args []string, color bool) int {
 	ip := ""
 	var hosts []string

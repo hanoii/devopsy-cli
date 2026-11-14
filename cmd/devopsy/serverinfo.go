@@ -1788,8 +1788,9 @@ func sortedKeysOf[V any](m map[string]V) []string {
 
 // setupInfoEntries are --server-info's lines on the server's setup (f): under setup, whether
 // devopsy set it up and what refuses releases there, then its items (setupItems), each not
-// devopsy's fixed by --server-setup on ref (in words locally, ref ""). What Docker (d) answers
-// itself is said under docker (dockerAnswers), and the tools under tools, never again here.
+// devopsy's fixed by --server-setup on ref (in words without a target, ref ""). What Docker
+// (d) answers itself is said under docker (dockerAnswers), and the tools under tools, never
+// again here.
 func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.StatusEntry {
 	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
 	// With every step refused, --server-setup applies nothing: the way out is the refusal's.

@@ -284,7 +284,7 @@ func serverDisks() ([]remote.Disk, string) {
 // statusReport is what --status shows and --status --json prints.
 type statusReport struct {
 	// Target is the address as typed, Server where it is, both empty
-	// locally.
+	// without a target.
 	Target  string         `json:"target,omitempty"`
 	Server  string         `json:"server,omitempty"`
 	Project string         `json:"project,omitempty"`
@@ -427,7 +427,7 @@ func (h envState) entries(at envAt) []remote.StatusEntry {
 
 // addFacts adds a project's facts: the server's disks, judged as
 // --server-info judges them (ref the server as typed, for their fixes,
-// empty locally), its containers, judged, and its entries.
+// empty without a target), its containers, judged, and its entries.
 func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
 	r.Project = facts.Project
 	r.Disks = facts.Disks
@@ -470,8 +470,8 @@ func containerTrouble(state, health string, exitCode int) string {
 	return ""
 }
 
-// print shows r on w in st under heading (none locally), or prints it
-// as JSON: statusWarned when something needs attention.
+// print shows r on w in st under heading (none without a target), or
+// prints it as JSON: statusWarned when something needs attention.
 func (r *statusReport) print(w io.Writer, st style, heading string, asJSON bool) int {
 	r.Attention = entriesWarn(r.Entries) || slices.ContainsFunc(r.Containers, func(c remote.StatusContainer) bool { return c.Level == remote.StatusWarning })
 	code := 0

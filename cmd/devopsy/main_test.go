@@ -395,7 +395,7 @@ func TestUserTargets(t *testing.T) {
 		t.Errorf("--rollback without a target (%d):\n%s", code, out)
 	}
 	// One that needs only a server asks for a server; in a session on a server, by its
-	// address, to run locally.
+	// address, to run from the operator's machine.
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--server-setup")
 	if code == 0 || !strings.Contains(out, "devopsy: error: --server-setup needs a server\ndevopsy: | targets: main, vm1-traefik\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @<server> --server-setup\n") {
 		t.Errorf("--server-setup without a server (%d):\n%s", code, out)
@@ -580,7 +580,7 @@ func TestRemoteVerbose(t *testing.T) {
 	}
 }
 
-// --vars end to end, with an ssh that runs the script locally.
+// --vars end to end, with an ssh that runs the script in the test.
 func TestRemoteVars(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -836,8 +836,8 @@ func TestReleaseSteps(t *testing.T) {
 	if out, code := run(nil, "@prod", "check"); code == 0 || !strings.Contains(out, "check runs only "+vocab.Operator.On) {
 		t.Fatalf("local command on a target (%d):\n%s", code, out)
 	}
-	// A local command that needs an address runs locally with it, as typed,
-	// and nothing of the target's.
+	// A local command that needs an address runs on the operator's machine
+	// with it, as typed, and nothing of the target's.
 	write(t, filepath.Join(dot, "commands", "addr"), "#!/bin/sh\n## Run: local\n## Needs: target\necho \"addr=$DEVOPSY_COMMAND_TARGET target=$DEVOPSY_TARGET env=$DEVOPSY_ENVIRONMENT instance=$DEVOPSY_INSTANCE site=$SITE $*\"\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "tunnel"), "#!/bin/sh\n## Run: local\n## Needs: server\necho \"tunnel=$DEVOPSY_COMMAND_TARGET\"\n", 0o755)
 	if out, code := run(nil, "@prod", "addr", "x"); code != 0 || !strings.Contains(out, "addr=prod target= env= instance= site= x") {
@@ -1559,7 +1559,7 @@ source "$1"; words=(${(z)2}); [[ $2 == *' ' ]] && words+=(''); CURRENT=${#words}
 }
 
 // --ssh-keys edits the deploy user's authorized_keys on the server (here: HOME
-// under tmp, the fake ssh running the scripts locally).
+// under tmp, the fake ssh running the scripts in the test).
 func TestRemoteSSHKeys(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -1806,7 +1806,8 @@ func TestLocalDestroy(t *testing.T) {
 		t.Errorf("--destroy --yes (%d):\n%s", code, out)
 	}
 	// Its container labeled as devopsy's, and none removed by their
-	// labels: locally nothing holds a lock, so another terminal's may run.
+	// labels: without a target nothing holds a lock, so another terminal's
+	// may run.
 	if !strings.Contains(out, "[--label][devopsy.env=app][--label][devopsy.task=destroy]") || strings.Contains(out, "[--filter]") {
 		t.Errorf("--destroy --yes, devopsy's containers:\n%s", out)
 	}

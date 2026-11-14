@@ -303,8 +303,8 @@ fi
 
 // DestroyAgain is kind (report.Fix or report.Hint) offering project's --project-users remove
 // --destroy under text by server, the address a server's command takes (Session.Server,
-// ServerRef locally), or words alone when there is none: the one way every line that names a
-// project user's destroy offers it.
+// ServerRef on the operator's machine), or words alone when there is none: the one way every
+// line that names a project user's destroy offers it.
 func DestroyAgain(kind func(string, ...string) report.Remedy, server, project, text, words string) report.Remedy {
 	if server == "" || !ValidName(project) {
 		return kind(words)

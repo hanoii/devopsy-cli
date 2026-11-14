@@ -303,8 +303,8 @@ func run() int {
 	}
 
 	// devopsy's flags for servers, used without a target. One that needs only a server
-	// (cli.ServerScope) asks for one; in a session on a server, its address, run locally:
-	// it runs over SSH, never on the machine it is typed on.
+	// (cli.ServerScope) asks for one; in a session on a server, its address, run from the
+	// operator's machine: it runs over SSH, never on the machine it is typed on.
 	if slices.Contains(cli.RemoteOnly, args[0]) {
 		var names []string
 		projectDir, _ := cli.FindProjectDir(cwd)

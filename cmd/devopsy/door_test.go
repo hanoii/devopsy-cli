@@ -630,8 +630,8 @@ func TestDoorTakesWhatDevopsyRuns(t *testing.T) {
 			_, _ = readVolumeRoots(ctx, map[string]cli.OwnedVolume{"db": {Volume: cli.Volume{Key: "db", Name: "shop-prod_db"}, Owner: "10001:10001"}}, c)
 		},
 	}
-	// An entry's extraction maps its owners on Linux, where the door runs: locally on macOS
-	// it maps none (extractEntry).
+	// An entry's extraction maps its owners on Linux, where the door runs: on macOS without
+	// a target it maps none (extractEntry).
 	if runtime.GOOS != "darwin" {
 		runs["an extraction"] = func() {
 			_ = extractEntry(ctx, tree, mnt, tree+"/t.tar", tarEntry{name: "storage", forms: []string{"storage"}}, c, "shop-prod", nil, m)

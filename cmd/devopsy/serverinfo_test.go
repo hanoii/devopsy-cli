@@ -546,7 +546,7 @@ func TestServerInfoReport(t *testing.T) {
 	if len(warnings) != 1 || !warnings[0].note || fixText(warnings[0].fixes) != "to keep releases on /srv:\n$ devopsy @vm1: --server-setup --root /srv\nto keep releases on /mnt/vol 2:\n$ devopsy @vm1: --server-setup --root '/mnt/vol 2'\nfor /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\n" {
 		t.Errorf("set up: %+v", warnings)
 	}
-	// Locally, with no address to name, the hint is words.
+	// Without a target, with no address to name, the hint is words.
 	if es := volumeEntries(*info.Setup, "", "setup"); len(es) != 1 || fixText(es[0].Remedies) != "for /mnt/vol3, add it to /etc/fstab, as root, then reload systemd:\n$ systemctl daemon-reload\nto keep releases on a volume, run --server-setup for this server, as its deploy user, with --root and its mount point\n" {
 		t.Errorf("locally: %+v", es)
 	}

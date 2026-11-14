@@ -52,9 +52,9 @@ const DataExcludeLabel = "devopsy.data.exclude"
 // writable, <uid>:<gid> in numbers (names cannot be resolved from the
 // host), or OwnerUser: devopsy creates them and gives them to it
 // wherever it creates or writes entries (a release, a sync's rsync, an
-// mnt --import, and locally before compose starts anything). Explicit,
-// never a default from user: (an image with none, tools sharing a mount
-// would each claim it).
+// mnt --import, and before compose starts anything without a target).
+// Explicit, never a default from user: (an image with none, tools
+// sharing a mount would each claim it).
 const MntOwnerLabel = "devopsy.mnt.owner"
 
 // OwnerUser is MntOwnerLabel's value for the service's own user:, which
@@ -165,7 +165,8 @@ const (
 )
 
 // DestroyDataFlag is --destroy's part where the project is, hidden: run in
-// a server's release by DestroyScript, and locally by --destroy itself.
+// a server's release by DestroyScript, and without a target by --destroy
+// itself.
 const DestroyDataFlag = "--destroy-data"
 
 // ReleaseStepsFlag runs a rollback's or a restart's steps on a server from
@@ -177,7 +178,7 @@ const ReleaseStepsFlag = "--release-steps"
 const ReleaseInheritFlag = "--release-inherit"
 
 // --export and --import move one service's data, the way its
-// DataCopyLabel says, locally or with @<target> on a server.
+// DataCopyLabel says, without a target or with @<target> on a server.
 const (
 	ExportFlag = "--export"
 	ImportFlag = "--import"

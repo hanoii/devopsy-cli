@@ -178,9 +178,10 @@ const ExportKey = "DEVOPSY.data-images"
 // ExportData is what a volumes export of service records of its data, in
 // ParentData's lines, for an import to check and take over as a sync does
 // the parent's (ImportLanding): on a target (rel, its current
-// release) what a sync's parent would send, its window; locally (rel "")
-// no history, its label's version and its tag alone, as one line. Empty
-// when there is nothing to record (no data service of that name).
+// release) what a sync's parent would send, its window; without a target
+// (rel "") no history, its label's version and its tag alone, as one
+// line. Empty when there is nothing to record (no data service of that
+// name).
 func (s *Set) ExportData(base, rel, service string) string {
 	if rel != "" {
 		return s.parentData(base, rel, service, false)

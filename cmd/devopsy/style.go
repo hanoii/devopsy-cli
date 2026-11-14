@@ -40,7 +40,7 @@ func (s style) scope(t string) string {
 	return s.wrap("\033[0;35m", t)
 }
 
-// entry colors what you type, and a command's "(runs locally)" apart.
+// entry colors what you type, and a command's "(Run: local)" apart.
 func (s style) entry(t string) string {
 	if name, ok := strings.CutSuffix(t, " "+cli.RunsLocallyNote); ok {
 		return s.name(name) + " " + s.ok(cli.RunsLocallyNote)

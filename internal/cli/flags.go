@@ -17,13 +17,13 @@ type Scope int
 const (
 	// Local runs on this machine only, without a target.
 	Local Scope = iota
-	// LocalOrTarget runs locally, or with @<target> on it: [@t].
+	// LocalOrTarget runs without a target, or with @<target> on it: [@t].
 	LocalOrTarget
 	// Target needs @<target>: @t.
 	Target
 	// Server needs a server: @<server> or any target's (remote.ServerTarget): @s.
 	Server
-	// LocalOrServer runs locally, or with @<server> on one: [@s].
+	// LocalOrServer runs without a target, or with @<server> on one: [@s].
 	LocalOrServer
 )
 
@@ -55,8 +55,8 @@ type FlagGroup struct {
 
 // Flags are devopsy's own flags, by task, common first: what help lists,
 // completion offers, and which scope each resolves its address with. A
-// flag that works locally and on servers differently (--upgrade) is listed
-// once for each. A new flag goes here.
+// flag that works without a target and on servers differently (--upgrade)
+// is listed once for each. A new flag goes here.
 var Flags = []FlagGroup{
 	{"Releases", []Flag{
 		{Name: "--release", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},

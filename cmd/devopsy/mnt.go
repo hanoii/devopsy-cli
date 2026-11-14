@@ -128,8 +128,8 @@ func dockerRunFresh(ctx context.Context, c container, args ...string) error {
 
 // ownersContainer is the owners' container of a release's switch and of
 // a local command in the project at cwd (ownMnt), remote.TaskOwners: what
-// --mnt-owners removes, a killed devopsy's (never locally, where another
-// terminal's step may run).
+// --mnt-owners removes, a killed devopsy's (never without a target, where
+// another terminal's step may run).
 func ownersContainer(cwd string) container {
 	return newContainer("owners", composeName(cwd), strconv.Itoa(os.Getpid()), remote.TaskOwners)
 }
@@ -610,11 +610,11 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 }
 
 // localMnt readies the owned entries of mnt and named volumes before
-// compose starts anything locally (cli.Plan.Starts): each missing entry is
-// made, and on Linux one missing or whose top directory is not its
-// owner's is given away in a util container, only then, and scanned whole
-// there: an entry whose top is right is never scanned, since that would
-// run before every such command. On macOS the top is never checked:
+// compose starts anything without a target (cli.Plan.Starts): each missing
+// entry is made, and on Linux one missing or whose top directory is not
+// its owner's is given away in a util container, only then, and scanned
+// whole there: an entry whose top is right is never scanned, since that
+// would run before every such command. On macOS the top is never checked:
 // Docker Desktop and OrbStack let any container user write the Mac's
 // files, and show them the owner Docker asks for, whatever the Mac says.
 // An owned volume is made and its root given on macOS as on Linux
@@ -629,8 +629,8 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 // cannot write. For the same reason as labels, an owned entry that is a
 // symbolic link (an entry shared between worktrees, a database on
 // another disk) is a warning, left as it is: Docker mounts what it points
-// to, which is the developer's choice locally (on a server the mounts
-// check refuses one).
+// to, which is the developer's choice in the local environment (on a
+// server the mounts check refuses one).
 func localMnt(cwd string) error {
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
