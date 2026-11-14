@@ -5,12 +5,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/sources"
 )
 
 // Everything devopsy says goes through this package (or --say, for the
@@ -28,35 +28,21 @@ func TestNothingSaysAround(t *testing.T) {
 		{"internal/cli/cli.go", "`devopsy: docker compose for projects"},
 		{"cmd/devopsy/main.go", "fmt.Fprint(os.Stderr, styleFor(os.Stderr).help(help.Text))"},
 	}
-	for _, dir := range []string{"../../cmd", "../../internal"} {
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return err
+	for _, f := range sources.Go(t, false) {
+		if strings.HasPrefix(f.Path, "internal/report/") {
+			continue
+		}
+	lines:
+		for i, line := range strings.Split(string(f.Data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") || !said.MatchString(line) {
+				continue
 			}
-			rel := strings.TrimPrefix(filepath.ToSlash(path), "../../")
-			if strings.HasPrefix(rel, "internal/report/") {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-		lines:
-			for i, line := range strings.Split(string(data), "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "//") || !said.MatchString(line) {
-					continue
+			for _, a := range allowed {
+				if f.Path == a.file && strings.Contains(line, a.line) {
+					continue lines
 				}
-				for _, a := range allowed {
-					if rel == a.file && strings.Contains(line, a.line) {
-						continue lines
-					}
-				}
-				t.Errorf("%s:%d says something around report: %s", rel, i+1, strings.TrimSpace(line))
 			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
+			t.Errorf("%s:%d says something around report: %s", f.Path, i+1, strings.TrimSpace(line))
 		}
 	}
 }
@@ -70,39 +56,31 @@ func TestNothingSaysAround(t *testing.T) {
 // that sets a global.
 func TestTestsParallel(t *testing.T) {
 	t.Parallel()
-	for _, dir := range []string{"../../cmd", "../../internal"} {
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || !d.IsDir() {
-				return err
-			}
-			fset := token.NewFileSet()
-			pkgs, err := parser.ParseDir(fset, path, nil, parser.ParseComments)
-			if err != nil {
-				return err
-			}
-			for _, pkg := range pkgs {
-				globals := map[string]bool{}
-				for _, f := range pkg.Files {
-					for _, decl := range f.Decls {
-						if g, ok := decl.(*ast.GenDecl); ok && g.Tok == token.VAR {
-							for _, s := range g.Specs {
-								for _, n := range s.(*ast.ValueSpec).Names {
-									globals[n.Name] = true
-								}
+	root := sources.Root(t)
+	for _, dir := range sources.Dirs(t, "cmd", "internal") {
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, filepath.Join(root, dir), nil, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pkg := range pkgs {
+			globals := map[string]bool{}
+			for _, f := range pkg.Files {
+				for _, decl := range f.Decls {
+					if g, ok := decl.(*ast.GenDecl); ok && g.Tok == token.VAR {
+						for _, s := range g.Specs {
+							for _, n := range s.(*ast.ValueSpec).Names {
+								globals[n.Name] = true
 							}
 						}
 					}
 				}
-				for file, f := range pkg.Files {
-					if strings.HasSuffix(file, "_test.go") {
-						checkParallel(t, fset, strings.TrimPrefix(filepath.ToSlash(file), "../../"), f, globals)
-					}
+			}
+			for file, f := range pkg.Files {
+				if strings.HasSuffix(file, "_test.go") {
+					checkParallel(t, fset, dir+"/"+filepath.Base(file), f, globals)
 				}
 			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
 		}
 	}
 }

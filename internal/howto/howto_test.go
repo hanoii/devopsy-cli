@@ -4,14 +4,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/sources"
 )
 
 // docsPage is the generated page, from this package's directory.
@@ -90,28 +90,14 @@ func TestConstantsAreTopics(t *testing.T) {
 // topic through Command, whose name the test above checks.
 func TestFlagSpelledOnce(t *testing.T) {
 	t.Parallel()
-	for _, dir := range []string{"../../cmd", "../../internal"} {
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return err
+	for _, f := range sources.Go(t, false) {
+		if strings.HasPrefix(f.Path, "internal/howto/") {
+			continue
+		}
+		for i, line := range strings.Split(string(f.Data), "\n") {
+			if strings.Contains(line, Flag) && !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				t.Errorf("%s:%d spells %s: name it by howto.Flag or howto.Command", f.Path, i+1, Flag)
 			}
-			rel := strings.TrimPrefix(filepath.ToSlash(path), "../../")
-			if strings.HasPrefix(rel, "internal/howto/") {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			for i, line := range strings.Split(string(data), "\n") {
-				if strings.Contains(line, Flag) && !strings.HasPrefix(strings.TrimSpace(line), "//") {
-					t.Errorf("%s:%d spells %s: name it by howto.Flag or howto.Command", rel, i+1, Flag)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
 		}
 	}
 }
