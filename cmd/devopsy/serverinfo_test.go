@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -1258,5 +1259,73 @@ func TestMountPoint(t *testing.T) {
 	}
 	if m := mountPoint("/", devOf("/")); m != "/" {
 		t.Errorf("/: %q", m)
+	}
+}
+
+// releasedAt is a server with environments at paths, each released, and
+// claims for owners, uid 100 on.
+func releasedAt(paths []string, owners ...string) remote.ServerInfo {
+	info := remote.ServerInfo{Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5, UIDsDir: "/home/devopsy/.config/devopsy/uids"}
+	for _, p := range paths {
+		info.Environments = append(info.Environments, remote.Environment{Path: p,
+			Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"})
+	}
+	for i, o := range owners {
+		info.UIDs = append(info.UIDs, remote.UIDClaim{Owner: o, UID: uint32(100 + i), Name: strings.ReplaceAll(o, ":", "_")})
+	}
+	return info
+}
+
+// reportAt is info's report as print lays it out, at its real width.
+func reportAt(info remote.ServerInfo) string {
+	es := serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	return b.String()
+}
+
+// An environment named as its project (shop/shop) is a row of its own under the project,
+// with or without a project uid claim on the heading: a heading is marked, never taken from a
+// key that is the project's name.
+func TestServerInfoEnvironmentNamedAsItsProject(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	info := remote.ServerInfo{Environments: []remote.Environment{{Path: "shop/prod"}, {Path: "shop/shop"}}}
+	for name, claims := range map[string][]remote.UIDClaim{
+		"no project claim": nil,
+		"a project claim":  {{Owner: "project:shop", UID: 1000001}},
+	} {
+		info.UIDs = claims
+		out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
+		_, projects, _ := strings.Cut(out, "\nprojects\n")
+		rows := 0
+		for _, l := range strings.Split(projects, "\n") {
+			if strings.HasPrefix(l, "    shop ") {
+				rows++
+			}
+		}
+		if rows != 1 {
+			t.Errorf("%s: shop/shop has no row of its own under shop:\n%s", name, projects)
+		}
+	}
+}
+
+// A disk that did not read is named by its paths, once, with no mount it never read.
+func TestDiskUnreadNamesItsPathOnce(t *testing.T) {
+	t.Parallel()
+	u := judgeDisk(remote.Disk{Paths: []string{"releases=/srv"}, Error: "stat /srv: permission denied"}, "", "vm1:")
+	if u.line != "releases /srv: stat /srv: permission denied" {
+		t.Errorf("a disk unread: %q", u.line)
+	}
+}
+
+// A project's rows go by name, what is left of a gone environment (its claim alone here)
+// among the live ones.
+func TestServerInfoProjectRowsByName(t *testing.T) {
+	t.Parallel()
+	out := reportAt(releasedAt([]string{"shop/a", "shop/z"}, "project:shop", "env:shop:a", "env:shop:m", "env:shop:z"))
+	a, m, z := strings.Index(out, "\n    a "), strings.Index(out, "\n    m "), strings.Index(out, "\n    z ")
+	if a < 0 || m < 0 || z < 0 || !(a < m && m < z) {
+		t.Errorf("rows not in order a, m, z:\n%s", out)
 	}
 }

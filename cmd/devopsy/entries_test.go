@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -104,5 +105,110 @@ leftovers
 	q := copyableEntries([]remote.StatusEntry{row("", "", "k", "@[2001:db8::1]:prod", "x")})
 	if q[0].Cells[0] != "@'[2001:db8::1]:prod'" {
 		t.Errorf("cells in JSON: %q", q[0].Cells)
+	}
+}
+
+// A key and a project's name show as every other line does, through report.Copyable, in the
+// text and in --json, a flat report's key too: an environment's or a project's name another
+// user chose reaches an admin's terminal.
+func TestEntryTableEscapesKeysAndNames(t *testing.T) {
+	t.Parallel()
+	es := []remote.StatusEntry{
+		{Level: remote.StatusInfo, Section: "projects", Group: "sh\x1b[2Jop", Key: "pr\x1b[2Jod", Lines: []string{"released"}},
+		{Level: remote.StatusInfo, Section: "projects", Group: "ap\x1b[2Jp", Key: "ap\x1b[2Jp", Lines: []string{"project uid 1"}},
+	}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	if strings.Contains(b.String(), "\x1b") {
+		t.Errorf("a key or a heading reaches the terminal with its escape:\n%q", b.String())
+	}
+	for _, e := range copyableEntries(es) {
+		if strings.Contains(e.Key+e.Group, "\x1b") {
+			t.Errorf("--json: key %q, group %q", e.Key, e.Group)
+		}
+	}
+	// A flat report's key too, as before the layout (the whole row went through Copyable).
+	flat := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "k\x1b[2Jk", Lines: []string{"v"}}}
+	b.Reset()
+	newEntryTable(&b, style{}, flat).print(flat)
+	if strings.Contains(b.String(), "\x1b") {
+		t.Errorf("a flat report's key: %q", b.String())
+	}
+}
+
+// Rows of cells under one key align with each other whatever lines sit between them, a full
+// disk's warning between two disks' rows.
+func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
+	t.Parallel()
+	row := func(cells ...string) remote.StatusEntry {
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: "server", Key: "disks", Lines: []string{remote.CellsJoined(cells...)}, Cells: cells}
+	}
+	es := []remote.StatusEntry{
+		row("/", "ext4", "releases"),
+		{Level: remote.StatusWarning, Section: "server", Key: "disks", Lines: []string{"/ is 94% full"}},
+		row("/mnt/backup", "ext4", "snapshots"),
+	}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	want := `
+server
+  disks  /            ext4  releases
+!        / is 94% full
+         /mnt/backup  ext4  snapshots
+`
+	if b.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+// A remedy's text that wraps goes on under its number, its first line keeping its indent: a
+// numbered fix's second line and its wrapped rest start where its text does.
+func TestEntryWrappedRemedyKeepsItsIndent(t *testing.T) {
+	t.Parallel()
+	long := strings.TrimSpace(strings.Repeat("words ", 20))
+	es := []remote.StatusEntry{{Level: remote.StatusWarning, Section: "server", Key: "disks", Lines: []string{"full"},
+		Remedies: []report.Remedy{report.Fix("first\n" + long), report.Fix("second")}}}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	lines := strings.Split(b.String(), "\n")
+	at := func(l string) int { return len(l) - len(strings.TrimLeft(l, " ")) }
+	for i, l := range lines {
+		if strings.Contains(l, "1. first") {
+			if want := at(l) + 3; at(lines[i+1]) != want || at(lines[i+2]) != want {
+				t.Errorf("the fix's second line and its wrapped rest start at %d and %d, want %d:\n%s", at(lines[i+1]), at(lines[i+2]), want, b.String())
+			}
+			return
+		}
+	}
+	t.Fatalf("no numbered fix:\n%s", b.String())
+}
+
+// A row of cells past the width is never cut at a word: its last cell moves whole to a line
+// of its own at the value column, every other cell whole on the row.
+func TestEntryRowMovesItsLastCellWhole(t *testing.T) {
+	t.Parallel()
+	cells := []string{"released 10 min ago by somebody@a-long-runner-name.example.com", "3 of 3 running", "uid 2091094815", "a sync or an export from it"}
+	es := []remote.StatusEntry{
+		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Key: "shop", Lines: []string{"project uid 1"}},
+		{Level: remote.StatusInfo, Section: "projects", Group: "shop", Key: "prod", Lines: []string{remote.CellsJoined(cells...)}, Cells: cells},
+	}
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	// Each cell whole on a line, the last on its own: never "uid" on one line and its number on the next.
+	lines := strings.Split(b.String(), "\n")
+	whole := func(cell string) bool {
+		for _, l := range lines {
+			if strings.Contains(l, cell) {
+				return true
+			}
+		}
+		return false
+	}
+	last := false
+	for _, l := range lines {
+		last = last || strings.TrimSpace(l) == cells[3]
+	}
+	if !whole(cells[0]) || !whole(cells[1]) || !whole(cells[2]) || !last {
+		t.Errorf("a cell cut, or the last cell not moved whole to its own line:\n%s", b.String())
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -285,5 +286,21 @@ exit 0
 	}
 	if n := strings.Count(calls, "ps -aq --no-trunc\n"); n != 1 {
 		t.Errorf("%d listings of the containers:\n%s", n, calls)
+	}
+}
+
+// A claim whose environment is gone is no live name: what else of it is left (its containers)
+// is said with it, never "only its uid claim".
+func TestServerInfoGoneClaimSaysWhatIsLeft(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	info := remote.ServerInfo{
+		Environments: []remote.Environment{{Path: "shop/prod"}},
+		UIDs:         []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "1000002"}},
+		Containers:   []remote.HostContainer{{Project: "shop-pr-1", Service: "web", State: "exited", Released: true}},
+	}
+	out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
+	if strings.Contains(out, "only its uid claim") && !strings.Contains(out, "web (exited)") {
+		t.Errorf("shop-pr-1's container is left, and the report says only its claim is:\n%s", out)
 	}
 }
