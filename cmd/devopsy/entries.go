@@ -90,12 +90,14 @@ type entryTable struct {
 	st   style
 	col  int
 	cols map[string]int
+	// width is where a section's prose wraps, reportWidth.
+	width int
 }
 
 // newEntryTable is a table whose key columns fit the keys of es, more
 // in the column of the entries with no section.
 func newEntryTable(w io.Writer, st style, es []remote.StatusEntry, more ...string) entryTable {
-	t := entryTable{w: w, st: st, cols: map[string]int{}}
+	t := entryTable{w: w, st: st, cols: map[string]int{}, width: reportWidth}
 	for _, k := range more {
 		t.cols[""] = max(t.cols[""], utf8.RuneCountInString(k)+2)
 	}
@@ -144,7 +146,8 @@ type laidLine struct {
 // on each change of section, a project's heading on each change of
 // group when its first entry is not the heading itself, a key on the
 // first line of each run of it, a warning's first line marked, the
-// cells aligned with their run's (cellWidths), each line quoted as
+// cells aligned with their run's (cellWidths), a column empty in every
+// row of its run left out, each line quoted as
 // report.Copyable quotes it. Remedies a later entry of the same key
 // shares are laid out once, after the last entry holding them
 // (sharedLater): one command that fixes several lines is offered once.
@@ -176,7 +179,10 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			w := widths[i]
 			var b strings.Builder
 			for j, c := range cells {
-				b.WriteString(pad(report.Copyable(c), w[j]) + "  ")
+				// A column empty in every row of its run takes no room.
+				if w[j] > 0 {
+					b.WriteString(pad(report.Copyable(c), w[j]) + "  ")
+				}
 			}
 			lines[0] = b.String() + report.Copyable(last)
 		}
@@ -277,7 +283,7 @@ func (t entryTable) print(es []remote.StatusEntry) {
 				indent = strings.Repeat(" ", l.indent-2) + "! "
 			}
 			key := pad(indent+l.key, col)
-			for k, part := range wrapAt(l.value, col, l.section != "") {
+			for k, part := range wrapAt(l.value, col, t.width, l.section != "") {
 				if k > 0 {
 					key = strings.Repeat(" ", col)
 				}
@@ -296,7 +302,7 @@ func (t entryTable) print(es []remote.StatusEntry) {
 				continue
 			}
 			lead := len(l.value) - len(strings.TrimLeft(l.value, " 0123456789."))
-			for k, part := range wrapAt(l.value, col+lead, l.section != "") {
+			for k, part := range wrapAt(l.value, col+lead, t.width, l.section != "") {
 				if k > 0 {
 					part = strings.Repeat(" ", lead) + part
 				}
@@ -306,12 +312,12 @@ func (t entryTable) print(es []remote.StatusEntry) {
 	}
 }
 
-// wrapAt is line cut at words into parts that fit reportWidth from
-// column col on when wrap, whole otherwise, when it fits or too little
-// room is left to wrap into (under 40 columns): a word longer than the
-// room stays whole.
-func wrapAt(line string, col int, wrap bool) []string {
-	room := reportWidth - col
+// wrapAt is line cut at words into parts that fit width from column col
+// on when wrap, whole otherwise, when it fits or too little room is left
+// to wrap into (under 40 columns): a word longer than the room stays
+// whole.
+func wrapAt(line string, col, width int, wrap bool) []string {
+	room := width - col
 	if !wrap || room < 40 || utf8.RuneCountInString(line) <= room {
 		return []string{line}
 	}

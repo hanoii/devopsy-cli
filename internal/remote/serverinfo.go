@@ -206,11 +206,14 @@ type Disk struct {
 	// containerd image store's images), snapshots, /, each as
 	// <what>=<path>.
 	Paths []string `json:"paths"`
-	Error string   `json:"error,omitempty"`
-	Type  string   `json:"type,omitempty"`
-	Size  int64    `json:"size,omitempty"`
-	Free  int64    `json:"free"` // to the deploy user
-	Used  int64    `json:"used"`
+	// Mount is where its filesystem is mounted, empty when it did not
+	// read.
+	Mount string `json:"mount,omitempty"`
+	Error string `json:"error,omitempty"`
+	Type  string `json:"type,omitempty"`
+	Size  int64  `json:"size,omitempty"`
+	Free  int64  `json:"free"` // to the deploy user
+	Used  int64  `json:"used"`
 	// Reflinks is yes or no where tried (the release root's), else
 	// empty.
 	Reflinks string `json:"reflinks,omitempty"`

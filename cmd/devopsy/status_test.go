@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -107,17 +108,17 @@ func TestStatusPrint(t *testing.T) {
 			{Level: remote.StatusWarning, Key: "maintenance", Lines: []string{"on"}, Remedies: []report.Remedy{report.Fix("", "devopsy maintenance off")}},
 		},
 		Disks: []remote.Disk{
-			{Paths: []string{"releases=/srv", "/=/"}, Type: "ext4", Size: 100e9, Free: 50e9, Used: 50e9},
-			{Paths: []string{"docker=/var/lib/docker"}, Type: "xfs", Size: 100e9, Free: 2e9, Used: 98e9},
+			{Paths: []string{"releases=/srv", "/=/"}, Mount: "/", Type: "ext4", Size: 100e9, Free: 50e9, Used: 50e9},
+			{Paths: []string{"docker=/var/lib/docker"}, Mount: "/var/lib/docker", Type: "xfs", Size: 100e9, Free: 2e9, Used: 98e9},
 		},
 	}, "vm1:")
 	var out bytes.Buffer
 	code := r.print(&out, style{}, "@vm1:prod (vm1:shop/prod)", false)
 	want := `@vm1:prod (vm1:shop/prod)
 release      20261107000000  just now
-disks        releases /srv, /: ext4, 50.0 GB free of 100.0 GB (50% used)
-             docker /var/lib/docker: xfs, 2.0 GB free of 100.0 GB (98% used)
-             docker /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
+disks        /                ext4  50.0 GB free of 100.0 GB  50% used  releases /srv
+             /var/lib/docker  xfs   2.0 GB free of 100.0 GB   98% used  docker /var/lib/docker
+             /var/lib/docker is 98% full, 2.0 GB free: builds, pulls, uploads, logs and databases fail once it is full
              to fix it:
              remove what nothing on the server owns, listed first with its sizes:
              $ devopsy @vm1: --gc
@@ -169,7 +170,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	id := s.current("prod")[len("releases/"):]
 	warn := []string{"FAKE_SHOW=warning\tmaintenance\ton\tdevopsy maintenance off\n"}
 	out, code := s.run(warn, "@prod", "--status")
-	if code != statusWarned || !strings.Contains(out, "\nrelease      "+id) || !strings.Contains(out, "\ndisks        releases ") ||
+	if code != statusWarned || !strings.Contains(out, "\nrelease      "+id) || !regexp.MustCompile(`\ndisks        \S+ .* releases `).MatchString(out) ||
 		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl          https://shop-prod.example\n") ||
 		!strings.Contains(out, "\nrunning      app db\n") || !strings.Contains(out, "\nmaintenance  on\n             to fix it:\n             $ devopsy maintenance off\n") {
 		t.Errorf("--status with a warning on the server (%d):\n%s", code, out)
@@ -218,7 +219,7 @@ func TestStatusPlainDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := s.run(nil, "@prod", "--status")
-	if code != 0 || !strings.Contains(out, "\nrelease     none: a plain devopsy directory\n") || !strings.Contains(out, "\ndisks       releases ") ||
+	if code != 0 || !strings.Contains(out, "\nrelease     none: a plain devopsy directory\n") || !regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) ||
 		!strings.Contains(out, "\ncontainers\n  app ") || !strings.Contains(out, "\nurl         https://") {
 		t.Errorf("--status of a plain directory (%d):\n%s", code, out)
 	}
@@ -379,7 +380,7 @@ func TestStatusUnreleasedTarget(t *testing.T) {
 	s := newSyncSetup(t)
 	out, code := s.run(nil, "@dev", "--status")
 	if code != 0 || !strings.Contains(out, "\nrelease     none: not released yet\n") || !strings.Contains(out, "\nparent      ") || !strings.Contains(out, "  never synced\n") ||
-		!strings.Contains(out, "\ndisks       releases ") || strings.Contains(out, "containers") {
+		!regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
 		t.Errorf("--status of an unreleased child (%d):\n%s", code, out)
 	}
 	stdout, stderr, code := s.runIO(nil, nil, "@dev", "--status", "--json")

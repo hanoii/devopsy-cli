@@ -65,8 +65,17 @@ type StatusEntry struct {
 	Remedies []report.Remedy `json:"remedies,omitempty"`
 }
 
-// CellsJoined is cells as an entry's line: two spaces between them.
-func CellsJoined(cells ...string) string { return strings.Join(cells, "  ") }
+// CellsJoined is cells as an entry's line: two spaces between those
+// not empty (an empty one only keeps the next aligned).
+func CellsJoined(cells ...string) string {
+	var said []string
+	for _, c := range cells {
+		if c != "" {
+			said = append(said, c)
+		}
+	}
+	return strings.Join(said, "  ")
+}
 
 // An entry's levels: a highlight is a fact shown in bold, one people
 // look for (a project's URL); a warning needs attention, and --status

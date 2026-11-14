@@ -333,8 +333,8 @@ func TestDoorProjectsLife(t *testing.T) {
 		t.Errorf("a release beside a wiped firewall:\n%s", out)
 	}
 	// Its --server-info says it too, with no setup of the admin's in it.
-	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); !strings.Contains(out, "W0001: the server's firewall is not loaded as devopsy loads it") ||
-		!strings.Contains(out, "report W0001 to the server's admin") || strings.Contains(out, "\nsetup ") || strings.Contains(out, "--server-setup") {
+	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); !saysWords(out, "W0001: the server's firewall is not loaded as devopsy loads it") ||
+		!saysWords(out, "report W0001 to the server's admin") || strings.Contains(out, "\n  setup ") || strings.Contains(out, "\n! setup ") || strings.Contains(out, "--server-setup") {
 		t.Errorf("a project user's --server-info beside a wiped firewall:\n%s", out)
 	}
 	if out, code := doorRoot(t, remote.FirewallScript); code != 0 {
@@ -1689,7 +1689,7 @@ docker run -d --name doorfw-md --network host busybox:1.37 sh -c 'mkdir -p /w &&
 		if got := reaches("devopsy-doorfwo"); len(got) == 0 {
 			t.Errorf("%s: the control: a project user reaches nothing with the rules broken", c.name)
 		}
-		if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, c.says) || !strings.Contains(out, "fix what refuses every step of the setup first, then run --server-setup") || strings.Contains(out, "devopsy @devopsy@doorsrv: --server-setup") {
+		if out := info(); !saysWords(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !saysWords(out, c.says) || !saysWords(out, "fix what refuses every step of the setup first, then run --server-setup") || strings.Contains(out, "devopsy @devopsy@doorsrv: --server-setup") {
 			t.Errorf("%s: --server-info:\n%s", c.name, out)
 		}
 		if c.put == "boot" {
@@ -2089,7 +2089,7 @@ docker run -d --name doorhostsvc-lo --network host busybox:1.37 sh -c 'mkdir -p 
 		t.Errorf("the container reached the host's loopback service: %s", out)
 	}
 	out, _ := op(t, "/", "devopsy @devopsy@doorsrv: --server-info 2>&1")
-	if !strings.Contains(out, "every container reaches what the host listens on beyond loopback") || !strings.Contains(out, ":18181 (httpd)") || strings.Contains(out, ":18182") {
+	if !saysWords(out, "every container reaches what the host listens on beyond loopback") || !strings.Contains(out, ":18181 (httpd)") || strings.Contains(out, ":18182") {
 		t.Errorf("--server-info:\n%s", out)
 	}
 }
@@ -2264,7 +2264,7 @@ volumes:
 		t.Errorf("the control: the same key, the deploy user's to give (%d): %s", code, out)
 	}
 	// --server-info reads the door's host as root: its users, and the firewall add loaded.
-	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\ndoor +`+regexp.QuoteMeta(doorSpace)+`, 1 project user\n`).MatchString(out) || strings.Contains(out, "firewall") {
+	if out, _ := op(t, "/", "devopsy @devopsy@doorsrv2: --server-info 2>&1"); !regexp.MustCompile(`\n  door +`+regexp.QuoteMeta(doorSpace)+`, 1 project user\n`).MatchString(out) || strings.Contains(out, "firewall") {
 		t.Errorf("--server-info on a door server:\n%s", out)
 	}
 	// add refuses a name sharing compose names with a project there, and refuses while the

@@ -1089,7 +1089,7 @@ func TestServerSetupNamesAVolumeThatHoldsReleases(t *testing.T) {
 	if fileExists(filepath.Join(home, uids.DirName)) {
 		t.Errorf("a claims directory in the home, %s, which releases never lived in", filepath.Join(home, uids.DirName))
 	}
-	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, owner.String()) || !strings.Contains(out, "shop/prod") {
+	if out, code := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "uid "+strconv.FormatUint(uint64(was), 10)) || !strings.Contains(out, "\n  shop") || !strings.Contains(out, "\n    prod ") {
 		t.Errorf("--server-info (%d) shows no claim or environment of the volume's:\n%s", code, out)
 	}
 }
@@ -2515,7 +2515,7 @@ func TestServerInfoJudgesTheKindLoaded(t *testing.T) {
 	firewallLoaded(t, host, false)
 	setupConfig(t, s, "door:\n  space: $HOME/space\n")
 	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
-	if !strings.Contains(out, "door: is in this server's config, and devopsy's firewall loads the containers' chain alone") {
+	if !saysWords(out, "door: is in this server's config, and devopsy's firewall loads the containers' chain alone") {
 		t.Fatalf("not the state this test is for:\n%s", out)
 	}
 	if strings.Contains(out, "could not be read as root") {
@@ -2542,7 +2542,7 @@ func TestServerSetupFactsBuildNoUtilImage(t *testing.T) {
 			t.Errorf("the util image %s: the facts session built it", name)
 		}
 		out, _ := s.run([]string{env}, "@devopsy@one:", "--server-info")
-		if docker, _ := s.logs(); strings.Contains(docker, "build ") || name == "missing" && !strings.Contains(out, "its chains could not be read as root: "+remote.UtilImage+" is not here") {
+		if docker, _ := s.logs(); strings.Contains(docker, "build ") || name == "missing" && !saysWords(out, "its chains could not be read as root: "+remote.UtilImage+" is not here") {
 			t.Errorf("the util image %s, --server-info:\n%s", name, out)
 		}
 	}
@@ -2741,7 +2741,7 @@ func TestFirewallSaysWhatDiffers(t *testing.T) {
 	for _, want := range []string{"metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it",
 		remote.FirewallScript + " is mode 644, devopsy's 755", remote.FirewallUnit + " differs from what devopsy writes",
 		remote.FirewallUnitLink + " does not enable " + remote.FirewallUnit, "/etc/systemd/system/devopsy-firewall.timer, an older install's, is still there"} {
-		if !strings.Contains(out, want) {
+		if !saysWords(out, want) {
 			t.Errorf("no %q:\n%s", want, out)
 		}
 	}

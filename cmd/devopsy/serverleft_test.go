@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,12 +16,20 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// leftSays is each entry of what may be dead or gone as one text: its key, its lines, then
-// each remedy's words and commands.
+// leftSays is each entry of what may be dead or gone as one text, a project's first by
+// project: its project and its key, its lines, then each remedy's words and commands.
 func leftSays(info remote.ServerInfo, host, ref string) []string {
 	var out []string
-	for _, e := range leftEntries(info, host, ref) {
+	groups, leftovers := leftEntries(info, host, ref)
+	var es []remote.StatusEntry
+	for _, p := range slices.Sorted(maps.Keys(groups)) {
+		es = append(es, groups[p]...)
+	}
+	for _, e := range append(es, leftovers...) {
 		s := e.Key + ": " + strings.Join(e.Lines, "\n")
+		if e.Group != "" {
+			s = e.Group + " " + s
+		}
 		for _, r := range e.Remedies {
 			s += "\n| " + r.Text
 			for _, c := range r.Cmds {
@@ -71,6 +80,7 @@ func TestServerInfoLeft(t *testing.T) {
 			{ID: "i5", Tags: []string{"busybox:1.37"}, Size: 4e6},
 			{ID: "i6", Tags: []string{"nginx:1.27"}, Containers: 1},
 			{ID: "i7", Tags: []string{remote.UtilImage}},
+			{ID: "i8", Tags: []string{"alpine:3", "alpine:3.22"}, Size: 8e6},
 		},
 		Volumes: []remote.HostVolume{
 			{Name: "shop-prod_db", Project: "shop-prod"},
@@ -82,20 +92,24 @@ func TestServerInfoLeft(t *testing.T) {
 		Removing:     []remote.RemovingDir{{Path: "shop/eu/old.rm.123", Size: 3e6}},
 		Door:         &remote.DoorFacts{Space: "/space", Users: 1, Keyless: []remote.KeylessUser{{User: "devopsy-blog", Project: "blog", Held: []string{"the uid claims env:blog:dev", "the volumes blog-dev_db"}}}},
 	}
+	gone := "| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n"
 	want := []string{
+		"blog project user: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
+		// A name of no project on the server is a project of its own, its heading.
+		"gone-prod gone-prod: gone, no environment and no uid claim on the server, and left: containers web (exited), volumes gone-prod_db, 1 image name of its releases\n" +
+			gone + "$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
+		"old-prod old-prod: gone, no environment and no uid claim on the server, and left: snapshots in /backups/old/prod\n" + gone + "$ rm -rf /backups/old/prod",
+		// Under the project its name starts with, the longest: shop's, though wiki has a stage-2.
+		"shop stage-2: gone, no environment and no uid claim on the server, and left: 2 image names of its releases\n" +
+			gone + "$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
+		"shop eu/old: a --destroy cut off while it removed it left old.rm.123, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
+		"wiki stage: gone, no environment and no uid claim on the server, and left: 1 image name of its releases\n" + gone + "$ docker rmi app:devopsy-wiki-stage-20261101000000",
 		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| its sizes, and the build cache it removes too:\n$ devopsy @vm1: --gc --dry-run",
-		"images: busybox:1.37, 4.0 MB: no release holds it, nor any container uses it\n| remove it once nothing needs it, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi busybox:1.37",
-		"gone: gone-prod: no environment and no uid claim on the server, and left:\ncontainers web (exited)\nvolumes gone-prod_db\n1 image name of its releases\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
-		"gone: old-prod: no environment and no uid claim on the server, and left:\nsnapshots in /backups/old/prod\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ rm -rf /backups/old/prod",
-		"gone: shop-stage-2: no environment and no uid claim on the server, and left:\n2 image names of its releases\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
-		"gone: wiki-stage: no environment and no uid claim on the server, and left:\n1 image name of its releases\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-wiki-stage-20261101000000",
+		// One row each, then one line for all and one rmi of every tag, to copy at once.
+		"images: busybox:1.37  4.0 MB",
+		"images: alpine:3, alpine:3.22  8.0 MB",
+		"images: no release holds them, nor any container uses them\n| remove them once nothing needs them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi busybox:1.37 alpine:3 alpine:3.22",
 		"volumes: 2 anonymous volumes no container uses (an image's VOLUME after a down without -v: a database's data, maybe)\n| once checked that none holds what is needed, remove them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker volume prune",
-		"environments: shop/eu/old.rm.123: left by a --destroy cut off while it removed shop/eu/old, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
-		"door: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
 	}
 	if got := leftSays(info, "devopsy@vm1", "vm1:"); !slices.Equal(got, want) {
 		t.Errorf("left:\n%s\n\nwant:\n%s", strings.Join(got, "\n\n"), strings.Join(want, "\n\n"))
@@ -105,7 +119,7 @@ func TestServerInfoLeft(t *testing.T) {
 	local := strings.Join(leftSays(info, "", ""), "\n\n")
 	for _, w := range []string{
 		"| --gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too",
-		"| remove it once nothing needs it:\n$ docker rmi busybox:1.37",
+		"| remove them once nothing needs them:\n$ docker rmi busybox:1.37 alpine:3 alpine:3.22",
 		"| a --destroy of shop/eu/old run again from shop's checkout resumes it",
 		"| a --project-users remove of blog with --destroy removes it with what it holds\n| or a key added for it (--ssh-keys with --for) takes it back",
 	} {
@@ -119,8 +133,8 @@ func TestServerInfoLeft(t *testing.T) {
 
 	// What goes by an absence is made only when the release root lists environments, all read,
 	// and the claims read: with the root's disk not mounted, every environment reads as gone.
-	gone := func(i remote.ServerInfo) bool {
-		return slices.ContainsFunc(leftSays(i, "devopsy@vm1", "vm1:"), func(s string) bool { return strings.HasPrefix(s, "gone: ") })
+	isGone := func(i remote.ServerInfo) bool {
+		return slices.ContainsFunc(leftSays(i, "devopsy@vm1", "vm1:"), func(s string) bool { return strings.Contains(s, ": gone, ") })
 	}
 	for name, change := range map[string]func(*remote.ServerInfo){
 		"no root environment": func(i *remote.ServerInfo) { i.Environments = i.Environments[4:] },
@@ -130,11 +144,11 @@ func TestServerInfoLeft(t *testing.T) {
 	} {
 		i := info
 		change(&i)
-		if gone(i) {
+		if isGone(i) {
 			t.Errorf("%s: a name reported gone", name)
 		}
 	}
-	if !gone(info) {
+	if !isGone(info) {
 		t.Errorf("nothing gone")
 	}
 	// A read that failed is unknown, said, never none.
@@ -161,7 +175,7 @@ func TestServerInfoLeft(t *testing.T) {
 	// containers comes from them.
 	i = info
 	i.ContainersUnread = "docker inspect: EOF"
-	if says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n"); strings.Contains(says, "nor any container uses it") {
+	if says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n"); strings.Contains(says, "nor any container uses") {
 		t.Errorf("with the containers unread, an image is used by none:\n%s", says)
 	}
 }

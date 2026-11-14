@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -344,14 +345,21 @@ func goneTags(imgs []remote.HostImage, live map[string]bool) map[string][]string
 
 // leftEntries are --server-info's lines of what may be dead or gone, each with its hint, for
 // the server host (an address's server part) and ref (as typed), both empty for this
-// machine's. Those that go by an absence are made only when liveNames reads.
-func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry {
-	var es []remote.StatusEntry
+// machine's: groups what belongs to a project (a gone environment, a cut --destroy's
+// directory, a project user's), by project, leftovers the rest. Those that go by an absence
+// are made only when liveNames reads.
+func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]remote.StatusEntry, leftovers []remote.StatusEntry) {
+	const section = "leftovers"
+	groups = map[string][]remote.StatusEntry{}
 	add := func(key, line string, hints ...report.Remedy) {
-		es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: key, Lines: []string{line}, Remedies: hints})
+		leftovers = append(leftovers, remote.StatusEntry{Level: remote.StatusInfo, Section: section, Key: key, Lines: []string{line}, Remedies: hints})
 	}
 	warn := func(key, line string) {
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{line}})
+		leftovers = append(leftovers, remote.StatusEntry{Level: remote.StatusWarning, Section: section, Key: key, Lines: []string{line}})
+	}
+	// inProject adds what is a project's, under key there.
+	inProject := func(project, key string, lines []string, hints ...report.Remedy) {
+		groups[project] = append(groups[project], remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Key: key, Lines: lines, Remedies: hints})
 	}
 	// onServer is a hint of commands run on the server: through --shell-host from here.
 	onServer := func(text string, cmds ...string) report.Remedy {
@@ -393,6 +401,9 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 	case info.ContainersUnread != "":
 		// Each image's containers are counted from that list: none of it reads as none.
 	default:
+		// One row each, then one line for all of them and one rmi of every tag.
+		var tags []string
+		n := 0
 		for _, img := range info.Images {
 			if slices.ContainsFunc(img.Tags, func(t string) bool {
 				_, hold := images.HoldOf(t)
@@ -401,8 +412,18 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 			}) || img.Containers > 0 {
 				continue
 			}
-			add("images", strings.Join(img.Tags, ", ")+", "+humanBytes(img.Size)+": no release holds it, nor any container uses it",
-				onServer("remove it once nothing needs it:", "docker rmi "+strings.Join(img.Tags, " ")))
+			cells := []string{strings.Join(img.Tags, ", "), humanBytes(img.Size)}
+			leftovers = append(leftovers, remote.StatusEntry{Level: remote.StatusInfo, Section: section, Key: "images", Lines: []string{remote.CellsJoined(cells...)}, Cells: cells})
+			tags = append(tags, img.Tags...)
+			n++
+		}
+		it := "them"
+		if n == 1 {
+			it = "it"
+		}
+		if n > 0 {
+			add("images", "no release holds "+it+", nor any container uses "+it,
+				onServer("remove "+it+" once nothing needs "+it+":", "docker rmi "+strings.Join(tags, " ")))
 		}
 	}
 
@@ -442,10 +463,9 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 		}
 		for _, name := range slices.Sorted(maps.Keys(gone)) {
 			g := gone[name]
-			lines := []string{name + ": no environment and no uid claim on the server, and left:"}
-			var cmds []string
+			var left, cmds []string
 			if len(g.containers) > 0 {
-				lines = append(lines, "containers "+strings.Join(g.containers, ", "))
+				left = append(left, "containers "+strings.Join(g.containers, ", "))
 				cmds = append(cmds, "docker compose -p "+remote.QuoteWord(name)+" down")
 			}
 			if len(g.volumes) > 0 {
@@ -454,19 +474,20 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 					vs = append(vs, v.Name)
 					names = append(names, remote.QuoteWord(v.Name))
 				}
-				lines = append(lines, "volumes "+strings.Join(vs, ", "))
+				left = append(left, "volumes "+strings.Join(vs, ", "))
 				cmds = append(cmds, "docker volume rm "+strings.Join(names, " "))
 			}
 			if len(g.tags) > 0 {
-				lines = append(lines, plural(len(g.tags), "image name")+" of its releases")
+				left = append(left, plural(len(g.tags), "image name")+" of its releases")
 				cmds = append(cmds, "docker rmi "+strings.Join(g.tags, " "))
 			}
 			if g.snapshots != "" {
-				lines = append(lines, "snapshots in "+g.snapshots)
+				left = append(left, "snapshots in "+g.snapshots)
 				cmds = append(cmds, "rm -rf "+remote.QuoteWord(g.snapshots))
 			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: "gone", Lines: lines,
-				Remedies: []report.Remedy{onServer("an environment removed by hand: remove what is left once none of it is needed:", cmds...)}})
+			project, key := projectOfName(name, info)
+			inProject(project, key, []string{"gone, no environment and no uid claim on the server, and left: " + strings.Join(left, ", ")},
+				onServer("an environment removed by hand: remove what is left once none of it is needed:", cmds...))
 		}
 	}
 
@@ -492,16 +513,43 @@ func leftEntries(info remote.ServerInfo, host, ref string) []remote.StatusEntry 
 		if host != "" {
 			hint = report.Hint("run it again, which resumes it, in "+project+"'s checkout:", "devopsy @"+host+":"+remote.QuoteWord(rest)+" --destroy")
 		}
-		add("environments", r.Path+": left by a --destroy cut off while it removed "+env+", "+humanBytes(r.Size), hint)
+		// Under the environment's own name: its <base>.rm.<pid> would widen every key.
+		inProject(project, rest, []string{"a --destroy cut off while it removed it left " + path.Base(r.Path) + ", " + humanBytes(r.Size)}, hint)
 	}
 
 	if info.Door != nil {
 		for _, k := range info.Door.Keyless {
-			es = append(es, remote.StatusEntry{Level: remote.StatusInfo, Key: "door", Lines: append([]string{keptUserLine(k)}, k.Held...), Remedies: keptUserHints(k.Project, ref)})
+			inProject(k.Project, "project user", append([]string{keptUserLine(k)}, k.Held...), keptUserHints(k.Project, ref)...)
 		}
 		for _, u := range info.Door.Destroying {
-			add("door", u.User+": its --project-users remove --destroy did not complete, and the door answers it nothing", destroyPendingHint(ref, u.Project))
+			inProject(u.Project, "project user", []string{u.User + ": its --project-users remove --destroy did not complete, and the door answers it nothing"}, destroyPendingHint(ref, u.Project))
 		}
 	}
-	return es
+	return groups, leftovers
+}
+
+// projectOfName is the project a compose name with no environment is filed under, and its
+// key there: of the projects on the server (its environments', its claims'), the one whose
+// name and a dash start it the longest, its key the rest; else the name its own project, its
+// key the name, the project's heading.
+func projectOfName(name string, info remote.ServerInfo) (project, key string) {
+	var projects []string
+	for _, e := range info.Environments {
+		p, _, _ := strings.Cut(e.Path, "/")
+		projects = append(projects, p)
+	}
+	for _, c := range info.UIDs {
+		if o, err := uids.ParseOwner(c.Owner); err == nil {
+			projects = append(projects, o.Project)
+		}
+	}
+	for _, p := range projects {
+		if rest, ok := strings.CutPrefix(name, p+"-"); ok && rest != "" && len(p) > len(project) {
+			project, key = p, rest
+		}
+	}
+	if project == "" {
+		return name, name
+	}
+	return project, key
 }
