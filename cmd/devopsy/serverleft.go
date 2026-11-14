@@ -389,7 +389,9 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 	inProject := func(project, key string, head bool, lines []string, hints ...report.Remedy) {
 		groups[project] = append(groups[project], remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Head: head, Key: key, Lines: lines, Remedies: hints})
 	}
-	onServer := func(text string, cmds ...string) report.Remedy { return onServerRemedy(report.Hint, ref, text, cmds...) }
+	onServer := func(text string, cmds ...string) report.Remedy {
+		return onServerRemedy(report.Hint, ref, text, cmds...)
+	}
 	dockerUp := info.Docker.Error == "" && !info.Docker.Door
 
 	if f := info.GC; f != nil && dockerUp {
@@ -673,7 +675,9 @@ func onServerRemedy(kind func(string, ...string) report.Remedy, ref, text string
 }
 
 // claimRm removes claim c from the claims directory dir.
-func claimRm(dir string, c remote.UIDClaim) string { return "rm " + remote.QuoteWord(claimPath(dir, c)) }
+func claimRm(dir string, c remote.UIDClaim) string {
+	return "rm " + remote.QuoteWord(claimPath(dir, c))
+}
 
 // claimRemoval is the way out of claim c left, of kind, on the server ref names: every claim
 // left is removed by hand, as the deploy user, once nothing of its owner is left.
