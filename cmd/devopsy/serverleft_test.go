@@ -97,14 +97,14 @@ func TestServerInfoLeft(t *testing.T) {
 	want := []string{
 		// Under its project's heading, never a key that widens every other.
 		"blog blog: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
-		// A name of no project on the server is a project of its own, its heading.
-		"gone-prod gone-prod: gone, no environment and no uid claim on the server, and left: containers web (exited), volumes gone-prod_db, 1 image name of its releases\n" +
+		// A name of no project on the server is a project of its own, its name the line above.
+		"gone-prod : gone, no environment and no uid claim on the server, and left: containers web (exited), volumes gone-prod_db, 1 image name of its releases\n" +
 			gone + "$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
 		// A claim whose environment is gone is no live name: what is left of it is looked for,
 		// its claim said with it and removed last.
 		"news prod: gone, no environment on the server, and left: its uid claim 2, 1 image name of its releases\n" +
 			gone + "$ docker rmi devopsy.internal/news-prod/app:latest\n$ rm /home/devopsy/.devopsy-uids/env:news:prod",
-		"old-prod old-prod: gone, no environment and no uid claim on the server, and left: snapshots in /backups/old/prod\n" + gone + "$ rm -rf /backups/old/prod",
+		"old-prod : gone, no environment and no uid claim on the server, and left: snapshots in /backups/old/prod\n" + gone + "$ rm -rf /backups/old/prod",
 		// Under the project its name starts with, the longest: shop's, though wiki has a stage-2.
 		"shop stage-2: gone, no environment and no uid claim on the server, and left: 2 image names of its releases\n" +
 			gone + "$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
@@ -303,8 +303,8 @@ func TestServerInfoGoneClaimSaysWhatIsLeft(t *testing.T) {
 		Containers:   []remote.HostContainer{{Project: "shop-pr-1", Service: "web", State: "exited", Released: true}},
 	}
 	out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
-	if strings.Contains(out, "only its uid claim") && !strings.Contains(out, "web (exited)") {
-		t.Errorf("shop-pr-1's container is left, and the report says only its claim is:\n%s", out)
+	if !strings.Contains(out, "\n    pr-1     gone, no environment on the server, and left: its uid claim 1000002, containers web (exited)\n") || strings.Contains(out, "only its uid claim") {
+		t.Errorf("shop-pr-1's row, its claim and its container:\n%s", out)
 	}
 }
 
@@ -317,15 +317,19 @@ func TestServerInfoGoneClaimUnlookedStaysSaid(t *testing.T) {
 		UIDsDir: "/home/devopsy/.devopsy-uids",
 		UIDs:    []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "env:shop:pr-1"}},
 	}
-	for name, change := range map[string]func(*remote.ServerInfo){
-		"no environment listed": func(*remote.ServerInfo) {},
-		"docker down": func(i *remote.ServerInfo) {
+	for name, c := range map[string]struct {
+		change func(*remote.ServerInfo)
+		why    string
+	}{
+		"no environment listed": {func(*remote.ServerInfo) {}, "the release root lists no environment"},
+		"docker down": {func(i *remote.ServerInfo) {
 			i.Environments, i.Docker.Error = []remote.Environment{{Path: "shop/prod"}}, "docker info: Cannot connect"
-		},
+		}, "Docker did not answer"},
 	} {
 		i := base
-		change(&i)
-		want := "shop pr-1: gone, its uid claim 1000002 is left\n| remove it by hand once nothing of it is left, on the server:\n$ devopsy @vm1: --shell-host\n$ rm /home/devopsy/.devopsy-uids/env:shop:pr-1"
+		c.change(&i)
+		want := "shop pr-1: gone, its uid claim 1000002 is left; what else is left was not looked for: " + c.why +
+			"\n| remove it by hand once nothing of it is left, on the server:\n$ devopsy @vm1: --shell-host\n$ rm /home/devopsy/.devopsy-uids/env:shop:pr-1"
 		if got := leftSays(i, "devopsy@vm1", "vm1:"); !slices.Contains(got, want) {
 			t.Errorf("%s: no row of the claim:\n%s", name, strings.Join(got, "\n\n"))
 		}

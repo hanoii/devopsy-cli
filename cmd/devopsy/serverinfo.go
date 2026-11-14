@@ -1519,7 +1519,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		es[i].Section = "server"
 	}
 	slices.SortStableFunc(es, func(a, b remote.StatusEntry) int { return cmp.Compare(serverKeyRank(a.Key), serverKeyRank(b.Key)) })
-	groups, top := projectEntries(info, host, now)
+	groups, top := projectEntries(info, host, ref, now)
 	leftGroups, leftovers := leftEntries(info, host, ref)
 	if len(top) == 0 && len(groups) == 0 && len(leftGroups) == 0 {
 		top = append(top, remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Lines: []string{"none"}})
@@ -1568,23 +1568,22 @@ func nameChunk(s string) (chunk, rest string) {
 // gone environment among the live ones, each row's entries (its warning,
 // what is left beside it) kept together and in their order.
 func projectRows(es []remote.StatusEntry) []remote.StatusEntry {
+	// A row is its name's, else its key's.
+	rowOf := func(e remote.StatusEntry) string { return cmp.Or(e.Name, e.Key) }
 	var head []remote.StatusEntry
 	var rows [][]remote.StatusEntry
 	for _, e := range es {
-		switch {
-		case e.Head:
+		if e.Head {
 			head = append(head, e)
-		case len(rows) > 0 && rows[len(rows)-1][0].Key == e.Key:
-			rows[len(rows)-1] = append(rows[len(rows)-1], e)
-		default:
-			if i := slices.IndexFunc(rows, func(r []remote.StatusEntry) bool { return r[0].Key == e.Key }); i >= 0 {
-				rows[i] = append(rows[i], e)
-				continue
-			}
-			rows = append(rows, []remote.StatusEntry{e})
+			continue
 		}
+		if i := slices.IndexFunc(rows, func(r []remote.StatusEntry) bool { return rowOf(r[0]) == rowOf(e) }); i >= 0 {
+			rows[i] = append(rows[i], e)
+			continue
+		}
+		rows = append(rows, []remote.StatusEntry{e})
 	}
-	slices.SortStableFunc(rows, func(a, b []remote.StatusEntry) int { return byName(a[0].Key, b[0].Key) })
+	slices.SortStableFunc(rows, func(a, b []remote.StatusEntry) int { return byName(rowOf(a[0]), rowOf(b[0])) })
 	for _, r := range rows {
 		head = append(head, r...)
 	}
@@ -1620,8 +1619,9 @@ func mergeKeys[V any](ms ...map[string]V) map[string]bool {
 // holds and its one warning under it, then the environments only a
 // claim is left of; top the section's own (the roles no environment
 // holds, what did not read), for the server host (an address's server
-// part, empty for this machine's), now when the facts came.
-func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups map[string][]remote.StatusEntry, top []remote.StatusEntry) {
+// part, empty for this machine's) and ref (as typed), now when the
+// facts came.
+func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (groups map[string][]remote.StatusEntry, top []remote.StatusEntry) {
 	const section = "projects"
 	groups = map[string][]remote.StatusEntry{}
 	entry := func(level, group, key string, lines []string, rs ...report.Remedy) remote.StatusEntry {
@@ -1694,7 +1694,7 @@ func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups 
 	staleProject := map[string][]remote.StatusEntry{}
 	for _, c := range info.UIDs {
 		rm := func(kind func(string, ...string) report.Remedy) report.Remedy {
-			return kind("remove it by hand, as the deploy user, once nothing of it is left on the server:", "rm "+remote.QuoteWord(claimPath(info.UIDsDir, c)))
+			return claimRemoval(kind, ref, info.UIDsDir, c)
 		}
 		switch {
 		case c.Bad != "" && c.Name == info.UIDsDir:
@@ -1813,6 +1813,24 @@ func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups 
 		if len(problems) > 0 {
 			groups[project] = append(groups[project], entry(remote.StatusWarning, project, rest, problems, statusHint(host, info.Root, env)))
 		}
+	}
+	// An environment claim with no row of its own and none of what is left (a project user's
+	// tree that answered nothing, an environment that did not read): said under its project,
+	// every claim somewhere.
+	rows := map[string]bool{}
+	for _, env := range info.Environments {
+		rows[composeNameOf(env.Path)] = true
+	}
+	left := staleClaims(info)
+	for _, c := range info.UIDs {
+		o, err := uids.ParseOwner(c.Owner)
+		if _, stale := left[o.ComposeName()]; err != nil || o.Env == "" || rows[o.ComposeName()] || stale {
+			continue
+		}
+		project, key := claimKey(c)
+		e := placed(project, key, []string{"uid " + strconv.FormatUint(uint64(c.UID), 10) + ", its environment not read"}, report.Remedy{})
+		e.Remedies = nil
+		groups[project] = append(groups[project], e)
 	}
 	// Each project's heading first, its project uid claims, and under it those left.
 	for p, words := range projectUIDs {

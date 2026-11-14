@@ -389,14 +389,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 	inProject := func(project, key string, head bool, lines []string, hints ...report.Remedy) {
 		groups[project] = append(groups[project], remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Head: head, Key: key, Lines: lines, Remedies: hints})
 	}
-	// onServer is a hint of commands run on the server: through --shell-host from here.
-	onServer := func(text string, cmds ...string) report.Remedy {
-		if ref != "" {
-			cmds = append([]string{"devopsy @" + ref + " --shell-host"}, cmds...)
-			text = strings.TrimSuffix(text, ":") + ", on the server:"
-		}
-		return report.Hint(text, cmds...)
-	}
+	onServer := func(text string, cmds ...string) report.Remedy { return onServerRemedy(report.Hint, ref, text, cmds...) }
 	dockerUp := info.Docker.Error == "" && !info.Docker.Door
 
 	if f := info.GC; f != nil && dockerUp {
@@ -460,11 +453,11 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 		// What else is left cannot be looked for: each claim left is said alone, never as all
 		// there is.
 		left := staleClaims(info)
+		why := notLookedFor(info, dockerUp)
 		for _, name := range slices.Sorted(maps.Keys(left)) {
 			c := left[name]
-			project, key := claimKey(c)
-			inProject(project, key, false, []string{"gone, its uid claim " + strconv.FormatUint(uint64(c.UID), 10) + " is left"},
-				onServer("remove it by hand once nothing of it is left:", "rm "+remote.QuoteWord(claimPath(info.UIDsDir, c))))
+			e := goneEntry(info, name, &c, claimLeftWords(c, nil, why), claimRemoval(report.Hint, ref, info.UIDsDir, c))
+			groups[e.Group] = append(groups[e.Group], e)
 		}
 	}
 	if ok && dockerUp {
@@ -504,6 +497,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 				of(n).snapshots = filepath.Join(info.SnapshotRoot, filepath.FromSlash(p))
 			}
 		}
+		why := notLookedFor(info, dockerUp)
 		for _, name := range slices.Sorted(maps.Keys(gone)) {
 			g := gone[name]
 			var left, cmds []string
@@ -528,31 +522,21 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 				left = append(left, "snapshots in "+g.snapshots)
 				cmds = append(cmds, "rm -rf "+remote.QuoteWord(g.snapshots))
 			}
-			project, key := projectOfName(name, info)
+			c := g.claim
+			if c != nil && len(left) == 0 {
+				e := goneEntry(info, name, c, claimLeftWords(*c, nil, why), claimRemoval(report.Hint, ref, info.UIDsDir, *c))
+				groups[e.Group] = append(groups[e.Group], e)
+				continue
+			}
 			what := "no environment and no uid claim on the server, and left: " + strings.Join(left, ", ")
-			hint := "an environment removed by hand: remove what is left once none of it is needed:"
-			if c := g.claim; c != nil {
-				// Known by its claim: its project and its key as its owner says them.
-				project, key = claimKey(*c)
-				uid := strconv.FormatUint(uint64(c.UID), 10)
+			if c != nil {
 				// Its claim last: freed while anything of it is left, its uid could go to
 				// another environment with these files still owned by it.
-				cmds = append(cmds, "rm "+remote.QuoteWord(claimPath(info.UIDsDir, *c)))
-				what = "no environment on the server, and left: " + strings.Join(append([]string{"its uid claim " + uid}, left...), ", ")
-				if len(left) == 0 {
-					what, hint = "only its uid claim "+uid+" is left", "remove it by hand once nothing of it is left:"
-				}
+				cmds = append(cmds, claimRm(info.UIDsDir, *c))
+				what = claimLeftWords(*c, left, why)
 			}
-			switch {
-			case key == project:
-				// A name of no project on the server: its own, and this its heading.
-				inProject(project, key, true, []string{"gone, " + what}, onServer(hint, cmds...))
-			case utf8.RuneCountInString(key) > goneKeyMax:
-				// A long name in the line, never widening every key.
-				inProject(project, "gone", false, []string{key + ": " + what}, onServer(hint, cmds...))
-			default:
-				inProject(project, key, false, []string{"gone, " + what}, onServer(hint, cmds...))
-			}
+			e := goneEntry(info, name, c, what, onServer("an environment removed by hand: remove what is left once none of it is needed:", cmds...))
+			groups[e.Group] = append(groups[e.Group], e)
 		}
 	}
 
@@ -579,7 +563,8 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 			hint = report.Hint("run it again, which resumes it, in "+project+"'s checkout:", "devopsy @"+host+":"+remote.QuoteWord(rest)+" --destroy")
 		}
 		// Under the environment's own name: its <base>.rm.<pid> would widen every key.
-		inProject(project, rest, false, []string{"a --destroy cut off while it removed it left " + path.Base(r.Path) + ", " + humanBytes(r.Size)}, hint)
+		e := placed(project, rest, []string{"a --destroy cut off while it removed it left " + path.Base(r.Path) + ", " + humanBytes(r.Size)}, hint)
+		groups[e.Group] = append(groups[e.Group], e)
 	}
 
 	if info.Door != nil {
@@ -600,14 +585,107 @@ func claimPath(dir string, c remote.UIDClaim) string {
 }
 
 // goneKeyMax is the longest name a gone environment is keyed by; a longer one is said in its
-// line, under the key gone.
+// line, under the key gone, a row of its own (its Name): a key widens every other.
 const goneKeyMax = 12
+
+// placed is project's row of key with lines and hint, key past goneKeyMax said in its first
+// line under gone, the row its own by its Name.
+func placed(project, key string, lines []string, hint report.Remedy) remote.StatusEntry {
+	e := remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Key: key, Lines: lines, Remedies: []report.Remedy{hint}}
+	if utf8.RuneCountInString(key) > goneKeyMax {
+		e.Key, e.Name = "gone", key
+		e.Lines = append([]string{key + ": " + strings.TrimPrefix(lines[0], "gone, ")}, lines[1:]...)
+	}
+	return e
+}
+
+// goneEntry is the row of what is left of the gone environment of compose name, its claim c
+// when one is left, what its words after "gone, ": in its project under its name, as its
+// claim's owner says them, else as projectOfName finds them; a name of no project on the
+// server a project of its own, its name the line above the row, so a heading never widens
+// the key column. A claim's row is never a heading.
+func goneEntry(info remote.ServerInfo, name string, c *remote.UIDClaim, what string, hint report.Remedy) remote.StatusEntry {
+	if c != nil {
+		project, key := claimKey(*c)
+		return placed(project, key, []string{"gone, " + what}, hint)
+	}
+	project, key, own := projectOfName(name, info)
+	if own {
+		return remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: name, Name: name, Lines: []string{"gone, " + what}, Remedies: []report.Remedy{hint}}
+	}
+	return placed(project, key, []string{"gone, " + what}, hint)
+}
+
+// claimLeftWords are what is left of a gone environment whose claim c is left, besides left:
+// only its claim when nothing else is and why is empty (everything else read), else its
+// claim and left, then why what else is left could not be looked for.
+func claimLeftWords(c remote.UIDClaim, left []string, why string) string {
+	uid := strconv.FormatUint(uint64(c.UID), 10)
+	words := "its uid claim " + uid + " is left"
+	switch {
+	case len(left) > 0:
+		words = "no environment on the server, and left: " + strings.Join(append([]string{"its uid claim " + uid}, left...), ", ")
+	case why == "":
+		return "only its uid claim " + uid + " is left"
+	}
+	if why != "" {
+		words += "; " + why
+	}
+	return words
+}
+
+// notLookedFor is why what is left of a gone environment could not all be looked for, empty
+// when everything read, dockerUp whether Docker answers as the deploy user's.
+func notLookedFor(info remote.ServerInfo, dockerUp bool) string {
+	switch {
+	case info.Docker.Door:
+		return "what else is left is the server's admin's to look for"
+	case !dockerUp:
+		return "what else is left was not looked for: Docker did not answer"
+	case info.EnvironmentsUnread != "":
+		return "what else is left was not looked for: the environments did not all read"
+	}
+	if _, _, ok := liveNames(info); !ok {
+		// Its claims unread, there is no claim to say this of: the root lists no environment.
+		return "what else is left was not looked for: the release root lists no environment"
+	}
+	var unread []string
+	for _, r := range []struct{ what, err string }{{"containers", info.ContainersUnread}, {"images", info.ImagesUnread}, {"volumes", info.VolumesUnread}} {
+		if r.err != "" {
+			unread = append(unread, r.what)
+		}
+	}
+	if len(unread) == 0 {
+		return ""
+	}
+	return "its " + strings.Join(unread, ", ") + " could not be read"
+}
+
+// onServerRemedy is a remedy of kind (report.Fix or report.Hint) of commands run on the
+// server: through --shell-host from the operator's machine, ref the server as typed, empty on
+// the server itself.
+func onServerRemedy(kind func(string, ...string) report.Remedy, ref, text string, cmds ...string) report.Remedy {
+	if ref != "" {
+		cmds = append([]string{"devopsy @" + ref + " --shell-host"}, cmds...)
+		text = strings.TrimSuffix(text, ":") + ", on the server:"
+	}
+	return kind(text, cmds...)
+}
+
+// claimRm removes claim c from the claims directory dir.
+func claimRm(dir string, c remote.UIDClaim) string { return "rm " + remote.QuoteWord(claimPath(dir, c)) }
+
+// claimRemoval is the way out of claim c left, of kind, on the server ref names: every claim
+// left is removed by hand, as the deploy user, once nothing of its owner is left.
+func claimRemoval(kind func(string, ...string) report.Remedy, ref, dir string, c remote.UIDClaim) report.Remedy {
+	return onServerRemedy(kind, ref, "remove it by hand once nothing of it is left:", claimRm(dir, c))
+}
 
 // projectOfName is the project a compose name with no environment is filed under, and its
 // key there: of the projects on the server (its environments', its claims'), the one whose
-// name and a dash start it the longest, its key the rest; else the name its own project, its
-// key the name, the project's heading.
-func projectOfName(name string, info remote.ServerInfo) (project, key string) {
+// name and a dash start it the longest, its key the rest; else own, the name of no project on
+// the server, its own project.
+func projectOfName(name string, info remote.ServerInfo) (project, key string, own bool) {
 	var projects []string
 	for _, e := range info.Environments {
 		p, _, _ := strings.Cut(e.Path, "/")
@@ -624,7 +702,7 @@ func projectOfName(name string, info remote.ServerInfo) (project, key string) {
 		}
 	}
 	if project == "" {
-		return name, name
+		return name, "", true
 	}
-	return project, key
+	return project, key, false
 }

@@ -288,10 +288,13 @@ of its own.
 
 `leftovers`, what may be dead or gone on the server, described below.
 
+Prose wraps at 100 columns, a command never, and a row of cells moves
+its last cell whole to a line of its own instead.
+
 What needs attention is a warning under the line it is about, its first
 line marked `!`, with its fix; a fix that serves several lines in a row
 (`--server-setup` for the setup's items) comes once, after the last of
-them. Prose wraps at 100 columns, a command never:
+them:
 
 - an older devopsy (`W0003`), with `--upgrade` or
   `--match-server-version` as its fix, or an older one on the operator's
@@ -354,7 +357,8 @@ code to pass on and no fix, and leaves out what only the admin can do
 
 `--json` prints the facts and the same lines for scripts and agents, each
 warning with its own fix, each line with its `section`, its project
-(`group`) and a row's `cells`. Its
+(`group`), a line of a project's heading (`head`), a row's `cells`, and
+the name of what a row is of when its key does not say it (`name`). Its
 fields may change before 1.0.0: the door's `firewall_wrong`,
 `firewall_error` and `project` are gone, the setup's `firewall` (its
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both
@@ -401,7 +405,11 @@ What goes by an environment's absence is shown only when the release
 root lists environments and every one of them, and the uid claims, could
 be read: with the root's disk not mounted, every environment would look
 gone. A uid claim whose environment is gone is said all the same, alone,
-since nothing else of it could be looked for. Images and volumes of a compose project that is not a release's
+with why nothing else of it could be looked for. A claim is "only" what
+is left only when its containers, images and volumes all read. An
+environment's claim with no row of its own (a project user's tree that
+answered nothing, an environment that did not read) is said under its
+project, so that every claim shows somewhere. Images and volumes of a compose project that is not a release's
 (the admin's own) are not shown. What of it could not be read (the
 images, the volumes, a part of `--gc`'s count) is a warning instead:
 unknown, never none.
