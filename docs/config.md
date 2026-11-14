@@ -213,7 +213,7 @@ an environment always make the change, and say what applies it:
 ## Release settings
 
 Release settings belong to the server, in its deploy user's
-`~/.config/devopsy/config.yaml`, so your machine and CI always agree:
+`~/.config/devopsy/config.yaml`, so every operator, a laptop or CI, agrees:
 
 ```yaml
 releases:

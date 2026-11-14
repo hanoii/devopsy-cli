@@ -31,13 +31,13 @@ command line:
 ```yaml
 release:
   before:                # before anything changes; a failure stops here
-    - local: image       #   on this machine, first
+    - local: image       #   on the operator's machine, first
     - remote: maint on   #   on the server, in the current release
   prepare: [secrets]     # on the server, in the new release, before it goes live
   run: deploy            # once it is current: the release itself
   after:                 # once live; a failure is only reported
     - remote: maint off  #   on the server, first
-    - local: notify      #   then locally
+    - local: notify      #   then on the operator's machine
 rollback: deploy         # only a run step: the same phases, in the restored release
 ```
 
@@ -464,7 +464,7 @@ more than apply variables (a schema update). A reload that fails,
 through its `reload:` step or devopsy's own `up`, leaves the release
 live and restarts nothing.
 
-Locally, `devopsy --reload` runs the `reload:` step under `defaults:` in
+Without a target, `devopsy --reload` runs the `reload:` step under `defaults:` in
 place (in a release on a server, its environment's), else the same `up`,
 once compose's required variables are set.
 

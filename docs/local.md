@@ -1,4 +1,4 @@
-# Working locally
+# Working without a target
 
 A project is a `.devopsy/` directory beside its code. Every devopsy
 command finds it from the directory you run it in:
@@ -34,7 +34,7 @@ Arguments that start with a flag go to compose unchecked (`devopsy
 --profile x up`). A flag on its own is different. Compose has none that
 stand alone, so a lone flag devopsy does not know is an error, with
 the nearest of its own flags as a hint (`devopsy --ssh-host`: did you
-mean `--shell-host`?). This holds locally and with a target.
+mean `--shell-host`?). This holds without a target and with one.
 
 ## Project commands
 
@@ -43,11 +43,11 @@ the project's `.env` loaded, `DEVOPSY_PROJECT_DIR` (the `.devopsy/` path)
 and `DEVOPSY_COMMAND_NAME` set. A `## Description:` line near the top
 shows in help, and two more lines say where it runs:
 
-- `## Run: local` runs it only on your machine (for example a build that
+- `## Run: local` runs it only on the operator's machine (for example a build that
   pushes an image); on a server it fails. `## Run: target` runs it only
   on the server, through `devopsy @<target>` (for example a deploy);
-  locally it fails. Without the line it runs where it is called: locally,
-  or on the target when one is given.
+  without a target it fails. Without the line it runs where it is called:
+  on the operator's machine, or on the target when one is given.
 - `## Needs: target` or `## Needs: server`, with `## Run: local`, makes a
   local command that takes an address: `devopsy @prod <command>`, or
   `devopsy @vm1 <command>` for a server (any target gives its server).
@@ -57,18 +57,18 @@ shows in help, and two more lines say where it runs:
 
 ```sh
 #!/bin/sh
-## Description: Copy a target's database locally
+## Description: Copy a target's database into the local environment
 ## Run: local
 ## Needs: target
 devopsy @"$DEVOPSY_COMMAND_TARGET" drush sql-dump > .devopsy/mnt/dump.sql
 devopsy drush sql-cli < .devopsy/mnt/dump.sql
 ```
 
-Help shows where each command runs, as it shows a flag's scope (`(runs
-locally)` after a local command that takes an address), and completion
+Help shows where each command runs, as it shows a flag's scope (`(Run:
+local)` after a local command that takes an address), and completion
 offers each command only where it runs. A release refuses, before
 anything changes, a step whose command runs in the wrong place (`local:`
-steps run locally, the rest on the server). devopsy detects a release on
+steps run on the operator's machine, the rest on the server). devopsy detects a release on
 a server by its `devopsy-target.env`, so a `target` command does not run
 in a plain directory on a server either.
 
@@ -100,7 +100,7 @@ devopsy --env --show > /tmp/env && docker compose -f .devopsy/compose.yaml --env
 
 ## Project name
 
-devopsy always sets `COMPOSE_PROJECT_NAME`. Locally it is the config's
+devopsy always sets `COMPOSE_PROJECT_NAME`. Without a target it is the config's
 `project:`, else compose's top-level `name:`, else the name of the
 directory holding `.devopsy/`, normalized; your own `COMPOSE_PROJECT_NAME`
 wins over all three. On a server it is always the environment's compose
@@ -171,8 +171,8 @@ covered. devopsy builds nothing itself.
 What a command produces goes to stdout: compose's output, `--env`,
 `--vars`, lists, `--export`'s data. Everything devopsy says goes to
 stderr, each line starting with `devopsy:`, which sets it apart from what
-compose, Docker and your commands print around it, locally and from a
-server:
+compose, Docker and your commands print around it, without a target and
+from a server:
 
 ```
 devopsy: releasing to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
@@ -260,7 +260,7 @@ over it.
 Releases and syncs run their SSH sessions without a terminal, so devopsy
 gives their steps, builds and run step one on the server (`script`, from
 util-linux), sized like yours: a build's live progress shows as it would
-locally. Logs are saved without the colors, and a progress display only
+on the operator's machine. Logs are saved without the colors, and a progress display only
 as its final state.
 
 Variables named `DEVOPSY_INTERNAL_*` pass these settings from one devopsy

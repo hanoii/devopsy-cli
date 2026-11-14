@@ -30,17 +30,7 @@ var docs = []string{"README.md", "docs/*.md", "internal/skill/*.md"}
 // ("" for the whole file).
 var kept = []struct{ file, line string }{
 	// Until the rename reaches them.
-	{"docs/capabilities.md", ""},
-	{"docs/config.md", ""},
-	{"docs/data.md", ""},
-	{"docs/images.md", ""},
-	{"docs/local.md", ""},
-	{"docs/project-users.md", ""},
-	{"docs/releases.md", ""},
-	{"docs/servers.md", ""},
-	{"docs/syncs.md", ""},
 	{"internal/skill/SKILL.md", ""},
-	{"README.md", ""},
 }
 
 // Every form is one literal fit for a script's double quotes and holds no retired word; no Go

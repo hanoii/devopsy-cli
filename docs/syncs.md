@@ -188,12 +188,12 @@ session to the child's, and the child's rsync talks to the daemon over
 that session itself: no port is opened on either server, and the
 child's rsync has no network either. A stream is written to a file on
 the child's server over a session of its own. Data goes from server to
-server, never through your machine.
+server, never through the operator.
 
 The parent's server connects with a key made for that sync, never with
 your SSH agent ([CI](servers.md#ci)):
 
-- devopsy makes the key pair on your machine for each sync and keeps it
+- devopsy makes the key pair on the operator's machine for each sync and keeps it
   in memory. Once the child's side is ready, it authorizes the public
   half. The parent's side receives the private half through its SSH
   session's input, never on a command line, and keeps it in a file of
@@ -223,9 +223,9 @@ minutes.
 A sync across servers needs:
 
 - The child's server reachable from the parent's at the user, hostname
-  and port `ssh -G` gives on your machine. A host behind a
-  `ProxyCommand` or `ProxyJump` is refused, since a relay through your
-  machine is not supported. Two users on one machine count as two
+  and port `ssh -G` gives on the operator's machine. A host behind a
+  `ProxyCommand` or `ProxyJump` is refused, since a relay through the
+  operator is not supported. Two users on one machine count as two
   servers here.
 - The child's sshd reading `expiry-time` in a key's options (OpenSSH
   7.7 or later).
@@ -233,7 +233,7 @@ A sync across servers needs:
   project user would otherwise drive a copy the deploy user runs, or
   the other way round. devopsy refuses before anything stops, and
   `--export` piped into `--import` moves a service's data across through
-  your machine instead.
+  the operator instead.
 
 ## When a sync fails
 
