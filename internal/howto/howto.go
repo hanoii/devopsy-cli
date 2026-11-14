@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // Flag is the flag that prints a topic, or the list of them.
@@ -21,19 +23,25 @@ type Name string
 
 // Step is one step of a topic: what it does, in a sentence or two, and the commands that do
 // it, as root, copyable as they are. A value the admin chooses is a shell variable set on the
-// step's first line, with its usual value; a value of the system is computed. A step whose
-// text starts with localStart runs on the operator's machine instead (a devopsy command
-// addressing the server).
+// step's first line, with its usual value; a value of the system is computed. A step with
+// Operator runs on the operator's machine instead (a devopsy command addressing the server),
+// its text opened by the words that say so.
 type Step struct {
-	Text string
-	Cmds []string
+	Text     string
+	Cmds     []string
+	Operator bool
 }
 
-// localStart opens the text of a step that runs on the operator's machine.
-const localStart = "Locally, "
+// text is s's text as printed, opened by where it runs when that is the operator's machine.
+func (s Step) text() string {
+	if s.Operator {
+		return vocab.Cap(vocab.Operator.From) + ", " + s.Text
+	}
+	return s.Text
+}
 
-// local says whether s runs on the operator's machine.
-func (s Step) local() bool { return strings.HasPrefix(s.Text, localStart) }
+// onOperator says whether s runs on the operator's machine.
+func onOperator(s Step) bool { return s.Operator }
 
 // Topic is one thing devopsy checks on a server and cannot set up: its name, a line for the list
 // and completion, a title, why it matters, its steps, and how to check them.
@@ -72,19 +80,20 @@ func Command(name Name) string { return "devopsy " + Flag + " " + string(name) }
 // width is where the text wraps.
 const width = 76
 
-// asRoot, locally where a topic has a step that runs locally, and deployUser introduce every topic's steps
+// asRoot, operatorSteps where a topic has a step run on the operator's machine, and deployUser introduce every topic's steps
 // (Topic.opening), so a topic printed alone tells what the docs page's reader is told: where
 // and as whom they run, who the deploy user is, where a value is set.
 const (
 	asRoot     = "Run each step as root on the server, Debian or Ubuntu with systemd."
-	locally    = "A step that starts with Locally runs on the operator's machine instead, where devopsy addresses the server by its deploy user."
 	deployUser = "The deploy user is the Unix user devopsy logs in as, which must exist. A step's first line sets the values to change, if it has any (for example user=devopsy)."
 )
 
+var operatorSteps = "A step that starts \"" + vocab.Cap(vocab.Operator.From) + "\" runs there, where devopsy addresses the server by its deploy user, not on the server."
+
 // opening is what introduces t's steps: where and as whom they run, who the deploy user is.
 func (t Topic) opening() string {
-	if slices.ContainsFunc(t.Steps, Step.local) {
-		return asRoot + " " + locally + " " + deployUser
+	if slices.ContainsFunc(t.Steps, onOperator) {
+		return asRoot + " " + operatorSteps + " " + deployUser
 	}
 	return asRoot + " " + deployUser
 }
@@ -154,7 +163,7 @@ func (t Topic) Body() string {
 	b.WriteString(wrap(t.Why, "", "") + "\n")
 	b.WriteString(wrap(t.opening(), "", "") + "\n")
 	for i, s := range t.Steps {
-		b.WriteString(wrap(s.Text, strconv.Itoa(i+1)+". ", stepIndent))
+		b.WriteString(wrap(s.text(), strconv.Itoa(i+1)+". ", stepIndent))
 		writeCmds(&b, s.Cmds, stepIndent)
 		b.WriteString("\n")
 	}

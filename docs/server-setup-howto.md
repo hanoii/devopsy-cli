@@ -129,7 +129,7 @@ tail --version | head -n 1
 Every user's processes hidden from the others
 
 A process's command line names projects, paths and arguments, and a devopsy
-session's is its whole script, the operator's command in it: on a server
+session's is its whole script, with the command that started it: on a server
 with project users, each should see only its own. On a server with project
 users, --project-users setup does this, with a unit of devopsy's
 (devopsy-proc.service) in place of the /etc/fstab line below: these steps
@@ -200,10 +200,10 @@ setfacl while the server has no project user. Steps 4 to 6 are for a server
 set up by hand in place of step 3, where a line in /etc/fstab is fine.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. A step
-that starts with Locally runs on the operator's machine instead, where
-devopsy addresses the server by its deploy user. The deploy user is the Unix
-user devopsy logs in as, which must exist. A step's first line sets the
-values to change, if it has any (for example user=devopsy).
+that starts "From the operator's machine" runs there, where devopsy
+addresses the server by its deploy user, not on the server. The deploy user
+is the Unix user devopsy logs in as, which must exist. A step's first line
+sets the values to change, if it has any (for example user=devopsy).
 
 1. Install sudo (sudo, visudo) and acl (setfacl), which nothing else of
    devopsy uses.
@@ -213,12 +213,13 @@ values to change, if it has any (for example user=devopsy).
    apt-get install -y sudo acl
    ```
 
-2. Locally, run --server-setup for this server: it makes the release root
-   the deploy user's, which --project-users setup and --project-users add
-   refuse without. It shows what it sets, asks, and applies.
+2. From the operator's machine, run --server-setup for this server: it makes
+   the release root the deploy user's, which --project-users setup and
+   --project-users add refuse without. It shows what it sets, asks, and
+   applies.
 
-3. Locally, run --project-users setup for this server: it shows what it
-   sets, asks, and applies.
+3. From the operator's machine, run --project-users setup for this server:
+   it shows what it sets, asks, and applies.
 
 4. By hand, in place of step 3: make the door's directory, the deploy
    user's, and mount it on itself with nosuid and nodev, now and at every
@@ -246,9 +247,9 @@ values to change, if it has any (for example user=devopsy).
 6. By hand, in place of step 3: hide every user's processes from the others,
    as the processes topic says.
 
-7. Locally, add project users with --project-users add, and reboot the
-   server after the first: sshd reads what the add wrote for it only at the
-   next boot, and until then no project user logs in.
+7. From the operator's machine, add project users with --project-users add,
+   and reboot the server after the first: sshd reads what the add wrote for
+   it only at the next boot, and until then no project user logs in.
 
 To check it: the three tools are found, the directory is mounted with nosuid
 and nodev, and --server-info no longer says either of them.

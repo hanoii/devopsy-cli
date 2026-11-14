@@ -1330,8 +1330,8 @@ func TestSyncResetNothingPresent(t *testing.T) {
 // parent's: at the data's version it goes on, nothing held, its history
 // the export's from an import line; a lower version is refused, nothing
 // stopped or written, unless --accept-image, which reaches the server's
-// import. Locally nothing is checked, so --accept-image there is an
-// error.
+// import. Without a target nothing is checked, so --accept-image there
+// is an error.
 func TestImportExportImages(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -1383,7 +1383,7 @@ func TestImportExportImages(t *testing.T) {
 		t.Errorf("history after an accepted import:\n%s", h)
 	}
 
-	// Locally: nothing to accept, and the header is no member.
+	// Without a target: nothing to accept, and the header is no member.
 	if _, errs, code := s.runIO(nil, out, "--import", "app", "--accept-image", "app"); code == 0 || !strings.Contains(errs, "--accept-image is for a target") {
 		t.Errorf("--accept-image locally (%d):\n%s", code, errs)
 	}

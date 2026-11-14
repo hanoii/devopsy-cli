@@ -183,8 +183,8 @@ func ParseOwner(s string) (Owner, error) {
 }
 
 // Plain is o's hashed slot, its uid wherever no other owner holds it: the start of its
-// domain's range plus FNV-1a-64 of its name, modulo the range's size. Locally, with no
-// claims, it is the uid.
+// domain's range plus FNV-1a-64 of its name, modulo the range's size. Without a
+// target, with no claims, it is the uid.
 func (o Owner) Plain() uint32 { return HashIn(o.Domain(), o.String()) }
 
 // HashIn is name's slot in d's range: its start plus FNV-1a-64 of name, modulo its size.

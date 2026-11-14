@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
+
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // Capability describes an interface devopsy defines and a project may
@@ -39,7 +41,7 @@ var Capabilities = []Capability{
 		Name:     "env",
 		What:     "values a project derives from its environment, like its hosts from COMPOSE_PROJECT_NAME and an imported base domain, computed by the project so devopsy knows none of them",
 		Who:      "projects whose compose files or commands need derived values",
-		CalledBy: "every devopsy command in the project (not help or completion), locally and on servers",
+		CalledBy: "every devopsy command in the project (not help or completion), with or " + vocab.NoTarget,
 		Actions: []CapabilityAction{
 			{
 				Name:   "compute",
@@ -53,7 +55,7 @@ var Capabilities = []Capability{
 		Name:     "status",
 		What:     "facts of the project's own under devopsy --status, after the containers: its URL, a maintenance mode, a version",
 		Who:      "any project with something to say about itself",
-		CalledBy: "devopsy [@<target>] --status, locally and on servers",
+		CalledBy: "devopsy [@<target>] --status, with or " + vocab.NoTarget,
 		Actions: []CapabilityAction{
 			{
 				Name:   "show",

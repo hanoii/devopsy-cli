@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/sources"
 )
 
 // rootDoc is the agents' root file, from the repository's root.
@@ -195,7 +197,7 @@ func goNames(t *testing.T) names {
 	t.Helper()
 	n := names{decls: map[string]map[string]bool{}, members: map[string]map[string]bool{}, types: map[string][]string{}, any: map[string]bool{}, docs: map[string]string{}}
 	word := regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
-	for _, dir := range goDirs(t) {
+	for _, dir := range sources.Dirs(t, "cmd", "internal", "e2e") {
 		n.docs[dir] = ""
 		fset := token.NewFileSet()
 		pkgs, err := parser.ParseDir(fset, filepath.Join(repoRoot, dir), nil, parser.ParseComments)
@@ -261,31 +263,6 @@ func goNames(t *testing.T) names {
 		n.any[e] = true
 	}
 	return n
-}
-
-// goDirs are the directories of the repository's Go packages, slash
-// separated from its root.
-func goDirs(t *testing.T) []string {
-	t.Helper()
-	var dirs []string
-	for _, top := range []string{"cmd", "internal", "e2e"} {
-		err := filepath.WalkDir(filepath.Join(repoRoot, top), func(p string, d fs.DirEntry, err error) error {
-			if err != nil || !d.IsDir() {
-				return err
-			}
-			if gos, _ := filepath.Glob(filepath.Join(p, "*.go")); len(gos) > 0 {
-				dirs = append(dirs, strings.TrimPrefix(filepath.ToSlash(p), repoRoot+"/"))
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if len(dirs) < 2 {
-		t.Fatal("no Go packages found")
-	}
-	return dirs
 }
 
 var (

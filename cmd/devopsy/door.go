@@ -430,8 +430,8 @@ func (s *doorSide) warnSealed(file map[string]any, argv []string, dir string) {
 }
 
 // sealedFix is the way out warnSealed offers: a release of the environment by the caller's
-// session's address, else in words, never one of compose's commands, which, shown locally in a
-// session, would run on the local project.
+// session's address, else in words, never one of compose's commands, which, shown on the
+// operator's machine in a session, would run on the local project.
 const sealedFix = "release again, with any change made in the checkout, which makes these containers again"
 
 // releaseHash is the hash a seal of path would name its copy by, read as a seal reads it

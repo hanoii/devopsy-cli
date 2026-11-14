@@ -128,8 +128,8 @@ case $after in
     printf '%s\n' "$id${token:+ $token}" >"$host_root` + setup.RestartMarker + `"
     echo ` + SetupAsked + `
     # The unit's start counter cleared: docker.service allows a few starts a minute
-    # (StartLimitBurst), a fresh server's install and restarts by hand count, and a restart an
-    # operator asked for is no crash loop. Its failure changes nothing of the restart.
+    # (StartLimitBurst), a fresh server's install and restarts by hand count, and a restart
+    # someone asked for is no crash loop. Its failure changes nothing of the restart.
     SYSTEMD_IGNORE_CHROOT=1 systemctl reset-failed docker.service || :
     if SYSTEMD_IGNORE_CHROOT=1 systemctl daemon-reload && SYSTEMD_IGNORE_CHROOT=1 systemctl restart --no-block docker.service; then
       echo ` + SetupQueued + `

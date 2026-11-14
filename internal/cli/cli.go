@@ -23,6 +23,8 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 	"go.yaml.in/yaml/v3"
+
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // ProjectDirName is the directory devopsy looks for.
@@ -62,10 +64,10 @@ type Plan struct {
 	// are masked.
 	Verbose []string
 	// Starts is set for a compose command that starts containers
-	// (startingCommands) locally: the caller reads the labels and readies
-	// mnt's owned entries (MntOwnerLabel) first. Never in a release on a
-	// server, where --mnt-owners gives them away at each switch, nor for
-	// --dry-run, which starts nothing.
+	// (startingCommands) without a target: the caller reads the labels
+	// and readies mnt's owned entries (MntOwnerLabel) first. Never in a
+	// release on a server, where --mnt-owners gives them away at each
+	// switch, nor for --dry-run, which starts nothing.
 	Starts bool
 	// StartsInRelease is set for such a command, or cp (which mounts bind
 	// sources afresh), in a release on a server:
@@ -529,8 +531,8 @@ On one server, one container copies between the two directories. Across
 servers, the parent's runs an rsync daemon for the copy and reaches the
 child's over SSH with a key made for that sync, which only does its requests
 there while it runs: no agent is forwarded, and the child's host must be
-reachable from the parent's as ssh -G resolves it locally (no ProxyCommand or
-ProxyJump). Both sides are project users, or neither.
+reachable from the parent's as ssh -G resolves it ` + vocab.Operator.On + `
+(no ProxyCommand or ProxyJump). Both sides are project users, or neither.
 
 The parent comes from the child's instance and the usual server variables
 (DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
@@ -610,8 +612,8 @@ so data goes from one environment to another without a project command:
 
 Replaces a service's data with stdin, what --export wrote, the way its
 devopsy.data.copy label says. stdin goes to a file first (under .devopsy/
-locally, next to the environment on a server); only once it is all there
-does anything change, and the file is removed afterwards.
+` + vocab.NoTarget + `, next to the environment on a server); only once it
+is all there does anything change, and the file is removed afterwards.
 
   custom   the data capability's import <service> reads it, with the
            service brought up first (--no-deps) unless stopped, and
@@ -629,8 +631,8 @@ checked against it before anything stops, as a sync checks its
 parent's: a version lower than the data's, or another tag at it, is
 refused. --accept-image <service> runs it on the data then, its history
 starting over. Each side runs its own image. A tar without it (made by
-hand) and every import locally start the history over, data of no known
-version: what next runs on it says its version. A custom import
+hand) and every import ` + vocab.NoTarget + ` start the history over, data
+of no known version: what next runs on it says its version. A custom import
 checks nothing and leaves the history and the image that runs as they
 were: its script loads the dump through that image.
 
@@ -647,8 +649,8 @@ release, rollback or restart) until an import of that service completes;
 no other service can be imported meanwhile. When the data itself cannot
 complete (an error near the end of a dump), --resolved accepts it as it
 is: it asks for the environment's full name and starts what the import
-kept down. Locally devopsy keeps no mark: the error says what it left
-down.
+kept down. ` + vocab.Cap(vocab.NoTarget) + ` devopsy keeps no mark: the error says
+what it left down.
 
 With a target, asks for the environment's full name (<project>/
 [<instance>/]<environment>) on the terminal first (--yes skips it, and
@@ -692,14 +694,14 @@ phases:
     prod:
       release:
         before:                # before anything changes; a failure stops
-          - local: image       #   locally, first
+          - local: image       #   ` + vocab.Operator.On + `, first
           - remote: maint on   #   on the server, in the current release
         prepare: [secrets]     # on the server, in the new release before it
                                # goes live (then: the variables check)
         run: deploy            # once it is current: the release itself
         after:                 # once live; a failure is only reported
           - remote: maint off  #   on the server first
-          - local: notify      #   then locally
+          - local: notify      #   then ` + vocab.Operator.On + `
       # or only the run step:
       # release: deploy
 
@@ -774,18 +776,18 @@ Without a target, --release runs in place, in the local project: the
 release steps under defaults: in config.yaml, prepare, the variables
 check, the images (always as build mode: what has a build is built, the
 rest pulled), then run. No upload, no switch and nothing to go back to;
-no before or after steps, which are the operator's side of a deploy.
+no before or after steps, which are ` + vocab.Operator.Poss + ` side of a deploy.
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback [--accept-image <service>,...] [--yes]
 
 Makes the release before the current one current again (skipping failed
 ones) and runs its rollback steps, from the restored release's own
 config.yaml on the server, not the checkout's (required there; the
-checkout's local before and after steps run locally), in release's
-phases: before, prepare and the variables check in the restored release
-(a failure changes nothing), run once it is current (a failure goes back
-again), after. No upload, and no new imports: the restored release
-keeps what it had. Usually the same run step as release:
+checkout's local before and after steps run ` + vocab.Operator.On + `),
+in release's phases: before, prepare and the variables check in the
+restored release (a failure changes nothing), run once it is current (a
+failure goes back again), after. No upload, and no new imports: the
+restored release keeps what it had. Usually the same run step as release:
 
   environments:
     prod:
@@ -979,13 +981,13 @@ keeps their terminal (docker's progress, colors).
 	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...] [-- command...]
 
 A shell in a container of the current release, as devopsy --shell runs it
-locally: the project's shell capability (capabilities/shell/open) if it has
-one; otherwise bash (or sh) in the service named, else the one labeled
-devopsy.shell=true in compose.yaml, else the only one running, as the
-service's user or its devopsy.shell.user label. Options go to docker
-compose exec, like --user root. After --, a command runs instead of the
-shell, directly as docker compose exec runs it: devopsy @<target> --shell
--- drush status.
+` + vocab.NoTarget + `: the project's shell capability
+(capabilities/shell/open) if it has one; otherwise bash (or sh) in the
+service named, else the one labeled devopsy.shell=true in compose.yaml, else
+the only one running, as the service's user or its devopsy.shell.user
+label. Options go to docker compose exec, like --user root. After --, a
+command runs instead of the shell, directly as docker compose exec runs it:
+devopsy @<target> --shell -- drush status.
 `,
 	"--destroy": `Usage: devopsy @<target> --destroy [--yes] [--purge]
        devopsy --destroy [--yes]
@@ -1032,7 +1034,7 @@ caller's environment, then .devopsy/.env).
 	"--upgrade": `Usage: devopsy @<server> --upgrade [vX.Y.Z]
 
 Replaces the server's devopsy with the latest release, or vX.Y.Z, as the
-deploy user, who owns it. devopsy --upgrade does the same locally. On a
+deploy user, who owns it. devopsy --upgrade does the same where it runs. On a
 server --server-setup set up, the devopsy now there applies the setup
 once per version, asking nothing: it leaves each value someone else set,
 and never restarts Docker.
@@ -1051,7 +1053,7 @@ What the server is, read in one session that changes nothing and waits
 for no lock, or without a server the Linux server it runs on (in
 --shell-host): its devopsy and release settings, the system (memory,
 load, uptime, the memory the kernel keeps for Kexec HandOver and kdump,
-whether its clock is synchronized and how far it is from the local one),
+whether its clock is synchronized and how far it is from ` + vocab.Operator.Poss + `),
 Docker (image store, security options, logs), its setup as
 --server-setup judges it, the filesystems of the
 release root, Docker's and containerd's data, the snapshot root and /
@@ -1417,7 +1419,7 @@ Where each runs:
     @t   on a target: @[<server>:][<instance>/]<environment>, or an alias
     @s   on a server: @<server> (@<server>: when a name is ambiguous, and
          always with a port or an IPv6 address), or any target's
-  [@t]   optional: without it, on your machine, in the project you are in
+  [@t]   optional: without it, where devopsy runs, in the project you are in
 
 `)
 	if projectDir == "" {
@@ -1433,7 +1435,8 @@ Where each runs:
 			run, _ := ReadCommandRun(path)
 			typed := c
 			if run.RunsLocal() {
-				// The prefix is an address: say it still runs locally.
+				// The prefix is an address: say it still runs on the
+				// operator's machine.
 				typed += " " + RunsLocallyNote
 			}
 			helpLine(&b, run.Scope().prefix(), typed, CommandDescription(path))
@@ -1559,7 +1562,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	// COMPOSE_PROJECT_NAME is always set, so commands and compose agree on
 	// it: releases write it into devopsy-target.env (<project>[-<instance>]-<environment>);
-	// locally it is the config's project, else compose's name:, else the
+	// without a target it is the config's project, else compose's name:, else the
 	// directory containing .devopsy (compose would take .devopsy itself).
 	project, err := remote.LoadProject(projectDir)
 	if err != nil {

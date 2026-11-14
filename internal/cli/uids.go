@@ -63,9 +63,9 @@ func releaseOwners(projectDir string) (root string, env uids.Owner, err error) {
 }
 
 // setUIDs sets the two uids. In a release, the server's claims give them, over every layer
-// and the caller's own value: a uid is devopsy's, never a variable's. Locally they are the
-// plain hashes, under the caller's and the .env's: on a developer's machine an override (a
-// bind mount the developer edits, rootless Docker) is theirs to make.
+// and the caller's own value: a uid is devopsy's, never a variable's. Without a target
+// they are the plain hashes, under the caller's and the .env's: on a developer's machine
+// an override (a bind mount the developer edits, rootless Docker) is theirs to make.
 func (p *loadedProject) setUIDs(cwd string, project *remote.Project) error {
 	if InRelease(p.dir) {
 		root, envOwner, err := releaseOwners(p.dir)

@@ -350,14 +350,15 @@ address the server by its deploy user, `devopsy@vm1`.
    project-users` prints the steps ([Server setup
    how-to](server-setup-howto.md#project-users)).
 
-2. Set the server up, then set it up for project users, locally:
+2. Set the server up, then set it up for project users, from the
+   operator's machine:
 
    ```sh
    devopsy @devopsy@vm1: --server-setup
    devopsy @devopsy@vm1: --project-users setup
    ```
 
-3. Add the project user and its keys, locally:
+3. Add the project user and its keys, from the operator's machine:
 
    ```sh
    devopsy @devopsy@vm1: --project-users add shop
@@ -411,7 +412,7 @@ choice. It sets:
   last line), naming the two lines to add by hand.
 - Every user's processes hidden from the others: a process's command
   line names projects and paths, and a devopsy session's is its whole
-  script, the operator's command in it. The group `devopsy-proc` is
+  script, with the command that started it. The group `devopsy-proc` is
   made, the deploy user put in it, and `devopsy-proc.service` remounts
   `/proc` with `hidepid=invisible` and the group's number early at every
   boot; where the server has polkit, a drop-in gives it the group. The

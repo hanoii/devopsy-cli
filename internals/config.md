@@ -40,5 +40,5 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 ## Secrets on a server
 
-- On a server the release's own config decides what is a secret; `--vars` masks locally from the configs `VarsReadScript` sends plus the checkout's.
-- `confirmUnnamedSecrets` runs locally, without a session: a secret-like name only in the server's files is left to `--vars set`.
+- On a server the release's own config decides what is a secret; `--vars` masks on the operator's machine from the configs `VarsReadScript` sends plus the checkout's.
+- `confirmUnnamedSecrets` runs on the operator's machine, without a session: a secret-like name only in the server's files is left to `--vars set`.

@@ -32,7 +32,8 @@ func sessionScripts(t *testing.T, file string) []string {
 // brackets), and the address of the environment that session is on, as typed and as a
 // release's hint names it (an alias without source: its resolved address): in a sync, the
 // holder's the child's and the push's the parent's, both the one command. A devopsy a
-// project command runs locally opens its sessions with its own command, never its caller's.
+// project command runs on the operator's machine opens its sessions with its own command,
+// never its caller's.
 func TestSessionsCarryTheCommandAndTheirAddress(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)

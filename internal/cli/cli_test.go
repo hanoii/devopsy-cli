@@ -13,6 +13,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // project creates dir/<name>/.devopsy with the given files (path: content)
@@ -371,12 +372,12 @@ func TestBuildCommandRun(t *testing.T) {
 		{false, nil, "odd", "## Needs: server takes ## Run: local", ""},
 		{false, addressed, "push", "", "vm1:prod"},
 		{false, addressed, "tunnel", "", "vm1:prod"},
-		{false, addressed, "image", "image runs only on your machine and takes no address", ""},
+		{false, addressed, "image", "image runs only " + vocab.Operator.On + " and takes no address", ""},
 		// A command without Needs never sees an outer one's address.
 		{false, []string{CommandTargetEnv + "=stale"}, "both", "", ""},
 		{true, nil, "deploy", "", ""},
 		{true, nil, "both", "", ""},
-		{true, nil, "image", "image runs only on your machine (## Run: local in ", ""},
+		{true, nil, "image", "image runs only " + vocab.Operator.On + " (## Run: local in ", ""},
 	} {
 		if c.release {
 			if err := os.WriteFile(release, lines, 0o644); err != nil {
@@ -439,7 +440,7 @@ func TestUsage(t *testing.T) {
 		"commands/push*":   "#!/bin/sh\n## Description: Push it\n## Run: local\n## Needs: server\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (runs locally)          Push it", "anything else is an error", "Releases:", "    @t --release [--from @<target>] [--accept-image <svc>] [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
+	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (Run: local)            Push it", "anything else is an error", "Releases:", "    @t --release [--from @<target>] [--accept-image <svc>] [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

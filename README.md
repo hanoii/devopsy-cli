@@ -1,13 +1,13 @@
 # devopsy-cli
 
 `devopsy` is a small command-line tool for running Docker Compose projects,
-both on your machine and on servers you own.
+without a target and on servers you own.
 
 Compose describes a project but has nothing for running it on a server.
 devopsy adds:
 
-- Releases. One command ships a new version, from your machine or CI, and
-  another rolls it back.
+- Releases. One command, run from a laptop or a CI job (the operator),
+  ships a new version, and another rolls it back.
 - Environments. Production, staging or one per pull request run side by
   side on one server, each with its own containers and volumes.
 - Variables per deployment. A value can be set for a project on a
@@ -81,8 +81,8 @@ For that, it decides some things for you:
 - devopsy adds only environment variables to compose, all of them shown by
   `devopsy --env`. Everything else is compose's.
 - Releases are pushed over SSH, never pulled. The server needs no access to the
-  repository, and no deploy keys, tokens or webhooks. Locally devopsy
-  needs `ssh`. On the server it needs `devopsy` and what Debian has:
+  repository, and no deploy keys, tokens or webhooks. On the operator's
+  machine devopsy needs `ssh`. On the server it needs `devopsy` and what Debian has:
   `tar`, GNU coreutils and util-linux (`flock`, `setsid`, `script`).
 - A release is a complete directory, run through a `current` symlink, and
   `shared/` keeps data and secrets across releases. A release never
@@ -144,7 +144,7 @@ its features.
 
 ## Getting started
 
-1. Install devopsy on your machine (below).
+1. Install devopsy (below).
 2. Prepare a server: Docker, a `devopsy` deploy user in the docker group,
    and devopsy ([devopsy-server](https://github.com/hanoii/devopsy-server)
    does all three on Debian 13).
@@ -153,7 +153,7 @@ its features.
 4. Start a project from a template
    ([devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami)
    is the smallest), or run `devopsy --init` in an existing compose project.
-5. `devopsy up -d` locally, then `devopsy @<server>:prod --release`.
+5. `devopsy up -d` without a target, then `devopsy @<server>:prod --release`.
 
 ## Install
 
@@ -169,7 +169,7 @@ it can, else `~/.local/bin` (`DEVOPSY_VERSION=v0.19.0` and
 `DEVOPSY_INSTALL_DIR` choose). `devopsy --upgrade [vX.Y.Z]` replaces the
 binary, with `sudo` when its directory is not yours. On servers set up
 with devopsy-server the directory is the deploy user's, and `devopsy
-@<server> --upgrade` upgrades a server from your machine. `devopsy
+@<server> --upgrade` upgrades a server from the operator's machine. `devopsy
 @<server> --match-server-version` makes yours the version the server
 runs, older or newer, for example in CI after installing.
 
@@ -206,7 +206,7 @@ ask devopsy at every Tab, so they follow the installed version.
 
 ## Documentation
 
-- [Working locally](docs/local.md): commands, project commands, variables,
+- [Working without a target](docs/local.md): commands, project commands, variables,
   output, secrets and debugging.
 - [Config and targets](docs/config.md): `.devopsy/config.yaml`, addresses,
   instances, parents, variables on a server, release settings, aliases.

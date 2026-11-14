@@ -8,6 +8,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // CommandTargetEnv is the address a project command with `## Needs:` was
@@ -15,18 +16,20 @@ import (
 const CommandTargetEnv = "DEVOPSY_COMMAND_TARGET"
 
 // commandTargetInternal carries that address from the devopsy that read
-// it to the one it execs locally, which runs the command.
+// it to the one it execs on the operator's machine, which runs the
+// command.
 const commandTargetInternal = "DEVOPSY_INTERNAL_COMMAND_TARGET"
 
 // RunsLocallyNote follows, in help, a local command that takes an
 // address, whose scope then looks like a remote one's.
-const RunsLocallyNote = "(runs locally)"
+const RunsLocallyNote = "(Run: local)"
 
 // CommandRun is where a project command runs, from its `## Run:` and
 // `## Needs:` lines.
 type CommandRun struct {
-	// Run is "" (where it is called: locally, or on the target with one),
-	// "local" (this machine only) or "target" (in a release only).
+	// Run is "" (where it is called: without a target, or on the target
+	// with one), "local" (this machine only) or "target" (in a release
+	// only).
 	Run string
 	// Needs is "", "target" or "server": the address a local command
 	// takes, which it gets in DEVOPSY_COMMAND_TARGET as typed.
@@ -67,8 +70,8 @@ func ReadCommandRun(path string) (CommandRun, error) {
 	return c, nil
 }
 
-// RunsLocal reports whether the command runs locally when it is
-// given an address.
+// RunsLocal reports whether the command runs on the operator's
+// machine when it is given an address.
 func (c CommandRun) RunsLocal() bool { return c.Run == "local" && c.Needs != "" }
 
 // Scope is the command's scope in help, like a flag's.
@@ -96,11 +99,11 @@ func (c CommandRun) Check(name, path string, where Where) error {
 		}
 	case Addressed:
 		if c.Run == "local" && c.Needs == "" {
-			return fmt.Errorf("%s runs only on your machine and takes no address (## Run: local in %s): devopsy %s", name, path, name)
+			return fmt.Errorf("%s runs only %s and takes no address (## Run: local in %s): devopsy %s", name, vocab.Operator.On, path, name)
 		}
 	case OnServer:
 		if c.Run == "local" {
-			return fmt.Errorf("%s runs only on your machine (## Run: local in %s), never on a server", name, path)
+			return fmt.Errorf("%s runs only %s (## Run: local in %s), never on a server", name, vocab.Operator.On, path)
 		}
 	}
 	return nil
@@ -116,8 +119,8 @@ func CheckCommand(projectDir, name string, where Where) (CommandRun, error) {
 	return c, c.Check(name, path, where)
 }
 
-// CommandOffered reports whether completion offers a command: locally, or
-// after an address.
+// CommandOffered reports whether completion offers a command: without a
+// target, or after an address.
 func CommandOffered(projectDir, name string, addressed bool) bool {
 	c, err := ReadCommandRun(filepath.Join(projectDir, "commands", name))
 	if err != nil {

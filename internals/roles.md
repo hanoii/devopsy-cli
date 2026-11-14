@@ -8,5 +8,5 @@ Code: `internal/cli/roles.go`; `--prepare-release` (`runPrepareRelease`) in `cmd
 - An import never overrides what the environment sets, even empty.
 - An empty export is a value: otherwise every project importing without `?` fails under a proxy without a wildcard.
 - Rollbacks never check roles or imports: the check would fail a rollback exactly when one is needed, the proxy down.
-- Roles are advisory, checked only at releases, never on a local `up` (a test proxy beside a main one is normal locally), and two releases claiming one role on different targets at once are not locked against each other; anyone in the docker group is root-equivalent anyway.
+- Roles are advisory, checked only at releases, never on a local `up` (a test proxy beside a main one is normal in the local environment), and two releases claiming one role on different targets at once are not locked against each other; anyone in the docker group is root-equivalent anyway.
 - `--debug imports` compares every running project's imports with its release's `devopsy-target.env`, found through compose's `working_dir` label.

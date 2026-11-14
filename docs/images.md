@@ -265,7 +265,7 @@ For `--export` and `--import`:
 
 - An `--export` of a `volumes` service carries its data's history in the
   tar's first header, which `tar` itself skips. On a target, that is the
-  history as a sync's parent sends it; locally, its label's version and
+  history as a sync's parent sends it; without a target, its label's version and
   tag alone. A `custom` export is its script's output and carries none.
 - An `--import` of a `volumes` service on a target checks the
   environment's labels against that history before any service stops, as
@@ -276,7 +276,7 @@ For `--export` and `--import`:
   (unless the import took the history over before what failed), start
   the service's history over, as data of no known version. What runs on
   it next sets its version: the service's label if it runs once the
-  import is in, else the next release's. Locally there is no history.
+  import is in, else the next release's. Without a target there is no history.
 
 An import, a sync and a `--no-code` restore read a service's labels as
 they are now. They refuse a service whose image the labels now name

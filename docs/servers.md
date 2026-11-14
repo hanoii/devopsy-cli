@@ -15,7 +15,7 @@ devopsy @vm1:develop --sync     # replace a child's data with its parent's, run 
 devopsy @vm1:develop --reset    # start a child over: all its data goes, then a sync as on its first release
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.data.copy label says
-devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
+devopsy @vm1:prod --export database | devopsy --import database   # prod's database into the local environment
 devopsy @vm1:prod --import database --resolved   # accept the data an import that failed left, start what it kept down
 devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped for the moment of its copy, code and images kept
 devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
@@ -266,7 +266,7 @@ in `--shell-host`; anywhere else it refuses. It reports:
 - its devopsy and release settings;
 - the system, with the memory the kernel keeps for Kexec HandOver and
   kdump, and whether its clock is synchronized and how far it is from the
-  local one;
+  operator's;
 - Docker: its version, its compose's and buildx's, its image store,
   security options and logs;
 - its setup as `--server-setup` judges it: whether devopsy set it up,
@@ -285,9 +285,9 @@ fix; a fix that serves several lines in a row (`--server-setup` for the
 setup's items) comes once, after the last of them:
 
 - an older devopsy (`W0003`), with `--upgrade` or
-  `--match-server-version` as its fix, or an older local one, which
-  reads what it does not know of the server's facts as missing, with
-  `--match-server-version`;
+  `--match-server-version` as its fix, or an older one on the operator's
+  machine, which reads what it does not know of the server's facts as
+  missing, with `--match-server-version`;
 - a reboot the system asks for (`/run/reboot-required`, with the
   packages asking, devopsy among them when its setup or its door did,
   `W0004`);
@@ -517,7 +517,7 @@ you run may not need what the server's devopsy lacks.
 
 ## Shells
 
-- `--shell` opens a shell in a container, as locally
+- `--shell` opens a shell in a container, as it does without a target
   ([Shells](local.md#shells)).
 - `--shell-host` opens your login shell on the server, in the current
   release (in the release root with `@<server>` alone). It does not depend
@@ -636,8 +636,8 @@ in the job run `devopsy --ssh-option IdentityFile="$DEVOPSY_SSH_KEY"
 remove the old one.
 
 For CI's known hosts file (`UserKnownHostsFile` in
-`DEVOPSY_SSH_COMMAND`, [CI](#ci)), run `ssh-keyscan <server>` locally
-and check its fingerprints against the ones the server prints:
+`DEVOPSY_SSH_COMMAND`, [CI](#ci)), run `ssh-keyscan <server>` on the
+operator's machine and check its fingerprints against the ones the server prints:
 
 ```sh
 for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key"; done

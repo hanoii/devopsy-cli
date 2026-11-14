@@ -276,8 +276,8 @@ volumes:
 ```
 
 The long syntax says it as `volume: {nocopy: true}`. A mount of an owned
-volume without it is refused, before a release goes live and locally
-before a start. What the image ships at that path is not copied into the
+volume without it is refused, before a release goes live and, without a
+target, before a start. What the image ships at that path is not copied into the
 volume then; a database makes its own. An owned volume that is
 `external:` or has a fixed `name:` is refused (another project's, or
 every environment's), and so are two services with different owners on
@@ -324,10 +324,10 @@ Where owners are applied:
   child's labels (`rsync --chown`), regardless of the owners on the
   parent's files.
 - An `--import` of a `volumes` service: what it extracted goes to its
-  owner before the import completes; locally on macOS, nothing, since
+  owner before the import completes; without a target on macOS, nothing, since
   Docker Desktop's file sharing may refuse the chown.
 - A reset, once it has emptied `mnt`, its owned volumes' roots too.
-- Locally, before `up`, `start`, `restart`, `run`, `create`, `watch` and
+- Without a target, before `up`, `start`, `restart`, `run`, `create`, `watch` and
   `scale`, but not with compose's `--dry-run`. A `--dry-run` after
   `run`'s service belongs to the container's command, and that run does
   start, so it gets the owners. A missing owned entry is created. On
@@ -376,7 +376,7 @@ takes the right one at its next copy.
   only the files whose owner differs: `chown` clears a setuid or setgid
   bit on a file it changes. A restore of the environment's own data
   takes one pass over it, changing nothing.
-- Locally on macOS an import maps its volumes, not its entries: Docker
+- Without a target on macOS an import maps its volumes, not its entries: Docker
   Desktop and OrbStack show bind mounts' files as any owner.
 
 ## The mounts check
@@ -479,8 +479,8 @@ A `custom` service that is not stopped is brought up for its import,
 alone (`--no-deps`), and down again afterwards if it was down.
 
 `--import` spools stdin to a file first, and changes nothing until it is
-all there: `.devopsy-sync.stream.<service>.*`, under `.devopsy/` locally
-(which releases never upload), beside the environment on a server. It
+all there: `.devopsy-sync.stream.<service>.*`, under `.devopsy/` without
+a target (which releases never upload), beside the environment on a server. It
 refuses a tar that is:
 
 - truncated, cut anywhere or missing its end-of-archive blocks;
@@ -551,7 +551,7 @@ The next import, or `--resolved`, first ends a load that a killed devopsy
 left running. `--destroy` still works: its `destroy:` step runs with what
 the import kept down still down.
 
-Locally there is no mark: the error says what it left down, and prints the
+Without a target there is no mark: the error says what it left down, and prints the
 `devopsy start ...` that brings it back.
 
 ### `--resolved`

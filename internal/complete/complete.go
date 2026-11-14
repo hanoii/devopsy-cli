@@ -217,8 +217,8 @@ func dataFlags(projectDir string, words []string, cur string, onTarget bool) Res
 	return filter(r, cur)
 }
 
-// jsonCandidate is --status's and --server-info's --json, locally and
-// on a target.
+// jsonCandidate is --status's and --server-info's --json, without a
+// target and with one.
 var jsonCandidate = Candidate{"--json", "the same as JSON, for scripts and agents", GroupDevopsy}
 
 // showFlag completes --env's one option.
@@ -230,9 +230,9 @@ func showFlag(words []string, cur string) Result {
 	return filter(r, cur)
 }
 
-// completeCommand completes `<command> [args...]`, run locally or on a
-// server: a project command's arguments are file names, anything else is
-// compose's.
+// completeCommand completes `<command> [args...]`, run without a target
+// or on a server: a project command's arguments are file names, anything
+// else is compose's.
 func completeCommand(cwd, projectDir string, words []string, environ []string) Result {
 	if len(words) == 1 {
 		r := filter(Result{Candidates: projectCommands(projectDir, false)}, words[0])
@@ -513,7 +513,7 @@ func targetDescription(t *remote.Target) string {
 	return "environment"
 }
 
-// projectCommands are the commands that run locally, or on a target.
+// projectCommands are the commands that run without a target, or on one.
 func projectCommands(projectDir string, addressed bool) []Candidate {
 	if projectDir == "" {
 		return nil

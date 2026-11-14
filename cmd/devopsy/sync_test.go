@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"github.com/hanoii/devopsy-cli/internal/uids"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // syncFakeDocker logs every call, with its compose project, to
@@ -1511,7 +1512,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
 	agent := env
 	// A child behind a jump host is out of the parent's reach.
-	if out, code := s.run(append(agent, "FAKE_PROXYJUMP=bastion"), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "relay through this machine is not supported yet") {
+	if out, code := s.run(append(agent, "FAKE_PROXYJUMP=bastion"), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "relay through "+vocab.Operator.Noun+" is not supported yet") {
 		t.Fatalf("proxyjump (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -2893,9 +2894,10 @@ func TestSyncPushLostSaysCopyDecides(t *testing.T) {
 }
 
 // --status: the project, its containers and the services with none,
-// then the status capability's entries, locally; with a target, the
-// release's record, the last sync and the server's disks first. Exit 3
-// when something needs attention, and --json prints the same.
+// then the status capability's entries, without a target; with a
+// target, the release's record, the last sync and the server's disks
+// first. Exit 3 when something needs attention, and --json prints the
+// same.
 func TestStatus(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -3051,10 +3053,10 @@ func tarOf(t *testing.T, files map[string]string) []byte {
 	return b.Bytes()
 }
 
-// --export and --import, locally and on a target: a stream through the
-// data capability's scripts, a mnt service as a tar of its entries, what
-// its stop label says (and what depends on it) stopped around it; stdin
-// spooled first, and nothing changed unless it is complete.
+// --export and --import, without a target and on one: a stream through
+// the data capability's scripts, a mnt service as a tar of its entries,
+// what its stop label says (and what depends on it) stopped around it;
+// stdin spooled first, and nothing changed unless it is complete.
 func TestExportImport(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -3417,7 +3419,8 @@ func TestExportImport(t *testing.T) {
 	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME custom=$DEVOPSY_DATA_CUSTOM stop=$DEVOPSY_DATA_STOP\"\n", 0o755)
 
 	// A failing import (once it wrote) keeps what it stopped down, said
-	// with the way to start it; the spool goes. Locally no mark.
+	// with the way to start it; the spool goes. Without a target no
+	// mark.
 	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ -z \"${FAKE_FAIL_IMPORT:-}\" ] || exit 4\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
 	if _, errs, code := s.runIO(append(stopped, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "--import", "db"); code == 0 || !strings.Contains(errs, "import db: exit status 4") || !strings.Contains(errs, "the import of db did not complete: its data may be partial, and db, app stay down") || !strings.Contains(errs, "$ devopsy start db app") {
 		t.Errorf("failing import (%d):\n%s", code, errs)
@@ -4961,7 +4964,7 @@ func TestOlderServerRefusesBeforeBeforeSteps(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ReleaseSnapshotsFeature+")") {
 		t.Fatalf("a child's first release on a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
 	}
-	if strings.Contains(out, "running 'devopsy deploy' locally (before)") {
+	if strings.Contains(out, "running the local step 'devopsy deploy' (before)") {
 		t.Errorf("the release ran its local before step before the server refused it:\n%s", out)
 	}
 	if dev := filepath.Join(s.root, "shop", "dev"); fileExists(dev) {

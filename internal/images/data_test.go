@@ -1652,11 +1652,12 @@ func TestParentDataBounded(t *testing.T) {
 }
 
 // An export records its service's window (on a target) or its label's
-// version and tag alone (locally); an import checks the environment's
-// labels against it and takes it over from an import line; a tar
-// without the record starts the history over with a line of no version;
-// --resolved keeps a window an import took over since its mark, else
-// starts over. (A custom import calls none of these: TestImportResolved.)
+// version and tag alone (without a target); an import checks the
+// environment's labels against it and takes it over from an import line;
+// a tar without the record starts the history over with a line of no
+// version; --resolved keeps a window an import took over since its mark,
+// else starts over. (A custom import calls none of these:
+// TestImportResolved.)
 func TestDataImport(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1734,7 +1735,7 @@ func TestDataImport(t *testing.T) {
 	if e, _ := match(readList(qa.e.rel(qa.cur)), entry{Service: "database"}); e.DataVersion != "11.8" {
 		t.Errorf("the listing after the import: %+v", e)
 	}
-	// Locally: the label's version and tag, as one line.
+	// Without a target: the label's version and tag, as one line.
 	local := &Set{Docker: d, Name: "app-local", Out: &out, List: func(string) ([]Service, error) { return []Service{db118}, nil }}
 	p := parseParentData(DataFor(local.ExportData("", "", "database"), "database"))["database"]
 	if p == nil || len(p.History) != 1 || p.History[0].Version != "11.8" || p.History[0].Tag != "11.8" {

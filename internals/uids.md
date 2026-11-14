@@ -18,7 +18,7 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `interna
 - A release's owner is read from where it is (`releaseOwners`), its target lines checked against its place under the release root, never from a variable a `.env` could set.
 - The claims directory is the configured release root's whenever the release, as reached, is under it, never one under a disk a project directory links to: one directory per server keeps every uid one owner's.
 - A project user's devopsy asks the door's `uids` request, whose answer is the two numbers alone (`askDoorUIDs`); the door reads the owner from the path in the caller's tree (`ownerAt`).
-- Locally the uids are the plain hashes, under the caller's and the `.env`'s, the project's from `config.yaml`'s `project:` alone (`CommittedName`) so it matches every server's.
+- Without a target the uids are the plain hashes, under the caller's and the `.env`'s, the project's from `config.yaml`'s `project:` alone (`CommittedName`) so it matches every server's.
 - `--vars set` and a config's `env:` refuse the two names (`uids.Reserved`).
 - A release whose compose files read either variable needs the server's `uids` feature (`cli.ReadsUIDs` of `cli.ComposeVariables`, `remote.WithAlsoNeeded`), checked in its first session and its upload's: an older server leaves them unset, and compose would refuse after the upload.
 - Every start of containers in a release holds both start locks shared, the environment's and its project's, from before it reads the claims again until compose ends (`holdStartLocks` for the deploy user, `doorSide.startLocks` for the door's `up`, `create` and `run`), and fails when a claim changed since the load: a free between the load and the start would leave a container on a freed uid.
@@ -32,4 +32,4 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `interna
 - The map goes by range alone and carries nothing of the sender's (no header, manifest or list line of the sender's): the range says the kind, so a tar by hand or from an older devopsy maps alike.
 - The receiving side's uids are its own load's (`ownMap`); a parent writing into a child takes them from the child's list (`!uids`, `parseChildUIDs`) and refuses the copy without them.
 - One map, two renderers: rsync's `--usermap` and `--groupmap` with the ranges as FROM (`Map.RsyncArgs`), never with `--chown`, which rsync refuses beside them, and a find script (`uids.MapScript`) after what copies owners as they are (a reflink clone, a tar's extraction), changing only what differs, since chown clears setuid and setgid bits.
-- A bind mount's entry is not mapped locally on macOS, where Docker fakes its owners: its file sharing may refuse the chown.
+- A bind mount's entry is not mapped in the local environment on macOS, where Docker fakes its owners: its file sharing may refuse the chown.

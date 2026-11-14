@@ -14,6 +14,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // runLocalRelease is --release without a target: a release in place, in
@@ -28,7 +29,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return 0
 	}
 	if len(args) > 0 {
-		return failErr(&report.Failure{Msg: "--release takes nothing locally", Remedies: []report.Remedy{report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release")}})
+		return failErr(&report.Failure{Msg: "--release " + vocab.NoTarget + " takes no argument", Remedies: []report.Remedy{report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release")}})
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
@@ -110,8 +111,8 @@ func runInPlace(root, phase string, a []string) int {
 // runLocalDestroy is --destroy without a target, in place, after asking
 // for the project's name (--yes skips it): defaults:' destroy step, when
 // there is one, then what runDestroyData takes down. Nothing else: on a
-// server devopsy then removes the environment's directory, which locally
-// is the checkout.
+// server devopsy then removes the environment's directory, which without
+// a target is the checkout.
 func runLocalDestroy(cwd string, args []string, color bool) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--destroy"]))
@@ -163,7 +164,7 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 
 // destroyStep is what --destroy runs first in projectDir: in a release
 // (a server's), the destroy: step of the environment it was made for, as
-// its own config says; locally defaults:' destroy:. Maybe none.
+// its own config says; without a target defaults:' destroy:. Maybe none.
 func destroyStep(projectDir string) ([]string, error) {
 	if cli.InRelease(projectDir) {
 		t, err := remote.ReleaseEnvironment(projectDir)

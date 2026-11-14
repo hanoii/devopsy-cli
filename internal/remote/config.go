@@ -67,7 +67,7 @@ type Project struct {
 	// release root, and the start of its compose project names.
 	Name string
 	// CommittedName is config.yaml's project: alone, never config.local.yaml's: what the
-	// project's uid hashes locally, so it matches every server's.
+	// project's uid hashes without a target, so it matches every server's.
 	CommittedName string
 	// Instances is the project's instances: true makes every target name
 	// one, false refuses them.
@@ -326,7 +326,8 @@ type Steps struct {
 	After   []Step
 }
 
-// Step is one devopsy command line, run locally or on the server.
+// Step is one devopsy command line, run on the operator's machine or on the
+// server.
 type Step struct {
 	Remote bool
 	Cmd    string
@@ -398,7 +399,7 @@ func decodePhase(n *yaml.Node, phase string) ([]Step, error) {
 }
 
 // Commands lists the command lines of steps run on the server (remote) or
-// locally.
+// on the operator's machine.
 func Commands(steps []Step, remote bool) []string {
 	var out []string
 	for _, s := range steps {

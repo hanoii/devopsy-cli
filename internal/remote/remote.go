@@ -190,7 +190,7 @@ func Files(projectRoot, mode string) ([]string, error) {
 			if f == "" {
 				continue
 			}
-			// Deleted locally but still in the index.
+			// Deleted in the checkout but still in the index.
 			if _, err := os.Lstat(filepath.Join(projectRoot, f)); err != nil {
 				continue
 			}
@@ -440,16 +440,17 @@ func quoteAll(args []string) string {
 var Verbose bool
 
 // Color says the operator's terminal takes colors: sessions' lines are
-// colored locally as they arrive (report.Colorize), and ColorEnv is
-// exported into every session for what the server can color itself.
+// colored on the operator's machine as they arrive (report.Colorize),
+// and ColorEnv is exported into every session for what the server can
+// color itself.
 var Color bool
 
 // ColorEnv set means the output ends on a terminal that takes colors,
 // even through a pipe: devopsy on a server, whose session has none, so
 // its messages and Compose's output (--ansi always) come colored to the
 // operator (a sync's push gets it too). Internal: devopsy exports it into
-// every session when it colors locally; what a person sets is
-// FORCE_COLOR (cli.ColorForced).
+// every session when it colors on the operator's machine; what a person
+// sets is FORCE_COLOR (cli.ColorForced).
 const ColorEnv = "DEVOPSY_INTERNAL_COLOR"
 
 // TTY is the operator's terminal size, "<cols> <rows>", when stderr is one
@@ -654,10 +655,10 @@ func upgradeRef(t *Target) string {
 }
 
 // HintAddress is the address a hint to release, roll back, sync or
-// restore names, in a script or locally: the alias as typed when it has
-// source: (it releases only from its checkout; one without cannot
-// release at all), else the resolved one (an instance, a server from
-// variables), so the hint works when copied.
+// restore names, in a script or on the operator's machine: the alias as
+// typed when it has source: (it releases only from its checkout; one
+// without cannot release at all), else the resolved one (an instance, a
+// server from variables), so the hint works when copied.
 func HintAddress(t *Target) string {
 	if t.Alias != "" && t.Source != "" {
 		return t.Alias
@@ -747,7 +748,7 @@ if ! devopsy ` + StdinGuardFlag + ` | tar -xzmf - -C "$rel.tmp"; then
   exit 1
 fi
 # Pending until its activation switches to it: one that never gets there
-# (cut, interrupted, its operator gone) is never rolled back to nor kept.
+# (cut, interrupted, its session gone) is never rolled back to nor kept.
 : >"$rel.tmp/` + PendingFile + `"
 mv "$rel.tmp" "$rel"
 echo "$id"

@@ -293,7 +293,7 @@ func TestSnapshotRestore(t *testing.T) {
 		t.Errorf("shared/.env without --with-env: %q\n%s", readString(filepath.Join(base, "shared", ".env")), out)
 	}
 	// The way to bring it back, a command that works as copied: devopsy
-	// alone, without the address, runs locally.
+	// alone, without the address, runs on the local environment.
 	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + id + ` --with-env`).MatchString(out) {
 		t.Errorf("the --with-env hint names no address:\n%s", out)
 	}

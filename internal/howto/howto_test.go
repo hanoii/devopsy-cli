@@ -4,14 +4,15 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/sources"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // docsPage is the generated page, from this package's directory.
@@ -90,28 +91,14 @@ func TestConstantsAreTopics(t *testing.T) {
 // topic through Command, whose name the test above checks.
 func TestFlagSpelledOnce(t *testing.T) {
 	t.Parallel()
-	for _, dir := range []string{"../../cmd", "../../internal"} {
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return err
+	for _, f := range sources.Go(t, false) {
+		if strings.HasPrefix(f.Path, "internal/howto/") {
+			continue
+		}
+		for i, line := range strings.Split(string(f.Data), "\n") {
+			if strings.Contains(line, Flag) && !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				t.Errorf("%s:%d spells %s: name it by howto.Flag or howto.Command", f.Path, i+1, Flag)
 			}
-			rel := strings.TrimPrefix(filepath.ToSlash(path), "../../")
-			if strings.HasPrefix(rel, "internal/howto/") {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			for i, line := range strings.Split(string(data), "\n") {
-				if strings.Contains(line, Flag) && !strings.HasPrefix(strings.TrimSpace(line), "//") {
-					t.Errorf("%s:%d spells %s: name it by howto.Flag or howto.Command", rel, i+1, Flag)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
 		}
 	}
 }
@@ -161,17 +148,17 @@ func TestText(t *testing.T) {
 				t.Errorf("%s: the steps' opening does not say %q: %s", tp.Name, words, tp.opening())
 			}
 		}
-		// A step that runs on the operator's machine says so, and so does the opening of a topic
-		// that has one, alone.
-		if strings.Contains(tp.opening(), locally) != slices.ContainsFunc(tp.Steps, Step.local) {
-			t.Errorf("%s: the opening says of steps run locally: %s", tp.Name, tp.opening())
-		}
-		for _, s := range tp.Steps {
-			if strings.Contains(s.Text, "operator's machine") && !s.local() {
-				t.Errorf("%s: a step run locally not starting with %q: %s", tp.Name, localStart, s.Text)
-			}
+		// A step that runs on the operator's machine says so first, and so does the opening of a
+		// topic that has one, alone.
+		if strings.Contains(tp.opening(), operatorSteps) != slices.ContainsFunc(tp.Steps, onOperator) {
+			t.Errorf("%s: the opening says of steps run on the operator's machine: %s", tp.Name, tp.opening())
 		}
 		text := tp.Text()
+		for i, s := range tp.Steps {
+			if opens := strings.Contains(text, "\n"+strconv.Itoa(i+1)+". "+vocab.Cap(vocab.Operator.From)+", "); opens != s.Operator {
+				t.Errorf("%s: step %d runs on the operator's machine %v, and its text says so %v:\n%s", tp.Name, i+1, s.Operator, opens, text)
+			}
+		}
 		if !strings.HasPrefix(text, "# "+tp.Title+"\n\n") || !strings.Contains(text, wrap(tp.opening(), "", "")) || !strings.Contains(text, "\nTo check it: ") {
 			t.Errorf("%s:\n%s", tp.Name, text)
 		}

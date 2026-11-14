@@ -1,6 +1,6 @@
 # AGENTS.md
 
-devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with a `.devopsy/` directory, locally and on servers over SSH: what it does not handle itself goes to `docker compose`. devopsy-server sets up hosts for it, and the devopsy-template-* repositories are projects built on it.
+devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with a `.devopsy/` directory, on the operator's machine and on servers over SSH: what it does not handle itself goes to `docker compose`. devopsy-server sets up hosts for it, and the devopsy-template-* repositories are projects built on it.
 
 ## Workflow
 
@@ -114,20 +114,22 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 ### Output
 
 - stdout is the result (for example compose's output, help, `--env`, `--vars get`, `--export`) and stderr everything devopsy says (for example progress, errors, prompts, the scripts' lines): pipes stay clean.
-- Everything devopsy says, locally or on a server, goes through `internal/report`, never a `"devopsy: "` literal or a stderr `Fprint` of its own (`TestNothingSaysAround`, help excepted): a line said around it misses the format, the level and its color, and the format changes in one place.
+- Everything devopsy says, on the operator's machine or on a server, goes through `internal/report`, never a `"devopsy: "` literal or a stderr `Fprint` of its own (`TestNothingSaysAround`, help excepted): a line said around it misses the format, the level and its color, and the format changes in one place.
 - Each line starts with `devopsy: ` (`report.Prefix`) and its level's tag (none for info, `warning: `, `error: `, `debug: ` at `-v`, `trace: ` at `-vv`), with details, hints and fixes on `devopsy: | ` lines and a command to copy after `$ `, so each line says by itself that it is devopsy's among compose's and Docker's output.
 - A command offered is a `report.Remedy`, never a `$ ` written by hand (`TestNothingSaysAround`) nor a command written into a message, a detail or a remedy's text (`TestScriptsOfferCommandsAsRemedies`), a flag named alone staying words: a fix (`report.Fix`), a way out of what a warning or an error says is wrong, under `to fix it:` and numbered when several, or a hint (`report.Hint`), a command worth knowing (for example one that shows more, or undoes a state a warning names that may be intended), shown in order after the fixes (`report.RemedyLines`), wherever a caller puts it.
 - A message for a server's admin carries a code (`report.Code`, in `report.Codes` and `docs/codes.md`), its first line the code and its description (`Code.Msg`), with the admin's fix, and for a reader who can only pass it on the detail naming the code for the admin and no remedy (`SayForAdmin`), both lines built from the registry only (`TestNothingSaysAround`): an admin told a code finds it in their own output and the docs.
 - A fix for a server's setup says what to set there in its text, with its topic's command (`howto.Command`, `devopsy --server-setup-howto <topic>`) when the steps are several, never a doc path or a tool that sets it (for example devopsy-server's setup script): a server set up another way has no such tool to rerun, and the command prints the steps wherever it is copied.
 - `error` means the command fails; anything that goes on is a `warning`.
 - The caller writes the words (lowercase after the prefix, names keeping their case, no final period, one message with its details rather than sentences in a row) and `report` everything else, never rewriting them.
+- Go text says the machine devopsy runs from against a server, the operator, by a form of `vocab.Operator` spliced where it is written (for example `"run it " + vocab.Operator.From + ", by this server's address:"`), never by its words, and a doc writes the form out; neither says a retired word (for example "locally", "your machine"), which `TestVocabulary` fails: a term reworded is one edit in `internal/vocab`, and the test finds what the rename missed.
+- A message is found from its output by its words apart from a term's, or by the term's words, which lead to its form in `internal/vocab` and from there to every message that uses it.
 - Details and remedies travel through wrapping in a `report.Failure` (`report.Fail(err, more...)`), and a command adds only the remedies it alone knows.
 - Prompts (`Logger.Confirm`, `Input`, `ConfirmName`) run only at a terminal; without one the command fails, naming `--yes`.
 - A server script says things through the hidden `devopsy --say <level> <message> [<detail>...] [--fix|--hint <text> [<command>...]]...` (its remedies through `sayRemedies`), and prints the lines `report` builds (`echoLine`, remedies included) only where it cannot rely on the server's devopsy (`basePrelude`'s checks, the `--ssh-keys` scripts).
 - `--say` fails when its write fails, as `echo` does: a release's script relies on that before its switch.
-- A stretch likely to take long (for example a fetch, a copy, a lock wait) says its time on a new line once it went through, never on a failure, through `report.Timer` locally and `sayTook` in a script: a line the code or a test matches stops matching with a time on it.
+- A stretch likely to take long (for example a fetch, a copy, a lock wait) says its time on a new line once it went through, never on a failure, through `report.Timer` in Go and `sayTook` in a script: a line the code or a test matches stops matching with a time on it.
 - A session's script, and an argument of several lines in the "running" notice, show only at `-vv`; below it the notice counts the argument's lines (`Plan.running`).
-- A hint names the address as typed, the alias, else the resolved address (`targetRef`), and a hint to release, roll back, sync or restore, locally or in a script, the alias only with `source:` (`remote.HintAddress`): the command works when copied, and an alias with `source:` releases only from its checkout.
+- A hint names the address as typed, the alias, else the resolved address (`targetRef`), and a hint to release, roll back, sync or restore, in Go or in a script, the alias only with `source:` (`remote.HintAddress`): the command works when copied, and an alias with `source:` releases only from its checkout.
 - A devopsy on a server takes both forms of the address from its session when the session is on the release it runs in, by compose name, or when it runs in none, else from its release's `DEVOPSY_TARGET` (`sessionHint`, `remote.Session.In`): a session opened on another environment (a shell that changed directory) would name that one.
 - A hint with no address known says its way out in words, never with a placeholder or its arguments alone (`offer`, `images.Set.fix`): copied, either fails.
 - A hint on a server to run again what failed gives the operator's command from the session (`remote.CommandEnv`).
@@ -135,7 +137,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - A control character, or a byte that is no UTF-8, shows escaped (`\x1b`) in every line devopsy says or prints, by the same `report.Copyable`, and a path in an offered command is quoted when a shell would read it (`remote.QuoteWord`): a name another user chose (a project user's directory, its `current` link) reaches an admin's terminal.
 - Color only at a terminal without `NO_COLOR`, or when forced (`cli.ColorForced`).
 - A line's color comes from how it starts, never from its words or the caller (`report.Paint`, devopsy's errors red, warnings yellow, info cyan, debug and trace dim, a `$ ` command bold, compose's done steps green and steps on the way dim), and another tool's lines stay as they are: a word like `error` in an app's log line is no failure, so a failure is said as an `error` to show red.
-- A session's lines are colored locally as they arrive (`report.Colorize`), the server's devopsy lines and compose's progress included, so a failure on a server stands out among them.
+- A session's lines are colored on the operator's machine as they arrive (`report.Colorize`), the server's devopsy lines and compose's progress included, so a failure on a server stands out among them.
 - Help is colored by its layout (`style.help` in `cmd/devopsy/style.go`), a heading ending with `:` and an entry starting with two to seven spaces, `@t` magenta and `@s` yellow: help laid out otherwise loses its color.
 - devopsy never exports `FORCE_COLOR`, and passes color to its devopsy on a server as `DEVOPSY_INTERNAL_COLOR` (`remote.ColorEnv`, exported when `remote.Color` is set): in a session every tool would color what the scripts capture.
 - `DEVOPSY_INTERNAL_*` variables are devopsy talking to devopsy, never documented and free to change; settings people set and what projects read keep plain `DEVOPSY_*` names.
@@ -143,7 +145,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 ### Flags and commands
 
 - Every flag is one entry in `cli.Flags`, by task group, with its scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: help, completion, `RemoteOnly` and `ServerScope` all come from it, so they never disagree.
-- A flag that differs locally and on a server (for example `--upgrade`) has one entry per scope.
+- A flag that differs without a target and on a server (for example `--upgrade`) has one entry per scope.
 - Help lines fit 80 columns (`TestUsage`).
 - A flag needs an environment, unless `cli.ServerScope` lists it (for example `--shell-host`, `--server-info`, `--upgrade`), which needs only a server (`remote.ServerTarget`): server tasks work before any project is released there.
 - An unknown flag alone is an error naming the nearest flag (`cli.LoneUnknownFlag`, in `Build` and in `runRemote` before connecting); arguments that start with a flag and go on (for example `--profile x up`) go to compose unchecked.
@@ -151,7 +153,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - `@<target> <command> --help` only prints help, resolving the target leniently (`cli.RemoteCommandHelp`, `DescribeTarget`): help never needs a server.
 - A project command says where it runs (`## Run: local|target`, `## Needs: target|server`, `cli.CommandRun`), checked in `Build`, in `runRemote` before connecting and on release steps (`checkStepScopes`).
 - Whether a command runs in a release is decided by its directory (`cli.InRelease`, `devopsy-target.env` beside its `code/`), never by a variable: a shell on the server or a plain `ssh` has none, and a variable would reach every child.
-- A `Needs:` command runs locally, in its project (`runAddressed`), with the address as typed in `DEVOPSY_COMMAND_TARGET` for that command only (passed as `DEVOPSY_INTERNAL_COMMAND_TARGET`) and never the target's variables, and calls devopsy with the address: an outer command's address must never reach an inner one.
+- A `Needs:` command runs on the operator's machine, in its project (`runAddressed`), with the address as typed in `DEVOPSY_COMMAND_TARGET` for that command only (passed as `DEVOPSY_INTERNAL_COMMAND_TARGET`) and never the target's variables, and calls devopsy with the address: an outer command's address must never reach an inner one.
 
 ### Secrets
 
@@ -184,13 +186,13 @@ docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false \
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
 
-- CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for completion, the race detector and shellcheck) and on macOS; run them on macOS too (`go vet ./... && go test -count=1 ./...`) for a change to what runs locally, where owners are never checked and there is no GNU `tail`.
+- CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for completion, the race detector and shellcheck) and on macOS; run them on macOS too (`go vet ./... && go test -count=1 ./...`) for a change to what runs on the operator's machine, where owners are never checked and there is no GNU `tail`.
 - Run `TestActivationCuts` (`DEVOPSY_TEST_CUTS=1`, on Linux, nightly in `e2e.yml`) for a change to an activation's order or failure paths: it cuts each docker call in turn, too slow for every run.
 - A test writes a file it then runs through `testfile.Write`, or a helper on it (`write`), never `os.WriteFile`: a parallel test's fork can leave the file busy, and its first call fails (`TestWrittenFakeRunsBesideForks`, `DEVOPSY_TEST_FORKS=1`, nightly in `e2e.yml`).
 - End to end (`e2e/`, build tag `e2e`) runs servers in Docker: `go test -tags e2e -count=1 -v -timeout 40m ./e2e` runs the suite on four lanes, `-run '^TestName$'` one test; read `internals/e2e.md` before writing or changing one.
 - Never sleep for something to happen: poll for it (`eventually` in `e2e/`, 250 ms; a loop on the file or the state in a unit test), so a test takes as long as the behavior, not the worst case.
 - A wait the heartbeat or a quiet time bounds is shortened through `DEVOPSY_INTERNAL_HEARTBEAT_EVERY` (`HeartbeatEnv=1` in unit tests, `fast()` and `quiet()` in `e2e/`), never by a constant of the test's own: `E2E_BEAT=5` runs the suite with the real timeouts.
-- Extend the fake or the helper that exists (`fakeBin`, the sync tests' docker that remembers stops and starts, `realDevopsy`, `project`, `twoReleases`) rather than write another, and use small images (`busybox:1.37`) for what only needs to run.
+- Extend the fake or the helper that exists (`fakeBin`, the sync tests' docker that remembers stops and starts, `realDevopsy`, `project`, `twoReleases`, `sources.Go` for a test reading the repository's own files) rather than write another, and use small images (`busybox:1.37`) for what only needs to run.
 - A way to make the suite faster that checks the same things is taken whatever the task, the one refactor beyond a task that needs no agreement (Refactors): measure it before and after with the same tests passing (`go test -v` results compared), and record it in `internals/checks.history.md`.
 - A unit test starts with `t.Parallel()` and owns everything it changes (a `t.TempDir()`, the command's `Env`, a root or a fake passed as an argument); `TestTestsParallel` (`internal/report`) fails one that neither starts so nor says why not, and a parallel one that assigns a package-level variable.
 - A test that sets the environment (`t.Setenv`) or a package-level variable (a function swapped for a fake, `ComposeConfig`, `ComposeCommands`) is serial, with a `// Not parallel: <what it sets>` line in its doc comment; better than a serial test, what it changes becomes an argument (`TestVarsScripts` takes its release root), and a helper that sets either makes every caller serial, so helpers take what they change as parameters.

@@ -68,9 +68,10 @@ func TestUIDsReleaseOutOfPlace(t *testing.T) {
 	}
 }
 
-// Locally the uids are the plain hashes, the caller's or the .env's own value first; the
-// project's comes from config.yaml's project: alone, so a worktree's local project keeps the
-// uid every server gives, while its environment uid follows its own compose name.
+// Without a target the uids are the plain hashes, the caller's or the .env's own value
+// first; the project's comes from config.yaml's project: alone, so a worktree's local
+// project keeps the uid every server gives, while its environment uid follows its own
+// compose name.
 func TestUIDsLocal(t *testing.T) {
 	t.Parallel()
 	root := project(t, "shop", map[string]string{

@@ -9,7 +9,7 @@ them, in the project's directory and with its environment. `devopsy
 
 `show` prints the project's own facts under `devopsy --status`, after the
 containers: its URL, a maintenance mode, a version. It runs with the
-project's environment loaded, locally and on servers: `devopsy @prod
+project's environment loaded, with or without a target: `devopsy @prod
 --status` runs it in the current release there, after the release's
 record, the parent, the last sync and the server's disks.
 
@@ -52,7 +52,7 @@ The drupal11 and registry templates have fuller ones.
 ## env
 
 `compute` prints `.env` lines. It runs before every devopsy command in the
-project except help and completion, locally and on servers. devopsy sets
+project except help and completion, with or without a target. devopsy sets
 the variables it prints that are not set yet, at the lowest precedence,
 and `--env` shows them.
 
@@ -65,7 +65,7 @@ the command.
 ## shell
 
 `open [service] [exec options...] [-- command...]` replaces devopsy's own
-`--shell`, locally and on servers.
+`--shell`, with or without a target.
 
 ## data
 
