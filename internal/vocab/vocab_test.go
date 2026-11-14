@@ -28,10 +28,7 @@ var docs = []string{"README.md", "docs/*.md", "internal/skill/*.md"}
 
 // kept are the places that keep a word, by file and a substring of the line the word is on
 // ("" for the whole file).
-var kept = []struct{ file, line string }{
-	// Until the rename reaches them.
-	{"internal/skill/SKILL.md", ""},
-}
+var kept = []struct{ file, line string }{}
 
 // Every form is one literal fit for a script's double quotes and holds no retired word; no Go
 // text outside this package writes a form's words, and none says a retired word, nor does a

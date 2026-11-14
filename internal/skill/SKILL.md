@@ -16,7 +16,7 @@ plane: compose, environment variables and SSH.
 - This text comes from devopsy `{{VERSION}}`. If `devopsy --version` says
   another, run `devopsy --ai-skill` for the text that matches it.
 - `devopsy --help` lists devopsy's own flags and where each applies
-  (locally, on a target, on a server); most take `--help` for their own
+  (without a target, on a target, on a server); most take `--help` for their own
   (`--release --help`, `--debug --help`). Bare `devopsy` in a project
   lists the project's own commands (`.devopsy/commands/`); a word is one
   of those, else a compose command (`devopsy up -d`), else an error.
@@ -61,7 +61,7 @@ devopsy-template-traefik, a Traefik released once per server.
 
 What devopsy requires:
 
-- No `name:`. devopsy sets `COMPOSE_PROJECT_NAME` (locally `project:`,
+- No `name:`. devopsy sets `COMPOSE_PROJECT_NAME` (without a target `project:`,
   on servers `<project>[-<instance>]-<environment>`: each environment is
   its own compose project), which wins over a `name:`; leave it out so
   the file says what runs.
@@ -201,7 +201,7 @@ what `config.yaml` sets.
 
 ## Operating
 
-- Locally, `devopsy up -d` and the rest of compose; `devopsy --release`
+- Without a target, `devopsy up -d` and the rest of compose; `devopsy --release`
   runs the release steps in place (prepare, images, run) and
   `devopsy --destroy` takes it all down, `mnt` emptied.
 - A target is `@[<server>:][<instance>/]<environment>`: `@vm1:prod`,
@@ -259,7 +259,7 @@ what `config.yaml` sets.
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`
-  line that checks the same locally. A custom domain is a CNAME to the
+  line that checks the same from the operator's machine. A custom domain is a CNAME to the
   environment's wildcard URL.
 - A new server is set up for devopsy as its deploy user with
   `devopsy @devopsy@<server>: --server-setup` (`--yes` asks nothing; a refusal stops only what needs it, the rest applied, exit 1; on a fresh server it asks where releases live, the home or a volume mounted at boot, a volume named as `releases: root`; `--root <dir>` answers it with no question, for `--yes` and CI):
@@ -297,7 +297,7 @@ what `config.yaml` sets.
   every such fix offers.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
-- `devopsy @<server> --match-server-version` makes the local devopsy the
+- `devopsy @<server> --match-server-version` makes the operator's devopsy the
   server's release, older or newer (in CI, after installing).
 
 ## When something fails
