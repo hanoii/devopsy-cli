@@ -30,14 +30,7 @@ var docs = []string{"README.md", "docs/*.md", "internal/skill/*.md"}
 // ("" for the whole file).
 var kept = []struct{ file, line string }{
 	// Until the rename reaches them.
-	{"cmd/devopsy/data.go", ""},
-	{"cmd/devopsy/main.go", ""},
-	{"cmd/devopsy/release_local.go", ""},
-	{"cmd/devopsy/reload.go", ""},
-	{"cmd/devopsy/remote.go", ""},
-	{"cmd/devopsy/serverinfo.go", ""},
 	{"docs/capabilities.md", ""},
-	{"docs/codes.md", ""},
 	{"docs/config.md", ""},
 	{"docs/data.md", ""},
 	{"docs/images.md", ""},
@@ -47,13 +40,11 @@ var kept = []struct{ file, line string }{
 	{"docs/server-setup-howto.md", ""},
 	{"docs/servers.md", ""},
 	{"docs/syncs.md", ""},
-	{"internal/cli/capabilities.go", ""},
 	{"internal/cli/cli.go", ""},
-	{"internal/cli/commandrun.go", ""},
+	{"internal/cli/commandrun.go", "RunsLocallyNote ="},
 	{"internal/cli/flags.go", ""},
 	{"internal/howto/howto.go", ""},
 	{"internal/howto/topics.go", ""},
-	{"internal/report/codes.go", ""},
 	{"internal/skill/SKILL.md", ""},
 	{"README.md", ""},
 }

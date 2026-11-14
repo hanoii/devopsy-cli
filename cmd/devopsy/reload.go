@@ -12,6 +12,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // reloadingIn is a reload's line naming the release whose log its
@@ -87,7 +88,7 @@ func runLocalReload(cwd string, args []string, color bool) int {
 		return 0
 	}
 	if len(args) > 0 {
-		report.Say(report.ErrorLevel, "--reload takes nothing locally", nil, report.Fix("", "devopsy --reload"), report.Fix("a target's:", "devopsy @<target> --reload"))
+		report.Say(report.ErrorLevel, "--reload "+vocab.NoTarget+" takes no argument", nil, report.Fix("", "devopsy --reload"), report.Fix("a target's:", "devopsy @<target> --reload"))
 		return 2
 	}
 	projectDir, err := cli.FindProjectDir(cwd)

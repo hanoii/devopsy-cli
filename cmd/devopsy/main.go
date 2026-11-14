@@ -23,6 +23,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/uids"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // Set at build time by GoReleaser.
@@ -318,7 +319,7 @@ func run() int {
 		if slices.Contains(cli.ServerScope, args[0]) {
 			need, fix = "a server", report.Fix("", "devopsy @<server> "+args[0])
 			if server := sessionServer(); server != "" {
-				fix = report.Fix("run it locally, by this server's address:", "devopsy @"+server+" "+args[0])
+				fix = report.Fix("run it "+vocab.Operator.From+", by this server's address:", "devopsy @"+server+" "+args[0])
 			}
 		}
 		return failErr(&report.Failure{Msg: args[0] + " needs " + need, Details: details, Remedies: []report.Remedy{fix}})

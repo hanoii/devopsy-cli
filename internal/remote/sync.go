@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // A sync copies a parent environment's data (shared/mnt) into a child's,
@@ -786,7 +787,7 @@ func KindsDiffer(parentProjectUser bool) string {
 
 // KindsFix is the way across between kinds: through the operator.
 func KindsFix() report.Remedy {
-	return report.Fix("copy a service's data through this machine instead, the parent's --export of it piped into the child's --import")
+	return report.Fix("copy a service's data through " + vocab.Operator.Noun + " instead, the parent's --export of it piped into the child's --import")
 }
 
 // syncFinish defines sync_finish go|abort|partial, in the child's

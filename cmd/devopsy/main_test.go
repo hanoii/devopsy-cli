@@ -17,6 +17,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // End-to-end: build the binary and run it against a fake docker that prints
@@ -400,7 +401,7 @@ func TestUserTargets(t *testing.T) {
 		t.Errorf("--server-setup without a server (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), append(withHome, remote.ServerEnv+"=devopsy@vm1:"), "--server-setup")
-	if code == 0 || !strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | run it locally, by this server's address:\ndevopsy: | $ devopsy @devopsy@vm1: --server-setup\n") {
+	if code == 0 || !strings.Contains(out, "devopsy: | to fix it:\ndevopsy: | run it "+vocab.Operator.From+", by this server's address:\ndevopsy: | $ devopsy @devopsy@vm1: --server-setup\n") {
 		t.Errorf("--server-setup without a server, in a session on one (%d):\n%s", code, out)
 	}
 	// --release without one runs in place, from defaults:, which this
@@ -824,7 +825,7 @@ func TestReleaseSteps(t *testing.T) {
 	// Commands' scopes: a local one never runs on the server, as a step or
 	// a word, refused before connecting.
 	write(t, filepath.Join(dot, "config.yaml"), strings.Replace(targets, "run: deploy --fast", "run: check", 1), 0o644)
-	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "a remote step: check runs only on your machine") {
+	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "a remote step: check runs only "+vocab.Operator.On) {
 		t.Fatalf("local command as a remote step (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(dot, "config.yaml"), strings.Replace(targets, "local: -v done", "local: -v deploy", 1), 0o644)
@@ -832,7 +833,7 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("target command as a local step (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
-	if out, code := run(nil, "@prod", "check"); code == 0 || !strings.Contains(out, "check runs only on your machine") {
+	if out, code := run(nil, "@prod", "check"); code == 0 || !strings.Contains(out, "check runs only "+vocab.Operator.On) {
 		t.Fatalf("local command on a target (%d):\n%s", code, out)
 	}
 	// A local command that needs an address runs locally with it, as typed,
@@ -1916,8 +1917,8 @@ func TestLocalRefusalsOfferTheirCommandsAsFixes(t *testing.T) {
 		cmds  []string
 		words string
 	}{
-		{[]string{"--release", "x"}, []string{"$ devopsy --release", "$ devopsy @<target> --release"}, "locally: devopsy --release ("},
-		{[]string{"--reload", "x"}, []string{"$ devopsy --reload", "$ devopsy @<target> --reload"}, "locally: devopsy --reload ("},
+		{[]string{"--release", "x"}, []string{"$ devopsy --release", "$ devopsy @<target> --release"}, "takes no argument: devopsy --release ("},
+		{[]string{"--reload", "x"}, []string{"$ devopsy --reload", "$ devopsy @<target> --reload"}, "takes no argument: devopsy --reload ("},
 		{[]string{"--environments"}, []string{"$ devopsy @<server> --environments"}, "no server: devopsy @<server>"},
 	} {
 		out, code := runDevopsy(t, project, nil, c.args...)

@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // SSHDestination splits a target's host (ParseServer) into ssh's user,
@@ -221,7 +222,7 @@ func ChildAddress(host string) (user, hostname, port string, err error) {
 	}
 	for _, k := range []string{"proxycommand", "proxyjump"} {
 		if v := eff[k]; v != "" && v != "none" {
-			return "", "", "", fmt.Errorf("%s is reached through a %s (%s): the parent's server cannot reach it directly; a relay through this machine is not supported yet", host, map[string]string{"proxycommand": "ProxyCommand", "proxyjump": "ProxyJump"}[k], v)
+			return "", "", "", fmt.Errorf("%s is reached through a %s (%s): the parent's server cannot reach it directly; a relay through "+vocab.Operator.Noun+" is not supported yet", host, map[string]string{"proxycommand": "ProxyCommand", "proxyjump": "ProxyJump"}[k], v)
 		}
 	}
 	user, hostname, port = eff["user"], eff["hostname"], eff["port"]

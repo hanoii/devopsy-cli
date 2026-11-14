@@ -1154,7 +1154,7 @@ func runImport(cwd string, args []string, color bool) int {
 	// remote.ImagesAcceptEnv; locally nothing is held, so nothing to
 	// accept.
 	if len(accept) > 0 {
-		return fail(cli.ImportFlag + " --accept-image is for a target, whose data services are checked against their data's history: locally nothing is checked")
+		return fail(cli.ImportFlag + " --accept-image is for a target, whose data services are checked against their data's history: without one nothing is checked")
 	}
 	if resolved {
 		return runResolved(cwd, name)
@@ -1724,7 +1724,7 @@ func runResolved(cwd, name string) int {
 		return fail(err.Error())
 	}
 	if !cli.InRelease(projectDir) {
-		return failErr(&report.Failure{Msg: "--resolved works on a target only: locally nothing records what a failed import kept down", Remedies: []report.Remedy{report.Fix("start what it kept down (the import's error names it):", "devopsy start <service>...")}})
+		return failErr(&report.Failure{Msg: "--resolved works on a target only: without one nothing records what a failed import kept down", Remedies: []report.Remedy{report.Fix("start what it kept down (the import's error names it):", "devopsy start <service>...")}})
 	}
 	base := filepath.Dir(cwd)
 	m := readMark(base)

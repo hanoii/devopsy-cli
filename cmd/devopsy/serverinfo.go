@@ -30,6 +30,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 	"github.com/hanoii/devopsy-cli/internal/update"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // serverInfoWarned is --server-info's exit code when it warned: 0 says
@@ -1085,7 +1086,7 @@ func runServerInfo(t *remote.Target, args []string) int {
 			return failErr(err)
 		}
 		r := serverReport{Facts: info, Entries: serverInfoReport(info, "", "", version, time.Now())}
-		head := "local"
+		head := "this machine"
 		if name, err := os.Hostname(); err == nil {
 			head += " (" + name + ")"
 			r.Host = name
@@ -1207,11 +1208,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// devopsy and the release settings.
 	v := info.Version
 	if local != info.Version {
-		v += " (local " + local + ")"
+		v += " (" + vocab.Operator.Poss + " " + local + ")"
 	}
 	row("devopsy", v)
 	if ref != "" && update.Newer(local, info.Version) {
-		forAdmin(report.OlderDevopsy, []string{"the server's " + info.Version + ", the local " + local},
+		forAdmin(report.OlderDevopsy, []string{"the server's " + info.Version + ", " + vocab.Operator.Poss + " " + local},
 			report.Fix("", "devopsy @"+ref+" --upgrade"), report.Fix("", "devopsy @"+ref+" --match-server-version"))
 	}
 	// The facts are judged here: an older local devopsy reads a field it does not know (a
@@ -1219,7 +1220,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	// a project user's too.
 	if ref != "" && update.Newer(info.Version, local) {
 		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key,
-			Lines:    []string{"the local devopsy is older than the server's", "the server's " + info.Version + ", the local " + local + ": what the local one does not know of the server's facts reads as missing"},
+			Lines:    []string{"the devopsy " + vocab.Operator.On + " is older than the server's", "the server's " + info.Version + ", " + vocab.Operator.Poss + " " + local + ": what it does not know of the server's facts reads as missing"},
 			Remedies: []report.Remedy{report.Fix("", "devopsy @"+ref+" --match-server-version")}})
 	}
 	row("releases", fmt.Sprintf("%s, keep %d (at most %d)", info.Root, info.Keep, info.MaxKeep))
@@ -1631,13 +1632,13 @@ func clockOffset(d time.Duration) string {
 	}
 	switch {
 	case d < 100*time.Millisecond:
-		return "matching local"
+		return "matching " + vocab.Operator.Poss
 	case d < 10*time.Second:
-		return fmt.Sprintf("about %.1f s %s local", d.Seconds(), way)
+		return fmt.Sprintf("about %.1f s %s %s", d.Seconds(), way, vocab.Operator.Poss)
 	case d < 2*time.Minute:
-		return fmt.Sprintf("about %d s %s local", int(d.Seconds()), way)
+		return fmt.Sprintf("about %d s %s %s", int(d.Seconds()), way, vocab.Operator.Poss)
 	}
-	return "about " + duration(d) + " " + way + " local"
+	return "about " + duration(d) + " " + way + " " + vocab.Operator.Poss
 }
 
 // reflinkFix is the way to keep services up through a snapshot's copy

@@ -747,7 +747,7 @@ if ! devopsy ` + StdinGuardFlag + ` | tar -xzmf - -C "$rel.tmp"; then
   exit 1
 fi
 # Pending until its activation switches to it: one that never gets there
-# (cut, interrupted, its operator gone) is never rolled back to nor kept.
+# (cut, interrupted, its session gone) is never rolled back to nor kept.
 : >"$rel.tmp/` + PendingFile + `"
 mv "$rel.tmp" "$rel"
 echo "$id"

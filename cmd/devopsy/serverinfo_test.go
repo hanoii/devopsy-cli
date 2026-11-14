@@ -22,6 +22,8 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/uids"
 	"strconv"
 	"syscall"
+
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // The facts read on a server: os-release, /proc/meminfo, docker info,
@@ -191,10 +193,10 @@ func TestServerInfoReport(t *testing.T) {
 		local  string
 		want   string // the warning, then its fix after |
 	}{
-		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "W0003: the server's devopsy is older than the local one\nthe server's 0.53.0, the local 0.54.0|devopsy @vm1: --upgrade\n\n$ devopsy @vm1: --match-server-version"},
+		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "W0003: the server's devopsy is older than " + vocab.Operator.Poss + "\nthe server's 0.53.0, " + vocab.Operator.Poss + " 0.54.0|devopsy @vm1: --upgrade\n\n$ devopsy @vm1: --match-server-version"},
 		// The local devopsy judges the server's facts, and an older one reads a field it does
 		// not know as missing (buildx's version, renamed, read as no buildx plugin).
-		{"older local devopsy", func(*remote.ServerInfo) {}, "0.52.0", "the local devopsy is older than the server's\nthe server's 0.53.0, the local 0.52.0: what the local one does not know of the server's facts reads as missing|$ devopsy @vm1: --match-server-version"},
+		{"older local devopsy", func(*remote.ServerInfo) {}, "0.52.0", "the devopsy " + vocab.Operator.On + " is older than the server's\nthe server's 0.53.0, " + vocab.Operator.Poss + " 0.52.0: what it does not know of the server's facts reads as missing|$ devopsy @vm1: --match-server-version"},
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "W0004: the server needs a reboot\n/run/reboot-required, for linux-image-amd64|reboot it"},
 		// The door: a space that takes setuid, sshd waiting for a reboot.
 		{"door unguarded", func(i *remote.ServerInfo) {
@@ -220,7 +222,7 @@ func TestServerInfoReport(t *testing.T) {
 		// Its time service on and no answer: a network blocking NTP.
 		{"clock unanswered", func(i *remote.ServerInfo) {
 			i.NTP, i.NTPService, i.Time = "no", "yes", now.Add(-800*time.Millisecond).UnixNano()
-		}, "", "W0005: the server's clock is not synchronized\nabout 0.8 s behind local: certificates|UDP 123 blocked out?"},
+		}, "", "W0005: the server's clock is not synchronized\nabout 0.8 s behind " + vocab.Operator.Poss + ": certificates|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
 		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "W0006: Kexec HandOver keeps memory as CMA, which only movable pages may use\nit keeps 1.3 GB: the kernel's own allocations|kho=off on the kernel's command line, then a reboot; this prints the steps:\n$ devopsy --server-setup-howto kexec-handover"},
 		// Docker's own, said once under docker with the docker topic, the setup's judgment of
@@ -387,8 +389,8 @@ func TestServerInfoReport(t *testing.T) {
 	// How far the server's clock is from the local one, synchronized or
 	// not.
 	for d, want := range map[time.Duration]string{
-		50 * time.Millisecond: "matching local", -800 * time.Millisecond: "about 0.8 s behind local",
-		42 * time.Second: "about 42 s ahead of local", -3 * time.Hour: "about 3 hours behind local",
+		50 * time.Millisecond: "matching " + vocab.Operator.Poss, -800 * time.Millisecond: "about 0.8 s behind " + vocab.Operator.Poss,
+		42 * time.Second: "about 42 s ahead of " + vocab.Operator.Poss, -3 * time.Hour: "about 3 hours behind " + vocab.Operator.Poss,
 	} {
 		if got := clockOffset(d); got != want {
 			t.Errorf("clock %v: %q, want %q", d, got, want)
@@ -396,7 +398,7 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	info0 := healthy()
 	info0.Time = now.Add(42 * time.Second).UnixNano()
-	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "clock synchronized, about 42 s ahead of local") {
+	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "clock synchronized, about 42 s ahead of "+vocab.Operator.Poss) {
 		t.Errorf("clock ahead: %+v\n%s", warnings, out)
 	}
 
@@ -817,13 +819,13 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	// in process; refused elsewhere (macOS: CI runs both).
 	out, code = s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "--server-info")
 	if runtime.GOOS != "linux" {
-		if code != 1 || !strings.Contains(out, "reads the Linux server it runs on, and this is "+runtime.GOOS) || !strings.Contains(out, "$ devopsy @<server> --server-info") || strings.Contains(out, "local (") {
+		if code != 1 || !strings.Contains(out, "reads the Linux server it runs on, and this is "+runtime.GOOS) || !strings.Contains(out, "$ devopsy @<server> --server-info") || strings.Contains(out, "this machine (") {
 			t.Errorf("not on Linux: exit %d:\n%s", code, out)
 		}
 		return
 	}
 	for _, want := range []string{
-		"local (",
+		"this machine (",
 		"releases      " + s.root + ", keep 5",
 		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
 		"environments  shop/dev  none: 19990101000000 failed",

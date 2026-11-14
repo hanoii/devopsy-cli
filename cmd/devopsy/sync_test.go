@@ -27,6 +27,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 	"github.com/hanoii/devopsy-cli/internal/uids"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // syncFakeDocker logs every call, with its compose project, to
@@ -1511,7 +1512,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
 	agent := env
 	// A child behind a jump host is out of the parent's reach.
-	if out, code := s.run(append(agent, "FAKE_PROXYJUMP=bastion"), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "relay through this machine is not supported yet") {
+	if out, code := s.run(append(agent, "FAKE_PROXYJUMP=bastion"), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "relay through "+vocab.Operator.Noun+" is not supported yet") {
 		t.Fatalf("proxyjump (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -4961,7 +4962,7 @@ func TestOlderServerRefusesBeforeBeforeSteps(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ReleaseSnapshotsFeature+")") {
 		t.Fatalf("a child's first release on a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
 	}
-	if strings.Contains(out, "running 'devopsy deploy' locally (before)") {
+	if strings.Contains(out, "running the local step 'devopsy deploy' (before)") {
 		t.Errorf("the release ran its local before step before the server refused it:\n%s", out)
 	}
 	if dev := filepath.Join(s.root, "shop", "dev"); fileExists(dev) {

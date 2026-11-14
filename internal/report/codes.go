@@ -1,5 +1,7 @@
 package report
 
+import "github.com/hanoii/devopsy-cli/internal/vocab"
+
 // Code names a condition a message is said with, so whoever can only pass the message on (a
 // project user) and whoever acts on it (the server's admin) name it the same: W and four
 // digits, each with one meaning, never reused or renumbered once released. Desc is what the
@@ -21,7 +23,7 @@ var SpaceUnguarded = Code{"W0002", "the project users' directory is not on a mou
 // older than the operator's, a reboot the system asks for, a clock out of sync, Kexec
 // HandOver's CMA, a snapshot root with no volume of its own, a tool missing.
 var (
-	OlderDevopsy   = Code{"W0003", "the server's devopsy is older than the local one"}
+	OlderDevopsy   = Code{"W0003", "the server's devopsy is older than " + vocab.Operator.Poss}
 	RebootNeeded   = Code{"W0004", "the server needs a reboot"}
 	ClockUnsynced  = Code{"W0005", "the server's clock is not synchronized"}
 	KexecHandOver  = Code{"W0006", "Kexec HandOver keeps memory as CMA, which only movable pages may use"}

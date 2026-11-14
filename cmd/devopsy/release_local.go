@@ -14,6 +14,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // runLocalRelease is --release without a target: a release in place, in
@@ -28,7 +29,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return 0
 	}
 	if len(args) > 0 {
-		return failErr(&report.Failure{Msg: "--release takes nothing locally", Remedies: []report.Remedy{report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release")}})
+		return failErr(&report.Failure{Msg: "--release " + vocab.NoTarget + " takes no argument", Remedies: []report.Remedy{report.Fix("", "devopsy --release"), report.Fix("a target's:", "devopsy @<target> --release")}})
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // project creates dir/<name>/.devopsy with the given files (path: content)
@@ -371,12 +372,12 @@ func TestBuildCommandRun(t *testing.T) {
 		{false, nil, "odd", "## Needs: server takes ## Run: local", ""},
 		{false, addressed, "push", "", "vm1:prod"},
 		{false, addressed, "tunnel", "", "vm1:prod"},
-		{false, addressed, "image", "image runs only on your machine and takes no address", ""},
+		{false, addressed, "image", "image runs only " + vocab.Operator.On + " and takes no address", ""},
 		// A command without Needs never sees an outer one's address.
 		{false, []string{CommandTargetEnv + "=stale"}, "both", "", ""},
 		{true, nil, "deploy", "", ""},
 		{true, nil, "both", "", ""},
-		{true, nil, "image", "image runs only on your machine (## Run: local in ", ""},
+		{true, nil, "image", "image runs only " + vocab.Operator.On + " (## Run: local in ", ""},
 	} {
 		if c.release {
 			if err := os.WriteFile(release, lines, 0o644); err != nil {

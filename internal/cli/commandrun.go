@@ -8,6 +8,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // CommandTargetEnv is the address a project command with `## Needs:` was
@@ -96,11 +97,11 @@ func (c CommandRun) Check(name, path string, where Where) error {
 		}
 	case Addressed:
 		if c.Run == "local" && c.Needs == "" {
-			return fmt.Errorf("%s runs only on your machine and takes no address (## Run: local in %s): devopsy %s", name, path, name)
+			return fmt.Errorf("%s runs only %s and takes no address (## Run: local in %s): devopsy %s", name, vocab.Operator.On, path, name)
 		}
 	case OnServer:
 		if c.Run == "local" {
-			return fmt.Errorf("%s runs only on your machine (## Run: local in %s), never on a server", name, path)
+			return fmt.Errorf("%s runs only %s (## Run: local in %s), never on a server", name, vocab.Operator.On, path)
 		}
 	}
 	return nil

@@ -413,7 +413,7 @@ func runRemoteRelease(cwd string, t *remote.Target, projectName, projectDir stri
 	}
 	local := func(phase string, list []string, commit string) int {
 		for _, step := range list {
-			timer := log.Start(fmt.Sprintf("running 'devopsy %s' locally (%s)", step, phase))
+			timer := log.Start(fmt.Sprintf("running the local step 'devopsy %s' (%s)", step, phase))
 			if code := runLocalStep(t, projectDir, remote.StepArgs(step), commit); code != 0 {
 				rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("'devopsy %s' exited %d", step, code)))
 				return code
