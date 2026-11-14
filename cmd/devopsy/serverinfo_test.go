@@ -1344,3 +1344,41 @@ func TestNamesSortNaturally(t *testing.T) {
 		t.Errorf("projects and rows not in their number's order:\n%s", out)
 	}
 }
+
+// A project uid claim left is removed as any claim is, through --shell-host on the server.
+func TestServerInfoProjectClaimLeftIsRemovedOnTheServer(t *testing.T) {
+	t.Parallel()
+	// blog's project claim is left: no environment of it holds a claim.
+	info := releasedAt([]string{"shop/prod"}, "project:shop", "env:shop:prod", "project:blog")
+	es := serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
+	found := false
+	for _, e := range es {
+		if e.Group != "blog" || !strings.Contains(strings.Join(e.Lines, " "), "uid claim") {
+			continue
+		}
+		found = true
+		cmds := fixText(e.Remedies)
+		if !strings.Contains(cmds, "$ devopsy @vm1: --shell-host\n$ rm ") {
+			t.Errorf("project:blog's claim left offers its rm without --shell-host, as an environment's claim does not:\n%s", cmds)
+		}
+	}
+	if !found {
+		t.Fatalf("no line of project:blog's claim left in:\n%+v", es)
+	}
+}
+
+// Every uid claim is said somewhere: one whose environment has no row and that is not judged
+// left (a project user's tree that answered nothing, an environment that did not read) is a
+// row of its project.
+func TestServerInfoEveryClaimIsSaid(t *testing.T) {
+	t.Parallel()
+	door := releasedAt([]string{"shop/prod"}, "env:shop:prod", "env:web:prod")
+	door.DoorProjects = []string{"web"}
+	unread := releasedAt([]string{"shop/prod"}, "env:shop:prod", "env:blog:prod")
+	unread.EnvironmentsUnread = "open /home/devopsy/blog: permission denied"
+	for name, info := range map[string]remote.ServerInfo{"a project user's tree unanswered": door, "an environment unread": unread} {
+		if out := reportAt(info); !strings.Contains(out, "uid 101") && !strings.Contains(out, " 101 ") {
+			t.Errorf("%s: the claim of uid 101 is said nowhere:\n%s", name, out)
+		}
+	}
+}

@@ -335,3 +335,85 @@ func TestServerInfoGoneClaimUnlookedStaysSaid(t *testing.T) {
 		}
 	}
 }
+
+// A gone environment named as its project (shop/shop, compose name shop-shop) is a row of its
+// own under the project, with its claim left and without: only a name of no project on the
+// server is a project of its own.
+func TestServerInfoGoneEnvironmentNamedAsItsProject(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	for name, info := range map[string]remote.ServerInfo{
+		"its claim left": {
+			Environments: []remote.Environment{{Path: "shop/prod"}},
+			UIDs:         []remote.UIDClaim{{Owner: "env:shop:shop", UID: 1000002, Name: "1000002"}},
+		},
+		"no claim, a container left": {
+			Environments: []remote.Environment{{Path: "shop/prod"}},
+			Containers:   []remote.HostContainer{{Project: "shop-shop", Service: "web", State: "exited", Released: true}},
+		},
+	} {
+		out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
+		_, projects, _ := strings.Cut(out, "\nprojects\n")
+		row := false
+		for _, l := range strings.Split(projects, "\n") {
+			row = row || strings.HasPrefix(l, "    shop ") && strings.Contains(l, "gone")
+		}
+		if !row {
+			t.Errorf("%s: the gone shop/shop has no row of its own under shop:\n%s", name, projects)
+		}
+	}
+}
+
+// A claim left is "only" what is left only when the containers, images and volumes all read:
+// with one of them unread, the claim is said without "only".
+func TestServerInfoGoneClaimPartlyUnlookedIsNotOnly(t *testing.T) {
+	t.Parallel()
+	base := remote.ServerInfo{
+		Environments: []remote.Environment{{Path: "shop/prod"}},
+		UIDsDir:      "/home/devopsy/.devopsy-uids",
+		UIDs:         []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "env:shop:pr-1"}},
+	}
+	for name, change := range map[string]func(*remote.ServerInfo){
+		"containers unread": func(i *remote.ServerInfo) { i.ContainersUnread = "docker inspect: exit status 1" },
+		"images unread":     func(i *remote.ServerInfo) { i.ImagesUnread = "docker image ls: exit status 1" },
+		"volumes unread":    func(i *remote.ServerInfo) { i.VolumesUnread = "docker volume ls: exit status 1" },
+	} {
+		i := base
+		change(&i)
+		got := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n\n")
+		if strings.Contains(got, "only its uid claim") || !strings.Contains(got, "uid claim 1000002") {
+			t.Errorf("%s: the claim said as all that is left, or unsaid:\n%s", name, got)
+		}
+	}
+}
+
+// A long gone name, keyed gone, is a row of its own, never a line of a live environment named
+// gone.
+func TestServerInfoLongGoneNameIsARowOfItsOwn(t *testing.T) {
+	t.Parallel()
+	info := releasedAt([]string{"shop/gone", "shop/prod"})
+	info.Containers = []remote.HostContainer{{Project: "shop-a-feature-branch-name", Service: "web", State: "exited", Released: true}}
+	out := reportAt(info)
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "a-feature-branch-name: ") && !strings.HasPrefix(l, "    gone ") {
+			t.Errorf("the gone a-feature-branch-name is a line of the live shop/gone's row (after %q):\n%s", lines[i-1], out)
+		}
+	}
+}
+
+// No gone name widens the one key column: a claim's whose rest could not be looked for, and a
+// name of no project on the server, its own project.
+func TestServerInfoGoneNamesWidenNoKey(t *testing.T) {
+	t.Parallel()
+	unlooked := releasedAt(nil, "env:shop:a-feature-branch-name")
+	ownHeading := releasedAt([]string{"shop/prod"})
+	ownHeading.Containers = []remote.HostContainer{{Project: "oldproject-production", Service: "web", State: "exited", Released: true}}
+	for name, info := range map[string]remote.ServerInfo{"a claim left, the rest unlooked": unlooked, "a name of no project": ownHeading} {
+		out := reportAt(info)
+		// The column of a report whose keys are server's own: snapshots and two spaces, indented.
+		if !strings.Contains(out, "\n  devopsy    0.53.0\n") {
+			t.Errorf("%s: a long gone name widened the key column:\n%s", name, out)
+		}
+	}
+}
