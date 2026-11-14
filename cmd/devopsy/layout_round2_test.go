@@ -87,3 +87,20 @@ func TestReviewLongGoneNamesWidenNoKey(t *testing.T) {
 		}
 	}
 }
+
+// Review round 2, bug: an environment's uid claim is said only on its environment's row, so a
+// claim whose environment has no row and that staleUID never judges left (a project user's
+// tree that answered nothing, an environment that did not read) is said nowhere, where the
+// report before the layout listed every claim.
+func TestReviewClaimWithNoRowIsSaid(t *testing.T) {
+	t.Parallel()
+	door := releasedAt([]string{"shop/prod"}, "env:shop:prod", "env:web:prod")
+	door.DoorProjects = []string{"web"}
+	unread := releasedAt([]string{"shop/prod"}, "env:shop:prod", "env:blog:prod")
+	unread.EnvironmentsUnread = "open /home/devopsy/blog: permission denied"
+	for name, info := range map[string]remote.ServerInfo{"a project user's tree unanswered": door, "an environment unread": unread} {
+		if out := reportAt(info); !strings.Contains(out, "uid 101") && !strings.Contains(out, " 101 ") {
+			t.Errorf("%s: the claim of uid 101 is said nowhere:\n%s", name, out)
+		}
+	}
+}
