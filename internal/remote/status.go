@@ -2,6 +2,7 @@ package remote
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -50,13 +51,22 @@ const StatusNoContainer = "none"
 
 // StatusEntry is a fact --status shows under its key: one or more lines
 // at a level (StatusInfo, StatusHighlight, StatusWarning), with the
-// ways to act on it.
+// ways to act on it. Section and Group place it in a report laid out in
+// parts (--server-info's server, projects, leftovers; a project in
+// projects), empty in a flat one; Cells are its first line's cells, a
+// row aligned with the others of its run, Lines[0] holding them joined.
 type StatusEntry struct {
 	Level    string          `json:"level"`
+	Section  string          `json:"section,omitempty"`
+	Group    string          `json:"group,omitempty"`
 	Key      string          `json:"key"`
 	Lines    []string        `json:"lines"`
+	Cells    []string        `json:"cells,omitempty"`
 	Remedies []report.Remedy `json:"remedies,omitempty"`
 }
+
+// CellsJoined is cells as an entry's line: two spaces between them.
+func CellsJoined(cells ...string) string { return strings.Join(cells, "  ") }
 
 // An entry's levels: a highlight is a fact shown in bold, one people
 // look for (a project's URL); a warning needs attention, and --status
