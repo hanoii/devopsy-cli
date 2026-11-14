@@ -10,7 +10,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - Owners are numbers only, 0 to 4294967294, normalized by `parseOwner` and compared as numbers: names cannot be resolved from the host, and past a `uid_t` or at 4294967295 (chown's -1) an owner passes the checks and fails `find` and `chown` after the switch.
 - A read-only mount claims nothing, two owners on one entry are an error, and an unlabeled writer of an owned entry is none (a tool sharing it).
 - The label owns the named volumes its service mounts writable too, their root alone (`cli.OwnedVolumes`, from every mount in `VolumeMounts`): what the service writes there is its own.
-- Every mount of an owned volume carries `nocopy`, read-only ones and unlabeled services' included, refused by the mounts check and locally before a start: Docker fills an empty volume from the image at its first mount and gives its root the image directory's owner, which a root given beforehand does not stop.
+- Every mount of an owned volume carries `nocopy`, read-only ones and unlabeled services' included, refused by the mounts check and before a start without a target: Docker fills an empty volume from the image at its first mount and gives its root the image directory's owner, which a root given beforehand does not stop.
 - An owned volume that is `external:` or has a fixed `name:` is refused, and so are two owners on one volume.
 - The value `user` takes the service's own `user:` (`cli.OwnerUser`, `labelOwner`), which must be `<uid>:<gid>` in numbers: a name cannot be resolved from the host, and a uid alone leaves the group to the image.
 - `user` is resolved where labels are parsed, so every consumer and the child's list see numbers, never the word.
@@ -30,10 +30,10 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
   - by a sync's `finish go` on the child, its owned volumes' roots, which the copy carried from the parent (a reset's too, after its copy), before its services start: when that fails the data stays marked and its services down;
   - by a reset, after `emptyMnt`, its owned volumes' roots with its entries.
 - A release's prepare makes no owned volume before the switch: the prepare steps, the only steps before it, run before `--missing-vars` lets the labels be read, and a volume with options is made by compose's `create` of the new release's containers.
-- Locally, before compose's `up`, `start`, `restart`, `run`, `create`, `watch` and `scale` (`Plan.Starts`), devopsy makes the missing owned entries and, on Linux, gives away and scans whole an entry whose top has the wrong owner, never one whose top is right; macOS never checks, since Docker Desktop and OrbStack show containers the owner Docker asks for; owned volumes are made and their roots given on macOS as on Linux, since only bind mounts fake owners there.
+- Without a target, before compose's `up`, `start`, `restart`, `run`, `create`, `watch` and `scale` (`Plan.Starts`), devopsy makes the missing owned entries and, on Linux, gives away and scans whole an entry whose top has the wrong owner, never one whose top is right; macOS never checks, since Docker Desktop and OrbStack show containers the owner Docker asks for; owned volumes are made and their roots given on macOS as on Linux, since only bind mounts fake owners there.
 - `Plan.Starts` reads the labels from the project's own compose files (`ComposeConfig`), never a `-f` the command adds; never for a `--dry-run` where compose parses it (before the command, after it up to `--`, for `run` only before its service: `commandValueFlags`, `dryRun`); never in a release on a server (`cli.InRelease`), where `--mnt-owners` owns it, so a rollback's plain `up` never fails on labels `--mnt-owners restored` only warns about.
-- Locally, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
-- Locally, an owned volume `cli.OwnedVolumes` refuses stops the start: the start would fill the volume and leave its owner a root it cannot write.
+- Without a target, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
+- Without a target, an owned volume `cli.OwnedVolumes` refuses stops the start: the start would fill the volume and leave its owner a root it cannot write.
 - No owners are fixed for a stream's import (it writes as the service's user), restarts or reboots (owners persist), and no flag fixes owners: a release does it.
 - The owners in copies are a named feature, `mnt-owner` found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
 
@@ -64,7 +64,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - The gate's message carries the links in its first line, which callers wrap.
 - A bind source below an owned entry is refused by any service, read-only too: the entry's owner can replace a directory below it with a link, Docker resolves a bind source on the host, and a link to `/` would mount the host's root into the next container started; the entry itself is a mount point no container can replace.
 - A path below an entry nobody owns stays allowed, but for one a link in the entry leads out of (`LeavingBinds`): such an entry is written from the host by the deploy user, an owned one by a container.
-- Locally nothing refuses a bind source below an owned entry.
+- Without a target nothing refuses a bind source below an owned entry.
 - `./mnt` whole is no entry: refused where labels are read as a data service's mount or an owned writable one, refused writable on any other service by the mounts check, and ignored read-only (a tool), so nothing downstream sees `.`; a tar carrying `./` itself is refused too.
 
 ## The util image
@@ -94,7 +94,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
   - `--mnt-owners` the `owners` ones, before it scans;
   - the next holder of the parent's sync lock (a push, an export) the `source` ones;
   - `--destroy-data` every task of its environment, never another environment's, since it holds every lock.
-- Locally only a failed import's end removes by label (`endImport`, `import`), never a local `--destroy` and never `owners`: nothing holds a lock there, and another terminal's owners' step may be running.
+- Without a target only a failed import's end removes by label (`endImport`, `import`), never a local `--destroy` and never `owners`: nothing holds a lock there, and another terminal's owners' step may be running.
 - A name stays only where it keeps a running container unique (`<prefix><compose name>-<pid>-<n>`, a sync's id), and `dockerRunFresh` (an import's, an owners' step's) and a snapshot check's `unzstd` remove a container of that very name first (`removeNamed`): a devopsy killed outright whose pid or snapshot this one repeats can have left it running, and `docker run` refuses the name.
 - A container's own devopsy removes it by name when its context ends (`dockerRunIO`).
 - Across servers the push's receive script starts the child's rsync, which the child's holder removes by its labels, so the labels are a named feature, `container-labels` (`remote.ContainerLabelsFeature`), found by `--sync-push`: an older parent would start it unlabeled, and its write could outlive the sync.
