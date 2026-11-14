@@ -1329,3 +1329,18 @@ func TestServerInfoProjectRowsByName(t *testing.T) {
 		t.Errorf("rows not in order a, m, z:\n%s", out)
 	}
 }
+
+// Projects and environments sort as people count: ignoring case, the digits in a name by
+// their number (pr-7 before pr-24), in one order for both.
+func TestNamesSortNaturally(t *testing.T) {
+	t.Parallel()
+	names := []string{"prod", "pr-24", "Pr-10", "pr-7", "pr-007b", "a2", "a10", "a"}
+	slices.SortFunc(names, byName)
+	if want := []string{"a", "a2", "a10", "pr-7", "pr-007b", "Pr-10", "pr-24", "prod"}; !slices.Equal(names, want) {
+		t.Errorf("sorted: %v, want %v", names, want)
+	}
+	out := reportAt(releasedAt([]string{"shop/pr-24", "shop/pr-7", "app10/prod", "app9/prod"}))
+	if a, b, c, d := strings.Index(out, "\n  app9"), strings.Index(out, "\n  app10"), strings.Index(out, "\n    pr-7 "), strings.Index(out, "\n    pr-24 "); !(a >= 0 && a < b && c >= 0 && c < d) {
+		t.Errorf("projects and rows not in their number's order:\n%s", out)
+	}
+}

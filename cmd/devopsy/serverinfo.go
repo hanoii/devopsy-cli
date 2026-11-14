@@ -1531,10 +1531,36 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	return append(es, leftovers...)
 }
 
-// byName orders names ignoring case, as a listing of projects and
-// environments reads.
+// byName orders names as people count them, projects' and environments'
+// alike: ignoring case, a run of digits by its number (pr-7 before
+// pr-24), then as they are written.
 func byName(a, b string) int {
-	return cmp.Or(cmp.Compare(strings.ToLower(a), strings.ToLower(b)), cmp.Compare(a, b))
+	x, y := strings.ToLower(a), strings.ToLower(b)
+	for x != "" && y != "" {
+		cx, restX := nameChunk(x)
+		cy, restY := nameChunk(y)
+		digits := cx[0] >= '0' && cx[0] <= '9' && cy[0] >= '0' && cy[0] <= '9'
+		if digits {
+			nx, ny := strings.TrimLeft(cx, "0"), strings.TrimLeft(cy, "0")
+			if c := cmp.Or(cmp.Compare(len(nx), len(ny)), cmp.Compare(nx, ny)); c != 0 {
+				return c
+			}
+		} else if c := cmp.Compare(cx, cy); c != 0 {
+			return c
+		}
+		x, y = restX, restY
+	}
+	return cmp.Or(cmp.Compare(len(x), len(y)), cmp.Compare(a, b))
+}
+
+// nameChunk is s's first run of digits, or of anything else, and the rest.
+func nameChunk(s string) (chunk, rest string) {
+	digit := func(r byte) bool { return r >= '0' && r <= '9' }
+	i := 1
+	for i < len(s) && digit(s[i]) == digit(s[0]) {
+		i++
+	}
+	return s[:i], s[i:]
 }
 
 // projectRows are a project's entries in the order it shows them: its
