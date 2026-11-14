@@ -405,9 +405,9 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 			}
 		}
 		if len(what) > 0 {
-			hint := report.Hint("--gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too")
+			hint := report.Hint("--gc with --dry-run, run on this server from a checkout or an alias, lists their sizes, and the build cache it would remove too")
 			if ref != "" {
-				hint = report.Hint("its sizes, and the build cache it removes too:", "devopsy @"+ref+" --gc --dry-run")
+				hint = report.Hint("to see their sizes, and the build cache it would remove too:", "devopsy @"+ref+" --gc --dry-run")
 			}
 			add("gc", "--gc would remove "+strings.Join(what, ", "), hint)
 		}

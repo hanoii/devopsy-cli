@@ -110,7 +110,7 @@ func TestServerInfoLeft(t *testing.T) {
 			gone + "$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
 		"shop eu/old: a --destroy cut off while it removed it left old.rm.123, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
 		"wiki stage: gone, no environment and no uid claim on the server, and left: 1 image name of its releases\n" + gone + "$ docker rmi app:devopsy-wiki-stage-20261101000000",
-		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| its sizes, and the build cache it removes too:\n$ devopsy @vm1: --gc --dry-run",
+		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| to see their sizes, and the build cache it would remove too:\n$ devopsy @vm1: --gc --dry-run",
 		// One row each, then one line for all and one rmi of every tag, to copy at once.
 		"images: busybox:1.37  4.0 MB",
 		"images: alpine:3, alpine:3.22  8.0 MB",
@@ -131,7 +131,7 @@ func TestServerInfoLeft(t *testing.T) {
 	// Without a target, what needs an address in words, the commands run here.
 	local := strings.Join(leftSays(info, "", ""), "\n\n")
 	for _, w := range []string{
-		"| --gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too",
+		"| --gc with --dry-run, run on this server from a checkout or an alias, lists their sizes, and the build cache it would remove too",
 		"| remove them once nothing needs them:\n$ docker rmi busybox:1.37 alpine:3 alpine:3.22",
 		"| a --destroy of shop/eu/old run again from shop's checkout resumes it",
 		"| a --project-users remove of blog with --destroy removes it with what it holds\n| or a key added for it (--ssh-keys with --for) takes it back",
