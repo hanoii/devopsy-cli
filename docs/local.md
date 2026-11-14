@@ -43,11 +43,12 @@ the project's `.env` loaded, `DEVOPSY_PROJECT_DIR` (the `.devopsy/` path)
 and `DEVOPSY_COMMAND_NAME` set. A `## Description:` line near the top
 shows in help, and two more lines say where it runs:
 
-- `## Run: local` runs it only on the operator's machine (for example a build that
-  pushes an image); on a server it fails. `## Run: target` runs it only
-  on the server, through `devopsy @<target>` (for example a deploy);
-  without a target it fails. Without the line it runs where it is called:
-  on the operator's machine, or on the target when one is given.
+- `## Run: local` runs it only on the operator's machine (for example a
+  build that pushes an image); on a server it fails. `## Run: target` runs
+  it only on the server, through `devopsy @<target>` (for example a
+  deploy); outside a release it fails. Without the line it runs where it
+  is called: without a target, in place, or on the target when one is
+  given.
 - `## Needs: target` or `## Needs: server`, with `## Run: local`, makes a
   local command that takes an address: `devopsy @prod <command>`, or
   `devopsy @vm1 <command>` for a server (any target gives its server).
@@ -258,10 +259,10 @@ through a pipe or in CI (`0` and `false` do not), and `NO_COLOR` wins
 over it.
 
 Releases and syncs run their SSH sessions without a terminal, so devopsy
-gives their steps, builds and run step one on the server (`script`, from
-util-linux), sized like yours: a build's live progress shows as it would
-on the operator's machine. Logs are saved without the colors, and a progress display only
-as its final state.
+gives their steps, builds and run step a terminal on the server (`script`,
+from util-linux), sized like yours: a build's live progress shows as it
+would at your terminal. Logs are saved without the colors, and a progress
+display only as its final state.
 
 Variables named `DEVOPSY_INTERNAL_*` pass these settings from one devopsy
 to another. Never set or read them, since any release may change them.

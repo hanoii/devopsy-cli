@@ -297,8 +297,9 @@ what `config.yaml` sets.
   every such fix offers.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.
-- `devopsy @<server> --match-server-version` makes the operator's devopsy the
-  server's release, older or newer (in CI, after installing).
+- `devopsy @<server> --match-server-version` installs on the operator's
+  machine the devopsy version the server runs, older or newer (in CI, after
+  installing).
 
 ## When something fails
 

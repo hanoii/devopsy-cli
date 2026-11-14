@@ -1,13 +1,13 @@
 # devopsy-cli
 
 `devopsy` is a small command-line tool for running Docker Compose projects,
-in development and on servers you own.
+without a target and on servers you own.
 
 Compose describes a project but has nothing for running it on a server.
 devopsy adds:
 
-- Releases. One command ships a new version from the operator, the laptop
-  or CI job that runs devopsy, and another rolls it back.
+- Releases. One command, run from a laptop or a CI job (the operator),
+  ships a new version, and another rolls it back.
 - Environments. Production, staging or one per pull request run side by
   side on one server, each with its own containers and volumes.
 - Variables per deployment. A value can be set for a project on a

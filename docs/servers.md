@@ -517,7 +517,7 @@ you run may not need what the server's devopsy lacks.
 
 ## Shells
 
-- `--shell` opens a shell in a container, as without a target
+- `--shell` opens a shell in a container, as it does without a target
   ([Shells](local.md#shells)).
 - `--shell-host` opens your login shell on the server, in the current
   release (in the release root with `@<server>` alone). It does not depend
