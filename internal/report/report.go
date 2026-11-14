@@ -112,7 +112,37 @@ func Hint(text string, cmds ...string) Remedy { return Remedy{Text: text, Cmds: 
 // commands, in order. A fix is the way out of what the line says, so it
 // comes first wherever a caller puts it among the hints.
 func RemedyLines(rs []Remedy) []string {
-	var out []string
+	out, _ := remedyLines(rs)
+	return out
+}
+
+// RemedyLine is a line of RemedyRows: its text, and Hang, the column in
+// it where a part of it cut to fit a width goes on (under a numbered
+// fix's text, its number's width).
+type RemedyLine struct {
+	Text string
+	Hang int
+}
+
+// RemedyRows are RemedyLines' lines one by one, a string of several
+// lines split, each with its hang.
+func RemedyRows(rs []Remedy) []RemedyLine {
+	out, hangs := remedyLines(rs)
+	var rows []RemedyLine
+	for i, s := range out {
+		for _, l := range strings.Split(s, "\n") {
+			rows = append(rows, RemedyLine{Text: l, Hang: hangs[i]})
+		}
+	}
+	return rows
+}
+
+// remedyLines is RemedyLines' layout, with each string's hang.
+func remedyLines(rs []Remedy) (out []string, hangs []int) {
+	add := func(hang int, s string) {
+		out = append(out, s)
+		hangs = append(hangs, hang)
+	}
 	var fixes, hints []Remedy
 	for _, r := range rs {
 		switch {
@@ -127,39 +157,39 @@ func RemedyLines(rs []Remedy) []string {
 	switch len(fixes) {
 	case 0:
 	case 1:
-		out = append(out, "to fix it:")
+		add(0, "to fix it:")
 		if fixes[0].Text != "" {
-			out = append(out, fixes[0].Text)
+			add(0, fixes[0].Text)
 		}
 		for _, c := range fixes[0].Cmds {
-			out = append(out, cmdMark+c)
+			add(0, cmdMark+c)
 		}
 	default:
-		out = append(out, "to fix it, do one of these:")
+		add(0, "to fix it, do one of these:")
 		for i, f := range fixes {
 			num := fmt.Sprintf("%d. ", i+1)
 			indent := strings.Repeat(" ", len(num))
 			cmds := f.Cmds
 			if f.Text != "" {
-				out = append(out, num+strings.ReplaceAll(strings.TrimRight(f.Text, "\n"), "\n", "\n"+indent))
+				add(len(num), num+strings.ReplaceAll(strings.TrimRight(f.Text, "\n"), "\n", "\n"+indent))
 			} else if len(cmds) > 0 {
-				out = append(out, num+cmdMark+cmds[0])
+				add(len(num), num+cmdMark+cmds[0])
 				cmds = cmds[1:]
 			}
 			for _, c := range cmds {
-				out = append(out, indent+cmdMark+c)
+				add(len(num), indent+cmdMark+c)
 			}
 		}
 	}
 	for _, h := range hints {
 		if h.Text != "" {
-			out = append(out, h.Text)
+			add(0, h.Text)
 		}
 		for _, c := range h.Cmds {
-			out = append(out, cmdMark+c)
+			add(0, cmdMark+c)
 		}
 	}
-	return out
+	return out, hangs
 }
 
 // Lines formats msg at level l: msg's first line after Head(l), then

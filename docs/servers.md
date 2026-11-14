@@ -366,15 +366,13 @@ What belongs to a project is shown in it, under the environment's name;
 a name of no project on the server is a project of its own:
 
 - what is left of an environment removed by hand, for a compose name
-  with no environment directory and no uid claim: its releases' image
+  with no environment directory: its uid claim, its releases' image
   names and a project user's builds, its containers, its volumes, its
   snapshots under the server's `snapshots: root`, with the commands that
   remove them (`docker compose -p <name> down`, `docker volume rm`,
-  `docker rmi`, `rm -rf`);
-- a uid claim whose environment is gone from the server (removed by
-  hand, never by `--destroy`), with its removal by hand. A claim left
-  harms nothing: its uid stays reserved, and removing it is what could
-  hand files still owned by it to another environment;
+  `docker rmi`, `rm -rf`, the claim's `rm` last). A claim left harms
+  nothing: its uid stays reserved, and removing it while anything of it
+  is left could hand those files to another environment;
 - a directory a `--destroy` cut off while it removed an environment left
   (`<environment>.rm.<pid>`), with its size, and the `--destroy` that
   resumes it;

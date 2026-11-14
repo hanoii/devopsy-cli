@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -286,34 +288,42 @@ func sessionServer() string { return remote.SessionFrom(os.Getenv).Server }
 // liveNames are the compose names of what is there, for every report that goes by an
 // absence: the release root's environment directories (the deploy user's, never a read of a
 // project user's tree, which may answer nothing) and every environment uid claim's (a project
-// user's start always has one). ok false when either does not read in full, or the root holds
-// no environment: with its disk not mounted, every environment would read as gone.
-func liveNames(info remote.ServerInfo) (live map[string]bool, ok bool) {
-	live = map[string]bool{}
+// user's start always has one) but those staleUID judges left (a door project's, whose tree
+// may answer nothing, it never judges so), stale by compose name. ok false when either does
+// not read in full, or the root holds no environment: with its disk not mounted, every
+// environment would read as gone.
+func liveNames(info remote.ServerInfo) (live map[string]bool, stale map[string]remote.UIDClaim, ok bool) {
+	live, stale = map[string]bool{}, map[string]remote.UIDClaim{}
 	for _, e := range info.Environments {
 		if e.User == "" {
 			live[composeNameOf(e.Path)] = true
 		}
 	}
 	if len(live) == 0 || info.EnvironmentsUnread != "" {
-		return nil, false
+		return nil, nil, false
 	}
 	for _, c := range info.UIDs {
 		if c.Bad != "" && c.Name == info.UIDsDir {
-			return nil, false // the claims did not read
+			return nil, nil, false // the claims did not read
 		}
-		if o, err := uids.ParseOwner(c.Owner); err == nil && o.Env != "" {
+		o, err := uids.ParseOwner(c.Owner)
+		switch {
+		case err != nil || o.Env == "":
+		case staleUID(c, info.UIDs, info.Environments, false, info.DoorProjects) != "":
+			stale[o.ComposeName()] = c
+		default:
 			live[o.ComposeName()] = true
 		}
 	}
-	return live, true
+	return live, stale, true
 }
 
-// goneEnv is what is left of a compose name with no environment and no uid claim.
+// goneEnv is what is left of a compose name with no environment: its claim when one is left.
 type goneEnv struct {
 	tags, containers []string
 	volumes          []remote.HostVolume
 	snapshots        string
+	claim            *remote.UIDClaim
 }
 
 // goneTags are the tags of a release (bookmarks, snapshots' bookmarks, fetch tags, a project
@@ -357,9 +367,9 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 	warn := func(key, line string) {
 		leftovers = append(leftovers, remote.StatusEntry{Level: remote.StatusWarning, Section: section, Key: key, Lines: []string{line}})
 	}
-	// inProject adds what is a project's, under key there.
-	inProject := func(project, key string, lines []string, hints ...report.Remedy) {
-		groups[project] = append(groups[project], remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Key: key, Lines: lines, Remedies: hints})
+	// inProject adds what is a project's, under key there, or under its heading when head.
+	inProject := func(project, key string, head bool, lines []string, hints ...report.Remedy) {
+		groups[project] = append(groups[project], remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Group: project, Head: head, Key: key, Lines: lines, Remedies: hints})
 	}
 	// onServer is a hint of commands run on the server: through --shell-host from here.
 	onServer := func(text string, cmds ...string) report.Remedy {
@@ -427,13 +437,16 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 		}
 	}
 
-	if live, ok := liveNames(info); ok && dockerUp {
+	if live, stale, ok := liveNames(info); ok && dockerUp {
 		gone := map[string]*goneEnv{}
 		of := func(name string) *goneEnv {
 			if gone[name] == nil {
 				gone[name] = &goneEnv{}
 			}
 			return gone[name]
+		}
+		for name, c := range stale {
+			of(name).claim = &c
 		}
 		if info.ImagesUnread == "" {
 			for name, tags := range goneTags(info.Images, live) {
@@ -486,8 +499,32 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 				cmds = append(cmds, "rm -rf "+remote.QuoteWord(g.snapshots))
 			}
 			project, key := projectOfName(name, info)
-			inProject(project, key, []string{"gone, no environment and no uid claim on the server, and left: " + strings.Join(left, ", ")},
-				onServer("an environment removed by hand: remove what is left once none of it is needed:", cmds...))
+			what := "no environment and no uid claim on the server, and left: " + strings.Join(left, ", ")
+			hint := "an environment removed by hand: remove what is left once none of it is needed:"
+			if c := g.claim; c != nil {
+				// Known by its claim: its project and its key as its owner says them.
+				if o, err := uids.ParseOwner(c.Owner); err == nil {
+					project, key = o.Project, filepath.ToSlash(filepath.Join(o.Instance, o.Env))
+				}
+				uid := strconv.FormatUint(uint64(c.UID), 10)
+				// Its claim last: freed while anything of it is left, its uid could go to
+				// another environment with these files still owned by it.
+				cmds = append(cmds, "rm "+remote.QuoteWord(claimPath(info.UIDsDir, *c)))
+				what = "no environment on the server, and left: " + strings.Join(append([]string{"its uid claim " + uid}, left...), ", ")
+				if len(left) == 0 {
+					what, hint = "only its uid claim "+uid+" is left", "remove it by hand once nothing of it is left:"
+				}
+			}
+			switch {
+			case key == project:
+				// A name of no project on the server: its own, and this its heading.
+				inProject(project, key, true, []string{"gone, " + what}, onServer(hint, cmds...))
+			case utf8.RuneCountInString(key) > goneKeyMax:
+				// A long name in the line, never widening every key.
+				inProject(project, "gone", false, []string{key + ": " + what}, onServer(hint, cmds...))
+			default:
+				inProject(project, key, false, []string{"gone, " + what}, onServer(hint, cmds...))
+			}
 		}
 	}
 
@@ -514,19 +551,29 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 			hint = report.Hint("run it again, which resumes it, in "+project+"'s checkout:", "devopsy @"+host+":"+remote.QuoteWord(rest)+" --destroy")
 		}
 		// Under the environment's own name: its <base>.rm.<pid> would widen every key.
-		inProject(project, rest, []string{"a --destroy cut off while it removed it left " + path.Base(r.Path) + ", " + humanBytes(r.Size)}, hint)
+		inProject(project, rest, false, []string{"a --destroy cut off while it removed it left " + path.Base(r.Path) + ", " + humanBytes(r.Size)}, hint)
 	}
 
 	if info.Door != nil {
 		for _, k := range info.Door.Keyless {
-			inProject(k.Project, "project user", append([]string{keptUserLine(k)}, k.Held...), keptUserHints(k.Project, ref)...)
+			inProject(k.Project, k.Project, true, append([]string{keptUserLine(k)}, k.Held...), keptUserHints(k.Project, ref)...)
 		}
 		for _, u := range info.Door.Destroying {
-			inProject(u.Project, "project user", []string{u.User + ": its --project-users remove --destroy did not complete, and the door answers it nothing"}, destroyPendingHint(ref, u.Project))
+			inProject(u.Project, u.Project, true, []string{u.User + ": its --project-users remove --destroy did not complete, and the door answers it nothing"}, destroyPendingHint(ref, u.Project))
 		}
 	}
 	return groups, leftovers
 }
+
+// claimPath is where claim c is in the claims directory dir: its file, named for its owner,
+// never dir itself.
+func claimPath(dir string, c remote.UIDClaim) string {
+	return filepath.Join(dir, cmp.Or(c.Name, c.Owner))
+}
+
+// goneKeyMax is the longest name a gone environment is keyed by; a longer one is said in its
+// line, under the key gone.
+const goneKeyMax = 12
 
 // projectOfName is the project a compose name with no environment is filed under, and its
 // key there: of the projects on the server (its environments', its claims'), the one whose

@@ -94,10 +94,15 @@ func TestServerInfoLeft(t *testing.T) {
 	}
 	gone := "| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n"
 	want := []string{
-		"blog project user: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
+		// Under its project's heading, never a key that widens every other.
+		"blog blog: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
 		// A name of no project on the server is a project of its own, its heading.
 		"gone-prod gone-prod: gone, no environment and no uid claim on the server, and left: containers web (exited), volumes gone-prod_db, 1 image name of its releases\n" +
 			gone + "$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
+		// A claim whose environment is gone is no live name: what is left of it is looked for,
+		// its claim said with it and removed last.
+		"news prod: gone, no environment on the server, and left: its uid claim 2, 1 image name of its releases\n" +
+			gone + "$ docker rmi devopsy.internal/news-prod/app:latest\n$ rm /home/devopsy/.devopsy-uids/env:news:prod",
 		"old-prod old-prod: gone, no environment and no uid claim on the server, and left: snapshots in /backups/old/prod\n" + gone + "$ rm -rf /backups/old/prod",
 		// Under the project its name starts with, the longest: shop's, though wiki has a stage-2.
 		"shop stage-2: gone, no environment and no uid claim on the server, and left: 2 image names of its releases\n" +
@@ -113,6 +118,13 @@ func TestServerInfoLeft(t *testing.T) {
 	}
 	if got := leftSays(info, "devopsy@vm1", "vm1:"); !slices.Equal(got, want) {
 		t.Errorf("left:\n%s\n\nwant:\n%s", strings.Join(got, "\n\n"), strings.Join(want, "\n\n"))
+	}
+
+	// A gone name too long for a key is said in its line, under gone: a key widens every other.
+	long2 := info
+	long2.Containers = append(slices.Clone(info.Containers), remote.HostContainer{Project: "shop-a-very-long-preview", Service: "web", State: "exited", Released: true})
+	if got := strings.Join(leftSays(long2, "devopsy@vm1", "vm1:"), "\n\n"); !strings.Contains(got, "\n\nshop gone: a-very-long-preview: no environment and no uid claim on the server, and left: containers web (exited)\n") {
+		t.Errorf("a long gone name:\n%s", got)
 	}
 
 	// Without a target, what needs an address in words, the commands run here.

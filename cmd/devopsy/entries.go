@@ -43,6 +43,7 @@ func entriesWarn(es []remote.StatusEntry) bool {
 func copyableEntries(es []remote.StatusEntry) []remote.StatusEntry {
 	out := make([]remote.StatusEntry, 0, len(es))
 	for _, e := range es {
+		e.Key, e.Group = report.Copyable(e.Key), report.Copyable(e.Group)
 		e.Lines = slices.Clone(e.Lines)
 		for j := range e.Lines {
 			e.Lines[j] = report.Copyable(e.Lines[j])
@@ -78,8 +79,10 @@ func printJSON(w io.Writer, v any) error {
 // reportWidth is how wide a report laid out in sections runs before its
 // prose wraps, at a word, to its value column: the same for a pipe, CI
 // and a terminal of any width, so what a test sees is what a person
-// sees. A command never wraps, since it is copied; a flat report's
-// lines never do, each message whole on its line as the code writes it.
+// sees. A command never wraps, since it is copied, nor a row of cells,
+// whose last cell moves whole to a line of its own instead; a flat
+// report's lines never do, each message whole on its line as the code
+// writes it.
 const reportWidth = 100
 
 // entryTable prints entries on w in st, their keys in a column two
@@ -95,25 +98,27 @@ type entryTable struct {
 	width int
 }
 
-// newEntryTable is a table whose key columns fit the keys of es, more
-// in the column of the entries with no section.
+// newEntryTable is a table whose key columns fit the keys of es, as
+// they show (report.Copyable), more in the column of the entries with no
+// section.
 func newEntryTable(w io.Writer, st style, es []remote.StatusEntry, more ...string) entryTable {
 	t := entryTable{w: w, st: st, cols: map[string]int{}, width: reportWidth}
 	for _, k := range more {
 		t.cols[""] = max(t.cols[""], utf8.RuneCountInString(k)+2)
 	}
 	sections := 0
+	seen := map[string]bool{}
 	for _, l := range layOut(es) {
+		seen[l.section] = true
 		if l.kind == lineEntry && l.key != "" {
 			t.cols[l.section] = max(t.cols[l.section], l.indent+utf8.RuneCountInString(l.key)+2)
+			if l.section != "" {
+				sections = max(sections, t.cols[l.section])
+			}
 		}
 	}
-	for sec, w := range t.cols {
-		if sec != "" {
-			sections = max(sections, w)
-		}
-	}
-	for sec := range t.cols {
+	// Every section, one with no key of its own too, starts its values at the one column.
+	for sec := range seen {
 		if sec != "" {
 			t.cols[sec] = sections
 		}
@@ -142,80 +147,76 @@ const (
 	lineRemedy
 )
 
-// laidLine is one line of a report before its key column is known.
+// laidLine is one line of a report before its key column is known, its
+// words as they show (report.Copyable).
 type laidLine struct {
 	kind    int
 	section string
 	indent  int
 	key     string // shown on this line only
 	mark    bool   // a warning's first line, "! " in its indent
-	value   string
+	value   string // a row of cells: all but its last, padded
+	last    string // a row of cells: its last
+	hang    int    // a remedy's text: where a part cut from it goes on
 	level   string
-	group   bool // the key is its project's name
+	group   bool // the key is its project's name, the line its heading's
 }
 
 // layOut lays out es in the order print shows them: a section's heading
 // on each change of section, a project's heading on each change of
-// group when its first entry is not the heading itself, a key on the
-// first line of each run of it, a warning's first line marked, the
-// cells aligned with their run's (cellWidths), a column empty in every
-// row of its run left out, each line quoted as
+// group when its first entry is not one of the heading's (Head), a key
+// on the first line of each run of it, a warning's first line marked,
+// the cells aligned with their run's (cellWidths), a column empty in
+// every row of its run left out, each key, name and line quoted as
 // report.Copyable quotes it. Remedies a later entry of the same key
 // shares are laid out once, after the last entry holding them
 // (sharedLater): one command that fixes several lines is offered once.
 func layOut(es []remote.StatusEntry) []laidLine {
 	var out []laidLine
 	widths := cellWidths(es)
-	prev := remote.StatusEntry{}
+	var prev remote.StatusEntry
 	for i, e := range es {
-		if i == 0 || e.Section != prev.Section {
-			if e.Section != "" {
-				out = append(out, laidLine{kind: lineSection, section: e.Section, value: e.Section})
-			}
-			prev = remote.StatusEntry{Section: e.Section}
+		newSection := i == 0 || e.Section != prev.Section
+		if newSection && e.Section != "" {
+			out = append(out, laidLine{kind: lineSection, section: e.Section, value: e.Section})
 		}
-		if e.Group != "" && e.Group != prev.Group && e.Key != e.Group {
-			out = append(out, laidLine{kind: lineGroup, section: e.Section, indent: 2, key: e.Group, group: true})
+		newGroup := newSection || e.Group != prev.Group
+		if e.Group != "" && newGroup && !e.Head {
+			out = append(out, laidLine{kind: lineGroup, section: e.Section, indent: 2, key: report.Copyable(e.Group), group: true})
 		}
 		indent := 0
 		switch {
-		case e.Group != "" && e.Key != e.Group:
+		case e.Group != "" && !e.Head:
 			indent = 4
 		case e.Section != "":
 			indent = 2
 		}
-		newKey := i == 0 || e.Key != prev.Key || e.Group != prev.Group || e.Section != prev.Section
-		lines := slices.Clone(e.Lines)
-		if len(e.Cells) > 0 && len(lines) > 0 {
-			cells, last := e.Cells[:len(e.Cells)-1], e.Cells[len(e.Cells)-1]
-			w := widths[i]
-			var b strings.Builder
-			for j, c := range cells {
-				// A column empty in every row of its run takes no room.
-				if w[j] > 0 {
-					b.WriteString(pad(report.Copyable(c), w[j]) + "  ")
-				}
-			}
-			lines[0] = b.String() + report.Copyable(last)
+		newKey := newGroup || e.Key != prev.Key || e.Head != prev.Head
+		key := report.Copyable(e.Key)
+		if e.Head {
+			key = report.Copyable(e.Group)
 		}
-		for j, l := range lines {
-			if j > 0 || len(e.Cells) == 0 {
-				l = report.Copyable(l)
+		for j, l := range e.Lines {
+			line := laidLine{kind: lineEntry, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level,
+				mark: j == 0 && e.Level == remote.StatusWarning}
+			if j == 0 && newKey {
+				line.key, line.group = key, e.Head
 			}
-			key := ""
-			if j == 0 {
-				if newKey {
-					key = e.Key
+			if j == 0 && len(e.Cells) > 0 {
+				var b strings.Builder
+				for k, c := range e.Cells[:len(e.Cells)-1] {
+					// A column empty in every row of its run takes no room.
+					if w := widths[i][k]; w > 0 {
+						b.WriteString(pad(report.Copyable(c), w) + "  ")
+					}
 				}
+				line.value, line.last = b.String(), report.Copyable(e.Cells[len(e.Cells)-1])
 			}
-			out = append(out, laidLine{kind: lineEntry, section: e.Section, indent: indent, key: key, value: l, level: e.Level,
-				mark: j == 0 && e.Level == remote.StatusWarning, group: j == 0 && e.Group != "" && e.Key == e.Group && newKey})
+			out = append(out, line)
 		}
 		if !sharedLater(es, i) {
-			for _, r := range report.RemedyLines(e.Remedies) {
-				for _, l := range strings.Split(r, "\n") {
-					out = append(out, laidLine{kind: lineRemedy, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level})
-				}
+			for _, r := range report.RemedyRows(e.Remedies) {
+				out = append(out, laidLine{kind: lineRemedy, section: e.Section, indent: indent, value: report.Copyable(r.Text), hang: r.Hang, level: e.Level})
 			}
 		}
 		prev = e
@@ -224,23 +225,24 @@ func layOut(es []remote.StatusEntry) []laidLine {
 }
 
 // cellWidths are the widths of each entry's cells but its last, by its
-// index: the widest of its run, every row of cells in a section's
-// groups (so environments align across projects), else the entries in
-// a row under one key.
+// index, as they show: the widest of its run, every row of cells in a
+// section's groups (so environments align across projects), else the
+// rows under one key in a section, whatever lines without cells (a
+// warning) sit between them.
 func cellWidths(es []remote.StatusEntry) map[int][]int {
 	runs := map[string][]int{}
 	var order []string
 	run := ""
 	for i, e := range es {
+		if i == 0 || e.Key != es[i-1].Key || e.Section != es[i-1].Section || e.Group != es[i-1].Group {
+			run = fmt.Sprintf("run\x00%d", i)
+		}
 		if len(e.Cells) == 0 {
 			continue
 		}
-		id := "section\x00" + e.Section
-		if e.Group == "" {
-			if i == 0 || es[i-1].Key != e.Key || es[i-1].Section != e.Section || len(es[i-1].Cells) == 0 {
-				run = fmt.Sprintf("run\x00%d", i)
-			}
-			id = run
+		id := run
+		if e.Group != "" {
+			id = "section\x00" + e.Section
 		}
 		if runs[id] == nil {
 			order = append(order, id)
@@ -271,8 +273,9 @@ func cellWidths(es []remote.StatusEntry) map[int][]int {
 // its indent (a warning shows in a pipe and greps; a report with no
 // sections has no indent to hold it, and a key column widened for it
 // would move every line whenever a warning shows), a highlight's bold,
-// each command bold; in a section, prose past reportWidth wraps at a
-// word to its column (wrapAt).
+// each command bold; in a section, prose past the width wraps at a word
+// to its column (wrapAt), and a row of cells past it moves its last
+// cell whole to a line of its own at the column.
 func (t entryTable) print(es []remote.StatusEntry) {
 	for _, l := range layOut(es) {
 		col := t.cols[l.section]
@@ -284,6 +287,7 @@ func (t entryTable) print(es []remote.StatusEntry) {
 			paint = t.st.head
 		}
 		indent := strings.Repeat(" ", l.indent)
+		wrap := l.section != ""
 		switch l.kind {
 		case lineSection:
 			fmt.Fprintln(t.w)
@@ -295,13 +299,25 @@ func (t entryTable) print(es []remote.StatusEntry) {
 				indent = strings.Repeat(" ", l.indent-2) + "! "
 			}
 			key := pad(indent+l.key, col)
-			for k, part := range wrapAt(l.value, col, t.width, l.section != "") {
+			if l.group {
+				// The project's name in its color, its facts as any line's.
+				key = indent + t.st.name(l.key) + key[len(indent)+len(l.key):]
+			}
+			var parts []string
+			switch {
+			case l.last == "":
+				parts = wrapAt(l.value, col, t.width, 0, wrap)
+			case wrap && l.value != "" && col+utf8.RuneCountInString(l.value+l.last) > t.width:
+				parts = []string{l.value, l.last}
+			default:
+				parts = []string{l.value + l.last}
+			}
+			for k, part := range parts {
 				if k > 0 {
 					key = strings.Repeat(" ", col)
 				}
 				if l.group && k == 0 {
-					// The project's name in its color, its facts as any line's.
-					fmt.Fprintln(t.w, strings.TrimRight(indent+t.st.name(l.key)+strings.Repeat(" ", col-l.indent-utf8.RuneCountInString(l.key))+paint(part), " "))
+					fmt.Fprintln(t.w, strings.TrimRight(key+paint(part), " "))
 					continue
 				}
 				fmt.Fprintln(t.w, paint(strings.TrimRight(key+part, " ")))
@@ -313,11 +329,7 @@ func (t entryTable) print(es []remote.StatusEntry) {
 				fmt.Fprintln(t.w, strings.Repeat(" ", col)+lead+t.st.head(cmd))
 				continue
 			}
-			lead := len(l.value) - len(strings.TrimLeft(l.value, " 0123456789."))
-			for k, part := range wrapAt(l.value, col+lead, t.width, l.section != "") {
-				if k > 0 {
-					part = strings.Repeat(" ", lead) + part
-				}
+			for _, part := range wrapAt(l.value, col, t.width, l.hang, wrap) {
 				fmt.Fprintln(t.w, paint(strings.TrimRight(strings.Repeat(" ", col)+part, " ")))
 			}
 		}
@@ -326,16 +338,20 @@ func (t entryTable) print(es []remote.StatusEntry) {
 
 // wrapAt is line cut at words into parts that fit width from column col
 // on when wrap, whole otherwise, when it fits or too little room is left
-// to wrap into (under 40 columns): a word longer than the room stays
-// whole.
-func wrapAt(line string, col, width int, wrap bool) []string {
-	room := width - col
-	if !wrap || room < 40 || utf8.RuneCountInString(line) <= room {
+// to wrap into (under 40 columns): the first part keeps the line's
+// leading spaces, the others start at hang or at them, whichever is
+// further; a word longer than the room stays whole.
+func wrapAt(line string, col, width, hang int, wrap bool) []string {
+	body := strings.TrimLeft(line, " ")
+	lead := len(line) - len(body)
+	hang = max(hang, lead)
+	room := width - col - hang
+	if !wrap || room < 40 || col+utf8.RuneCountInString(line) <= width {
 		return []string{line}
 	}
 	var parts []string
 	cur := ""
-	for _, w := range strings.Split(line, " ") {
+	for _, w := range strings.Split(body, " ") {
 		switch {
 		case cur == "":
 			cur = w
@@ -346,7 +362,15 @@ func wrapAt(line string, col, width int, wrap bool) []string {
 			cur = w
 		}
 	}
-	return append(parts, cur)
+	parts = append(parts, cur)
+	for i := range parts {
+		n := hang
+		if i == 0 {
+			n = lead
+		}
+		parts[i] = strings.Repeat(" ", n) + parts[i]
+	}
+	return parts
 }
 
 // sharedLater says whether an entry after es[i], under the same key in

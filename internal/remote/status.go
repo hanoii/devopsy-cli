@@ -53,12 +53,15 @@ const StatusNoContainer = "none"
 // at a level (StatusInfo, StatusHighlight, StatusWarning), with the
 // ways to act on it. Section and Group place it in a report laid out in
 // parts (--server-info's server, projects, leftovers; a project in
-// projects), empty in a flat one; Cells are its first line's cells, a
-// row aligned with the others of its run, Lines[0] holding them joined.
+// projects), empty in a flat one; Head marks a line of its group's
+// heading, shown under the group's name; Cells are its first line's
+// cells, a row aligned with the others of its run, Lines[0] holding them
+// joined.
 type StatusEntry struct {
 	Level    string          `json:"level"`
 	Section  string          `json:"section,omitempty"`
 	Group    string          `json:"group,omitempty"`
+	Head     bool            `json:"head,omitempty"`
 	Key      string          `json:"key"`
 	Lines    []string        `json:"lines"`
 	Cells    []string        `json:"cells,omitempty"`

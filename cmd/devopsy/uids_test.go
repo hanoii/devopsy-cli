@@ -245,6 +245,21 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 			t.Errorf("%s said %v, want %v", owner, said[owner], want)
 		}
 	}
+	// A claims directory that does not read is said as such, with nothing in it to remove.
+	unread := remote.ServerInfo{Version: "0.53.0", Root: root, UIDsDir: info.UIDsDir, UIDs: []remote.UIDClaim{{Name: info.UIDsDir, Bad: "permission denied"}}}
+	_, ws := serverInfoSays(unread, "", "", "0.53.0", time.Now())
+	n := 0
+	for _, w := range ws {
+		if strings.Contains(w.msg, "uid claims") || strings.Contains(w.msg, "no claim") {
+			n++
+			if w.msg != "the uid claims could not be read: permission denied" || len(w.fixes) != 0 {
+				t.Errorf("the claims unread: %+v", w)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("the claims unread, said %d times: %+v", n, ws)
+	}
 	// With the environments not all read, an environment's claim is taken for live: blog's
 	// directory may be the one that failed.
 	info.EnvironmentsUnread = "open " + filepath.Join(root, "blog") + ": permission denied"

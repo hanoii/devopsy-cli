@@ -1522,14 +1522,47 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	groups, top := projectEntries(info, host, now)
 	leftGroups, leftovers := leftEntries(info, host, ref)
 	if len(top) == 0 && len(groups) == 0 && len(leftGroups) == 0 {
-		top = append(top, remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Key: "none", Lines: []string{""}})
+		top = append(top, remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Lines: []string{"none"}})
 	}
 	es = append(es, top...)
-	for _, p := range slices.Sorted(maps.Keys(mergeKeys(groups, leftGroups))) {
-		es = append(es, groups[p]...)
-		es = append(es, leftGroups[p]...)
+	for _, p := range slices.SortedFunc(maps.Keys(mergeKeys(groups, leftGroups)), byName) {
+		es = append(es, projectRows(append(groups[p], leftGroups[p]...))...)
 	}
 	return append(es, leftovers...)
+}
+
+// byName orders names ignoring case, as a listing of projects and
+// environments reads.
+func byName(a, b string) int {
+	return cmp.Or(cmp.Compare(strings.ToLower(a), strings.ToLower(b)), cmp.Compare(a, b))
+}
+
+// projectRows are a project's entries in the order it shows them: its
+// heading's first, then each row by its key's name, what is left of a
+// gone environment among the live ones, each row's entries (its warning,
+// what is left beside it) kept together and in their order.
+func projectRows(es []remote.StatusEntry) []remote.StatusEntry {
+	var head []remote.StatusEntry
+	var rows [][]remote.StatusEntry
+	for _, e := range es {
+		switch {
+		case e.Head:
+			head = append(head, e)
+		case len(rows) > 0 && rows[len(rows)-1][0].Key == e.Key:
+			rows[len(rows)-1] = append(rows[len(rows)-1], e)
+		default:
+			if i := slices.IndexFunc(rows, func(r []remote.StatusEntry) bool { return r[0].Key == e.Key }); i >= 0 {
+				rows[i] = append(rows[i], e)
+				continue
+			}
+			rows = append(rows, []remote.StatusEntry{e})
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b []remote.StatusEntry) int { return byName(a[0].Key, b[0].Key) })
+	for _, r := range rows {
+		head = append(head, r...)
+	}
+	return head
 }
 
 // serverKeys are the server section's keys in their order: the
@@ -1632,13 +1665,17 @@ func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups 
 	// environment is gone in its project, one that does not read the section's.
 	envUID := map[string]remote.UIDClaim{}
 	projectUIDs := map[string][]string{}
-	var stale []remote.StatusEntry
 	staleProject := map[string][]remote.StatusEntry{}
 	for _, c := range info.UIDs {
 		rm := func(kind func(string, ...string) report.Remedy) report.Remedy {
-			return kind("remove it by hand, as the deploy user, once nothing of it is left on the server:", "rm "+remote.QuoteWord(filepath.Join(info.UIDsDir, c.Name)))
+			return kind("remove it by hand, as the deploy user, once nothing of it is left on the server:", "rm "+remote.QuoteWord(claimPath(info.UIDsDir, c)))
 		}
-		if c.Bad != "" {
+		switch {
+		case c.Bad != "" && c.Name == info.UIDsDir:
+			// The directory itself: nothing in it to remove.
+			topAdd(remote.StatusWarning, "uids", "the uid claims could not be read: "+oneLine(c.Bad))
+			continue
+		case c.Bad != "":
 			topAdd(remote.StatusWarning, "uids", c.Name+" in "+info.UIDsDir+" is no claim: "+c.Bad, rm(report.Fix))
 			continue
 		}
@@ -1658,13 +1695,12 @@ func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups 
 			projectUIDs[o.Project] = append(projectUIDs[o.Project], words)
 		}
 		// A claim left harms nothing: its uid stays reserved, and only freeing it could hand
-		// its files to another environment.
-		switch why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); {
-		case why == "":
-		case o.Env != "":
-			stale = append(stale, entry(remote.StatusInfo, o.Project, filepath.ToSlash(filepath.Join(o.Instance, o.Env)), []string{"gone, only its uid claim " + uid + " is left"}, rm(report.Hint)))
-		default:
-			staleProject[o.Project] = append(staleProject[o.Project], entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint)))
+		// its files to another environment. An environment's is what is left of it
+		// (leftEntries); a project's is said under its heading.
+		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" {
+			e := entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint))
+			e.Head = true
+			staleProject[o.Project] = append(staleProject[o.Project], e)
 		}
 	}
 
@@ -1674,9 +1710,7 @@ func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups 
 	if info.EnvironmentsUnread != "" {
 		topAdd(remote.StatusWarning, "environments", "not every environment could be read: "+oneLine(info.EnvironmentsUnread))
 	}
-	for _, env := range slices.SortedFunc(slices.Values(info.Environments), func(a, b remote.Environment) int {
-		return cmp.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
-	}) {
+	for _, env := range info.Environments {
 		project, rest, _ := strings.Cut(env.Path, "/")
 		h := parseStatus(env.Status)
 		h.busy = h.busy && !noFlock
@@ -1754,13 +1788,11 @@ func projectEntries(info remote.ServerInfo, host string, now time.Time) (groups 
 			groups[project] = append(groups[project], entry(remote.StatusWarning, project, rest, problems, statusHint(host, info.Root, env)))
 		}
 	}
-	for _, e := range stale {
-		groups[e.Group] = append(groups[e.Group], e)
-	}
 	// Each project's heading first, its project uid claims, and under it those left.
 	for p, words := range projectUIDs {
-		head := append([]remote.StatusEntry{entry(remote.StatusInfo, p, p, []string{strings.Join(words, ", ")})}, staleProject[p]...)
-		groups[p] = append(head, groups[p]...)
+		head := entry(remote.StatusInfo, p, p, []string{strings.Join(words, ", ")})
+		head.Head = true
+		groups[p] = append(append([]remote.StatusEntry{head}, staleProject[p]...), groups[p]...)
 	}
 	return groups, top
 }
@@ -1837,24 +1869,38 @@ const diskWarnEnv = "DEVOPSY_INTERNAL_DISK_WARN"
 // this machine.
 func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
 	var u diskUse
-	mount := disk.Mount
+	mount, root := disk.Mount, false
+	var named []string
 	for _, p := range disk.Paths {
 		what, path, _ := strings.Cut(p, "=")
+		named = append(named, path)
 		if what == "/" {
 			// / is named for the disk it is on: its mount says it.
-			mount = cmp.Or(mount, "/")
+			root = true
 			continue
 		}
 		u.names = append(u.names, what)
 		u.paths = append(u.paths, what+" "+path)
 	}
-	// Facts with no mount (an older server's): / when it is there, else what lives there first.
-	if mount == "" && len(u.paths) > 0 {
-		_, mount, _ = strings.Cut(disk.Paths[0], "=")
-	}
 	if disk.Error != "" {
-		u.line = strings.Join(append(u.paths, mount), ", ") + ": " + disk.Error
+		// What it is by its paths, its mount only when it is one they do not name.
+		where := u.paths
+		if root {
+			where = append(where, "/")
+		}
+		if mount != "" && !slices.Contains(named, mount) {
+			where = append(where, mount)
+		}
+		u.line = strings.Join(where, ", ") + ": " + disk.Error
 		return u
+	}
+	// Facts with no mount (an older server's): / when it is there, else what lives there first.
+	switch {
+	case mount != "":
+	case root:
+		mount = "/"
+	case len(named) > 0:
+		mount = named[0]
 	}
 	// As df counts it: of what the deploy user could use, rounded up.
 	pct := int64(0)

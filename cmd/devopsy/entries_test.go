@@ -38,6 +38,11 @@ func TestEntryTableSections(t *testing.T) {
 	info := func(section, group, key string, lines ...string) remote.StatusEntry {
 		return remote.StatusEntry{Level: remote.StatusInfo, Section: section, Group: group, Key: key, Lines: lines}
 	}
+	head := func(group string, lines ...string) remote.StatusEntry {
+		e := info("projects", group, group, lines...)
+		e.Head = true
+		return e
+	}
 	row := func(section, group, key string, cells ...string) remote.StatusEntry {
 		e := info(section, group, key, remote.CellsJoined(cells...))
 		e.Cells = cells
@@ -56,9 +61,9 @@ func TestEntryTableSections(t *testing.T) {
 		info("server", "", "disks", "/  xfs"),
 		warn,
 		info("server", "", "setup", long),
-		info("projects", "app", "app", "project uid 1"),
+		head("app", "project uid 1"),
 		row("projects", "app", "prod", "released just now by ci", "1 of 1 running", "uid 2"),
-		info("projects", "shop", "shop", "project uid 3"),
+		head("shop", "project uid 3"),
 		row("projects", "shop", "staging", "released 2 days ago by somebody", "1 of 2 running", "uid 4"),
 		envWarn,
 		row("projects", "web", "dev", "gone", "x"),

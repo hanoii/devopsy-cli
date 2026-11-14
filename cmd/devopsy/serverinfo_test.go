@@ -179,6 +179,12 @@ func TestServerInfoReport(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("healthy: warnings %+v", warnings)
 	}
+	// No project on the server: the section says none as its value.
+	empty := healthy()
+	empty.Environments, empty.Containers = nil, nil
+	if out, _ := serverInfoSays(empty, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "\nprojects\n             none\n") {
+		t.Errorf("no project:\n%s", out)
+	}
 	// A count says one in the singular.
 	one := healthy()
 	one.Door = &remote.DoorFacts{Space: "/space", Users: 1}
