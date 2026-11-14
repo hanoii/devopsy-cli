@@ -1059,9 +1059,12 @@ Docker (image store, security options, logs), its setup as
 release root, Docker's and containerd's data, the snapshot root and /
 (free space, reflinks on the release root), the roles projects hold and
 what they export, and every environment under the release root with its
-current release, its containers and its state.
+current release, its containers and its state. It is laid out in three
+parts: server, projects (each environment with its uid and the role it
+holds) and leftovers, what may be dead or gone.
 
-What needs attention is a warning under what it is about, with its fix:
+What needs attention is a warning under what it is about, marked !, with
+its fix:
 an older devopsy, a reboot the system asks for, memory Kexec HandOver
 keeps as CMA (the kernel's own allocations can run out with memory
 free), a clock out of sync, a kernel with AppArmor and no

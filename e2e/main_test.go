@@ -637,6 +637,12 @@ func background(t *testing.T, dir, command, log string) {
 	}
 }
 
+// saysWords says whether out, --server-info's report, whose sections wrap their prose, holds
+// want's words in a row, whatever the spaces and line breaks between them.
+func saysWords(out, want string) bool {
+	return strings.Contains(strings.Join(strings.Fields(out), " "), strings.Join(strings.Fields(want), " "))
+}
+
 // eventually waits until cond holds, failing after within.
 func eventually(t *testing.T, within time.Duration, what string, cond func() bool) time.Duration {
 	t.Helper()

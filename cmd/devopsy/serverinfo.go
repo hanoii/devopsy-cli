@@ -683,7 +683,7 @@ func diskFacts(root, docker, containerd, snapshots string, reflink bool) []remot
 			disks[i].Paths = append(disks[i].Paths, label)
 			return
 		}
-		d := remote.Disk{Paths: []string{label}}
+		d := remote.Disk{Paths: []string{label}, Mount: mountPoint(at, dev)}
 		if d.Type, d.Size, d.Free, d.Used, err = statDisk(at); err != nil {
 			d.Error = err.Error()
 		}
@@ -699,6 +699,31 @@ func diskFacts(root, docker, containerd, snapshots string, reflink bool) []remot
 	add("snapshots", snapshots)
 	add("/", "/")
 	return disks
+}
+
+// mountPoint is where the filesystem of dev, which path is on, is
+// mounted: the highest directory above path, its links resolved, still
+// on dev, "" when one on the way does not read.
+func mountPoint(path string, dev uint64) string {
+	at, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		at, err = filepath.Abs(at)
+	}
+	if err != nil {
+		return ""
+	}
+	for at != "/" {
+		up := filepath.Dir(at)
+		fi, err := os.Stat(up)
+		if err != nil {
+			return ""
+		}
+		if uint64(fi.Sys().(*syscall.Stat_t).Dev) != dev {
+			return at
+		}
+		at = up
+	}
+	return at
 }
 
 // tryReflink tries a clone in dir: yes, no, or empty when it could not
@@ -1171,7 +1196,10 @@ func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool)
 // host (as an address's server part) and ref (as typed, for fixes:
 // remote.ServerRef), both empty for this machine's; local is this
 // devopsy's version, now when the facts came: what ages count from and
-// the server's clock (info.Time) is compared with.
+// the server's clock (info.Time) is compared with. Its entries are in
+// three sections: the server's own (serverKeys' order), its projects
+// (projectEntries, with what leftEntries finds of each), and the
+// leftovers that are the server's.
 func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) []remote.StatusEntry {
 	var es []remote.StatusEntry
 	key := ""
@@ -1316,23 +1344,6 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		forAdmin(report.ClockUnsynced, []string{why}, fixes...)
 	}
 
-	// A warning only where a project user is there to read them: without one every login is
-	// the deploy user's or an admin's, and it is a line to know before adding one.
-	users := info.Door != nil && info.Door.Users > 0
-	switch r := info.ProcRefused; {
-	case processesShown(info.HidePID) && users:
-		msg, detail, fixes := processesShownWarning(ref)
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: fixes})
-	case processesShown(info.HidePID):
-		msg, hints := processesShownNote(ref)
-		note(msg, hints...)
-	// /proc hidden another way, judged as --project-users setup judges it, in its words.
-	case r != nil && users:
-		warn(r.Message, fixWords(*r)...)
-	case r != nil:
-		note(r.Message, report.Hint(r.Fix))
-	}
-
 	if dr := info.Door; dr != nil {
 		row("door", dr.Space+", "+plural(dr.Users, "project user"))
 		if dr.Unguarded != "" {
@@ -1411,12 +1422,47 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if d.Proxy != "" {
 			more("proxy " + d.Proxy)
 		}
+		// Where Docker keeps its data, which disks then names alone.
+		var data []string
+		for _, disk := range info.Disks {
+			for _, p := range disk.Paths {
+				switch what, path, _ := strings.Cut(p, "="); what {
+				case "docker":
+					data = append(data, "data "+path)
+				case "containerd":
+					data = append(data, what+" "+path)
+				}
+			}
+		}
+		if len(data) > 0 {
+			more(strings.Join(data, ", "))
+		}
 	}
 
 	// The server's setup, as --server-setup judges it.
 	if info.Setup != nil {
 		es = append(es, setupInfoEntries(*info.Setup, d, ref)...)
 	}
+
+	// /proc's processes, under setup: --project-users setup sets them. A warning only where a
+	// project user is there to read them: without one every login is the deploy user's or an
+	// admin's, and it is a line to know before adding one.
+	key = "setup"
+	users := info.Door != nil && info.Door.Users > 0
+	switch r := info.ProcRefused; {
+	case processesShown(info.HidePID) && users:
+		msg, detail, fixes := processesShownWarning(ref)
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: []string{msg, detail}, Remedies: fixes})
+	case processesShown(info.HidePID):
+		msg, hints := processesShownNote(ref)
+		note(msg, hints...)
+	// /proc hidden another way, judged as --project-users setup judges it, in its words.
+	case r != nil && users:
+		warn(r.Message, fixWords(*r)...)
+	case r != nil:
+		note(r.Message, report.Hint(r.Fix))
+	}
+
 	// What a project user can only pass on: by its code, no remedy it could take.
 	for _, id := range info.ForAdmin {
 		if c, ok := report.CodeOf(id); ok {
@@ -1437,15 +1483,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				snapshotDisk = i
 			}
 		}
-		reflinks := ""
-		switch disk.Reflinks {
-		case "yes":
-			reflinks = ", reflinks"
-		case "no":
-			reflinks = ", no reflinks"
-		}
+		reflinks := map[string]string{"yes": "reflinks", "no": "no reflinks"}[disk.Reflinks]
 		key = "disks"
-		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries(reflinks)...)
+		es = append(es, judgeDisk(disk, info.SnapshotRoot, ref).entries("", reflinks, false)...)
 		if disk.Reflinks == "no" {
 			// The mirror is the project's to take, data on XFS the admin's.
 			fixes := []report.Remedy{reflinkFix(info.MirrorsOff)}
@@ -1474,6 +1514,123 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 
+	// The server's own, in its sections' order, each key's entries kept in theirs.
+	for i := range es {
+		es[i].Section = "server"
+	}
+	slices.SortStableFunc(es, func(a, b remote.StatusEntry) int { return cmp.Compare(serverKeyRank(a.Key), serverKeyRank(b.Key)) })
+	groups, top := projectEntries(info, host, ref, now)
+	leftGroups, leftovers := leftEntries(info, host, ref)
+	if len(top) == 0 && len(groups) == 0 && len(leftGroups) == 0 {
+		top = append(top, remote.StatusEntry{Level: remote.StatusInfo, Section: "projects", Lines: []string{"none"}})
+	}
+	es = append(es, top...)
+	for _, p := range slices.SortedFunc(maps.Keys(mergeKeys(groups, leftGroups)), byName) {
+		es = append(es, projectRows(append(groups[p], leftGroups[p]...))...)
+	}
+	return append(es, leftovers...)
+}
+
+// byName orders names as people count them, projects' and environments'
+// alike: ignoring case, a run of digits by its number (pr-7 before
+// pr-24), then as they are written.
+func byName(a, b string) int {
+	x, y := strings.ToLower(a), strings.ToLower(b)
+	for x != "" && y != "" {
+		cx, restX := nameChunk(x)
+		cy, restY := nameChunk(y)
+		digits := cx[0] >= '0' && cx[0] <= '9' && cy[0] >= '0' && cy[0] <= '9'
+		if digits {
+			nx, ny := strings.TrimLeft(cx, "0"), strings.TrimLeft(cy, "0")
+			if c := cmp.Or(cmp.Compare(len(nx), len(ny)), cmp.Compare(nx, ny)); c != 0 {
+				return c
+			}
+		} else if c := cmp.Compare(cx, cy); c != 0 {
+			return c
+		}
+		x, y = restX, restY
+	}
+	return cmp.Or(cmp.Compare(len(x), len(y)), cmp.Compare(a, b))
+}
+
+// nameChunk is s's first run of digits, or of anything else, and the rest.
+func nameChunk(s string) (chunk, rest string) {
+	digit := func(r byte) bool { return r >= '0' && r <= '9' }
+	i := 1
+	for i < len(s) && digit(s[i]) == digit(s[0]) {
+		i++
+	}
+	return s[:i], s[i:]
+}
+
+// projectRows are a project's entries in the order it shows them: its
+// heading's first, then each row by its key's name, what is left of a
+// gone environment among the live ones, each row's entries (its warning,
+// what is left beside it) kept together and in their order.
+func projectRows(es []remote.StatusEntry) []remote.StatusEntry {
+	// A row is its name's, else its key's.
+	rowOf := func(e remote.StatusEntry) string { return cmp.Or(e.Name, e.Key) }
+	var head []remote.StatusEntry
+	var rows [][]remote.StatusEntry
+	for _, e := range es {
+		if e.Head {
+			head = append(head, e)
+			continue
+		}
+		if i := slices.IndexFunc(rows, func(r []remote.StatusEntry) bool { return rowOf(r[0]) == rowOf(e) }); i >= 0 {
+			rows[i] = append(rows[i], e)
+			continue
+		}
+		rows = append(rows, []remote.StatusEntry{e})
+	}
+	slices.SortStableFunc(rows, func(a, b []remote.StatusEntry) int { return byName(rowOf(a[0]), rowOf(b[0])) })
+	for _, r := range rows {
+		head = append(head, r...)
+	}
+	return head
+}
+
+// serverKeys are the server section's keys in their order: the
+// machine, Docker, the disks and the tools, then devopsy's own install.
+var serverKeys = strings.Fields("system docker disks tools devopsy releases snapshots setup door admin")
+
+// serverKeyRank is key's place in serverKeys, any other's after them.
+func serverKeyRank(key string) int {
+	if i := slices.Index(serverKeys, key); i >= 0 {
+		return i
+	}
+	return len(serverKeys)
+}
+
+// mergeKeys is a set of the keys of maps.
+func mergeKeys[V any](ms ...map[string]V) map[string]bool {
+	keys := map[string]bool{}
+	for _, m := range ms {
+		for k := range m {
+			keys[k] = true
+		}
+	}
+	return keys
+}
+
+// projectEntries are --server-info's projects, by project: its heading
+// (its project uid claims), then each environment's row (its release,
+// its containers, its uid claim, what runs there) with the role it
+// holds and its one warning under it, then the environments only a
+// claim is left of; top the section's own (the roles no environment
+// holds, what did not read), for the server host (an address's server
+// part, empty for this machine's) and ref (as typed), now when the
+// facts came.
+func projectEntries(info remote.ServerInfo, host, ref string, now time.Time) (groups map[string][]remote.StatusEntry, top []remote.StatusEntry) {
+	const section = "projects"
+	groups = map[string][]remote.StatusEntry{}
+	entry := func(level, group, key string, lines []string, rs ...report.Remedy) remote.StatusEntry {
+		return remote.StatusEntry{Level: level, Section: section, Group: group, Key: key, Lines: lines, Remedies: rs}
+	}
+	topAdd := func(level, key, line string, rs ...report.Remedy) {
+		top = append(top, entry(level, "", key, []string{line}, rs...))
+	}
+
 	// Roles: who holds each, what they export, from the containers docker
 	// ps lists, as a release's check and imports see them (cli.Running,
 	// RoleHoldersScript): a restarting one holds its role too.
@@ -1495,54 +1652,108 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			}
 		}
 	}
-	switch {
-	case info.ContainersUnread != "":
-		row("roles", "unknown")
-		warn("the containers could not be listed: " + oneLine(info.ContainersUnread))
-	case len(holders) == 0:
-		row("roles", "none")
+	envNames := map[string]bool{}
+	for _, env := range info.Environments {
+		envNames[composeNameOf(env.Path)] = true
+	}
+	// roleLine is what compose name holds: its roles and what it exports.
+	roleLine := func(name string, roles []string) string {
+		line := "role " + strings.Join(roles, ", ")
+		var ex []string
+		for _, k := range sortedKeysOf(exports[name]) {
+			ex = append(ex, k+"="+exports[name][k])
+		}
+		if len(ex) > 0 {
+			line += ", exports " + strings.Join(ex, ", ")
+		}
+		return line
+	}
+	held := map[string][]string{}
+	if info.ContainersUnread != "" {
+		topAdd(remote.StatusWarning, "roles", "the roles are unknown: the containers could not be listed: "+oneLine(info.ContainersUnread))
 	}
 	for _, role := range sortedKeysOf(holders) {
 		for _, p := range holders[role] {
-			value := role + ": " + p
-			for _, k := range sortedKeysOf(exports[p]) {
-				value += " " + k + "=" + exports[p][k]
-			}
-			row("roles", value)
+			held[p] = append(held[p], role)
 		}
 		if len(holders[role]) > 1 {
-			warn("role " + role + " is held by " + strings.Join(holders[role], " and ") + ": a role is one compose project's on a host, and imports read either")
+			topAdd(remote.StatusWarning, "roles", "role "+role+" is held by "+strings.Join(holders[role], " and ")+": a role is one compose project's on a host, and imports read either")
+		}
+	}
+	// A role held by no environment (the admin's own compose project) is the section's.
+	for _, p := range sortedKeysOf(held) {
+		if !envNames[p] {
+			topAdd(remote.StatusInfo, "roles", p+": "+roleLine(p, held[p]))
+		}
+	}
+
+	// The uid claims: a project's on its heading, an environment's on its row, one whose
+	// environment is gone in its project, one that does not read the section's.
+	envUID := map[string]remote.UIDClaim{}
+	projectUIDs := map[string][]string{}
+	staleProject := map[string][]remote.StatusEntry{}
+	for _, c := range info.UIDs {
+		rm := func(kind func(string, ...string) report.Remedy) report.Remedy {
+			return claimRemoval(kind, ref, info.UIDsDir, c)
+		}
+		switch {
+		case c.Bad != "" && c.Name == info.UIDsDir:
+			// The directory itself: nothing in it to remove.
+			topAdd(remote.StatusWarning, "uids", "the uid claims could not be read: "+oneLine(c.Bad))
+			continue
+		case c.Bad != "":
+			topAdd(remote.StatusWarning, "uids", c.Name+" in "+info.UIDsDir+" is no claim: "+c.Bad, rm(report.Fix))
+			continue
+		}
+		o, err := uids.ParseOwner(c.Owner)
+		if err != nil {
+			topAdd(remote.StatusWarning, "uids", c.Owner+"'s uid claim is left: "+err.Error(), rm(report.Fix))
+			continue
+		}
+		uid := strconv.FormatUint(uint64(c.UID), 10)
+		if o.Env != "" {
+			envUID[o.ComposeName()] = c
+		} else {
+			words := "project uid " + uid
+			if o.Instance != "" {
+				words += " for " + o.Instance
+			}
+			projectUIDs[o.Project] = append(projectUIDs[o.Project], words)
+		}
+		// A claim left harms nothing: its uid stays reserved, and only freeing it could hand
+		// its files to another environment. An environment's is what is left of it
+		// (leftEntries); a project's is said under its heading.
+		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" && o.Env == "" {
+			e := entry(remote.StatusInfo, o.Project, o.Project, []string{c.Owner + "'s uid claim " + uid + " is left: " + why}, rm(report.Hint))
+			e.Head = true
+			staleProject[o.Project] = append(staleProject[o.Project], e)
 		}
 	}
 
 	// Environments. Without flock every lock reads held: no environment
 	// is busy then, nothing can run there (warned above).
 	noFlock := slices.Contains(info.Missing, "flock")
-	if len(info.Environments) == 0 {
-		row("environments", "none")
-	}
 	if info.EnvironmentsUnread != "" {
-		key = "environments"
-		warn("not every environment could be read: " + oneLine(info.EnvironmentsUnread))
+		topAdd(remote.StatusWarning, "environments", "not every environment could be read: "+oneLine(info.EnvironmentsUnread))
 	}
 	for _, env := range info.Environments {
+		project, rest, _ := strings.Cut(env.Path, "/")
 		h := parseStatus(env.Status)
 		h.busy = h.busy && !noFlock
-		value := env.Path + "  "
+		// A first release that failed is its warning's to say.
+		release := ""
 		switch {
-		case h.none && h.failed != "":
-			value += "none: " + h.failed + " failed"
 		case h.none:
-			value += "none: not released yet"
+			release = "not released yet"
+		case h.record == nil:
+			release = "release " + h.id
 		default:
-			value += h.id
-			if h.record != nil {
-				if when, err := time.Parse(time.RFC3339, h.record.Time); err == nil {
-					value += "  " + agoAt(when, now)
-				}
-				if h.record.By != "" {
-					value += "  by " + h.record.By
-				}
+			release = "released"
+			if when, err := time.Parse(time.RFC3339, h.record.Time); err == nil {
+				release += " " + agoAt(when, now)
+			}
+			if h.record.By != "" {
+				release += " by " + h.record.By
 			}
 		}
 		compose := composeNameOf(env.Path)
@@ -1562,28 +1773,37 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				bad = append(bad, c.Service+" "+trouble)
 			}
 		}
+		cells := []string{release, "", "", ""}
 		if all > 0 {
-			value += fmt.Sprintf("  %d of %d running", running, all)
+			cells[1] = fmt.Sprintf("%d of %d running", running, all)
+		}
+		if c, ok := envUID[compose]; ok {
+			cells[2] = "uid " + strconv.FormatUint(uint64(c.UID), 10)
 		}
 		switch {
 		case h.syncing:
-			value += "  syncing"
+			cells[3] = "syncing"
 		case h.importing:
-			value += "  importing"
+			cells[3] = "importing"
 		case h.snapshotting:
-			value += "  taking a snapshot"
+			cells[3] = "taking a snapshot"
 		case h.source:
-			value += "  a sync or an export from it"
+			cells[3] = "a sync or an export from it"
 		case h.busy:
-			value += "  an operation running"
+			cells[3] = "an operation running"
 		}
-		row("environments", value)
+		e := entry(remote.StatusInfo, project, rest, []string{remote.CellsJoined(cells...)})
+		e.Cells = cells
+		if roles := held[compose]; len(roles) > 0 {
+			e.Lines = append(e.Lines, roleLine(compose, roles))
+		}
+		groups[project] = append(groups[project], e)
 		// --status's warnings (envState.entries), whose fixes --status
-		// gives: this names the environment only by its path.
+		// gives: this names the environment by its row.
 		var problems []string
-		for _, e := range h.entries(envAt{}) {
-			if e.Level == remote.StatusWarning {
-				problems = append(problems, e.Lines...)
+		for _, w := range h.entries(envAt{}) {
+			if w.Level == remote.StatusWarning {
+				problems = append(problems, w.Lines...)
 			}
 		}
 		if len(bad) > 0 {
@@ -1591,33 +1811,34 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		// One warning of every problem, with the --status that shows them.
 		if len(problems) > 0 {
-			var lines []string
-			for _, p := range problems {
-				lines = append(lines, env.Path+": "+p)
-			}
-			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: lines, Remedies: []report.Remedy{statusHint(host, info.Root, env)}})
+			groups[project] = append(groups[project], entry(remote.StatusWarning, project, rest, problems, statusHint(host, info.Root, env)))
 		}
 	}
-
-	// The uids containers run as: each claim, and those whose environment is gone.
-	if len(info.UIDs) == 0 {
-		row("uids", "none")
+	// An environment claim with no row of its own and none of what is left (a project user's
+	// tree that answered nothing, an environment that did not read): said under its project,
+	// every claim somewhere.
+	rows := map[string]bool{}
+	for _, env := range info.Environments {
+		rows[composeNameOf(env.Path)] = true
 	}
+	left := staleClaims(info)
 	for _, c := range info.UIDs {
-		rm := func() report.Remedy {
-			return report.Fix("remove it by hand, as the deploy user, once nothing of it is left on the server:", "rm "+remote.QuoteWord(filepath.Join(info.UIDsDir, c.Name)))
-		}
-		if c.Bad != "" {
-			row("uids", c.Name+"  no claim")
-			warn(c.Name+" in "+info.UIDsDir+" is no claim: "+c.Bad, rm())
+		o, err := uids.ParseOwner(c.Owner)
+		if _, stale := left[o.ComposeName()]; err != nil || o.Env == "" || rows[o.ComposeName()] || stale {
 			continue
 		}
-		row("uids", strconv.FormatUint(uint64(c.UID), 10)+"  "+c.Owner)
-		if why := staleUID(c, info.UIDs, info.Environments, info.EnvironmentsUnread != "", info.DoorProjects); why != "" {
-			warn(c.Owner+"'s uid claim is left: "+why, rm())
-		}
+		project, key := claimKey(c)
+		e := placed(project, key, []string{"uid " + strconv.FormatUint(uint64(c.UID), 10) + ", its environment not read"}, report.Remedy{})
+		e.Remedies = nil
+		groups[project] = append(groups[project], e)
 	}
-	return append(es, leftEntries(info, host, ref)...)
+	// Each project's heading first, its project uid claims, and under it those left.
+	for p, words := range projectUIDs {
+		head := entry(remote.StatusInfo, p, p, []string{strings.Join(words, ", ")})
+		head.Head = true
+		groups[p] = append(append([]remote.StatusEntry{head}, staleProject[p]...), groups[p]...)
+	}
+	return groups, top
 }
 
 // oneLine is text, an error's lines joined (errors.Join), on one line.
@@ -1652,20 +1873,34 @@ func reflinkFix(mirrorsOff bool) report.Remedy {
 	return report.Fix(mirror + ", or data on XFS")
 }
 
-// diskUse is a disk as --server-info and --status say it: value its
-// line (what lives there, its filesystem, what is free), and past the
-// thresholds warn and the ways to free it.
+// diskUse is a disk as --server-info and --status say it: its row's
+// cells (where it is mounted, its filesystem, what is free, how full it
+// is), what lives there by name and with its path, a line instead when
+// it did not read, and past the thresholds warn and the ways to free it.
 type diskUse struct {
-	value, warn string
-	fixes       []report.Remedy
+	cells, names, paths []string
+	line, warn          string
+	fixes               []report.Remedy
 }
 
-// entries are the disk's line under disks, more after its value, then
-// its warning, an entry of its own with its fixes.
-func (u diskUse) entries(more string) []remote.StatusEntry {
-	es := []remote.StatusEntry{{Level: remote.StatusInfo, Key: "disks", Lines: []string{u.value + more}}}
+// entries are the disk's row under disks in section, reflinks its cell
+// after its use (empty when not tried, kept for the next cells to
+// align), what lives there last, with its paths when withPaths (a
+// report with no other line naming them), then its warning, an entry
+// of its own with its fixes.
+func (u diskUse) entries(section, reflinks string, withPaths bool) []remote.StatusEntry {
+	e := remote.StatusEntry{Level: remote.StatusInfo, Section: section, Key: "disks", Lines: []string{u.line}}
+	if u.line == "" {
+		holds := u.names
+		if withPaths {
+			holds = u.paths
+		}
+		e.Cells = append(slices.Clone(u.cells), reflinks, strings.Join(holds, ", "))
+		e.Lines = []string{remote.CellsJoined(e.Cells...)}
+	}
+	es := []remote.StatusEntry{e}
 	if u.warn != "" {
-		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: "disks", Lines: []string{u.warn}, Remedies: u.fixes})
+		es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Section: section, Key: "disks", Lines: []string{u.warn}, Remedies: u.fixes})
 	}
 	return es
 }
@@ -1673,33 +1908,54 @@ func (u diskUse) entries(more string) []remote.StatusEntry {
 // diskWarnEnv off judges no disk full, for tests whose disk may be.
 const diskWarnEnv = "DEVOPSY_INTERNAL_DISK_WARN"
 
-// judgeDisk is disk's line and warning, for a server with snapshotRoot,
+// judgeDisk is disk's row and warning, for a server with snapshotRoot,
 // ref the server as typed for its fixes (remote.ServerRef), empty for
 // this machine.
 func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
-	var paths []string
+	var u diskUse
+	mount, root := disk.Mount, false
+	var named []string
 	for _, p := range disk.Paths {
 		what, path, _ := strings.Cut(p, "=")
+		named = append(named, path)
 		if what == "/" {
-			paths = append(paths, "/")
-		} else {
-			paths = append(paths, what+" "+path)
+			// / is named for the disk it is on: its mount says it.
+			root = true
+			continue
 		}
+		u.names = append(u.names, what)
+		u.paths = append(u.paths, what+" "+path)
 	}
-	where := strings.Join(paths, ", ")
 	if disk.Error != "" {
-		return diskUse{value: where + ": " + disk.Error}
+		// What it is by its paths, its mount only when it is one they do not name.
+		where := u.paths
+		if root {
+			where = append(where, "/")
+		}
+		if mount != "" && !slices.Contains(named, mount) {
+			where = append(where, mount)
+		}
+		u.line = strings.Join(where, ", ") + ": " + disk.Error
+		return u
+	}
+	// Facts with no mount (an older server's): / when it is there, else what lives there first.
+	switch {
+	case mount != "":
+	case root:
+		mount = "/"
+	case len(named) > 0:
+		mount = named[0]
 	}
 	// As df counts it: of what the deploy user could use, rounded up.
 	pct := int64(0)
 	if total := disk.Used + disk.Free; total > 0 {
 		pct = (disk.Used*100 + total - 1) / total
 	}
-	use := diskUse{value: fmt.Sprintf("%s: %s, %s free of %s (%d%% used)", where, disk.Type, humanBytes(disk.Free), humanBytes(disk.Size), pct)}
+	u.cells = []string{mount, disk.Type, humanBytes(disk.Free) + " free of " + humanBytes(disk.Size), fmt.Sprintf("%d%% used", pct)}
 	if (pct < diskUsedWarn && disk.Free >= diskFreeWarn) || os.Getenv(diskWarnEnv) == "off" {
-		return use
+		return u
 	}
-	use.warn = fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", where, pct, humanBytes(disk.Free))
+	u.warn = fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", mount, pct, humanBytes(disk.Free))
 	has := func(what string) bool {
 		return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
 	}
@@ -1707,22 +1963,22 @@ func judgeDisk(disk remote.Disk, snapshotRoot, ref string) diskUse {
 		// --gc, the one removal of what nothing on the server owns (old build cache, one-offs,
 		// dangling images), needs an address: on the server itself, it is words.
 		if ref == "" {
-			use.fixes = append(use.fixes, report.Fix("see what Docker takes, then remove what nothing on this server owns with --gc, run on it from a checkout or an alias:", "docker system df"))
+			u.fixes = append(u.fixes, report.Fix("see what Docker takes, then remove what nothing on this server owns with --gc, run on it from a checkout or an alias:", "docker system df"))
 		} else {
-			use.fixes = append(use.fixes, report.Fix("remove what nothing on the server owns, listed first with its sizes:", "devopsy @"+ref+" --gc"))
+			u.fixes = append(u.fixes, report.Fix("remove what nothing on the server owns, listed first with its sizes:", "devopsy @"+ref+" --gc"))
 		}
 	}
 	if has("snapshots") || (has("releases") && snapshotRoot == "") {
-		use.fixes = append(use.fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
+		u.fixes = append(u.fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
 	}
-	if len(use.fixes) == 0 {
+	if len(u.fixes) == 0 {
 		if ref == "" {
-			use.fixes = append(use.fixes, report.Hint("see what takes it"))
+			u.fixes = append(u.fixes, report.Hint("see what takes it"))
 		} else {
-			use.fixes = append(use.fixes, report.Hint("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+			u.fixes = append(u.fixes, report.Hint("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
 		}
 	}
-	return use
+	return u
 }
 
 // composeNameOf is the compose name of the environment at path,

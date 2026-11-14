@@ -261,28 +261,40 @@ too (for example `devopsy --server-setup-howto docker | glow -`). devopsy-server
 
 `--server-info` reads the server in one session that changes nothing and
 waits for no lock. Without a target it reads the Linux server it runs on,
-in `--shell-host`; anywhere else it refuses. It reports:
+in `--shell-host`; anywhere else it refuses. It reports in three parts.
 
-- its devopsy and release settings;
+`server`, the machine and devopsy's install on it:
+
 - the system, with the memory the kernel keeps for Kexec HandOver and
   kdump, and whether its clock is synchronized and how far it is from the
   operator's;
 - Docker: its version, its compose's and buildx's, its image store,
-  security options and logs;
-- its setup as `--server-setup` judges it: whether devopsy set it up,
-  where its record is, and the values someone else set that were kept;
+  security options, logs and where it keeps its data;
 - the filesystems of the release root, Docker's and containerd's data,
-  the snapshot root and `/`: free space, and whether the release root
-  makes reflinks;
-- the roles projects hold and what they export;
-- every environment under the release root, with its current release,
-  its containers and its state;
-- the uids its environments' containers run as, each claim with its
-  owner ([uids](#uids)).
+  the snapshot root and `/`, one row each: where it is mounted, its type,
+  free space, how full it is, whether the release root makes reflinks,
+  and what lives there;
+- its devopsy and release settings;
+- its setup as `--server-setup` judges it: whether devopsy set it up,
+  where its record is, the values someone else set that were kept, and
+  whether `/proc` shows every user's processes.
 
-What needs attention is a warning under the line it is about, with its
-fix; a fix that serves several lines in a row (`--server-setup` for the
-setup's items) comes once, after the last of them:
+`projects`, each project under its name with its project uid, then a row
+per environment: when its current release was made and by whom, its
+containers running, the uid its containers run as ([uids](#uids)) and
+what runs on it, with the role it holds and what it exports under the
+row. A role held by a compose project that is no environment is a line
+of its own.
+
+`leftovers`, what may be dead or gone on the server, described below.
+
+Prose wraps at 100 columns, a command never, and a row of cells moves
+its last cell whole to a line of its own instead.
+
+What needs attention is a warning under the line it is about, its first
+line marked `!`, with its fix; a fix that serves several lines in a row
+(`--server-setup` for the setup's items) comes once, after the last of
+them:
 
 - an older devopsy (`W0003`), with `--upgrade` or
   `--match-server-version` as its fix, or an older one on the operator's
@@ -335,9 +347,8 @@ setup's items) comes once, after the last of them:
   completes), services an operation left stopped, or containers
   restarting, paused, dead, unhealthy, or exited on an error of their
   own (a stop's codes excepted), each as `--status` says it;
-- a uid claim whose environment is gone from the server (removed by
-  hand, never by `--destroy`), or an entry of the claims directory that
-  is no claim, each with its removal by hand.
+- an entry of the claims directory that is no claim, with its removal by
+  hand.
 
 A warning only the server's admin can fix carries its
 [code](codes.md). A project user's `--server-info` says it with the
@@ -345,31 +356,27 @@ code to pass on and no fix, and leaves out what only the admin can do
 (the hint to free what kdump keeps, data on XFS).
 
 `--json` prints the facts and the same lines for scripts and agents, each
-warning with its own fix. Its
+warning with its own fix, each line with its `section`, its project
+(`group`), a line of a project's heading (`head`), a row's `cells`, and
+the name of what a row is of when its key does not say it (`name`). Its
 fields may change before 1.0.0: the door's `firewall_wrong`,
 `firewall_error` and `project` are gone, the setup's `firewall` (its
 `state`, `differs`, `wrong` and `unread`) saying the firewall for both
 kinds.
 
 It also shows, as information with a command to see to it, what may be
-dead or gone. devopsy removes none of it, and none of it makes the exit 3:
+dead or gone. devopsy removes none of it, and none of it makes the exit 3.
+What belongs to a project is shown in it, under the environment's name;
+a name of no project on the server is a project of its own:
 
-- what [`--gc`](#--gc) would remove, counted (one-off containers,
-  release snapshots, image names a project's record left, dangling
-  images), with `--gc --dry-run` as its hint for the sizes and the
-  build cache, which only `--gc` reads;
-- images with a tag that no release holds and no container uses (tools
-  a project ran, the admin's own), with their size, `docker rmi` as the
-  hint;
 - what is left of an environment removed by hand, for a compose name
-  with no environment directory and no uid claim: its releases' image
+  with no environment directory: its uid claim, its releases' image
   names and a project user's builds, its containers, its volumes, its
   snapshots under the server's `snapshots: root`, with the commands that
   remove them (`docker compose -p <name> down`, `docker volume rm`,
-  `docker rmi`, `rm -rf`);
-- anonymous volumes no container uses (an image's `VOLUME` after a
-  `down` without `-v`, which may be a database's data), `docker volume
-  prune` as the hint, once checked;
+  `docker rmi`, `rm -rf`, the claim's `rm` last). A claim left harms
+  nothing: its uid stays reserved, and removing it while anything of it
+  is left could hand those files to another environment;
 - a directory a `--destroy` cut off while it removed an environment left
   (`<environment>.rm.<pid>`), with its size, and the `--destroy` that
   resumes it;
@@ -381,10 +388,28 @@ dead or gone. devopsy removes none of it, and none of it makes the exit 3:
   not complete, with that command, which completes it, as the hint, and
   not as a project user with no key.
 
+The rest is the server's, under `leftovers`:
+
+- what [`--gc`](#--gc) would remove, counted (one-off containers,
+  release snapshots, image names a project's record left, dangling
+  images), with `--gc --dry-run` as its hint for the sizes and the
+  build cache, which only `--gc` reads;
+- images with a tag that no release holds and no container uses (tools
+  a project ran, the admin's own), one row each with its size, then one
+  `docker rmi` of all of them as the hint;
+- anonymous volumes no container uses (an image's `VOLUME` after a
+  `down` without `-v`, which may be a database's data), `docker volume
+  prune` as the hint, once checked.
+
 What goes by an environment's absence is shown only when the release
 root lists environments and every one of them, and the uid claims, could
 be read: with the root's disk not mounted, every environment would look
-gone. Images and volumes of a compose project that is not a release's
+gone. A uid claim whose environment is gone is said all the same, alone,
+with why nothing else of it could be looked for. A claim is "only" what
+is left only when its containers, images and volumes all read. An
+environment's claim with no row of its own (a project user's tree that
+answered nothing, an environment that did not read) is said under its
+project, so that every claim shows somewhere. Images and volumes of a compose project that is not a release's
 (the admin's own) are not shown. What of it could not be read (the
 images, the volumes, a part of `--gc`'s count) is a warning instead:
 unknown, never none.
@@ -474,7 +499,8 @@ share goes to the next free one, and stays its owner's for as long as
 the claim does. Back the directory up with the release root: claimed
 anew elsewhere, a uid can differ.
 
-`--server-info` lists them, and warns of one left over. The deploy user
+`--server-info` shows each with its project or environment, and one
+left over with its environment gone as a line of its project. The deploy user
 may remove a claim by hand (`rm`), once nothing of that environment is
 left on the server: its next start would claim a new uid while its data
 keeps the old one. The names hold `:`, which rsync and scp read as a

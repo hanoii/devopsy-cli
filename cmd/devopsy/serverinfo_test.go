@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -49,7 +50,7 @@ func TestServerFactsParsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d.Version != "29.9.1" || !d.Containerd || d.RootDir != "/var/lib/docker" || !slices.Equal(d.Security, []string{"apparmor", "seccomp", "cgroupns"}) || d.Cgroup != "v2" || d.LogDriver != "json-file" || d.Proxy != "http://proxy:3128" {
-		t.Errorf("docker        info: %+v", d)
+		t.Errorf("  docker     info: %+v", d)
 	}
 	d = remote.DockerFacts{}
 	if err := parseDockerInfo([]byte(`{"Driver":"overlay2","DriverStatus":[["Backing Filesystem","xfs"]]}`), &d); err != nil || d.Containerd {
@@ -158,20 +159,19 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
-		"devopsy       0.53.0\n",
-		"releases      /home/devopsy, keep 5 (at most 5)",
-		"snapshots     in each environment's directory, keep at most 5",
-		"system        Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
+		"  devopsy    0.53.0\n",
+		"  releases   /home/devopsy, keep 5 (at most 5)",
+		"  snapshots  in each environment's directory, keep at most 5",
+		"  system     Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
 		"2 CPUs, 4.3 GB memory (2.1 GB available), no swap, load 0.10 0.20 0.30, up 3 days",
-		"              clock synchronized\n",
-		"docker        29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
+		"             clock synchronized\n",
+		"  docker     29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
 		"security apparmor seccomp",
 		"logs json-file max-file=5 max-size=20m",
-		"disks         releases /home/devopsy, docker /var/lib/docker, /: xfs, 40.0 GB free of 80.0 GB (50% used), reflinks",
-		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
-		"environments  traefik/prod  20261026120000  24 h ago  by ci",
-		"shop/prod  20261027115000  10 min ago  by ana  1 of 3 running",
-		"shop/Staging  20261027110000  1 h ago  by ana  1 of 1 running",
+		"             data /var/lib/docker\n",
+		"  disks      /  xfs  40.0 GB free of 80.0 GB  50% used  reflinks  releases, docker\n",
+		"\nprojects\n  shop\n    prod     released 10 min ago by ana  1 of 3 running\n    Staging  released 1 h ago by ana     1 of 1 running\n" +
+			"  traefik\n    prod     released 24 h ago by ci     1 of 1 running\n             role proxy, exports BASE_DOMAIN=vm1.example.com\n",
 	} {
 		if !strings.Contains(out+"\n", want) {
 			t.Errorf("healthy: no %q in:\n%s", want, out)
@@ -180,10 +180,16 @@ func TestServerInfoReport(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("healthy: warnings %+v", warnings)
 	}
+	// No project on the server: the section says none as its value.
+	empty := healthy()
+	empty.Environments, empty.Containers = nil, nil
+	if out, _ := serverInfoSays(empty, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "\nprojects\n             none\n") {
+		t.Errorf("no project:\n%s", out)
+	}
 	// A count says one in the singular.
 	one := healthy()
 	one.Door = &remote.DoorFacts{Space: "/space", Users: 1}
-	if out, _ := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "door          /space, 1 project user\n") {
+	if out, _ := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "  door       /space, 1 project user\n") {
 		t.Errorf("one project user:\n%s", out)
 	}
 
@@ -265,7 +271,7 @@ func TestServerInfoReport(t *testing.T) {
 		{"full snapshot disk", func(i *remote.ServerInfo) {
 			i.SnapshotRoot = "/backups"
 			i.Disks = append(i.Disks, remote.Disk{Paths: []string{"snapshots=/backups"}, Type: "ext4", Size: 100e9, Free: 1e9, Used: 99e9})
-		}, "", "snapshots /backups is 99% full|$ devopsy @<target> --snapshots remove <id>"},
+		}, "", "/backups is 99% full|$ devopsy @<target> --snapshots remove <id>"},
 		{"snapshot root on the data", func(i *remote.ServerInfo) {
 			i.SnapshotRoot = "/backups"
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
@@ -283,27 +289,27 @@ func TestServerInfoReport(t *testing.T) {
 		}, "", "role proxy is held by traefik-prod and other-prod|"},
 		{"first release failed", func(i *remote.ServerInfo) {
 			i.Environments = append(i.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
-		}, "", "shop/dev: none: 20261027110000 failed|$ devopsy @vm1:dev --status"},
+		}, "", "none: 20261027110000 failed|$ devopsy @vm1:dev --status"},
 		{"cut", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "cut\t20261027115000\trelease\t20261026000000\n"
-		}, "", "shop/prod: the release of 20261027115000 was cut off past its switch: its run step may not have run|devopsy @vm1:prod --status"},
+		}, "", "the release of 20261027115000 was cut off past its switch: its run step may not have run|devopsy @vm1:prod --status"},
 		// In --status' words: a failed run step's restart is no switch.
 		{"cut restart", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "cut\t20261026000000\trestart\t20261027115000\n"
-		}, "", "shop/prod: the restart of 20261026000000 after 20261027115000 failed was cut off: its run step may not have run|devopsy @vm1:prod --status"},
+		}, "", "the restart of 20261026000000 after 20261027115000 failed was cut off: its run step may not have run|devopsy @vm1:prod --status"},
 		{"sync", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "partial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")
-		}, "", "shop/prod: from a sync that did not complete: the copy was cut|"},
+		}, "", "from a sync that did not complete: the copy was cut|"},
 		{"import", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "partial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut")
-		}, "", "shop/prod: the import of db did not complete: the import was cut|"},
-		{"left", func(i *remote.ServerInfo) { i.Environments[1].Status += "left\tdb app \n" }, "", "shop/prod: an operation cut off recorded db app as stopped|"},
+		}, "", "the import of db did not complete: the import was cut|"},
+		{"left", func(i *remote.ServerInfo) { i.Environments[1].Status += "left\tdb app \n" }, "", "an operation cut off recorded db app as stopped|"},
 		{"restarting", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "db", State: "restarting"}, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "running", Health: "unhealthy"})
-		}, "", "shop/prod: db restarting, worker unhealthy|"},
+		}, "", "db restarting, worker unhealthy|"},
 		{"paused", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "web", State: "paused"})
-		}, "", "shop/prod: web paused|"},
+		}, "", "web paused|"},
 		// Judged as --status judges it (containerTrouble): an exit on an
 		// error of its own, never a one-off's.
 		// The server's setup: never set up, each item not devopsy's, what refuses releases
@@ -352,11 +358,11 @@ func TestServerInfoReport(t *testing.T) {
 		{"exited on an error", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "exited", ExitCode: 1},
 				remote.HostContainer{Project: "shop-prod", Service: "app", State: "exited", ExitCode: 2, OneOff: true})
-		}, "", "shop/prod: worker exited 1|"},
+		}, "", "worker exited 1|"},
 		// A list that failed is unknown, never none: said, with what was read shown.
 		{"containers unread", func(i *remote.ServerInfo) {
 			i.Containers, i.ContainersUnread = nil, "docker ps: Cannot connect to the Docker daemon"
-		}, "", "the containers could not be listed: docker ps: Cannot connect to the Docker daemon|"},
+		}, "", "the roles are unknown: the containers could not be listed: docker ps: Cannot connect to the Docker daemon|"},
 		{"environments unread", func(i *remote.ServerInfo) {
 			i.EnvironmentsUnread = "open /home/devopsy/blog: permission denied"
 		}, "", "not every environment could be read: open /home/devopsy/blog: permission denied|"},
@@ -374,8 +380,8 @@ func TestServerInfoReport(t *testing.T) {
 	// import under way, and a restore, whose mark is there while it runs,
 	// keep what they stopped down (envState.entries).
 	for status, want := range map[string]string{
-		"importing\nbusy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut"): "1 of 3 running  importing|shop/prod: importing db: what it stopped stays down until it completes",
-		"busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "20261020000000", remote.IncompleteRestore, "restoring"):        "1 of 3 running  an operation running|shop/prod: restoring snapshot 20261020000000: what it stopped stays down until it completes",
+		"importing\nbusy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut"): "1 of 3 running  importing|importing db: what it stopped stays down until it completes",
+		"busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "20261020000000", remote.IncompleteRestore, "restoring"):        "1 of 3 running  an operation running|restoring snapshot 20261020000000: what it stopped stays down until it completes",
 	} {
 		said, warned, _ := strings.Cut(want, "|")
 		info := healthy()
@@ -466,7 +472,7 @@ func TestServerInfoReport(t *testing.T) {
 	// A project user's: Docker is the door's to answer, read not at all and no warning.
 	infoDoor := healthy()
 	infoDoor.Docker, infoDoor.Setup = remote.DockerFacts{Door: true}, nil
-	if out, warnings := serverInfoSays(infoDoor, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "docker        the server's admin's, through the door") {
+	if out, warnings := serverInfoSays(infoDoor, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "  docker     the server's admin's, through the door") {
 		t.Errorf("a project user's docker: %+v\n%s", warnings, out)
 	}
 	// What only the server's admin fixes reads to a project user as its code to pass on, with
@@ -537,8 +543,8 @@ func TestServerInfoReport(t *testing.T) {
 		{MountPoint: "/mnt/vol 2", Source: "/dev/sdc", FSType: "ext4", Size: 50e9, Free: 49e9},
 		{MountPoint: "/mnt/vol3", Source: "/dev/sdd", FSType: "ext4", Size: 10e9, Free: 9e9, Refusal: &setup.Refusal{Item: setup.RefusalRoot, Message: "nothing mounts /mnt/vol3 at boot", Fix: "add it to /etc/fstab, as root, then reload systemd:", Command: "systemctl daemon-reload"}}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-	for _, want := range []string{"setup         by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `              daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
-		"              volumes: releases live in the deploy user's home, /home/devopsy, while releases: root names no other; volumes that could hold them:\n              /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n              /mnt/vol 2 (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)\n              /mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot\n"} {
+	for _, want := range []string{"  setup      by devopsy, its record /home/devopsy/.config/devopsy/server.yaml\n", `             daemon.json: default-address-pools: {"default-address-pools":[{"base":"10.200.0.0/16","size":24}]}, kept by the admin`,
+		"             volumes: releases live in the deploy user's home, /home/devopsy, while releases: root names no other; volumes that could hold them:\n             /srv (xfs on /dev/sdb, 100.0 GB, 99.0 GB free)\n             /mnt/vol 2 (ext4 on /dev/sdc, 50.0 GB, 49.0 GB free)\n             /mnt/vol3 (ext4 on /dev/sdd, 10.0 GB, 9.0 GB free), not offered: nothing mounts /mnt/vol3 at boot\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("set up: no %q in:\n%s", want, out)
 		}
@@ -577,13 +583,13 @@ func TestServerInfoReport(t *testing.T) {
 	info.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
 	info.Setup.Refusals = []setup.Refusal{{Item: "Docker", Message: "Docker has no compose plugin", Fix: "install Docker's compose plugin", Stops: setup.RefusalPlugins}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-	want := "setup         never set up by devopsy: --upgrade applies nothing here\n" +
-		"              Docker: Docker has no compose plugin\n              to fix it:\n              install Docker's compose plugin\n" +
-		"              socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
-		"              mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
-		"              metadata firewall: containers reach the cloud's metadata services"
+	want := "! setup      never set up by devopsy: --upgrade applies nothing here\n" +
+		"!            Docker: Docker has no compose plugin\n             to fix it:\n             install Docker's compose plugin\n" +
+		"!            socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
+		"!            mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
+		"!            metadata firewall: containers reach the cloud's metadata services"
 	if !strings.Contains(out, want) || strings.Count(out, "$ devopsy @vm1: --server-setup") != 1 ||
-		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n              to fix it:\n              $ devopsy @vm1: --server-setup\n") {
+		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n             to fix it:\n             $ devopsy @vm1: --server-setup\n") {
 		t.Errorf("the setup's one fix, once:\n%s", out)
 	}
 	if len(warnings) != 5 || slices.ContainsFunc(warnings, func(w said) bool { return len(w.fixes) != 1 }) {
@@ -604,14 +610,14 @@ func TestServerInfoReport(t *testing.T) {
 		if reboot {
 			detail = "nothing is lost by waiting: the reboot the server needs (/run/reboot-required) does it"
 		}
-		want := "              Docker: needs a restart to take daemon.json (live-restore)\n              " + detail + "\n              to restart Docker sooner:\n              $ devopsy @vm1: --server-setup\n"
+		want := "Docker: needs a restart to take daemon.json (live-restore)\n             " + detail + "\n             to restart Docker sooner:\n             $ devopsy @vm1: --server-setup\n"
 		n := 0
 		for _, w := range warnings {
 			if !w.note {
 				n++
 			}
 		}
-		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "W0004: the server needs a reboot\n              /run/reboot-required, for devopsy\n") {
+		if !strings.Contains(out, want) || n != warned || reboot != strings.Contains(out, "W0004: the server needs a reboot\n             /run/reboot-required, for devopsy\n") {
 			t.Errorf("pending, reboot %v: %d warnings %+v\n%s", reboot, n, warnings, out)
 		}
 	}
@@ -630,7 +636,7 @@ func TestServerInfoReport(t *testing.T) {
 	info.Missing = []string{"flock"}
 	info.Environments[1].Status += "busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut")
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-	if len(warnings) != 2 || !strings.Contains(warnings[1].msg, "shop/prod: the import of db did not complete") || strings.Contains(out, "an operation running") {
+	if len(warnings) != 2 || !strings.Contains(warnings[1].msg, "the import of db did not complete") || strings.Contains(out, "an operation running") {
 		t.Errorf("no flock: %+v\n%s", warnings, out)
 	}
 
@@ -639,9 +645,15 @@ func TestServerInfoReport(t *testing.T) {
 	// that shows them.
 	info = healthy()
 	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")})
-	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || strings.Count(warnings[0].msg, "shop/dev: ") != 2 || len(warnings[0].fixes) != 1 {
+	if _, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || len(strings.Split(warnings[0].msg, "\n")) != 2 || len(warnings[0].fixes) != 1 {
 		t.Errorf("two problems of shop/dev, one warning with its fix: %+v", warnings)
 	}
+}
+
+// saysWords says whether out, a report a section of which wraps its prose, holds want's
+// words in a row, whatever the spaces and line breaks between them.
+func saysWords(out, want string) bool {
+	return strings.Contains(strings.Join(strings.Fields(out), " "), strings.Join(strings.Fields(want), " "))
 }
 
 // said is a warning --server-info shows, or a note (said with its
@@ -657,7 +669,11 @@ type said struct {
 func serverInfoSays(info remote.ServerInfo, host, ref, local string, now time.Time) (string, []said) {
 	es := serverInfoReport(info, host, ref, local, now)
 	var b strings.Builder
-	newEntryTable(&b, style{}, es).print(es)
+	// Unwrapped: what wraps is the formatter's to test (TestEntryTableSections), a line's
+	// words this one's.
+	tab := newEntryTable(&b, style{}, es)
+	tab.width = 1 << 20
+	tab.print(es)
 	var ws []said
 	for _, e := range es {
 		if e.Level == remote.StatusWarning || len(e.Remedies) > 0 {
@@ -748,36 +764,37 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin", remote.HostRootEnv + "=" + host}, "@devopsy@one:", "--server-info")
 	for _, want := range []string{
 		"@devopsy@one:\n",
-		"releases      " + s.root + ", keep 5",
+		"  releases   " + s.root,
 		"containerd /var/lib/containerd",
-		"docker        29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
-		"disks         releases " + s.root,
-		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
-		"environments  shop/dev  none: 19990101000000 failed",
-		"shop/eu/prod  none: not released yet",
-		"shop/prod  " + strings.TrimPrefix(s.current("prod"), "releases/") + "  just now",
-		"shop/dev: none: 19990101000000 failed",
-		"in shop's checkout:\n              $ devopsy @devopsy@one:dev --status",
-		"shop/prod: db restarting",
+		"  docker     29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
+		"  disks      /  ",
+		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
+		"  shop       project uid ",
+		"\n    dev      not released yet\n  !          none: 19990101000000 failed\n             in shop's checkout:\n             $ devopsy @devopsy@one:dev --status\n",
+		"\n    eu/prod  not released yet\n",
+		"\n    prod     released just now by ",
+		"0 of 1 running  uid ",
+		"\n  !          db restarting\n",
 		// The server's clock, taken last and compared on arrival.
 		"clock not synchronized, ",
 		"$ timedatectl timesync-status",
 		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
 		// step, so --server-setup is offered only past that refusal, once after the last line
 		// it fixes.
-		"setup         never set up by devopsy: --upgrade applies nothing here\n              Docker: ",
-		"(its instance's credentials)\n              to fix it:\n              fix what refuses every step of the setup first, then run --server-setup\n",
-		"              Docker: systemd is not this host's init",
-		"              daemon.json: logs: none, devopsy's",
+		"! setup      never set up by devopsy: --upgrade applies nothing here\n!            Docker: ",
+		"(its instance's credentials)\n             to fix it:\n             fix what refuses every step of the setup first, then run --server-setup\n",
+		"!            Docker: systemd is not this host's init",
+		"!            daemon.json: logs: none, devopsy's",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
 		}
 	}
 	for _, want := range []string{
-		"images        busybox:1.37, 4.3 MB: no release holds it, nor any container uses it\n              remove it once nothing needs it, on the server:\n              $ devopsy @devopsy@one: --shell-host\n              $ docker rmi busybox:1.37",
-		"gone          shop-gone: no environment and no uid claim on the server, and left:\n              containers web (exited)",
-		"environments  shop/old.rm.999999999: left by a --destroy cut off while it removed shop/old, 0 B\n              run it again, which resumes it, in shop's checkout:\n              $ devopsy @devopsy@one:old --destroy",
+		"\nleftovers\n",
+		"  images     busybox:1.37  4.3 MB\n             no release holds it, nor any container uses it\n             remove it once nothing needs it, on the server:\n             $ devopsy @devopsy@one: --shell-host\n             $ docker rmi busybox:1.37",
+		"\n    gone     gone, no environment and no uid claim on the server, and left: containers web (exited)\n",
+		"\n    old      a --destroy cut off while it removed it left old.rm.999999999, 0 B\n             run it again, which resumes it, in shop's checkout:\n             $ devopsy @devopsy@one:old --destroy",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
@@ -803,7 +820,8 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	var fixes []string
 	for _, e := range r.Entries {
-		if e.Level == remote.StatusWarning && e.Key == "environments" {
+		// An environment's warning in JSON: its section, its project, its key and the cells of its row.
+		if e.Level == remote.StatusWarning && e.Section == "projects" && e.Group == "shop" && e.Key == "dev" {
 			for _, f := range e.Remedies {
 				fixes = append(fixes, f.Cmds...)
 			}
@@ -811,7 +829,10 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	if code != serverInfoWarned || !r.Attention || r.Server != "devopsy@one:" || r.Facts.Root != s.root || len(r.Facts.Environments) == 0 ||
 		r.Facts.GC == nil || len(r.Facts.Images) != 1 || len(r.Facts.Removing) != 1 ||
-		!slices.Contains(fixes, "devopsy @devopsy@one:dev --status") {
+		!slices.Contains(fixes, "devopsy @devopsy@one:dev --status") ||
+		!slices.ContainsFunc(r.Entries, func(e remote.StatusEntry) bool {
+			return e.Group == "shop" && e.Key == "prod" && len(e.Cells) == 4 && e.Cells[1] == "0 of 1 running"
+		}) {
 		t.Errorf("--json (%d): %+v", code, r)
 	}
 
@@ -826,9 +847,9 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	for _, want := range []string{
 		"this machine (",
-		"releases      " + s.root + ", keep 5",
-		"roles         proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
-		"environments  shop/dev  none: 19990101000000 failed",
+		"  releases   " + s.root,
+		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
+		"\n    dev      not released yet\n  !          none: 19990101000000 failed\n",
 		"$ cd " + filepath.Join(s.root, "shop", "dev", "current") + " && devopsy --status",
 	} {
 		if !strings.Contains(out, want) {
@@ -1055,7 +1076,8 @@ func TestServerInfoOffersNoStatusInAProjectUsersTree(t *testing.T) {
 	_, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
 	warned := false
 	for _, w := range warnings {
-		if !strings.Contains(w.msg, "shop/prod") {
+		// The environment's warning, under its row: the one offering its --status.
+		if !strings.Contains(fixText(w.fixes), "--status") {
 			continue
 		}
 		warned = true
@@ -1206,5 +1228,157 @@ func TestServerInfoSaysAMissingToolOnce(t *testing.T) {
 	}
 	if len(tar) != 1 {
 		t.Errorf("a missing tar warned %d times: %q", len(tar), tar)
+	}
+}
+
+// A disk's mount is the highest directory above a path on it still on its filesystem, its
+// links resolved first: a disk's row leads with it.
+func TestMountPoint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	devOf := func(p string) uint64 {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return uint64(fi.Sys().(*syscall.Stat_t).Dev)
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{dir, link} {
+		m := mountPoint(p, devOf(p))
+		if m == "" || !strings.HasPrefix(real+"/", strings.TrimSuffix(m, "/")+"/") || devOf(m) != devOf(p) || (m != "/" && devOf(filepath.Dir(m)) == devOf(p)) {
+			t.Errorf("%s: mount %q", p, m)
+		}
+	}
+	if m := mountPoint("/", devOf("/")); m != "/" {
+		t.Errorf("/: %q", m)
+	}
+}
+
+// releasedAt is a server with environments at paths, each released, and
+// claims for owners, uid 100 on.
+func releasedAt(paths []string, owners ...string) remote.ServerInfo {
+	info := remote.ServerInfo{Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5, UIDsDir: "/home/devopsy/.config/devopsy/uids"}
+	for _, p := range paths {
+		info.Environments = append(info.Environments, remote.Environment{Path: p,
+			Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"})
+	}
+	for i, o := range owners {
+		info.UIDs = append(info.UIDs, remote.UIDClaim{Owner: o, UID: uint32(100 + i), Name: strings.ReplaceAll(o, ":", "_")})
+	}
+	return info
+}
+
+// reportAt is info's report as print lays it out, at its real width.
+func reportAt(info remote.ServerInfo) string {
+	es := serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
+	var b bytes.Buffer
+	newEntryTable(&b, style{}, es).print(es)
+	return b.String()
+}
+
+// An environment named as its project (shop/shop) is a row of its own under the project,
+// with or without a project uid claim on the heading: a heading is marked, never taken from a
+// key that is the project's name.
+func TestServerInfoEnvironmentNamedAsItsProject(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	info := remote.ServerInfo{Environments: []remote.Environment{{Path: "shop/prod"}, {Path: "shop/shop"}}}
+	for name, claims := range map[string][]remote.UIDClaim{
+		"no project claim": nil,
+		"a project claim":  {{Owner: "project:shop", UID: 1000001}},
+	} {
+		info.UIDs = claims
+		out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
+		_, projects, _ := strings.Cut(out, "\nprojects\n")
+		rows := 0
+		for _, l := range strings.Split(projects, "\n") {
+			if strings.HasPrefix(l, "    shop ") {
+				rows++
+			}
+		}
+		if rows != 1 {
+			t.Errorf("%s: shop/shop has no row of its own under shop:\n%s", name, projects)
+		}
+	}
+}
+
+// A disk that did not read is named by its paths, once, with no mount it never read.
+func TestDiskUnreadNamesItsPathOnce(t *testing.T) {
+	t.Parallel()
+	u := judgeDisk(remote.Disk{Paths: []string{"releases=/srv"}, Error: "stat /srv: permission denied"}, "", "vm1:")
+	if u.line != "releases /srv: stat /srv: permission denied" {
+		t.Errorf("a disk unread: %q", u.line)
+	}
+}
+
+// A project's rows go by name, what is left of a gone environment (its claim alone here)
+// among the live ones.
+func TestServerInfoProjectRowsByName(t *testing.T) {
+	t.Parallel()
+	out := reportAt(releasedAt([]string{"shop/a", "shop/z"}, "project:shop", "env:shop:a", "env:shop:m", "env:shop:z"))
+	a, m, z := strings.Index(out, "\n    a "), strings.Index(out, "\n    m "), strings.Index(out, "\n    z ")
+	if a < 0 || m < 0 || z < 0 || !(a < m && m < z) {
+		t.Errorf("rows not in order a, m, z:\n%s", out)
+	}
+}
+
+// Projects and environments sort as people count: ignoring case, the digits in a name by
+// their number (pr-7 before pr-24), in one order for both.
+func TestNamesSortNaturally(t *testing.T) {
+	t.Parallel()
+	names := []string{"prod", "pr-24", "Pr-10", "pr-7", "pr-007b", "a2", "a10", "a"}
+	slices.SortFunc(names, byName)
+	if want := []string{"a", "a2", "a10", "pr-7", "pr-007b", "Pr-10", "pr-24", "prod"}; !slices.Equal(names, want) {
+		t.Errorf("sorted: %v, want %v", names, want)
+	}
+	out := reportAt(releasedAt([]string{"shop/pr-24", "shop/pr-7", "app10/prod", "app9/prod"}))
+	if a, b, c, d := strings.Index(out, "\n  app9"), strings.Index(out, "\n  app10"), strings.Index(out, "\n    pr-7 "), strings.Index(out, "\n    pr-24 "); !(a >= 0 && a < b && c >= 0 && c < d) {
+		t.Errorf("projects and rows not in their number's order:\n%s", out)
+	}
+}
+
+// A project uid claim left is removed as any claim is, through --shell-host on the server.
+func TestServerInfoProjectClaimLeftIsRemovedOnTheServer(t *testing.T) {
+	t.Parallel()
+	// blog's project claim is left: no environment of it holds a claim.
+	info := releasedAt([]string{"shop/prod"}, "project:shop", "env:shop:prod", "project:blog")
+	es := serverInfoReport(info, "vm1", "vm1:", "0.53.0", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
+	found := false
+	for _, e := range es {
+		if e.Group != "blog" || !strings.Contains(strings.Join(e.Lines, " "), "uid claim") {
+			continue
+		}
+		found = true
+		cmds := fixText(e.Remedies)
+		if !strings.Contains(cmds, "$ devopsy @vm1: --shell-host\n$ rm ") {
+			t.Errorf("project:blog's claim left offers its rm without --shell-host, as an environment's claim does not:\n%s", cmds)
+		}
+	}
+	if !found {
+		t.Fatalf("no line of project:blog's claim left in:\n%+v", es)
+	}
+}
+
+// Every uid claim is said somewhere: one whose environment has no row and that is not judged
+// left (a project user's tree that answered nothing, an environment that did not read) is a
+// row of its project.
+func TestServerInfoEveryClaimIsSaid(t *testing.T) {
+	t.Parallel()
+	door := releasedAt([]string{"shop/prod"}, "env:shop:prod", "env:web:prod")
+	door.DoorProjects = []string{"web"}
+	unread := releasedAt([]string{"shop/prod"}, "env:shop:prod", "env:blog:prod")
+	unread.EnvironmentsUnread = "open /home/devopsy/blog: permission denied"
+	for name, info := range map[string]remote.ServerInfo{"a project user's tree unanswered": door, "an environment unread": unread} {
+		if out := reportAt(info); !strings.Contains(out, "uid 101") && !strings.Contains(out, " 101 ") {
+			t.Errorf("%s: the claim of uid 101 is said nowhere:\n%s", name, out)
+		}
 	}
 }

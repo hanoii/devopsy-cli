@@ -2943,7 +2943,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 		len(r.Entries) != 2 || r.Entries[0].Key != "url" || strings.Join(r.Entries[0].Lines, " ") != "https://shop.example https://www.shop.example" {
 		t.Errorf("--status --json (%d, %v): %+v\n%s%s", code, err, r, stdout, stderr)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet\n") || !strings.Contains(out, "\ndisks       releases ") || strings.Contains(out, "containers") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet\n") || !regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) || strings.Contains(out, "containers") {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
 	// A current that is a directory (a failed release's containers
@@ -2959,7 +2959,7 @@ printf 'info\trunning\t%s\n' "$DEVOPSY_STATUS_RUNNING"
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "releases", "19990101000000", remote.FailedFile), "", 0o644)
 	out, code = s.run(nil, "@prod", "--status")
-	if code != 0 || !strings.Contains(out, "release     "+s.current("prod")[len("releases/"):]) || !strings.Contains(out, "just now") || !strings.Contains(out, "(1 kept)") || !strings.Contains(out, "url         https://shop-prod.example\n") || !strings.Contains(out, "\ndisks       releases ") || strings.Contains(out, "parent") {
+	if code != 0 || !strings.Contains(out, "release     "+s.current("prod")[len("releases/"):]) || !strings.Contains(out, "just now") || !strings.Contains(out, "(1 kept)") || !strings.Contains(out, "url         https://shop-prod.example\n") || !regexp.MustCompile(`\ndisks       \S+ .* releases `).MatchString(out) || strings.Contains(out, "parent") {
 		t.Fatalf("prod status (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {

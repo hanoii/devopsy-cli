@@ -432,7 +432,7 @@ func (r *statusReport) addFacts(facts remote.StatusFacts, ref string) {
 	r.Project = facts.Project
 	r.Disks = facts.Disks
 	for _, d := range facts.Disks {
-		r.Entries = append(r.Entries, judgeDisk(d, facts.SnapshotRoot, ref).entries("")...)
+		r.Entries = append(r.Entries, judgeDisk(d, facts.SnapshotRoot, ref).entries("", "", true)...)
 	}
 	r.head = len(r.Entries)
 	r.Containers = []remote.StatusContainer{}

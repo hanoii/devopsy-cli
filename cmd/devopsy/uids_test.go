@@ -190,9 +190,10 @@ func TestDoorFreeRefuses(t *testing.T) {
 	}
 }
 
-// --server-info lists every uid claim with its owner, and warns of one whose environment is
-// gone (removed without --destroy) or whose project has no environment claim left, and of an
-// entry that is no claim, each with its removal by hand.
+// --server-info shows each uid claim where its owner is: a project's on its heading, an
+// environment's on its row; one whose environment is gone (removed without --destroy) is a row
+// of its own in its project, said with its removal by hand and never warned, since a claim
+// left harms nothing; an entry that is no claim is warned, with its removal by hand.
 func TestServerInfoListsUIDClaims(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -211,36 +212,59 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 	}
 	info := remote.ServerInfo{Version: "0.53.0", Root: root, Environments: []remote.Environment{{Path: "shop/prod", Status: "none\t\n"}}, DoorProjects: []string{"door"}}
 	info.UIDsDir, info.UIDs = uidFacts(root)
+	uid := map[string]string{}
+	for _, c := range info.UIDs {
+		uid[c.Owner] = strconv.FormatUint(uint64(c.UID), 10)
+	}
 	out, warnings := serverInfoSays(info, "", "", "0.53.0", time.Now())
-	for _, want := range []string{"env:shop:prod", "project:shop", "env:blog:prod", "project:blog", "stray  no claim"} {
+	for _, want := range []string{
+		"\n  blog       project uid " + uid["project:blog"] + "\n    prod     gone, only its uid claim " + uid["env:blog:prod"] + " is left\n",
+		"\n  shop       project uid " + uid["project:shop"] + "\n    prod     not released yet  uid " + uid["env:shop:prod"] + "\n",
+		"\n! uids       stray in " + info.UIDsDir + " is no claim: ",
+	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("no uids row for %s:\n%s", want, out)
+			t.Errorf("no %q in:\n%s", want, out)
 		}
 	}
-	stale := map[string]bool{}
+	said := map[string]bool{}
 	for _, w := range warnings {
-		for _, owner := range []string{"env:shop:prod", "env:blog:prod", "project:blog", "project:shop", "stray", "env:door:prod"} {
-			if strings.HasPrefix(w.msg, owner+"'s uid claim is left") || strings.HasPrefix(w.msg, owner+" in ") {
-				stale[owner] = true
+		for owner, msg := range map[string]string{"env:blog:prod": "gone, only its uid claim", "stray": "stray in ", "project:blog": "project:blog's", "project:shop": "project:shop's", "env:door:prod": "door"} {
+			if strings.HasPrefix(w.msg, msg) {
+				said[owner] = true
+				if owner == "env:blog:prod" && !w.note || owner == "stray" && w.note {
+					t.Errorf("%s: a note %v", owner, w.note)
+				}
 				if len(w.fixes) != 1 || len(w.fixes[0].Cmds) != 1 || !strings.HasPrefix(w.fixes[0].Cmds[0], "rm ") {
 					t.Errorf("%s: no removal offered: %+v", owner, w.fixes)
 				}
 			}
 		}
 	}
-	for owner, want := range map[string]bool{"env:blog:prod": true, "stray": true, "env:shop:prod": false, "project:shop": false, "project:blog": false, "env:door:prod": false} {
-		if stale[owner] != want {
-			t.Errorf("%s warned %v, want %v", owner, stale[owner], want)
+	for owner, want := range map[string]bool{"env:blog:prod": true, "stray": true, "project:shop": false, "project:blog": false, "env:door:prod": false} {
+		if said[owner] != want {
+			t.Errorf("%s said %v, want %v", owner, said[owner], want)
 		}
+	}
+	// A claims directory that does not read is said as such, with nothing in it to remove.
+	unread := remote.ServerInfo{Version: "0.53.0", Root: root, UIDsDir: info.UIDsDir, UIDs: []remote.UIDClaim{{Name: info.UIDsDir, Bad: "permission denied"}}}
+	_, ws := serverInfoSays(unread, "", "", "0.53.0", time.Now())
+	n := 0
+	for _, w := range ws {
+		if strings.Contains(w.msg, "uid claims") || strings.Contains(w.msg, "no claim") {
+			n++
+			if w.msg != "the uid claims could not be read: permission denied" || len(w.fixes) != 0 {
+				t.Errorf("the claims unread: %+v", w)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("the claims unread, said %d times: %+v", n, ws)
 	}
 	// With the environments not all read, an environment's claim is taken for live: blog's
 	// directory may be the one that failed.
 	info.EnvironmentsUnread = "open " + filepath.Join(root, "blog") + ": permission denied"
-	_, warnings = serverInfoSays(info, "", "", "0.53.0", time.Now())
-	for _, w := range warnings {
-		if strings.HasPrefix(w.msg, "env:blog:prod's uid claim is left") {
-			t.Errorf("with environments unread: %s", w.msg)
-		}
+	if out, _ = serverInfoSays(info, "", "", "0.53.0", time.Now()); strings.Contains(out, "gone, only its uid claim") {
+		t.Errorf("with environments unread:\n%s", out)
 	}
 }
 

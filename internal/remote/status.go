@@ -2,6 +2,7 @@ package remote
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -50,12 +51,36 @@ const StatusNoContainer = "none"
 
 // StatusEntry is a fact --status shows under its key: one or more lines
 // at a level (StatusInfo, StatusHighlight, StatusWarning), with the
-// ways to act on it.
+// ways to act on it. Section and Group place it in a report laid out in
+// parts (--server-info's server, projects, leftovers; a project in
+// projects), empty in a flat one; Head marks a line of its group's
+// heading, shown under the group's name; Name is what a row is of when
+// its key does not say it (a gone environment's long name, keyed gone),
+// a row of its own apart from another of the same key; Cells are its first line's
+// cells, a row aligned with the others of its run, Lines[0] holding them
+// joined.
 type StatusEntry struct {
 	Level    string          `json:"level"`
+	Section  string          `json:"section,omitempty"`
+	Group    string          `json:"group,omitempty"`
+	Head     bool            `json:"head,omitempty"`
 	Key      string          `json:"key"`
+	Name     string          `json:"name,omitempty"`
 	Lines    []string        `json:"lines"`
+	Cells    []string        `json:"cells,omitempty"`
 	Remedies []report.Remedy `json:"remedies,omitempty"`
+}
+
+// CellsJoined is cells as an entry's line: two spaces between those
+// not empty (an empty one only keeps the next aligned).
+func CellsJoined(cells ...string) string {
+	var said []string
+	for _, c := range cells {
+		if c != "" {
+			said = append(said, c)
+		}
+	}
+	return strings.Join(said, "  ")
 }
 
 // An entry's levels: a highlight is a fact shown in bold, one people

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,16 +12,25 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// leftSays is each entry of what may be dead or gone as one text: its key, its lines, then
-// each remedy's words and commands.
+// leftSays is each entry of what may be dead or gone as one text, a project's first by
+// project: its project and its key, its lines, then each remedy's words and commands.
 func leftSays(info remote.ServerInfo, host, ref string) []string {
 	var out []string
-	for _, e := range leftEntries(info, host, ref) {
+	groups, leftovers := leftEntries(info, host, ref)
+	var es []remote.StatusEntry
+	for _, p := range slices.Sorted(maps.Keys(groups)) {
+		es = append(es, groups[p]...)
+	}
+	for _, e := range append(es, leftovers...) {
 		s := e.Key + ": " + strings.Join(e.Lines, "\n")
+		if e.Group != "" {
+			s = e.Group + " " + s
+		}
 		for _, r := range e.Remedies {
 			s += "\n| " + r.Text
 			for _, c := range r.Cmds {
@@ -71,6 +81,7 @@ func TestServerInfoLeft(t *testing.T) {
 			{ID: "i5", Tags: []string{"busybox:1.37"}, Size: 4e6},
 			{ID: "i6", Tags: []string{"nginx:1.27"}, Containers: 1},
 			{ID: "i7", Tags: []string{remote.UtilImage}},
+			{ID: "i8", Tags: []string{"alpine:3", "alpine:3.22"}, Size: 8e6},
 		},
 		Volumes: []remote.HostVolume{
 			{Name: "shop-prod_db", Project: "shop-prod"},
@@ -82,30 +93,46 @@ func TestServerInfoLeft(t *testing.T) {
 		Removing:     []remote.RemovingDir{{Path: "shop/eu/old.rm.123", Size: 3e6}},
 		Door:         &remote.DoorFacts{Space: "/space", Users: 1, Keyless: []remote.KeylessUser{{User: "devopsy-blog", Project: "blog", Held: []string{"the uid claims env:blog:dev", "the volumes blog-dev_db"}}}},
 	}
+	gone := "| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n"
 	want := []string{
-		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| its sizes, and the build cache it removes too:\n$ devopsy @vm1: --gc --dry-run",
-		"images: busybox:1.37, 4.0 MB: no release holds it, nor any container uses it\n| remove it once nothing needs it, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi busybox:1.37",
-		"gone: gone-prod: no environment and no uid claim on the server, and left:\ncontainers web (exited)\nvolumes gone-prod_db\n1 image name of its releases\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
-		"gone: old-prod: no environment and no uid claim on the server, and left:\nsnapshots in /backups/old/prod\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ rm -rf /backups/old/prod",
-		"gone: shop-stage-2: no environment and no uid claim on the server, and left:\n2 image names of its releases\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
-		"gone: wiki-stage: no environment and no uid claim on the server, and left:\n1 image name of its releases\n" +
-			"| an environment removed by hand: remove what is left once none of it is needed, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi app:devopsy-wiki-stage-20261101000000",
+		// Under its project's heading, never a key that widens every other.
+		"blog blog: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
+		// A name of no project on the server is a project of its own, its name the line above.
+		"gone-prod : gone, no environment and no uid claim on the server, and left: containers web (exited), volumes gone-prod_db, 1 image name of its releases\n" +
+			gone + "$ docker compose -p gone-prod down\n$ docker volume rm gone-prod_db\n$ docker rmi devopsy.internal/gone-prod/web:latest",
+		// A claim whose environment is gone is no live name: what is left of it is looked for,
+		// its claim said with it and removed last.
+		"news prod: gone, no environment on the server, and left: its uid claim 2, 1 image name of its releases\n" +
+			gone + "$ docker rmi devopsy.internal/news-prod/app:latest\n$ rm /home/devopsy/.devopsy-uids/env:news:prod",
+		"old-prod : gone, no environment and no uid claim on the server, and left: snapshots in /backups/old/prod\n" + gone + "$ rm -rf /backups/old/prod",
+		// Under the project its name starts with, the longest: shop's, though wiki has a stage-2.
+		"shop stage-2: gone, no environment and no uid claim on the server, and left: 2 image names of its releases\n" +
+			gone + "$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
+		"shop eu/old: a --destroy cut off while it removed it left old.rm.123, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
+		"wiki stage: gone, no environment and no uid claim on the server, and left: 1 image name of its releases\n" + gone + "$ docker rmi app:devopsy-wiki-stage-20261101000000",
+		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| to see their sizes, and the build cache it would remove too:\n$ devopsy @vm1: --gc --dry-run",
+		// One row each, then one line for all and one rmi of every tag, to copy at once.
+		"images: busybox:1.37  4.0 MB",
+		"images: alpine:3, alpine:3.22  8.0 MB",
+		"images: no release holds them, nor any container uses them\n| remove them once nothing needs them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker rmi busybox:1.37 alpine:3 alpine:3.22",
 		"volumes: 2 anonymous volumes no container uses (an image's VOLUME after a down without -v: a database's data, maybe)\n| once checked that none holds what is needed, remove them, on the server:\n$ devopsy @vm1: --shell-host\n$ docker volume prune",
-		"environments: shop/eu/old.rm.123: left by a --destroy cut off while it removed shop/eu/old, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
-		"door: devopsy-blog has no key and still holds:\nthe uid claims env:blog:dev\nthe volumes blog-dev_db\n| remove it with what it holds:\n$ devopsy @vm1: --project-users remove blog --destroy\n| or a key added for it (--ssh-keys with --for) takes it back",
 	}
 	if got := leftSays(info, "devopsy@vm1", "vm1:"); !slices.Equal(got, want) {
 		t.Errorf("left:\n%s\n\nwant:\n%s", strings.Join(got, "\n\n"), strings.Join(want, "\n\n"))
 	}
 
+	// A gone name too long for a key is said in its line, under gone: a key widens every other.
+	long2 := info
+	long2.Containers = append(slices.Clone(info.Containers), remote.HostContainer{Project: "shop-a-very-long-preview", Service: "web", State: "exited", Released: true})
+	if got := strings.Join(leftSays(long2, "devopsy@vm1", "vm1:"), "\n\n"); !strings.Contains(got, "\n\nshop gone: a-very-long-preview: no environment and no uid claim on the server, and left: containers web (exited)\n") {
+		t.Errorf("a long gone name:\n%s", got)
+	}
+
 	// Without a target, what needs an address in words, the commands run here.
 	local := strings.Join(leftSays(info, "", ""), "\n\n")
 	for _, w := range []string{
-		"| --gc with --dry-run, run on this server from a checkout or an alias, lists it with its sizes, and the build cache it removes too",
-		"| remove it once nothing needs it:\n$ docker rmi busybox:1.37",
+		"| --gc with --dry-run, run on this server from a checkout or an alias, lists their sizes, and the build cache it would remove too",
+		"| remove them once nothing needs them:\n$ docker rmi busybox:1.37 alpine:3 alpine:3.22",
 		"| a --destroy of shop/eu/old run again from shop's checkout resumes it",
 		"| a --project-users remove of blog with --destroy removes it with what it holds\n| or a key added for it (--ssh-keys with --for) takes it back",
 	} {
@@ -119,8 +146,11 @@ func TestServerInfoLeft(t *testing.T) {
 
 	// What goes by an absence is made only when the release root lists environments, all read,
 	// and the claims read: with the root's disk not mounted, every environment reads as gone.
-	gone := func(i remote.ServerInfo) bool {
-		return slices.ContainsFunc(leftSays(i, "devopsy@vm1", "vm1:"), func(s string) bool { return strings.HasPrefix(s, "gone: ") })
+	// Found by what is left of it; a claim left is said whatever reads (TestServerInfoGoneClaimUnlookedStaysSaid).
+	isGone := func(i remote.ServerInfo) bool {
+		return slices.ContainsFunc(leftSays(i, "devopsy@vm1", "vm1:"), func(s string) bool {
+			return strings.Contains(s, ", and left: ") || strings.Contains(s, "only its uid claim")
+		})
 	}
 	for name, change := range map[string]func(*remote.ServerInfo){
 		"no root environment": func(i *remote.ServerInfo) { i.Environments = i.Environments[4:] },
@@ -130,11 +160,11 @@ func TestServerInfoLeft(t *testing.T) {
 	} {
 		i := info
 		change(&i)
-		if gone(i) {
+		if isGone(i) {
 			t.Errorf("%s: a name reported gone", name)
 		}
 	}
-	if !gone(info) {
+	if !isGone(info) {
 		t.Errorf("nothing gone")
 	}
 	// A read that failed is unknown, said, never none.
@@ -161,7 +191,7 @@ func TestServerInfoLeft(t *testing.T) {
 	// containers comes from them.
 	i = info
 	i.ContainersUnread = "docker inspect: EOF"
-	if says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n"); strings.Contains(says, "nor any container uses it") {
+	if says := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n"); strings.Contains(says, "nor any container uses") {
 		t.Errorf("with the containers unread, an image is used by none:\n%s", says)
 	}
 }
@@ -259,5 +289,131 @@ exit 0
 	}
 	if n := strings.Count(calls, "ps -aq --no-trunc\n"); n != 1 {
 		t.Errorf("%d listings of the containers:\n%s", n, calls)
+	}
+}
+
+// A claim whose environment is gone is no live name: what else of it is left (its containers)
+// is said with it, never "only its uid claim".
+func TestServerInfoGoneClaimSaysWhatIsLeft(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	info := remote.ServerInfo{
+		Environments: []remote.Environment{{Path: "shop/prod"}},
+		UIDs:         []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "1000002"}},
+		Containers:   []remote.HostContainer{{Project: "shop-pr-1", Service: "web", State: "exited", Released: true}},
+	}
+	out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
+	if !strings.Contains(out, "\n    pr-1     gone, no environment on the server, and left: its uid claim 1000002, containers web (exited)\n") || strings.Contains(out, "only its uid claim") {
+		t.Errorf("shop-pr-1's row, its claim and its container:\n%s", out)
+	}
+}
+
+// A claim whose environment is gone never goes unsaid: when what else is left cannot be looked
+// for (no environment listed, Docker down), it is a gone row of its own with its removal,
+// never "only its uid claim", since nothing else was looked for.
+func TestServerInfoGoneClaimUnlookedStaysSaid(t *testing.T) {
+	t.Parallel()
+	base := remote.ServerInfo{
+		UIDsDir: "/home/devopsy/.devopsy-uids",
+		UIDs:    []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "env:shop:pr-1"}},
+	}
+	for name, c := range map[string]struct {
+		change func(*remote.ServerInfo)
+		why    string
+	}{
+		"no environment listed": {func(*remote.ServerInfo) {}, "the release root lists no environment"},
+		"docker down": {func(i *remote.ServerInfo) {
+			i.Environments, i.Docker.Error = []remote.Environment{{Path: "shop/prod"}}, "docker info: Cannot connect"
+		}, "Docker did not answer"},
+	} {
+		i := base
+		c.change(&i)
+		want := "shop pr-1: gone, its uid claim 1000002 is left; what else is left was not looked for: " + c.why +
+			"\n| remove it by hand once nothing of it is left, on the server:\n$ devopsy @vm1: --shell-host\n$ rm /home/devopsy/.devopsy-uids/env:shop:pr-1"
+		if got := leftSays(i, "devopsy@vm1", "vm1:"); !slices.Contains(got, want) {
+			t.Errorf("%s: no row of the claim:\n%s", name, strings.Join(got, "\n\n"))
+		}
+	}
+}
+
+// A gone environment named as its project (shop/shop, compose name shop-shop) is a row of its
+// own under the project, with its claim left and without: only a name of no project on the
+// server is a project of its own.
+func TestServerInfoGoneEnvironmentNamedAsItsProject(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	for name, info := range map[string]remote.ServerInfo{
+		"its claim left": {
+			Environments: []remote.Environment{{Path: "shop/prod"}},
+			UIDs:         []remote.UIDClaim{{Owner: "env:shop:shop", UID: 1000002, Name: "1000002"}},
+		},
+		"no claim, a container left": {
+			Environments: []remote.Environment{{Path: "shop/prod"}},
+			Containers:   []remote.HostContainer{{Project: "shop-shop", Service: "web", State: "exited", Released: true}},
+		},
+	} {
+		out, _ := serverInfoSays(info, "vm1", "vm1:", "0.1.0", now)
+		_, projects, _ := strings.Cut(out, "\nprojects\n")
+		row := false
+		for _, l := range strings.Split(projects, "\n") {
+			row = row || strings.HasPrefix(l, "    shop ") && strings.Contains(l, "gone")
+		}
+		if !row {
+			t.Errorf("%s: the gone shop/shop has no row of its own under shop:\n%s", name, projects)
+		}
+	}
+}
+
+// A claim left is "only" what is left only when the containers, images and volumes all read:
+// with one of them unread, the claim is said without "only".
+func TestServerInfoGoneClaimPartlyUnlookedIsNotOnly(t *testing.T) {
+	t.Parallel()
+	base := remote.ServerInfo{
+		Environments: []remote.Environment{{Path: "shop/prod"}},
+		UIDsDir:      "/home/devopsy/.devopsy-uids",
+		UIDs:         []remote.UIDClaim{{Owner: "env:shop:pr-1", UID: 1000002, Name: "env:shop:pr-1"}},
+	}
+	for name, change := range map[string]func(*remote.ServerInfo){
+		"containers unread": func(i *remote.ServerInfo) { i.ContainersUnread = "docker inspect: exit status 1" },
+		"images unread":     func(i *remote.ServerInfo) { i.ImagesUnread = "docker image ls: exit status 1" },
+		"volumes unread":    func(i *remote.ServerInfo) { i.VolumesUnread = "docker volume ls: exit status 1" },
+	} {
+		i := base
+		change(&i)
+		got := strings.Join(leftSays(i, "devopsy@vm1", "vm1:"), "\n\n")
+		if strings.Contains(got, "only its uid claim") || !strings.Contains(got, "uid claim 1000002") {
+			t.Errorf("%s: the claim said as all that is left, or unsaid:\n%s", name, got)
+		}
+	}
+}
+
+// A long gone name, keyed gone, is a row of its own, never a line of a live environment named
+// gone.
+func TestServerInfoLongGoneNameIsARowOfItsOwn(t *testing.T) {
+	t.Parallel()
+	info := releasedAt([]string{"shop/gone", "shop/prod"})
+	info.Containers = []remote.HostContainer{{Project: "shop-a-feature-branch-name", Service: "web", State: "exited", Released: true}}
+	out := reportAt(info)
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "a-feature-branch-name: ") && !strings.HasPrefix(l, "    gone ") {
+			t.Errorf("the gone a-feature-branch-name is a line of the live shop/gone's row (after %q):\n%s", lines[i-1], out)
+		}
+	}
+}
+
+// No gone name widens the one key column: a claim's whose rest could not be looked for, and a
+// name of no project on the server, its own project.
+func TestServerInfoGoneNamesWidenNoKey(t *testing.T) {
+	t.Parallel()
+	unlooked := releasedAt(nil, "env:shop:a-feature-branch-name")
+	ownHeading := releasedAt([]string{"shop/prod"})
+	ownHeading.Containers = []remote.HostContainer{{Project: "oldproject-production", Service: "web", State: "exited", Released: true}}
+	for name, info := range map[string]remote.ServerInfo{"a claim left, the rest unlooked": unlooked, "a name of no project": ownHeading} {
+		out := reportAt(info)
+		// The column of a report whose keys are server's own: snapshots and two spaces, indented.
+		if !strings.Contains(out, "\n  devopsy    0.53.0\n") {
+			t.Errorf("%s: a long gone name widened the key column:\n%s", name, out)
+		}
 	}
 }

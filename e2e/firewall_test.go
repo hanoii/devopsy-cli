@@ -121,7 +121,7 @@ docker run -d --name srvfw-md --network host busybox:1.37 sh -c 'mkdir -p /w && 
 	if out, code := srv(t, "devopsy "+remote.UtilImageFlag); code != 0 {
 		t.Fatalf("the util image (%d): %s", code, out)
 	}
-	if out := info(); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !strings.Contains(out, "nothing in PREROUTING jumps to "+remote.FirewallContainerChain) {
+	if out := info(); !saysWords(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") || !saysWords(out, "nothing in PREROUTING jumps to "+remote.FirewallContainerChain) {
 		t.Errorf("--server-info, the firewall wiped:\n%s", out)
 	}
 	if out, code := srvRoot(t, remote.FirewallScript); code != 0 {
