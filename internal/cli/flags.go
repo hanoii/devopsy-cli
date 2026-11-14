@@ -8,6 +8,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/vocab"
 )
 
 // Scope is where a flag of devopsy's runs: which address it takes.
@@ -61,13 +62,13 @@ var Flags = []FlagGroup{
 		{Name: "--release", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},
 		{Name: "--release-sync", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "the same, and sync the parent's data in"},
 		{Name: "--release-no-sync", Args: "[--accept-image <svc>] [--yes]", Scope: Target, Desc: "the same, never syncing"},
-		{Name: "--release", Scope: Local, Desc: "locally, in place: prepare, images, run\n(defaults: release steps)"},
+		{Name: "--release", Scope: Local, Desc: "in place: prepare, images, run\n(defaults: release steps)"},
 		{Name: "--rollback", Args: "[--accept-image <svc>] [--yes]", Scope: Target, Desc: "back to the previous release"},
 		{Name: "--reload", Scope: LocalOrTarget, Desc: "the release again with its variables and\nimports as they are now: its reload: step"},
 		{Name: "--releases", Args: "[remove <id|failed>... [--yes]]", Scope: Target, Desc: "the releases there; or remove some,\nwith the images only they hold"},
 		{Name: "--log", Args: "[<id>]", Scope: Target, Desc: "what the last release (or <id>) printed"},
 		{Name: "--destroy", Args: "[--yes] [--purge]", Scope: Target, Desc: "remove the environment, data included"},
-		{Name: "--destroy", Args: "[--yes]", Scope: Local, Desc: "locally, in place: the destroy step\n(defaults: destroy)"},
+		{Name: "--destroy", Args: "[--yes]", Scope: Local, Desc: "in place: the destroy step\n(defaults: destroy)"},
 	}},
 	{"Data", []Flag{
 		{Name: "--sync", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "a child's data from its parent, then run"},
@@ -106,7 +107,7 @@ var Flags = []FlagGroup{
 	{"Setup and tools", []Flag{
 		{Name: "--init", Args: "[project]", Scope: Local, Desc: "a new .devopsy/config.yaml"},
 		{Name: "--context-hash", Args: "[service]", Scope: Local, Desc: "a hash of an image's build inputs"},
-		{Name: "--probe", Args: "<host>...", Scope: Local, Desc: "DNS, certificates, HTTPS, checked locally"},
+		{Name: "--probe", Args: "<host>...", Scope: Local, Desc: "DNS, certificates, HTTPS, from " + vocab.Operator.Noun},
 		{Name: "--upgrade", Args: "[v]", Scope: Local, Desc: "this devopsy, to latest or v"},
 		{Name: "--completion", Args: "<shell>", Scope: Local, Desc: "shell completion: bash, zsh or fish"},
 		{Name: "--ai-skill", Args: "[--stub] [install [--global]]", Scope: Local, Desc: "the skill for agents: print it,\nor install it"},

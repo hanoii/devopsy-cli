@@ -21,7 +21,7 @@ const commandTargetInternal = "DEVOPSY_INTERNAL_COMMAND_TARGET"
 
 // RunsLocallyNote follows, in help, a local command that takes an
 // address, whose scope then looks like a remote one's.
-const RunsLocallyNote = "(runs locally)"
+const RunsLocallyNote = "(Run: local)"
 
 // CommandRun is where a project command runs, from its `## Run:` and
 // `## Needs:` lines.
