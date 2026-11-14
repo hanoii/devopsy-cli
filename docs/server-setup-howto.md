@@ -200,10 +200,10 @@ setfacl while the server has no project user. Steps 4 to 6 are for a server
 set up by hand in place of step 3, where a line in /etc/fstab is fine.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. A step
-that starts "From the operator's machine" runs there, not on the server,
-where devopsy addresses the server by its deploy user. The deploy user is
-the Unix user devopsy logs in as, which must exist. A step's first line sets
-the values to change, if it has any (for example user=devopsy).
+that starts "From the operator's machine" runs there, where devopsy
+addresses the server by its deploy user, not on the server. The deploy user
+is the Unix user devopsy logs in as, which must exist. A step's first line
+sets the values to change, if it has any (for example user=devopsy).
 
 1. Install sudo (sudo, visudo) and acl (setfacl), which nothing else of
    devopsy uses.

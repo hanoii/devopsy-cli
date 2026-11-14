@@ -88,7 +88,7 @@ const (
 	deployUser = "The deploy user is the Unix user devopsy logs in as, which must exist. A step's first line sets the values to change, if it has any (for example user=devopsy)."
 )
 
-var operatorSteps = "A step that starts \"" + vocab.Cap(vocab.Operator.From) + "\" runs there, not on the server, where devopsy addresses the server by its deploy user."
+var operatorSteps = "A step that starts \"" + vocab.Cap(vocab.Operator.From) + "\" runs there, where devopsy addresses the server by its deploy user, not on the server."
 
 // opening is what introduces t's steps: where and as whom they run, who the deploy user is.
 func (t Topic) opening() string {
