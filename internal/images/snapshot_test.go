@@ -95,3 +95,51 @@ func TestFilterImportedOwn(t *testing.T) {
 		t.Errorf("the imported listing: %+v", es)
 	}
 }
+
+// An imported snapshot's removal takes no name from its tools file
+// (ToolsFile), which is the other server's word as its listing is: the
+// listing is cut to the current release's services with its ids cleared
+// (FilterImported), and the tools must not stay as they came.
+//
+// Bug (review round 1 of feat/tool-bookmarks): a take copies its release's
+// files, devopsy-tools among them, an import keeps the tar's, and
+// FilterImported rewrites the listing alone, so Remove of the imported
+// snapshot reads a crafted line (any name, any image id on this server)
+// and strips that name from an image no bookmark holds and no container
+// uses: the admin's own image here.
+func TestImportedSnapshotTools(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	stage := newSim(t, d, "app-stage", &out)
+	stage.e.set.Snapshots = filepath.Join(stage.base(), "snapshots")
+	if _, err := stage.release(false, appSvc); err != nil {
+		t.Fatal(err)
+	}
+	// An image of the server's that no release of devopsy's holds.
+	d.pull("nginx:1.27", "sha256:n1")
+	// The snapshot as an import extracted it: a listing and a tools file,
+	// both whoever made the tar's.
+	dir := filepath.Join(stage.e.set.Snapshots, "20261017000002")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeList(dir, []entry{{Ref: "app-prod-app", ID: "sha256:other", Service: "app", Kind: KindOwn}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEntries(filepath.Join(dir, ToolsFile), []entry{{Ref: "nginx:1.27", ID: "sha256:n1", Service: "tool", Kind: KindPulled}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FilterImported(dir, stage.e.rel(stage.cur)); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.e.set.BookmarkFrom(dir, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.e.set.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if d.names["nginx:1.27"] != "sha256:n1" {
+		t.Errorf("the imported snapshot's removal took nginx:1.27, which its tools file alone named: %v\n%s", d.names, out.String())
+	}
+}
