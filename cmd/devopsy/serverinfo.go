@@ -1265,9 +1265,9 @@ func (r *serverReport) print(w io.Writer, st style, heading string, asJSON bool)
 // remote.ServerRef), both empty for this machine's; local is this
 // devopsy's version, now when the facts came: what ages count from and
 // the server's clock (info.Time) is compared with. Its entries are in
-// three sections: the server's own (serverKeys' order), its projects
-// (projectEntries, with what leftEntries finds of each), and the
-// leftovers that are the server's.
+// four sections: the server's own and devopsy's install (ownSections'
+// keys and order), its projects (projectEntries, with what leftEntries
+// finds of each), and the leftovers that are the server's.
 func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) []remote.StatusEntry {
 	var es []remote.StatusEntry
 	key := ""
@@ -1306,7 +1306,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	if local != info.Version {
 		v += " (" + vocab.Operator.Poss + " " + local + ")"
 	}
-	row("devopsy", v)
+	row("version", v)
 	if ref != "" && update.Newer(local, info.Version) {
 		forAdmin(report.OlderDevopsy, []string{"the server's " + info.Version + ", " + vocab.Operator.Poss + " " + local},
 			report.Fix("", "devopsy @"+ref+" --upgrade"), report.Fix("", "devopsy @"+ref+" --match-server-version"))
@@ -1609,11 +1609,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 
-	// The server's own, in its sections' order, each key's entries kept in theirs.
+	// The server's own and devopsy's, in their sections' order, each key's entries kept in theirs.
 	for i := range es {
-		es[i].Section = "server"
+		es[i].Section = ownSection(es[i].Key)
 	}
-	slices.SortStableFunc(es, func(a, b remote.StatusEntry) int { return cmp.Compare(serverKeyRank(a.Key), serverKeyRank(b.Key)) })
+	slices.SortStableFunc(es, func(a, b remote.StatusEntry) int { return cmp.Compare(ownKeyRank(a.Key), ownKeyRank(b.Key)) })
 	groups, top := projectEntries(info, host, ref, now)
 	leftGroups, leftovers := leftEntries(info, host, ref)
 	if len(top) == 0 && len(groups) == 0 && len(leftGroups) == 0 {
@@ -1685,16 +1685,39 @@ func projectRows(es []remote.StatusEntry) []remote.StatusEntry {
 	return head
 }
 
-// serverKeys are the server section's keys in their order: the
-// machine, Docker, the disks and the tools, then devopsy's own install.
-var serverKeys = strings.Fields("system docker disks tools devopsy releases snapshots setup door admin")
+// ownSections are --server-info's sections before its projects, each
+// with its keys in their order: the server's (the machine, Docker, the
+// disks and the tools), then devopsy's install (its version, the
+// release settings, the setup with /proc's processes, the door, what a
+// project user passes on to the admin).
+var ownSections = []struct {
+	name string
+	keys []string
+}{
+	{"server", strings.Fields("system docker disks tools")},
+	{"devopsy", strings.Fields("version releases snapshots setup door admin")},
+}
 
-// serverKeyRank is key's place in serverKeys, any other's after them.
-func serverKeyRank(key string) int {
-	if i := slices.Index(serverKeys, key); i >= 0 {
-		return i
+// ownSection is the section of key, devopsy's for a key no section lists.
+func ownSection(key string) string {
+	for _, s := range ownSections {
+		if slices.Contains(s.keys, key) {
+			return s.name
+		}
 	}
-	return len(serverKeys)
+	return ownSections[len(ownSections)-1].name
+}
+
+// ownKeyRank is key's place in ownSections' keys, any other's after them.
+func ownKeyRank(key string) int {
+	rank := 0
+	for _, s := range ownSections {
+		if i := slices.Index(s.keys, key); i >= 0 {
+			return rank + i
+		}
+		rank += len(s.keys)
+	}
+	return rank
 }
 
 // mergeKeys is a set of the keys of maps.

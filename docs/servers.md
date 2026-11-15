@@ -369,9 +369,9 @@ too (for example `devopsy --server-setup-howto docker | glow -`). devopsy-server
 
 `--server-info` reads the server in one session that changes nothing and
 waits for no lock. Without a target it reads the Linux server it runs on,
-in `--shell-host`; anywhere else it refuses. It reports in three parts.
+in `--shell-host`; anywhere else it refuses. It reports in four parts.
 
-`server`, the machine and devopsy's install on it:
+`server`, the machine:
 
 - the system, with the memory the kernel keeps for Kexec HandOver and
   kdump, and whether its clock is synchronized and how far it is from the
@@ -381,8 +381,11 @@ in `--shell-host`; anywhere else it refuses. It reports in three parts.
 - the filesystems of the release root, Docker's and containerd's data,
   the snapshot root and `/`, one row each: where it is mounted, its type,
   free space, how full it is, whether the release root makes reflinks,
-  and what lives there;
-- its devopsy and release settings;
+  and what lives there.
+
+`devopsy`, its install on the server:
+
+- its version and the release settings;
 - its setup as `--server-setup` judges it: whether devopsy set it up,
   where its record is, the values someone else set that were kept, and
   whether `/proc` shows every user's processes.

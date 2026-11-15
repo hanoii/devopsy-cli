@@ -212,10 +212,10 @@ func TestServerInfoReport(t *testing.T) {
 
 	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
-		"  devopsy    0.53.0\n",
-		"  releases   /home/devopsy, keep 5 (at most 5)",
+		// The server's own, then devopsy's install, each its own section.
+		"\ndevopsy\n  version    0.53.0\n  releases   /home/devopsy, keep 5 (at most 5)\n",
 		"  snapshots  in each environment's directory, keep at most 5",
-		"  system     Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
+		"\nserver\n  system     Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
 		"2 CPUs, 4.3 GB memory (2.1 GB available), no swap, load 0.10 0.20 0.30, up 3 days",
 		"             clock synchronized\n",
 		"  docker     29.9.1, compose 5.5.0, buildx 0.38.2, containerd image store (overlayfs), cgroup v2",
@@ -229,6 +229,10 @@ func TestServerInfoReport(t *testing.T) {
 		if !strings.Contains(out+"\n", want) {
 			t.Errorf("healthy: no %q in:\n%s", want, out)
 		}
+	}
+	// The sections in their order: the server's, devopsy's, the projects.
+	if s, d, p := strings.Index(out, "\nserver\n"), strings.Index(out, "\ndevopsy\n"), strings.Index(out, "\nprojects\n"); s < 0 || d < s || p < d {
+		t.Errorf("healthy: sections out of order:\n%s", out)
 	}
 	if len(warnings) != 0 {
 		t.Errorf("healthy: warnings %+v", warnings)

@@ -419,7 +419,7 @@ func TestServerInfoGoneNamesWidenNoKey(t *testing.T) {
 	for name, info := range map[string]remote.ServerInfo{"a claim left, the rest unlooked": unlooked, "a name of no project": ownHeading} {
 		out := reportAt(info)
 		// The column of a report whose keys are server's own: snapshots and two spaces, indented.
-		if !strings.Contains(out, "\n  devopsy    0.53.0\n") {
+		if !strings.Contains(out, "\n  version    0.53.0\n") {
 			t.Errorf("%s: a long gone name widened the key column:\n%s", name, out)
 		}
 	}
