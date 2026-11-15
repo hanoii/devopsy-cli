@@ -518,7 +518,7 @@ func TestProxyClientStepKeepsLoginsWhenJqFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := fakes(t, map[string]string{
-		"getent":  "echo devopsy:x:1000:1000::" + home + ":/bin/sh\n",
+		"getent":  "echo devopsy:x:61000:61000::" + home + ":/bin/sh\n",
 		"apt-get": "echo 'E: Unable to locate package jq' >&2\nexit 100\n",
 		"jq":      "echo 'jq: command not found' >&2\nexit 127\n",
 		// install without the owner a test cannot set: the file before last onto the last.
