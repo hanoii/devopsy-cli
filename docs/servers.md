@@ -391,9 +391,9 @@ a name of no project on the server is a project of its own:
 The rest is the server's, under `leftovers`:
 
 - what [`--gc`](#--gc) would remove, counted (one-off containers,
-  release snapshots, image names a project's record left, dangling
-  images), with `--gc --dry-run` as its hint for the sizes and the
-  build cache, which only `--gc` reads;
+  release snapshots, image names a project's record left, old util
+  images, dangling images), with `--gc --dry-run` as its hint for the
+  sizes and the build cache, which only `--gc` reads;
 - images with a tag that no release holds and no container uses (tools
   a project ran, the admin's own), one row each with its size, then one
   `docker rmi` of all of them as the hint;
@@ -447,8 +447,10 @@ gone. In this order:
   removal) is skipped: whatever holds them prunes them;
 - the names in the deploy user's projects' records of names left that
   can go now, as a release's pruning retries them (`--releases` lists a
-  project's record), then the dangling images no container uses, as
-  `docker image prune` finds them (never `-a`).
+  project's record), then the tags of `devopsy.internal/util` other than
+  the one this devopsy uses that no container uses (an older devopsy's
+  util image), by name and without `-f`, then the dangling images no
+  container uses, as `docker image prune` finds them (never `-a`).
 
 It never removes a tagged image no release holds, a volume, a release, an
 environment, a project user's snapshots, the containers of a service, or

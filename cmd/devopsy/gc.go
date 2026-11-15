@@ -138,6 +138,7 @@ type gcPlan struct {
 	Builders   []gcBuilder   `json:"builders,omitempty"`
 	Snapshots  []gcSnapshot  `json:"snapshots,omitempty"`
 	Left       []gcLeft      `json:"left,omitempty"`
+	Util       []gcTag       `json:"util,omitempty"`
 	Dangling   gcDangling    `json:"dangling,omitzero"`
 	Unread     []string      `json:"unread,omitempty"`
 }
@@ -211,6 +212,22 @@ func (l gcLeft) words() string {
 	return s + ", a name only (the image has others)"
 }
 
+// gcTag is an old util image (remote.OldUtilTag) by its name Ref and its image's ID, its
+// Size when the name is the image's last, which takes the image.
+type gcTag struct {
+	Ref  string `json:"ref"`
+	ID   string `json:"id"`
+	Last bool   `json:"last,omitempty"`
+	Size int64  `json:"size,omitempty"`
+}
+
+func (t gcTag) words() string {
+	if t.Last {
+		return t.Ref + ", an old util image, " + humanBytes(t.Size)
+	}
+	return t.Ref + ", an old util image, a name only (the image has others)"
+}
+
 // gcDangling is the dangling images no container uses, what docker image prune removes, by id.
 type gcDangling struct {
 	Images []gcImage `json:"images,omitempty"`
@@ -232,7 +249,7 @@ func (d gcDangling) size() int64 {
 
 // count is how many things the plan removes: a stopped builder's cache stays.
 func (p gcPlan) count() int {
-	n := len(p.OneOffs) + len(p.Snapshots) + len(p.Left) + len(p.Dangling.Images)
+	n := len(p.OneOffs) + len(p.Snapshots) + len(p.Left) + len(p.Util) + len(p.Dangling.Images)
 	for _, b := range p.Builders {
 		if !b.Stopped {
 			n++
@@ -273,6 +290,10 @@ func (p gcPlan) entries() []remote.StatusEntry {
 	for _, l := range p.Left {
 		lines = append(lines, l.words())
 		total += l.Size
+	}
+	for _, u := range p.Util {
+		lines = append(lines, u.words())
+		total += u.Size
 	}
 	if n := len(p.Dangling.Images); n > 0 {
 		lines = append(lines, fmt.Sprintf("%s no container uses, %s", plural(n, "dangling image"), humanBytes(p.Dangling.size())))
@@ -358,14 +379,15 @@ func runGCStep(args []string) int {
 
 // only is what of p the listing listed too, each by its id: a one-off by its container's,
 // a builder by its project and name (the daemon's by its context's), unless the listing said its cache stays (Stopped), a release snapshot
-// by its environment and id, a name left by its environment, name and image, a dangling image
-// by its id. What p could not read stays in.
+// by its environment and id, a name left by its environment, name and image, an old util image
+// by its name and image, a dangling image by its id. What p could not read stays in.
 func (p gcPlan) only(listing gcPlan) gcPlan {
 	p.OneOffs = keepListed(p.OneOffs, listing.OneOffs, func(c gcOneOff) string { return c.ID })
 	p.Builders = keepListed(p.Builders, slices.DeleteFunc(slices.Clone(listing.Builders), func(b gcBuilder) bool { return b.Stopped }),
 		func(b gcBuilder) string { return b.Project + "\x00" + b.Name })
 	p.Snapshots = keepListed(p.Snapshots, listing.Snapshots, gcSnapshot.key)
 	p.Left = keepListed(p.Left, listing.Left, func(l gcLeft) string { return leftKey(l.Retried) })
+	p.Util = keepListed(p.Util, listing.Util, gcTag.key)
 	p.Dangling.Images = keepListed(p.Dangling.Images, listing.Dangling.Images, func(i gcImage) string { return i.ID })
 	return p
 }
@@ -381,6 +403,9 @@ func keepListed[T any](found, listed []T, key func(T) string) []T {
 
 // key is a release snapshot by its environment and id.
 func (s gcSnapshot) key() string { return s.Base + "\x00" + s.ID }
+
+// key is an old util image by its name and image.
+func (t gcTag) key() string { return t.Ref + "\x00" + t.ID }
 
 // leftKey is a name a project's record left, by its environment, name and image.
 func leftKey(r images.Retried) string { return r.Name + "\x00" + r.Ref + "\x00" + r.Image }
@@ -461,6 +486,8 @@ func (g *gcScope) find() gcPlan {
 			p.Left = append(p.Left, l)
 		}
 	}
+	p.Util, err = g.oldUtil()
+	unread("the old util images", err)
 	p.Dangling, err = g.dangling()
 	unread("the dangling images", err)
 	return p
@@ -802,6 +829,68 @@ func parseDockerSize(s string) int64 {
 	return 0
 }
 
+// oldUtil are the old util images (remote.OldUtilTag) no container uses, by their names, each
+// with its image's size when it is the image's last name: devopsy's own images, which no
+// release, --destroy or pruning removes, since only its util image's tag bump leaves them.
+func (g *gcScope) oldUtil() ([]gcTag, error) {
+	rows, err := imageRows(g.docker)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]int{}
+	var tags []gcTag
+	for _, r := range rows {
+		if !strings.Contains(r.Ref, "<none>") {
+			names[r.ID]++
+		}
+		if remote.OldUtilTag(r.Ref) {
+			tags = append(tags, gcTag{Ref: r.Ref, ID: r.ID, Size: r.Size})
+		}
+	}
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	used, err := g.imagesUsed()
+	if err != nil {
+		return nil, err
+	}
+	tags = slices.DeleteFunc(tags, func(t gcTag) bool { return used[t.ID] })
+	for i := range tags {
+		if tags[i].Last = names[tags[i].ID] == 1; !tags[i].Last {
+			tags[i].Size = 0
+		}
+	}
+	return tags, nil
+}
+
+// removeOldUtil removes the old util images of tags that are still such and used by no container,
+// decided again under the image lock (oldUtil), each by its name: docker image rm without -f
+// refuses one a container started on since, and takes only the name from an image that has
+// others. False when one stays.
+func (g *gcScope) removeOldUtil(tags []gcTag) bool {
+	if len(tags) == 0 {
+		return true
+	}
+	now, err := g.oldUtil()
+	if err != nil {
+		report.Warn("the old util images stay: " + err.Error())
+		return false
+	}
+	ok := true
+	for _, t := range tags {
+		if !slices.ContainsFunc(now, func(x gcTag) bool { return x.key() == t.key() }) {
+			continue
+		}
+		if out, err := exec.Command(g.docker, "image", "rm", t.Ref).CombinedOutput(); err != nil {
+			report.Warn(t.Ref+" stays", oneLine(cmp.Or(string(out), err.Error())))
+			ok = false
+			continue
+		}
+		report.Info("removed " + t.words())
+	}
+	return ok
+}
+
 // dangling are the dangling images no container uses, with their size as Docker counts it
 // (none counted): what docker image prune removes.
 func (g *gcScope) dangling() (gcDangling, error) {
@@ -946,12 +1035,12 @@ func (g *gcScope) remove(p gcPlan) int {
 		}
 	}
 	// 4. Images, under the exclusive image lock taken once: each project's record retried,
-	// then the dangling images. Never after a wait for that lock ended: it would wait again.
+	// the old util images, then the dangling images. Never after a wait for that lock ended: it would wait again.
 	switch {
 	case ended:
 		log.Warn("the server's images stayed busy: the other release snapshots and the images stay, for the next --gc")
 		return gcLeftWarned
-	case len(p.Left) == 0 && len(p.Dangling.Images) == 0:
+	case len(p.Left) == 0 && len(p.Util) == 0 && len(p.Dangling.Images) == 0:
 	default:
 		unlock, err := imagesLock{root: g.root, how: syscall.LOCK_EX, docker: g.docker, who: "--gc", doing: "removing"}.take(context.Background(), log)
 		if err != nil {
@@ -965,6 +1054,9 @@ func (g *gcScope) remove(p gcPlan) int {
 			set := projectImages(pd, errOut)
 			set.RetryOnly(listed)
 			left = left || slices.ContainsFunc(set.Retryable(), listed)
+		}
+		if !g.removeOldUtil(p.Util) {
+			left = true
 		}
 		if !g.removeDangling(p.Dangling) {
 			left = true

@@ -66,7 +66,7 @@ func leftFacts(info *remote.ServerInfo, r remote.Releases, d *remote.Door, trees
 
 // facts are the plan counted, for --server-info: what --gc would remove.
 func (p gcPlan) facts() *remote.GCFacts {
-	return &remote.GCFacts{OneOffs: len(p.OneOffs), Snapshots: len(p.Snapshots), Left: len(p.Left), Dangling: len(p.Dangling.Images), Unread: p.Unread}
+	return &remote.GCFacts{OneOffs: len(p.OneOffs), Snapshots: len(p.Snapshots), Left: len(p.Left), Util: len(p.Util), Dangling: len(p.Dangling.Images), Unread: p.Unread}
 }
 
 // hostImages are the images with a tag, by docker image ls (imageRows), each with every tag it
@@ -399,7 +399,7 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 		for _, c := range []struct {
 			n    int
 			what string
-		}{{f.OneOffs, "one-off container"}, {f.Snapshots, "release snapshot"}, {f.Left, "image name a project's record left"}, {f.Dangling, "dangling image"}} {
+		}{{f.OneOffs, "one-off container"}, {f.Snapshots, "release snapshot"}, {f.Left, "image name a project's record left"}, {f.Util, "old util image"}, {f.Dangling, "dangling image"}} {
 			if c.n > 0 {
 				what = append(what, plural(c.n, c.what))
 			}
@@ -431,7 +431,8 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 			if slices.ContainsFunc(img.Tags, func(t string) bool {
 				_, hold := images.HoldOf(t)
 				_, _, build := images.IsDoorBuild(t)
-				return hold || build || images.Familiar(t) == images.Familiar(remote.UtilImage)
+				// The util image is devopsy's, and an old one --gc's to remove (its count above).
+				return hold || build || images.Familiar(t) == images.Familiar(remote.UtilImage) || remote.OldUtilTag(t)
 			}) || img.Containers > 0 {
 				continue
 			}

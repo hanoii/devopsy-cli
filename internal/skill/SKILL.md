@@ -279,7 +279,7 @@ what `config.yaml` sets.
   and `--server-info` warns of what differs from devopsy's setup.
 - What a server keeps that nothing of devopsy removes (old exited one-off
   containers, unused build cache, release snapshots of releases gone,
-  names a project's record left, dangling images) goes with
+  names a project's record left, old util images, dangling images) goes with
   `devopsy @<server> --gc`, as the deploy user: `--dry-run` lists it
   with sizes and asks nothing, `--yes` removes without asking; exit 3
   when something is left to remove; after an answer it removes only

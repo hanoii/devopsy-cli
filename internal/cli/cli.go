@@ -1107,7 +1107,8 @@ Docker's own rule, never because an owner looks gone. In this order:
                   snapshots are in use is skipped
   images          the names in the deploy user's projects' records of
                   names left that can go now, as a release's pruning
-                  retries them, then the dangling images no container uses
+                  retries them, then the old tags of devopsy's util image
+                  and the dangling images, none a container uses
 
 It lists what it would remove with sizes, asks, then removes, deciding
 each removal again: a run cut off leaves only less to remove. It never

@@ -44,12 +44,13 @@ func leftSays(info remote.ServerInfo, host, ref string) []string {
 
 // What --server-info shows of what may be dead or gone, each with its hint: what --gc would
 // remove, tagged images no release holds and no container uses (never a hold, a build, the
-// util image or one a container uses), what is left of a compose name with no environment
-// directory and no uid claim (a release's tags, anchored, so shop-stage's never take
-// shop-stage-2's nor the other way, a name over 94 characters by its cut prefix; a project
-// user's builds; a release's containers; volumes of such a name only, never of the admin's own
-// compose projects; snapshots under the snapshot root), dangling anonymous volumes, a cut
-// --destroy's directory, and a project user with no key that holds environments. Without a
+// util image, an old util image --gc counts, or one a container uses), what is left of a
+// compose name with no environment directory and no uid claim (a release's tags, anchored, so
+// shop-stage's never take shop-stage-2's nor the other way, a name over 94 characters by its
+// cut prefix; a project user's builds; a release's containers; volumes of such a name only,
+// never of the admin's own compose projects; snapshots under the snapshot root), dangling
+// anonymous volumes, a cut --destroy's directory, and a project user with no key that holds
+// environments. Without a
 // target the hints say in words what needs an address. A read that failed (the images, the
 // volumes, what --gc's count could not read, the containers an image's use is counted from) is
 // said or leaves its lines out, never taken for none.
@@ -72,7 +73,7 @@ func TestServerInfoLeft(t *testing.T) {
 			{Project: "gone-prod", Service: "migrate", State: "exited", Released: true, OneOff: true},
 			{Project: "tools", Service: "x", State: "running"},
 		},
-		GC: &remote.GCFacts{OneOffs: 2, Left: 1, Dangling: 3},
+		GC: &remote.GCFacts{OneOffs: 2, Left: 1, Util: 1, Dangling: 3},
 		Images: []remote.HostImage{
 			{ID: "i1", Tags: []string{"app:devopsy-shop-prod-20261101000000", "app:devopsy-shop-stage-20261101000000"}, Containers: 1},
 			{ID: "i2", Tags: []string{"app:devopsy-shop-stage-2-20261101000000", "app:devopsy-shop-stage-2-s20261102000000-a1"}},
@@ -81,6 +82,7 @@ func TestServerInfoLeft(t *testing.T) {
 			{ID: "i5", Tags: []string{"busybox:1.37"}, Size: 4e6},
 			{ID: "i6", Tags: []string{"nginx:1.27"}, Containers: 1},
 			{ID: "i7", Tags: []string{remote.UtilImage}},
+			{ID: "i9", Tags: []string{remote.UtilRepo + ":4"}},
 			{ID: "i8", Tags: []string{"alpine:3", "alpine:3.22"}, Size: 8e6},
 		},
 		Volumes: []remote.HostVolume{
@@ -110,7 +112,7 @@ func TestServerInfoLeft(t *testing.T) {
 			gone + "$ docker rmi app:devopsy-shop-stage-2-20261101000000 app:devopsy-shop-stage-2-s20261102000000-a1",
 		"shop eu/old: a --destroy cut off while it removed it left old.rm.123, 3.0 MB\n| run it again, which resumes it, in shop's checkout:\n$ devopsy @devopsy@vm1:eu/old --destroy",
 		"wiki stage: gone, no environment and no uid claim on the server, and left: 1 image name of its releases\n" + gone + "$ docker rmi app:devopsy-wiki-stage-20261101000000",
-		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 3 dangling images\n| to see their sizes, and the build cache it would remove too:\n$ devopsy @vm1: --gc --dry-run",
+		"gc: --gc would remove 2 one-off containers, 1 image name a project's record left, 1 old util image, 3 dangling images\n| to see their sizes, and the build cache it would remove too:\n$ devopsy @vm1: --gc --dry-run",
 		// One row each, then one line for all and one rmi of every tag, to copy at once.
 		"images: busybox:1.37  4.0 MB",
 		"images: alpine:3, alpine:3.22  8.0 MB",
@@ -238,7 +240,7 @@ func TestSnapshotEnvDirs(t *testing.T) {
 // no builder's cache (buildx, buildctl), no image inspect for a size, no second ps or inspect of
 // the containers (the one-offs and the images in use are hostContainers' read), and no walk of a
 // release snapshot. An exited one-off of a listed environment past the age, a release snapshot
-// whose release is gone and a dangling image no container uses are counted; an image's size
+// whose release is gone, an old util image and a dangling image no container uses are counted; an image's size
 // comes from docker image ls, a volume no container uses from docker volume ls.
 func TestServerFactsCountGC(t *testing.T) {
 	t.Parallel()
@@ -255,7 +257,7 @@ case "$*" in
   'inspect --format '*) echo 'exited 0 - sha256:old "2026-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod","com.docker.compose.oneoff":"True"}'
     echo 'running 0 - sha256:d2 "0001-01-01T00:00:00Z" {"com.docker.compose.project":"shop-prod"}' ;;
   'image ls -q --no-trunc --filter dangling=true') echo sha256:d1; echo sha256:d2 ;;
-  'image ls --no-trunc --format {{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}') echo 'sha256:t1 busybox:1.37 4.26MB'; echo 'sha256:d2 <none>:<none> 1MB' ;;
+  'image ls --no-trunc --format {{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}') echo 'sha256:t1 busybox:1.37 4.26MB'; echo 'sha256:d2 <none>:<none> 1MB'; echo 'sha256:u4 devopsy.internal/util:4 24MB' ;;
   'volume ls --format '*) echo '["a1","com.docker.volume.anonymous="]'; echo '["shop-prod_db","com.docker.compose.project=shop-prod"]' ;;
   'volume ls -q --filter dangling=true') echo a1 ;;
 esac
@@ -272,10 +274,10 @@ exit 0
 	if err := json.Unmarshal(out, &info); err != nil || info.GC == nil {
 		t.Fatalf("--server-facts: %v:\n%s", err, out)
 	}
-	if g := *info.GC; g.OneOffs != 1 || g.Snapshots != 1 || g.Dangling != 1 || g.Left != 0 || len(g.Unread) > 0 {
+	if g := *info.GC; g.OneOffs != 1 || g.Snapshots != 1 || g.Util != 1 || g.Dangling != 1 || g.Left != 0 || len(g.Unread) > 0 {
 		t.Errorf("gc facts %+v", g)
 	}
-	if len(info.Images) != 1 || info.Images[0].Size != 4260000 || info.Images[0].Containers != 0 {
+	if len(info.Images) != 2 || info.Images[0].Size != 4260000 || info.Images[0].Containers != 0 {
 		t.Errorf("images %+v", info.Images)
 	}
 	if !slices.Equal(info.Volumes, []remote.HostVolume{{Name: "a1", Anonymous: true, Unused: true}, {Name: "shop-prod_db", Project: "shop-prod"}}) {

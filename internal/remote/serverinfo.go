@@ -109,11 +109,12 @@ type ServerInfo struct {
 
 // GCFacts are what --gc lists, counted with no size and no build cache, which only its own
 // listing reads: its one-off containers, release snapshots, image names a project's record
-// left, dangling images, and what it could not read.
+// left, old util images (OldUtilTag), dangling images, and what it could not read.
 type GCFacts struct {
 	OneOffs   int      `json:"one_offs"`
 	Snapshots int      `json:"snapshots"`
 	Left      int      `json:"left"`
+	Util      int      `json:"util"`
 	Dangling  int      `json:"dangling"`
 	Unread    []string `json:"unread,omitempty"`
 }

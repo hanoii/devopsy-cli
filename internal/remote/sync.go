@@ -428,8 +428,21 @@ const (
 // devopsy-util:1, :2, :3 and :4 (:3 added zstd, for snapshots, :4 acl, for the
 // door's grants), then devopsy.internal/util:5, under the door's build host
 // (images.DoorHost), so no project user's pull writes the name root runs:
-// hosts keep the older ones until removed.
-const UtilImage = "devopsy.internal/util:5"
+// --gc removes UtilRepo's older tags (OldUtilTag), and hosts keep the
+// older names until removed by hand.
+const UtilImage = UtilRepo + ":5"
+
+// UtilRepo is UtilImage's repository: every tag of it is devopsy's util
+// image, this devopsy's or an older one's.
+const UtilRepo = "devopsy.internal/util"
+
+// OldUtilTag is whether ref, as docker image ls gives it, is a tag of
+// UtilRepo other than UtilImage's: an older devopsy's util image, which no
+// step of this devopsy runs, and --gc removes.
+func OldUtilTag(ref string) bool {
+	tag, ok := strings.CutPrefix(ref, UtilRepo+":")
+	return ok && ref != UtilImage && tag != "<none>" && tag != "" && !strings.ContainsAny(tag, "@:/")
+}
 
 // UtilImageMaxAge is how old UtilImage may get before it is rebuilt.
 const UtilImageMaxAge = 7 * 24 * time.Hour

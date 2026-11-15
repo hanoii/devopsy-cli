@@ -75,6 +75,7 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - A rebuild that fails warns and goes on with the image there, since a registry out of reach must never stop a sync, an import or `--destroy`; a missing one that fails to build fails.
 - Two rebuilds at once on a host are harmless: a build tags the image only once complete.
 - The tag is bumped whenever `UtilDockerfile` changes, and a new tag is a named feature of its own (internals/snapshots.md's gates): a new tag is built at its first use on each host, where the old one would be rebuilt from the old Dockerfile only once a week old.
+- Every tag of `UtilRepo` but `UtilImage`'s (`remote.OldUtilTag`) is an older devopsy's, which `--gc` removes (internals/other.md).
 - One implementation, in Go, never in a script: a weekly check in shell needs GNU `date`, which the macOS test runs lack.
 
 ## devopsy's containers

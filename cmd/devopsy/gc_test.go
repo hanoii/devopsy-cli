@@ -98,11 +98,12 @@ func TestGCPlanEntries(t *testing.T) {
 		Builders:  []gcBuilder{{Records: 34, Size: 1.2e9}, {Name: "devopsy-blog", Project: "blog", Stopped: true}},
 		Snapshots: []gcSnapshot{{Env: "shop/prod", ID: "20261101120000", Release: "20261020120000", Size: 300e6}},
 		Left:      []gcLeft{{Retried: images.Retried{Ref: "shop-web:old", Release: "20261020120000", Name: "shop-prod"}, Last: true, Size: 100e6}, {Retried: images.Retried{Ref: "app:2", Release: "1", Name: "shop-stage"}}},
+		Util:      []gcTag{{Ref: "devopsy.internal/util:4", ID: "u4", Last: true, Size: 25e6}, {Ref: "devopsy.internal/util:3", ID: "u5"}},
 		Dangling:  gcDangling{Images: []gcImage{{"d1", 150e6}, {"d2", 150e6}, {"d3", 150e6}, {"d4", 150e6}}},
 		Unread:    []string{"the environments of /home/devopsy/blog: permission denied"},
 	}
-	if p.count() != 9 {
-		t.Errorf("count %d, want 9: the stopped builder's cache stays", p.count())
+	if p.count() != 11 {
+		t.Errorf("count %d, want 11: the stopped builder's cache stays", p.count())
 	}
 	var lines []string
 	for _, e := range p.entries() {
@@ -117,6 +118,8 @@ func TestGCPlanEntries(t *testing.T) {
 		"snapshots: shop/prod 20261101120000, its release 20261020120000 gone, 300.0 MB",
 		"images: shop-web:old, left by release 20261020120000 of shop-prod, 100.0 MB",
 		"images: app:2, left by release 1 of shop-stage, a name only (the image has others)",
+		"images: devopsy.internal/util:4, an old util image, 25.0 MB",
+		"images: devopsy.internal/util:3, an old util image, a name only (the image has others)",
 		"images: 4 dangling images no container uses, 600.0 MB",
 		"not read: the environments of /home/devopsy/blog: permission denied: nothing of it removed",
 		"total: up to 2.2 GB",
@@ -258,14 +261,41 @@ esac
 	}
 }
 
+// The old util images --gc removes: every tag of remote.UtilRepo but remote.UtilImage's, by
+// its name, that no container uses, its size only when the image has no other name (the
+// current tag's included), since then the name takes the image; never another repository's,
+// the util image's name before devopsy.internal/util included, which only an upgrade left.
+func TestGCOldUtil(t *testing.T) {
+	t.Parallel()
+	docker := filepath.Join(t.TempDir(), "docker")
+	write(t, docker, `#!/bin/sh
+case "$*" in
+  'image ls --no-trunc --format {{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}')
+    echo 'sha256:u5 `+remote.UtilImage+` 25MB'; echo 'sha256:u4 devopsy.internal/util:4 24MB'
+    echo 'sha256:u3 devopsy.internal/util:3 23MB'; echo 'sha256:u5 devopsy.internal/util:2 25MB'
+    echo 'sha256:x devopsy.internal/util:<none> 1MB'; echo 'sha256:o devopsy-util:4 22MB'
+    echo 'sha256:y devopsy.internal/util2:1 1MB' ;;
+  'ps -aq --no-trunc') echo c1 ;;
+  'container inspect --format {{.Image}} c1') echo sha256:u3 ;;
+  *) echo "unexpected: $*" >&2; exit 9 ;;
+esac
+`, 0o755)
+	tags, err := (&gcScope{docker: docker}).oldUtil()
+	want := []gcTag{{Ref: "devopsy.internal/util:4", ID: "sha256:u4", Last: true, Size: 24e6}, {Ref: "devopsy.internal/util:2", ID: "sha256:u5"}}
+	if err != nil || !slices.Equal(tags, want) {
+		t.Errorf("old util %+v (%v), want %+v", tags, err, want)
+	}
+}
+
 // --gc end to end through a session that runs here: --dry-run lists with sizes and exits 3,
 // removing nothing; without a terminal it asks nothing and removes nothing, naming --yes.
 // The removal after an answer removes only what its listing listed, each decided again: what
-// came to qualify since (a one-off, a release snapshot, a name a project's record left, a
-// dangling image) stays, and the build cache goes by the listing's cutoff. --yes removes in
+// came to qualify since (a one-off, a release snapshot, a name a project's record left, an old
+// util image, a dangling image) stays, and the build cache goes by the listing's cutoff. --yes removes in
 // one session what it lists: the old one-off (never with -v), the daemon's old build cache by
 // prune's own rule on the builder its Docker context names, the release snapshot of a release
-// gone, the name a project's record left, then the dangling images; an environment whose
+// gone, the name a project's record left, the old util image by its name, then the dangling
+// images; an environment whose
 // snapshot lock is held is skipped and exits 3, its snapshot kept for the next run; a project
 // user is refused before anything.
 func TestGC(t *testing.T) {
@@ -277,7 +307,8 @@ func TestGC(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
 	// What is removed is marked in state (rm-<id>, : and / as _); what came to qualify after
-	// the listing shows once state/new is there: one-off c2, image shop-web:older, dangling d2.
+	// the listing shows once state/new is there: one-off c2, image shop-web:older, old util image
+	// devopsy.internal/util:3, dangling d2.
 	log, state := filepath.Join(tmp, "docker.log"), t.TempDir()
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 echo "$*" >>`+log+`
@@ -304,6 +335,8 @@ case "$*" in
   'image inspect --format {{json .}} shop-web:older') echo '{"Id":"sha256:bbb","RepoTags":["shop-web:older"],"Size":100000000}' ;;
   'image rm '*) touch "`+state+`/rm-$(printf %s "$3" | tr :/ __)" ;;
   'image ls -q --no-trunc --filter dangling=true') gone sha256:d1 || echo sha256:d1; new && ! gone sha256:d2 && echo sha256:d2; true ;;
+  'image ls --no-trunc --format {{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}') echo 'sha256:u5 '`+remote.UtilImage+`' 25MB'
+    gone devopsy.internal/util:4 || echo 'sha256:u4 devopsy.internal/util:4 24MB'; new && ! gone devopsy.internal/util:3 && echo 'sha256:u3 devopsy.internal/util:3 23MB'; true ;;
   'ps -aq --no-trunc') ;;
   'image inspect --format {{.Id}} {{.Size}} '*) shift 4; for i; do echo "$i 600000000"; done ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
@@ -379,8 +412,9 @@ esac
 		"snapshots    shop/prod 20261020000001, its release 20261001000000 gone, 3.0 kB",
 		"             shop/stage 20261020000001, its release 20261001000000 gone, 3.0 kB",
 		"images       shop-web:old, left by release 20261001000000 of shop-prod, 100.0 MB",
+		"             devopsy.internal/util:4, an old util image, 24.0 MB",
 		"             1 dangling image no container uses, 600.0 MB",
-		"total        up to 713.5 MB",
+		"total        up to 737.5 MB",
 		"$ devopsy @devopsy@server: --server-info",
 	} {
 		if !strings.Contains(out, want) {
@@ -418,7 +452,7 @@ esac
 	}
 	_, errs, code = step(listing, "remove-listed")
 	rs, until := pruned()
-	want := []string{"rm c1", "image rm shop-web:old", "image rm sha256:d1"}
+	want := []string{"rm c1", "image rm shop-web:old", "image rm devopsy.internal/util:4", "image rm sha256:d1"}
 	if code != gcLeftWarned || !slices.Equal(rs, want) || until < 720*time.Hour || until > 721*time.Hour ||
 		snap("prod", "20261020000001") || !snap("prod", "20261020000002") || !snap("prod", "20261102000000") || !snap("stage", "20261020000001") ||
 		!strings.Contains(errs, "the release snapshots of shop/stage stay") || !strings.Contains(errs, "removing snapshot shop/prod 20261020000001 (its release 20261001000000 is gone)") ||
@@ -431,7 +465,7 @@ esac
 	lock.Close()
 	out, code = run("--yes")
 	rs, until = pruned()
-	want = []string{"rm c2", "image rm shop-web:older", "image rm sha256:d2"}
+	want = []string{"rm c2", "image rm shop-web:older", "image rm devopsy.internal/util:3", "image rm sha256:d2"}
 	if code != 0 || !slices.Equal(rs, want) || until < 720*time.Hour || until > 721*time.Hour || snap("prod", "20261020000002") || snap("stage", "20261020000001") || !snap("prod", "20261102000000") ||
 		!strings.Contains(out, "removed shop-web:older, left by release 20261002000000 of shop-prod") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-info") {
 		t.Fatalf("--yes (%d) removed %v:\n%s", code, removals(), out)
