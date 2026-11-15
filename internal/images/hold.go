@@ -408,18 +408,15 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold, ps *profiles) error {
 	es = withOwnBuilds(es)
 	tid := s.idOf(rel)
-	sharers, tools, toolsOK := s.beside(rel, es, ps)
+	sharers, tools, toolsOK := s.beside(rel, es, ps, true)
 	s.resolveBookmarks(rel, es, holds, sharers)
-	if err := s.keep(rel, es); err != nil {
+	if err := s.keepWithTools(rel, es, tools, toolsOK); err != nil {
 		s.say(report.ErrorLevel, "could not record the images of %s: %v", tid, err)
 		return err
 	}
 	if err := writeCompose(rel, es, holds); err != nil {
 		s.say(report.ErrorLevel, "could not write %s's %s: %v", tid, ComposeFile, err)
 		return err
-	}
-	if toolsOK {
-		s.keepTools(rel, tools)
 	}
 	return nil
 }
@@ -499,8 +496,9 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 	for svc, ch := range kept {
 		holds[svc] = ch
 	}
-	ps := s.profilesOf(rel)
-	sharers, _, _ := s.beside(rel, es, ps)
+	// Every profile listed only if its sharers need it here, at most once with the write's.
+	ps := s.profilesOf(rel, false)
+	sharers, _, _ := s.beside(rel, es, ps, false)
 	s.resolveBookmarks(rel, es, holds, sharers)
 	if was, err := os.ReadFile(filepath.Join(rel, ComposeFile)); err == nil && slices.Equal(before, es) && string(was) == composeText(es, holds) {
 		return nil

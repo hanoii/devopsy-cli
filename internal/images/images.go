@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,6 +93,8 @@ type Docker interface {
 	ID(ref string) (string, error)
 	// Tags are the image's names (RepoTags).
 	Tags(id string) ([]string, error)
+	// RepoTags are every name in a repository, of any image.
+	RepoTags(repo string) ([]string, error)
 	// Tag points dst at src's image (a name or an id).
 	Tag(src, dst string) error
 	// Remove removes a name: Docker untags it while the image has other
@@ -595,11 +598,9 @@ func (s *Set) Bookmark(rel string) {
 		s.say(report.WarnLevel, "could not list the images of %s: a rollback to it builds or pulls them again", id)
 		return
 	}
-	if err := s.keep(rel, es); err != nil {
+	_, tools, ok := s.beside(rel, withOwnBuilds(es), s.profilesOf(rel, false), true)
+	if err := s.keepWithTools(rel, es, tools, ok); err != nil {
 		s.say(report.WarnLevel, "could not record the images of %s (%v): a rollback to it builds or pulls them again", id, err)
-	}
-	if _, tools, ok := s.beside(rel, withOwnBuilds(es), s.profilesOf(rel)); ok {
-		s.keepTools(rel, tools)
 	}
 }
 
@@ -723,9 +724,28 @@ func digestOf(ref string) string {
 }
 
 // keep records a release's entries (ListFile) and tags each image with
-// its bookmark, giving up what an earlier listing of it no longer has.
+// its bookmark, giving up what an earlier listing of it no longer has: a
+// snapshot's (BookmarkFrom), which has no tools.
 func (s *Set) keep(rel string, es []entry) error {
-	return s.keepIn(rel, withOwnBuilds(es), listingKind)
+	return s.keepIn(rel, withOwnBuilds(es), listingKind, nil)
+}
+
+// keepWithTools records a release's listing es (keep) then its tools (keepTools), when
+// toolsOK (beside's), whatever keep returned: the listing is written before it tags, so a
+// record failing on an own bookmark still has the release its tools, which go with it. Each
+// file's drops are judged against both (keepIn's others): a name one gives up that the other
+// lists is the release's still.
+func (s *Set) keepWithTools(rel string, es, tools []entry, toolsOK bool) error {
+	es = withOwnBuilds(es)
+	others := tools
+	if !toolsOK {
+		others = readTools(rel)
+	}
+	err := s.keepIn(rel, es, listingKind, others)
+	if toolsOK {
+		s.keepTools(rel, tools, es)
+	}
+	return err
 }
 
 // listKind is one of a release's files of images (keepIn): its file, how its bookmarks are
@@ -747,32 +767,46 @@ var (
 		lost: func(id string) string { return "a rollback to " + id + " pulls it again" }}
 	// toolsKind is its tools (ToolsFile): one gone costs its run a pull, said by nothing.
 	toolsKind = listKind{file: ToolsFile, names: toolBookmarks,
-		lost: func(id string) string { return "its image stays when " + id + " goes" }}
+		lost: func(id string) string { return "another release's removal may take the name " + id + " runs it by" }}
 )
 
-// profiles are a release's services of every profile (ListAll), read once for what sits
-// beside its listing (beside); none when the set lists no profiles (tests), err when the
-// listing failed, said once (said).
+// profiles are a release's services of every profile (ListAll), listed at most once and only
+// when something beside its listing needs them (beside), its list nil when the set lists no
+// profiles (tests); a listing that failed is said once (said). byName: a tool's image is
+// read by its name now (Inspect); else it keeps the one recorded for it. Behind the door
+// only a record, right after its fetch claimed its tools, reads them by name: the door's
+// inspect of a name the project has not claimed claims it, which pulls.
 type profiles struct {
-	svcs       []Service
-	err        error
-	none, said bool
+	list         func() ([]Service, error)
+	svcs         []Service
+	err          error
+	loaded, said bool
+	byName       bool
 }
 
-func (s *Set) profilesOf(rel string) *profiles {
-	if s.ListAll == nil {
-		return &profiles{none: true}
+// profilesOf are rel's, for a record when record.
+func (s *Set) profilesOf(rel string, record bool) *profiles {
+	ps := &profiles{byName: record || !s.Door}
+	if s.ListAll != nil {
+		ps.list = func() ([]Service, error) { return s.ListAll(rel) }
 	}
-	svcs, err := s.ListAll(rel)
-	return &profiles{svcs: svcs, err: err}
+	return ps
+}
+
+func (ps *profiles) load() ([]Service, error) {
+	if !ps.loaded {
+		ps.loaded = true
+		ps.svcs, ps.err = ps.list()
+	}
+	return ps.svcs, ps.err
 }
 
 // beside splits a release's services beside its listing es (ps, every profile's) into the
-// sharers of an own entry's image (sharers: its fetch file names them, else ps does) and its
-// tools: every one without build: or pull_policy: never whose service and image es has none of,
-// each with the image its name holds now. Without ps the tools are not known (ok false), and
-// what they and a sharer cost is said once.
-func (s *Set) beside(rel string, es []entry, ps *profiles) (sharers map[string]string, tools []entry, ok bool) {
+// sharers of an own entry's image (sharers: its fetch file names them, else ps does) and, with
+// withTools, its tools: every one without build: or pull_policy: never whose service and image
+// es has none of, each with its image (profiles' byName). ok false: the tools are not known
+// (no listing of every profile, or it failed, said once with what it costs).
+func (s *Set) beside(rel string, es []entry, ps *profiles, withTools bool) (sharers map[string]string, tools []entry, ok bool) {
 	sharers = map[string]string{}
 	listed, own := map[string]bool{}, map[string]bool{}
 	for _, e := range es {
@@ -796,55 +830,71 @@ func (s *Set) beside(rel string, es []entry, ps *profiles) (sharers map[string]s
 			}
 		}
 	}
-	if ps.none {
+	needSharers := tags == nil && len(own) > 0
+	if ps.list == nil || !needSharers && !withTools {
 		return sharers, nil, false
 	}
-	if ps.err != nil {
+	svcs, err := ps.load()
+	if err != nil {
 		if !ps.said {
 			ps.said = true
-			cost := "its tools stay as they were recorded"
-			if tags == nil && len(own) > 0 {
-				cost += ", and one sharing a build's image runs what its name holds"
+			var costs []string
+			if withTools {
+				costs = append(costs, "its tools stay as they were recorded")
 			}
-			s.say(report.WarnLevel, "could not list every profile's services of %s (%v): %s", s.idOf(rel), ps.err, cost)
+			if needSharers {
+				costs = append(costs, "one sharing a build's image runs what its name holds")
+			}
+			s.say(report.WarnLevel, "could not list every profile's services of %s (%v): %s", s.idOf(rel), err, strings.Join(costs, ", and "))
 		}
 		return sharers, nil, false
 	}
-	for _, svc := range ps.svcs {
+	var recorded map[string]string
+	if withTools && !ps.byName {
+		recorded = map[string]string{}
+		for _, t := range readTools(rel) {
+			recorded[t.Service+" "+familiar(t.Ref)] = t.ID
+		}
+	}
+	for _, svc := range svcs {
 		ref := familiar(svc.Ref)
 		switch {
 		case listed[svc.Name]:
 		case own[ref]:
-			if tags == nil {
+			if needSharers {
 				sharers[svc.Name] = ref
 			}
-		case listed[ref] || svc.Build || svc.NeverPull:
+		case !withTools || listed[ref] || svc.Build || svc.NeverPull:
 		default:
 			e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
-			if img, err := s.Docker.Inspect(digestRef(svc.Ref)); err == nil {
+			if !ps.byName {
+				e.ID = recorded[svc.Name+" "+ref]
+			} else if img, err := s.Docker.Inspect(digestRef(svc.Ref)); err == nil {
 				e.ID = img.ID
 			}
 			tools = append(tools, e)
 		}
 	}
-	return sharers, tools, true
+	return sharers, tools, withTools
 }
 
 // keepTools records a release's tools (ToolsFile, beside's), each bookmarked by its tool tag,
-// so it goes with the release by Remove's rules like any of its images, giving up what an
-// earlier record of them no longer has. A failure is said and costs nothing else: a tool's
-// image is only a pull.
-func (s *Set) keepTools(rel string, tools []entry) {
+// so it goes with the release by Remove's rules, giving up what an earlier record of them no
+// longer has that listed, its listing as written, does not take. A failure is said and costs
+// nothing else: a tool's name stays while any release's tool bookmark names its tag
+// (toolNamed), so all it costs is this release's own hold on that name.
+func (s *Set) keepTools(rel string, tools, listed []entry) {
 	if len(tools) == 0 && readTools(rel) == nil {
 		return
 	}
-	if err := s.keepIn(rel, tools, toolsKind); err != nil {
-		s.say(report.WarnLevel, "could not record the tools of %s (%v): their images stay when it goes", s.idOf(rel), err)
+	if err := s.keepIn(rel, tools, toolsKind, listed); err != nil {
+		s.say(report.WarnLevel, "could not record the tools of %s (%v): another release's removal may take the names it runs them by", s.idOf(rel), err)
 	}
 }
 
-// keepIn is keep of one of a release's files of images (listKind).
-func (s *Set) keepIn(rel string, es []entry, k listKind) error {
+// keepIn is keep of one of a release's files of images (listKind), what it gives up judged
+// against es and others, the release's other file as it is written (its listing, its tools).
+func (s *Set) keepIn(rel string, es []entry, k listKind, others []entry) error {
 	file, namesOf := k.file, k.names
 	id := s.idOf(rel)
 	old := readEntries(filepath.Join(rel, file))
@@ -859,7 +909,7 @@ func (s *Set) keepIn(rel string, es []entry, k listKind) error {
 	// through a mirror) no removal of es takes: it is recorded (review:
 	// it outlived every release).
 	named := map[string]bool{}
-	for _, e := range es {
+	for _, e := range append(slices.Clip(es), others...) {
 		listed[familiar(e.Ref)+" "+e.ID] = true
 		named[familiar(digestRef(e.Ref))+" "+e.ID] = true
 		if e.Digest != "" && repoKey(e.Digest) == repoKey(e.Ref) {
@@ -1031,8 +1081,30 @@ func (s *Set) Remove(rel string) error {
 		}
 		refs[img] = appendNew(refs[img], es[i].Ref)
 	}
+	// A tool's name is judged on the image it holds now too: it may have moved on since its
+	// bookmark (another release's pull), and its last release takes it wherever it is.
+	for i, e := range es {
+		if !toolTagOf.MatchString(names[i]) {
+			continue
+		}
+		cur, err := s.Docker.ID(e.Ref)
+		if errors.Is(err, ErrNoImage) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, ok := refs[cur]; !ok {
+			order = append(order, cur)
+		}
+		refs[cur] = appendNew(refs[cur], e.Ref)
+	}
 	var stay, gone []string
 	dead := s.leftBookmarks()
+	skip := maps.Clone(mine)
+	for _, d := range dead {
+		maps.Copy(skip, d)
+	}
 	for _, img := range order {
 		tags, err := s.Docker.Tags(img)
 		if errors.Is(err, ErrNoImage) {
@@ -1060,6 +1132,18 @@ func (s *Set) Remove(rel string) error {
 				rm = appendNew(rm, t)
 			}
 		}
+		// A name another release's tool runs by stays, unrecorded: that release takes it.
+		var kept []string
+		for _, r := range rm {
+			named, err := s.toolNamed(r, skip)
+			if err != nil {
+				return err
+			}
+			if !named {
+				kept = append(kept, r)
+			}
+		}
+		rm = kept
 		if holders := holding(tags, mine, dead[img]); len(holders) > 0 {
 			// The releases holding it take the names in their own
 			// repositories when they go; the ones in others (a mirror
@@ -1112,6 +1196,33 @@ func (s *Set) Remove(rel string) error {
 		s.say(report.InfoLevel, "removed %s, which only %s held", strings.Join(gone, ", "), id)
 	}
 	return nil
+}
+
+// toolTagOf matches a release's tool tag (toolTag), its cksum after -t: never a snapshot's
+// tag (its id follows s), nor a cksum of a repository named twice (base 10).
+var toolTagOf = regexp.MustCompile(`-[0-9]{14}-t[0-9a-z]{1,7}$`)
+
+// toolNamed says whether a tool tag of a release, none of skip's (the going release's, the
+// record's dead ones), names ref (its cksum, toolTag's, after -t): a tool runs by its name,
+// never a pin, whatever image its bookmark sits on, so the name stays while one does and goes
+// with the last. Server-wide by the tags alone, reading no release's files. Behind the door
+// never: a project user's removal of a name it does not write does nothing.
+func (s *Set) toolNamed(ref string, skip map[string]bool) (bool, error) {
+	if s.Door || isBookmark(ref) {
+		return false, nil
+	}
+	tags, err := s.Docker.RepoTags(repoKey(ref))
+	if err != nil {
+		return false, err
+	}
+	mark := "-t" + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
+	for _, t := range tags {
+		_, tag := SplitRef(t)
+		if !skip[familiar(t)] && toolTagOf.MatchString(tag) && strings.HasSuffix(tag, mark) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // releaseEntries are a release's listing and its tools, in that order, with their bookmarks'
@@ -1297,7 +1408,7 @@ func (s *Set) retried(l left) int {
 		return leftKept
 	case cur != l.id:
 		return leftDropped
-	case !isBookmark(l.ref) && (s.held(l.id) || s.used(l.id)):
+	case !isBookmark(l.ref) && (s.held(l.id) || s.used(l.id) || s.toolRuns(l.ref)):
 		return leftKept
 	}
 	return leftRemoved
@@ -1349,6 +1460,17 @@ func (s *Set) leftBookmarks() map[string]map[string]bool {
 		}
 	}
 	return dead
+}
+
+// toolRuns says whether a release's tool runs by ref (toolNamed), none the record holds dead;
+// when Docker cannot tell, one does.
+func (s *Set) toolRuns(ref string) bool {
+	skip := map[string]bool{}
+	for _, d := range s.leftBookmarks() {
+		maps.Copy(skip, d)
+	}
+	named, err := s.toolNamed(ref, skip)
+	return err != nil || named
 }
 
 // used says whether a container uses an image; when Docker cannot tell,

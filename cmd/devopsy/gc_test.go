@@ -338,6 +338,7 @@ case "$*" in
   'image ls --no-trunc --format {{.ID}} {{.Repository}}:{{.Tag}} {{.Size}}') echo 'sha256:u5 '`+remote.UtilImage+`' 25MB'
     gone devopsy.internal/util:4 || echo 'sha256:u4 devopsy.internal/util:4 24MB'; new && ! gone devopsy.internal/util:3 && echo 'sha256:u3 devopsy.internal/util:3 23MB'; true ;;
   'ps -aq --no-trunc') ;;
+  'image ls --format {{.Repository}}:{{.Tag}} '*) ;;
   'image inspect --format {{.Id}} {{.Size}} '*) shift 4; for i; do echo "$i 600000000"; done ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
 esac

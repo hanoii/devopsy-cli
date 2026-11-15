@@ -263,7 +263,7 @@ func (s *Set) Record(rel, prev string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := s.writeHeld(rel, es, holds, s.profilesOf(rel)); err != nil {
+	if err := s.writeHeld(rel, es, holds, s.profilesOf(rel, true)); err != nil {
 		return err
 	}
 	if len(lines) > 0 {

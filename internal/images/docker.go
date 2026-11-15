@@ -44,6 +44,11 @@ func (d CLI) Tags(id string) ([]string, error) {
 	return strings.Fields(out), err
 }
 
+func (d CLI) RepoTags(repo string) ([]string, error) {
+	out, err := d.run("image", "ls", "--format", "{{.Repository}}:{{.Tag}}", repo)
+	return strings.Fields(out), err
+}
+
 func (d CLI) Tag(src, dst string) error {
 	_, err := d.run("tag", src, dst)
 	return err

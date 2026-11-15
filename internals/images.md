@@ -26,10 +26,13 @@
 ## Bookmarks
 
 - Bookmarks are the reference count, each release tagging every image it runs as `<repo>:devopsy-<compose name>-<id>` (`bookmarkPrefix`, a long compose name cut and hashed to fit Docker's 128, a repository named twice adding a checksum of the ref) by image id: another fetch may move the name meanwhile.
-- A release's tools are every profile's services without `build:` or `pull_policy: never` whose service and image its listing has none of (`beside`, from one `ListAll` per write, which also gives the sharers of its own images).
-- Every writer of a release's listing (`writeHeld` for a record, a restore and a landing's derive; `Bookmark` for an undo) writes its tools into `ToolsFile` (`devopsy-tools`, `keepTools`) and bookmarks each by what its name holds now under its tool tag (`toolTag`, `-t<cksum>` after the id), so a tool goes with its release by the removal's rules (`releaseEntries`).
+- A release's tools are every profile's services without `build:` or `pull_policy: never` whose service and image its listing has none of (`beside`, from at most one `ListAll` per write, listed only when its tools or its own images' sharers need it).
+- Every writer of a release's listing that bookmarks (`writeHeld` for a record, a restore and a landing's derive, `Bookmark` for an undo, through `keepWithTools`) writes its tools into `ToolsFile` (`devopsy-tools`) whatever the listing's bookmarks did, each bookmarked under its tool tag (`toolTag`, `-t` and the cksum of the tool's name after the id), so a tool goes with its release by the removal's rules (`releaseEntries`).
+- `LastHold` and `Land`'s claims rewrite the listing without Docker and leave the tools as they are.
+- A tool's image is the one its name holds now, read by name, but behind the door only at the record, right after the fetch claimed it: the door's inspect of a name the project has not claimed claims it, which pulls, so another writer keeps the image recorded.
+- What one of a release's files gives up is judged against both (`keepIn`'s others): a name moving between the listing and the tools is no name left.
 - No pin, hold, rule, restore or landing reads `ToolsFile` for what runs: a buildable profiled service breaks build mode and rollbacks, and a profiled data service would start unjudged.
-- A tool's listing or bookmark that fails is a warning, never a failed record, since a tool's image costs only a pull.
+- A tool's listing or bookmark that fails is a warning, never a failed record, since a tool's name stays while any release's tool bookmark names it and its image costs only a pull.
 - A tag that reaches a tool outside a listing's write (a `--vars set`, then a run) and a tool a profile builds are never recorded.
 - Digests are bookmarked too and never restored: `prune -f` would delete an unused image pulled by digest only.
 - A release fetched again never removes names: it untags the bookmarks its new listing no longer makes and records the names it dropped for the next pruning, since it runs under the shared lock beside other fetches.
@@ -111,7 +114,10 @@
   - held by another bookmark (never one the record holds), it stays, its names in repositories no holder is in recorded;
   - used by a container, its names are recorded, never stripped;
   - else its listed names and its other names in the same repositories go (`mariadb:11` with `mariadb:11.4`);
-  - a name that moved on stays.
+  - a name that moved on stays, but for a tool's, judged on the image it holds now;
+  - a name any other release's tool tag names stays, unrecorded, whatever image that bookmark is on (`toolNamed`, from its repository's tags alone, `RepoTags`): a tool runs by its name, never a pin.
+- The last release whose tool tag names a name takes it, and a retry keeps one a tool tag still names (`toolRuns`).
+- Behind the door no tool tag is looked for: a project user's removal of a name it does not write does nothing.
 - Never `docker rmi -f`; a refusal is recorded: `-f` strips the names of an image a container uses, which a removal keeps and records instead.
 - Removals are idempotent, and one cut off anywhere is finished by the next; Docker failing (anything but a missing image) stops one with exit 1 and the release stays, `RemoveReleases` removing a directory only after its images, and `--destroy` then keeps the directory and says to run it again.
 - A release's removals scan no directory, sweep nothing server-wide and keep no trash directory: a removal decides from its release's listing and Docker's state, and reads nothing above its project. `--gc` and a project user's destroy are the sweeps: `--gc` by each of the deploy user's projects' records and Docker's own rule (internals/other.md), the destroy by the names only that project writes (`Policy.OwnRef`, internals/door.md).

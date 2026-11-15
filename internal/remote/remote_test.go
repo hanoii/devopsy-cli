@@ -1281,7 +1281,7 @@ func readFile(path string) string {
 // fakeImageTools writes into bin a docker whose image store is a file per
 // tag under $FAKE_ROOT/images, holding the image's id (the id of the
 // release that built or pulled it): tag, inspect (with the Id and RepoTags
-// formats), rm (refused for the tags in $FAKE_IN_USE, as for a container's
+// formats), image ls of a repository's names, rm (refused for the tags in $FAKE_IN_USE, as for a container's
 // image), image prune (logged in $FAKE_ROOT/pruned) and ps -a --filter
 // ancestor=<id> (the compose projects in $FAKE_ROOT/users/<id>), every command
 // failing as with the daemon down when $FAKE_DOCKER_DOWN is set; plus a
@@ -1354,6 +1354,12 @@ case "$1 $2" in
     [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
     rm -f "$(f "$3")" ;;
   "image prune") echo prune >>"$FAKE_ROOT/pruned"; echo "Total reclaimed space: 1MB" ;;
+  "image ls")
+    # A repository's names: image ls --format {{.Repository}}:{{.Tag}} <repository>.
+    for t in "$FAKE_ROOT"/images/"$(echo "$5" | tr '/' '_')":*; do
+      [ -f "$t" ] && echo "${t##*/}" | tr '_' '/'
+    done
+    exit 0 ;;
   *)
     [ "$1" = tag ] || exit 1
     # From a name, or from an image id (the content of some name's file).

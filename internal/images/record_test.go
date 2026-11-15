@@ -227,7 +227,7 @@ func TestRecordToolsFailures(t *testing.T) {
 	if err := e.set.Record(e.rel(refused), e.rel(gone)); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "could not bookmark "+jq.Ref+" as "+toolTag("app-prod", refused, jq.Ref)) || !strings.Contains(out.String(), "its image stays when "+refused+" goes") {
+	if !strings.Contains(out.String(), "could not bookmark "+jq.Ref+" as "+toolTag("app-prod", refused, jq.Ref)) || !strings.Contains(out.String(), "another release's removal may take the name "+refused+" runs it by") {
 		t.Errorf("a refused tool bookmark, said:\n%s", out.String())
 	}
 	listErr = errors.New("compose config: exit status 1")
@@ -242,7 +242,8 @@ func TestRecordToolsFailures(t *testing.T) {
 
 // A release's record lists every profile's services once: the sharers of its own images
 // (resolveBookmarks) and its tools (keepTools) are both what sits beside its listing (beside),
-// even with an own image and no fetch file, where the sharers come from that listing too.
+// even with an own image and no fetch file, where the sharers come from that listing too. A
+// landing that changes nothing (derive) lists none when no sharer needs them.
 func TestRecordListsEveryProfileOnce(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -263,6 +264,15 @@ func TestRecordListsEveryProfileOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("every profile listed %d times in one record\n%s", calls, out.String())
+	}
+	pulled := e.release(proxySvc)
+	d.pull(proxySvc.Ref, "sha256:c1")
+	if err := e.set.Record(e.rel(pulled), e.rel(id)); err != nil {
+		t.Fatal(err)
+	}
+	calls = 0
+	if err := e.set.derive(filepath.Dir(e.dir), e.rel(pulled), map[string]Service{proxySvc.Name: proxySvc}, false); err != nil || calls != 0 {
+		t.Errorf("a landing that changed nothing (%v) listed every profile %d times\n%s", err, calls, out.String())
 	}
 }
 
@@ -489,5 +499,38 @@ func TestFixNeedsAnAddressForACommand(t *testing.T) {
 	none := (&Set{}).fix("a release builds it:", "--release")
 	if none.Text != "a release builds it (--release on this environment)" || len(none.Cmds) != 0 {
 		t.Errorf("without an address: %+v", none)
+	}
+}
+
+// A release whose record fails on its own image's bookmark still records the tools its fetch
+// pulled (keepWithTools): its listing is written before the bookmarks, so its undo keeps the
+// listing and bookmarks nothing, and the record is that release's one write of its tools.
+func TestFailedRecordKeepsItsTools(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	local := Service{Name: "local", Ref: "local-app", NeverPull: true}
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(local.Ref, "sha256:l1")
+	d.pull(jq.Ref, "sha256:j1")
+	r1 := e.release(local)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The next release's fetch pulls jq:1.8's new image; its own image's bookmark is refused
+	// (the first Tag), so its record fails, and the release is undone.
+	d.pull(jq.Ref, "sha256:j2")
+	r2 := e.release(local)
+	d.fail = map[string]bool{"Tag": true}
+	if err := e.set.Record(e.rel(r2), e.rel(r1)); err == nil {
+		t.Fatal("the record went through a refused own bookmark")
+	}
+	e.set.Undo(e.rel(r2), false)
+	if got := d.names[toolTag("app-prod", r2, jq.Ref)]; got != "sha256:j2" {
+		t.Errorf("the failed release's tool bookmark holds %q, want the image its fetch pulled: %v\n%s", got, d.names, out.String())
 	}
 }

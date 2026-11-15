@@ -1295,8 +1295,9 @@ image_unlock() {
 // Either way every profile's services without a build are pulled too
 // (ProfilePull): a tool run now and then (`--profile tools run --rm jq`)
 // would otherwise keep the tag it pulled first, never its fixes. Pulled
-// only: the listing and the bookmarks stay the default services' (`config
-// --images`), and a profile's buildable services are neither built nor
+// only: the listing stays the default services' (`config --images`), each
+// tool bookmarked beside it (images.ToolsFile) and never pinned, and a
+// profile's buildable services are neither built nor
 // pulled, so a tool nobody pushed never fails a release. In build mode
 // that is the same one pull; image mode pulls its default services'
 // third-party images twice (a manifest request each, nothing
