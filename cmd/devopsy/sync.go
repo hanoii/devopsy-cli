@@ -502,6 +502,13 @@ func lostSays(t *remote.Target, when, left string) string {
 	return s + ", or its devopsy on the server was killed: " + left
 }
 
+// lostRerun says a session cut off (lostSays) that left what left says, with the command to
+// run again (command, after the address), which takes up what the cut one left: each step of
+// it stands alone.
+func lostRerun(t *remote.Target, left, command string) {
+	report.Say(report.ErrorLevel, lostSays(t, "", left), nil, report.Fix("", "devopsy @"+targetRef(t)+" "+command))
+}
+
 // staysDown is what an operation cut off may leave stopped there, until
 // the next lock-taker of the environment starts it (settleStops).
 const staysDown = "what it stopped may stay down until the next release, sync, import or snapshot there"

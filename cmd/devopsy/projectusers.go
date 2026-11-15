@@ -95,8 +95,7 @@ func runDestroyProjectUser(t *remote.Target, typed []string, yes bool) int {
 	}
 	if code == sshLost {
 		// Each step stands alone, the user held by the destroy's mark meanwhile.
-		report.Say(report.ErrorLevel, lostSays(t, "", "the destroy may have stopped halfway there, "+door.UserOf(project)+" held by its mark"), nil,
-			report.Fix("", "devopsy @"+targetRef(t)+" --project-users remove "+project+" --destroy"))
+		lostRerun(t, "the destroy may have stopped halfway there, "+door.UserOf(project)+" held by its mark", "--project-users remove "+project+" --destroy")
 	}
 	return code
 }

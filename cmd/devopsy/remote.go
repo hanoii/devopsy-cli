@@ -1014,7 +1014,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		return failErr(err)
 	}
 	if code == sshLost {
-		report.Say(report.ErrorLevel, lostSays(t, "", "the destroy may have stopped halfway there"), nil, report.Fix("", "devopsy @"+targetRef(t)+" --destroy"))
+		lostRerun(t, "the destroy may have stopped halfway there", "--destroy")
 	}
 	if code != 0 {
 		return code

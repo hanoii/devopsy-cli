@@ -112,7 +112,7 @@ func gcRemove(t *remote.Target, script string, listing []byte) int {
 		return 1
 	case sshLost:
 		// Each removal stands alone: a cut run leaves only less to remove.
-		report.Say(report.ErrorLevel, lostSays(t, "", "--gc may have stopped halfway there, each removal done or not begun"), nil, report.Fix("", "devopsy @"+targetRef(t)+" --gc"))
+		lostRerun(t, "--gc may have stopped halfway there, each removal done or not begun", "--gc")
 		return code
 	}
 	if code == 0 || code == gcLeftWarned {
