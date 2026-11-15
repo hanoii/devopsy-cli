@@ -31,8 +31,13 @@ var (
 	ToolMissing    = Code{"W0008", "the server lacks a tool devopsy uses"}
 )
 
+// NotDeployUser: a session logged in as another user than the one the server records as its
+// deploy user (/etc/devopsy/deploy-user), neither root nor a project user, which every
+// session's devopsy refuses: two docker users would share one daemon's compose names and uids.
+var NotDeployUser = Code{"W0009", "this login is not the server's deploy user"}
+
 // Codes is the registry, every code once, which docs/codes.md lists.
-var Codes = []Code{FirewallNotLoaded, SpaceUnguarded, OlderDevopsy, RebootNeeded, ClockUnsynced, KexecHandOver, SnapshotOnData, ToolMissing}
+var Codes = []Code{FirewallNotLoaded, SpaceUnguarded, OlderDevopsy, RebootNeeded, ClockUnsynced, KexecHandOver, SnapshotOnData, ToolMissing, NotDeployUser}
 
 // CodeOf is the registry's code by its ID.
 func CodeOf(id string) (Code, bool) {

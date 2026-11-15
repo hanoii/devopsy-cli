@@ -556,7 +556,8 @@ func refusedWords(stopped []string) string {
 
 // stepPhrase is a step's name in a sentence, where its name is an item's key with no article.
 var stepPhrase = map[string]string{
-	string(setup.StepBuffers):  "the " + setup.ItemBuffers,
-	string(setup.StepMounts):   "the " + setup.ItemMounts,
-	string(setup.StepFirewall): "the " + setup.FirewallItemName,
+	string(setup.StepDeployUser): "the " + setup.ItemDeployUser + "'s record",
+	string(setup.StepBuffers):    "the " + setup.ItemBuffers,
+	string(setup.StepMounts):     "the " + setup.ItemMounts,
+	string(setup.StepFirewall):   "the " + setup.FirewallItemName,
 }

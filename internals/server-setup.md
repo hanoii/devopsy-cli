@@ -1,6 +1,6 @@
 # Server setup
 
-`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `internal/remote/serversetup.go` (`SetupRootScript`), `cmd/devopsy/projectusers_setup.go` and `internal/remote/projectusers_setup.go` (`--project-users setup`, `ProjectUsersSetupScript`), `internal/howto/` (`--server-setup-howto`'s topics) and `cmd/devopsy/howto.go`. User docs: `docs/servers.md`, `docs/server-setup-howto.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
+`--server-setup` keeps what devopsy needs of a server as devopsy wants it. Code: `internal/setup/` (the item model, touching nothing; parts, states, the steps and what stops them, the merge, the record, the daemon's flags, the volume candidates, the files' texts), `cmd/devopsy/serversetup.go` (the operator's side), `serversetup_step.go` (the server's, `--server-setup-step`), `firewallcheck.go` (the firewall's root read and its judgment, for the setup, `--server-info`, a release and the door), `hostroot.go` (`hostRun`), `deployuser.go` (the deploy user's record and every session's check of it), `internal/remote/serversetup.go` (`SetupRootScript`), `cmd/devopsy/projectusers_setup.go` and `internal/remote/projectusers_setup.go` (`--project-users setup`, `ProjectUsersSetupScript`), `internal/howto/` (`--server-setup-howto`'s topics) and `cmd/devopsy/howto.go`. User docs: `docs/servers.md`, `docs/server-setup-howto.md`, `docs/codes.md`, `docs/releases.md` (what an upload says).
 
 ## Items
 
@@ -84,6 +84,15 @@
 - A project user's release asks the door (its `firewall` request, `warnDoorFirewall`), which answers right, wrong or unknown from the deploy user's own read (unknown through another host's Docker), and says W0001 for the admin; on a server with project users a wipe is seen in the deploy user's releases, the project users' and `--server-info`.
 - A run raises a live socket buffer only when lower, never lowering it; one that cannot be raised fails the second check, naming the reboot that loads the file.
 - The sysctl file sets 7500000 at each boot, over an earlier file's higher value: a higher one belongs in a file sorting after `90-devopsy-net.conf`.
+
+## The deploy user
+
+- A server's deploy user is the one `setup.DeployUserFile` names, root's, which only `--server-setup`'s root run writes (`setup.DeployUserText`), with the user the setup runs as, as its first put (`StepDeployUser`, first of `setup.Steps`); devopsy-server's own files are never read for it, a server set up another way having none.
+- Every session refuses a login the record does not name, but root and a project user (`asProjectUser`), in `--release-settings` before anything else (`checkDeployUser`), with `remote.SettingsRefusedExit`, W0009 and the deploy user's address on the session's host (`remote.HostEnv`, `remote.AsUser`): two docker users on one daemon share compose names, keep two claims directories and read each other's images as gone.
+- With no record nothing is refused; a record that names no one user (`setup.ParseDeployUser`) refuses every login but root, since only root writes it and a guess would let any docker user through.
+- A record naming another user than the setup runs as, or one it cannot read, is a refusal that stops every step (`setup.RefusalDeployUser`, `deployUserFact`): a setup as another user would make that user's release root and config. devopsy never rewrites it; changing the deploy user is the admin's, by hand (`howto.DeployUser`).
+- A setup run as root with no record writes none: root's sessions are never checked, so root is no deploy user to record.
+- `--server-info` says a record not written yet as a note under setup with `--server-setup` as a hint, never a warning, on a server set up by devopsy (on one never set up, the setup's own warning says it): such a server refuses nothing until its next apply, `--upgrade`'s included.
 
 ## `daemon.json` and the record
 

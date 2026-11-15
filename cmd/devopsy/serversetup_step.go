@@ -266,6 +266,11 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		root, f.NamesRoot = proposed, true
 	}
 	f.Root = resolveRoot(root)
+	if x, refusal := deployUserFact(h, currentLogin()); refusal != nil {
+		f.Refusals = append(f.Refusals, *refusal)
+	} else if x != nil {
+		f.Files = append(f.Files, *x)
+	}
 	if r := toolsRefusal(); r != nil {
 		f.Refusals = append(f.Refusals, *r)
 	}
@@ -1111,6 +1116,10 @@ func applySetup(h setupHost, a setupApply) int {
 	if file(setup.ItemMounts) && f.Goes(setup.StepMounts) {
 		dropinText = rd.dropin
 	}
+	deployText := ""
+	if file(setup.ItemDeployUser) && f.Goes(setup.StepDeployUser) {
+		deployText = setup.DeployUserText(currentLogin().name)
+	}
 	raise := f.Goes(setup.StepBuffers) && slices.ContainsFunc(f.Buffers, func(b setup.BufferFact) bool { return b.Low })
 	give := !a.upgrade && f.RootAction != "" && f.Goes(setup.StepRoot)
 	// A restart only for what Docker has to take, as read under the lock: daemon.json put by
@@ -1162,13 +1171,13 @@ func applySetup(h setupHost, a setupApply) int {
 	before := systemctlShow("InvocationID")
 	var out bytes.Buffer
 	queued, dockerDown := false, false
-	if len(daemonText) > 0 || sysctlText != "" || dropinText != "" || raise || give || restart {
+	if len(daemonText) > 0 || sysctlText != "" || dropinText != "" || deployText != "" || raise || give || restart {
 		after := ""
 		if restart {
 			after = "restart"
 		}
 		token := runToken()
-		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, raise, give, after, before, token, rd.flags, &out)
+		err := rootSetupRun(h, f.Root, daemonText, sysctlText, dropinText, deployText, raise, give, after, before, token, rd.flags, &out)
 		// A restart asked may take the run's container down before its words reach here: the
 		// marker this run wrote for it, by its token (an older run's, pending, never), says it
 		// was asked, and the bounded wait tells whether it came. A run that ended on its own
@@ -1200,6 +1209,9 @@ func applySetup(h setupHost, a setupApply) int {
 		if !did(remote.SetupPut + " " + setup.MountsDropIn) {
 			dropinText = ""
 		}
+		if !did(remote.SetupPut + " " + setup.DeployUserFile) {
+			deployText = ""
+		}
 		raise, give = raise && did(remote.SetupRaised), give && did(remote.SetupMade+" "+f.Root, remote.SetupGave+" "+f.Root)
 	}
 	// The record follows the file, whatever the restart does next; none over a record
@@ -1227,7 +1239,7 @@ func applySetup(h setupHost, a setupApply) int {
 			said.Remedies = append(said.Remedies, report.Hint("what Docker said, as root:", "journalctl -u docker.service"))
 			var marked bytes.Buffer
 			failures++
-			switch err := rootSetupRun(h, f.Root, nil, "", "", false, false, "mark", before, "", rd.flags, &marked); {
+			switch err := rootSetupRun(h, f.Root, nil, "", "", "", false, false, "mark", before, "", rd.flags, &marked); {
 			case err == nil:
 				report.Fail(said)
 				sayRootLines(marked.String(), putNames, f.Root)
@@ -1271,7 +1283,7 @@ func applySetup(h setupHost, a setupApply) int {
 		}
 	}
 	for _, x := range again.facts.Files {
-		if !x.InSync && (x.Item == setup.ItemBuffers && sysctlText != "" || x.Item == setup.ItemMounts && dropinText != "") {
+		if !x.InSync && (x.Item == setup.ItemBuffers && sysctlText != "" || x.Item == setup.ItemMounts && dropinText != "" || x.Item == setup.ItemDeployUser && deployText != "") {
 			left = append(left, x.Path+" still differs from what devopsy writes")
 		}
 	}
@@ -1391,7 +1403,7 @@ func fixWords(r setup.Refusal) []report.Remedy {
 
 // rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,
 // the docker client's own dropped once the restart is queued.
-func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string, raise, give bool, after, invocation, token string, flags []string, out *bytes.Buffer) error {
+func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin, deployUser string, raise, give bool, after, invocation, token string, flags []string, out *bytes.Buffer) error {
 	q := &queuedLines{out: out}
 	flag := func(b bool) string {
 		if b {
@@ -1400,7 +1412,7 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin string
 		return ""
 	}
 	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"), token)
+	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"), token, deployUser)
 	run.Stderr = quietQueued{q}
 	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %w", err) })
 }
@@ -1513,9 +1525,12 @@ func sayRootLines(out string, parts []string, root string) {
 		word, rest, _ := strings.Cut(l, " ")
 		switch word {
 		case remote.SetupPut:
-			if rest == setup.DaemonFile && len(parts) > 0 {
+			switch {
+			case rest == setup.DaemonFile && len(parts) > 0:
 				report.Info("put " + rest + ": " + strings.Join(parts, ", "))
-			} else {
+			case rest == setup.DeployUserFile:
+				report.Info("recorded " + who + " as the server's deploy user in " + rest + ": devopsy refuses any other login but root and project users")
+			default:
 				report.Info("put " + rest)
 			}
 		case remote.SetupMade:

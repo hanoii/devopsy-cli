@@ -14,6 +14,7 @@ no server, project or Docker.
 - [kexec-handover](#kexec-handover): kho=off on the kernel's command line, freeing memory it keeps
 - [kdump](#kdump): no memory kept for a crash kernel, a choice
 - [xfs](#xfs): the data on XFS, so its copies are reflinks
+- [deploy-user](#deploy-user): the one deploy user, and changing it
 
 ## docker
 
@@ -399,4 +400,87 @@ user=devopsy
 home=$(getent passwd "$user" | cut -d: -f6)
 echo check > "$home/.reflink-a" && cp --reflink=always "$home/.reflink-a" "$home/.reflink-b" && echo reflinks
 rm -f "$home/.reflink-a" "$home/.reflink-b"
+```
+
+## deploy-user
+
+The server's deploy user, and changing it
+
+devopsy runs every release, uid claim and setup of a server as one deploy
+user, which --server-setup records in /etc/devopsy/deploy-user, root's, with
+the user it runs as. Every session's devopsy refuses any other login but
+root and the project users, and --server-setup refuses to run as another
+user: two users in the docker group would share one Docker's compose names
+and uids, each with releases, claims and a setup of its own. devopsy never
+changes the record. These steps move what the old deploy user holds to the
+new one by hand, then rewrite it. They run with no release running, and
+change nothing of what runs.
+
+Run each step as root on the server, Debian or Ubuntu with systemd. A step
+that starts "From the operator's machine" runs there, where devopsy
+addresses the server by its deploy user, not on the server. The deploy user
+is the Unix user devopsy logs in as, which must exist. A step's first line
+sets the values to change, if it has any (for example user=devopsy).
+
+1. Name the two users, and put the new one in the docker group, which
+   applies from its next login.
+
+   ```sh
+   old=devopsy new=deploy
+   usermod -aG docker "$new"
+   ```
+
+2. Move the old user's devopsy config to the new user's: its config.yaml,
+   the setup's record server.yaml, and the project users' entries under
+   door/.
+
+   ```sh
+   old=devopsy new=deploy
+   from=$(getent passwd "$old" | cut -d: -f6)/.config/devopsy to=$(getent passwd "$new" | cut -d: -f6)/.config/devopsy
+   install -d -o "$new" -g "$new" "${to%/*}"
+   mv "$from" "$to"
+   chown -R "$new:$new" "$to"
+   ```
+
+3. Give the new user what the old one owns under the release root, the uid
+   claims in its .devopsy-uids included, by owner alone: the containers'
+   files keep their own. The root is the old user's home unless that config
+   names another in releases: root, and then that one; do the same under
+   snapshots: root where it names one. Where the release root is the old
+   user's home, also set releases: root to it in the new user's config.yaml,
+   since releases go in the new user's home otherwise.
+
+   ```sh
+   old=devopsy new=deploy
+   root=$(getent passwd "$old" | cut -d: -f6)
+   find "$root" -xdev -user "$old" -exec chown -h "$new" {} +
+   find "$root" -xdev -group "$old" -exec chgrp -h "$new" {} +
+   ```
+
+4. Where the server has project users, name the new user in the door's sudo
+   rules and sshd's drop-in, both checked before sshd reads them again.
+
+   ```sh
+   old=devopsy new=deploy
+   sed -i "s/(${old} :/(${new} :/; s/^${old} ALL=/${new} ALL=/" /etc/sudoers.d/devopsy-projects
+   visudo -cf /etc/sudoers.d/devopsy-projects
+   sed -i "s/^\(\tAuthorizedKeysCommandUser \)${old}\$/\1${new}/" /etc/ssh/sshd_config.d/devopsy.conf
+   sshd -t && systemctl reload ssh
+   ```
+
+5. Rewrite the record with the new user.
+
+   ```sh
+   new=deploy
+   printf '# Written by devopsy (--server-setup).\n%s\n' "$new" > /etc/devopsy/deploy-user
+   ```
+
+6. From the operator's machine, run --server-setup for this server as the
+   new user, which finds the record its own and sets up the rest for it.
+
+To check it: the record names the new user, and --server-info as the new
+user shows the server's environments, with no refusal of the login.
+
+```sh
+cat /etc/devopsy/deploy-user
 ```

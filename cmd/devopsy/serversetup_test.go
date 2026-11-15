@@ -163,15 +163,16 @@ func readRecordOf(t *testing.T, s *syncSetup) map[string]setup.Entry {
 	return r.Daemon
 }
 
-// --server-setup --yes on a fresh server, in two sessions: the release root made, every part
-// of daemon.json put and recorded, the buffers' file and live values, the mounts drop-in, and
-// Docker restarted with no container running, confirmed by its InvocationID and docker info.
-// A second run changes nothing and opens no second session.
+// --server-setup --yes on a fresh server, in two sessions: the deploy user recorded, the
+// release root made, every part of daemon.json put and recorded, the buffers' file and live
+// values, the mounts drop-in, and Docker restarted with no container running, confirmed by its
+// InvocationID and docker info. A second run changes nothing and opens no second session.
 func TestServerSetupYes(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
+	me := currentLogin().name
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	for _, want := range []string{"release root", "made the release root " + s.root, "put " + setup.DaemonFile + ": logs, live-restore, default-address-pools",
+	for _, want := range []string{"release root", "recorded " + me + " as the server's deploy user in " + setup.DeployUserFile, "made the release root " + s.root, "put " + setup.DaemonFile + ": logs, live-restore, default-address-pools",
 		"put " + setup.SysctlFile, "raised net.core.rmem_max to 7500000", "put " + setup.MountsDropIn, "this server is set up by devopsy now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q (%d):\n%s", want, code, out)
@@ -179,6 +180,9 @@ func TestServerSetupYes(t *testing.T) {
 	}
 	if code != 0 {
 		t.Fatalf("exit %d", code)
+	}
+	if got := readString(filepath.Join(host, setup.DeployUserFile)); got != setup.DeployUserText(me) {
+		t.Errorf("the deploy user's record: %q", got)
 	}
 	d, err := setup.ParseDaemon([]byte(readString(filepath.Join(host, setup.DaemonFile))))
 	if err != nil {
@@ -202,6 +206,25 @@ func TestServerSetupYes(t *testing.T) {
 	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if _, sessions := s.logs(); code != 0 || !strings.Contains(out, "nothing to change") || strings.Count(sessions, "\n") != 1 {
 		t.Errorf("a second run (%d):\n%s\nsessions:\n%s", code, out, sessions)
+	}
+}
+
+// A server whose record names another deploy user refuses the setup in its first session's
+// prelude, W0009 with the deploy user's address on the host as typed, before anything: no
+// file put, no release root made, no second session.
+func TestServerSetupRefusesAnotherDeployUser(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root is never checked")
+	}
+	s, host := setupServer(t)
+	write(t, filepath.Join(host, setup.DeployUserFile), setup.DeployUserText("someone-else"), 0o644)
+	s.logs()
+	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
+	if _, sessions := s.logs(); code == 0 || !strings.Contains(out, "devopsy: error: "+report.NotDeployUser.Msg()+"\n") || !strings.Contains(out, "$ devopsy @someone-else@one: --server-info\n") ||
+		!strings.Contains(out, "$ "+howto.Command(howto.DeployUser)+"\n") || strings.Count(sessions, "\n") != 1 ||
+		fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(s.root) || readString(filepath.Join(host, setup.DeployUserFile)) != setup.DeployUserText("someone-else") {
+		t.Errorf("another deploy user (%d):\n%s\nsessions:\n%s", code, out, sessions)
 	}
 }
 

@@ -9,10 +9,10 @@ import (
 // run), daemon.json devopsy cannot judge or Docker does not read and a broken record its parts
 // and a restart, the release root its making and the mounts drop-in, a root no unit file
 // holds the drop-in alone, flock and the firewall's own the firewall; Docker's plugins and
-// tar, which releases need, none.
+// tar, which releases need, none; the deploy user's record naming another user every one.
 func TestStepsBlockedByRefusals(t *testing.T) {
 	t.Parallel()
-	all := []Step{StepRoot, StepBuffers, StepMounts, StepParts, StepRestart, StepFirewall}
+	all := []Step{StepDeployUser, StepRoot, StepBuffers, StepMounts, StepParts, StepRestart, StepFirewall}
 	for _, c := range []struct {
 		name    string
 		f       Facts
@@ -23,6 +23,7 @@ func TestStepsBlockedByRefusals(t *testing.T) {
 		{"daemon.json unjudged", Facts{DaemonError: "not a JSON object"}, []Step{StepParts, StepRestart}},
 		{"a broken record", Facts{Refusals: []Refusal{{Item: RefusalRecord}}}, []Step{StepParts, StepRestart}},
 		{"the release root", Facts{Refusals: []Refusal{{Item: RefusalRoot}}}, []Step{StepRoot, StepMounts}},
+		{"another deploy user", Facts{Refusals: []Refusal{{Item: RefusalDeployUser}}}, all},
 		{"flock", Facts{Refusals: []Refusal{{Item: RefusalTools, Stops: RefusalFlock}}}, []Step{StepFirewall}},
 		{"tar", Facts{Refusals: []Refusal{{Item: RefusalTools, Stops: RefusalTar}}}, nil},
 		{"Docker's plugins", Facts{Refusals: []Refusal{{Item: RefusalDocker, Stops: RefusalPlugins}}}, nil},

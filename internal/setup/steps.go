@@ -31,22 +31,26 @@ const (
 	RefusalTar = "tar"
 	// RefusalMountsPath: a release root a unit file cannot hold, which the mounts drop-in names.
 	RefusalMountsPath = "mounts path"
+	// RefusalDeployUser: the record names another user than the setup runs as, or cannot be
+	// read: a setup as another user would make that user's release root and config.
+	RefusalDeployUser = ItemDeployUser
 )
 
 // Step is one of an apply's steps, each applied or not apart from the others.
 type Step string
 
 const (
-	StepRoot     Step = "the release root"
-	StepParts    Step = "daemon.json's parts"
-	StepRestart  Step = "Docker's restart"
-	StepBuffers  Step = ItemBuffers
-	StepMounts   Step = ItemMounts
-	StepFirewall Step = FirewallItemName
+	StepDeployUser Step = ItemDeployUser
+	StepRoot       Step = "the release root"
+	StepParts      Step = "daemon.json's parts"
+	StepRestart    Step = "Docker's restart"
+	StepBuffers    Step = ItemBuffers
+	StepMounts     Step = ItemMounts
+	StepFirewall   Step = FirewallItemName
 )
 
 // Steps are an apply's steps, in the order it takes them.
-var Steps = []Step{StepRoot, StepBuffers, StepMounts, StepParts, StepRestart, StepFirewall}
+var Steps = []Step{StepDeployUser, StepRoot, StepBuffers, StepMounts, StepParts, StepRestart, StepFirewall}
 
 // stepNeeds is what each step needs, by what a refusal stops: every step is a root run, so
 // Docker refused (not answering, not this host's) stops them all; daemon.json devopsy cannot
@@ -55,14 +59,16 @@ var Steps = []Step{StepRoot, StepBuffers, StepMounts, StepParts, StepRestart, St
 // mounts drop-in that names it, a root a unit file cannot hold the drop-in alone; the
 // firewall's loader takes its lock with flock, the one tool a step runs (the apply's own locks
 // are devopsy's), and its own refusal (allow where the door's is wanted) stops it alone.
-// Docker's plugins and tar stop no step: releases need them.
+// Docker's plugins and tar stop no step: releases need them. The deploy user's record naming
+// another user stops every step, its own included: the setup is the deploy user's alone.
 var stepNeeds = map[Step][]string{
-	StepRoot:     {RefusalDocker, RefusalRoot},
-	StepBuffers:  {RefusalDocker},
-	StepMounts:   {RefusalDocker, RefusalRoot, RefusalMountsPath},
-	StepParts:    {RefusalDocker, RefusalDaemon, RefusalRecord},
-	StepRestart:  {RefusalDocker, RefusalDaemon, RefusalRecord},
-	StepFirewall: {RefusalDocker, RefusalFlock, FirewallItemName},
+	StepDeployUser: {RefusalDocker, RefusalDeployUser},
+	StepRoot:       {RefusalDocker, RefusalDeployUser, RefusalRoot},
+	StepBuffers:    {RefusalDocker, RefusalDeployUser},
+	StepMounts:     {RefusalDocker, RefusalDeployUser, RefusalRoot, RefusalMountsPath},
+	StepParts:      {RefusalDocker, RefusalDeployUser, RefusalDaemon, RefusalRecord},
+	StepRestart:    {RefusalDocker, RefusalDeployUser, RefusalDaemon, RefusalRecord},
+	StepFirewall:   {RefusalDocker, RefusalDeployUser, RefusalFlock, FirewallItemName},
 }
 
 // Refused is every item that refuses in f, a daemon.json devopsy cannot judge among them.
@@ -136,6 +142,8 @@ func (f Facts) Changing() []Step {
 func (f Facts) change(s Step) (changes, known bool) {
 	parts := slices.ContainsFunc(f.Parts, func(p PartFact) bool { return p.Puts })
 	switch s {
+	case StepDeployUser:
+		return slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemDeployUser && !x.InSync }), slices.ContainsFunc(f.Files, func(x FileFact) bool { return x.Item == ItemDeployUser })
 	case StepRoot:
 		return f.RootAction != "", f.RootAction != "" || !slices.Contains(f.Refused(), RefusalRoot)
 	case StepBuffers:

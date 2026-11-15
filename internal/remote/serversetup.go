@@ -68,17 +68,22 @@ fi
 // (now) or mark (the marker and flag, whatever changed; "" marks only when daemon.json
 // changed), the InvocationID for the marker, the unit's dockerd flags, one a line, and the
 // run's own token, which a restart's marker carries after the id: the id is what pending
-// compares, the token which run asked the restart.
+// compares, the token which run asked the restart; then the deploy user's record's text ("" to
+// leave it), put first of all.
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}
-dockerd_flags=${11:-} token=${12:-}
+dockerd_flags=${11:-} token=${12:-} deploy_user=${13:-}
 export dockerd_flags
 ` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1) with the flags docker.service starts it with (one
 # a line), as Docker starts on it: saying only what it refuses.
 validate='set -f; IFS="
 "; out=$(dockerd --validate --config-file "$1" $dockerd_flags 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }'
 changed=
+if [ -n "$deploy_user" ]; then
+  mkdir -p "$host_root` + path.Dir(setup.DeployUserFile) + `"
+  if put "$host_root` + setup.DeployUserFile + `" 644 true "$deploy_user"; then echo "` + SetupPut + ` ` + setup.DeployUserFile + `"; fi
+fi
 if [ -n "$give" ]; then
   p=$root
   if [ ! -e "$p" ]; then install -d -m 755 "$p"; echo "` + SetupMade + ` $root"; fi

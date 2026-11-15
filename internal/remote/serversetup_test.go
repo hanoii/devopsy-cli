@@ -74,9 +74,9 @@ func TestSetupRootScript(t *testing.T) {
 	}
 	owner := "0:0" // never used: nothing here is root's
 	daemon := "{\n  \"live-restore\": true\n}\n"
-	all := []string{host, owner, "1", root, daemon, setup.SysctlText(), dropin, "1", "", "inv-1"}
+	all := []string{host, owner, "1", root, daemon, setup.SysctlText(), dropin, "1", "", "inv-1", "", "", setup.DeployUserText("deploy")}
 	out, code := run(nil, all...)
-	for _, want := range []string{"made " + root + "\n", "put " + setup.DaemonFile + "\n", "put " + setup.SysctlFile + "\n", "raised net.core.rmem_max\n", "raised net.core.wmem_max\n", "put " + setup.MountsDropIn + "\n", "marked\n"} {
+	for _, want := range []string{"put " + setup.DeployUserFile + "\n", "made " + root + "\n", "put " + setup.DaemonFile + "\n", "put " + setup.SysctlFile + "\n", "raised net.core.rmem_max\n", "raised net.core.wmem_max\n", "put " + setup.MountsDropIn + "\n", "marked\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("first run: no %q (%d):\n%s", want, code, out)
 		}
@@ -86,6 +86,9 @@ func TestSetupRootScript(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(host, setup.DaemonFile)); err != nil || fi.Mode().Perm() != 0o644 {
 		t.Errorf("a daemon.json made: %v, %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(filepath.Join(host, setup.DeployUserFile)); err != nil || fi.Mode().Perm() != 0o644 || read(setup.DeployUserFile) != setup.DeployUserText("deploy") {
+		t.Errorf("the deploy user's record: %v, %q", err, read(setup.DeployUserFile))
 	}
 	if read(setup.DaemonFile) != daemon || read(setup.SysctlFile) != setup.SysctlText() || read(setup.MountsDropIn) != dropin {
 		t.Errorf("the files:\n%s\n%s\n%s", read(setup.DaemonFile), read(setup.SysctlFile), read(setup.MountsDropIn))

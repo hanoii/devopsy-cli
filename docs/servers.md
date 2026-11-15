@@ -108,6 +108,9 @@ applies the rest, says what it did not apply and why, and exits 1:
 - `docker.service` starting Docker with another `--config-file`, a
   `daemon.json` devopsy cannot judge, or a record it cannot read:
   `daemon.json`'s parts and a restart of Docker;
+- the deploy user's record naming another user than the one it runs
+  as, or one it cannot read ([The deploy user](#the-deploy-user)):
+  every item;
 - a release root refused (another user's, a file, `/`): its making and
   the mounts drop-in that names it; one a unit file cannot hold: the
   drop-in alone;
@@ -132,6 +135,7 @@ What it keeps as devopsy wants it:
 
 | Item | devopsy's value |
 |---|---|
+| The deploy user | `/etc/devopsy/deploy-user`, root's, naming the user `--server-setup` runs as ([The deploy user](#the-deploy-user)); as root, none is written |
 | The release root | made when missing, given to the deploy user when root owns it and it is empty |
 | `daemon.json`'s logs | `"log-driver": "local"`, `"log-opts": {"max-size": "20m", "max-file": "5"}` |
 | `daemon.json`'s `live-restore` | `true` |
@@ -243,6 +247,32 @@ last found Docker at its floor ([Docker](#docker)) are recorded in
 never edited by hand. Its first run writes it. A run whose only change
 is that note writes it and says there is nothing to change.
 
+### The deploy user
+
+A server has one deploy user, which `--server-setup` records in
+`/etc/devopsy/deploy-user` as the user it runs as. From then on every
+session's devopsy refuses, before it reads or changes anything, a login
+that is not that user, root or a project user, with `W0009`
+([Codes](codes.md#w0009)) and the deploy user's address:
+
+```
+devopsy: error: W0009: this login is not the server's deploy user
+devopsy: | this login is admin, and /etc/devopsy/deploy-user names devopsy the deploy user: devopsy runs every release, uid claim and setup of a server as that one user
+devopsy: | to fix it:
+devopsy: | address the server as devopsy, for example:
+devopsy: | $ devopsy @devopsy@vm1: --server-info
+```
+
+Two users in the `docker` group, each taken for the deploy user (an
+admin's own account the default SSH user, say), would each have a
+release root, uid claims and a setup of their own on one Docker, whose
+compose names they share. `--server-setup` run as another user refuses
+too, so the record never changes by itself: making another user the
+deploy user is by hand, with the steps `devopsy --server-setup-howto
+deploy-user` prints. A server set up before the record gets it at its
+next `--server-setup` or `--upgrade`, and until then `--server-info`
+says it is not recorded yet and nothing is refused.
+
 ## `--server-setup-howto`
 
 What devopsy checks on a server and does not set up itself (Docker, the
@@ -318,7 +348,8 @@ them:
 - a server never set up by devopsy, on which `--upgrade` applies nothing,
   and each item of the setup that differs from devopsy's (a release root
   releases refuse, a part of `daemon.json`, the socket buffers, the
-  mounts drop-in, the metadata firewall, `W0001`), each fixed by
+  mounts drop-in, the metadata firewall, `W0001`, the deploy user's
+  record changed; one not written yet is a line, not a warning), each fixed by
   `--server-setup`, or, where the setup refuses every step, by what it
   refuses first;
 - Docker needing a restart to take `daemon.json` (the parts, where
