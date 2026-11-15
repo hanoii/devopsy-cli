@@ -3251,3 +3251,48 @@ func TestUpgradeNotesItsVersionByWhatARefusalStopped(t *testing.T) {
 		})
 	}
 }
+
+// An apply refused as another deploy user's server changes nothing of the login's, its
+// config included: a volume chosen (--root) is never named as its releases: root, as no
+// server.yaml of its is written, since a setup as another user would make that user's release
+// root and config.
+
+func TestServerSetupRefusedNamesNoRoot(t *testing.T) {
+	t.Parallel()
+	s, host, vol, config := rootChoice(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	before := readString(config)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol)
+	if code == 0 || !strings.Contains(out, "ops was set up too on this server") {
+		t.Fatalf("the apply was not refused as another deploy user's (%d):\n%s", code, out)
+	}
+	if got := readString(config); got != before {
+		t.Errorf("a refused apply named the root in the login's config:\n%s\n%s", got, out)
+	}
+}
+
+// --upgrade's apply refused as another deploy user's server warns with that refusal's own ways
+// out and nothing else: never --server-setup as the login, which refuses the same way, as the
+// fix of what it left or as what makes the release root.
+
+func TestUpgradeRefusedAsAnotherDeployUserOffersNoSetup(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".devopsy-uids", "env:shop:prod"), "x\n", 0o644)
+	write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), "{}\n", 0o600)
+	out, code := s.run([]string{remote.HostEnv + "=admin@one"}, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "warning: deploy user: devopsy was set up as ops on this server") {
+		t.Fatalf("--upgrade's apply not refused as another deploy user's, as a warning (%d):\n%s", code, out)
+	}
+	for _, said := range []string{"run --server-setup for this server", "--server-setup makes it the deploy user's"} {
+		if strings.Contains(out, said) {
+			t.Errorf("a refused --upgrade offers a setup refused the same way, %q:\n%s", said, out)
+		}
+	}
+}

@@ -462,3 +462,165 @@ func deployUserFactRefusal(t *testing.T, h setupHost, me login, root string) *se
 	}
 	return r
 }
+
+// The deploy-user topic's move step finds devopsy's projects by the rule devopsyEnvironment
+// judges environments by, written in shell: on each tree, the topic's loop lists a project
+// exactly where devopsyEnvironment finds an environment of it.
+func TestDevopsyEnvironmentIsTheTopicsRule(t *testing.T) {
+	t.Parallel()
+	tp, _ := howto.Find(string(howto.DeployUser))
+	loop := ""
+	for _, s := range tp.Steps {
+		for _, c := range s.Cmds {
+			if strings.HasPrefix(c, `projects=$(cd "$from"`) {
+				loop = c
+			}
+		}
+	}
+	if loop == "" {
+		t.Fatal("no projects= line in the move step")
+	}
+	for name, files := range map[string][]string{
+		"a release lock":            {"shop/prod/releases/1/code/x", "shop/prod/.lock"},
+		"a release's target env":    {"shop/prod/releases/1/" + remote.TargetEnvFile},
+		"an instance's environment": {"shop/eu/prod/releases/1/x", "shop/eu/prod/.lock"},
+		"another tool's releases":   {"site/app/releases/1/REVISION", "site/app/current/REVISION", "site/app/shared/x"},
+		"a .env alone":              {"work/app/.env", "work/app/shared/x"},
+	} {
+		root := t.TempDir()
+		for _, f := range files {
+			write(t, filepath.Join(root, f), "x\n", 0o644)
+		}
+		cmd := exec.Command("sh", "-c", "from="+remote.QuoteWord(root)+"\n"+loop+"\nprintf '%s' \"$projects\"")
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		env := devopsyEnvironment(root)
+		want := ""
+		if env != "" {
+			want, _, _ = strings.Cut(env, "/")
+		}
+		if string(out) != want {
+			t.Errorf("%s: the topic lists %q, devopsyEnvironment finds %q", name, out, env)
+		}
+	}
+}
+
+// otherServer is a host root whose docker group holds admin, the login, and ops, with files
+// under it, each holding a line.
+func otherServer(t *testing.T, group string, files ...string) setupHost {
+	t.Helper()
+	h := setupHost{root: t.TempDir()}
+	write(t, h.path("/etc/group"), group, 0o644)
+	write(t, h.path("/etc/passwd"), "root:x:0:0::/root:/bin/sh\nadmin:x:1000:1000::/home/admin:/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	for _, f := range files {
+		write(t, h.path(f), "x\n", 0o644)
+	}
+	return h
+}
+
+// A docker member whose config names a release root outside its home (releases: root, what
+// --server-setup --root writes for a volume) holds its environments and uid claims there, so
+// they count as its own: it is never judged as holding a setup record alone, whose removal the
+// refusal would offer, and one that never ran --server-setup is seen too.
+
+func TestOtherDeployUserHoldsWhatItsReleaseRootHolds(t *testing.T) {
+	t.Parallel()
+	me := login{uid: 1000, name: "admin"}
+	const config = "/home/ops/.config/devopsy/config.yaml"
+	held := []string{"/srv/releases/.devopsy-uids/env:shop:prod", "/srv/releases/shop/prod/releases/20261115000000/x", "/srv/releases/shop/prod/.lock"}
+
+	h := otherServer(t, "docker:x:990:admin,ops\n", append([]string{"/home/ops/.config/devopsy/" + setup.RecordFile}, held...)...)
+	write(t, h.path(config), "releases:\n  root: /srv/releases\n", 0o644)
+	o := otherDeployUser(h, me, "")
+	if o.name != "ops" || o.bare != "" {
+		t.Errorf("a member set up on a release root of its config's, holding environments there, is judged bare (its record's removal offered): %+v", o)
+	}
+	if _, r := deployUserFact(h, me, "", remote.Session{Host: "admin@vm1"}); r == nil || r.OrCommand != "" {
+		t.Errorf("its refusal offers the removal of its setup record: %+v", r)
+	}
+
+	h = otherServer(t, "docker:x:990:admin,ops\n", held...)
+	write(t, h.path(config), "releases:\n  root: /srv/releases\n", 0o644)
+	if o := otherDeployUser(h, me, ""); o.name != "ops" {
+		t.Errorf("a member that never ran the setup, its environments on a release root of its config's, is not seen: %+v", o)
+	}
+}
+
+// Root is no deploy user, whatever its home holds: listed in the docker group with a setup
+// record of a setup once run as root, it refuses no login's record.
+
+func TestOtherDeployUserIsNeverRoot(t *testing.T) {
+	t.Parallel()
+	h := otherServer(t, "docker:x:990:admin,root\n", "/root/.config/devopsy/"+setup.RecordFile)
+	if o := otherDeployUser(h, login{uid: 1000, name: "admin"}, ""); o.name != "" {
+		t.Errorf("root taken for another deploy user: %+v", o)
+	}
+}
+
+// An environment of devopsy's is told from another tool's releases by what only devopsy makes:
+// a docker member deploying its own apps with a tool of the same layout (releases/ beside a
+// current link and shared/, as Capistrano and Deployer make them) is no deploy user.
+
+func TestHomeReleasesAreDevopsysOwn(t *testing.T) {
+	t.Parallel()
+	h := otherServer(t, "docker:x:990:admin,ops\n", "/home/ops/apps/shop/releases/20261115000000/REVISION", "/home/ops/apps/shop/shared/config/database.yml")
+	write(t, h.path("/home/ops/apps/shop/current/REVISION"), "x\n", 0o644)
+	if o := otherDeployUser(h, login{uid: 1000, name: "admin"}, ""); o.name != "" {
+		t.Errorf("another tool's releases taken for an environment of devopsy's: %+v", o)
+	}
+}
+
+// What the root run says of another deploy user reads back as it was said, whatever its paths
+// hold: the removal offered is only ever a bare setup record's.
+
+func TestOtherWireKeepsItsFields(t *testing.T) {
+	t.Parallel()
+	said := otherUser{name: "ops", evidence: "its environment /home/ops/shop\tx/prod"}
+	got, ok := otherLine(otherWire(said) + "\n")
+	if !ok || got != said {
+		t.Errorf("read back %+v (%v), said %+v", got, ok, said)
+	}
+	if r := otherDeployRefusal(got, login{uid: 1000, name: "admin"}, remote.Session{Host: "admin@vm1"}); r.OrCommand != "" {
+		t.Errorf("a removal offered for a path that is no setup record: %q", r.OrCommand)
+	}
+}
+
+// A refusal's fix never says to run the setup as the other user with, as its command, the one
+// that prints the steps to change the deploy user: those steps do the opposite.
+
+func TestOtherDeployRefusalWithNoCommandKeepsItsFixApartFromTheSteps(t *testing.T) {
+	t.Parallel()
+	for _, o := range []otherUser{
+		{name: "uid 1001", evidence: "the release root /srv/releases is its"},
+		{name: "ops", evidence: "its uid claims /home/ops/.devopsy-uids"},
+	} {
+		s := remote.Session{Host: "admin@vm1"}
+		if o.name == "ops" {
+			s = remote.Session{}
+		}
+		for _, w := range fixWords(otherDeployRefusal(o, login{uid: 1000, name: "admin"}, s)) {
+			if strings.HasPrefix(w.Text, "run it as") && len(w.Cmds) == 1 && w.Cmds[0] == howto.Command(howto.DeployUser) {
+				t.Errorf("%s: %q offered with %q", o.name, w.Text, w.Cmds[0])
+			}
+		}
+	}
+}
+
+// A record naming a user the server does not have (a login removed, a name mistyped) is one
+// that cannot tell the deploy user: W0010, as docs/codes.md says, never W0009 naming no one.
+func TestCheckDeployUserOfNoLogin(t *testing.T) {
+	t.Parallel()
+	h := recordAt(t, setup.DeployUserText("ghost"))
+	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\n", 0o644)
+	err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{})
+	var f *report.Failure
+	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "it names ghost, which is no user of this server's") {
+		t.Errorf("a record naming no login: %#v", err)
+	}
+	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\nghost:x:1001:1001::/home/ghost:/bin/sh\n", 0o644)
+	if err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{}); !errors.As(err, &f) || f.Msg != report.NotDeployUser.Msg() {
+		t.Errorf("a record naming a login of the server's: %#v", err)
+	}
+}

@@ -273,9 +273,10 @@ admin's own account the default SSH user, say), would each have a
 release root, uid claims and a setup of their own on one Docker, whose
 compose names they share. `--server-setup` run as another user refuses
 too, and so does one on a server with no record yet that shows another
-deploy user: another member of the `docker` group whose home holds
-devopsy's setup record (`~/.config/devopsy/server.yaml`), its uid claims
-or an environment's releases, or a release root another user owns. It
+deploy user: another member of the `docker` group, root aside, with
+devopsy's setup record in its home (`~/.config/devopsy/server.yaml`), or
+uid claims or an environment of devopsy's under its release root (its
+`releases: root`, else its home), or a release root another user owns. It
 refuses before anything changes, in one of three ways:
 
 - where that user's setup record is all it holds (an account set up by
@@ -290,7 +291,8 @@ refuses before anything changes, in one of three ways:
 by itself: making another
 user the deploy user is by hand, with the steps `devopsy
 --server-setup-howto deploy-user` prints. A record that cannot be read,
-or names no one user, refuses every login but root and project users
+or names no one user or a user the server does not have, refuses every
+login but root and project users
 with `W0010` until root corrects it, in root's own shell
 (`--shell-host --root`). A server set up before the record
 gets it at its next `--server-setup` or `--upgrade`, and until then

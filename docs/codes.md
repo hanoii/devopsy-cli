@@ -74,7 +74,8 @@ set up before the record gets it at its next `--server-setup` or
 ## W0010
 
 The record of the deploy user is there but cannot be read, or names no one
-user: no line, several, or a name no login has. devopsy does not guess who
+user: no line, several, a name no login could have, or a user the server
+does not have. devopsy does not guess who
 it names, so it refuses every login but root and project users, the deploy
 user's and `--shell-host`'s too, until root corrects the file from root's own
 shell, `--shell-host --root`.

@@ -76,6 +76,9 @@ type Refusal struct {
 	// none): another deploy user's bare setup record to remove where it may be a mistake.
 	Or        string `json:"or,omitempty"`
 	OrCommand string `json:"or_command,omitempty"`
+	// HowtoAside offers Howto's steps as a hint after the fixes, never as the command of Fix: a
+	// fix whose words are no steps (run it as another user).
+	HowtoAside bool `json:"howto_aside,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
 	// file).

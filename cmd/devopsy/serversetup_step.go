@@ -393,6 +393,30 @@ func nameReleaseRoot(h setupHost, root string) error {
 	return nil
 }
 
+// rootNaming judges root, as the operator chose it, for nameReleaseRoot, changing nothing:
+// whether it is to be named (rootTakes), and the config's refusal of it (setup.SetReleaseRoot on
+// the config as it is), so an apply refuses before anything changes.
+func rootNaming(h setupHost, root string) (bool, error) {
+	name, err := rootTakes(h, root)
+	if err != nil || !name {
+		return name, err
+	}
+	file := remote.UserConfigFile()
+	have, err := os.ReadFile(file)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if _, err := setup.SetReleaseRoot(have, root); err != nil {
+		return false, refusalFailure(*configRefusal(file, root, err))
+	}
+	return true, nil
+}
+
+// setupOffered says whether an apply's words may send the login to --server-setup (a failure's
+// fix, the release root it makes): never under the deploy user's refusal, which refuses that
+// setup the same way.
+func setupOffered(f setup.Facts) bool { return !slices.Contains(f.Refused(), setup.RefusalDeployUser) }
+
 // configRefusal is the deploy user's config at file refused to name root as releases: root
 // (setup.SetReleaseRoot), err why, with the setting to make there by hand.
 func configRefusal(file, root string, err error) *setup.Refusal {
@@ -991,10 +1015,15 @@ func applySetup(h setupHost, a setupApply) int {
 	// apply's exit once it went as far as it could, 1 for a refusal or a failure, 0 under
 	// --upgrade; failed both, for what ends the apply.
 	refused, failures := false, 0
+	var f setup.Facts
 	fail := func(msg string, details ...string) {
 		failures++
 		if a.upgrade {
-			report.Say(report.WarnLevel, msg, details, report.Fix("run --server-setup for this server"))
+			var fixes []report.Remedy
+			if setupOffered(f) {
+				fixes = append(fixes, report.Fix("run --server-setup for this server"))
+			}
+			report.Say(report.WarnLevel, msg, details, fixes...)
 			return
 		}
 		report.Error(msg, details...)
@@ -1016,32 +1045,39 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	defer lock.Close()
 
-	// The root chosen goes into the config first, so everything after judges it as the
-	// config names it; a refusal there ends the apply, nothing changed.
+	// The root chosen is judged first, its refusal ending the apply with nothing changed, and
+	// everything after judges it as proposed; it goes into the config only once the deploy
+	// user's refusals had their chance (namedRoot), since a setup refused as another user's
+	// changes nothing of the login's.
+	naming := false
 	if a.root != "" {
-		if err := nameReleaseRoot(h, a.root); err != nil {
+		if naming, err = rootNaming(h, a.root); err != nil {
 			report.Fail(err)
 			return 1
 		}
 	}
-	rd, err := readSetup(h, readHostDocker(h))
+	proposed := ""
+	if naming {
+		proposed = a.root
+	}
+	rd, err := readSetupAt(h, readHostDocker(h), proposed)
 	if err != nil {
 		return failed(err.Error())
 	}
-	f := rd.facts
+	f = rd.facts
 	// A refusal stops only the steps that need what it refuses (setup.Facts.Goes), each said
 	// once per run with its fix (here, unless the first session said it), the others applied;
 	// the apply then fails, a warning under --upgrade.
 	refused = len(f.Refused()) > 0
 	sayRefusals(f, sayLevel(a.upgrade), a.said, false)
-	if a.upgrade && f.RootAction != "" {
+	if a.upgrade && f.RootAction != "" && setupOffered(f) {
 		report.Warn(rootWords(f.Root, f.RootAction) + ": --server-setup makes it the deploy user's")
 	}
 	// Every step is a root run: with none going (Docker refused), nothing goes at all, no
 	// image built and no chains read for it, said as the first session says it; but the
 	// record's floor note, which a release trusts, never outlives the Docker it noted.
 	if f.NoneGoes() {
-		if f.FloorNote && !slices.Contains(f.Refused(), setup.RefusalRecord) {
+		if f.FloorNote && !slices.Contains(f.Refused(), setup.RefusalRecord) && !slices.Contains(f.Refused(), setup.RefusalDeployUser) {
 			r := rd.record
 			r.Floor = floorNote(rd.floorMet)
 			if err := setup.WriteRecord(record, r); err != nil {
@@ -1220,6 +1256,13 @@ func applySetup(h setupHost, a setupApply) int {
 			deployText = ""
 		}
 		raise, give = raise && did(remote.SetupRaised), give && did(remote.SetupMade+" "+f.Root, remote.SetupGave+" "+f.Root)
+	}
+	// The root chosen, named now that no refusal of the deploy user's stands (rootNaming).
+	if naming && !slices.Contains(f.Refused(), setup.RefusalDeployUser) {
+		if err := nameReleaseRoot(h, a.root); err != nil {
+			report.Fail(err)
+			failures++
+		}
 	}
 	// The record follows the file, whatever the restart does next; none over a record
 	// devopsy could not read, which it says to remove.
@@ -1405,7 +1448,7 @@ func fixWords(r setup.Refusal) []report.Remedy {
 	switch {
 	case r.Command != "":
 		rs = []report.Remedy{report.Fix(r.Fix, r.Command)}
-	case r.Howto != "" && r.Or == "":
+	case r.Howto != "" && r.Or == "" && !r.HowtoAside:
 		return []report.Remedy{stepsFix(r.Fix, r.Howto)}
 	default:
 		rs = []report.Remedy{report.Fix(r.Fix)}
@@ -1509,10 +1552,18 @@ func otherLine(out string) (o otherUser, ok bool) {
 	for _, l := range strings.Split(out, "\n") {
 		if rest, found := strings.CutPrefix(l, remote.SetupOther+"\t"); found {
 			f := append(strings.SplitN(rest, "\t", 4), "", "", "")
-			if f[0] == "" || f[1] == "" {
+			var q [3]string
+			for i := range q {
+				v, err := strconv.Unquote(f[i])
+				if err != nil {
+					return otherUser{}, false
+				}
+				q[i] = v
+			}
+			if q[0] == "" || q[1] == "" {
 				return otherUser{}, false
 			}
-			return otherUser{name: f[0], evidence: f[1], bare: f[2], both: f[3] == "1"}, true
+			return otherUser{name: q[0], evidence: q[1], bare: q[2], both: f[3] == "1"}, true
 		}
 	}
 	return otherUser{}, false

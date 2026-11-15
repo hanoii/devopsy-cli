@@ -27,9 +27,13 @@ func runUpgrade(args []string, color bool) int {
 		return fail("usage: devopsy --upgrade [vX.Y.Z]")
 	}
 	// Its session runs no prelude: on a server, a login the record does not name is refused here,
-	// before anything, as every other session's --release-settings refuses it.
-	if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
-		return failErr(err)
+	// before anything, as every other session's --release-settings refuses it. Only in a
+	// session (the server's address it carries): the operator's own --upgrade, with no target,
+	// upgrades its own devopsy whatever user it is.
+	if s := remote.SessionFrom(os.Getenv); s.Host != "" || s.Server != "" {
+		if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, s); err != nil {
+			return failErr(err)
+		}
 	}
 	if !update.IsRelease(version) {
 		return fail(developmentBuild())

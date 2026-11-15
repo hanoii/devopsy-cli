@@ -1230,6 +1230,24 @@ func ReleaseRootError(root string) error {
 	return nil
 }
 
+// homeRoot is a releases: root as written, a leading ~ the user's home, home.
+func homeRoot(root, home string) string {
+	if strings.HasPrefix(root, "~/") || root == "~" {
+		return filepath.Join(home, strings.TrimPrefix(root, "~"))
+	}
+	return root
+}
+
+// ReleaseRootIn is the release root another user's config at file names (releases: root, its
+// ~ home), else that user's home: what the server's devopsy reads of a user other than itself
+// (cmd/devopsy's otherDeployUser). A file that cannot be read or parsed names none.
+func ReleaseRootIn(file, home string) string {
+	if f, err := readConfigFile(file, true); err == nil && f != nil && f.releases != nil && f.releases.Root != "" {
+		return homeRoot(f.releases.Root, home)
+	}
+	return home
+}
+
 // ReleaseSettings are the user-level config's releases: with defaults: the
 // root (the home directory), keep and max_keep (DefaultKeep). keep is
 // capped at max_keep.
@@ -1266,7 +1284,7 @@ func ReleaseSettings() (Releases, error) {
 		if err != nil {
 			return r, err
 		}
-		r.Root = filepath.Join(home, strings.TrimPrefix(r.Root, "~"))
+		r.Root = homeRoot(r.Root, home)
 	}
 	if err := ReleaseRootError(r.Root); err != nil {
 		return r, err

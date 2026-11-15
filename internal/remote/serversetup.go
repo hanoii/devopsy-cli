@@ -110,13 +110,15 @@ if [ -n "$deploy_user" ]; then
     du_said=$(` + HostRootEnv + `=$host_root "$devopsy_bin" ` + DeployUserOtherFlag + ` "$du_want" "${owner%%:*}" "$root") || du_said="` + SetupUnread + `	the server's devopsy could not tell"
     [ -z "$du_said" ] || { printf '%s\n' "$du_said"; exit 4; }
   }
-  du_tmp=$(mktemp "$du.XXXXXX")
-  printf '%s' "$deploy_user" >"$du_tmp" && chmod 644 "$du_tmp"
-  du_want=$(deploy_user_name "$du_tmp")
+  du_want=$(printf '%s' "$deploy_user" | deploy_user_name /dev/stdin)
   du_check
+  # The whole file only once nothing is against it, so no refusal leaves it behind.
   du_made=
-  if [ ! -e "$du" ] && [ ! -L "$du" ] && ln "$du_tmp" "$du" 2>/dev/null; then du_made=1; fi
-  rm -f "$du_tmp"
+  if [ ! -e "$du" ] && [ ! -L "$du" ]; then
+    du_tmp=$(mktemp "$du.XXXXXX")
+    if printf '%s' "$deploy_user" >"$du_tmp" && chmod 644 "$du_tmp" && ln "$du_tmp" "$du" 2>/dev/null; then du_made=1; fi
+    rm -f "$du_tmp"
+  fi
   du_check
   if [ -n "$du_made" ] || put "$du" 644 true "$deploy_user"; then echo "` + SetupPut + ` ` + setup.DeployUserFile + `"; fi
 fi

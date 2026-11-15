@@ -350,7 +350,7 @@ func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	homes := t.TempDir()
-	for _, f := range []string{"devopsy/shop/prod/releases/1/x", "devopsy/.devopsy-uids/claims/shop-prod", "deploy/shop/dev/releases/1/x", "deploy/.devopsy-uids/claims/shop-dev"} {
+	for _, f := range []string{"devopsy/shop/prod/releases/1/x", "devopsy/shop/prod/.lock", "devopsy/.devopsy-uids/claims/shop-prod", "deploy/shop/dev/releases/1/x", "deploy/shop/dev/.lock", "deploy/.devopsy-uids/claims/shop-dev"} {
 		p := filepath.Join(homes, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -388,9 +388,9 @@ func TestDeployUserTopicPutsTheNewUserInTheProcessesGroup(t *testing.T) {
 }
 
 // The deploy-user topic's move step, where the release root is the old user's home, takes for a
-// project of devopsy's only a directory holding an environment's releases/ beside what devopsy
-// makes with it, never the old user's own work (a checkout with a .env, a shared/ of its own),
-// which an admin's own account as the old deploy user holds.
+// project of devopsy's only a directory holding an environment's releases/ beside its release
+// lock, never the old user's own work (a checkout with a .env, a shared/ of its own, another
+// tool's releases/ beside current and shared/), which an admin's own account holds.
 func TestDeployUserMoveStepLeavesWhatDevopsyDidNotMake(t *testing.T) {
 	t.Parallel()
 	me, err := user.Current()
@@ -398,7 +398,8 @@ func TestDeployUserMoveStepLeavesWhatDevopsyDidNotMake(t *testing.T) {
 		t.Fatal(err)
 	}
 	homes := t.TempDir()
-	for _, f := range []string{"admin/shop/prod/releases/1/code/x", "admin/shop/prod/shared/.env", "admin/work/.env", "admin/src/site/.env", "admin/notes/app/shared/todo", "deploy/.keep"} {
+	for _, f := range []string{"admin/shop/prod/releases/1/code/x", "admin/shop/prod/.lock", "admin/shop/prod/shared/.env", "admin/work/.env", "admin/src/site/.env", "admin/notes/app/shared/todo",
+		"admin/apps/site/releases/1/REVISION", "admin/apps/site/current/REVISION", "admin/apps/site/shared/x", "deploy/.keep"} {
 		p := filepath.Join(homes, f)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -412,7 +413,7 @@ func TestDeployUserMoveStepLeavesWhatDevopsyDidNotMake(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(homes, "deploy", "shop", "prod", "releases")); err != nil {
 		t.Fatalf("the project did not move: %v\n%s", err, out)
 	}
-	for _, own := range []string{"work", "src", "notes"} {
+	for _, own := range []string{"work", "src", "notes", "apps"} {
 		if _, err := os.Stat(filepath.Join(homes, "admin", own)); err != nil {
 			t.Errorf("the move step took the old user's own ~/%s for a project of devopsy's and moved it to the new user's home:\n%s", own, out)
 		}

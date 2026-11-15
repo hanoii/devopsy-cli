@@ -460,8 +460,9 @@ sets the values to change, if it has any (for example user=devopsy).
    releases: root), stop every environment first, the project users' too,
    with devopsy down in its current, then move what devopsy made there into
    the new user's home, the new release root: each project's directory (one
-   holding an environment's releases/ beside its current, its lock or its
-   shared/, what only devopsy makes together), the uid claims in
+   holding an environment's releases/ beside its release lock, .lock, or a
+   release holding its devopsy-target.env, what only devopsy makes; another
+   tool's releases/ beside current and shared/ is none), the uid claims in
    .devopsy-uids and the image lock. What the new home holds of the same
    name already stays, said and not moved: merge the two by hand. Containers
    keep the paths their bind mounts had, so each environment is started
@@ -472,7 +473,7 @@ sets the values to change, if it has any (for example user=devopsy).
    ```sh
    old=devopsy new=deploy
    from=$(getent passwd "$old" | cut -d: -f6) to=$(getent passwd "$new" | cut -d: -f6)
-   projects=$(cd "$from" && for r in */*/releases */*/*/releases; do e=${r%/releases}; [ -d "$r" ] && { [ -e "$e/current" ] || [ -e "$e/.lock" ] || [ -d "$e/shared" ]; } && echo "${r%%/*}"; done | sort -u)
+   projects=$(cd "$from" && for r in */*/releases */*/*/releases; do [ -d "$r" ] && { [ -e "${r%/releases}/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; } && echo "${r%%/*}"; done | sort -u)
    for p in $projects .devopsy-uids .devopsy-images.lock; do if [ -e "$to/$p" ]; then echo "$to/$p is there already: merge it by hand"; elif [ -e "$from/$p" ]; then mv "$from/$p" "$to/$p"; fi; done
    ```
 
@@ -486,7 +487,7 @@ sets the values to change, if it has any (for example user=devopsy).
    old=devopsy new=deploy
    root=$(getent passwd "$new" | cut -d: -f6) og=$(id -gn "$old") ng=$(id -gn "$new")
    [ -z "$(find "$root" -maxdepth 0 -user "$old")" ] || chown "$new:$ng" "$root"
-   projects=$(cd "$root" && for r in */*/releases */*/*/releases; do e=${r%/releases}; [ -d "$r" ] && { [ -e "$e/current" ] || [ -e "$e/.lock" ] || [ -d "$e/shared" ]; } && echo "${r%%/*}"; done | sort -u)
+   projects=$(cd "$root" && for r in */*/releases */*/*/releases; do [ -d "$r" ] && { [ -e "${r%/releases}/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; } && echo "${r%%/*}"; done | sort -u)
    for p in $projects .devopsy-uids .devopsy-images.lock; do [ ! -e "$root/$p" ] || find "$root/$p" -xdev -user "$old" -exec chown -h "$new" {} +; done
    for p in $projects .devopsy-uids .devopsy-images.lock; do [ ! -e "$root/$p" ] || find "$root/$p" -xdev -group "$og" -exec chgrp -h "$ng" {} +; done
    ```

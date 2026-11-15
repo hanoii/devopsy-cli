@@ -30,11 +30,23 @@ func deployUserRecord(h setupHost) (name string, text []byte, err error) {
 		return "", nil, nil
 	}
 	if err == nil {
-		if name, err = setup.ParseDeployUser(string(text), remote.LoginName); err == nil {
+		if name, err = setup.ParseDeployUser(string(text), remote.LoginName); err == nil && !loginKnown(h, name) {
+			err = errors.New("it names " + name + ", which is no user of this server's")
+		}
+		if err == nil {
 			return name, text, nil
 		}
 	}
 	return "", nil, fmt.Errorf("%s cannot tell the server's deploy user: %w", setup.DeployUserFile, err)
+}
+
+// loginKnown says whether name is a user of h's (lookupLogin), always where h is a host root of
+// the tests' with no passwd file of its own, which knows no user to judge by.
+func loginKnown(h setupHost, name string) bool {
+	if _, err := os.Stat(h.path("/etc/passwd")); err != nil && h.root != "" {
+		return true
+	}
+	return lookupLogin(h, name, 0) != nil
 }
 
 // login is who this devopsy runs as: its uid, and its name ("" when the system has none).
@@ -56,33 +68,42 @@ func (l login) words() string {
 // Linux: without cgo (every release), user.Current, user.LookupId of its own uid and user.Lookup
 // of the name in $USER all answer from $USER and $HOME where the passwd file does not list the
 // uid (a login from LDAP or sssd), values the login sets itself, so a name it chose would pass
-// for another's (the deploy user's, a project user's). The passwd file first, then getent, which
-// asks the system's other sources (NSS).
+// for another's (the deploy user's, a project user's).
 func currentUser() (*user.User, error) {
 	uid := strconv.Itoa(os.Getuid())
 	if runtime.GOOS != "linux" {
 		return user.LookupId(uid)
 	}
+	if u := lookupLogin(setupHost{}, uid, 2); u != nil {
+		return u, nil
+	}
+	return nil, user.UnknownUserIdError(os.Getuid())
+}
+
+// lookupLogin is the user whose passwd field (0 its name, 2 its uid) is key: in h's passwd file
+// first, then, on the host itself (h's root ""), through getent, which asks the system's other
+// sources (NSS); nil for none.
+func lookupLogin(h setupHost, key string, field int) *user.User {
 	find := func(lines string) *user.User {
 		for line := range strings.SplitSeq(lines, "\n") {
 			// name:password:uid:gid:gecos:home:shell
-			if f := strings.Split(line, ":"); len(f) >= 6 && f[2] == uid && f[0] != "" {
+			if f := strings.Split(line, ":"); len(f) >= 6 && f[field] == key && f[0] != "" {
 				return &user.User{Username: f[0], Uid: f[2], Gid: f[3], Name: f[4], HomeDir: f[5]}
 			}
 		}
 		return nil
 	}
-	if passwd, err := os.ReadFile("/etc/passwd"); err == nil {
+	if passwd, err := os.ReadFile(h.path("/etc/passwd")); err == nil {
 		if u := find(string(passwd)); u != nil {
-			return u, nil
+			return u
 		}
 	}
-	if out, err := exec.Command("getent", "passwd", uid).Output(); err == nil {
-		if u := find(string(out)); u != nil {
-			return u, nil
+	if h.root == "" {
+		if out, err := exec.Command("getent", "passwd", key).Output(); err == nil {
+			return find(string(out))
 		}
 	}
-	return nil, user.UnknownUserIdError(os.Getuid())
+	return nil
 }
 
 // currentLogin is this process's login (currentUser), its name "" where the system has none.
@@ -157,23 +178,81 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 
 // otherDeployUser is the user other than me a server with no record shows set up by devopsy,
 // and what shows it: a member of the docker group (h's group and passwd files, a member listed
-// or its primary group) whose home holds devopsy's setup record in its config
-// (~/.config/devopsy/server.yaml), uid claims (.devopsy-uids) or an environment's releases
-// (homeReleases), a deploy user that never ran --server-setup included; else the owner of the
-// release root root, another user's but root's, by name, else "uid N", no login. "" for none.
-// bare is the member's setup record where that is all that shows it (no claims, no environment
-// in its home), one it may hold by mistake, "" otherwise.
-// The one judgment of it: the facts read it as the login can, and the root run asks it again
-// as root before it makes the record (DeployUserOtherFlag).
+// or its primary group), root never, with devopsy's setup record in its home's config
+// (~/.config/devopsy/server.yaml), or uid claims or an environment (devopsyEnvironment) under
+// its release root (its config's releases: root, else its home), a deploy user that never ran
+// --server-setup included; else the owner of the release root root, another user's but root's,
+// by name, else "uid N", no login. Its zero value for none. The one judgment of it: the facts
+// read it as the login can, and the root run asks it again as root before it makes the record
+// (DeployUserOtherFlag).
 func otherDeployUser(h setupHost, me login, root string) otherUser {
+	users, members := dockerMembers(h)
+	for _, m := range members {
+		i := slices.IndexFunc(users, func(u passwdEntry) bool { return u.name == m })
+		if m == me.name || i < 0 || users[i].home == "" || users[i].uid == strconv.Itoa(me.uid) || users[i].uid == "0" {
+			continue
+		}
+		home := users[i].home
+		record := filepath.Join(home, ".config", "devopsy", setup.RecordFile)
+		theirs := remote.ReleaseRootIn(h.path(filepath.Join(home, ".config", "devopsy", remote.ConfigFile)), home)
+		claims := filepath.Join(theirs, uids.DirName)
+		env := devopsyEnvironment(h.path(theirs))
+		holds := exists(h.path(claims)) || env != ""
+		o := otherUser{name: m, both: holds && holdsEnvironments(root)}
+		switch {
+		case exists(h.path(record)) && !holds:
+			o.evidence, o.bare = "its setup record "+record, record
+		case exists(h.path(claims)):
+			o.evidence = "its uid claims " + claims
+		case env != "":
+			o.evidence = "its environment " + filepath.Join(theirs, env)
+		case exists(h.path(record)):
+			o.evidence = "its setup record " + record
+		}
+		if o.evidence != "" {
+			return o
+		}
+	}
+	var st syscall.Stat_t
+	if root != "" && syscall.Stat(root, &st) == nil && st.Uid != 0 && int(st.Uid) != me.uid {
+		owner := fmt.Sprint("uid ", st.Uid)
+		if i := slices.IndexFunc(users, func(u passwdEntry) bool { return u.uid == strconv.Itoa(int(st.Uid)) }); i >= 0 {
+			owner = users[i].name
+		}
+		return otherUser{name: owner, evidence: "the release root " + root + " is its"}
+	}
+	return otherUser{}
+}
+
+// otherUser is another deploy user a server shows (otherDeployUser): its name, what shows it,
+// its setup record where that is all (bare, one it may hold by mistake), and both where it holds
+// environments or claims and so does the login's own release root, a bigger issue than a choice.
+type otherUser struct {
+	name, evidence, bare string
+	both                 bool
+}
+
+// holdsEnvironments says whether the release root root holds devopsy's environments or uid
+// claims, the login's own (otherDeployUser), by what only devopsy makes (devopsyEnvironment):
+// unlike rootHolds, which errs toward held so that no root is moved under releases, a home's own
+// .env is none here, so it never turns a choice into the error of two users with environments.
+func holdsEnvironments(root string) bool {
+	return root != "" && (exists(filepath.Join(root, uids.DirName)) || devopsyEnvironment(root) != "")
+}
+
+// passwdEntry is a passwd file's line, as otherDeployUser reads it.
+type passwdEntry struct{ name, uid, gid, home string }
+
+// dockerMembers are h's passwd file's users and the docker group's members by name: those its
+// group line lists, then those whose primary group it is.
+func dockerMembers(h setupHost) ([]passwdEntry, []string) {
 	group, _ := os.ReadFile(h.path("/etc/group"))
 	passwd, _ := os.ReadFile(h.path("/etc/passwd"))
-	type entry struct{ name, uid, gid, home string }
-	var users []entry
+	var users []passwdEntry
 	for line := range strings.SplitSeq(string(passwd), "\n") {
 		// name:password:uid:gid:gecos:home:shell, a shell or more left out read as none.
 		if f := strings.Split(line, ":"); len(f) >= 6 && f[0] != "" {
-			users = append(users, entry{f[0], f[2], f[3], f[5]})
+			users = append(users, passwdEntry{f[0], f[2], f[3], f[5]})
 		}
 	}
 	gid, members := "", []string{}
@@ -192,74 +271,26 @@ func otherDeployUser(h setupHost, me login, root string) otherUser {
 			members = append(members, u.name)
 		}
 	}
-	for _, m := range members {
-		i := slices.IndexFunc(users, func(u entry) bool { return u.name == m })
-		if m == me.name || i < 0 || users[i].home == "" || users[i].uid == strconv.Itoa(me.uid) {
-			continue
-		}
-		home := users[i].home
-		record := filepath.Join(home, ".config", "devopsy", setup.RecordFile)
-		claims := filepath.Join(home, uids.DirName)
-		env := homeReleases(h.path(home))
-		holds := exists(h.path(claims)) || env != ""
-		o := otherUser{name: m, both: holds && holdsEnvironments(root)}
-		switch {
-		case exists(h.path(record)) && !holds:
-			o.evidence, o.bare = "its setup record "+record, record
-		case exists(h.path(claims)):
-			o.evidence = "its uid claims " + claims
-		case env != "":
-			o.evidence = "its environment " + filepath.Join(home, env)
-		case exists(h.path(record)):
-			o.evidence = "its setup record " + record
-		}
-		if o.evidence != "" {
-			return o
-		}
-	}
-	var st syscall.Stat_t
-	if root != "" && syscall.Stat(root, &st) == nil && st.Uid != 0 && int(st.Uid) != me.uid {
-		owner := fmt.Sprint("uid ", st.Uid)
-		if i := slices.IndexFunc(users, func(u entry) bool { return u.uid == strconv.Itoa(int(st.Uid)) }); i >= 0 {
-			owner = users[i].name
-		}
-		return otherUser{name: owner, evidence: "the release root " + root + " is its"}
-	}
-	return otherUser{}
+	return users, members
 }
 
-// otherUser is another deploy user a server shows (otherDeployUser): its name, what shows it,
-// its setup record where that is all (bare, one it may hold by mistake), and both where it holds
-// environments or claims and so does the login's own release root, a bigger issue than a choice.
-type otherUser struct {
-	name, evidence, bare string
-	both                 bool
-}
-
-// holdsEnvironments says whether the release root root holds devopsy's environments or uid
-// claims, the login's own (otherDeployUser), by what only devopsy makes (homeReleases): unlike
-// rootHolds, which errs toward held so that no root is moved under releases, a home's own .env
-// is none here, so it never turns a choice into the error of two users with environments.
-func holdsEnvironments(root string) bool {
-	return root != "" && (exists(filepath.Join(root, uids.DirName)) || homeReleases(root) != "")
-}
-
-// homeReleases is an environment devopsy released under home, as its release root, relative
-// to it, "" for none: <project>[/<instance>]/<environment> holding releases/ beside its current
-// link, its release lock or its shared/, what only devopsy makes together.
-func homeReleases(home string) string {
+// devopsyEnvironment is an environment devopsy released under the release root root, relative
+// to it, "" for none: <project>[/<instance>]/<environment> holding releases/ beside its release
+// lock (.lock), or a release holding its devopsy-target.env, what only devopsy makes. Another
+// tool's layout of releases/ beside current and shared/ (Capistrano's, Deployer's) is none. The
+// deploy-user topic's move step tests the same in shell (TestDevopsyEnvironmentIsTheTopicsRule).
+func devopsyEnvironment(root string) string {
 	for _, pattern := range []string{"*/*/releases", "*/*/*/releases"} {
-		found, _ := filepath.Glob(filepath.Join(home, pattern))
+		found, _ := filepath.Glob(filepath.Join(root, pattern))
 		for _, rel := range found {
 			env := filepath.Dir(rel)
 			if fi, err := os.Stat(rel); err != nil || !fi.IsDir() {
 				continue
 			}
-			for _, beside := range []string{"current", ".lock", "shared"} {
-				if _, err := os.Lstat(filepath.Join(env, beside)); err == nil {
-					r, _ := filepath.Rel(home, env)
-					return r
-				}
+			targets, _ := filepath.Glob(filepath.Join(rel, "*", remote.TargetEnvFile))
+			if _, err := os.Lstat(filepath.Join(env, ".lock")); err == nil || len(targets) > 0 {
+				r, _ := filepath.Rel(root, env)
+				return r
 			}
 		}
 	}
@@ -272,15 +303,16 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// otherWire is the line --deploy-user-other prints, and otherLine reads back: other, the user,
-// what shows it, its bare setup record ("" for none) and both (1 or ""), tab separated, a user
-// with no name ("uid N") holding a space.
+// otherWire is the line --deploy-user-other prints, and otherLine reads back: other, then the
+// user, what shows it and its bare setup record ("" for none), each quoted as Go quotes a string
+// (strconv.Quote), so a tab or a newline in a path never shifts a field, and both (1 or ""),
+// tab separated.
 func otherWire(o otherUser) string {
 	both := ""
 	if o.both {
 		both = "1"
 	}
-	return remote.SetupOther + "\t" + o.name + "\t" + o.evidence + "\t" + o.bare + "\t" + both
+	return remote.SetupOther + "\t" + strconv.Quote(o.name) + "\t" + strconv.Quote(o.evidence) + "\t" + strconv.Quote(o.bare) + "\t" + both
 }
 
 // runDeployUserOther implements the hidden remote.DeployUserOtherFlag <login> <uid> <root>, run
@@ -347,15 +379,20 @@ func deployUnreadRefusal(why string) setup.Refusal {
 // settles it: only the steps, by hand.
 func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	who := me.words()
-	r := setup.Refusal{Item: setup.RefusalDeployUser, Howto: howto.DeployUser,
-		Message: "devopsy was set up as " + o.name + " on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name,
-		Fix:     "run it as " + o.name}
+	r := setup.Refusal{Item: setup.RefusalDeployUser, Howto: howto.DeployUser, HowtoAside: true,
+		Message: "devopsy was set up as " + o.name + " on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name}
+	login := remote.LoginName(o.name)
 	switch {
 	case o.both:
 		r.Message = "both " + who + " and " + o.name + " hold environments on this server (" + o.evidence + "): neither is recorded as the deploy user until one's are moved to the other"
-		r.Fix = "settle which one is the deploy user by hand, moving the other's environments to it"
+		r.Fix, r.HowtoAside = "settle which one is the deploy user by hand, moving the other's environments to it", false
 		return r
-	case s.Host != "" && remote.LoginName(o.name):
+	case !login:
+		// An owner with no name in the passwd file: no login to run it as.
+		r.Fix = "find which login " + o.name + " is, and run --server-setup as that user"
+	case s.Host == "":
+		r.Fix = "run --server-setup as " + o.name
+	default:
 		r.Fix, r.Command = "run it as "+o.name+":", "devopsy @"+remote.AsUser(s.Host, o.name)+" --server-setup"
 	}
 	if o.bare != "" {
