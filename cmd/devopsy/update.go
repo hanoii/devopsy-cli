@@ -28,7 +28,7 @@ func runUpgrade(args []string, color bool) int {
 	}
 	// Its session runs no prelude: on a server, a login the record does not name is refused here,
 	// before anything, as every other session's --release-settings refuses it.
-	if err := checkDeployUser(setupHost{root: os.Getenv(remote.HostRootEnv)}, currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
+	if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
 		return failErr(err)
 	}
 	if !update.IsRelease(version) {

@@ -1116,7 +1116,7 @@ func applySetup(h setupHost, a setupApply) int {
 	if file(setup.ItemMounts) && f.Goes(setup.StepMounts) {
 		dropinText = rd.dropin
 	}
-	deployText, deployRefused := "", false
+	deployText := ""
 	if file(setup.ItemDeployUser) && f.Goes(setup.StepDeployUser) {
 		deployText = setup.DeployUserText(currentLogin().name)
 	}
@@ -1194,7 +1194,14 @@ func applySetup(h setupHost, a setupApply) int {
 			runErr = nil
 		}
 		did := func(went ...string) bool { return rootRunDid(true, runErr, out.String(), "", went...) }
-		if runErr != nil {
+		// The run refused the deploy user's record as root (rootDeployRefusal): a refusal of the
+		// facts' from here on, which stops every later step and the setup record as one the
+		// facts read does, said once as the facts say theirs.
+		if r := rootDeployRefusal(out.String()); r != nil {
+			f.Refusals = append(f.Refusals, *r)
+			failures++
+			sayRefusalsOf([]setup.Refusal{*r}, nil, "", sayLevel(a.upgrade), nil, false)
+		} else if runErr != nil {
 			fail(err.Error())
 		}
 		if !did(remote.SetupPut + " " + setup.DaemonFile) {
@@ -1210,25 +1217,13 @@ func applySetup(h setupHost, a setupApply) int {
 			dropinText = ""
 		}
 		if !did(remote.SetupPut + " " + setup.DeployUserFile) {
-			// The run read, as root, another deploy user this login could not see: it refused
-			// before anything, and no setup record of this login's goes either.
-			if other, evidence, ok := otherLine(out.String()); ok {
-				r := otherDeployRefusal(other, evidence, currentLogin(), remote.SessionFrom(os.Getenv))
-				failures++
-				level := report.ErrorLevel
-				if a.upgrade {
-					level = report.WarnLevel
-				}
-				report.Say(level, r.Message, nil, fixWords(r)...)
-			}
-			deployRefused = deployText != ""
 			deployText = ""
 		}
 		raise, give = raise && did(remote.SetupRaised), give && did(remote.SetupMade+" "+f.Root, remote.SetupGave+" "+f.Root)
 	}
 	// The record follows the file, whatever the restart does next; none over a record
 	// devopsy could not read, which it says to remove.
-	if (recorded || (!rd.exists && !a.upgrade)) && !slices.Contains(f.Refused(), setup.RefusalRecord) && !deployRefused {
+	if (recorded || (!rd.exists && !a.upgrade)) && !slices.Contains(f.Refused(), setup.RefusalRecord) && !slices.Contains(f.Refused(), setup.RefusalDeployUser) {
 		if err := setup.WriteRecord(record, next); err != nil {
 			fail(err.Error())
 		} else if !rd.exists {
@@ -1319,8 +1314,9 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	// An apply with no failure notes the devopsy that made it, which --upgrade applies once:
 	// one a refusal stopped a change of is applied again. Every apply notes whether this
-	// devopsy found Docker at its floor, as its last read finds it (floorNote).
-	if !slices.Contains(f.Refused(), setup.RefusalRecord) {
+	// devopsy found Docker at its floor, as its last read finds it (floorNote). None for a login
+	// refused as the deploy user: a record of its own would make it a server set up by it.
+	if !slices.Contains(f.Refused(), setup.RefusalRecord) && !slices.Contains(f.Refused(), setup.RefusalDeployUser) {
 		r := again.record
 		if failures == 0 && len(f.Stopped()) == 0 {
 			r.Version = version
@@ -1426,7 +1422,7 @@ func rootSetupRun(h setupHost, root string, daemon []byte, sysctl, dropin, deplo
 		return ""
 	}
 	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"), token, deployUser)
+	run := setupRun(h.root, owner, flag(give), root, string(daemon), sysctl, dropin, flag(raise), after, invocation, strings.Join(flags, "\n"), token, deployUser, selfPath())
 	run.Stderr = quietQueued{q}
 	return run.run(q, func(err error) error { return fmt.Errorf("the setup's run as root: %w", err) })
 }
@@ -1496,16 +1492,41 @@ func rootRunDid(asked bool, err error, out, failed string, went ...string) bool 
 	return slices.ContainsFunc(went, func(w string) bool { return hasLine(out, w) })
 }
 
-// otherLine is the root run's SetupOther line in out, the user and what shows it, ok false for
-// none.
+// otherLine is the root run's SetupOther line in out (otherWire), the user and what shows it,
+// ok false for none.
 func otherLine(out string) (user, evidence string, ok bool) {
 	for _, l := range strings.Split(out, "\n") {
-		if rest, found := strings.CutPrefix(l, remote.SetupOther+" "); found {
-			user, evidence, ok = strings.Cut(rest, " ")
+		if rest, found := strings.CutPrefix(l, remote.SetupOther+"\t"); found {
+			user, evidence, ok = strings.Cut(rest, "\t")
 			return user, evidence, ok
 		}
 	}
 	return "", "", false
+}
+
+// rootDeployRefusal is the refusal the root run said as root before it made the deploy user's
+// record (its SetupOther or SetupUnread line in out), nil for none.
+func rootDeployRefusal(out string) *setup.Refusal {
+	if other, evidence, ok := otherLine(out); ok {
+		r := otherDeployRefusal(other, evidence, currentLogin(), remote.SessionFrom(os.Getenv))
+		return &r
+	}
+	if why, ok := unreadLine(out); ok {
+		r := deployUnreadRefusal(why)
+		return &r
+	}
+	return nil
+}
+
+// unreadLine is the root run's SetupUnread line in out, why the record could not be read, ok
+// false for none.
+func unreadLine(out string) (why string, ok bool) {
+	for _, l := range strings.Split(out, "\n") {
+		if rest, found := strings.CutPrefix(l, remote.SetupUnread+"\t"); found {
+			return rest, true
+		}
+	}
+	return "", false
 }
 
 // hasLine says whether out holds the line word, alone or first.

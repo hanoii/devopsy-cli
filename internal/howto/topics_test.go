@@ -339,12 +339,10 @@ func TestDeployUserConfigStepLeavesTwoConfigsApart(t *testing.T) {
 	}
 }
 
-// Bug (review round 2): the deploy-user topic's move step, where the release root is the old
-// user's home, moves each project's directory and the uid claims with a plain mv, which puts
-// them inside the new user's own when that one is there already: on a server where two docker
-// users each took themselves for the deploy user (what the record is for), both homes hold a
-// .devopsy-uids, often the same project, and the old claims land in .devopsy-uids/.devopsy-uids
-// and shop/shop, where no devopsy reads them, with no word: the two owners on one uid stay.
+// The deploy-user topic's move step never moves a project's directory or the uid claims inside
+// what the new home holds of the same name already (two docker users that each took themselves
+// for the deploy user): it says so and leaves them for a merge by hand, where no devopsy would
+// read them nested.
 func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
 	t.Parallel()
 	me, err := user.Current()
@@ -362,7 +360,7 @@ func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
 		}
 	}
 	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=devopsy ;; *) h=$2 ;; esac; echo "$2:x:1000:1000::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
-	out := pasted(t, stepWith(t, DeployUser, ".devopsy-images.lock; do [ ! -e \"$from/$p\" ]"), path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
+	out := pasted(t, stepWith(t, DeployUser, `mv "$from/$p" "$to/$p"`), path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
 	for _, nested := range []string{"deploy/.devopsy-uids/.devopsy-uids", "deploy/shop/shop"} {
 		if _, err := os.Stat(filepath.Join(homes, nested)); err == nil {
 			t.Errorf("the move step put the old user's %s inside the new user's own, where no devopsy reads it:\n%s", filepath.Base(nested), out)
@@ -370,12 +368,9 @@ func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
 	}
 }
 
-// Bug (review round 2): on a server with project users, --project-users setup put the deploy
-// user in devopsy-proc (setup.ProcGroup, the group that sees every process once /proc hides
-// them), and the deploy-user topic hands the door to the new user (its directory, sudo rules,
-// sshd's drop-in) without putting it there, nor running --project-users setup, which would:
-// the new deploy user's /proc then hides the project users' processes, and the topic's own
-// check (--server-info with no refusal) shows that group's warning instead.
+// The deploy-user topic puts the new deploy user in devopsy-proc on a server with project users,
+// as --project-users setup put the old one: otherwise /proc hides the project users' processes
+// from it.
 func TestDeployUserTopicPutsTheNewUserInTheProcessesGroup(t *testing.T) {
 	t.Parallel()
 	tp, _ := Find(string(DeployUser))
@@ -390,4 +385,48 @@ func TestDeployUserTopicPutsTheNewUserInTheProcessesGroup(t *testing.T) {
 		}
 	}
 	t.Error("no step puts the new deploy user in devopsy-proc, which the door's /proc hiding lets see every process")
+}
+
+// The deploy-user topic's move step, where the release root is the old user's home, takes for a
+// project of devopsy's only a directory holding an environment's releases/ beside what devopsy
+// makes with it, never the old user's own work (a checkout with a .env, a shared/ of its own),
+// which an admin's own account as the old deploy user holds.
+func TestDeployUserMoveStepLeavesWhatDevopsyDidNotMake(t *testing.T) {
+	t.Parallel()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes := t.TempDir()
+	for _, f := range []string{"admin/shop/prod/releases/1/code/x", "admin/shop/prod/shared/.env", "admin/work/.env", "admin/src/site/.env", "admin/notes/app/shared/todo", "deploy/.keep"} {
+		p := filepath.Join(homes, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=admin ;; *) h=$2 ;; esac; echo "$2:x:1000:1000::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
+	out := pasted(t, stepWith(t, DeployUser, `mv "$from/$p" "$to/$p"`), path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
+	if _, err := os.Stat(filepath.Join(homes, "deploy", "shop", "prod", "releases")); err != nil {
+		t.Fatalf("the project did not move: %v\n%s", err, out)
+	}
+	for _, own := range []string{"work", "src", "notes"} {
+		if _, err := os.Stat(filepath.Join(homes, "admin", own)); err != nil {
+			t.Errorf("the move step took the old user's own ~/%s for a project of devopsy's and moved it to the new user's home:\n%s", own, out)
+		}
+	}
+}
+
+// The deploy-user topic's record step makes /etc/devopsy where the server has none (one
+// devopsy-server did not install, where the setup's refusal for another deploy user sends the
+// reader), so the record is written.
+func TestDeployUserRecordStepMakesItsDirectory(t *testing.T) {
+	t.Parallel()
+	record := filepath.Join(t.TempDir(), "devopsy", "deploy-user")
+	out := pasted(t, stepWith(t, DeployUser, "/etc/devopsy/deploy-user"), "/usr/bin:/bin", "/etc/devopsy/deploy-user", record)
+	if got, err := os.ReadFile(record); err != nil || string(got) != "deploy\n" {
+		t.Errorf("the record on a server with no /etc/devopsy: %q, %v\n%s", got, err, out)
+	}
 }

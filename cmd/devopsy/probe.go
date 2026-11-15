@@ -104,7 +104,7 @@ func runReleaseSettings(args []string) int {
 		report.Error("usage: devopsy --release-settings [<project> <compose name>]")
 		return 2
 	}
-	if err := checkDeployUser(setupHost{root: os.Getenv(remote.HostRootEnv)}, currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
+	if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
 		failErr(err)
 		return remote.SettingsRefusedExit
 	}

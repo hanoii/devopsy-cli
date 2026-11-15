@@ -133,11 +133,13 @@ const deployUserNameShell = `deploy_user_name() { sed -e 's/^[[:space:]]*//' -e 
 `
 
 // deployUserGate stops a --ssh-keys script of a login the server's record does not name, by the
-// server's devopsy's own check (--release-settings), only where the record is there: only a
-// server's devopsy writes it, so one that runs the check is there too, and a server without it
-// needs nothing of its devopsy here.
-var deployUserGate = `if [ -e "${` + HostRootEnv + `:-}` + setup.DeployUserFile + `" ] || [ -L "${` + HostRootEnv + `:-}` + setup.DeployUserFile + `" ]; then
-  devopsy --release-settings >/dev/null || exit 1
+// server's devopsy's check of the login alone (DeployUserCheckFlag), which neither a config nor
+// a release root holds up, only where the record is there: only a server's devopsy writes it, so
+// one with the check is there too, and a server without it needs nothing new of its devopsy.
+// The host's own path is tested whatever the tests' host root says, so a login that set that
+// never skips the check.
+var deployUserGate = `if [ -e ` + setup.DeployUserFile + ` ] || [ -L ` + setup.DeployUserFile + ` ] || { [ -n "${` + HostRootEnv + `:-}" ] && [ -e "$` + HostRootEnv + `` + setup.DeployUserFile + `" ]; }; then
+  devopsy ` + DeployUserCheckFlag + ` || exit 1
 fi
 `
 

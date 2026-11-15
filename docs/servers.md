@@ -254,9 +254,9 @@ A server has one deploy user, which `--server-setup` records in
 user before it asks. From then on every session's devopsy refuses,
 before it reads or changes anything, a login that is not that user, root
 or a project user, with `W0009` ([Codes](codes.md#w0009)) and the deploy
-user's address; only `--shell-host`, the way in when something is
-broken, and `--match-server-version`, which reads the version alone, are
-not checked:
+user's address, `--shell-host` included; only `--shell-host --root`,
+root's own shell, and `--match-server-version`, which reads the version
+alone, are not checked:
 
 ```
 devopsy: error: W0009: this login is not the server's deploy user
@@ -273,14 +273,15 @@ admin's own account the default SSH user, say), would each have a
 release root, uid claims and a setup of their own on one Docker, whose
 compose names they share. `--server-setup` run as another user refuses
 too, and so does one on a server with no record yet that shows another
-deploy user: another member of the `docker` group with devopsy's setup
-record (`~/.config/devopsy/server.yaml`), or a release root another user
-owns. It names that user and the command to run it as that user, before
+deploy user: another member of the `docker` group whose home holds
+devopsy's setup record (`~/.config/devopsy/server.yaml`), its uid claims
+or an environment's releases, or a release root another user owns. It names that user and the command to run it as that user, before
 anything changes. The record never changes by itself: making another
 user the deploy user is by hand, with the steps `devopsy
 --server-setup-howto deploy-user` prints. A record that cannot be read,
 or names no one user, refuses every login but root and project users
-with `W0010` until root corrects it. A server set up before the record
+with `W0010` until root corrects it, in root's own shell
+(`--shell-host --root`). A server set up before the record
 gets it at its next `--server-setup` or `--upgrade`, and until then
 `--server-info` says it is not recorded yet, naming the user the next
 `--server-setup` would record, and nothing is refused.

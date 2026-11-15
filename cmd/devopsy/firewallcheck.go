@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/user"
 	"strings"
 	"time"
 
@@ -70,8 +69,8 @@ func firewallChainsWrong(read string, door bool) ([]string, error) {
 // admin's, nothing in it that user's to act on, and whose docker is the door, which would
 // refuse a root run, and Docker's reads, and log each.
 func asProjectUser() bool {
-	u, err := user.Current()
-	return err == nil && inDoorGroup(u.Username)
+	me := currentLogin()
+	return me.name != "" && inDoorGroup(me.name)
 }
 
 // readsChains says whether the chains are read as root: where devopsy's firewall is installed

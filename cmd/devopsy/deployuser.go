@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +17,8 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
+	"github.com/hanoii/devopsy-cli/internal/uids"
+	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
 // deployUserRecord reads the server's record of its deploy user (setup.DeployUserFile, under
@@ -47,12 +51,44 @@ func (l login) words() string {
 	return l.name
 }
 
-// currentLogin is this process's login, its name the system's for its uid. Never user.Current:
-// without cgo, a uid the passwd file does not list falls back to $USER, which the login sets
-// itself, and a name it chose would pass for the deploy user's.
+// currentUser is the user this process runs as, by its uid in the system's user database, for
+// whatever decides who it is (its name, its home, its ids). Never os/user's own lookups of it on
+// Linux: without cgo (every release), user.Current, user.LookupId of its own uid and user.Lookup
+// of the name in $USER all answer from $USER and $HOME where the passwd file does not list the
+// uid (a login from LDAP or sssd), values the login sets itself, so a name it chose would pass
+// for another's (the deploy user's, a project user's). The passwd file first, then getent, which
+// asks the system's other sources (NSS).
+func currentUser() (*user.User, error) {
+	uid := strconv.Itoa(os.Getuid())
+	if runtime.GOOS != "linux" {
+		return user.LookupId(uid)
+	}
+	find := func(lines string) *user.User {
+		for line := range strings.SplitSeq(lines, "\n") {
+			// name:password:uid:gid:gecos:home:shell
+			if f := strings.Split(line, ":"); len(f) >= 6 && f[2] == uid && f[0] != "" {
+				return &user.User{Username: f[0], Uid: f[2], Gid: f[3], Name: f[4], HomeDir: f[5]}
+			}
+		}
+		return nil
+	}
+	if passwd, err := os.ReadFile("/etc/passwd"); err == nil {
+		if u := find(string(passwd)); u != nil {
+			return u, nil
+		}
+	}
+	if out, err := exec.Command("getent", "passwd", uid).Output(); err == nil {
+		if u := find(string(out)); u != nil {
+			return u, nil
+		}
+	}
+	return nil, user.UnknownUserIdError(os.Getuid())
+}
+
+// currentLogin is this process's login (currentUser), its name "" where the system has none.
 func currentLogin() login {
 	l := login{uid: os.Getuid()}
-	if u, err := user.LookupId(strconv.Itoa(l.uid)); err == nil {
+	if u, err := currentUser(); err == nil {
 		l.name = u.Username
 	}
 	return l
@@ -72,8 +108,12 @@ func checkDeployUser(h setupHost, me login, projectUser func() bool, s remote.Se
 	deploy, _, err := deployUserRecord(h)
 	switch {
 	case err != nil:
-		return &report.Failure{Msg: report.DeployUserUnread.Msg(), Details: []string{err.Error()},
-			Remedies: []report.Remedy{report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644")}}
+		// Root's own shell is the way in: --shell-host as any other login is checked too.
+		fix := report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644, in root's shell (--shell-host --root on this server)")
+		if c := s.OnServer("--shell-host --root"); c != "" {
+			fix = report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644, in root's shell:", c)
+		}
+		return &report.Failure{Msg: report.DeployUserUnread.Msg(), Details: []string{err.Error()}, Remedies: []report.Remedy{fix}}
 	case deploy == "" || deploy == me.name:
 		return nil
 	}
@@ -99,8 +139,8 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 	deploy, text, err := deployUserRecord(h)
 	switch {
 	case err != nil:
-		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: err.Error(),
-			Fix: "correct it as root, naming the deploy user alone on a line, the file root's with mode 644", Howto: howto.DeployUser}
+		r := deployUnreadRefusal(err.Error())
+		return nil, &r
 	case deploy != "" && deploy != me.name:
 		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: setup.DeployUserFile + " names " + deploy + " the server's deploy user, and this setup runs as " + me.words(),
 			Fix: "run --server-setup as " + deploy + ", or make " + me.words() + " the deploy user by hand", Howto: howto.DeployUser}
@@ -117,17 +157,20 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 
 // otherDeployUser is the user other than me a server with no record shows set up by devopsy,
 // and what shows it: a member of the docker group (h's group and passwd files, a member listed
-// or its primary group) with devopsy's setup record in its home's config
-// (~/.config/devopsy/server.yaml), else the owner of the release root root, another user's but
-// root's. "" for none; what this login cannot see reads as none, and the root run reads the same
-// again as root, before it writes the record (remote.SetupRootScript, its "other" line).
+// or its primary group) whose home holds devopsy's setup record in its config
+// (~/.config/devopsy/server.yaml), uid claims (.devopsy-uids) or an environment's releases
+// (homeReleases), a deploy user that never ran --server-setup included; else the owner of the
+// release root root, another user's but root's, by name, else "uid N", no login. "" for none.
+// The one judgment of it: the facts read it as the login can, and the root run asks it again
+// as root before it makes the record (DeployUserOtherFlag).
 func otherDeployUser(h setupHost, me login, root string) (user, evidence string) {
 	group, _ := os.ReadFile(h.path("/etc/group"))
 	passwd, _ := os.ReadFile(h.path("/etc/passwd"))
 	type entry struct{ name, uid, gid, home string }
 	var users []entry
 	for line := range strings.SplitSeq(string(passwd), "\n") {
-		if f := strings.Split(line, ":"); len(f) >= 7 {
+		// name:password:uid:gid:gecos:home:shell, a shell or more left out read as none.
+		if f := strings.Split(line, ":"); len(f) >= 6 && f[0] != "" {
 			users = append(users, entry{f[0], f[2], f[3], f[5]})
 		}
 	}
@@ -135,8 +178,10 @@ func otherDeployUser(h setupHost, me login, root string) (user, evidence string)
 	for line := range strings.SplitSeq(string(group), "\n") {
 		if f := strings.Split(line, ":"); len(f) >= 4 && f[0] == "docker" {
 			gid = f[2]
-			if f[3] != "" {
-				members = strings.Split(f[3], ",")
+			for m := range strings.SplitSeq(f[3], ",") {
+				if m = strings.TrimSpace(m); m != "" {
+					members = append(members, m)
+				}
 			}
 		}
 	}
@@ -147,12 +192,20 @@ func otherDeployUser(h setupHost, me login, root string) (user, evidence string)
 	}
 	for _, m := range members {
 		i := slices.IndexFunc(users, func(u entry) bool { return u.name == m })
-		if m == me.name || i < 0 || users[i].home == "" {
+		if m == me.name || i < 0 || users[i].home == "" || users[i].uid == strconv.Itoa(me.uid) {
 			continue
 		}
-		record := filepath.Join(users[i].home, ".config", "devopsy", setup.RecordFile)
-		if _, err := os.Stat(h.path(record)); err == nil {
+		home := users[i].home
+		record := filepath.Join(home, ".config", "devopsy", setup.RecordFile)
+		claims := filepath.Join(home, uids.DirName)
+		switch {
+		case exists(h.path(record)):
 			return m, "its setup record " + record
+		case exists(h.path(claims)):
+			return m, "its uid claims " + claims
+		}
+		if env := homeReleases(h.path(home)); env != "" {
+			return m, "its environment " + filepath.Join(home, env)
 		}
 	}
 	var st syscall.Stat_t
@@ -164,6 +217,95 @@ func otherDeployUser(h setupHost, me login, root string) (user, evidence string)
 		return owner, "the release root " + root + " is its"
 	}
 	return "", ""
+}
+
+// homeReleases is an environment devopsy released under home, as its release root, relative
+// to it, "" for none: <project>[/<instance>]/<environment> holding releases/ beside its current
+// link, its release lock or its shared/, what only devopsy makes together.
+func homeReleases(home string) string {
+	for _, pattern := range []string{"*/*/releases", "*/*/*/releases"} {
+		found, _ := filepath.Glob(filepath.Join(home, pattern))
+		for _, rel := range found {
+			env := filepath.Dir(rel)
+			if fi, err := os.Stat(rel); err != nil || !fi.IsDir() {
+				continue
+			}
+			for _, beside := range []string{"current", ".lock", "shared"} {
+				if _, err := os.Lstat(filepath.Join(env, beside)); err == nil {
+					r, _ := filepath.Rel(home, env)
+					return r
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// exists says whether path is there, a link included.
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// otherWire is the line --deploy-user-other prints, and otherLine reads back: other, the user
+// and what shows it, tab separated, a user with no name ("uid N") holding a space.
+func otherWire(user, evidence string) string {
+	return remote.SetupOther + "\t" + user + "\t" + evidence
+}
+
+// runDeployUserOther implements the hidden remote.DeployUserOtherFlag <login> <uid> <root>, run
+// by the setup's root run as root, under remote.HostRootEnv as it sets it, before it makes the
+// deploy user's record: the record naming another user than login (its "other" line, the record
+// as what shows it), one that cannot be read (its "unread" line), else otherDeployUser's "other"
+// line where there is none, nothing when login may be recorded.
+func runDeployUserOther(args []string) int {
+	if len(args) != 3 {
+		return fail("usage: devopsy " + remote.DeployUserOtherFlag + " <login> <uid> <root>")
+	}
+	uid, err := strconv.Atoi(args[1])
+	if err != nil {
+		return fail("not a uid: " + args[1])
+	}
+	me, h := login{uid: uid, name: args[0]}, setupHost{root: os.Getenv(remote.HostRootEnv)}
+	deploy, _, err := deployUserRecord(h)
+	switch {
+	case err != nil:
+		fmt.Println(remote.SetupUnread + "\t" + err.Error())
+	case deploy != "" && deploy != me.name:
+		fmt.Println(otherWire(deploy, "the record "+setup.DeployUserFile+" names it"))
+	case deploy == "":
+		if other, evidence := otherDeployUser(h, me, args[2]); other != "" {
+			fmt.Println(otherWire(other, evidence))
+		}
+	}
+	return 0
+}
+
+// deployUserHost is where the deploy user's check reads the record (checkDeployUser): the host's
+// own root in a release build, remote.HostRootEnv's only in a development build, the tests': a
+// login that set it would read a record of its own making and pass.
+func deployUserHost() setupHost {
+	if update.IsRelease(version) {
+		return setupHost{}
+	}
+	return setupHost{root: os.Getenv(remote.HostRootEnv)}
+}
+
+// runDeployUserCheck implements the hidden remote.DeployUserCheckFlag: the deploy user's check
+// of this login alone (checkDeployUser), for the scripts that run no prelude (the --ssh-keys
+// scripts), which neither a config nor a release root of the login's may hold up.
+func runDeployUserCheck() int {
+	if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
+		failErr(err)
+		return remote.SettingsRefusedExit
+	}
+	return 0
+}
+
+// deployUnreadRefusal is the setup's refusal of a deploy user's record that cannot be read, why.
+func deployUnreadRefusal(why string) setup.Refusal {
+	return setup.Refusal{Item: setup.RefusalDeployUser, Message: why,
+		Fix: "correct it as root, naming the deploy user alone on a line, the file root's with mode 644", Howto: howto.DeployUser}
 }
 
 // otherDeployRefusal is the setup's refusal to record me where the server shows other set up by

@@ -289,7 +289,7 @@ func TestKeysListingFinishesARemoval(t *testing.T) {
 }
 
 // The --ssh-keys scripts run no prelude: where the server records its deploy user, they ask the
-// server's devopsy's check first (--release-settings), so a login the record does not name, in
+// server's devopsy's check of the login first (DeployUserCheckFlag), so a login the record does not name, in
 // the docker group, writes no key (a project user's in a door directory of its own home, which
 // sshd never asks) and the script fails.
 func TestKeysScriptsRefuseAnotherLogin(t *testing.T) {
@@ -298,7 +298,7 @@ func TestKeysScriptsRefuseAnotherLogin(t *testing.T) {
 	for name, body := range map[string]string{
 		"flock":   "exit 0",
 		"id":      `case "$1" in -nG) echo admin docker ;; -un) echo admin ;; -u) [ "${2:-}" = devopsy-shop ] && echo 10002 || echo 1001 ;; *) exit 1 ;; esac`,
-		"devopsy": `case "$1" in --release-settings) echo "devopsy: error: W0009: this login is not the server's deploy user" >&2; exit ` + strconv.Itoa(SettingsRefusedExit) + ` ;; esac`,
+		"devopsy": `case "$1" in ` + DeployUserCheckFlag + `) echo "devopsy: error: W0009: this login is not the server's deploy user" >&2; exit ` + strconv.Itoa(SettingsRefusedExit) + ` ;; esac`,
 	} {
 		if err := testfile.Write(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
 			t.Fatal(err)

@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -75,7 +74,12 @@ func TestSetupRootScript(t *testing.T) {
 	}
 	owner := "0:0" // never used: nothing here is root's
 	daemon := "{\n  \"live-restore\": true\n}\n"
-	all := []string{host, owner, "1", root, daemon, setup.SysctlText(), dropin, "1", "", "inv-1", "", "", setup.DeployUserText("deploy")}
+	// The server's devopsy finds nothing against the deploy user's record (DeployUserOtherFlag).
+	nothing := filepath.Join(t.TempDir(), "devopsy")
+	if err := testfile.Write(nothing, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	all := []string{host, owner, "1", root, daemon, setup.SysctlText(), dropin, "1", "", "inv-1", "", "", setup.DeployUserText("deploy"), nothing}
 	out, code := run(nil, all...)
 	for _, want := range []string{"put " + setup.DeployUserFile + "\n", "made " + root + "\n", "put " + setup.DaemonFile + "\n", "put " + setup.SysctlFile + "\n", "raised net.core.rmem_max\n", "raised net.core.wmem_max\n", "put " + setup.MountsDropIn + "\n", "marked\n"} {
 		if !strings.Contains(out, want) {
@@ -213,62 +217,44 @@ func TestSetupRootScriptKeepsADaemonFileBehindALink(t *testing.T) {
 	}
 }
 
-// The root run reads the deploy user's record again as root, under its own write, whatever the
-// setup read before: one naming another user (another docker user's setup that applied at once)
-// is never rewritten, and the run says no put.
-func TestSetupRootScriptKeepsARecordNamingAnotherUser(t *testing.T) {
+// The root run puts the deploy user's record only where the server's devopsy, asked as root
+// under the run's host root (DeployUserOtherFlag) before it makes the record and again after,
+// says nothing against it; whatever it says (another deploy user, a record naming another or
+// one it cannot read) is printed on its own line and ends the run with 4 before anything else,
+// a record there left as it is, and a devopsy that fails to answer reads as one it cannot read.
+func TestSetupRootScriptAsksTheServersDevopsy(t *testing.T) {
 	t.Parallel()
 	host, bin := setupHostRoot(t)
-	file := filepath.Join(host, setup.DeployUserFile)
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+	calls := filepath.Join(t.TempDir(), "du-calls")
+	fake := filepath.Join(t.TempDir(), "devopsy")
+	if err := testfile.Write(fake, []byte("#!/bin/sh\necho \"$DEVOPSY_INTERNAL_HOST_ROOT $*\" >>"+calls+"\n[ -z \"${FAKE_DU_EXIT:-}\" ] || exit \"$FAKE_DU_EXIT\"\nprintf '%s' \"${FAKE_DU_SAID:-}\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(file, []byte(setup.DeployUserText("deploy")), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	c := exec.Command("sh", "-c", SetupRootScript, "sh", host, "0:0", "", filepath.Join(host, "srv"), "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"))
-	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls"))
-	out, _ := c.CombinedOutput()
-	if got, _ := os.ReadFile(file); string(got) != setup.DeployUserText("deploy") || strings.Contains(string(out), SetupPut+" "+setup.DeployUserFile) {
-		t.Errorf("the root run replaced a record naming another user: %q\n%s", got, out)
-	}
-}
-
-// With no record yet, the root run refuses to make one, as root and before anything else, on a
-// server that shows another deploy user, what the login's own facts could not see: a docker
-// member other than the one it records with devopsy's setup record in its home, or a release
-// root another user than root owns. It says who and what shows it (SetupOther) and exits 4; a
-// member with no record lets it make the record.
-func TestSetupRootScriptRefusesWithAnotherDeployUser(t *testing.T) {
-	t.Parallel()
-	host, bin := setupHostRoot(t)
-	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:admin\n")
-	write(t, filepath.Join(host, "etc", "passwd"), "admin:x:61000:61000::/home/admin:/bin/sh\ndevopsy:x:61002:990::/home/devopsy:/bin/sh\n")
 	root := filepath.Join(host, "srv")
-	run := func(owner string) (string, int) {
+	record := filepath.Join(host, setup.DeployUserFile)
+	run := func(env ...string) (string, int) {
 		t.Helper()
-		c := exec.Command("sh", "-c", SetupRootScript, "sh", host, owner, "", root, "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"))
-		c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls"))
+		os.Remove(calls)
+		c := exec.Command("sh", "-c", SetupRootScript, "sh", host, "1000:1000", "", root, "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"), fake)
+		c.Env = append(append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls")), env...)
 		out, _ := c.CombinedOutput()
 		return string(out), c.ProcessState.ExitCode()
 	}
-	record := filepath.Join(host, setup.DeployUserFile)
-	write(t, filepath.Join(host, "home", "devopsy", ".config", "devopsy", setup.RecordFile), "{}\n")
-	if out, code := run("1000:1000"); code != 4 || !strings.Contains(out, SetupOther+" devopsy its setup record /home/devopsy/.config/devopsy/"+setup.RecordFile+"\n") || readFile(record) != "" {
-		t.Errorf("another member's setup record (%d), the record %q:\n%s", code, readFile(record), out)
+	other := SetupOther + "\tops\tits setup record /home/ops/.config/devopsy/server.yaml"
+	if out, code := run("FAKE_DU_SAID=" + other); code != 4 || !strings.Contains(out, other+"\n") || readFile(record) != "" || strings.Contains(out, SetupPut) {
+		t.Errorf("another deploy user (%d), the record %q:\n%s", code, readFile(record), out)
 	}
-	if err := os.Remove(filepath.Join(host, "home", "devopsy", ".config", "devopsy", setup.RecordFile)); err != nil {
-		t.Fatal(err)
+	if out, code := run("FAKE_DU_EXIT=1"); code != 4 || !strings.Contains(out, SetupUnread+"\t") || readFile(record) != "" {
+		t.Errorf("a devopsy that does not answer (%d):\n%s", code, out)
 	}
-	// The release root, there and this test's user's, read as another's by the owner given.
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
+	if out, code := run(); code != 0 || !strings.Contains(out, SetupPut+" "+setup.DeployUserFile+"\n") || readFile(record) != setup.DeployUserText("admin") ||
+		readFile(calls) != strings.Repeat(host+" "+DeployUserOtherFlag+" admin 1000 "+root+"\n", 2) {
+		t.Errorf("nothing against it (%d), asked %q:\n%s", code, readFile(calls), out)
 	}
-	other := strconv.Itoa(os.Getuid()+1) + ":0"
-	if out, code := run(other); code != 4 || !strings.Contains(out, SetupOther+" "+strconv.Itoa(os.Getuid())+" the release root "+root+" is its\n") || readFile(record) != "" {
-		t.Errorf("a release root of another's (%d):\n%s", code, out)
-	}
-	if out, code := run(strconv.Itoa(os.Getuid()) + ":0"); code != 0 || !strings.Contains(out, SetupPut+" "+setup.DeployUserFile+"\n") || readFile(record) != setup.DeployUserText("admin") {
-		t.Errorf("no other deploy user (%d):\n%s", code, out)
+	// A record there naming another user, which the server's devopsy says: left as it is.
+	write(t, record, setup.DeployUserText("deploy"))
+	said := SetupOther + "\tdeploy\tthe record " + setup.DeployUserFile + " names it"
+	if out, code := run("FAKE_DU_SAID=" + said); code != 4 || readFile(record) != setup.DeployUserText("deploy") || strings.Contains(out, SetupPut+" "+setup.DeployUserFile) {
+		t.Errorf("the root run replaced a record naming another user (%d): %q\n%s", code, readFile(record), out)
 	}
 }

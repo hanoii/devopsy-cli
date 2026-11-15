@@ -1183,7 +1183,7 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 	if tree == "" {
 		tree = filepath.Join(u.HomeDir, s.Project)
 	}
-	deploy, err := user.Current()
+	deploy, err := currentUser()
 	if err != nil {
 		return door.Policy{}, err
 	}

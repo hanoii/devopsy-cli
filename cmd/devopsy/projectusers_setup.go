@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -587,8 +586,8 @@ func procHiding(mounts string, ours bool, me string, groups groupLookup) (p setu
 // deployUserName is this user's name, the deploy user's on a server, "the deploy user" where it
 // cannot be read.
 func deployUserName() string {
-	if u, err := user.Current(); err == nil {
-		return u.Username
+	if me := currentLogin(); me.name != "" {
+		return me.name
 	}
 	return "the deploy user"
 }
@@ -662,7 +661,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 			polkit = setup.PolkitDropInText()
 		}
 	}
-	me, err := user.Current()
+	me, err := currentUser()
 	if err != nil {
 		return failErr(err)
 	}

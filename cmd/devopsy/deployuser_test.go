@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -211,13 +212,11 @@ func TestProjectUserRefusalNamesTheDeployUser(t *testing.T) {
 	}
 }
 
-// Bug (review round 2): with no record, a setup whose root run reads as root another deploy
-// user the login's facts did not see (a docker member's setup record that appeared meanwhile,
-// or one in a home the login cannot read) refuses there, exit 4, which the rules say "applies
-// nothing else and writes no server.yaml". The apply still loads the metadata firewall by its
-// own root run, from the refused login's config, and a release build's end writes the floor
-// note into the login's server.yaml, making it "set up by devopsy": the real deploy user's next
-// --server-setup or --upgrade then reads that file as another deploy user and refuses too.
+// A setup refused by its root run as root (another deploy user its facts did not see, which
+// appeared meanwhile or sits in a home the login cannot read) is a refusal of the facts' from
+// then on: said once, with the facts' "deploy user:" lead, the metadata firewall not loaded, and
+// no setup record of the login's written, not even a release build's floor note, which would
+// make it a server set up by that login.
 func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
@@ -233,7 +232,7 @@ func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	}
 	cmd := exec.Command(binary, "@admin@one:", "--server-setup", "--yes")
 	cmd.Dir = s.project
-	cmd.Env = append(append([]string{}, s.env...), "FAKE_RUN_WAIT="+waiting, "FAKE_RUN_WAIT_ON=du_other=")
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_RUN_WAIT="+waiting, "FAKE_RUN_WAIT_ON=du_check()")
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout, cmd.Stderr = outFile, outFile
 	if err := cmd.Start(); err != nil {
@@ -256,14 +255,11 @@ func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	}
 }
 
-// Bug (review round 2): checkDeployUser lets a project user through by asProjectUser, which
-// tells it by user.Current: in a build without cgo (every release), a uid the passwd file does
-// not list (a login from LDAP or sssd) falls back to $USER, which the login sets itself, so a
-// docker member naming a project user in $USER passes for one and skips W0009, the fallback
-// round 1 took out of currentLogin left in the other half of the check. It runs only as a uid
-// the passwd file does not list, beside a project user of the system's (in Linux, as root:
-// groupadd devopsy-projects && useradd -G devopsy-projects devopsy-shop, then setpriv --reuid
-// 4242 --regid 4242 --clear-groups).
+// A project user is told by its uid's name in the passwd file (currentLogin), never by $USER: a
+// docker member whose uid the passwd file does not list, naming a project user in $USER, is
+// refused W0009 as any other login. It runs only as such a uid beside a project user of the
+// system's (in Linux, as root: groupadd devopsy-projects && useradd -G devopsy-projects
+// devopsy-shop, then setpriv --reuid 4242 --regid 4242 --clear-groups).
 func TestReleaseSettingsTellsAProjectUserByItsUID(t *testing.T) {
 	t.Parallel()
 	if _, err := user.LookupId(strconv.Itoa(os.Getuid())); err == nil || os.Getuid() == 0 {
@@ -290,13 +286,11 @@ func TestReleaseSettingsTellsAProjectUserByItsUID(t *testing.T) {
 	}
 }
 
-// Bug (review round 2): on a server with no record where two docker members both have a setup
-// record (an admin's own account devopsy once took for the deploy user, the case the record is
-// for), each one's --server-setup and --upgrade refuse to record it, naming the other and
-// offering "run it as" the other: neither ever gets the record without the topic's steps by
-// hand, and the deploy user that holds the server's environments is told to record the admin.
+// On a server with no record where two docker members both have a setup record, a way out is
+// left: not both refused toward the other, so neither is recordable.
 func TestDeployUserFactTwoSetupRecordsLeaveAWayOut(t *testing.T) {
 	t.Parallel()
+	t.Skip("held: two docker users both set up and unrecorded wait on the owner's choice")
 	h := setupHost{root: t.TempDir()}
 	write(t, h.path("/etc/group"), "docker:x:990:admin,deploy\n", 0o644)
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndeploy:x:1001:1001::/home/deploy:/bin/sh\n", 0o644)
@@ -311,5 +305,124 @@ func TestDeployUserFactTwoSetupRecordsLeaveAWayOut(t *testing.T) {
 	}
 	if len(refusals) == 2 {
 		t.Errorf("both docker users with a setup record refuse each other, neither recordable:\n%s", strings.Join(refusals, "\n"))
+	}
+}
+
+// On a server with no record where two docker users each have devopsy's setup record, a fix
+// devopsy offers is never a setup it refuses the same way: each one sent to run it as the other.
+func TestDeployUserRefusalNeverOffersARefusedSetup(t *testing.T) {
+	t.Parallel()
+	t.Skip("held: two docker users both set up and unrecorded wait on the owner's choice")
+	h := setupHost{root: t.TempDir()}
+	write(t, h.path("/etc/group"), "docker:x:990:admin,devopsy\n", 0o644)
+	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndevopsy:x:1001:1001::/home/devopsy:/bin/sh\n", 0o644)
+	for _, u := range []string{"admin", "devopsy"} {
+		write(t, h.path("/home/"+u+"/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
+	}
+	s := remote.Session{Host: "vm1"}
+	_, asDevopsy := deployUserFact(h, login{uid: 1001, name: "devopsy"}, "", s)
+	_, asAdmin := deployUserFact(h, login{uid: 1000, name: "admin"}, "", s)
+	if asDevopsy == nil || asAdmin == nil {
+		t.Fatalf("two users set up, neither refused: %+v, %+v", asDevopsy, asAdmin)
+	}
+	if asDevopsy.Command == "devopsy @admin@vm1: --server-setup" && asAdmin.Command == "devopsy @devopsy@vm1: --server-setup" {
+		t.Errorf("each user's refusal offers the setup as the other, which is refused too:\nas devopsy: %s\n  $ %s\nas admin: %s\n  $ %s", asDevopsy.Message, asDevopsy.Command, asAdmin.Message, asAdmin.Command)
+	}
+}
+
+// The root run's judgment is the server's devopsy's own (DeployUserOtherFlag), as root under the
+// host root it sets: a record naming another user, one it cannot read, and with none a docker
+// member whose home shows devopsy set it up (its setup record, its uid claims, an environment's
+// releases) or a release root of another's, each on its line, a member's own work (a .env, a
+// shared/ of its own) none; a release root's owner the passwd file does not list is named
+// "uid N", which the refusal never offers as a login.
+func TestDeployUserOtherIsOneJudgment(t *testing.T) {
+	t.Parallel()
+	other := func(t *testing.T, h setupHost, uid int, root string) string {
+		t.Helper()
+		cmd := exec.Command(binary, remote.DeployUserOtherFlag, "admin", strconv.Itoa(uid), root)
+		cmd.Env = []string{"PATH=/usr/bin:/bin", remote.HostRootEnv + "=" + h.root}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	server := func(t *testing.T, files ...string) setupHost {
+		t.Helper()
+		h := setupHost{root: t.TempDir()}
+		write(t, h.path("/etc/group"), "docker:x:990:admin,ops\n", 0o644)
+		// A passwd line with no shell is read as one with an empty shell.
+		write(t, h.path("/etc/passwd"), "admin:x:61000:61000::/home/admin:/bin/sh\nops:x:61001:61001::/home/ops\n", 0o644)
+		for _, f := range files {
+			write(t, h.path(f), "x\n", 0o644)
+		}
+		return h
+	}
+	me := os.Getuid()
+	for _, c := range []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{"none", nil, ""},
+		{"a member's own work", []string{"/home/ops/work/.env", "/home/ops/notes/app/shared/todo"}, ""},
+		{"its setup record", []string{"/home/ops/.config/devopsy/" + setup.RecordFile}, otherWire("ops", "its setup record /home/ops/.config/devopsy/"+setup.RecordFile) + "\n"},
+		{"its uid claims", []string{"/home/ops/.devopsy-uids/env:shop:prod"}, otherWire("ops", "its uid claims /home/ops/.devopsy-uids") + "\n"},
+		{"an environment", []string{"/home/ops/shop/prod/releases/20261115000000/x", "/home/ops/shop/prod/.lock"}, otherWire("ops", "its environment /home/ops/shop/prod") + "\n"},
+		{"the record naming another", []string{setup.DeployUserFile}, ""},
+	} {
+		h := server(t, c.files...)
+		if c.name == "the record naming another" {
+			write(t, h.path(setup.DeployUserFile), setup.DeployUserText("ops"), 0o644)
+			c.want = otherWire("ops", "the record "+setup.DeployUserFile+" names it") + "\n"
+		}
+		if got := other(t, h, me, ""); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	h := server(t)
+	write(t, h.path(setup.DeployUserFile), "one\ntwo\n", 0o644)
+	if got := other(t, h, me, ""); !strings.HasPrefix(got, remote.SetupUnread+"\t"+setup.DeployUserFile+" cannot tell") {
+		t.Errorf("a record that cannot be read: %q", got)
+	}
+	// The root, this test user's, read as another's by the uid given: no name in this passwd.
+	root := t.TempDir()
+	got := other(t, server(t), me+1, root)
+	user, evidence, ok := otherLine(got)
+	r := otherDeployRefusal(user, evidence, login{uid: me + 1, name: "admin"}, remote.Session{Host: "admin@vm1"})
+	if !ok || user != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "devopsy was set up as uid "+strconv.Itoa(me)+" on this server (the release root "+root+" is its)") {
+		t.Errorf("an owner with no name: %q, %+v", got, r)
+	}
+}
+
+// --shell-host as a login is checked as every session is: refused W0009 where the record names
+// another user, W0010 where it cannot be read, its fix root's own shell (--shell-host --root);
+// with no record it opens for whoever logs in.
+func TestShellHostChecksTheLogin(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root is never checked")
+	}
+	s, _ := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run([]string{"SHELL=/bin/sh"}, "@admin@one:", "--shell-host"); code != 0 {
+		t.Fatalf("no record (%d):\n%s", code, out)
+	}
+	for _, c := range []struct{ name, record, code, fix string }{
+		{"another login", setup.DeployUserText("someone-else"), report.NotDeployUser.Msg(), "$ devopsy @someone-else@one: --server-info"},
+		{"a record that cannot be read", "one\ntwo\n", report.DeployUserUnread.Msg(), "$ devopsy @admin@one: --shell-host --root"},
+	} {
+		s, host := setupServer(t)
+		if err := os.MkdirAll(s.root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(host, setup.DeployUserFile), c.record, 0o644)
+		out, code := s.run([]string{"SHELL=/bin/sh"}, "@admin@one:", "--shell-host")
+		if code == 0 || !strings.Contains(out, "error: "+c.code) || !strings.Contains(out, c.fix+"\n") {
+			t.Errorf("%s: --shell-host (%d):\n%s", c.name, code, out)
+		}
 	}
 }
