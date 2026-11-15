@@ -838,10 +838,8 @@ func (s *Set) beside(rel string, es []entry, ps *profiles, withTools bool) (shar
 	if err != nil {
 		if !ps.said {
 			ps.said = true
-			var costs []string
-			if withTools {
-				costs = append(costs, "its tools stay as they were recorded")
-			}
+			// Every owner of a profiles records tools (a record, a restore, a landing, an undo).
+			costs := []string{"its tools stay as they were recorded"}
 			if needSharers {
 				costs = append(costs, "one sharing a build's image runs what its name holds")
 			}
@@ -882,7 +880,7 @@ func (s *Set) beside(rel string, es []entry, ps *profiles, withTools bool) (shar
 // so it goes with the release by Remove's rules, giving up what an earlier record of them no
 // longer has that listed, its listing as written, does not take. A failure is said and costs
 // nothing else: a tool's name stays while any release's tool bookmark names its tag
-// (toolNamed), so all it costs is this release's own hold on that name.
+// (toolTagsOf), so all it costs is this release's own hold on that name.
 func (s *Set) keepTools(rel string, tools, listed []entry) {
 	if len(tools) == 0 && readTools(rel) == nil {
 		return
@@ -1082,9 +1080,11 @@ func (s *Set) Remove(rel string) error {
 		refs[img] = appendNew(refs[img], es[i].Ref)
 	}
 	// A tool's name is judged on the image it holds now too: it may have moved on since its
-	// bookmark (another release's pull), and its last release takes it wherever it is.
+	// bookmark (another release's pull), and its last release takes it wherever it is. Never
+	// behind the door: it answers a read of a name by claiming it, a pull, and the name is not
+	// the project user's to remove.
 	for i, e := range es {
-		if !toolTagOf.MatchString(names[i]) {
+		if s.Door || !toolTagOf.MatchString(names[i]) {
 			continue
 		}
 		cur, err := s.Docker.ID(e.Ref)
@@ -1101,10 +1101,8 @@ func (s *Set) Remove(rel string) error {
 	}
 	var stay, gone []string
 	dead := s.leftBookmarks()
-	skip := maps.Clone(mine)
-	for _, d := range dead {
-		maps.Copy(skip, d)
-	}
+	skip := s.notHolding(mine, dead)
+	tools := s.toolTags()
 	for _, img := range order {
 		tags, err := s.Docker.Tags(img)
 		if errors.Is(err, ErrNoImage) {
@@ -1132,18 +1130,25 @@ func (s *Set) Remove(rel string) error {
 				rm = appendNew(rm, t)
 			}
 		}
-		// A name another release's tool runs by stays, unrecorded: that release takes it.
-		var kept []string
+		// A name another release's tool runs by stays, recorded, so a retry takes it once no
+		// tool tag names it, whichever release had the tag (a project user's never takes a
+		// plain name); and so does its image's digest in its repository, whose removal would
+		// strip it.
+		var left []string
+		toolRepos := map[string]bool{}
 		for _, r := range rm {
-			named, err := s.toolNamed(r, skip)
+			named, err := tools.names(r, skip)
 			if err != nil {
 				return err
 			}
-			if !named {
-				kept = append(kept, r)
+			if named {
+				toolRepos[repoKey(r)] = true
+				s.record(r, img, id, ToolKeeps)
+			} else {
+				left = append(left, r)
 			}
 		}
-		rm = kept
+		rm = slices.DeleteFunc(left, func(r string) bool { return strings.Contains(r, "@") && toolRepos[repoKey(r)] })
 		if holders := holding(tags, mine, dead[img]); len(holders) > 0 {
 			// The releases holding it take the names in their own
 			// repositories when they go; the ones in others (a mirror
@@ -1202,18 +1207,36 @@ func (s *Set) Remove(rel string) error {
 // tag (its id follows s), nor a cksum of a repository named twice (base 10).
 var toolTagOf = regexp.MustCompile(`-[0-9]{14}-t[0-9a-z]{1,7}$`)
 
-// toolNamed says whether a tool tag of a release, none of skip's (the going release's, the
+// ToolKeeps is why a removal leaves a name recorded (LeftFile) while a release's tool tag
+// names it: no failure, a name a tool runs by.
+const ToolKeeps = "kept: a release's tool runs by it"
+
+// toolTagsOf reads the tags of a repository, each once per toolTags (a removal's).
+type toolTagsOf struct {
+	s    *Set
+	read map[string][]string
+}
+
+func (s *Set) toolTags() *toolTagsOf { return &toolTagsOf{s: s, read: map[string][]string{}} }
+
+// names says whether a tool tag of a release, none of skip's (the going release's, the
 // record's dead ones), names ref (its cksum, toolTag's, after -t): a tool runs by its name,
 // never a pin, whatever image its bookmark sits on, so the name stays while one does and goes
-// with the last. Server-wide by the tags alone, reading no release's files. Behind the door
+// once none does. Server-wide by the tags alone, reading no release's files. Behind the door
 // never: a project user's removal of a name it does not write does nothing.
-func (s *Set) toolNamed(ref string, skip map[string]bool) (bool, error) {
-	if s.Door || isBookmark(ref) {
+func (tt *toolTagsOf) names(ref string, skip map[string]bool) (bool, error) {
+	s := tt.s
+	if s.Door || isBookmark(ref) || strings.Contains(ref, "@") {
 		return false, nil
 	}
-	tags, err := s.Docker.RepoTags(repoKey(ref))
-	if err != nil {
-		return false, err
+	repo := repoKey(ref)
+	tags, ok := tt.read[repo]
+	if !ok {
+		var err error
+		if tags, err = s.Docker.RepoTags(repo); err != nil {
+			return false, err
+		}
+		tt.read[repo] = tags
 	}
 	mark := "-t" + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
 	for _, t := range tags {
@@ -1462,15 +1485,24 @@ func (s *Set) leftBookmarks() map[string]map[string]bool {
 	return dead
 }
 
-// toolRuns says whether a release's tool runs by ref (toolNamed), none the record holds dead;
-// when Docker cannot tell, one does.
+// toolRuns says whether a release's tool runs by ref (toolTagsOf.names), none the record holds
+// dead; when Docker cannot tell, one does.
 func (s *Set) toolRuns(ref string) bool {
-	skip := map[string]bool{}
-	for _, d := range s.leftBookmarks() {
+	named, err := s.toolTags().names(ref, s.notHolding(nil, s.leftBookmarks()))
+	return err != nil || named
+}
+
+// notHolding are the bookmarks that hold nothing for a removal or a retry: mine (the going
+// release's) and every one the record holds dead (leftBookmarks), whatever image.
+func (s *Set) notHolding(mine map[string]bool, dead map[string]map[string]bool) map[string]bool {
+	skip := maps.Clone(mine)
+	if skip == nil {
+		skip = map[string]bool{}
+	}
+	for _, d := range dead {
 		maps.Copy(skip, d)
 	}
-	named, err := s.toolNamed(ref, skip)
-	return err != nil || named
+	return skip
 }
 
 // used says whether a container uses an image; when Docker cannot tell,

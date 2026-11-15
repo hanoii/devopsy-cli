@@ -45,6 +45,8 @@ type fakeDocker struct {
 	// otherPlatform are images the registry has for another platform
 	// only: a pull fails as Docker's does.
 	otherPlatform map[string]bool
+	// repoTagsRead counts RepoTags' reads, by repository.
+	repoTagsRead map[string]int
 }
 
 func (d *fakeDocker) failing(method string) error {
@@ -138,6 +140,10 @@ func (d *fakeDocker) RepoTags(repo string) ([]string, error) {
 	if err := d.failing("RepoTags"); err != nil {
 		return nil, err
 	}
+	if d.repoTagsRead == nil {
+		d.repoTagsRead = map[string]int{}
+	}
+	d.repoTagsRead[repoKey(repo)]++
 	var ns []string
 	for n := range d.names {
 		if !strings.Contains(n, "@") && repoKey(n) == repoKey(repo) {
@@ -1224,8 +1230,8 @@ func TestRestoreBookmarksToolsAgain(t *testing.T) {
 // whatever image that bookmark sits on, and the last one takes it wherever it is: a tool is
 // never pinned, so its name is all a live release runs it by. A newer release of the same
 // environment that pulled the moved tag (its fetch failed, undone, then removed), or another
-// environment's that did (its --destroy), goes without taking it; once the live release goes
-// too, the name and its images go.
+// environment's that did (its --destroy), goes without taking it, reading the repository's
+// tags once for every name of it; once the live release goes too, the name and its images go.
 func TestRemoveKeepsANameAToolRunsBy(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1253,8 +1259,13 @@ func TestRemoveKeepsANameAToolRunsBy(t *testing.T) {
 	if got := d.names[toolTag("app-a", failed, jq.Ref)]; got != "sha256:j2" {
 		t.Fatalf("the failed release's tool bookmark holds %q", got)
 	}
+	d.names["ghcr.io/jqlang/jq:1.8.0"] = "sha256:j2"
+	d.repoTagsRead = nil
 	if err := a.set.Remove(a.rel(failed)); err != nil {
 		t.Fatal(err)
+	}
+	if n := d.repoTagsRead["ghcr.io/jqlang/jq"]; n != 1 {
+		t.Errorf("one removal read the tool's repository's tags %d times", n)
 	}
 	if _, ok := d.names[familiar(jq.Ref)]; !ok {
 		t.Errorf("%s is gone after %s's removal, while the live %s runs its tool by it: %v\n%s", jq.Ref, failed, ra, d.names, out.String())
@@ -1342,14 +1353,10 @@ func (d *namesRead) Inspect(ref string) (Image, error) {
 	return d.fakeDocker.Inspect(ref)
 }
 
-// Review round 3, a failing test of a bug: behind the door a removal reads each of its
-// release's tools by its plain name (Remove's "judged on the image it holds now", after it
-// untagged the tool's bookmark), though only a record reads a tool by name there. The door
-// answers an inspect of a plain name whose last claim's image is gone by claiming it, a pull:
-// the bookmark just untagged was that image's last name, so every removal of the last release
-// holding a tool pulls the tool again (left under a claim hold after a --destroy), and a
-// registry that no longer serves the tag fails the removal, the release staying for good. The
-// name is not the project user's to remove either way (toolNamed leaves the door out).
+// Behind the door a removal reads no tool by its plain name, as only a record does there: the
+// door answers a read of a name whose last claim's image is gone by claiming it, a pull (the
+// bookmark just untagged was that image's last name), and the name is not the project user's
+// to remove; the tool's bookmark goes all the same.
 func TestDoorRemovalReadsNoToolByName(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1382,14 +1389,12 @@ func TestDoorRemovalReadsNoToolByName(t *testing.T) {
 	}
 }
 
-// Review round 3, a failing test of a bug: a removal keeps a name while any release's tool
-// tag names it, for that release to take, but a project user's release never takes a plain
-// name (behind the door its removal of one does nothing, and it looks for no tool tag). So a
-// deploy user's project sharing a tool's tag with a project user's leaves the name, and the
-// image it holds, for good once it is destroyed first: kept unrecorded, no pruning retries
-// it. Here the project user's claim landed the tag's newer image, so no bookmark of its holds
-// the image the server's name is on, which the removal took before the name rule.
-func TestProjectUsersToolTagKeepsNoNameForGood(t *testing.T) {
+// A name a removal keeps for another release's tool tag is recorded (ToolKeeps), and a pruning
+// removes it once no tool tag names it, whichever release had the tag: a project user's never
+// takes a plain name (its removal of one does nothing), so without the record a deploy user's
+// project sharing a tool with it leaves the name and its image for good. Here the project
+// user's claim landed the tag's newer image, so no bookmark of its holds the one the name is on.
+func TestToolKeptNameIsRetried(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
@@ -1419,5 +1424,42 @@ func TestProjectUsersToolTagKeepsNoNameForGood(t *testing.T) {
 	a.set.Prune()
 	if id, ok := d.names[familiar(jq.Ref)]; ok {
 		t.Errorf("%s (%s) outlived every release that ran it, recorded nowhere (%v): %v\n%s", jq.Ref, id, readLeft(a.set.Left), d.names, out.String())
+	}
+}
+
+// A removal by digest never strips a name a tool keeps: a release that pinned the image a tool's
+// tag holds by its digest goes while another release's tool runs by the tag, and leaves the
+// digest, whose removal takes every name of the image in its repository on Docker's containerd
+// store; the image goes with its last name.
+func TestRemoveByDigestKeepsAToolsName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	a, b := newRecEnv(t, d, "app-prod", ModeImage, &out), newRecEnv(t, d, "shop-prod", ModeImage, &out)
+	a.set.Left, b.set.Left = left, left
+	b.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(b.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j0")
+	rb := b.release(proxySvc)
+	if err := b.set.Record(b.rel(rb), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The tag moves on, and app-prod pins its image by digest.
+	d.pull(jq.Ref, "sha256:j1")
+	pinned := jq.Ref + "@sha256:j1"
+	d.names[familiar(pinned)] = "sha256:j1"
+	ra := a.release(Service{Name: "jq", Ref: pinned})
+	if err := a.set.Record(a.rel(ra), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.set.Remove(a.rel(ra)); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[familiar(jq.Ref)]; got != "sha256:j1" {
+		t.Errorf("%s holds %q after a removal by digest, while %s's tool runs by it: %v\n%s", jq.Ref, got, rb, d.names, out.String())
 	}
 }

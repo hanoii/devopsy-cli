@@ -663,12 +663,18 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	}
 }
 
+// --releases shows each release, then the names its project's removals left, and apart the
+// names they kept for a release's tool, which read as no failure.
 func TestFormatReleases(t *testing.T) {
 	t.Parallel()
-	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
+	out := "left\t1760000000\tapp-prod\t20261001000000\tmariadb:11\tsha256:m\ta container of app-prod uses its image\n" +
+		"left\t1760000000\tapp-prod\t20261001000000\tjq:1.8\tsha256:j\t" + images.ToolKeeps + "\n" +
+		"20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
 		"20261004120000\t-\tfailed\t\t\n"
 	got := FormatReleases(out)
-	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED"} {
+	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED",
+		"Images the project's removals left (each pruning retries):\n  mariadb:11  app-prod, release 20261001000000, ", "\n    a container of app-prod uses its image\n",
+		"Names the project's removals kept for a release's tool (each pruning removes them once no tool runs by them):\n  jq:1.8  app-prod, release 20261001000000, "} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}

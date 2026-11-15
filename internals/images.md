@@ -114,9 +114,11 @@
   - held by another bookmark (never one the record holds), it stays, its names in repositories no holder is in recorded;
   - used by a container, its names are recorded, never stripped;
   - else its listed names and its other names in the same repositories go (`mariadb:11` with `mariadb:11.4`);
-  - a name that moved on stays, but for a tool's, judged on the image it holds now;
-  - a name any other release's tool tag names stays, unrecorded, whatever image that bookmark is on (`toolNamed`, from its repository's tags alone, `RepoTags`): a tool runs by its name, never a pin.
-- The last release whose tool tag names a name takes it, and a retry keeps one a tool tag still names (`toolRuns`).
+  - a name that moved on stays, but for a tool's, judged on the image it holds now (never behind the door, whose read of a name claims it, a pull);
+  - a name any other release's tool tag names stays, recorded as kept (`ToolKeeps`), whatever image that bookmark is on (`toolTagsOf`, its repository's tags read once per removal, `RepoTags`): a tool runs by its name, never a pin;
+  - so does that image's digest in the name's repository, whose removal would strip the name.
+- A retry keeps a name a tool tag still names (`toolRuns`) and removes it once none does, whichever release's tag it was: a project user's never takes a plain name.
+- `--releases` lists the names kept for a tool apart from what a removal could not take (`FormatReleases`), and `--gc` counts none: a kept name is no failure.
 - Behind the door no tool tag is looked for: a project user's removal of a name it does not write does nothing.
 - Never `docker rmi -f`; a refusal is recorded: `-f` strips the names of an image a container uses, which a removal keeps and records instead.
 - Removals are idempotent, and one cut off anywhere is finished by the next; Docker failing (anything but a missing image) stops one with exit 1 and the release stays, `RemoveReleases` removing a directory only after its images, and `--destroy` then keeps the directory and says to run it again.

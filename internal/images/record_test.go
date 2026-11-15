@@ -243,7 +243,8 @@ func TestRecordToolsFailures(t *testing.T) {
 // A release's record lists every profile's services once: the sharers of its own images
 // (resolveBookmarks) and its tools (keepTools) are both what sits beside its listing (beside),
 // even with an own image and no fetch file, where the sharers come from that listing too. A
-// landing that changes nothing (derive) lists none when no sharer needs them.
+// landing that changes nothing (derive) lists none when no sharer needs them, and one whose
+// listing fails says what that costs its tools too.
 func TestRecordListsEveryProfileOnce(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -273,6 +274,11 @@ func TestRecordListsEveryProfileOnce(t *testing.T) {
 	calls = 0
 	if err := e.set.derive(filepath.Dir(e.dir), e.rel(pulled), map[string]Service{proxySvc.Name: proxySvc}, false); err != nil || calls != 0 {
 		t.Errorf("a landing that changed nothing (%v) listed every profile %d times\n%s", err, calls, out.String())
+	}
+	e.set.ListAll = func(string) ([]Service, error) { return nil, errors.New("compose config: exit status 1") }
+	out.Reset()
+	if err := e.set.derive(filepath.Dir(e.dir), e.rel(id), map[string]Service{local.Name: local}, false); err != nil || !strings.Contains(out.String(), "its tools stay as they were recorded, and one sharing a build's image runs what its name holds") {
+		t.Errorf("a landing whose profiles could not be listed (%v) said:\n%s", err, out.String())
 	}
 }
 

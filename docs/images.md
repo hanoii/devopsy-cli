@@ -23,7 +23,9 @@ pulled ([Fetching images](releases.md#fetching-images)), are tagged
 release's `devopsy-tools`, and go with the release like its images. A
 tool is never pinned or brought back: it runs what its tag holds now,
 and a rollback or a restart tags it again there. A tool's name stays
-while any release on the server has that tool, and goes with the last.
+while any release on the server has that tool, listed apart by
+`--releases` of a project whose removal kept it, and the next pruning
+after the last one removes it.
 
 devopsy never moves a pulled name back to an older image, because
 another environment, instance or project may be running it.
