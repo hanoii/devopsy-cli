@@ -40,3 +40,17 @@ func TestDeployUserMoveStepLeavesWhatDevopsyDidNotMake(t *testing.T) {
 		}
 	}
 }
+
+// Bug (review round 2): the deploy-user topic's record step writes into /etc/devopsy, which
+// only the setup's root run makes. A server with no record yet has none (one devopsy-server did
+// not install), and that is where the setup's refusal for another deploy user shown sends the
+// reader to this topic: the step fails there, no record written, and the next step's
+// --server-setup is refused as before.
+func TestDeployUserRecordStepMakesItsDirectory(t *testing.T) {
+	t.Parallel()
+	record := filepath.Join(t.TempDir(), "devopsy", "deploy-user")
+	out := pasted(t, stepWith(t, DeployUser, "/etc/devopsy/deploy-user"), "/usr/bin:/bin", "/etc/devopsy/deploy-user", record)
+	if got, err := os.ReadFile(record); err != nil || string(got) != "deploy\n" {
+		t.Errorf("the record on a server with no /etc/devopsy: %q, %v\n%s", got, err, out)
+	}
+}
