@@ -119,27 +119,26 @@ deploy user is the Unix user devopsy logs in as, which must exist. A step's
 first line sets the values to change, if it has any (for example
 user=devopsy).
 
-1. Set the proxy and the host names to reach without it, comma separated,
-   then give apt the proxy and each of those hosts direct: apt reads no list
-   of exceptions, only a host at a time.
+1. Set the proxy and what to reach without it, comma separated (host names,
+   addresses, ranges), then give apt the proxy and each host name and
+   address of the list direct: apt reads no list of exceptions, only a host
+   at a time, never a range.
 
    ```sh
-   proxy=http://proxy.example.com:3128
-   direct=
+   proxy=http://proxy.example.com:3128 direct=
    printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$proxy" "$proxy" > /etc/apt/apt.conf.d/90-devopsy-proxy
-   for h in $(echo "$direct" | tr , ' '); do printf 'Acquire::http::Proxy::%s "DIRECT";\nAcquire::https::Proxy::%s "DIRECT";\n' "$h" "$h" >> /etc/apt/apt.conf.d/90-devopsy-proxy; done
+   echo "$direct" | tr , '\n' | while read -r h; do case "$h" in '' | */* | .* | *[*:]*) ;; *) printf 'Acquire::http::Proxy::%s "DIRECT";\nAcquire::https::Proxy::%s "DIRECT";\n' "$h" "$h" >> /etc/apt/apt.conf.d/90-devopsy-proxy ;; esac; done
    ```
 
 2. Give Docker's daemon the proxy for its pulls in a drop-in, loopback and
-   those hosts left direct, then restart it, since it reads the proxy when
-   it starts. With live-restore on in daemon.json, which --server-setup
-   sets, the containers keep running through the restart; without it every
+   the list left direct, then restart it, since it reads the proxy when it
+   starts. With live-restore on in daemon.json, which --server-setup sets,
+   the containers keep running through the restart; without it every
    container stops, so restart at a quiet time. A proxies key in
    daemon.json, where someone set one, wins over the drop-in.
 
    ```sh
-   proxy=http://proxy.example.com:3128
-   direct=
+   proxy=http://proxy.example.com:3128 direct=
    list=localhost,127.0.0.1,::1${direct:+,$direct}
    mkdir -p /etc/systemd/system/docker.service.d
    printf '[Service]\nEnvironment="HTTP_PROXY=%s" "HTTPS_PROXY=%s" "NO_PROXY=%s"\n' "$proxy" "$proxy" "$list" > /etc/systemd/system/docker.service.d/90-devopsy-proxy.conf
@@ -154,17 +153,14 @@ user=devopsy).
    environment's address and up -d --force-recreate.
 
    ```sh
-   user=devopsy
-   proxy=http://proxy.example.com:3128
-   direct=
+   user=devopsy proxy=http://proxy.example.com:3128 direct=
    list=localhost,127.0.0.1,::1${direct:+,$direct}
    apt-get update
    apt-get install -y jq
    home=$(getent passwd "$user" | cut -d: -f6)
    [ -d "$home/.docker" ] || install -d -m 700 -o "$user" -g "$user" "$home/.docker"
-   if [ -s "$home/.docker/config.json" ]; then cat "$home/.docker/config.json"; else echo '{}'; fi | jq --arg p "$proxy" --arg n "$list" '.proxies.default += {httpProxy: $p, httpsProxy: $p, noProxy: $n}' > /tmp/docker-config.json
-   install -m 600 -o "$user" -g "$user" /tmp/docker-config.json "$home/.docker/config.json"
-   rm /tmp/docker-config.json
+   if [ -s "$home/.docker/config.json" ]; then cat "$home/.docker/config.json"; else echo '{}'; fi | jq --arg p "$proxy" --arg n "$list" '.proxies.default += {httpProxy: $p, httpsProxy: $p, noProxy: $n}' > "$home/.docker/config.json.new" && install -m 600 -o "$user" -g "$user" "$home/.docker/config.json.new" "$home/.docker/config.json"
+   rm -f "$home/.docker/config.json.new"
    ```
 
 4. Put the proxy in the login environment, /etc/environment, which pam_env
@@ -173,8 +169,7 @@ user=devopsy).
    kept.
 
    ```sh
-   proxy=http://proxy.example.com:3128
-   direct=
+   proxy=http://proxy.example.com:3128 direct=
    list=localhost,127.0.0.1,::1${direct:+,$direct}
    grep -vE '^[[:space:]]*(export[[:space:]]+)?(http_proxy|https_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|NO_PROXY)=' /etc/environment > /etc/environment.new
    printf '%s\n' "http_proxy=\"$proxy\"" "https_proxy=\"$proxy\"" "no_proxy=\"$list\"" "HTTP_PROXY=\"$proxy\"" "HTTPS_PROXY=\"$proxy\"" "NO_PROXY=\"$list\"" >> /etc/environment.new

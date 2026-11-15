@@ -153,7 +153,7 @@ func TestProxyStepsKeepTheirFiles(t *testing.T) {
 
 	apt := filepath.Join(dir, "90-devopsy-proxy")
 	a := stepWith(t, Proxy, "90-devopsy-proxy")
-	pasted(t, Step{Cmds: append([]string{a.Cmds[0], "direct=intranet.example.com"}, a.Cmds[2:]...)}, "/usr/bin:/bin", "/etc/apt/apt.conf.d/90-devopsy-proxy", apt)
+	pasted(t, Step{Cmds: append([]string{a.Cmds[0], "direct=intranet.example.com"}, a.Cmds[1:]...)}, "/usr/bin:/bin", "/etc/apt/apt.conf.d/90-devopsy-proxy", apt)
 	got, err := os.ReadFile(apt)
 	if err != nil {
 		t.Fatal(err)
@@ -500,5 +500,75 @@ func TestDeployUserRecordStepKeepsTheRecordOnAFailedWrite(t *testing.T) {
 		"> /etc/devopsy/deploy-user.new", "> /dev/full", "/etc/devopsy/deploy-user", record)
 	if got, _ := os.ReadFile(record); string(got) != "old\n" {
 		t.Errorf("the record after a failed write: %q\n%s", got, out)
+	}
+}
+
+// The proxy topic's client step leaves the deploy user's config.json as it was, its registry
+// logins with it, when jq gives nothing (not installed since apt could not reach its mirror, or
+// a file that is no JSON): pasted lines run whatever the one before returned.
+func TestProxyClientStepKeepsLoginsWhenJqFails(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, ".docker"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(home, ".docker", "config.json")
+	before := `{"auths":{"registry.example.com":{"auth":"eA=="}}}` + "\n"
+	if err := os.WriteFile(config, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := fakes(t, map[string]string{
+		"getent":  "echo devopsy:x:1000:1000::" + home + ":/bin/sh\n",
+		"apt-get": "echo 'E: Unable to locate package jq' >&2\nexit 100\n",
+		"jq":      "echo 'jq: command not found' >&2\nexit 127\n",
+		// install without the owner a test cannot set: the file before last onto the last.
+		"install": "for a; do src=$dst; dst=$a; done\ncase $dst in */.docker) exit 0 ;; esac\ncat \"$src\" > \"$dst\"\n",
+	}, "getent", "apt-get", "jq", "install")
+	out := pasted(t, stepWith(t, Proxy, "config.json"), path, "/tmp/docker-config.json", filepath.Join(t.TempDir(), "docker-config.json"))
+	got, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != before {
+		t.Errorf("config.json after a jq that failed:\n%q\nwant it as it was:\n%q\n%s", got, before, out)
+	}
+}
+
+// No topic writes a file of a fixed name under /tmp: every user of the server may make that
+// name first (project users among them), and the proxy topic's holds the deploy user's
+// registry logins on their way to config.json.
+func TestTopicsWriteNoFixedTmpFile(t *testing.T) {
+	t.Parallel()
+	for _, tp := range Topics {
+		for _, s := range append(append([]Step{}, tp.Steps...), tp.Check) {
+			for _, c := range s.Cmds {
+				if strings.Contains(c, "> /tmp/") || strings.Contains(c, ">/tmp/") {
+					t.Errorf("%s: a file of a fixed name under /tmp: %s", tp.Name, c)
+				}
+			}
+		}
+	}
+}
+
+// The proxy topic's apt step gives apt a line of its own only for each entry of the list to
+// reach directly that apt can match, a host name or an address (apt compares a URL's host with
+// the key as it is), never a range or a leading-dot domain, which no URL's host equals: the
+// steps' one direct= feeds every place, and a setup tool writing the topic's files takes the
+// same list, ranges included.
+func TestProxyAptStepNamesHostsAlone(t *testing.T) {
+	t.Parallel()
+	apt := filepath.Join(t.TempDir(), "90-devopsy-proxy")
+	a := stepWith(t, Proxy, "90-devopsy-proxy")
+	out := pasted(t, Step{Cmds: append([]string{a.Cmds[0], "direct=intranet.example.com,10.0.0.0/8,192.0.2.7,.example.org"}, a.Cmds[1:]...)},
+		"/usr/bin:/bin", "/etc/apt/apt.conf.d/90-devopsy-proxy", apt)
+	got, err := os.ReadFile(apt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Acquire::http::Proxy \"http://proxy.example.com:3128\";\nAcquire::https::Proxy \"http://proxy.example.com:3128\";\n" +
+		"Acquire::http::Proxy::intranet.example.com \"DIRECT\";\nAcquire::https::Proxy::intranet.example.com \"DIRECT\";\n" +
+		"Acquire::http::Proxy::192.0.2.7 \"DIRECT\";\nAcquire::https::Proxy::192.0.2.7 \"DIRECT\";\n"
+	if string(got) != want {
+		t.Errorf("apt's file for a list with a range, an address and a domain:\n%s\nwant:\n%s\n%s", got, want, out)
 	}
 }

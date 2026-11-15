@@ -1506,12 +1506,14 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		// One proxy without the other: the containers' requests out going direct while Docker's
 		// pulls go through it, or the reverse. On a network whose only way out is the proxy,
-		// what goes direct fails.
+		// what goes direct fails. The containers' is config.json's proxies.default: an entry for
+		// another daemon gives this server's none.
+		containers := slices.ContainsFunc(d.ClientProxies, func(p remote.ClientProxy) bool { return p.For == "default" })
 		switch {
-		case d.Proxy != "" && len(d.ClientProxies) == 0:
+		case d.Proxy != "" && !containers:
 			warn("Docker's daemon pulls through a proxy and the deploy user's containers get none: their requests to the Internet go direct",
 				stepsFix("give the deploy user's Docker client the proxy (config.json's proxies)", howto.Proxy))
-		case d.Proxy == "" && len(d.ClientProxies) > 0:
+		case d.Proxy == "" && containers:
 			warn("the deploy user's containers get a proxy and Docker's daemon none: its pulls go direct",
 				stepsFix("give Docker's daemon the proxy, as root", howto.Proxy))
 		}

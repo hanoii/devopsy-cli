@@ -69,15 +69,13 @@ var Topics = []Topic{
 			"The proxy's address carries no login: the login environment is every user's to read, and every container's environment shows it. " +
 			"--server-info shows the daemon's proxy and the containers' under docker, and warns when one is set without the other.",
 		Steps: []Step{
-			{Text: "Set the proxy and the host names to reach without it, comma separated, then give apt the proxy and each of those hosts direct: apt reads no list of exceptions, only a host at a time.", Cmds: []string{
-				`proxy=http://proxy.example.com:3128`,
-				`direct=`,
+			{Text: "Set the proxy and what to reach without it, comma separated (host names, addresses, ranges), then give apt the proxy and each host name and address of the list direct: apt reads no list of exceptions, only a host at a time, never a range.", Cmds: []string{
+				`proxy=http://proxy.example.com:3128 direct=`,
 				`printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$proxy" "$proxy" > /etc/apt/apt.conf.d/90-devopsy-proxy`,
-				`for h in $(echo "$direct" | tr , ' '); do printf 'Acquire::http::Proxy::%s "DIRECT";\nAcquire::https::Proxy::%s "DIRECT";\n' "$h" "$h" >> /etc/apt/apt.conf.d/90-devopsy-proxy; done`,
+				`echo "$direct" | tr , '\n' | while read -r h; do case "$h" in '' | */* | .* | *[*:]*) ;; *) printf 'Acquire::http::Proxy::%s "DIRECT";\nAcquire::https::Proxy::%s "DIRECT";\n' "$h" "$h" >> /etc/apt/apt.conf.d/90-devopsy-proxy ;; esac; done`,
 			}},
-			{Text: "Give Docker's daemon the proxy for its pulls in a drop-in, loopback and those hosts left direct, then restart it, since it reads the proxy when it starts. With live-restore on in daemon.json, which --server-setup sets, the containers keep running through the restart; without it every container stops, so restart at a quiet time. A proxies key in daemon.json, where someone set one, wins over the drop-in.", Cmds: []string{
-				`proxy=http://proxy.example.com:3128`,
-				`direct=`,
+			{Text: "Give Docker's daemon the proxy for its pulls in a drop-in, loopback and the list left direct, then restart it, since it reads the proxy when it starts. With live-restore on in daemon.json, which --server-setup sets, the containers keep running through the restart; without it every container stops, so restart at a quiet time. A proxies key in daemon.json, where someone set one, wins over the drop-in.", Cmds: []string{
+				`proxy=http://proxy.example.com:3128 direct=`,
 				`list=localhost,127.0.0.1,::1${direct:+,$direct}`,
 				`mkdir -p /etc/systemd/system/docker.service.d`,
 				`printf '[Service]\nEnvironment="HTTP_PROXY=%s" "HTTPS_PROXY=%s" "NO_PROXY=%s"\n' "$proxy" "$proxy" "$list" > /etc/systemd/system/docker.service.d/90-devopsy-proxy.conf`,
@@ -85,21 +83,17 @@ var Topics = []Topic{
 				`systemctl restart docker`,
 			}},
 			{Text: "Give the deploy user's Docker client the proxy, which Docker passes to every container and build that user makes, the file's other keys kept (registry logins among them). Containers made before keep their old values until recreated: " + vocab.Operator.From + ", devopsy with the environment's address and up -d --force-recreate.", Cmds: []string{
-				`user=devopsy`,
-				`proxy=http://proxy.example.com:3128`,
-				`direct=`,
+				`user=devopsy proxy=http://proxy.example.com:3128 direct=`,
 				`list=localhost,127.0.0.1,::1${direct:+,$direct}`,
 				`apt-get update`,
 				`apt-get install -y jq`,
 				`home=$(getent passwd "$user" | cut -d: -f6)`,
 				`[ -d "$home/.docker" ] || install -d -m 700 -o "$user" -g "$user" "$home/.docker"`,
-				`if [ -s "$home/.docker/config.json" ]; then cat "$home/.docker/config.json"; else echo '{}'; fi | jq --arg p "$proxy" --arg n "$list" '.proxies.default += {httpProxy: $p, httpsProxy: $p, noProxy: $n}' > /tmp/docker-config.json`,
-				`install -m 600 -o "$user" -g "$user" /tmp/docker-config.json "$home/.docker/config.json"`,
-				`rm /tmp/docker-config.json`,
+				`if [ -s "$home/.docker/config.json" ]; then cat "$home/.docker/config.json"; else echo '{}'; fi | jq --arg p "$proxy" --arg n "$list" '.proxies.default += {httpProxy: $p, httpsProxy: $p, noProxy: $n}' > "$home/.docker/config.json.new" && install -m 600 -o "$user" -g "$user" "$home/.docker/config.json.new" "$home/.docker/config.json"`,
+				`rm -f "$home/.docker/config.json.new"`,
 			}},
 			{Text: "Put the proxy in the login environment, /etc/environment, which pam_env gives every login and SSH session, devopsy's included: the proxy's six variables taken out wherever they are, then appended, every other line kept.", Cmds: []string{
-				`proxy=http://proxy.example.com:3128`,
-				`direct=`,
+				`proxy=http://proxy.example.com:3128 direct=`,
 				`list=localhost,127.0.0.1,::1${direct:+,$direct}`,
 				`grep -vE '^[[:space:]]*(export[[:space:]]+)?(http_proxy|https_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|NO_PROXY)=' /etc/environment > /etc/environment.new`,
 				`printf '%s\n' "http_proxy=\"$proxy\"" "https_proxy=\"$proxy\"" "no_proxy=\"$list\"" "HTTP_PROXY=\"$proxy\"" "HTTPS_PROXY=\"$proxy\"" "NO_PROXY=\"$list\"" >> /etc/environment.new`,
