@@ -135,6 +135,9 @@ func (d *fakeDocker) Tags(id string) ([]string, error) {
 }
 
 func (d *fakeDocker) Tag(src, dst string) error {
+	if err := d.failing("Tag"); err != nil {
+		return err
+	}
 	id, err := d.ID(src)
 	if err != nil {
 		// docker tag takes a digest reference as its source too, resolved
@@ -546,15 +549,13 @@ func randomHistory(t *testing.T, seed int64) {
 		log = append(log, step)
 		for _, e := range envs {
 			for _, id := range e.releases() {
-				es := readList(e.rel(id))
-				ts := readTools(e.rel(id))
-				for i, b := range append(bookmarks(es, e.set.Name, id), toolBookmarks(ts, e.set.Name, id)...) {
-					want := append(slices.Clone(es), ts...)[i].ID
-					if want == "" || gone[b] {
+				es, names := e.set.releaseEntries(e.rel(id))
+				for i, b := range names {
+					if es[i].ID == "" || gone[b] {
 						continue
 					}
-					if got, _ := d.ID(b); got != want {
-						t.Fatalf("after %v: %s's bookmark %s is %q, want %q\n%s", log, id, b, got, want, out.String())
+					if got, _ := d.ID(b); got != es[i].ID {
+						t.Fatalf("after %v: %s's bookmark %s is %q, want %q\n%s", log, id, b, got, es[i].ID, out.String())
 					}
 				}
 			}
@@ -622,14 +623,13 @@ func randomHistory(t *testing.T, seed int64) {
 					d.pull(shared, newImage())
 				}
 			}
-			e.set.Bookmark(e.rel(id))
 			if rng.Intn(2) == 0 { // a tool both environments pull, its tag moving on
 				tools[e][id] = []string{"jq:1.8"}
 				if _, err := d.ID("jq:1.8"); err != nil || rng.Intn(3) == 0 {
 					d.pull("jq:1.8", newImage())
 				}
-				e.set.keepTools(e.rel(id), readList(e.rel(id)))
 			}
+			e.set.Bookmark(e.rel(id))
 			e.current = id
 			e.run(d)
 			if rng.Intn(4) == 0 { // a one-off left behind
@@ -641,6 +641,10 @@ func randomHistory(t *testing.T, seed int64) {
 		case 2: // a release whose fetch fails halfway: undone
 			id := e.newRelease(own, shared)
 			d.pull(shared, newImage())
+			if rng.Intn(2) == 0 { // its tool pulled before the fetch failed: bumped, then abandoned
+				tools[e][id] = []string{"jq:1.8"}
+				d.pull("jq:1.8", newImage())
+			}
 			before := usedNames(d, other)
 			e.set.Undo(e.rel(id), false)
 			if err := os.WriteFile(filepath.Join(e.rel(id), failedFile), nil, 0o644); err != nil {
@@ -1128,5 +1132,45 @@ func TestPinned(t *testing.T) {
 		if Pinned(ref) != want {
 			t.Errorf("%s: %v", ref, !want)
 		}
+	}
+}
+
+// A release a rollback or a restart brings back has its tools bookmarked again by what their
+// names hold now, as its pulled entries are: a tool is never pinned and runs what its tag
+// holds, so once the newer release that pulled the moved tag goes, the tag still names an
+// image the restored release holds.
+func TestRestoreBookmarksToolsAgain(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	r1 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The registry moves jq:1.8 on; the next release pulls and records it, then fails its
+	// run, and the restart brings r1 back.
+	d.pull(jq.Ref, "sha256:j2")
+	r2 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r2), e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.set.Restore(e.rel(r1), e.rel(r2), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[toolTag("app-prod", r1, jq.Ref)]; got != "sha256:j2" {
+		t.Errorf("%s's tool bookmark holds %q, want what its tag holds now", r1, got)
+	}
+	if err := e.set.Remove(e.rel(r2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.names[familiar(jq.Ref)]; !ok {
+		t.Errorf("%s is gone while the current release %s lists its tool jq: %v\n%s", jq.Ref, r1, d.names, out.String())
 	}
 }

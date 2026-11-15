@@ -96,18 +96,10 @@ func TestFilterImportedOwn(t *testing.T) {
 	}
 }
 
-// An imported snapshot's removal takes no name from its tools file
-// (ToolsFile), which is the other server's word as its listing is: the
-// listing is cut to the current release's services with its ids cleared
-// (FilterImported), and the tools must not stay as they came.
-//
-// Bug (review round 1 of feat/tool-bookmarks): a take copies its release's
-// files, devopsy-tools among them, an import keeps the tar's, and
-// FilterImported rewrites the listing alone, so Remove of the imported
-// snapshot reads a crafted line (any name, any image id on this server)
-// and strips that name from an image no bookmark holds and no container
-// uses: the admin's own image here.
-func TestImportedSnapshotTools(t *testing.T) {
+// An imported snapshot keeps no tools file (ToolsFile), the other server's word as its listing
+// is: FilterImported drops one a tar carries, so the snapshot's removal never strips a name a
+// crafted line gives (any name, any image id on this server), the admin's own image here.
+func TestFilterImportedDropsTools(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer

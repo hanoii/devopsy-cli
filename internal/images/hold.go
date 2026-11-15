@@ -365,9 +365,9 @@ func (s *Set) ownInstead(o entry, h hold, what string) (entry, composeHold, erro
 // environment building or pulling under it moves for the others (stage, a
 // branch's, a pull request's), nor the id, which a build cannot tag. A
 // hold on another reference (a digest) stays as it is. A service of no
-// entry sharing an own image (sharers: one under a profile) runs that
+// entry sharing an own image (sharers, beside: one under a profile) runs that
 // image's bookmark, its release's own build's while the entry is held.
-func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeHold) {
+func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeHold, sharers map[string]string) {
 	names := bookmarks(es, s.Name, s.idOf(rel))
 	byRef := map[string]string{}
 	listed := map[string]bool{}
@@ -393,64 +393,23 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 			byRef[familiar(e.Ref)] = names[i]
 		}
 	}
-	for svc, ref := range s.sharers(rel, es) {
+	for svc, ref := range sharers {
 		if b, ok := byRef[ref]; ok && !listed[svc] {
 			holds[svc] = composeHold{Image: b, bookmark: true}
 		}
 	}
 }
 
-// sharers are rel's services of no entry in es (one under a profile: the
-// listing is the default services') whose image is exactly an own entry's,
-// by that entry's familiar ref: from its fetch file, which names every
-// profile's service sharing a build under that build's fetch tag, else
-// every profile's listing now (ListAll), never what an earlier file said.
-func (s *Set) sharers(rel string, es []entry) map[string]string {
-	out := map[string]string{}
-	listed := map[string]bool{}
-	own := map[string]bool{}
-	for _, e := range es {
-		listed[e.Service] = true
-		if e.Kind == KindOwn {
-			own[familiar(e.Ref)] = true
-		}
-	}
-	if tags := fetchTags(rel); tags != nil {
-		byTag := map[string]string{}
-		for _, e := range es {
-			if t := tags[e.Service]; t != "" && e.Service != "" {
-				byTag[t] = familiar(e.Ref)
-			}
-		}
-		for svc, t := range tags {
-			if ref, ok := byTag[t]; ok && !listed[svc] {
-				out[svc] = ref
-			}
-		}
-		return out
-	}
-	if s.ListAll == nil || len(own) == 0 {
-		return out
-	}
-	all, err := s.ListAll(rel)
-	if err != nil {
-		s.say(report.WarnLevel, "could not list every profile's services of %s (%v): one sharing a build's image runs what its name holds", s.idOf(rel), err)
-		return out
-	}
-	for _, svc := range all {
-		if ref := familiar(svc.Ref); own[ref] && !listed[svc.Name] {
-			out[svc.Name] = ref
-		}
-	}
-	return out
-}
-
-// writeHeld records rel's entries (keep: the listing and its bookmarks)
-// and its ComposeFile with holds.
-func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold) error {
+// writeHeld records rel's entries (keep: the listing and its bookmarks),
+// its ComposeFile with holds, and its tools (keepTools) as its services of
+// every profile ps give them beside the listing as written: every writer
+// of a listing (a record, a restore, a landing's derive) bookmarks its
+// tools again by what their names hold now, as a pulled entry's.
+func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold, ps *profiles) error {
 	es = withOwnBuilds(es)
 	tid := s.idOf(rel)
-	s.resolveBookmarks(rel, es, holds)
+	sharers, tools, toolsOK := s.beside(rel, es, ps)
+	s.resolveBookmarks(rel, es, holds, sharers)
 	if err := s.keep(rel, es); err != nil {
 		s.say(report.ErrorLevel, "could not record the images of %s: %v", tid, err)
 		return err
@@ -458,6 +417,9 @@ func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold) er
 	if err := writeCompose(rel, es, holds); err != nil {
 		s.say(report.ErrorLevel, "could not write %s's %s: %v", tid, ComposeFile, err)
 		return err
+	}
+	if toolsOK {
+		s.keepTools(rel, tools)
 	}
 	return nil
 }
@@ -537,11 +499,13 @@ func (s *Set) derive(base, rel string, svcs map[string]Service, asIs bool) error
 	for svc, ch := range kept {
 		holds[svc] = ch
 	}
-	s.resolveBookmarks(rel, es, holds)
+	ps := s.profilesOf(rel)
+	sharers, _, _ := s.beside(rel, es, ps)
+	s.resolveBookmarks(rel, es, holds, sharers)
 	if was, err := os.ReadFile(filepath.Join(rel, ComposeFile)); err == nil && slices.Equal(before, es) && string(was) == composeText(es, holds) {
 		return nil
 	}
-	if err := s.writeHeld(rel, es, holds); err != nil {
+	if err := s.writeHeld(rel, es, holds, ps); err != nil {
 		return err
 	}
 	if len(heldLines) > 0 {

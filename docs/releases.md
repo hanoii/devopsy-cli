@@ -343,6 +343,8 @@ only the project:
 - `devopsy-release.json`: the commit, branch and who made the release;
 - `devopsy-target.env`: its environment;
 - `devopsy-images`: its images, with each one's digest and version;
+- `devopsy-tools`: the tools it pulled under a profile, each tagged for
+  it ([Images](images.md#each-release-keeps-its-images));
 - `devopsy-compose.yaml` (below);
 - `devopsy-fetch.yaml` while a build-mode fetch runs: the name each build
   lands under, removed once the fetch is done;

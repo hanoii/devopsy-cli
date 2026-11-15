@@ -20,9 +20,9 @@ every environment building the project on the server shares.
 A release's tools, every profile's services without a `build:` that it
 pulled ([Fetching images](releases.md#fetching-images)), are tagged
 `devopsy-<compose name>-<release id>-t<checksum>`, listed in the
-release's `devopsy-tools`, and go with the release like its images. Only
-a new release records them: a tool is never pinned or brought
-back, and runs what its tag holds now.
+release's `devopsy-tools`, and go with the release like its images. A
+tool is never pinned or brought back: it runs what its tag holds now,
+and a rollback or a restart tags it again there.
 
 devopsy never moves a pulled name back to an older image, because
 another environment, instance or project may be running it.

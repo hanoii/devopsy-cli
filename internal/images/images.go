@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -585,7 +586,8 @@ func writeFile(path, content string) error {
 // recorded (LeftFile) for the next pruning, which holds the lock alone:
 // this runs beside other releases' fetches, which may be pulling them.
 // A listing that fails keeps the previous one, so its bookmarks are
-// still found.
+// still found. Its tools are recorded too (keepTools), so a failed
+// release's go with it.
 func (s *Set) Bookmark(rel string) {
 	id := filepath.Base(rel)
 	es, err := s.entries(rel, false)
@@ -595,6 +597,9 @@ func (s *Set) Bookmark(rel string) {
 	}
 	if err := s.keep(rel, es); err != nil {
 		s.say(report.WarnLevel, "could not record the images of %s (%v): a rollback to it builds or pulls them again", id, err)
+	}
+	if _, tools, ok := s.beside(rel, withOwnBuilds(es), s.profilesOf(rel)); ok {
+		s.keepTools(rel, tools)
 	}
 }
 
@@ -720,54 +725,127 @@ func digestOf(ref string) string {
 // keep records a release's entries (ListFile) and tags each image with
 // its bookmark, giving up what an earlier listing of it no longer has.
 func (s *Set) keep(rel string, es []entry) error {
-	return s.keepIn(rel, withOwnBuilds(es), false)
+	return s.keepIn(rel, withOwnBuilds(es), listingKind)
 }
 
-// keepTools records the tools a new release pulled (ToolsFile): every
-// profile's service (ListAll) without build: or pull_policy: never whose
-// image is none the release lists, each bookmarked by its tool tag, so it
-// goes with the release by Remove's rules like any of its images. A
-// listing or a bookmark that fails is said and costs nothing else: a
-// tool's image is only a pull.
-func (s *Set) keepTools(rel string, listed []entry) {
+// listKind is one of a release's files of images (keepIn): its file, how its bookmarks are
+// named, what is said of an image of it that is gone (nil: nothing) and what a pulled one's
+// bookmark that could not be put costs, for the release's id.
+type listKind struct {
+	file  string
+	names func(es []entry, name, id string) []string
+	gone  func(id, what string) string
+	lost  func(id string) string
+}
+
+var (
+	// listingKind is the release's listing (ListFile).
+	listingKind = listKind{file: ListFile, names: bookmarks,
+		gone: func(id, what string) string {
+			return id + "'s image of " + what + " is gone: a rollback to " + id + " builds or pulls it again"
+		},
+		lost: func(id string) string { return "a rollback to " + id + " pulls it again" }}
+	// toolsKind is its tools (ToolsFile): one gone costs its run a pull, said by nothing.
+	toolsKind = listKind{file: ToolsFile, names: toolBookmarks,
+		lost: func(id string) string { return "its image stays when " + id + " goes" }}
+)
+
+// profiles are a release's services of every profile (ListAll), read once for what sits
+// beside its listing (beside); none when the set lists no profiles (tests), err when the
+// listing failed, said once (said).
+type profiles struct {
+	svcs       []Service
+	err        error
+	none, said bool
+}
+
+func (s *Set) profilesOf(rel string) *profiles {
 	if s.ListAll == nil {
-		return
+		return &profiles{none: true}
 	}
 	svcs, err := s.ListAll(rel)
-	if err != nil {
-		s.say(report.WarnLevel, "could not list the tools of %s (%v): their images stay when it goes", filepath.Base(rel), err)
+	return &profiles{svcs: svcs, err: err}
+}
+
+// beside splits a release's services beside its listing es (ps, every profile's) into the
+// sharers of an own entry's image (sharers: its fetch file names them, else ps does) and its
+// tools: every one without build: or pull_policy: never whose service and image es has none of,
+// each with the image its name holds now. Without ps the tools are not known (ok false), and
+// what they and a sharer cost is said once.
+func (s *Set) beside(rel string, es []entry, ps *profiles) (sharers map[string]string, tools []entry, ok bool) {
+	sharers = map[string]string{}
+	listed, own := map[string]bool{}, map[string]bool{}
+	for _, e := range es {
+		listed[e.Service] = true
+		listed[familiar(e.Ref)] = true
+		if e.Kind == KindOwn {
+			own[familiar(e.Ref)] = true
+		}
+	}
+	tags := fetchTags(rel)
+	if tags != nil {
+		byTag := map[string]string{}
+		for _, e := range es {
+			if t := tags[e.Service]; t != "" && e.Service != "" {
+				byTag[t] = familiar(e.Ref)
+			}
+		}
+		for svc, t := range tags {
+			if ref, found := byTag[t]; found && !listed[svc] {
+				sharers[svc] = ref
+			}
+		}
+	}
+	if ps.none {
+		return sharers, nil, false
+	}
+	if ps.err != nil {
+		if !ps.said {
+			ps.said = true
+			cost := "its tools stay as they were recorded"
+			if tags == nil && len(own) > 0 {
+				cost += ", and one sharing a build's image runs what its name holds"
+			}
+			s.say(report.WarnLevel, "could not list every profile's services of %s (%v): %s", s.idOf(rel), ps.err, cost)
+		}
+		return sharers, nil, false
+	}
+	for _, svc := range ps.svcs {
+		ref := familiar(svc.Ref)
+		switch {
+		case listed[svc.Name]:
+		case own[ref]:
+			if tags == nil {
+				sharers[svc.Name] = ref
+			}
+		case listed[ref] || svc.Build || svc.NeverPull:
+		default:
+			e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
+			if img, err := s.Docker.Inspect(digestRef(svc.Ref)); err == nil {
+				e.ID = img.ID
+			}
+			tools = append(tools, e)
+		}
+	}
+	return sharers, tools, true
+}
+
+// keepTools records a release's tools (ToolsFile, beside's), each bookmarked by its tool tag,
+// so it goes with the release by Remove's rules like any of its images, giving up what an
+// earlier record of them no longer has. A failure is said and costs nothing else: a tool's
+// image is only a pull.
+func (s *Set) keepTools(rel string, tools []entry) {
+	if len(tools) == 0 && readTools(rel) == nil {
 		return
 	}
-	in := map[string]bool{}
-	for _, e := range listed {
-		in[e.Service] = true
-		in[familiar(e.Ref)] = true
-	}
-	var ts []entry
-	for _, svc := range svcs {
-		if in[svc.Name] || in[familiar(svc.Ref)] || svc.Build || svc.NeverPull {
-			continue
-		}
-		e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
-		if img, err := s.Docker.Inspect(digestRef(svc.Ref)); err == nil {
-			e.ID = img.ID
-		}
-		ts = append(ts, e)
-	}
-	if len(ts) == 0 && readTools(rel) == nil {
-		return
-	}
-	if err := s.keepIn(rel, ts, true); err != nil {
-		s.say(report.WarnLevel, "could not record the tools of %s (%v): their images stay when it goes", filepath.Base(rel), err)
+	if err := s.keepIn(rel, tools, toolsKind); err != nil {
+		s.say(report.WarnLevel, "could not record the tools of %s (%v): their images stay when it goes", s.idOf(rel), err)
 	}
 }
 
-// keepIn is keep of a release's listing, or of its tools (ToolsFile, toolBookmarks).
-func (s *Set) keepIn(rel string, es []entry, tools bool) error {
-	file, namesOf := ListFile, bookmarks
-	if tools {
-		file, namesOf = ToolsFile, toolBookmarks
-	}
+// keepIn is keep of one of a release's files of images (listKind).
+func (s *Set) keepIn(rel string, es []entry, k listKind) error {
+	file, namesOf := k.file, k.names
 	id := s.idOf(rel)
 	old := readEntries(filepath.Join(rel, file))
 	// A name and the image it had: a listing again under the same name
@@ -803,21 +881,17 @@ func (s *Set) keepIn(rel string, es []entry, tools bool) error {
 		if e.ID != "" {
 			if _, err := s.Docker.ID(e.ID); errors.Is(err, ErrNoImage) {
 				// Gone (pruned by hand, a restart's last try as built): nothing to
-				// bookmark, and an up builds it again onto the bookmark; a tool's
-				// run pulls it again.
-				if tools {
-					continue
+				// bookmark, and an up builds it again onto the bookmark.
+				if k.gone != nil {
+					s.say(report.WarnLevel, "%s", k.gone(id, cmp.Or(e.Service, e.Ref)))
 				}
-				s.say(report.WarnLevel, "%s's image of %s is gone: a rollback to %s builds or pulls it again", id, cmp.Or(e.Service, e.Ref), id)
 				continue
 			}
 			if err := s.Docker.Tag(e.ID, names[i]); err != nil && e.Kind == KindOwn {
 				s.say(report.ErrorLevel, "could not bookmark %s as %s, which %s runs it by: %v", e.Ref, names[i], id, err)
 				ownErr = cmp.Or(ownErr, err)
-			} else if err != nil && tools {
-				s.say(report.WarnLevel, "could not bookmark the tool %s as %s (%v): its image stays when %s goes", e.Ref, names[i], err, id)
 			} else if err != nil {
-				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s pulls it again", e.Ref, names[i], err, id)
+				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): %s", e.Ref, names[i], err, k.lost(id))
 			}
 		}
 	}
@@ -919,13 +993,10 @@ func (s *Set) Remove(rel string) error {
 	// img recover finds): its tags are names no listing has.
 	s.dropFetch(rel)
 	id := s.idOf(rel)
-	// Its tools go by the same rules as its images (keepTools).
-	listed, tools := readList(rel), readTools(rel)
-	es := append(listed, tools...)
+	es, names := s.releaseEntries(rel)
 	if len(es) == 0 {
 		return nil
 	}
-	names := append(bookmarks(listed, s.Name, id), toolBookmarks(tools, s.Name, id)...)
 	mine := map[string]bool{}
 	imgs := make([]string, len(es))
 	for i, e := range es {
@@ -1041,6 +1112,14 @@ func (s *Set) Remove(rel string) error {
 		s.say(report.InfoLevel, "removed %s, which only %s held", strings.Join(gone, ", "), id)
 	}
 	return nil
+}
+
+// releaseEntries are a release's listing and its tools, in that order, with their bookmarks'
+// names: what its removal takes, its tools by the same rules as its images.
+func (s *Set) releaseEntries(rel string) ([]entry, []string) {
+	id := s.idOf(rel)
+	listed, tools := readList(rel), readTools(rel)
+	return append(slices.Clip(listed), tools...), append(bookmarks(listed, s.Name, id), toolBookmarks(tools, s.Name, id)...)
 }
 
 // holding are the bookmarks among an image's tags that are not in mine

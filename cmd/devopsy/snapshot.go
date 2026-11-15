@@ -749,13 +749,14 @@ func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel
 	if err := os.MkdirAll(filepath.Join(tmp, remote.SnapshotData), 0o700); err != nil {
 		return err
 	}
-	// The release, its logs left out.
+	// The release, its logs and its tools (images.ToolsFile) left out: a snapshot bookmarks
+	// its listing alone, and a tools file a tar carried would be anyone's word.
 	if out, err := exec.Command("cp", "-a", filepath.Join(rel, remote.CodeDir), filepath.Join(tmp, remote.CodeDir)).CombinedOutput(); err != nil {
 		return fmt.Errorf("copying the release's code: %v %s", err, out)
 	}
 	files, _ := os.ReadDir(rel)
 	for _, f := range files {
-		if f.IsDir() || !f.Type().IsRegular() || f.Name() == remote.LogFile || f.Name() == remote.ServerLogFile {
+		if f.IsDir() || !f.Type().IsRegular() || f.Name() == remote.LogFile || f.Name() == remote.ServerLogFile || f.Name() == images.ToolsFile {
 			continue
 		}
 		if err := copyFile(filepath.Join(rel, f.Name()), filepath.Join(tmp, f.Name())); err != nil {

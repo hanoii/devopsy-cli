@@ -3,6 +3,7 @@ package images
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,8 +121,9 @@ func TestRecordListing(t *testing.T) {
 }
 
 // A release records the tools it pulled (every profile's services that neither build nor
-// share an image it lists) with their bookmarks, and only those: each goes with its release by
-// the rules of any image, kept while another environment's release holds it, recorded while a
+// share an image it lists) with their bookmarks, and only those, one in a listed service's
+// repository under another tag by a bookmark of its own: each goes with its release by the
+// rules of any image, kept while another environment's release holds it, recorded while a
 // container uses it, and its image gone with the last release that holds it.
 func TestRecordTools(t *testing.T) {
 	t.Parallel()
@@ -135,6 +137,7 @@ func TestRecordTools(t *testing.T) {
 		{Name: "local", Ref: "local-tool", NeverPull: true},
 		{Name: "worker", Ref: "app-prod-app"},
 		{Name: "proxy-debug", Ref: "caddy:2-alpine"},
+		{Name: "proxy-next", Ref: "caddy:2.8"},
 	}
 	envs := []*recEnv{newRecEnv(t, d, "app-prod", ModeBuild, &out), newRecEnv(t, d, "shop-prod", ModeBuild, &out)}
 	ids := make([]string, len(envs))
@@ -147,6 +150,7 @@ func TestRecordTools(t *testing.T) {
 	d.pull("app-prod-app", "sha256:a1")
 	d.pull("caddy:2-alpine", "sha256:c1")
 	d.pull("ghcr.io/jqlang/jq:1.8.1", "sha256:j1")
+	d.pull("caddy:2.8", "sha256:c2")
 	for i, e := range envs {
 		ids[i] = e.release(appSvc, proxySvc)
 		if err := e.set.Record(e.rel(ids[i]), ""); err != nil {
@@ -154,8 +158,11 @@ func TestRecordTools(t *testing.T) {
 		}
 	}
 	got := readTools(envs[0].rel(ids[0]))
-	if len(got) != 1 || got[0] != (entry{Ref: jq.Ref, ID: "sha256:j1", Service: "jq", Kind: KindPulled}) {
+	if want := []entry{{Ref: jq.Ref, ID: "sha256:j1", Service: "jq", Kind: KindPulled}, {Ref: "caddy:2.8", ID: "sha256:c2", Service: "proxy-next", Kind: KindPulled}}; !slices.Equal(got, want) {
 		t.Fatalf("tools: %+v", got)
+	}
+	if b := toolTag("app-prod", ids[0], "caddy:2.8"); d.names[b] != "sha256:c2" || d.names["caddy:"+bookmarkPrefix("app-prod")+ids[0]] != "sha256:c1" {
+		t.Errorf("caddy's tool and listed bookmarks: %v", d.names)
 	}
 	tag := "ghcr.io/jqlang/jq:" + bookmarkPrefix("app-prod") + ids[0] + "-t"
 	var bms []string
@@ -189,8 +196,73 @@ func TestRecordTools(t *testing.T) {
 	}
 	d.containers = nil
 	envs[1].set.Prune()
-	if d.images["sha256:j1"] {
-		t.Errorf("jq outlived its releases: %v\n%s", d.names, out.String())
+	if d.images["sha256:j1"] || d.images["sha256:c2"] {
+		t.Errorf("a tool outlived its releases: %v\n%s", d.names, out.String())
+	}
+}
+
+// A tool costs a release nothing when it cannot be recorded: its image gone (listed with no
+// image, no bookmark), its bookmark refused, every profile's listing failing (its tools as
+// they were) are each said or quiet, and the record goes on.
+func TestRecordToolsFailures(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	var listErr error
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), listErr
+	}
+	gone := e.release()
+	if err := e.set.Record(e.rel(gone), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTools(e.rel(gone)); len(got) != 1 || got[0].ID != "" || strings.Contains(out.String(), "jq") {
+		t.Errorf("a tool with no image: %+v\n%s", got, out.String())
+	}
+	d.pull(jq.Ref, "sha256:j1")
+	d.fail = map[string]bool{"Tag": true}
+	refused := e.release()
+	if err := e.set.Record(e.rel(refused), e.rel(gone)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "could not bookmark "+jq.Ref+" as "+toolTag("app-prod", refused, jq.Ref)) || !strings.Contains(out.String(), "its image stays when "+refused+" goes") {
+		t.Errorf("a refused tool bookmark, said:\n%s", out.String())
+	}
+	listErr = errors.New("compose config: exit status 1")
+	unlisted := e.release()
+	if err := e.set.Record(e.rel(unlisted), e.rel(refused)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(e.rel(unlisted), ToolsFile)); err == nil || !strings.Contains(out.String(), "could not list every profile's services of "+unlisted) {
+		t.Errorf("tools with every profile unlisted:\n%s", out.String())
+	}
+}
+
+// A release's record lists every profile's services once: the sharers of its own images
+// (resolveBookmarks) and its tools (keepTools) are both what sits beside its listing (beside),
+// even with an own image and no fetch file, where the sharers come from that listing too.
+func TestRecordListsEveryProfileOnce(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	local := Service{Name: "local", Ref: "local-app", NeverPull: true}
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	calls := 0
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		calls++
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(local.Ref, "sha256:l1")
+	d.pull(jq.Ref, "sha256:j1")
+	id := e.release(local)
+	if err := e.set.Record(e.rel(id), ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("every profile listed %d times in one record\n%s", calls, out.String())
 	}
 }
 

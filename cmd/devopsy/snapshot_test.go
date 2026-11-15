@@ -47,7 +47,8 @@ var snapshotID = regexp.MustCompile(`taking snapshot ([0-9]{14}) of ([0-9]{14})`
 // then every service with data and its dependents stopped, the mirror
 // brought in line, the services started again, and the tars from the
 // mirror afterwards; the snapshot holds the release's code and listing,
-// a manifest and the environment's variables; its stop lines go once
+// never its tools (images.ToolsFile: a snapshot bookmarks its listing
+// alone), a manifest and the environment's variables; its stop lines go once
 // the services are back; keep counts manual snapshots; manual: false and
 // a marked environment refuse.
 func TestSnapshotTake(t *testing.T) {
@@ -56,6 +57,11 @@ func TestSnapshotTake(t *testing.T) {
 	s.mirrored("prod")
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=secret\n", 0o600)
+	cur, err := os.Readlink(filepath.Join(s.root, "shop", "prod", "current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(s.root, "shop", "prod", filepath.Dir(cur), images.ToolsFile), "jq:1.8\tsha256:j1\tjq\tpulled\n", 0o644)
 
 	out, code := s.run(nil, "@prod", "--snapshot")
 	docker, _ := s.logs()
@@ -69,6 +75,9 @@ func TestSnapshotTake(t *testing.T) {
 		if !fileExists(filepath.Join(snap, f)) {
 			t.Errorf("the snapshot lacks %s", f)
 		}
+	}
+	if fileExists(filepath.Join(snap, images.ToolsFile)) {
+		t.Errorf("the snapshot carries its release's %s", images.ToolsFile)
 	}
 	if got := strings.Join(tarNames(t, filepath.Join(snap, "data", "mnt.db.tar.zst")), " "); !strings.Contains(got, "db/ibdata") {
 		t.Errorf("db's tar: %s", got)
