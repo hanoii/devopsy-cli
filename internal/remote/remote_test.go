@@ -945,7 +945,7 @@ exit 0
 	// inherited variables and its copy of the parent's server's levels
 	// are read, when they exist), to the run step; the record of what
 	// ran on the data after it (img ran) reads the listing, not compose.
-	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
+	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1526,7 +1526,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1557,7 +1557,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\n3: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	rel1 := filepath.Join(base, "releases", "1")
@@ -1663,7 +1663,7 @@ exit 0
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
 	// Every profile's services without a build pulled too, never listed.
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- config --format json\n1: -- pull\n1: -- --profile * pull --ignore-buildable\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- config --format json\n1: -- pull\n1: -- --profile * pull --ignore-buildable\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 	// A profile's image that fails to pull fails the release before it

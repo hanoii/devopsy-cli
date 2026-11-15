@@ -394,8 +394,9 @@ The rest is the server's, under `leftovers`:
   release snapshots, image names a project's record left, old util
   images, dangling images), with `--gc --dry-run` as its hint for the
   sizes and the build cache, which only `--gc` reads;
-- images with a tag that no release holds and no container uses (tools
-  a project ran, the admin's own), one row each with its size, then one
+- images with a tag that no release holds and no container uses (a tool
+  a project built or ran under a tag no release pulled, the admin's
+  own), one row each with its size, then one
   `docker rmi` of all of them as the hint;
 - anonymous volumes no container uses (an image's `VOLUME` after a
   `down` without `-v`, which may be a database's data), `docker volume

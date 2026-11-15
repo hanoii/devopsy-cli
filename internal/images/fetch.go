@@ -32,8 +32,17 @@ const FetchComposeEnv = "DEVOPSY_INTERNAL_FETCH_COMPOSE"
 // name>-<id>-f<cksum of the ref>, which no bookmark has (theirs end in digits after the id),
 // within Docker's 128 characters (bookmarkPrefix's cut), the same for every service naming
 // that ref.
-func fetchTag(name, id, ref string) string {
-	return RepoOf(ref) + ":" + bookmarkPrefix(name) + id + "-f" + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
+func fetchTag(name, id, ref string) string { return markedTag(name, id, ref, "f") }
+
+// toolTag is the bookmark of a tool release id pulled (ToolsFile): <repo>:devopsy-<compose
+// name>-<id>-t<cksum of the ref>, which no bookmark of its listing has, so a tool in a
+// repository a listed service names never takes that service's.
+func toolTag(name, id, ref string) string { return markedTag(name, id, ref, "t") }
+
+// markedTag is a release's tag of ref with mark and the ref's cksum after its id, within
+// Docker's 128 characters (bookmarkPrefix's cut).
+func markedTag(name, id, ref, mark string) string {
+	return RepoOf(ref) + ":" + bookmarkPrefix(name) + id + "-" + mark + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
 }
 
 // WriteFetch writes rel's FetchFile before its fetch (img fetch-file): in build mode, each

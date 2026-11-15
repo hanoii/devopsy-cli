@@ -368,6 +368,7 @@ func TestNamesTag(t *testing.T) {
 		{"app:devopsy-shop-stage-20261101000000-123456", "shop-stage", true},
 		{"app:devopsy-shop-stage-s20261101000000-a1b2", "shop-stage", true},
 		{"app:devopsy-shop-stage-20261101000000-fz9", "shop-stage", true},
+		{"app:devopsy-shop-stage-20261101000000-tz9", "shop-stage", true},
 		{"registry.example.com:5000/app:devopsy-shop-stage-20261101000000", "shop-stage", true},
 		{"app:devopsy-shop-stage-2-20261101000000", "shop-stage", false},
 		{"app:devopsy-shop-stage-20261101000000", "shop-stage-2", false},
@@ -387,6 +388,7 @@ func TestNamesTag(t *testing.T) {
 		"app:devopsy-shop-stage-20261101000000":          "shop-stage",
 		"app:devopsy-shop-stage-2-s20261101000000-a1b2":  "shop-stage-2",
 		"app:devopsy-shop-stage-20261101000000-f3x":      "shop-stage",
+		"app:devopsy-shop-stage-20261101000000-t3x":      "shop-stage",
 		"app:devopsy-shop-20261101000000-20261102000000": "shop-20261101000000",
 		"app:" + bookmarkPrefix(long) + "20261101000000": cut,
 		"app:devopsy-shop-claim.abababababab":            "",
@@ -506,10 +508,13 @@ func (e *env) releases() []string {
 }
 
 // Two environments sharing mariadb:11 (one sometimes as its alias
-// mariadb:11.4) release, fail, roll back and remove releases at random.
-// At every step: every kept release's bookmarks point to the images it
-// recorded, a restore never moves a name another environment's container
-// uses, and once every release and container is gone, no image is left.
+// mariadb:11.4) release, fail, roll back and remove releases at random,
+// some releases with a tool under a profile, jq:1.8, which both pull and
+// its registry moves forward. At every step: every kept release's
+// bookmarks, its tools' too, point to the images it recorded, a restore
+// never moves a name another environment's container uses, and once
+// every release and container is gone, no image is left, a tool's
+// included.
 func TestRandomHistory(t *testing.T) {
 	t.Parallel()
 	for seed := int64(1); seed <= 200; seed++ {
@@ -523,6 +528,15 @@ func randomHistory(t *testing.T, seed int64) {
 	var out bytes.Buffer
 	left := filepath.Join(t.TempDir(), LeftFile)
 	envs := []*env{newEnv(t, d, "app-a", left, &out), newEnv(t, d, "app-b", left, &out)}
+	// Each release's tools, its profile's services beside its listing's (ListAll).
+	tools := map[*env]map[string][]string{}
+	for _, e := range envs {
+		e, ts := e, map[string][]string{}
+		tools[e] = ts
+		e.set.ListAll = func(rel string) ([]Service, error) {
+			return services(append(slices.Clone(e.lists[filepath.Base(rel)]), ts[filepath.Base(rel)]...)), nil
+		}
+	}
 	img := 0
 	newImage := func() string { img++; return fmt.Sprintf("sha256:%04d", img) }
 	var log []string
@@ -533,12 +547,14 @@ func randomHistory(t *testing.T, seed int64) {
 		for _, e := range envs {
 			for _, id := range e.releases() {
 				es := readList(e.rel(id))
-				for i, b := range bookmarks(es, e.set.Name, id) {
-					if es[i].ID == "" || gone[b] {
+				ts := readTools(e.rel(id))
+				for i, b := range append(bookmarks(es, e.set.Name, id), toolBookmarks(ts, e.set.Name, id)...) {
+					want := append(slices.Clone(es), ts...)[i].ID
+					if want == "" || gone[b] {
 						continue
 					}
-					if got, _ := d.ID(b); got != es[i].ID {
-						t.Fatalf("after %v: %s's bookmark %s is %q, want %q\n%s", log, id, b, got, es[i].ID, out.String())
+					if got, _ := d.ID(b); got != want {
+						t.Fatalf("after %v: %s's bookmark %s is %q, want %q\n%s", log, id, b, got, want, out.String())
 					}
 				}
 			}
@@ -607,6 +623,13 @@ func randomHistory(t *testing.T, seed int64) {
 				}
 			}
 			e.set.Bookmark(e.rel(id))
+			if rng.Intn(2) == 0 { // a tool both environments pull, its tag moving on
+				tools[e][id] = []string{"jq:1.8"}
+				if _, err := d.ID("jq:1.8"); err != nil || rng.Intn(3) == 0 {
+					d.pull("jq:1.8", newImage())
+				}
+				e.set.keepTools(e.rel(id), readList(e.rel(id)))
+			}
 			e.current = id
 			e.run(d)
 			if rng.Intn(4) == 0 { // a one-off left behind

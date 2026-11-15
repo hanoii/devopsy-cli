@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,81 @@ func TestRecordListing(t *testing.T) {
 	}
 	if imgs, _, _ := composeFacts(e2.rel(id2)); imgs["app"] != "app-prod-app@sha256:a1" {
 		t.Errorf("image mode app's image: in %s is %q", ComposeFile, imgs["app"])
+	}
+}
+
+// A release records the tools it pulled (every profile's services that neither build nor
+// share an image it lists) with their bookmarks, and only those: each goes with its release by
+// the rules of any image, kept while another environment's release holds it, recorded while a
+// container uses it, and its image gone with the last release that holds it.
+func TestRecordTools(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8.1"}
+	tools := []Service{
+		jq,
+		{Name: "builder", Ref: "app-prod-builder", Build: true},
+		{Name: "local", Ref: "local-tool", NeverPull: true},
+		{Name: "worker", Ref: "app-prod-app"},
+		{Name: "proxy-debug", Ref: "caddy:2-alpine"},
+	}
+	envs := []*recEnv{newRecEnv(t, d, "app-prod", ModeBuild, &out), newRecEnv(t, d, "shop-prod", ModeBuild, &out)}
+	ids := make([]string, len(envs))
+	for _, e := range envs {
+		e.set.Left = left
+		e.set.ListAll = func(rel string) ([]Service, error) {
+			return append(slices.Clone(e.svcs[filepath.Base(rel)]), tools...), nil
+		}
+	}
+	d.pull("app-prod-app", "sha256:a1")
+	d.pull("caddy:2-alpine", "sha256:c1")
+	d.pull("ghcr.io/jqlang/jq:1.8.1", "sha256:j1")
+	for i, e := range envs {
+		ids[i] = e.release(appSvc, proxySvc)
+		if err := e.set.Record(e.rel(ids[i]), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := readTools(envs[0].rel(ids[0]))
+	if len(got) != 1 || got[0] != (entry{Ref: jq.Ref, ID: "sha256:j1", Service: "jq", Kind: KindPulled}) {
+		t.Fatalf("tools: %+v", got)
+	}
+	tag := "ghcr.io/jqlang/jq:" + bookmarkPrefix("app-prod") + ids[0] + "-t"
+	var bms []string
+	for n, id := range d.names {
+		if strings.HasPrefix(n, tag) && id == "sha256:j1" {
+			bms = append(bms, n)
+		}
+	}
+	if len(bms) != 1 {
+		t.Fatalf("jq's bookmark %s...: %v", tag, d.names)
+	}
+	if name, ok := NameOfTag(bms[0]); !ok || name != "app-prod" {
+		t.Errorf("NameOfTag(%s) = %q %v", bms[0], name, ok)
+	}
+	// Nothing that judges or restores reads it: the listing is the release's services.
+	if l := readList(envs[0].rel(ids[0])); len(l) != 2 {
+		t.Errorf("listing: %+v", l)
+	}
+	if err := envs[0].set.Remove(envs[0].rel(ids[0])); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.names[bms[0]]; ok || d.names[jq.Ref] != "sha256:j1" {
+		t.Errorf("jq while shop-prod's release holds it: %v\n%s", d.names, out.String())
+	}
+	d.containers = []container{{image: "sha256:j1", project: "shop-prod"}}
+	if err := envs[1].set.Remove(envs[1].rel(ids[1])); err != nil {
+		t.Fatal(err)
+	}
+	if d.names[jq.Ref] != "sha256:j1" || len(readLeft(left)) == 0 {
+		t.Errorf("jq under a container's use: %v, recorded %v\n%s", d.names, readLeft(left), out.String())
+	}
+	d.containers = nil
+	envs[1].set.Prune()
+	if d.images["sha256:j1"] {
+		t.Errorf("jq outlived its releases: %v\n%s", d.names, out.String())
 	}
 }
 

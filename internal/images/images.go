@@ -52,6 +52,13 @@ const (
 	// held on another release's image, the release's own name, id and
 	// build key (entry.OwnRef).
 	ListFile = "devopsy-images"
+	// ToolsFile lists the tools a release pulls (every profile's services
+	// that do not build, outside its listing: ProfilePull), in ListFile's
+	// columns, of which only the name, the image and the service are
+	// written: each bookmarked by its release's tool tag (toolTag), so it
+	// goes with the release (Remove). Nothing else reads it: a tool is
+	// never pinned, held, judged or restored, and runs what its tag holds.
+	ToolsFile = "devopsy-tools"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
 	// dropped), and Recover finishes what the release script would have.
@@ -361,7 +368,8 @@ func NameOfTag(ref string) (name string, ok bool) {
 }
 
 // tagName is a release's tag: devopsy-<name>-, its id (s for a snapshot's), then a cksum or a
-// fetch's -f<cksum>; the name greedy, so the id is the last that fits.
+// fetch's -f<cksum> (a tool's -t<cksum> reads as a cksum in base 36); the name greedy, so the
+// id is the last that fits.
 var tagName = regexp.MustCompile(`^devopsy-(.+)-s?[0-9]{14}(-f?[0-9a-z]{1,10})?$`)
 
 // ClaimHold is the hold the door's claim of an image writes for a project, in repo: the
@@ -510,8 +518,22 @@ func bookmarks(entries []entry, name, id string) []string {
 
 // readList reads a release's ListFile: nil when it has none. Lines
 // without an id are an image Docker did not have, or v0.38's.
-func readList(rel string) []entry {
-	data, err := os.ReadFile(filepath.Join(rel, ListFile))
+func readList(rel string) []entry { return readEntries(filepath.Join(rel, ListFile)) }
+
+// readTools reads a release's ToolsFile: nil when it has none.
+func readTools(rel string) []entry { return readEntries(filepath.Join(rel, ToolsFile)) }
+
+// toolBookmarks are the bookmark names of a release's tools, in order (toolTag).
+func toolBookmarks(tools []entry, name, id string) []string {
+	bs := make([]string, len(tools))
+	for i, e := range tools {
+		bs[i] = toolTag(name, id, e.Ref)
+	}
+	return bs
+}
+
+func readEntries(path string) []entry {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
@@ -531,7 +553,9 @@ func readList(rel string) []entry {
 	return es
 }
 
-func writeList(rel string, es []entry) error {
+func writeList(rel string, es []entry) error { return writeEntries(filepath.Join(rel, ListFile), es) }
+
+func writeEntries(path string, es []entry) error {
 	var b strings.Builder
 	for _, e := range es {
 		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag, e.OwnRef, e.OwnID, e.OwnBuild, e.OwnDigest, e.OwnDataVersion, e.OwnTag}
@@ -540,7 +564,7 @@ func writeList(rel string, es []entry) error {
 		}
 		b.WriteString(strings.Join(cols, "\t") + "\n")
 	}
-	return writeFile(filepath.Join(rel, ListFile), b.String())
+	return writeFile(path, b.String())
 }
 
 // writeFile replaces a file whole, so a reader never sees half of it.
@@ -696,9 +720,56 @@ func digestOf(ref string) string {
 // keep records a release's entries (ListFile) and tags each image with
 // its bookmark, giving up what an earlier listing of it no longer has.
 func (s *Set) keep(rel string, es []entry) error {
-	es = withOwnBuilds(es)
+	return s.keepIn(rel, withOwnBuilds(es), false)
+}
+
+// keepTools records the tools a new release pulled (ToolsFile): every
+// profile's service (ListAll) without build: or pull_policy: never whose
+// image is none the release lists, each bookmarked by its tool tag, so it
+// goes with the release by Remove's rules like any of its images. A
+// listing or a bookmark that fails is said and costs nothing else: a
+// tool's image is only a pull.
+func (s *Set) keepTools(rel string, listed []entry) {
+	if s.ListAll == nil {
+		return
+	}
+	svcs, err := s.ListAll(rel)
+	if err != nil {
+		s.say(report.WarnLevel, "could not list the tools of %s (%v): their images stay when it goes", filepath.Base(rel), err)
+		return
+	}
+	in := map[string]bool{}
+	for _, e := range listed {
+		in[e.Service] = true
+		in[familiar(e.Ref)] = true
+	}
+	var ts []entry
+	for _, svc := range svcs {
+		if in[svc.Name] || in[familiar(svc.Ref)] || svc.Build || svc.NeverPull {
+			continue
+		}
+		e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
+		if img, err := s.Docker.Inspect(digestRef(svc.Ref)); err == nil {
+			e.ID = img.ID
+		}
+		ts = append(ts, e)
+	}
+	if len(ts) == 0 && readTools(rel) == nil {
+		return
+	}
+	if err := s.keepIn(rel, ts, true); err != nil {
+		s.say(report.WarnLevel, "could not record the tools of %s (%v): their images stay when it goes", filepath.Base(rel), err)
+	}
+}
+
+// keepIn is keep of a release's listing, or of its tools (ToolsFile, toolBookmarks).
+func (s *Set) keepIn(rel string, es []entry, tools bool) error {
+	file, namesOf := ListFile, bookmarks
+	if tools {
+		file, namesOf = ToolsFile, toolBookmarks
+	}
 	id := s.idOf(rel)
-	old := readList(rel)
+	old := readEntries(filepath.Join(rel, file))
 	// A name and the image it had: a listing again under the same name
 	// may give it another image (a rollback holding a newer one), which
 	// leaves the old pair to nothing that would remove it.
@@ -717,10 +788,10 @@ func (s *Set) keep(rel string, es []entry) error {
 			named[familiar(e.Digest)+" "+e.ID] = true
 		}
 	}
-	if err := writeList(rel, es); err != nil {
+	if err := writeEntries(filepath.Join(rel, file), es); err != nil {
 		return err
 	}
-	names := bookmarks(es, s.Name, id)
+	names := namesOf(es, s.Name, id)
 	keep := map[string]bool{}
 	// An own image's bookmark is what its release runs it by (resolveBookmarks):
 	// one that cannot be put fails the record, before the switch, once the rest
@@ -732,19 +803,25 @@ func (s *Set) keep(rel string, es []entry) error {
 		if e.ID != "" {
 			if _, err := s.Docker.ID(e.ID); errors.Is(err, ErrNoImage) {
 				// Gone (pruned by hand, a restart's last try as built): nothing to
-				// bookmark, and an up builds it again onto the bookmark.
+				// bookmark, and an up builds it again onto the bookmark; a tool's
+				// run pulls it again.
+				if tools {
+					continue
+				}
 				s.say(report.WarnLevel, "%s's image of %s is gone: a rollback to %s builds or pulls it again", id, cmp.Or(e.Service, e.Ref), id)
 				continue
 			}
 			if err := s.Docker.Tag(e.ID, names[i]); err != nil && e.Kind == KindOwn {
 				s.say(report.ErrorLevel, "could not bookmark %s as %s, which %s runs it by: %v", e.Ref, names[i], id, err)
 				ownErr = cmp.Or(ownErr, err)
+			} else if err != nil && tools {
+				s.say(report.WarnLevel, "could not bookmark the tool %s as %s (%v): its image stays when %s goes", e.Ref, names[i], err, id)
 			} else if err != nil {
 				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s pulls it again", e.Ref, names[i], err, id)
 			}
 		}
 	}
-	oldNames := bookmarks(old, s.Name, id)
+	oldNames := namesOf(old, s.Name, id)
 	for i, e := range old {
 		if b := oldNames[i]; !keep[familiar(b)] {
 			if img, err := s.Docker.ID(b); err == nil {
@@ -842,11 +919,13 @@ func (s *Set) Remove(rel string) error {
 	// img recover finds): its tags are names no listing has.
 	s.dropFetch(rel)
 	id := s.idOf(rel)
-	es := readList(rel)
+	// Its tools go by the same rules as its images (keepTools).
+	listed, tools := readList(rel), readTools(rel)
+	es := append(listed, tools...)
 	if len(es) == 0 {
 		return nil
 	}
-	names := bookmarks(es, s.Name, id)
+	names := append(bookmarks(listed, s.Name, id), toolBookmarks(tools, s.Name, id)...)
 	mine := map[string]bool{}
 	imgs := make([]string, len(es))
 	for i, e := range es {
