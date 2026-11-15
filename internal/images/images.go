@@ -1198,10 +1198,10 @@ func (s *Set) Remove(rel string) error {
 		}
 	}
 	if len(stay) > 0 {
-		s.say(report.InfoLevel, "kept the images of %s that other releases use too: %s", id, strings.Join(stay, ", "))
+		s.say(report.InfoLevel, "kept %s: other releases use them too", strings.Join(stay, ", "))
 	}
 	if len(gone) > 0 {
-		s.say(report.InfoLevel, "removed %s, which nothing but %s used", strings.Join(gone, ", "), id)
+		s.say(report.InfoLevel, "removed %s: only %s used them", strings.Join(gone, ", "), id)
 	}
 	return nil
 }

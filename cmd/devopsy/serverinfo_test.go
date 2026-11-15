@@ -482,8 +482,8 @@ func TestServerInfoReport(t *testing.T) {
 	info0.Setup = setUp("")
 	info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing, info0.Setup.Files[2].User = false, true, "devopsy"
 	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !warnings[0].note || !warnings[0].fixes[0].Hint ||
-		!strings.Contains(out, "no deploy user recorded yet ("+setup.DeployUserFile+"): until one is, any user in the docker group passes for it, and the next --server-setup records the login it runs as, devopsy here") ||
-		!strings.Contains(out, "to record devopsy:\n") || !strings.Contains(out, "$ devopsy @vm1: --server-setup") {
+		!strings.Contains(out, "no deploy user recorded yet ("+setup.DeployUserFile+"), so any user in the docker group can act as one; the next --server-setup records the login it runs as (devopsy here)") ||
+		!strings.Contains(out, "to record devopsy as the deploy user, run --server-setup as devopsy:\n") || !strings.Contains(out, "$ devopsy @vm1: --server-setup") {
 		t.Errorf("the deploy user not recorded: %+v\n%s", warnings, out)
 	}
 	// Recorded: named, a line of no note.
@@ -493,7 +493,7 @@ func TestServerInfoReport(t *testing.T) {
 	}
 	// Never set up: the first setup records whoever runs it, said before it does.
 	info0.Setup.Record, info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing, info0.Setup.Files[2].User = "", false, true, "admin"
-	if out, _ := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "no deploy user recorded yet: the first --server-setup records the login it runs as, admin here, and refuses every other login after") {
+	if out, _ := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "no deploy user recorded yet: the first --server-setup records the login it runs as (admin here), and from then on refuses every other login") {
 		t.Errorf("the deploy user on a server never set up:\n%s", out)
 	}
 
@@ -870,7 +870,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
 		// step, so --server-setup is offered only past that refusal, once after the last line
 		// it fixes. A server never set up says the first setup records the login it runs as.
-		"! setup      never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as,",
+		"! setup      never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as",
 		"(its instance's credentials)\n             to fix it:\n             fix what refuses every step of the setup first, then run --server-setup\n",
 		"!            Docker: systemd is not this host's init",
 		"!            daemon.json: logs: none, devopsy's",

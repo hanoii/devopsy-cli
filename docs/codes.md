@@ -22,8 +22,8 @@ devopsy: | report W0001 to the server's admin
 | W0006 | Kexec HandOver keeps memory as CMA, which only movable pages may use | Put `kho=off` on the kernel's command line and reboot; `devopsy --server-setup-howto kexec-handover` prints the steps. |
 | W0007 | the snapshot root is on the release root's filesystem | Mount the volume meant for snapshots on the snapshot root, which `--server-info` names. |
 | W0008 | the server lacks a tool devopsy uses | Install it with the system's packages; `--server-info` names it, with the topic whose steps install it. |
-| W0009 | this login is not the server's deploy user | Run the command again as the deploy user the error names, which it offers addressed so (for example `devopsy @devopsy@<server>: --upgrade`); `devopsy --server-setup-howto deploy-user` prints the steps to make another user the deploy user. |
-| W0010 | the server's record of its deploy user cannot be read | As root, put the deploy user's name in `/etc/devopsy/deploy-user`, alone on its line, the file root's with mode 644, from root's shell (`devopsy @<server>: --shell-host --root`). |
+| W0009 | this login is not the server's deploy user | Run the command again as the deploy user the error names; the error offers it with that address (for example `devopsy @devopsy@<server>: --upgrade`); `devopsy --server-setup-howto deploy-user` prints the steps to make another user the deploy user. |
+| W0010 | the server's record of its deploy user cannot be read | Open root's shell (`devopsy @<server>: --shell-host --root`) and write the deploy user's name in `/etc/devopsy/deploy-user`, on a line by itself (owner root, mode 644). |
 
 ## W0001
 
@@ -61,10 +61,11 @@ mount gone (a boot where it failed) or without the two options.
 ## W0009
 
 `--server-setup` records the user it runs as in `/etc/devopsy/deploy-user`,
-root's, and every session's devopsy then refuses any other login, but root
-and project users, before it changes or reads anything, `--shell-host`
-included (`--shell-host --root` and `--match-server-version` aside). The reader is anyone else in the `docker`
-group, often the admin logged in under their own account by default. Two
+a file root owns, and from then on devopsy refuses any login other than
+that user, root or a project user, before it reads or changes anything,
+`--shell-host` included (`--shell-host --root` and
+`--match-server-version` aside). Whoever sees it is another member of the
+`docker` group, often an admin logged in under their own account. Two
 such users would each have a release root, uid claims and a setup of their
 own on one Docker, sharing its compose names: a release of one target from
 the second would take over the first one's containers and volumes. A server

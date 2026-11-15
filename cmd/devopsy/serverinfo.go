@@ -263,7 +263,7 @@ func projectUsersSetup(kind func(string, ...string) report.Remedy, ref string, t
 		cmd = "devopsy @" + ref + " --project-users setup"
 	}
 	return []report.Remedy{offer(kind, "set the server up for project users:", cmd, "run --project-users setup for this server, as its deploy user"),
-		byHandHint(topic)}
+		byHandHint("set it up", topic)}
 }
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
@@ -2150,21 +2150,21 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 	if i := slices.IndexFunc(f.Files, func(x setup.FileFact) bool { return x.Item == setup.ItemDeployUser }); i >= 0 {
 		x := f.Files[i]
 		// The login named where the read knew it.
-		here, who := "", "it"
+		here, record := "", report.Hint("to record the deploy user, run --server-setup as that user")
 		if x.User != "" {
-			here, who = ", "+x.User+" here", x.User
+			here = " (" + x.User + " here)"
+			record = report.Hint("to record " + x.User + " as the deploy user, run --server-setup as " + x.User)
+			if len(fix.Cmds) > 0 {
+				record = report.Hint(record.Text+":", fix.Cmds...)
+			}
 		}
 		switch {
 		case x.Missing && f.Record != "":
 			f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
-			record := report.Hint("record " + who + " with --server-setup, as the deploy user")
-			if len(fix.Cmds) > 0 {
-				record = report.Hint("to record "+who+":", fix.Cmds...)
-			}
-			line(remote.StatusInfo, "no deploy user recorded yet ("+setup.DeployUserFile+"): until one is, any user in the docker group passes for it, and the next --server-setup records the login it runs as"+here, record)
+			line(remote.StatusInfo, "no deploy user recorded yet ("+setup.DeployUserFile+"), so any user in the docker group can act as one; the next --server-setup records the login it runs as"+here, record)
 		case x.Missing:
 			f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
-			line(remote.StatusInfo, "no deploy user recorded yet: the first --server-setup records the login it runs as"+here+", and refuses every other login after")
+			line(remote.StatusInfo, "no deploy user recorded yet: the first --server-setup records the login it runs as"+here+", and from then on refuses every other login")
 		case x.InSync && x.User != "":
 			line(remote.StatusInfo, "deploy user "+x.User+" ("+setup.DeployUserFile+")")
 		}

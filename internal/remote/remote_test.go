@@ -1748,7 +1748,7 @@ exit 0
 	}
 
 	// a's next release prunes a's first: b's bookmark holds X.
-	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "kept the images of 1 that other releases use too: registry/app:abc, mariadb:11") {
+	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "kept registry/app:abc, mariadb:11: other releases use them too") {
 		t.Errorf("pruning a release whose images others hold says nothing:\n%s", out)
 	}
 	if exists("app/a/prod/releases/1") || fakeImage(root, "registry/app:devopsy-app-a-prod-1") != "" {
@@ -1779,7 +1779,7 @@ exit 0
 	if exists("app/b/prod/releases/1") || exists("app/b/prod/releases/2") {
 		t.Errorf("b's releases 1 and 2 not pruned:\n%s", out)
 	}
-	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc, which nothing but 1 used") {
+	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc: only 1 used them") {
 		t.Errorf("registry/app:abc stays with no release holding it:\n%s", out)
 	}
 	if fakeImage(root, "mariadb:11") != "Y" || fakeImage(root, "registry/app:def") != "Y" {

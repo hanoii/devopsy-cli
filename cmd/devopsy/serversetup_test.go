@@ -284,7 +284,7 @@ func TestServerSetupPlanRefusesWhereRootCannotRead(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(ops, 0o755) })
 	out, code := s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@admin@one:", "--server-setup", "--yes")
-	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: what ops keep cannot be read as "+me+", nor as root (") ||
+	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: devopsy cannot tell whether ops is already this server's deploy user: its home cannot be read as "+me+", nor as root (") ||
 		strings.Contains(out, "would record") || fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) {
 		t.Errorf("a home unread, the util image not built (%d):\n%s", code, out)
 	}

@@ -1477,7 +1477,11 @@ func fixWords(r setup.Refusal) []report.Remedy {
 		rs = append(rs, report.Fix(r.Or, cmds...))
 	}
 	if r.Howto != "" {
-		rs = append(rs, stepsHint("or do it by hand", r.Howto))
+		by := "do it"
+		if r.Howto == howto.DeployUser {
+			by = "change the deploy user"
+		}
+		rs = append(rs, byHandHint(by, r.Howto))
 	}
 	return rs
 }

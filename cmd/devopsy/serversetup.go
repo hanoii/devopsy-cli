@@ -324,9 +324,9 @@ func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 func fileWords(x setup.FileFact) string {
 	switch {
 	case x.Item == setup.ItemDeployUser && x.Missing:
-		return "would record " + x.User + " as this server's deploy user (" + x.Path + "), refusing every other login after"
+		return "would record " + x.User + " as this server's deploy user (" + x.Path + "): from then on any other login is refused, except root and project users"
 	case x.Item == setup.ItemDeployUser:
-		return x.Path + " differs from what devopsy writes, naming " + x.User
+		return x.Path + " names " + x.User + ", but not in the form devopsy writes"
 	case x.Missing:
 		return x.Path + " does not exist yet"
 	}

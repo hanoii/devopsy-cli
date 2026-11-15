@@ -70,7 +70,8 @@ func TestCheckDeployUser(t *testing.T) {
 		f.Details[0] != "logged in as admin, but this server's deploy user is deploy ("+setup.DeployUserFile+")" {
 		t.Fatalf("another user: %#v", err)
 	}
-	if len(f.Remedies) != 2 || f.Remedies[0].Text != "run it as deploy:" || len(f.Remedies[0].Cmds) != 1 || f.Remedies[0].Cmds[0] != "devopsy @deploy@vm1:5369: --upgrade" || !f.Remedies[1].Hint {
+	if len(f.Remedies) != 2 || f.Remedies[0].Text != "run it as deploy:" || len(f.Remedies[0].Cmds) != 1 || f.Remedies[0].Cmds[0] != "devopsy @deploy@vm1:5369: --upgrade" || !f.Remedies[1].Hint ||
+		f.Remedies[1].Text != "to make admin the deploy user instead, follow the steps this prints:" {
 		t.Errorf("another user's remedies: %#v", f.Remedies)
 	}
 	// A command whose address names no server: the deploy user's address, for example.
@@ -85,8 +86,8 @@ func TestCheckDeployUser(t *testing.T) {
 	}
 	// A record that names no one: W0010, with why and the fix as root.
 	err = checkDeployUser(recordAt(t, "\n# none\n"), me, no, remote.Session{})
-	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || f.Details[0] != setup.DeployUserFile+" should hold the deploy user's name alone on a line, and it holds none" ||
-		len(f.Remedies) != 1 || !strings.Contains(f.Remedies[0].Text, "as root") {
+	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || f.Details[0] != setup.DeployUserFile+" holds none; it should hold only the deploy user's name, on one line" ||
+		len(f.Remedies) != 1 || !strings.HasPrefix(f.Remedies[0].Text, "open root's shell") {
 		t.Errorf("a record naming no one: %#v", err)
 	}
 }
@@ -182,8 +183,8 @@ func TestDeployUserFactSeesAnotherDeployUser(t *testing.T) {
 	mine := t.TempDir()
 	write(t, filepath.Join(mine, "blog", "prod", "releases", "1", "x"), "x\n", 0o644)
 	write(t, filepath.Join(mine, "blog", "prod", ".lock"), "", 0o644)
-	if _, r := deployUserFact(h, me, mine, remote.Session{Host: "admin@vm1"}); r == nil || !strings.HasPrefix(r.Message, "both admin and ops hold environments on this server (its uid claims /home/ops/.devopsy-uids)") ||
-		r.Command != "" || r.Or != "" || r.Howto == "" {
+	if _, r := deployUserFact(h, me, mine, remote.Session{Host: "admin@vm1"}); r == nil || r.Message != "admin and ops both have environments on this server (ops has uid claims in /home/ops/.devopsy-uids): one of them has to take over the other's before either can be recorded as the deploy user" ||
+		r.Command != howto.Command(howto.DeployUser) || r.Or != "" || r.Howto != "" {
 		t.Errorf("both holding environments: %+v", r)
 	}
 	if ws := fixWords(*deployUserFactRefusal(t, h, me, mine)); len(ws) != 1 || ws[0].Hint || len(ws[0].Cmds) != 1 || ws[0].Cmds[0] != howto.Command(howto.DeployUser) {
@@ -191,7 +192,7 @@ func TestDeployUserFactSeesAnotherDeployUser(t *testing.T) {
 	}
 	// A release root another user owns: its owner, by the passwd file.
 	root := t.TempDir()
-	if _, r := deployUserFact(server(t), login{uid: os.Getuid() + 1, name: "admin"}, root, remote.Session{}); r == nil || !strings.Contains(r.Message, "the release root "+root+" is its") || r.Command != "" {
+	if _, r := deployUserFact(server(t), login{uid: os.Getuid() + 1, name: "admin"}, root, remote.Session{}); r == nil || !strings.Contains(r.Message, "it owns the release root "+root) || r.Command != "" {
 		t.Errorf("a release root of another's: %+v", r)
 	}
 	if x, r := deployUserFact(server(t), me, root, remote.Session{}); r != nil || x == nil {
@@ -417,7 +418,7 @@ func TestDeployUserOtherIsOneJudgment(t *testing.T) {
 	}
 	h := server(t)
 	write(t, h.path(setup.DeployUserFile), "one\ntwo\n", 0o644)
-	if got := other(t, h, me, ""); !strings.HasPrefix(got, remote.SetupUnread+"\t"+setup.DeployUserFile+" should hold") {
+	if got := other(t, h, me, ""); !strings.HasPrefix(got, remote.SetupUnread+"\t"+setup.DeployUserFile+" holds several") {
 		t.Errorf("a record that cannot be read: %q", got)
 	}
 	// The root, this test user's, read as another's by the uid given: no name in this passwd.
@@ -425,7 +426,7 @@ func TestDeployUserOtherIsOneJudgment(t *testing.T) {
 	got := other(t, server(t), me+1, root)
 	o, ok := otherLine(got)
 	r := otherDeployRefusal(o, login{uid: me + 1, name: "admin"}, remote.Session{Host: "admin@vm1"})
-	if !ok || o.name != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "uid "+strconv.Itoa(me)+" is set up as this server's deploy user already (the release root "+root+" is its)") {
+	if !ok || o.name != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "uid "+strconv.Itoa(me)+" is set up as this server's deploy user already (it owns the release root "+root+")") {
 		t.Errorf("an owner with no name: %q, %+v", got, r)
 	}
 }
@@ -626,7 +627,7 @@ func TestCheckDeployUserOfNoLogin(t *testing.T) {
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\n", 0o644)
 	err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{})
 	var f *report.Failure
-	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "it names ghost, and this server has no such user") {
+	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "names ghost, but this server has no such user; it should hold only the deploy user's name, on one line") {
 		t.Errorf("a record naming no login: %#v", err)
 	}
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\nghost:x:1001:1001::/home/ghost:/bin/sh\n", 0o644)
@@ -711,16 +712,27 @@ func TestDeployUserFactAsksRootWhatItCannotRead(t *testing.T) {
 	}
 	h.rootRead = func(login, string) (string, error) { return "", errors.New("its run as root: exit status 125") }
 	if x, r := deployUserFact(h, me, "", s); x != nil || r == nil || r.Item != setup.RefusalDeployUser ||
-		r.Message != "what ops keep cannot be read as admin, nor as root (its run as root: exit status 125): devopsy cannot tell whether one of them is this server's deploy user already" {
+		r.Message != "devopsy cannot tell whether ops is already this server's deploy user: its home cannot be read as admin, nor as root (its run as root: exit status 125)" ||
+		r.Fix != "run --server-setup again once root can read it, or run it as the user who should be the deploy user" {
 		t.Errorf("the root read failed: %+v, %+v", x, r)
 	}
 	h.rootRead = func(login, string) (string, error) { return "", errNoUtilImage }
-	if _, r := deployUserFact(h, me, "", s); r == nil || r.Fix != "run --server-setup, which builds devopsy's util image and reads them as root" {
+	if _, r := deployUserFact(h, me, "", s); r == nil || r.Fix != "run --server-setup, which builds devopsy's util image and reads those homes as root" {
 		t.Errorf("no util image: %+v", r)
 	}
 	h.rootRead = nil
 	if x, r := deployUserFact(h, me, "", s); r != nil || x == nil || !x.Missing {
 		t.Errorf("no root read: %+v, %+v", x, r)
+	}
+	// Several unseen, named as a choice.
+	if r := unseenRefusal([]string{"ops", "kim"}, me, errors.New("x")); r.Message != "devopsy cannot tell whether ops or kim is already this server's deploy user: their homes cannot be read as admin, nor as root (x)" ||
+		r.Fix != "run --server-setup again once root can read them, or run it as the user who should be the deploy user" {
+		t.Errorf("several unseen: %+v", r)
+	}
+	// The setup's by-hand way of the deploy user's refusals.
+	if ws := fixWords(setup.Refusal{Item: setup.RefusalDeployUser, Fix: "run it as ops:", Command: "devopsy @ops@vm1: --server-setup", Howto: howto.DeployUser, HowtoAside: true}); len(ws) != 2 ||
+		ws[1].Text != "or change the deploy user by hand, with the steps this prints:" {
+		t.Errorf("the by-hand hint: %+v", ws)
 	}
 }
 

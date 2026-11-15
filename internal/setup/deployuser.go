@@ -21,7 +21,7 @@ func DeployUserText(user string) string { return Header + "\n" + user + "\n" }
 // ParseDeployUser is the user a record's text names: its one line that is neither blank nor a
 // comment, trimmed, and valid when valid takes it (a login an address takes, remote.LoginName). A
 // file with none, several, or a name valid refuses is an error saying what it holds instead,
-// after the words of what it should hold: only root writes it, so it is never guessed at.
+// after the record's path: only root writes it, so it is never guessed at.
 func ParseDeployUser(text string, valid func(string) bool) (string, error) {
 	var names []string
 	for line := range strings.SplitSeq(text, "\n") {
@@ -32,11 +32,11 @@ func ParseDeployUser(text string, valid func(string) bool) (string, error) {
 	}
 	switch {
 	case len(names) == 0:
-		return "", errors.New("it holds none")
+		return "", errors.New("holds none")
 	case len(names) > 1:
-		return "", errors.New("it holds several: " + strings.Join(names, ", "))
+		return "", errors.New("holds several: " + strings.Join(names, ", "))
 	case !valid(names[0]):
-		return "", errors.New("it holds " + strconv.Quote(names[0]))
+		return "", errors.New("holds " + strconv.Quote(names[0]))
 	}
 	return names[0], nil
 }
