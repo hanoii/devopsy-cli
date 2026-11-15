@@ -110,6 +110,13 @@ what they reach directly.
   (`curl --noproxy '*'`), and busybox's `wget` ignores `no_proxy`
   altogether (`wget -Y off`).
 
+The server's own list still names loopback (`localhost,127.0.0.1,::1`):
+an app's request to itself through curl or libcurl (PHP's, for one) goes
+to the proxy otherwise, and no project can change that for its app's
+code. `--server-info` shows the proxy containers get under `docker`, and
+a note with the line to add when its `noProxy` leaves any of them out.
+Containers created after a change get it.
+
 ## `--server-setup`
 
 `devopsy @devopsy@vm1: --server-setup` sets up what devopsy needs of a

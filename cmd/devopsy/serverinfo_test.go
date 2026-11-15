@@ -126,6 +126,54 @@ func TestHostContainers(t *testing.T) {
 
 // What --server-info prints of the facts, and what it warns about: a
 // healthy server says nothing; each problem is one warning with its fix.
+// clientProxies reads the proxies config.json gives containers, those naming one, by the
+// daemon they are for, and none from a file that is missing or not JSON.
+func TestClientProxies(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if ps := clientProxies(dir); ps != nil {
+		t.Errorf("no config.json: %+v", ps)
+	}
+	file := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(file, []byte(`{"auths":{"registry.example.com":{"auth":"eA=="}},"proxies":{
+		"tcp://docker.example.com:2376":{"httpProxy":"http://other.example.com:8080"},
+		"default":{"httpProxy":"http://proxy.example.com:8080","httpsProxy":"http://proxy.example.com:3128","noProxy":"localhost"},
+		"tcp://none.example.com:2376":{"noProxy":"localhost"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := []remote.ClientProxy{
+		{For: "default", File: file, Proxy: "http://proxy.example.com:3128", NoProxy: "localhost"},
+		{For: "tcp://docker.example.com:2376", File: file, Proxy: "http://other.example.com:8080"},
+	}
+	if ps := clientProxies(dir); !slices.Equal(ps, want) {
+		t.Errorf("proxies: %+v, want %+v", ps, want)
+	}
+	if err := os.WriteFile(file, []byte(`not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ps := clientProxies(dir); ps != nil {
+		t.Errorf("not JSON: %+v", ps)
+	}
+}
+
+// loopbackProxied matches a noProxy list as curl does: trimmed, any case, a leading dot, *,
+// a range, IPv6 in brackets.
+func TestLoopbackProxied(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ list, want string }{
+		{"", "localhost 127.0.0.1 ::1"},
+		{"localhost", "127.0.0.1 ::1"},
+		{" Localhost , 127.0.0.1,::1", ""},
+		{".localhost,127.0.0.0/8,[::1]", ""},
+		{"*", ""},
+		{"10.0.0.0/8,example.com,::1/128", "localhost 127.0.0.1"},
+	} {
+		if got := strings.Join(loopbackProxied(c.list), " "); got != c.want {
+			t.Errorf("%q: %q, want %q", c.list, got, c.want)
+		}
+	}
+}
+
 func TestServerInfoReport(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
@@ -191,6 +239,25 @@ func TestServerInfoReport(t *testing.T) {
 	one.Door = &remote.DoorFacts{Space: "/space", Users: 1}
 	if out, _ := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "  door       /space, 1 project user\n") {
 		t.Errorf("one project user:\n%s", out)
+	}
+	// The proxy the deploy user's client gives containers is said under docker, and the
+	// loopback its noProxy leaves to it is a note with its hint, never a warning: an app's
+	// request to itself goes there through curl, and nothing devopsy runs needs it.
+	proxied := healthy()
+	proxied.Docker.ClientProxies = []remote.ClientProxy{{For: "default", File: "/home/devopsy/.docker/config.json",
+		Proxy: "http://proxy.example.com:3128", NoProxy: "localhost,10.0.0.0/8"}}
+	out, ws := serverInfoSays(proxied, "vm1", "vm1:", "0.53.0", now)
+	if !strings.Contains(out, "             containers' proxy http://proxy.example.com:3128\n") ||
+		!strings.Contains(out, "its noProxy leaves 127.0.0.1, ::1 to the proxy") {
+		t.Errorf("a proxy leaving loopback to it:\n%s", out)
+	}
+	if len(ws) != 1 || !ws[0].note || len(ws[0].fixes) != 1 || !ws[0].fixes[0].Hint ||
+		ws[0].fixes[0].Text != "add 127.0.0.1,::1 to noProxy in /home/devopsy/.docker/config.json, as the deploy user: containers created after it get it" {
+		t.Errorf("a proxy leaving loopback to it: said %+v", ws)
+	}
+	proxied.Docker.ClientProxies[0].NoProxy = "LOCALHOST, 127.0.0.0/8,[::1]"
+	if out, ws := serverInfoSays(proxied, "vm1", "vm1:", "0.53.0", now); strings.Contains(out, "its noProxy") || len(ws) != 0 {
+		t.Errorf("a proxy leaving no loopback to it: said %+v in:\n%s", ws, out)
 	}
 
 	for _, c := range []struct {
