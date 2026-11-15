@@ -125,6 +125,28 @@ func TestSessionExportsTheServer(t *testing.T) {
 
 // AsUser names the server at a destination logged in as another user, its login replaced, its
 // port kept, an IPv6 address without one bracketed for the colon after it.
+// CommandAs is the session's command as typed, its address logged in as another user on the
+// session's host: what W0009 offers to run again as the deploy user. A command whose address
+// names no server (an alias, a server from variables), or a session without its command or its
+// host, has none, and the hint says it in words.
+func TestCommandAs(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ command, host, want string }{
+		{"devopsy @admin@vm1: --upgrade", "admin@vm1", "devopsy @deploy@vm1: --upgrade"},
+		{"devopsy @admin@vm1:2222:prod --release", "admin@vm1:2222", "devopsy @deploy@vm1:2222:prod --release"},
+		{"devopsy @vm1:eu/prod --vars set 'A=b c'", "vm1", "devopsy @deploy@vm1:eu/prod --vars set 'A=b c'"},
+		{"devopsy '@admin@[2001:db8::1]:22:' --server-info", "admin@[2001:db8::1]:22", "devopsy '@deploy@[2001:db8::1]:22:' --server-info"},
+		{"devopsy -v @admin@vm1: --gc", "admin@vm1", "devopsy -v @deploy@vm1: --gc"},
+		{"devopsy @prod --release", "vm1", ""},
+		{"devopsy @admin@vm1: --upgrade", "", ""},
+		{"", "vm1", ""},
+	} {
+		if got := (Session{Command: c.command, Host: c.host}).CommandAs("deploy"); got != c.want {
+			t.Errorf("CommandAs of %q on %q = %q, want %q", c.command, c.host, got, c.want)
+		}
+	}
+}
+
 func TestAsUser(t *testing.T) {
 	t.Parallel()
 	for host, want := range map[string]string{

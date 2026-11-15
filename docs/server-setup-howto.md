@@ -406,16 +406,16 @@ rm -f "$home/.reflink-a" "$home/.reflink-b"
 
 The server's deploy user, and changing it
 
-devopsy runs every release, uid claim and setup of a server as one deploy
-user, which --server-setup records in /etc/devopsy/deploy-user, root's, with
-the user it runs as. Every session's devopsy refuses any other login but
-root and the project users, and --server-setup refuses to run as another
-user, or to record one where the server shows another set up: two users in
-the docker group would share one Docker's compose names and uids, each with
-releases, claims and a setup of its own. devopsy never changes the record.
-These steps hand what devopsy made for the old deploy user to the new one by
-hand, then rewrite it, with no release running; the old user's own files,
-its ~/.ssh and dotfiles, stay its own.
+devopsy works on a server as one Unix user, its deploy user: every release,
+uid claim and setup there belongs to that user. --server-setup records it in
+/etc/devopsy/deploy-user, a file of root's, and from then on devopsy refuses
+any other login, except root and the project users. Without that, two users
+in the docker group would share one Docker, and a release from one could
+take over the other's containers, volumes and uids. devopsy never changes
+the record itself. When the wrong user was recorded, or the deploy user has
+to change, these steps hand everything devopsy made for the old user to the
+new one, then rewrite the record. Run them while no release is in progress.
+The old user's own files, its ~/.ssh and dotfiles, stay its own.
 
 Run each step as root on the server, Debian or Ubuntu with systemd. A step
 that starts "From the operator's machine" runs there, where devopsy
@@ -423,88 +423,114 @@ addresses the server by its deploy user, not on the server. The deploy user
 is the Unix user devopsy logs in as, which must exist. A step's first line
 sets the values to change, if it has any (for example user=devopsy).
 
-1. Name the two users, and put the new one in the docker group, which
-   applies from its next login.
+1. Name the old and the new user, and add the new one to the docker group.
+   The group applies from its next login.
 
    ```sh
    old=devopsy new=deploy
    usermod -aG docker "$new"
    ```
 
-2. Authorize for the new user the keys that log in as the old one, the
-   operator's, CI's and every sync's: the steps after it log in as the new
-   user.
+2. Let the keys that log in as the old user log in as the new one too: the
+   operator's, CI's and every sync's. The steps after this one log in as the
+   new user.
 
    ```sh
    old=devopsy new=deploy
-   from=$(getent passwd "$old" | cut -d: -f6) to=$(getent passwd "$new" | cut -d: -f6) group=$(id -gn "$new")
+   from=$(getent passwd "$old" | cut -d: -f6)
+   to=$(getent passwd "$new" | cut -d: -f6)
+   group=$(id -gn "$new")
    install -d -m 700 -o "$new" -g "$group" "$to/.ssh"
    cat "$from/.ssh/authorized_keys" >> "$to/.ssh/authorized_keys"
-   chown "$new:$group" "$to/.ssh/authorized_keys" && chmod 600 "$to/.ssh/authorized_keys"
+   chown "$new:$group" "$to/.ssh/authorized_keys"
+   chmod 600 "$to/.ssh/authorized_keys"
    ```
 
-3. Move the old user's devopsy config to the new user's: its config.yaml,
-   the setup's record server.yaml, and the project users' entries under
-   door/. Where the new user has a devopsy config of its own already, with
-   files in it, rmdir refuses it and nothing moves: merge the two by hand,
-   keeping one server.yaml.
+3. Move the old user's devopsy config to the new user: config.yaml, the
+   setup's record server.yaml, and the project users' entries under door/.
+   If the new user already has a devopsy config with files in it, nothing
+   moves: merge the two by hand, keeping one server.yaml.
 
    ```sh
    old=devopsy new=deploy
-   from=$(getent passwd "$old" | cut -d: -f6)/.config/devopsy to=$(getent passwd "$new" | cut -d: -f6)/.config/devopsy group=$(id -gn "$new")
+   from=$(getent passwd "$old" | cut -d: -f6)/.config/devopsy
+   to=$(getent passwd "$new" | cut -d: -f6)/.config/devopsy
+   group=$(id -gn "$new")
    install -d -o "$new" -g "$group" "${to%/*}"
-   { [ ! -e "$to" ] || rmdir "$to"; } && mv "$from" "$to" && chown -R -h "$new:$group" "$to"
+   if [ -e "$to" ] && ! rmdir "$to" 2>/dev/null; then
+     echo "$to holds files already: merge the two configs by hand"
+   else
+     mv "$from" "$to" && chown -R -h "$new:$group" "$to"
+   fi
    ```
 
-4. Where the release root is the old user's home (the config names no
-   releases: root), stop every environment first, the project users' too,
-   with devopsy down in its current, then move what devopsy made there into
-   the new user's home, the new release root: each project's directory (one
-   holding an environment's releases/ beside its release lock, .lock, or a
-   release holding its devopsy-target.env, what only devopsy makes; another
-   tool's releases/ beside current and shared/ is none), the uid claims in
-   .devopsy-uids and the image lock. What the new home holds of the same
-   name already stays, said and not moved: merge the two by hand. Containers
-   keep the paths their bind mounts had, so each environment is started
-   again at the end; snapshots in an environment's directory move with it,
-   and a snapshots: root elsewhere stays where it is. Where the config names
-   a releases: root, nothing moves: skip this step.
+4. Skip this step if the config names a releases: root. Otherwise the
+   release root is the old user's home, and what devopsy made there moves to
+   the new user's home. First stop every environment, the project users'
+   too, with devopsy down in each one's current. Then move each project's
+   directory, the uid claims (.devopsy-uids) and the image lock. A project
+   is told by what only devopsy makes: an environment's releases/ beside its
+   .lock, or a release holding a devopsy-target.env. Another tool's
+   releases/, current and shared/ stay where they are. Anything the new home
+   already holds under the same name is not moved: the step says so, and the
+   two are merged by hand. Snapshots inside an environment move with it, and
+   a snapshots: root elsewhere stays. Containers keep the paths their bind
+   mounts had, so each environment is started again at the end.
 
    ```sh
    old=devopsy new=deploy
-   from=$(getent passwd "$old" | cut -d: -f6) to=$(getent passwd "$new" | cut -d: -f6)
-   projects=$(cd "$from" && for r in */*/releases */*/*/releases; do [ -d "$r" ] && { [ -e "${r%/releases}/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; } && echo "${r%%/*}"; done | sort -u)
-   for p in $projects .devopsy-uids .devopsy-images.lock; do if [ -e "$to/$p" ]; then echo "$to/$p is there already: merge it by hand"; elif [ -e "$from/$p" ]; then mv "$from/$p" "$to/$p"; fi; done
+   from=$(getent passwd "$old" | cut -d: -f6)
+   to=$(getent passwd "$new" | cut -d: -f6)
+   projects=$(cd "$from" && for r in */*/releases */*/*/releases; do
+     d=${r%/releases}
+     if [ -d "$r" ] && { [ -e "$d/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; }; then echo "${r%%/*}"; fi
+   done | sort -u)
+   for p in $projects .devopsy-uids .devopsy-images.lock; do
+     if [ -e "$to/$p" ]; then echo "$to/$p is there already: merge it by hand"
+     elif [ -e "$from/$p" ]; then mv "$from/$p" "$to/$p"
+     fi
+   done
    ```
 
-5. Give the new user what devopsy made under the release root, by owner
-   alone: the projects' directories, the uid claims and the image lock, the
-   containers' files keeping their own owners. The root is the new user's
-   home after the step before, else the releases: root the config names: set
-   root to it. Do the same under snapshots: root where the config names one.
+5. Hand the new user what devopsy made under the release root, changing
+   owners only: the projects, the uid claims and the image lock. Files a
+   container owns keep their owner. Set root to the release root: the new
+   user's home after the step before, or the releases: root the config
+   names. Do the same under a snapshots: root, if the config names one.
 
    ```sh
    old=devopsy new=deploy
-   root=$(getent passwd "$new" | cut -d: -f6) og=$(id -gn "$old") ng=$(id -gn "$new")
+   root=$(getent passwd "$new" | cut -d: -f6)
+   og=$(id -gn "$old") ng=$(id -gn "$new")
    [ -z "$(find "$root" -maxdepth 0 -user "$old")" ] || chown "$new:$ng" "$root"
-   projects=$(cd "$root" && for r in */*/releases */*/*/releases; do [ -d "$r" ] && { [ -e "${r%/releases}/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; } && echo "${r%%/*}"; done | sort -u)
-   for p in $projects .devopsy-uids .devopsy-images.lock; do [ ! -e "$root/$p" ] || find "$root/$p" -xdev -user "$old" -exec chown -h "$new" {} +; done
-   for p in $projects .devopsy-uids .devopsy-images.lock; do [ ! -e "$root/$p" ] || find "$root/$p" -xdev -group "$og" -exec chgrp -h "$ng" {} +; done
+   projects=$(cd "$root" && for r in */*/releases */*/*/releases; do
+     d=${r%/releases}
+     if [ -d "$r" ] && { [ -e "$d/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; }; then echo "${r%%/*}"; fi
+   done | sort -u)
+   for p in $projects .devopsy-uids .devopsy-images.lock; do
+     [ -e "$root/$p" ] || continue
+     find "$root/$p" -xdev -user "$old" -exec chown -h "$new" {} +
+     find "$root/$p" -xdev -group "$og" -exec chgrp -h "$ng" {} +
+   done
    ```
 
-6. Give the new user the devopsy binary and its directory where the old one
-   owns them, as devopsy-server installs it, so that --upgrade replaces it.
+6. If the old user owns the devopsy binary or its directory, as
+   devopsy-server installs it, give them to the new user, so that --upgrade
+   can replace it.
 
    ```sh
    old=devopsy new=deploy
-   bin=$(readlink -f "$(command -v devopsy)"); for p in "$bin" "${bin%/*}"; do [ -z "$(find "$p" -maxdepth 0 -user "$old")" ] || chown "$new" "$p"; done
+   bin=$(readlink -f "$(command -v devopsy)")
+   for p in "$bin" "${bin%/*}"; do
+     [ -z "$(find "$p" -maxdepth 0 -user "$old")" ] || chown "$new" "$p"
+   done
    ```
 
-7. Where the server has project users, give the new user the project users'
-   directory (door: space: in the config, else /var/lib/devopsy-door) by
-   owner alone, put it in the group that sees every process once /proc hides
-   them, from its next login, and name it in the door's sudo rules and
-   sshd's drop-in, both checked before sshd reads them again.
+7. If the server has project users, give the new user their directory (door:
+   space: in the config, else /var/lib/devopsy-door), add it to the group
+   that sees every process once /proc hides them, and name it in the door's
+   sudo rules and in sshd's drop-in. Both files are checked before sshd
+   reads them again.
 
    ```sh
    old=devopsy new=deploy space=/var/lib/devopsy-door
@@ -516,23 +542,25 @@ sets the values to change, if it has any (for example user=devopsy).
    sshd -t && systemctl reload ssh
    ```
 
-8. Rewrite the record with the new user, readable by every user, as each
-   session reads it; the next step's --server-setup writes it as devopsy
-   does.
+8. Write the new user into the record, readable by everyone, since every
+   session reads it. The next step's --server-setup rewrites it in devopsy's
+   own form.
 
    ```sh
    new=deploy
    install -d -m 755 "$(dirname /etc/devopsy/deploy-user)"
-   printf '%s\n' "$new" > /etc/devopsy/deploy-user.new && chmod 644 /etc/devopsy/deploy-user.new && mv /etc/devopsy/deploy-user.new /etc/devopsy/deploy-user
+   printf '%s\n' "$new" > /etc/devopsy/deploy-user.new
+   chmod 644 /etc/devopsy/deploy-user.new
+   mv /etc/devopsy/deploy-user.new /etc/devopsy/deploy-user
    ```
 
 9. From the operator's machine, run --server-setup for this server as the
-   new user, which finds the record its own and sets up the rest for it,
-   then start each environment stopped before (its deploy, or a release).
+   new user. It finds the record naming it, and sets up the rest. Then start
+   each environment stopped before (its deploy, or a release).
 
 To check it: the record names the new user, nothing devopsy made under the
-release root is the old user's any more, and --server-info as the new user
-shows the server's environments, with no refusal of the login.
+release root still belongs to the old user, and --server-info as the new
+user lists the server's environments, with no refusal of the login.
 
 ```sh
 old=devopsy new=deploy

@@ -161,7 +161,7 @@ func TestProjectUsersSetupRefusesWithoutWhatAddNeeds(t *testing.T) {
 	}
 	out, code := s.run([]string{"PATH=" + pathWithout(t, bin, "sudo")}, "@devopsy@one:", "--project-users", "setup", space, "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy: error: tools: no sudo in PATH, which project users need\ndevopsy: | to fix it:\ndevopsy: | install sudo and acl with the system's packages; this prints the steps:\ndevopsy: | $ "+howto.Command(howto.ProjectUsers)+"\n") ||
-		!strings.Contains(out, "devopsy: error: devopsy left the project users' directory, Docker's wait at boot for that directory, process hiding and door: space: in the config as they are, since what they need is refused above\n") || !unchanged() {
+		!strings.Contains(out, "devopsy: error: devopsy left the project users' directory, Docker's wait at boot for that directory, process hiding and door: space: in the config as they are, until what is refused above is fixed\n") || !unchanged() {
 		t.Errorf("no sudo (%d):\n%s", code, out)
 	}
 	out, code = s.run([]string{"FAKE_BUILDX_VERSION=0.29.1"}, "@devopsy@one:", "--project-users", "setup", space, "--yes")

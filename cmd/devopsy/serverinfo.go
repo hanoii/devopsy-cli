@@ -2140,13 +2140,29 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 	} else {
 		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
 	}
-	// The deploy user not recorded yet is a server set up before the record, which the next
-	// apply writes: said, and no warning, as nothing it refuses differs from before.
-	if i := slices.IndexFunc(f.Files, func(x setup.FileFact) bool { return x.Item == setup.ItemDeployUser && x.Missing }); i >= 0 {
-		who := f.Files[i].User
-		f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
-		if f.Record != "" {
-			line(remote.StatusInfo, "the deploy user is not recorded yet in "+setup.DeployUserFile+": any user in the docker group passes for it, and --server-setup as "+who+" records "+who, report.Hint(fix.Text, fix.Cmds...))
+	// The deploy user, by name once recorded. Not recorded yet, on a server set up before the
+	// record or never set up, the next setup records whoever runs it, which the reader learns
+	// before it does: said, and no warning, as nothing it refuses differs from before.
+	if i := slices.IndexFunc(f.Files, func(x setup.FileFact) bool { return x.Item == setup.ItemDeployUser }); i >= 0 {
+		x := f.Files[i]
+		// The login named where the read knew it.
+		here, who := "", "it"
+		if x.User != "" {
+			here, who = ", "+x.User+" here", x.User
+		}
+		switch {
+		case x.Missing && f.Record != "":
+			f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
+			record := report.Hint("record " + who + " with --server-setup, as the deploy user")
+			if len(fix.Cmds) > 0 {
+				record = report.Hint("to record "+who+":", fix.Cmds...)
+			}
+			line(remote.StatusInfo, "no deploy user recorded yet ("+setup.DeployUserFile+"): until one is, any user in the docker group passes for it, and the next --server-setup records the login it runs as"+here, record)
+		case x.Missing:
+			f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
+			line(remote.StatusInfo, "no deploy user recorded yet: the first --server-setup records the login it runs as"+here+", and refuses every other login after")
+		case x.InSync && x.User != "":
+			line(remote.StatusInfo, "deploy user "+x.User+" ("+setup.DeployUserFile+")")
 		}
 	}
 	var docker []string

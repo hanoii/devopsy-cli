@@ -172,7 +172,7 @@ func TestServerSetupYes(t *testing.T) {
 	s, host := setupServer(t)
 	me := currentLogin().name
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	for _, want := range []string{"release root", "recorded " + me + " as the server's deploy user in " + setup.DeployUserFile, "made the release root " + s.root, "put " + setup.DaemonFile + ": logs, live-restore, default-address-pools",
+	for _, want := range []string{"release root", me + " is now this server's deploy user (" + setup.DeployUserFile + ")", "made the release root " + s.root, "put " + setup.DaemonFile + ": logs, live-restore, default-address-pools",
 		"put " + setup.SysctlFile, "raised net.core.rmem_max to 7500000", "put " + setup.MountsDropIn, "this server is set up by devopsy now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q (%d):\n%s", want, code, out)
@@ -238,7 +238,7 @@ func TestServerSetupApplyUpgradeRefusesWhereAnotherIsSetUp(t *testing.T) {
 	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
-	if code != 0 || !strings.Contains(out, "devopsy: warning: deploy user: ops was set up too on this server") || !strings.Contains(out, "$ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
+	if code != 0 || !strings.Contains(out, "devopsy: warning: deploy user: ops is set up on this server too") || !strings.Contains(out, "$ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
 		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) {
 		t.Errorf("--upgrade where another is set up (%d):\n%s", code, out)
 	}
@@ -256,7 +256,7 @@ func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
 	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
-	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: ops was set up too on this server (its setup record /home/ops/.config/devopsy/server.yaml), and this setup runs as "+me) ||
+	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: ops is set up on this server too (its setup record /home/ops/.config/devopsy/server.yaml): recording "+me+" as the deploy user would lock ops out") ||
 		!strings.Contains(out, "devopsy: | 1. run it as ops:\ndevopsy: |    $ devopsy @ops@one: --server-setup\n") ||
 		!strings.Contains(out, "devopsy: | 2. if ops was set up by mistake and holds no environments, remove its setup record as root:\ndevopsy: |    $ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
 		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
@@ -265,8 +265,8 @@ func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
 }
 
 // A server whose record names another deploy user refuses the setup in its first session's
-// prelude, W0009 with the deploy user's address on the host as typed, before anything: no
-// file put, no release root made, no second session.
+// prelude, W0009 with the command itself to run again as the deploy user on the host as typed,
+// before anything: no file put, no release root made, no second session.
 func TestServerSetupRefusesAnotherDeployUser(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
@@ -276,7 +276,7 @@ func TestServerSetupRefusesAnotherDeployUser(t *testing.T) {
 	write(t, filepath.Join(host, setup.DeployUserFile), setup.DeployUserText("someone-else"), 0o644)
 	s.logs()
 	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
-	if _, sessions := s.logs(); code == 0 || !strings.Contains(out, "devopsy: error: "+report.NotDeployUser.Msg()+"\n") || !strings.Contains(out, "$ devopsy @someone-else@one: --server-info\n") ||
+	if _, sessions := s.logs(); code == 0 || !strings.Contains(out, "devopsy: error: "+report.NotDeployUser.Msg()+"\n") || !strings.Contains(out, "$ devopsy @someone-else@one: --server-setup --yes\n") ||
 		!strings.Contains(out, "$ "+howto.Command(howto.DeployUser)+"\n") || strings.Count(sessions, "\n") != 1 ||
 		fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(s.root) || readString(filepath.Join(host, setup.DeployUserFile)) != setup.DeployUserText("someone-else") {
 		t.Errorf("another deploy user (%d):\n%s\nsessions:\n%s", code, out, sessions)
@@ -544,7 +544,7 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || !strings.Contains(out, "devopsy: warning: Docker: systemd is not this host's init") ||
-		!strings.Contains(out, "devopsy: warning: devopsy left the release root and the metadata firewall as they are, since what they need is refused above\n") || !strings.Contains(out, "run --server-setup for this server") {
+		!strings.Contains(out, "devopsy: warning: nothing changed, until what is refused above is fixed\n") || !strings.Contains(out, "run --server-setup for this server") {
 		t.Errorf("--upgrade on a failure (%d):\n%s", code, out)
 	}
 	if r, _, _ := setup.ReadRecord(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)); r.Version != "" {
@@ -2857,7 +2857,7 @@ func TestServerSetupAppliesBesideARefusedRoot(t *testing.T) {
 	write(t, s.root, "a file\n", 0o644)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, remote.FirewallScript)) ||
-		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "devopsy left the release root and the mounts drop-in as they are, since what they need is refused above\n") {
+		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "devopsy left the release root and the mounts drop-in as they are, until what is refused above is fixed\n") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -3053,7 +3053,7 @@ func TestUpgradeWithEveryStepStoppedRunsNothing(t *testing.T) {
 	write(t, filepath.Join(host, "active-state"), "inactive\n", 0o644)
 	s.logs()
 	out, code := s.run([]string{"FAKE_UTIL_MISSING=1"}, remote.ServerSetupFlag, "apply", "--upgrade")
-	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: devopsy left ") || !strings.Contains(out, "daemon.json's parts and Docker's restart as they are, since what they need is refused above\n") {
+	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: nothing changed, until what is refused above is fixed\n") {
 		t.Fatalf("(%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, remote.UtilImage) {
@@ -3100,7 +3100,7 @@ func TestPlanSetupNamesWhatIsRefused(t *testing.T) {
 	if _, _, err := planSetup(f, false, ask); err != nil || len(ask.asked) != 1 {
 		t.Fatalf("%v, asked %q", err, ask.asked)
 	}
-	if ask.asked[0] != "apply these? | devopsy left daemon.json's parts and Docker's restart as they are, since what they need is refused above" {
+	if ask.asked[0] != "apply these? | devopsy left daemon.json's parts and Docker's restart as they are, until what is refused above is fixed" {
 		t.Errorf("the question: %q", ask.asked[0])
 	}
 	f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalDocker})
@@ -3126,14 +3126,14 @@ func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
 	}{
 		"daemon.json not judged": {func(t *testing.T, s *syncSetup, host string) {
 			write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
-		}, "devopsy leaves the file as it is", "daemon.json's parts and Docker's restart as they are, since what they need"},
+		}, "devopsy leaves the file as it is", "daemon.json's parts and Docker's restart as they are, until what is refused above"},
 		"a root no unit holds": {func(t *testing.T, s *syncSetup, host string) {
 			root := filepath.Join(filepath.Dir(s.root), "re\tleases")
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			write(t, filepath.Join(filepath.Dir(s.root), "home", "config.yaml"), "releases:\n  root: \""+strings.ReplaceAll(root, "\t", `\t`)+"\"\n", 0o644)
-		}, "a unit file cannot hold", "the mounts drop-in as it is, since what it needs"},
+		}, "a unit file cannot hold", "the mounts drop-in as it is, until what is refused above"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -3145,7 +3145,7 @@ func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
 			record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
 			write(t, record, "daemon.json: {}\n", 0o600)
 			out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
-			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: devopsy left "+c.stopped+" is refused above\n") {
+			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: devopsy left "+c.stopped+" is fixed\n") {
 				t.Errorf("(%d):\n%s", code, out)
 			}
 			if r, _, _ := setup.ReadRecord(record); r.Version != "" {
@@ -3266,7 +3266,7 @@ func TestServerSetupRefusedNamesNoRoot(t *testing.T) {
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	before := readString(config)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol)
-	if code == 0 || !strings.Contains(out, "ops was set up too on this server") {
+	if code == 0 || !strings.Contains(out, "ops is set up on this server too") {
 		t.Fatalf("the apply was not refused as another deploy user's (%d):\n%s", code, out)
 	}
 	if got := readString(config); got != before {
@@ -3287,7 +3287,7 @@ func TestUpgradeRefusedAsAnotherDeployUserOffersNoSetup(t *testing.T) {
 	write(t, filepath.Join(host, "home", "ops", ".devopsy-uids", "env:shop:prod"), "x\n", 0o644)
 	write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run([]string{remote.HostEnv + "=admin@one"}, remote.ServerSetupFlag, "apply", "--upgrade")
-	if code != 0 || !strings.Contains(out, "warning: deploy user: devopsy was set up as ops on this server") {
+	if code != 0 || !strings.Contains(out, "warning: deploy user: ops is set up as this server's deploy user already") {
 		t.Fatalf("--upgrade's apply not refused as another deploy user's, as a warning (%d):\n%s", code, out)
 	}
 	for _, said := range []string{"run --server-setup for this server", "--server-setup makes it the deploy user's"} {

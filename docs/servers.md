@@ -335,7 +335,15 @@ with `W0010` until root corrects it, in root's own shell
 (`--shell-host --root`). A server set up before the record
 gets it at its next `--server-setup` or `--upgrade`, and until then
 `--server-info` says it is not recorded yet, naming the user the next
-`--server-setup` would record, and nothing is refused.
+`--server-setup` would record, and nothing is refused. On a server never
+set up, `--server-info` says the same: the first `--server-setup` records
+the login it runs as. Once recorded, `--server-info` names the deploy
+user under `setup`.
+
+A login refused with `W0009` is offered the command it ran, addressed as
+the deploy user (for example `devopsy @devopsy@<server>: --upgrade`),
+where its address names the server; an alias's is offered as
+`--server-info` on the deploy user's address.
 
 ## `--server-setup-howto`
 

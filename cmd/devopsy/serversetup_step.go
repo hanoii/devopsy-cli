@@ -1641,7 +1641,7 @@ func sayRootLines(out string, parts []string, root string) {
 			case rest == setup.DaemonFile && len(parts) > 0:
 				report.Info("put " + rest + ": " + strings.Join(parts, ", "))
 			case rest == setup.DeployUserFile:
-				report.Info("recorded " + who + " as the server's deploy user in " + rest + ": devopsy refuses any other login but root and project users")
+				report.Info(who + " is now this server's deploy user (" + rest + "): any other login is refused, except root and project users")
 			default:
 				report.Info("put " + rest)
 			}

@@ -29,16 +29,21 @@ func deployUserRecord(h setupHost) (name string, text []byte, err error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil, nil
 	}
-	if err == nil {
-		if name, err = setup.ParseDeployUser(string(text), remote.LoginName); err == nil && !loginKnown(h, name) {
-			err = errors.New("it names " + name + ", which is no user of this server's")
-		}
-		if err == nil {
-			return name, text, nil
-		}
+	if err != nil {
+		return "", nil, fmt.Errorf("%s cannot be read: %w", setup.DeployUserFile, err)
 	}
-	return "", nil, fmt.Errorf("%s cannot tell the server's deploy user: %w", setup.DeployUserFile, err)
+	if name, err = setup.ParseDeployUser(string(text), remote.LoginName); err == nil && !loginKnown(h, name) {
+		err = errors.New("it names " + name + ", and this server has no such user")
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("%s should hold the deploy user's name alone on a line, and %w", setup.DeployUserFile, err)
+	}
+	return name, text, nil
 }
+
+// deployRecordFix is the fix of a record that cannot be read, wherever it is said (W0010, the
+// setup's refusal): what root writes in it.
+const deployRecordFix = "as root, put the deploy user's name in it, alone on its line, the file root's with mode 644"
 
 // loginKnown says whether name is a user of h's (lookupLogin), always where h is a host root of
 // the tests' with no passwd file of its own, which knows no user to judge by.
@@ -145,22 +150,26 @@ func checkDeployUser(h setupHost, me login, projectUser func() bool, s remote.Se
 	switch {
 	case err != nil:
 		// Root's own shell is the way in: --shell-host as any other login is checked too.
-		fix := report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644, in root's shell (--shell-host --root on this server)")
+		fix := report.Fix(deployRecordFix + ", from root's shell (--shell-host --root on this server)")
 		if c := s.OnServer("--shell-host --root"); c != "" {
-			fix = report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644, in root's shell:", c)
+			fix = report.Fix(deployRecordFix+", from root's shell:", c)
 		}
 		return &report.Failure{Msg: report.DeployUserUnread.Msg(), Details: []string{err.Error()}, Remedies: []report.Remedy{fix}}
 	case deploy == "" || deploy == me.name:
 		return nil
 	}
-	f := &report.Failure{Msg: report.NotDeployUser.Msg(),
-		Details: []string{"this login is " + me.words() + ", and " + setup.DeployUserFile + " names " + deploy + " the deploy user: devopsy runs every release, uid claim and setup of a server as that one user"}}
-	if s.Host != "" {
+	f := &report.Failure{Msg: report.NotDeployUser.Msg(), Details: []string{
+		"logged in as " + me.words() + ", but this server's deploy user is " + deploy + " (" + setup.DeployUserFile + ")",
+		"devopsy works on a server as one user only, so that every release, uid claim and setup there stays in one place"}}
+	switch c := s.CommandAs(deploy); {
+	case c != "":
+		f.Remedies = append(f.Remedies, report.Fix("run it as "+deploy+":", c))
+	case s.Host != "":
 		f.Remedies = append(f.Remedies, report.Fix("address the server as "+deploy+", for example:", "devopsy @"+remote.AsUser(s.Host, deploy)+" --server-info"))
-	} else {
+	default:
 		f.Remedies = append(f.Remedies, report.Fix("address the server as "+deploy))
 	}
-	f.Remedies = append(f.Remedies, stepsHint("to make "+me.words()+" the deploy user instead, move what is "+deploy+"'s by hand", howto.DeployUser))
+	f.Remedies = append(f.Remedies, stepsHint("to make "+me.words()+" the deploy user instead, by hand", howto.DeployUser))
 	return f
 }
 
@@ -178,7 +187,7 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 		r := deployUnreadRefusal(err.Error())
 		return nil, &r
 	case deploy != "" && deploy != me.name:
-		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: setup.DeployUserFile + " names " + deploy + " the server's deploy user, and this setup runs as " + me.words(),
+		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: "this server's deploy user is " + deploy + " (" + setup.DeployUserFile + "), and this setup runs as " + me.words(),
 			Fix: "run --server-setup as " + deploy + ", or make " + me.words() + " the deploy user by hand", Howto: howto.DeployUser}
 	case me.uid == 0 && deploy == "", me.name == "":
 		return nil, nil
@@ -382,7 +391,7 @@ func runDeployUserCheck() int {
 // deployUnreadRefusal is the setup's refusal of a deploy user's record that cannot be read, why.
 func deployUnreadRefusal(why string) setup.Refusal {
 	return setup.Refusal{Item: setup.RefusalDeployUser, Message: why,
-		Fix: "correct it as root, naming the deploy user alone on a line, the file root's with mode 644", Howto: howto.DeployUser}
+		Fix: deployRecordFix, Howto: howto.DeployUser}
 }
 
 // otherDeployRefusal is the setup's refusal to record me where the server shows o set up by
@@ -395,11 +404,11 @@ func deployUnreadRefusal(why string) setup.Refusal {
 func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	who := me.words()
 	r := setup.Refusal{Item: setup.RefusalDeployUser, Howto: howto.DeployUser, HowtoAside: true,
-		Message: "devopsy was set up as " + o.name + " on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name}
+		Message: o.name + " is set up as this server's deploy user already (" + o.evidence + "): recording " + who + " instead would lock " + o.name + " out"}
 	login := remote.LoginName(o.name)
 	switch {
 	case o.both:
-		r.Message = "both " + who + " and " + o.name + " hold environments on this server (" + o.evidence + "): neither is recorded as the deploy user until one's are moved to the other"
+		r.Message = "both " + who + " and " + o.name + " hold environments on this server (" + o.evidence + "): one has to take over the other's before either can be recorded as the deploy user"
 		r.Fix, r.HowtoAside = "settle which one is the deploy user by hand, moving the other's environments to it", false
 		return r
 	case !login:
@@ -412,7 +421,7 @@ func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	}
 	if o.bare != "" {
 		r.Howto = ""
-		r.Message = o.name + " was set up too on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name
+		r.Message = o.name + " is set up on this server too (" + o.evidence + "): recording " + who + " as the deploy user would lock " + o.name + " out"
 		r.Or, r.OrCommand = "if "+o.name+" was set up by mistake and holds no environments, remove its setup record as root:", "sudo rm "+remote.QuoteWord(o.bare)
 	}
 	return r

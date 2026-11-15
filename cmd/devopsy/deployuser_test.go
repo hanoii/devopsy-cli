@@ -62,13 +62,21 @@ func TestCheckDeployUser(t *testing.T) {
 		}
 	}
 
-	err := checkDeployUser(recordAt(t, setup.DeployUserText("deploy")), me, no, remote.Session{Host: "admin@vm1:5369"})
+	// Another user: who logged in and who the deploy user is, and the refused command itself
+	// offered again as the deploy user.
+	err := checkDeployUser(recordAt(t, setup.DeployUserText("deploy")), me, no, remote.Session{Host: "admin@vm1:5369", Command: "devopsy @admin@vm1:5369: --upgrade"})
 	var f *report.Failure
-	if !errors.As(err, &f) || f.Msg != report.NotDeployUser.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "this login is admin") || !strings.Contains(f.Details[0], "names deploy the deploy user") {
+	if !errors.As(err, &f) || f.Msg != report.NotDeployUser.Msg() || len(f.Details) != 2 ||
+		f.Details[0] != "logged in as admin, but this server's deploy user is deploy ("+setup.DeployUserFile+")" {
 		t.Fatalf("another user: %#v", err)
 	}
-	if len(f.Remedies) != 2 || len(f.Remedies[0].Cmds) != 1 || f.Remedies[0].Cmds[0] != "devopsy @deploy@vm1:5369: --server-info" || !f.Remedies[1].Hint {
+	if len(f.Remedies) != 2 || f.Remedies[0].Text != "run it as deploy:" || len(f.Remedies[0].Cmds) != 1 || f.Remedies[0].Cmds[0] != "devopsy @deploy@vm1:5369: --upgrade" || !f.Remedies[1].Hint {
 		t.Errorf("another user's remedies: %#v", f.Remedies)
+	}
+	// A command whose address names no server: the deploy user's address, for example.
+	err = checkDeployUser(recordAt(t, setup.DeployUserText("deploy")), me, no, remote.Session{Host: "admin@vm1:5369", Command: "devopsy @prod --release"})
+	if !errors.As(err, &f) || len(f.Remedies[0].Cmds) != 1 || f.Remedies[0].Cmds[0] != "devopsy @deploy@vm1:5369: --server-info" {
+		t.Errorf("an alias: %#v", err)
 	}
 	// Without the session's host, the way out in words.
 	err = checkDeployUser(recordAt(t, setup.DeployUserText("deploy")), me, no, remote.Session{})
@@ -77,7 +85,7 @@ func TestCheckDeployUser(t *testing.T) {
 	}
 	// A record that names no one: W0010, with why and the fix as root.
 	err = checkDeployUser(recordAt(t, "\n# none\n"), me, no, remote.Session{})
-	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || f.Details[0] != setup.DeployUserFile+" cannot tell the server's deploy user: it names no user" ||
+	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || f.Details[0] != setup.DeployUserFile+" should hold the deploy user's name alone on a line, and it holds none" ||
 		len(f.Remedies) != 1 || !strings.Contains(f.Remedies[0].Text, "as root") {
 		t.Errorf("a record naming no one: %#v", err)
 	}
@@ -156,7 +164,7 @@ func TestDeployUserFactSeesAnotherDeployUser(t *testing.T) {
 		case c.other == "" && (r != nil || x == nil || !x.Missing):
 			t.Errorf("%s: %v, %v", c.name, x, r)
 		// Its setup record alone: two ways out, running it as that user, or the record's removal.
-		case c.other != "" && (x != nil || r == nil || r.Item != setup.RefusalDeployUser || !strings.HasPrefix(r.Message, c.other+" was set up too on this server (its setup record /home/"+c.other+"/.config/devopsy/server.yaml)") ||
+		case c.other != "" && (x != nil || r == nil || r.Item != setup.RefusalDeployUser || !strings.HasPrefix(r.Message, c.other+" is set up on this server too (its setup record /home/"+c.other+"/.config/devopsy/server.yaml)") ||
 			r.Command != "devopsy @"+c.other+"@vm1: --server-setup" || r.OrCommand != "sudo rm /home/"+c.other+"/.config/devopsy/server.yaml" || r.Howto != ""):
 			t.Errorf("%s: %v, %+v", c.name, x, r)
 		}
@@ -165,7 +173,7 @@ func TestDeployUserFactSeesAnotherDeployUser(t *testing.T) {
 	// steps, never a removal.
 	h := server(t, "ops")
 	write(t, h.path("/home/ops/.devopsy-uids/env:shop:prod"), "x\n", 0o644)
-	if _, r := deployUserFact(h, me, "", remote.Session{Host: "admin@vm1"}); r == nil || !strings.HasPrefix(r.Message, "devopsy was set up as ops on this server (its uid claims /home/ops/.devopsy-uids)") ||
+	if _, r := deployUserFact(h, me, "", remote.Session{Host: "admin@vm1"}); r == nil || !strings.HasPrefix(r.Message, "ops is set up as this server's deploy user already (its uid claims /home/ops/.devopsy-uids)") ||
 		r.Command != "devopsy @ops@vm1: --server-setup" || r.Or != "" || r.Howto == "" {
 		t.Errorf("a member holding claims: %+v", r)
 	}
@@ -265,7 +273,7 @@ func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	write(t, waiting+".go", "", 0o644)
 	_ = cmd.Wait()
 	out := readString(outFile.Name())
-	if !strings.Contains(out, "ops was set up too on this server") {
+	if !strings.Contains(out, "ops is set up on this server too") {
 		t.Fatalf("the root run's refusal not said (%d):\n%s", cmd.ProcessState.ExitCode(), out)
 	}
 	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
@@ -322,7 +330,7 @@ func TestDeployUserFactTwoSetupRecordsLeaveAWayOut(t *testing.T) {
 	for me, other := range map[string]string{"admin": "deploy", "deploy": "admin"} {
 		uid := map[string]int{"admin": 1000, "deploy": 1001}[me]
 		_, r := deployUserFact(h, login{uid: uid, name: me}, "", remote.Session{Host: me + "@vm1"})
-		if r == nil || !strings.HasPrefix(r.Message, other+" was set up too on this server") || r.OrCommand != "sudo rm /home/"+other+"/.config/devopsy/"+setup.RecordFile {
+		if r == nil || !strings.HasPrefix(r.Message, other+" is set up on this server too") || r.OrCommand != "sudo rm /home/"+other+"/.config/devopsy/"+setup.RecordFile {
 			t.Errorf("as %s: no way out by the removal of %s's bare record: %+v", me, other, r)
 		}
 	}
@@ -409,7 +417,7 @@ func TestDeployUserOtherIsOneJudgment(t *testing.T) {
 	}
 	h := server(t)
 	write(t, h.path(setup.DeployUserFile), "one\ntwo\n", 0o644)
-	if got := other(t, h, me, ""); !strings.HasPrefix(got, remote.SetupUnread+"\t"+setup.DeployUserFile+" cannot tell") {
+	if got := other(t, h, me, ""); !strings.HasPrefix(got, remote.SetupUnread+"\t"+setup.DeployUserFile+" should hold") {
 		t.Errorf("a record that cannot be read: %q", got)
 	}
 	// The root, this test user's, read as another's by the uid given: no name in this passwd.
@@ -417,7 +425,7 @@ func TestDeployUserOtherIsOneJudgment(t *testing.T) {
 	got := other(t, server(t), me+1, root)
 	o, ok := otherLine(got)
 	r := otherDeployRefusal(o, login{uid: me + 1, name: "admin"}, remote.Session{Host: "admin@vm1"})
-	if !ok || o.name != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "devopsy was set up as uid "+strconv.Itoa(me)+" on this server (the release root "+root+" is its)") {
+	if !ok || o.name != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "uid "+strconv.Itoa(me)+" is set up as this server's deploy user already (the release root "+root+" is its)") {
 		t.Errorf("an owner with no name: %q, %+v", got, r)
 	}
 }
@@ -469,14 +477,16 @@ func deployUserFactRefusal(t *testing.T, h setupHost, me login, root string) *se
 func TestDevopsyEnvironmentIsTheTopicsRule(t *testing.T) {
 	t.Parallel()
 	tp, _ := howto.Find(string(howto.DeployUser))
-	loop := ""
+	// The loop's lines, from its first to the one that ends it.
+	var lines []string
 	for _, s := range tp.Steps {
 		for _, c := range s.Cmds {
-			if strings.HasPrefix(c, `projects=$(cd "$from"`) {
-				loop = c
+			if strings.HasPrefix(c, `projects=$(cd "$from"`) || len(lines) > 0 && !strings.HasSuffix(lines[len(lines)-1], "| sort -u)") {
+				lines = append(lines, c)
 			}
 		}
 	}
+	loop := strings.Join(lines, "\n")
 	if loop == "" {
 		t.Fatal("no projects= line in the move step")
 	}
@@ -616,7 +626,7 @@ func TestCheckDeployUserOfNoLogin(t *testing.T) {
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\n", 0o644)
 	err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{})
 	var f *report.Failure
-	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "it names ghost, which is no user of this server's") {
+	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "it names ghost, and this server has no such user") {
 		t.Errorf("a record naming no login: %#v", err)
 	}
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\nghost:x:1001:1001::/home/ghost:/bin/sh\n", 0o644)

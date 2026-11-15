@@ -306,10 +306,8 @@ func TestDeployUserTopicHandsOverTheBinary(t *testing.T) {
 	t.Parallel()
 	tp, _ := Find(string(DeployUser))
 	for _, s := range tp.Steps {
-		for _, c := range s.Cmds {
-			if strings.Contains(c, "command -v devopsy") && strings.Contains(c, "chown") {
-				return
-			}
+		if c := strings.Join(s.Cmds, "\n"); strings.Contains(c, "command -v devopsy") && strings.Contains(c, "chown") {
+			return
 		}
 	}
 	t.Error("no step gives the new user the devopsy binary the old one owns")

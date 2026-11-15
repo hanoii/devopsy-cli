@@ -22,8 +22,8 @@ devopsy: | report W0001 to the server's admin
 | W0006 | Kexec HandOver keeps memory as CMA, which only movable pages may use | Put `kho=off` on the kernel's command line and reboot; `devopsy --server-setup-howto kexec-handover` prints the steps. |
 | W0007 | the snapshot root is on the release root's filesystem | Mount the volume meant for snapshots on the snapshot root, which `--server-info` names. |
 | W0008 | the server lacks a tool devopsy uses | Install it with the system's packages; `--server-info` names it, with the topic whose steps install it. |
-| W0009 | this login is not the server's deploy user | Address the server as the user the error names, for example `devopsy @devopsy@<server>: --server-info`; `devopsy --server-setup-howto deploy-user` prints the steps to make another user the deploy user. |
-| W0010 | the server's record of its deploy user cannot be read | Correct `/etc/devopsy/deploy-user` as root, in root's shell (`devopsy @<server>: --shell-host --root`): the deploy user's name alone on a line, the file root's with mode 644. |
+| W0009 | this login is not the server's deploy user | Run the command again as the deploy user the error names, which it offers addressed so (for example `devopsy @devopsy@<server>: --upgrade`); `devopsy --server-setup-howto deploy-user` prints the steps to make another user the deploy user. |
+| W0010 | the server's record of its deploy user cannot be read | As root, put the deploy user's name in `/etc/devopsy/deploy-user`, alone on its line, the file root's with mode 644, from root's shell (`devopsy @<server>: --shell-host --root`). |
 
 ## W0001
 

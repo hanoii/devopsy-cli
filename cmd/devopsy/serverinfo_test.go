@@ -476,13 +476,25 @@ func TestServerInfoReport(t *testing.T) {
 	}
 
 	// The deploy user not recorded yet, on a server set up before the record: a line under
-	// setup with --server-setup as a hint, a note and no warning, so no exit 3.
+	// setup naming the login the next setup records, with --server-setup as a hint, a note
+	// and no warning, so no exit 3.
 	info0 = healthy()
 	info0.Setup = setUp("")
-	info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing = false, true
-	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !warnings[0].note || !warnings[0].fixes[0].Hint || !strings.Contains(out, "the deploy user is not recorded yet in "+setup.DeployUserFile+": any user in the docker group passes for it") ||
-		!strings.Contains(out, "$ devopsy @vm1: --server-setup") {
+	info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing, info0.Setup.Files[2].User = false, true, "devopsy"
+	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !warnings[0].note || !warnings[0].fixes[0].Hint ||
+		!strings.Contains(out, "no deploy user recorded yet ("+setup.DeployUserFile+"): until one is, any user in the docker group passes for it, and the next --server-setup records the login it runs as, devopsy here") ||
+		!strings.Contains(out, "to record devopsy:\n") || !strings.Contains(out, "$ devopsy @vm1: --server-setup") {
 		t.Errorf("the deploy user not recorded: %+v\n%s", warnings, out)
+	}
+	// Recorded: named, a line of no note.
+	info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing = true, false
+	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "deploy user devopsy ("+setup.DeployUserFile+")\n") {
+		t.Errorf("the deploy user recorded: %+v\n%s", warnings, out)
+	}
+	// Never set up: the first setup records whoever runs it, said before it does.
+	info0.Setup.Record, info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing, info0.Setup.Files[2].User = "", false, true, "admin"
+	if out, _ := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "no deploy user recorded yet: the first --server-setup records the login it runs as, admin here, and refuses every other login after") {
+		t.Errorf("the deploy user on a server never set up:\n%s", out)
 	}
 
 	// Other users' processes are never said with them hidden (a name, a number, noaccess's
@@ -857,8 +869,8 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"$ timedatectl timesync-status",
 		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
 		// step, so --server-setup is offered only past that refusal, once after the last line
-		// it fixes.
-		"! setup      never set up by devopsy: --upgrade applies nothing here\n!            Docker: ",
+		// it fixes. A server never set up says the first setup records the login it runs as.
+		"! setup      never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as,",
 		"(its instance's credentials)\n             to fix it:\n             fix what refuses every step of the setup first, then run --server-setup\n",
 		"!            Docker: systemd is not this host's init",
 		"!            daemon.json: logs: none, devopsy's",

@@ -324,7 +324,7 @@ func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 func fileWords(x setup.FileFact) string {
 	switch {
 	case x.Item == setup.ItemDeployUser && x.Missing:
-		return "would record " + x.User + " as the server's deploy user, in " + x.Path
+		return "would record " + x.User + " as this server's deploy user (" + x.Path + "), refusing every other login after"
 	case x.Item == setup.ItemDeployUser:
 		return x.Path + " differs from what devopsy writes, naming " + x.User
 	case x.Missing:
@@ -541,7 +541,17 @@ func sayRefusalsOf(rs []setup.Refusal, missing []string, daemonError string, lev
 // refusedLine names what f's refusals stop that had a change to make (setup.Facts.Stopped),
 // "" when nothing: the first session's question, a run with nothing to apply and an apply's
 // end say it.
-func refusedLine(f setup.Facts) string { return refusedWords(f.Stopped()) }
+func refusedLine(f setup.Facts) string {
+	stopped := f.Stopped()
+	if len(stopped) > 0 && f.NoneGoes() {
+		return nothingChanged
+	}
+	return refusedWords(stopped)
+}
+
+// nothingChanged is what a setup with every step refused says of what it did, the refusals
+// said above it.
+const nothingChanged = "nothing changed, until what is refused above is fixed"
 
 // refusedWords is refusedLine of the steps stopped, by name, "" for none: one sentence naming
 // what devopsy did not set up, each step as a sentence says it (stepPhrase).
@@ -554,9 +564,9 @@ func refusedWords(stopped []string) string {
 	case 0:
 		return ""
 	case 1:
-		return "devopsy left " + words[0] + " as it is, since what it needs is refused above"
+		return "devopsy left " + words[0] + " as it is, until what is refused above is fixed"
 	}
-	return "devopsy left " + joinAnd(words) + " as they are, since what they need is refused above"
+	return "devopsy left " + joinAnd(words) + " as they are, until what is refused above is fixed"
 }
 
 // stepPhrase is a step's name in a sentence, where its name is an item's key with no article.

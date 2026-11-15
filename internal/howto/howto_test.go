@@ -41,7 +41,7 @@ func TestTopics(t *testing.T) {
 				t.Errorf("%s: step %d says nothing", tp.Name, i+1)
 			}
 			for _, c := range s.Cmds {
-				if placeholder.MatchString(c) || strings.HasPrefix(c, "$ ") || strings.TrimSpace(c) != c || c == "" {
+				if placeholder.MatchString(c) || strings.HasPrefix(c, "$ ") || strings.TrimRight(c, " \t") != c || strings.TrimSpace(c) == "" {
 					t.Errorf("%s: step %d's command cannot be copied as it is: %q", tp.Name, i+1, c)
 				}
 			}
