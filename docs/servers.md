@@ -39,7 +39,7 @@ layout, `<instance>/<environment>` with `instances: true`, else
 
 Every command needs an environment, except these, which need only a
 server: `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
-`--server-setup`, `--gc`, `--environments`, `--vars-project`,
+`--server-setup`, `--gc`, `--reboot`, `--environments`, `--vars-project`,
 `--upgrade` and `--match-server-version` (`--environments` and `--vars-project` with the checkout's
 project, or an alias's).
 
@@ -58,6 +58,7 @@ devopsy @vm1 --match-server-version   # this devopsy, to the server's version
 devopsy @vm1 --server-info       # what the server is, and what needs attention
 devopsy @devopsy@vm1: --server-setup   # the server set up as devopsy wants it
 devopsy @vm1 --gc --dry-run      # what nothing on the server owns, listed
+devopsy @vm1 --reboot            # the server rebooted, its hostname typed
 ```
 
 ## Docker
@@ -592,6 +593,40 @@ it lists; otherwise what it skipped, could not remove or could not read.
 devopsy @vm1 --gc --dry-run   # what it would remove, with sizes
 devopsy @vm1 --gc             # the same, asked, then removed
 devopsy @vm1 --gc --yes       # removed without asking
+```
+
+## `--reboot`
+
+`devopsy @vm1 --reboot` reboots the server, as its deploy user, by
+`systemctl reboot` as root through devopsy's util image, then waits up to
+10 minutes for the server to answer on a new boot (its boot id, in
+`/proc/sys/kernel/random/boot_id`). The containers Docker restarts (a
+restart policy) come back with Docker; [`--server-info`](#--server-info)
+shows the server once it is back.
+
+It first looks, in a session that changes nothing, and says how many
+containers stop and what waits for a reboot (`/run/reboot-required` and
+its packages), then asks for the server's hostname: the name proves the
+machine, whatever alias or address reached it. A second session decides
+everything again before it asks systemd. `--yes` reboots without looking
+or asking; without a terminal and without `--yes` nothing is rebooted.
+
+It is refused, nothing rebooted and nothing waited for, while a release
+or another change that holds an environment's lock runs in one of the
+deploy user's environments, or a setup of the server runs. Project
+users' releases are not waited for: one under way is cut. It is refused
+too when Docker does not answer or is not this host's (rootless, another
+host's), or systemd is not the host's init: a root shell
+([Shells](#shells)) reboots it then. The locks stay held until the
+shutdown ends the session, so nothing starts in between.
+
+It fails when systemd refuses the reboot, when the server is still up 2
+minutes after systemd took it, and when the wait ends: on the same boot
+the server did not reboot, and with no answer it did not come back.
+
+```sh
+devopsy @vm1 --reboot         # the hostname typed, then rebooted
+devopsy @vm1 --reboot --yes   # rebooted without asking
 ```
 
 ## uids

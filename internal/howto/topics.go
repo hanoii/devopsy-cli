@@ -191,7 +191,7 @@ var Topics = []Topic{
 				`grep -qs '^door:' "$config" || printf '\ndoor:\n  space: %s\n' "$space" | runuser -u "$user" -- tee -a "$config" >/dev/null`,
 			}},
 			{Text: "By hand, in place of step 3: hide every user's processes from the others, as the processes topic says."},
-			{Text: "add project users with --project-users add, and reboot the server after the first: sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", Operator: true},
+			{Text: "add project users with --project-users add, and reboot the server after the first (--reboot): sshd reads what the add wrote for it only at the next boot, and until then no project user logs in.", Operator: true},
 		},
 		Check: Step{Text: "the three tools are found, the directory is mounted with nosuid and nodev, and --server-info no longer says either of them.", Cmds: []string{
 			`command -v sudo visudo setfacl`,

@@ -191,7 +191,7 @@ func listProjectUsers(d *remote.Door) int {
 			destroyPendingHint(sessionServer(), destroying[who]))
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
-		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
+		report.Say(report.WarnLevel, "sshd takes the door at the next reboot: until then no project user logs in", nil, rebootFix(sessionServer()))
 	}
 	return 0
 }
@@ -449,8 +449,8 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	}
 	sayAdded(report.Default(), who, project, entry, ref, had, remote.KeysLeft(remote.DoorKeysFile(who)))
 	if strings.Contains(out.String(), "reboot") {
-		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
-			"any reboot takes it, one the server does by itself for /run/reboot-required included")
+		report.Say(report.WarnLevel, "sshd takes the door at the next reboot: until then no project user logs in",
+			[]string{"any reboot takes it, one the server does by itself for /run/reboot-required included"}, rebootFix(ref))
 	}
 	warnProcesses(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}, ref, groupOf)
 	return 0

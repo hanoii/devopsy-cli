@@ -161,7 +161,7 @@ func run() int {
 				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--project-users"]))
 				return 0
 			}
-		case "--server-setup", "--gc":
+		case "--server-setup", "--gc", "--reboot":
 			if len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
 				fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[args[0]]))
 				return 0
@@ -190,6 +190,8 @@ func run() int {
 			return runServerSetupStep(args[1:])
 		case remote.GCStepFlag:
 			return runGCStep(args[1:])
+		case remote.RebootStepFlag:
+			return runRebootStep(args[1:])
 		case remote.ServerReadyFlag:
 			return runServerReady(args[1:])
 		case remote.SyncKeyFlag:

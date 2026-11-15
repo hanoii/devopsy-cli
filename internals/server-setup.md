@@ -141,8 +141,8 @@
 - Pending is read only where a restart could go (Docker answering and this host's, the restart's step going), never hidden by a refusal that stops nothing.
 - Pending is worded once (`pendingWords`) for `--server-setup`'s differences, its end, `--server-info` and the operator's "nothing to change": the restart Docker needs, the parts `docker info` shows it has yet to take (`setup.Visible.Differ`, none when only the marker tells), and what does it, the reboot the server needs where the system's restart flag is raised (`setup.Facts.Reboot`), else whoever restarts Docker.
 - `--server-setup` sooner is a hint (`soonerHint`), never a fix: waiting may be the operator's choice. In `--server-info` pending is a warning while nothing is to restart Docker, and an info line once a reboot is asked for, the reboot's own warning keeping exit 3 for a server that waits on it alone.
-- A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes and holds them all until the restart is confirmed or given up.
-- The restart's locks are the deploy user's own projects' alone (`deployEnvBases`, `ownProjects`, `--server-info`'s filter), a project user's tree being that user's to change: never walked or locked, and the run says those releases are not waited for.
+- A restart is refused, with nothing changed, while a release holds a lock in the deploy user's environments: the apply tries each `$base/.lock` before anything changes (`holdServer`, without the setup lock its apply holds already) and holds them all until the restart is confirmed or given up.
+- `holdServer` is the one hold of a change of the whole server (the restart, a reboot), never a wait: the deploy user's own projects' locks alone (`deployEnvBases`, `ownProjects`, `--server-info`'s filter), a project user's tree being that user's to change, never walked or locked, and the run says those releases are not waited for (`projectUsersNotWaited`).
 - Docker is never restarted on a `daemon.json` dockerd refuses, whoever wrote it: it would stay down.
 - The restart is queued with `--no-block`, `daemon-reload` first, after the root run writes the marker with the `InvocationID` read just before the run and the run's own token after it (`runToken`): a restart that comes ends pending by its new id, the marker left to be read so (`/run` empties at a boot), and one that does not leaves Docker pending.
 - Pending compares the marker's id alone (`setup.Pending`); a marker with no token (a change marked, an older devopsy's) is pending and never a restart asked.
@@ -153,6 +153,15 @@
 - The system's restart flag after a restart not confirmed is raised then, by a second root run, never before the restart, which would ask a reboot for nothing; with Docker down that run cannot start, and the error says nothing was flagged.
 - A change not restarted now raises the restart marker (`setup.RestartMarker`, with the `InvocationID` read just before the run, the one source of it) and the system's flag, through `restart_flag`, only when the run changed `daemon.json`.
 - systemctl refusing from the chroot never leads to a privileged container in the host's pid namespace (internals/door.md): the run marks the change and names the restart for the admin.
+
+## Rebooting
+
+- `--reboot` is `--gc`'s two sessions (`--reboot-step look`, then `act`, alone with `--yes`), the hostname typed between them (`typeToGoOn`): it proves the machine, whatever alias or address reached it.
+- Both refuse, before anything, a project user, a Docker not answering or not this host's and no systemd (`hostRefusals`), and what `holdServer` finds held, the setup lock included; the look takes the locks shared, creates no lock file and lets go at once.
+- The act readies the util image before any lock, says `boot <id> <hostname>`, asks `SYSTEMD_IGNORE_CHROOT=1 systemctl reboot` through a `hostRun` with the host's pids and a read-only root, says `asked`, and holds the locks until the shutdown ends it, bounded (`rebootDownBound`, the step's argument in tests): nothing starts between the ask and the shutdown.
+- The act's stdout lines (`remote.RebootBoot`, `RebootAsked`, `RebootFailed`) decide how `--reboot` ends, never its exit: a reboot cuts the session, whose code is then ssh's or a signal's.
+- The wait is a `boundedWait` on the boot id (`awaitBoot`), each try a session of its own, bounded, with a short `ConnectTimeout`, no master connection and ssh's words discarded, never `BatchMode` (`internals/other.md`); a try that fails goes on waiting, and at the bound the last try tells a server still on its boot from one not answering.
+- Every line that says a reboot is needed offers `--reboot` (`rebootFix`), in words where no address is known.
 
 ## Sessions
 

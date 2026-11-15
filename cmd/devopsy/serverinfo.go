@@ -434,16 +434,7 @@ func systemFacts(info *remote.ServerInfo) {
 			info.Uptime, _ = strconv.ParseFloat(f[0], 64)
 		}
 	}
-	if _, err := os.Stat(remote.RebootRequired); err == nil {
-		info.RebootRequired = true
-		if data, err := os.ReadFile(remote.RebootRequired + ".pkgs"); err == nil {
-			for _, p := range strings.Fields(string(data)) {
-				if !slices.Contains(info.RebootPackages, p) {
-					info.RebootPackages = append(info.RebootPackages, p)
-				}
-			}
-		}
-	}
+	info.RebootRequired, info.RebootPackages = rebootFlag("")
 	if out, err := exec.Command("timedatectl", "show", "-p", "NTP", "-p", "NTPSynchronized").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
@@ -1382,7 +1373,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if len(info.RebootPackages) > 0 {
 			why += ", for " + strings.Join(info.RebootPackages, ", ")
 		}
-		forAdmin(report.RebootNeeded, []string{why}, report.Fix("reboot it at a quiet time: its containers come back with Docker"))
+		forAdmin(report.RebootNeeded, []string{why}, rebootFix(ref))
 	}
 	// Against the operator's clock, which a laptop or CI keeps
 	// synchronized: off by the way's one-way time at most.
@@ -1420,7 +1411,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		if dr.Reboot {
 			warn("sshd takes the door at the next reboot: until then no project user logs in",
-				report.Fix("reboot it at a quiet time: its containers come back with Docker"))
+				rebootFix(ref))
 		}
 		if len(dr.Listeners) > 0 {
 			es = append(es, remote.StatusEntry{Level: remote.StatusWarning, Key: key, Lines: append([]string{"every container reaches what the host listens on beyond loopback"}, dr.Listeners...),

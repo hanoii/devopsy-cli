@@ -341,8 +341,9 @@ sets the values to change, if it has any (for example user=devopsy).
    as the processes topic says.
 
 7. From the operator's machine, add project users with --project-users add,
-   and reboot the server after the first: sshd reads what the add wrote for
-   it only at the next boot, and until then no project user logs in.
+   and reboot the server after the first (--reboot): sshd reads what the add
+   wrote for it only at the next boot, and until then no project user logs
+   in.
 
 To check it: the three tools are found, the directory is mounted with nosuid
 and nodev, and --server-info no longer says either of them.

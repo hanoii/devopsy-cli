@@ -100,6 +100,7 @@ var Flags = []FlagGroup{
 		{Name: "--server-info", Args: "[--json]", Scope: LocalOrServer, Desc: "the server, its disks, Docker, roles and\nenvironments, and what needs attention"},
 		{Name: "--server-setup", Args: "[--yes] [--root <dir>]", Scope: Server, Desc: "the server's setup for devopsy: Docker's\ndaemon.json, buffers, the release root"},
 		{Name: "--gc", Args: "[--dry-run] [--yes]", Scope: Server, Desc: "remove what nothing on the server owns:\nold one-offs and build cache, snapshots\nof releases gone, images left"},
+		{Name: "--reboot", Args: "[--yes]", Scope: Server, Desc: "reboot the server, its hostname typed,\nand wait for it to come back"},
 		{Name: howto.Flag, Args: "[<topic>|--all]", Scope: Local, Desc: "the steps, as root, for what devopsy\nchecks on a server and cannot set up"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
 		{Name: "--match-server-version", Scope: Server, Desc: "this devopsy, to the version the server runs"},

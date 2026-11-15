@@ -365,9 +365,10 @@ address the server by its deploy user, `devopsy@vm1`.
    devopsy @devopsy@vm1: --ssh-keys --for shop add ~/.ssh/id_ed25519.pub
    ```
 
-4. Reboot the server after the first `add`. sshd takes devopsy's part of
-   its configuration at the next boot, and until then no project user
-   logs in; `--project-users` says so.
+4. Reboot the server after the first `add` (`devopsy @<server>
+   --reboot`). sshd takes devopsy's part of its configuration at the next
+   boot, and until then no project user logs in; `--project-users` says
+   so.
 
 ### `--project-users setup`
 

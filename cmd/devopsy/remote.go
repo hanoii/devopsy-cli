@@ -258,6 +258,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--gc":
 		return runGC(t, args[1:])
 
+	case "--reboot":
+		return runReboot(t, args[1:])
+
 	case "--status":
 		return runRemoteStatus(t, args[1:], color)
 

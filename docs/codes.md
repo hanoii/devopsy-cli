@@ -17,7 +17,7 @@ devopsy: | report W0001 to the server's admin
 | W0001 | the server's firewall is not loaded as devopsy loads it | Run `devopsy @devopsy@<server>: --server-setup`, which loads devopsy's firewall again; `--server-info` says what differs. |
 | W0002 | the project users' directory is not on a mount with nosuid and nodev | Run `devopsy @devopsy@<server>: --project-users setup`, which mounts it again; `--server-info` says why. |
 | W0003 | the server's devopsy is older than the operator's | Run `devopsy @devopsy@<server>: --upgrade`. |
-| W0004 | the server needs a reboot | Reboot it at a quiet time: its containers come back with Docker. `--server-info` names the packages that asked for it. |
+| W0004 | the server needs a reboot | Reboot it at a quiet time (`devopsy @<server> --reboot`): its containers come back with Docker. `--server-info` names the packages that asked for it. |
 | W0005 | the server's clock is not synchronized | Turn its time service on (`timedatectl set-ntp true`, as root), or name a time server its network answers; `--server-info` says which. |
 | W0006 | Kexec HandOver keeps memory as CMA, which only movable pages may use | Put `kho=off` on the kernel's command line and reboot; `devopsy --server-setup-howto kexec-handover` prints the steps. |
 | W0007 | the snapshot root is on the release root's filesystem | Mount the volume meant for snapshots on the snapshot root, which `--server-info` names. |
