@@ -142,6 +142,12 @@ func TestDeployUserLeavesAProjectUsersNames(t *testing.T) {
 	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
 		t.Errorf("--destroy beside another project user's names (%d):\n%s", code, out)
 	}
+	// A server's script addressed by that environment acts on none, so a project user's
+	// names are no refusal there: --project-users add, run again, must reach the server.
+	write(t, filepath.Join(home, "door", "users", "devopsy-shop.yaml"), "project: shop\n", 0o644)
+	if out, code := s.run(nil, "@prod", "--project-users", "list"); code != 0 || strings.Contains(out, "under the names of project user") {
+		t.Errorf("a server's script by the environment's address (%d):\n%s", code, out)
+	}
 }
 
 // --project-users remove ends the project user's processes once its keys are gone, so the

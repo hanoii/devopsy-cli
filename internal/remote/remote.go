@@ -611,13 +611,14 @@ const SettingsRefusedExit = 3
 // the upgrade hint: one too old to list its features (features=) lacks
 // them all. It leaves its --release-settings in $settings, which given
 // t's project and compose name refuses one that is not the server user's
-// to act on. Its lines are a plain echo: the server's devopsy may lack
-// --say.
+// to act on, only for a script on an environment (t.Path): a server's
+// script acts on none, even by an environment's address. Its lines are a
+// plain echo: the server's devopsy may lack --say.
 func serverCheck(ref string, t *Target) string {
 	upgrade := report.Fix("upgrade it:", "devopsy @"+ref+" --upgrade")
 	risk := report.Fix("set " + FeatureCheckEnv + "=warn to go on at your own risk")
 	env := ""
-	if name := t.ComposeName(); name != "" {
+	if name := t.ComposeName(); t.Path != "" && name != "" {
 		env = " " + Quote(t.Project.Name) + " " + Quote(name)
 	}
 	return `settings=$(devopsy --release-settings` + env + `) || { [ $? = ` + strconv.Itoa(SettingsRefusedExit) + ` ] || ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings", upgrade) + `; exit 1; }
