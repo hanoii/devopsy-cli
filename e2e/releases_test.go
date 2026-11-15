@@ -53,7 +53,8 @@ func TestReleasesStates(t *testing.T) {
 
 // --destroy takes the containers, the data written as root by a
 // container, the images and the directory, the levels' leftovers with
-// --purge, and the networks and volumes only an older release named.
+// --purge, and the networks and volumes only an older release named; a
+// tool under a profile, which a release pulls and bookmarks, goes too.
 func TestDestroy(t *testing.T) {
 	dir := project(t, "gone", map[string]string{
 		".devopsy/config.yaml":     "project: gone\nenvironments:\n  prod:\n    mode: image\n    release: deploy\n    rollback: deploy\n",
@@ -73,11 +74,17 @@ services:
     command: [sh, -c, 'echo root >/data/stamp && exec sleep infinity']
     volumes: [./mnt/data:/data]
     networks: [own]
+  tool:
+    image: busybox:1.37-musl
+    profiles: [tools]
 networks:
   own:
 EOF
 devopsy @server:prod --release`); code != 0 {
 		t.Fatalf("second release (%d):\n%s", code, out)
+	}
+	if out, _ := srv(t, "docker image ls --format '{{.Repository}}:{{.Tag}}' --filter reference='busybox:devopsy-gone-prod-*-t*'"); !strings.Contains(out, "busybox:devopsy-gone-prod-") {
+		t.Fatalf("the tool's bookmark, before --destroy: %q", out)
 	}
 	const owned = "label=com.docker.compose.project=gone-prod"
 	if out, _ := srv(t, "docker volume ls -q --filter "+owned+"; docker network ls -q --filter name=gone-prod_old --filter name=gone-prod_default"); len(strings.Fields(out)) != 3 {
@@ -90,8 +97,8 @@ devopsy @server:prod --release`); code != 0 {
 		out, _ := srv(t, "ls -laR gone")
 		t.Errorf("left:\n%s", out)
 	}
-	if out, _ := srv(t, "docker ps -aq --filter label=com.docker.compose.project=gone-prod; docker image ls -q --filter reference='*:devopsy-gone-prod-*'"); strings.TrimSpace(out) != "" {
-		t.Errorf("containers or bookmarks left: %s", out)
+	if out, _ := srv(t, "docker ps -aq --filter label=com.docker.compose.project=gone-prod; docker image ls -q --filter reference='*:devopsy-gone-prod-*' --filter reference=busybox:1.37-musl"); strings.TrimSpace(out) != "" {
+		t.Errorf("containers, bookmarks or the tool left: %s", out)
 	}
 	if out, _ := srv(t, "docker volume ls -q --filter "+owned+"; docker network ls -q --filter "+owned); strings.TrimSpace(out) != "" {
 		t.Errorf("networks or volumes left: %s", out)

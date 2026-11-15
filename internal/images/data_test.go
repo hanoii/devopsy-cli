@@ -590,13 +590,21 @@ func TestReleaseRunsWhatItFetched(t *testing.T) {
 	}
 	// A copy landing (derive) sees the pin and leaves it: a pulled service's image: is no
 	// own image by a bookmark.
+	// Changing nothing, it lists every profile once, for the sharers of its own image (its
+	// tools are the write's), and says nothing.
 	before, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile))
+	listed, said := 0, out.Len()
+	m.e.set.ListAll = func(rel string) ([]Service, error) { listed++; return m.e.set.List(rel) }
 	if err := m.e.set.derive(m.base(), m.e.rel(r1), map[string]Service{"app": appSvc, "database": db118}, false); err != nil {
 		m.fail("derive: %v", err)
 	}
+	m.e.set.ListAll = nil
 	after, _ := os.ReadFile(filepath.Join(m.e.rel(r1), ComposeFile))
 	if imgs, _, held := composeFacts(m.e.rel(r1)); string(after) != string(before) || held["database"] != "" || isBookmark(imgs["database"]) {
 		m.fail("a landing changed the pin:\n%s\nwas:\n%s", after, before)
+	}
+	if listed != 1 || out.Len() != said {
+		m.fail("a landing that changed nothing listed every profile %d times and said:\n%s", listed, out.String()[said:])
 	}
 	// A rollback takes what the name holds at the time, under the lock (a floating tag
 	// goes forward), and pins that: the next up runs it whatever the name holds then.

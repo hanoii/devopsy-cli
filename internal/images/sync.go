@@ -329,5 +329,10 @@ func FilterImported(snap, cur string) error {
 		e.ID, e.OwnID = "", ""
 		kept = append(kept, e)
 	}
+	// Its tools are the other server's word too, and a snapshot carries none of its own
+	// (a take leaves them out): one a tar carries would have its removal strip names.
+	if err := removeIfThere(filepath.Join(snap, ToolsFile)); err != nil {
+		return err
+	}
 	return writeList(snap, kept)
 }

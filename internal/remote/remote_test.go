@@ -663,12 +663,18 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	}
 }
 
+// --releases shows each release, then the names its project's removals left, and apart the
+// names they kept for a release's tool, which read as no failure.
 func TestFormatReleases(t *testing.T) {
 	t.Parallel()
-	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
+	out := "left\t1760000000\tapp-prod\t20261001000000\tmariadb:11\tsha256:m\ta container of app-prod uses its image\n" +
+		"left\t1760000000\tapp-prod\t20261001000000\tjq:1.8\tsha256:j\t" + images.ToolKeeps + "\n" +
+		"20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
 		"20261004120000\t-\tfailed\t\t\n"
 	got := FormatReleases(out)
-	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED"} {
+	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED",
+		"Images the project's removals left (each pruning retries):\n  mariadb:11  app-prod, release 20261001000000, ", "\n    a container of app-prod uses its image\n",
+		"Names the project's removals kept for a release's tool (each pruning removes them once no tool runs by them):\n  jq:1.8  app-prod, release 20261001000000, "} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
@@ -945,7 +951,7 @@ exit 0
 	// inherited variables and its copy of the parent's server's levels
 	// are read, when they exist), to the run step; the record of what
 	// ran on the data after it (img ran) reads the listing, not compose.
-	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
+	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1281,7 +1287,7 @@ func readFile(path string) string {
 // fakeImageTools writes into bin a docker whose image store is a file per
 // tag under $FAKE_ROOT/images, holding the image's id (the id of the
 // release that built or pulled it): tag, inspect (with the Id and RepoTags
-// formats), rm (refused for the tags in $FAKE_IN_USE, as for a container's
+// formats), image ls of a repository's names, rm (refused for the tags in $FAKE_IN_USE, as for a container's
 // image), image prune (logged in $FAKE_ROOT/pruned) and ps -a --filter
 // ancestor=<id> (the compose projects in $FAKE_ROOT/users/<id>), every command
 // failing as with the daemon down when $FAKE_DOCKER_DOWN is set; plus a
@@ -1354,6 +1360,12 @@ case "$1 $2" in
     [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
     rm -f "$(f "$3")" ;;
   "image prune") echo prune >>"$FAKE_ROOT/pruned"; echo "Total reclaimed space: 1MB" ;;
+  "image ls")
+    # A repository's names: image ls --format {{.Repository}}:{{.Tag}} <repository>.
+    for t in "$FAKE_ROOT"/images/"$(echo "$5" | tr '/' '_')":*; do
+      [ -f "$t" ] && echo "${t##*/}" | tr '_' '/'
+    done
+    exit 0 ;;
   *)
     [ "$1" = tag ] || exit 1
     # From a name, or from an image id (the content of some name's file).
@@ -1526,7 +1538,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1557,7 +1569,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\n3: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	rel1 := filepath.Join(base, "releases", "1")
@@ -1663,7 +1675,7 @@ exit 0
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
 	// Every profile's services without a build pulled too, never listed.
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- config --format json\n1: -- pull\n1: -- --profile * pull --ignore-buildable\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- config --format json\n1: -- pull\n1: -- --profile * pull --ignore-buildable\n1: -- config --format json\n1: -- --profile * config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 	// A profile's image that fails to pull fails the release before it

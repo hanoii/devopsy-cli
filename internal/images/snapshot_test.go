@@ -95,3 +95,43 @@ func TestFilterImportedOwn(t *testing.T) {
 		t.Errorf("the imported listing: %+v", es)
 	}
 }
+
+// An imported snapshot keeps no tools file (ToolsFile), the other server's word as its listing
+// is: FilterImported drops one a tar carries, so the snapshot's removal never strips a name a
+// crafted line gives (any name, any image id on this server), the admin's own image here.
+func TestFilterImportedDropsTools(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	stage := newSim(t, d, "app-stage", &out)
+	stage.e.set.Snapshots = filepath.Join(stage.base(), "snapshots")
+	if _, err := stage.release(false, appSvc); err != nil {
+		t.Fatal(err)
+	}
+	// An image of the server's that no release of devopsy's holds.
+	d.pull("nginx:1.27", "sha256:n1")
+	// The snapshot as an import extracted it: a listing and a tools file,
+	// both whoever made the tar's.
+	dir := filepath.Join(stage.e.set.Snapshots, "20261017000002")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeList(dir, []entry{{Ref: "app-prod-app", ID: "sha256:other", Service: "app", Kind: KindOwn}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEntries(filepath.Join(dir, ToolsFile), []entry{{Ref: "nginx:1.27", ID: "sha256:n1", Service: "tool", Kind: KindPulled}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FilterImported(dir, stage.e.rel(stage.cur)); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.e.set.BookmarkFrom(dir, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.e.set.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if d.names["nginx:1.27"] != "sha256:n1" {
+		t.Errorf("the imported snapshot's removal took nginx:1.27, which its tools file alone named: %v\n%s", d.names, out.String())
+	}
+}

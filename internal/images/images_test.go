@@ -45,6 +45,8 @@ type fakeDocker struct {
 	// otherPlatform are images the registry has for another platform
 	// only: a pull fails as Docker's does.
 	otherPlatform map[string]bool
+	// repoTagsRead counts RepoTags' reads, by repository.
+	repoTagsRead map[string]int
 }
 
 func (d *fakeDocker) failing(method string) error {
@@ -134,7 +136,28 @@ func (d *fakeDocker) Tags(id string) ([]string, error) {
 	return ts, nil
 }
 
+func (d *fakeDocker) RepoTags(repo string) ([]string, error) {
+	if err := d.failing("RepoTags"); err != nil {
+		return nil, err
+	}
+	if d.repoTagsRead == nil {
+		d.repoTagsRead = map[string]int{}
+	}
+	d.repoTagsRead[repoKey(repo)]++
+	var ns []string
+	for n := range d.names {
+		if !strings.Contains(n, "@") && repoKey(n) == repoKey(repo) {
+			ns = append(ns, n)
+		}
+	}
+	sort.Strings(ns)
+	return ns, nil
+}
+
 func (d *fakeDocker) Tag(src, dst string) error {
+	if err := d.failing("Tag"); err != nil {
+		return err
+	}
 	id, err := d.ID(src)
 	if err != nil {
 		// docker tag takes a digest reference as its source too, resolved
@@ -368,6 +391,7 @@ func TestNamesTag(t *testing.T) {
 		{"app:devopsy-shop-stage-20261101000000-123456", "shop-stage", true},
 		{"app:devopsy-shop-stage-s20261101000000-a1b2", "shop-stage", true},
 		{"app:devopsy-shop-stage-20261101000000-fz9", "shop-stage", true},
+		{"app:devopsy-shop-stage-20261101000000-tz9", "shop-stage", true},
 		{"registry.example.com:5000/app:devopsy-shop-stage-20261101000000", "shop-stage", true},
 		{"app:devopsy-shop-stage-2-20261101000000", "shop-stage", false},
 		{"app:devopsy-shop-stage-20261101000000", "shop-stage-2", false},
@@ -387,6 +411,7 @@ func TestNamesTag(t *testing.T) {
 		"app:devopsy-shop-stage-20261101000000":          "shop-stage",
 		"app:devopsy-shop-stage-2-s20261101000000-a1b2":  "shop-stage-2",
 		"app:devopsy-shop-stage-20261101000000-f3x":      "shop-stage",
+		"app:devopsy-shop-stage-20261101000000-t3x":      "shop-stage",
 		"app:devopsy-shop-20261101000000-20261102000000": "shop-20261101000000",
 		"app:" + bookmarkPrefix(long) + "20261101000000": cut,
 		"app:devopsy-shop-claim.abababababab":            "",
@@ -506,10 +531,14 @@ func (e *env) releases() []string {
 }
 
 // Two environments sharing mariadb:11 (one sometimes as its alias
-// mariadb:11.4) release, fail, roll back and remove releases at random.
-// At every step: every kept release's bookmarks point to the images it
-// recorded, a restore never moves a name another environment's container
-// uses, and once every release and container is gone, no image is left.
+// mariadb:11.4) release, fail, roll back and remove releases at random,
+// some releases with a tool under a profile, jq:1.8, which both pull and
+// its registry moves forward. At every step: every kept release's
+// bookmarks, its tools' too, point to the images it recorded, a current
+// release's tool's name is there, a restore never moves a name another
+// environment's container uses, and once
+// every release and container is gone, no image is left, a tool's
+// included.
 func TestRandomHistory(t *testing.T) {
 	t.Parallel()
 	for seed := int64(1); seed <= 200; seed++ {
@@ -523,6 +552,15 @@ func randomHistory(t *testing.T, seed int64) {
 	var out bytes.Buffer
 	left := filepath.Join(t.TempDir(), LeftFile)
 	envs := []*env{newEnv(t, d, "app-a", left, &out), newEnv(t, d, "app-b", left, &out)}
+	// Each release's tools, its profile's services beside its listing's (ListAll).
+	tools := map[*env]map[string][]string{}
+	for _, e := range envs {
+		e, ts := e, map[string][]string{}
+		tools[e] = ts
+		e.set.ListAll = func(rel string) ([]Service, error) {
+			return services(append(slices.Clone(e.lists[filepath.Base(rel)]), ts[filepath.Base(rel)]...)), nil
+		}
+	}
 	img := 0
 	newImage := func() string { img++; return fmt.Sprintf("sha256:%04d", img) }
 	var log []string
@@ -532,8 +570,8 @@ func randomHistory(t *testing.T, seed int64) {
 		log = append(log, step)
 		for _, e := range envs {
 			for _, id := range e.releases() {
-				es := readList(e.rel(id))
-				for i, b := range bookmarks(es, e.set.Name, id) {
+				es, names := e.set.releaseEntries(e.rel(id))
+				for i, b := range names {
 					if es[i].ID == "" || gone[b] {
 						continue
 					}
@@ -546,6 +584,14 @@ func randomHistory(t *testing.T, seed int64) {
 		for _, c := range d.containers {
 			if !d.images[c.image] {
 				t.Fatalf("after %v: a container's image %s is gone", log, c.image)
+			}
+		}
+		// A tool runs by its name: while its release is current, the name is there.
+		for _, e := range envs {
+			for _, ref := range tools[e][e.current] {
+				if _, ok := d.names[familiar(ref)]; !ok && e.current != "" {
+					t.Fatalf("after %v: %s's current %s runs its tool by %s, which is gone\n%s", log, e.set.Name, e.current, ref, out.String())
+				}
 			}
 		}
 	}
@@ -606,6 +652,12 @@ func randomHistory(t *testing.T, seed int64) {
 					d.pull(shared, newImage())
 				}
 			}
+			if rng.Intn(2) == 0 { // a tool both environments pull, its tag moving on
+				tools[e][id] = []string{"jq:1.8"}
+				if _, err := d.ID("jq:1.8"); err != nil || rng.Intn(3) == 0 {
+					d.pull("jq:1.8", newImage())
+				}
+			}
 			e.set.Bookmark(e.rel(id))
 			e.current = id
 			e.run(d)
@@ -618,6 +670,10 @@ func randomHistory(t *testing.T, seed int64) {
 		case 2: // a release whose fetch fails halfway: undone
 			id := e.newRelease(own, shared)
 			d.pull(shared, newImage())
+			if rng.Intn(2) == 0 { // its tool pulled before the fetch failed: bumped, then abandoned
+				tools[e][id] = []string{"jq:1.8"}
+				d.pull("jq:1.8", newImage())
+			}
 			before := usedNames(d, other)
 			e.set.Undo(e.rel(id), false)
 			if err := os.WriteFile(filepath.Join(e.rel(id), failedFile), nil, 0o644); err != nil {
@@ -1105,5 +1161,305 @@ func TestPinned(t *testing.T) {
 		if Pinned(ref) != want {
 			t.Errorf("%s: %v", ref, !want)
 		}
+	}
+}
+
+// A release a rollback or a restart brings back has its tools bookmarked again by what their
+// names hold now, as its pulled entries are: a tool is never pinned and runs what its tag
+// holds, so once the newer release that pulled the moved tag goes, the tag still names an
+// image the restored release holds. Behind the door a restore reads no tool by its name (the
+// door's inspect of a name claims it, which pulls): its tools keep the images recorded.
+func TestRestoreBookmarksToolsAgain(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	r1 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The registry moves jq:1.8 on; the next release pulls and records it, then fails its
+	// run, and the restart brings r1 back.
+	d.pull(jq.Ref, "sha256:j2")
+	r2 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r2), e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.set.Restore(e.rel(r1), e.rel(r2), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[toolTag("app-prod", r1, jq.Ref)]; got != "sha256:j2" {
+		t.Errorf("%s's tool bookmark holds %q, want what its tag holds now", r1, got)
+	}
+	if err := e.set.Remove(e.rel(r2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.names[familiar(jq.Ref)]; !ok {
+		t.Errorf("%s is gone while the current release %s lists its tool jq: %v\n%s", jq.Ref, r1, d.names, out.String())
+	}
+	door := newRecEnv(t, d, "shop-prod", ModeImage, &out)
+	door.set.Door = true
+	door.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(door.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d1 := door.release(proxySvc)
+	if err := door.set.Record(door.rel(d1), ""); err != nil {
+		t.Fatal(err)
+	}
+	d.pull(jq.Ref, "sha256:j3")
+	d2 := door.release(proxySvc)
+	door.set.Undo(door.rel(d2), false)
+	if err := door.set.Restore(door.rel(d1), door.rel(d2), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[toolTag("shop-prod", d1, jq.Ref)]; got != "sha256:j2" {
+		t.Errorf("behind the door, %s's tool bookmark holds %q after its restore, want the image its record read", d1, got)
+	}
+	if got, ok := d.names[toolTag("shop-prod", d2, jq.Ref)]; ok {
+		t.Errorf("behind the door, an undo read its tool by its name: %s", got)
+	}
+}
+
+// A removal keeps a name a tool runs by while another release's tool bookmark names its tag,
+// whatever image that bookmark sits on, and the last one takes it wherever it is: a tool is
+// never pinned, so its name is all a live release runs it by. A newer release of the same
+// environment that pulled the moved tag (its fetch failed, undone, then removed), or another
+// environment's that did (its --destroy), goes without taking it, reading the repository's
+// tags once for every name of it; once the live release goes too, the name and its images go.
+func TestRemoveKeepsANameAToolRunsBy(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	a, b := newRecEnv(t, d, "app-a", ModeImage, &out), newRecEnv(t, d, "app-b", ModeImage, &out)
+	for _, e := range []*recEnv{a, b} {
+		e.set.Left = left
+		e.set.ListAll = func(rel string) ([]Service, error) {
+			return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+		}
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	ra := a.release(proxySvc)
+	if err := a.set.Record(a.rel(ra), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The registry moves jq:1.8 on; app-a's next release pulls it, fails its fetch and is
+	// undone, then removed, ra staying live with no restore.
+	d.pull(jq.Ref, "sha256:j2")
+	failed := a.release(proxySvc)
+	a.set.Undo(a.rel(failed), false)
+	if got := d.names[toolTag("app-a", failed, jq.Ref)]; got != "sha256:j2" {
+		t.Fatalf("the failed release's tool bookmark holds %q", got)
+	}
+	d.names["ghcr.io/jqlang/jq:1.8.0"] = "sha256:j2"
+	d.repoTagsRead = nil
+	if err := a.set.Remove(a.rel(failed)); err != nil {
+		t.Fatal(err)
+	}
+	if n := d.repoTagsRead["ghcr.io/jqlang/jq"]; n != 1 {
+		t.Errorf("one removal read the tool's repository's tags %d times", n)
+	}
+	if _, ok := d.names[familiar(jq.Ref)]; !ok {
+		t.Errorf("%s is gone after %s's removal, while the live %s runs its tool by it: %v\n%s", jq.Ref, failed, ra, d.names, out.String())
+	}
+	// Moved on again, app-b's release pulls it, then app-b goes.
+	d.pull(jq.Ref, "sha256:j3")
+	rb := b.release(proxySvc)
+	if err := b.set.Record(b.rel(rb), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.set.Remove(b.rel(rb)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.names[familiar(jq.Ref)]; !ok {
+		t.Errorf("%s is gone after app-b's removal, while app-a's live %s runs its tool by it: %v\n%s", jq.Ref, ra, d.names, out.String())
+	}
+	if err := a.set.Remove(a.rel(ra)); err != nil {
+		t.Fatal(err)
+	}
+	a.set.Prune()
+	if _, ok := d.names[familiar(jq.Ref)]; ok || d.images["sha256:j1"] || d.images["sha256:j2"] || d.images["sha256:j3"] {
+		t.Errorf("a tool's name or images outlived every release that ran it: %v\n%s", d.names, out.String())
+	}
+}
+
+// A name one of a release's files gives up while the other takes it is no name left behind
+// (keepIn's others): a listed service moved onto a tool's tag (a --vars set, then a restart)
+// takes the tool's name from its tools, and moved back gives it to them again, neither
+// recorded as left for a pruning to retry.
+func TestNameMovingBetweenListingAndToolsIsNoNameLeft(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	next := Service{Name: "proxy-next", Ref: "caddy:2.8"}
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), next), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(next.Ref, "sha256:c2")
+	r1 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTools(e.rel(r1)); len(got) != 1 || got[0].ID != "sha256:c2" {
+		t.Fatalf("tools: %+v", got)
+	}
+	e.set.Restart = true
+	for _, ref := range []string{next.Ref, proxySvc.Ref} {
+		e.svcs[r1] = []Service{{Name: proxySvc.Name, Ref: ref}}
+		if err := e.set.Restore(e.rel(r1), "", false); err != nil {
+			t.Fatal(err)
+		}
+		if l := readList(e.rel(r1)); len(l) != 1 || l[0].Ref != ref {
+			t.Fatalf("the listing after a restart on %s: %+v", ref, l)
+		}
+		for _, l := range readLeft(e.set.Left) {
+			if familiar(l.ref) == familiar(next.Ref) {
+				t.Errorf("%s recorded as left (%s) after a restart on %s, while %s lists or bookmarks it\n%s", l.ref, l.why, ref, r1, out.String())
+			}
+		}
+	}
+}
+
+// namesRead is a fakeDocker noting every plain name read (ID, Inspect): none a hold, a
+// reference by digest or an id, which the door answers without a claim.
+type namesRead struct {
+	*fakeDocker
+	read []string
+}
+
+func (d *namesRead) note(ref string) {
+	if !isBookmark(ref) && !Pinned(ref) && !strings.HasPrefix(ref, "sha256:") {
+		d.read = append(d.read, ref)
+	}
+}
+
+func (d *namesRead) ID(ref string) (string, error) {
+	d.note(ref)
+	return d.fakeDocker.ID(ref)
+}
+
+func (d *namesRead) Inspect(ref string) (Image, error) {
+	d.note(ref)
+	return d.fakeDocker.Inspect(ref)
+}
+
+// Behind the door a removal reads no tool by its plain name, as only a record does there: the
+// door answers a read of a name whose last claim's image is gone by claiming it, a pull (the
+// bookmark just untagged was that image's last name), and the name is not the project user's
+// to remove; the tool's bookmark goes all the same.
+func TestDoorRemovalReadsNoToolByName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "shop-prod", ModeImage, &out)
+	e.set.Door = true
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	r1 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[toolTag("shop-prod", r1, jq.Ref)]; got != "sha256:j1" {
+		t.Fatalf("the tool's bookmark holds %q", got)
+	}
+	reads := &namesRead{fakeDocker: d}
+	e.set.Docker = reads
+	if err := e.set.Remove(e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.names[toolTag("shop-prod", r1, jq.Ref)]; ok {
+		t.Errorf("the tool's bookmark stays after its release's removal")
+	}
+	if slices.Contains(reads.read, jq.Ref) {
+		t.Errorf("behind the door, a removal read its tool by its name, which claims it (a pull): %v", reads.read)
+	}
+}
+
+// A name a removal keeps for another release's tool tag is recorded (ToolKeeps), and a pruning
+// removes it once no tool tag names it, whichever release had the tag: a project user's never
+// takes a plain name (its removal of one does nothing), so without the record a deploy user's
+// project sharing a tool with it leaves the name and its image for good. Here the project
+// user's claim landed the tag's newer image, so no bookmark of its holds the one the name is on.
+func TestToolKeptNameIsRetried(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	a := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	a.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(a.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	ra := a.release(proxySvc)
+	if err := a.set.Record(a.rel(ra), ""); err != nil {
+		t.Fatal(err)
+	}
+	// A project user's release of the same tool: its claim loads the registry's image now
+	// (j2) and writes no plain name, its record bookmarking it under its own tool tag.
+	d.images["sha256:j2"] = true
+	theirs := familiar(toolTag("shop-prod", "20261016000001", jq.Ref))
+	d.names[theirs] = "sha256:j2"
+	if err := a.set.Remove(a.rel(ra)); err != nil {
+		t.Fatal(err)
+	}
+	// The project user's release goes: the door removes its hold, never the plain name.
+	if err := d.Remove(theirs); err != nil {
+		t.Fatal(err)
+	}
+	a.set.Prune()
+	if id, ok := d.names[familiar(jq.Ref)]; ok {
+		t.Errorf("%s (%s) outlived every release that ran it, recorded nowhere (%v): %v\n%s", jq.Ref, id, readLeft(a.set.Left), d.names, out.String())
+	}
+}
+
+// A removal by digest never strips a name a tool keeps: a release that pinned the image a tool's
+// tag holds by its digest goes while another release's tool runs by the tag, and leaves the
+// digest, whose removal takes every name of the image in its repository on Docker's containerd
+// store; the image goes with its last name.
+func TestRemoveByDigestKeepsAToolsName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	a, b := newRecEnv(t, d, "app-prod", ModeImage, &out), newRecEnv(t, d, "shop-prod", ModeImage, &out)
+	a.set.Left, b.set.Left = left, left
+	b.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(b.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j0")
+	rb := b.release(proxySvc)
+	if err := b.set.Record(b.rel(rb), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The tag moves on, and app-prod pins its image by digest.
+	d.pull(jq.Ref, "sha256:j1")
+	pinned := jq.Ref + "@sha256:j1"
+	d.names[familiar(pinned)] = "sha256:j1"
+	ra := a.release(Service{Name: "jq", Ref: pinned})
+	if err := a.set.Record(a.rel(ra), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.set.Remove(a.rel(ra)); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[familiar(jq.Ref)]; got != "sha256:j1" {
+		t.Errorf("%s holds %q after a removal by digest, while %s's tool runs by it: %v\n%s", jq.Ref, got, rb, d.names, out.String())
 	}
 }

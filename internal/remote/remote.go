@@ -1295,8 +1295,9 @@ image_unlock() {
 // Either way every profile's services without a build are pulled too
 // (ProfilePull): a tool run now and then (`--profile tools run --rm jq`)
 // would otherwise keep the tag it pulled first, never its fixes. Pulled
-// only: the listing and the bookmarks stay the default services' (`config
-// --images`), and a profile's buildable services are neither built nor
+// only: the listing stays the default services' (`config --images`), each
+// tool bookmarked beside it (images.ToolsFile) and never pinned, and a
+// profile's buildable services are neither built nor
 // pulled, so a tool nobody pushed never fails a release. In build mode
 // that is the same one pull; image mode pulls its default services'
 // third-party images twice (a manifest request each, nothing
@@ -1594,10 +1595,30 @@ func FormatReleases(out string) string {
 	if b.Len() == 0 {
 		b.WriteString("No releases yet.\n")
 	}
-	if left := ParseLeft(out); len(left) > 0 {
-		b.WriteString("\nImages the project's removals left (Docker refused; each pruning retries):\n")
-		for _, l := range left {
-			fmt.Fprintf(&b, "  %s  %s, release %s, %s\n    %s\n", l.Ref, l.Name, l.Release, l.Time.Format("2006-01-02 15:04"), l.Why)
+	// A name kept while a release's tool runs by it is no failure: under a heading of its own.
+	var left, kept []Left
+	for _, l := range ParseLeft(out) {
+		if l.Why == images.ToolKeeps {
+			kept = append(kept, l)
+		} else {
+			left = append(left, l)
+		}
+	}
+	for _, g := range []struct {
+		head string
+		ls   []Left
+	}{
+		{"Images the project's removals left (each pruning retries):", left},
+		{"Names the project's removals kept for a release's tool (each pruning removes them once no tool runs by them):", kept},
+	} {
+		if len(g.ls) > 0 {
+			b.WriteString("\n" + g.head + "\n")
+		}
+		for _, l := range g.ls {
+			fmt.Fprintf(&b, "  %s  %s, release %s, %s\n", l.Ref, l.Name, l.Release, l.Time.Format("2006-01-02 15:04"))
+			if l.Why != images.ToolKeeps {
+				fmt.Fprintf(&b, "    %s\n", l.Why)
+			}
 		}
 	}
 	return b.String()

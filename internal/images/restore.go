@@ -270,7 +270,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		s.say(report.ErrorLevel, "could not record what --accept-image let through: %v", err)
 		return err
 	}
-	if err := s.writeHeld(target, es, holds); err != nil {
+	if err := s.writeHeld(target, es, holds, s.profilesOf(target, false)); err != nil {
 		return err
 	}
 	switch {

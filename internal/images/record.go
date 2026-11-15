@@ -203,7 +203,8 @@ func (s *Set) judgeRelease(rel string) ([]judged, error) {
 // Record writes what a new release runs, once its images are fetched:
 // the listing (ListFile, with each image's digest and version, and each
 // data service's version and tag), the bookmarks and its ComposeFile,
-// which labels each service with the image it was given. prev is the
+// which labels each service with the image it was given, and its tools
+// with their bookmarks (writeHeld). prev is the
 // release it replaces ("" for a first one): its listing says what moved.
 // Check came before the fetch; what it let through by --accept-image
 // starts its data's history over once it runs (ForcedFile, Ran), but for
@@ -262,7 +263,7 @@ func (s *Set) Record(rel, prev string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := s.writeHeld(rel, es, holds); err != nil {
+	if err := s.writeHeld(rel, es, holds, s.profilesOf(rel, true)); err != nil {
 		return err
 	}
 	if len(lines) > 0 {

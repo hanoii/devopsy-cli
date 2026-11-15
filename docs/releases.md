@@ -109,9 +109,11 @@ its `mode:`, before it goes live:
 Every profile's services without a `build:` are pulled on every release,
 so a tool run now and then (`devopsy --profile tools run --rm jq`) gets
 its tag's fixes too, and one that fails to pull fails the release like
-any other. They are pulled but not kept as the release's images ([Each
-release keeps its images](images.md#each-release-keeps-its-images)). A
-profile's buildable services are built when they are used.
+any other. They are kept with the release and go with it, but never
+pinned or brought back like its images: a tool runs what its tag holds
+now ([Each release keeps its
+images](images.md#each-release-keeps-its-images)). A profile's buildable
+services are built when they are used.
 
 The run step's `up` then finds every image there, and a `deploy` needs
 no `build` or `pull`: `up -d --wait --remove-orphans`, with no
@@ -341,6 +343,8 @@ only the project:
 - `devopsy-release.json`: the commit, branch and who made the release;
 - `devopsy-target.env`: its environment;
 - `devopsy-images`: its images, with each one's digest and version;
+- `devopsy-tools`: the tools it pulled under a profile, each tagged for
+  it ([Images](images.md#each-release-keeps-its-images));
 - `devopsy-compose.yaml` (below);
 - `devopsy-fetch.yaml` while a build-mode fetch runs: the name each build
   lands under, removed once the fetch is done;
