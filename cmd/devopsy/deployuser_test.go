@@ -208,3 +208,48 @@ func TestProjectUserRefusalNamesTheDeployUser(t *testing.T) {
 		}
 	}
 }
+
+// Bug (review round 2): with no record, a setup whose root run reads as root another deploy
+// user the login's facts did not see (a docker member's setup record that appeared meanwhile,
+// or one in a home the login cannot read) refuses there, exit 4, which the rules say "applies
+// nothing else and writes no server.yaml". The apply still loads the metadata firewall by its
+// own root run, from the refused login's config, and a release build's end writes the floor
+// note into the login's server.yaml, making it "set up by devopsy": the real deploy user's next
+// --server-setup or --upgrade then reads that file as another deploy user and refuses too.
+func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	asRelease(t, s)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	// The other user's setup record appears once the facts were read, before the root run.
+	waiting := filepath.Join(t.TempDir(), "waiting")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@admin@one:", "--server-setup", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_RUN_WAIT="+waiting, "FAKE_RUN_WAIT_ON=du_other=")
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, waiting, "the setup's root run", startWait, func() string { return readString(outFile.Name()) })
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	write(t, waiting+".go", "", 0o644)
+	_ = cmd.Wait()
+	out := readString(outFile.Name())
+	if !strings.Contains(out, "devopsy was set up as ops on this server") {
+		t.Fatalf("the root run's refusal not said (%d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
+	if fileExists(record) || fileExists(filepath.Join(host, setup.DeployUserFile)) {
+		t.Errorf("a login refused as root got a setup record (%q) or the deploy user's record:\n%s", readString(record), out)
+	}
+	if fileExists(filepath.Join(host, "iptables.log")) || fileExists(filepath.Join(host, remote.FirewallMark)) {
+		t.Errorf("a login refused as root loaded the metadata firewall:\n%s", out)
+	}
+}
