@@ -174,37 +174,42 @@ func TestLoopbackProxied(t *testing.T) {
 	}
 }
 
+// healthyServerInfo is a server with nothing to warn of: devopsy, Docker and the disks as
+// they should be, Traefik and two projects released.
+func healthyServerInfo() remote.ServerInfo {
+	return remote.ServerInfo{
+		Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
+		OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
+		MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
+		AppArmor: true, AppArmorParser: true,
+		Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: "0.38.2", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
+			RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
+			LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
+		Disks: []remote.Disk{{Paths: []string{"releases=/home/devopsy", "docker=/var/lib/docker", "/=/"}, Type: "xfs", Size: 80e9, Free: 40e9, Used: 40e9, Reflinks: "yes"}},
+		Containers: []remote.HostContainer{
+			{Project: "traefik-prod", Service: "traefik", State: "running", Labels: map[string]string{"devopsy.role": "proxy", "devopsy.export.BASE_DOMAIN": "vm1.example.com"}},
+			{Project: "shop-prod", Service: "app", State: "running", Health: "healthy"},
+			{Project: "shop-prod", Service: "migrate", State: "exited"},
+			// Stopped with a healthcheck: Docker says unhealthy once its
+			// monitor stopped (Docker 29.8), which is no warning (review).
+			{Project: "shop-prod", Service: "db", State: "exited", Health: "unhealthy"},
+			// An environment's name keeps its case in its directory, its
+			// compose name is lowercased (review).
+			{Project: "shop-staging", Service: "app", State: "running"},
+		},
+		Environments: []remote.Environment{
+			{Path: "traefik/prod", Status: "release\t20261026120000\t{\"mode\":\"image\",\"time\":\"2026-10-26T12:00:00Z\",\"by\":\"ci\"}\nkept\t1\nsynced\t\n"},
+			{Path: "shop/prod", Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t2\nsynced\t\n"},
+			{Path: "shop/Staging", Status: "release\t20261027110000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:00:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
+		},
+	}
+}
+
 func TestServerInfoReport(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
-	healthy := func() remote.ServerInfo {
-		return remote.ServerInfo{
-			Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
-			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
-			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
-			AppArmor: true, AppArmorParser: true,
-			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: "0.38.2", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
-				RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
-				LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
-			Disks: []remote.Disk{{Paths: []string{"releases=/home/devopsy", "docker=/var/lib/docker", "/=/"}, Type: "xfs", Size: 80e9, Free: 40e9, Used: 40e9, Reflinks: "yes"}},
-			Containers: []remote.HostContainer{
-				{Project: "traefik-prod", Service: "traefik", State: "running", Labels: map[string]string{"devopsy.role": "proxy", "devopsy.export.BASE_DOMAIN": "vm1.example.com"}},
-				{Project: "shop-prod", Service: "app", State: "running", Health: "healthy"},
-				{Project: "shop-prod", Service: "migrate", State: "exited"},
-				// Stopped with a healthcheck: Docker says unhealthy once its
-				// monitor stopped (Docker 29.8), which is no warning (review).
-				{Project: "shop-prod", Service: "db", State: "exited", Health: "unhealthy"},
-				// An environment's name keeps its case in its directory, its
-				// compose name is lowercased (review).
-				{Project: "shop-staging", Service: "app", State: "running"},
-			},
-			Environments: []remote.Environment{
-				{Path: "traefik/prod", Status: "release\t20261026120000\t{\"mode\":\"image\",\"time\":\"2026-10-26T12:00:00Z\",\"by\":\"ci\"}\nkept\t1\nsynced\t\n"},
-				{Path: "shop/prod", Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t2\nsynced\t\n"},
-				{Path: "shop/Staging", Status: "release\t20261027110000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:00:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
-			},
-		}
-	}
+	healthy := healthyServerInfo
+
 	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
 		"  devopsy    0.53.0\n",
@@ -1517,16 +1522,8 @@ func TestServerInfoProxyWarningReadsThisDaemonsEntry(t *testing.T) {
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	other := []remote.ClientProxy{{For: "tcp://build.example.com:2376", File: "/home/devopsy/.docker/config.json", Proxy: "http://proxy.example.com:3128", NoProxy: "localhost,127.0.0.1,::1"}}
 	warned := func(daemon, words string) bool {
-		info := remote.ServerInfo{
-			Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
-			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
-			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
-			AppArmor: true, AppArmorParser: true,
-			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: "0.38.2", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
-				RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
-				LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true,
-				Proxy: daemon, ClientProxies: other},
-		}
+		info := healthyServerInfo()
+		info.Docker.Proxy, info.Docker.ClientProxies = daemon, other
 		_, ws := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
 		for _, w := range ws {
 			if !w.note && strings.Contains(w.msg, words) {
