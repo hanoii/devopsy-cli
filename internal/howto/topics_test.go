@@ -126,7 +126,7 @@ func TestDoorConfigStepKeepsTheConfigsLastLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := fakes(t, map[string]string{
-		"getent":  "echo devopsy:x:1000:1000::" + home + ":/bin/sh\n",
+		"getent":  "echo devopsy:x:61010:61010::" + home + ":/bin/sh\n",
 		"runuser": "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
 	}, "getent", "runuser")
 	s := stepWith(t, ProjectUsers, "config.yaml")
@@ -238,7 +238,7 @@ func TestDeployUserConfigStepNeverNestsTheConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := fakes(t, map[string]string{
-		"getent":  `echo "$2:x:1000:1000::` + homes + `/$2:/bin/sh"` + "\n",
+		"getent":  `echo "$2:x:61010:61010::` + homes + `/$2:/bin/sh"` + "\n",
 		"install": `for a; do :; done; mkdir -p "$a"` + "\n",
 	}, "getent", "install", "chown")
 	out := pasted(t, stepWith(t, DeployUser, ".config/devopsy"), path)
@@ -284,7 +284,7 @@ func TestDeployUserOwnersStepLeavesTheOldUsersLogin(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "log")
 	logged := "shift 2\nfor a; do echo \"$a\"; done >> " + log + "\n"
 	path := fakes(t, map[string]string{
-		"getent": "echo " + me.Username + ":x:1000:1000::" + home + ":/bin/sh\n",
+		"getent": "echo " + me.Username + ":x:61010:61010::" + home + ":/bin/sh\n",
 		"chown":  logged, "chgrp": logged,
 	}, "getent", "chown", "chgrp")
 	s := stepWith(t, DeployUser, `-exec chown -h "$new"`)
@@ -327,7 +327,7 @@ func TestDeployUserConfigStepLeavesTwoConfigsApart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	path := fakes(t, map[string]string{"getent": `echo "$2:x:1000:1000::` + homes + `/$2:/bin/sh"` + "\n"}, "getent", "install", "chown", "id")
+	path := fakes(t, map[string]string{"getent": `echo "$2:x:61010:61010::` + homes + `/$2:/bin/sh"` + "\n"}, "getent", "install", "chown", "id")
 	out := pasted(t, stepWith(t, DeployUser, ".config/devopsy"), path)
 	if _, err := os.Stat(filepath.Join(old, "server.yaml")); err != nil {
 		t.Errorf("the old user's config moved over the new user's own:\n%s", out)
@@ -357,7 +357,7 @@ func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=devopsy ;; *) h=$2 ;; esac; echo "$2:x:1000:1000::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
+	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=devopsy ;; *) h=$2 ;; esac; echo "$2:x:61010:61010::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
 	out := pasted(t, stepWith(t, DeployUser, `mv "$from/$p" "$to/$p"`), path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
 	for _, nested := range []string{"deploy/.devopsy-uids/.devopsy-uids", "deploy/shop/shop"} {
 		if _, err := os.Stat(filepath.Join(homes, nested)); err == nil {
@@ -406,7 +406,7 @@ func TestDeployUserMoveStepLeavesWhatDevopsyDidNotMake(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=admin ;; *) h=$2 ;; esac; echo "$2:x:1000:1000::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
+	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=admin ;; *) h=$2 ;; esac; echo "$2:x:61010:61010::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
 	out := pasted(t, stepWith(t, DeployUser, `mv "$from/$p" "$to/$p"`), path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
 	if _, err := os.Stat(filepath.Join(homes, "deploy", "shop", "prod", "releases")); err != nil {
 		t.Fatalf("the project did not move: %v\n%s", err, out)

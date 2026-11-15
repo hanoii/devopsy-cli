@@ -324,7 +324,7 @@ func TestDeployUserFactTwoSetupRecordsLeaveAWayOut(t *testing.T) {
 	t.Parallel()
 	h := setupHost{root: t.TempDir()}
 	write(t, h.path("/etc/group"), "docker:x:990:admin,deploy\n", 0o644)
-	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndeploy:x:1001:1001::/home/deploy:/bin/sh\n", 0o644)
+	write(t, h.path("/etc/passwd"), "admin:x:61010:61010::/home/admin:/bin/sh\ndeploy:x:61011:61011::/home/deploy:/bin/sh\n", 0o644)
 	for _, u := range []string{"admin", "deploy"} {
 		write(t, h.path("/home/"+u+"/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
 	}
@@ -344,7 +344,7 @@ func TestDeployUserRefusalNeverOffersARefusedSetup(t *testing.T) {
 	t.Parallel()
 	h := setupHost{root: t.TempDir()}
 	write(t, h.path("/etc/group"), "docker:x:990:admin,devopsy\n", 0o644)
-	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndevopsy:x:1001:1001::/home/devopsy:/bin/sh\n", 0o644)
+	write(t, h.path("/etc/passwd"), "admin:x:61010:61010::/home/admin:/bin/sh\ndevopsy:x:61011:61011::/home/devopsy:/bin/sh\n", 0o644)
 	for _, u := range []string{"admin", "devopsy"} {
 		write(t, h.path("/home/"+u+"/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
 	}
@@ -524,7 +524,7 @@ func otherServer(t *testing.T, group string, files ...string) setupHost {
 	t.Helper()
 	h := setupHost{root: t.TempDir()}
 	write(t, h.path("/etc/group"), group, 0o644)
-	write(t, h.path("/etc/passwd"), "root:x:0:0::/root:/bin/sh\nadmin:x:1000:1000::/home/admin:/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, h.path("/etc/passwd"), "root:x:0:0::/root:/bin/sh\nadmin:x:61010:61010::/home/admin:/bin/sh\nops:x:61011:61011::/home/ops:/bin/sh\n", 0o644)
 	for _, f := range files {
 		write(t, h.path(f), "x\n", 0o644)
 	}
@@ -624,13 +624,13 @@ func TestOtherDeployRefusalWithNoCommandKeepsItsFixApartFromTheSteps(t *testing.
 func TestCheckDeployUserOfNoLogin(t *testing.T) {
 	t.Parallel()
 	h := recordAt(t, setup.DeployUserText("ghost"))
-	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\n", 0o644)
+	write(t, h.path("/etc/passwd"), "admin:x:61010:61010::/home/admin:/bin/sh\n", 0o644)
 	err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{})
 	var f *report.Failure
 	if !errors.As(err, &f) || f.Msg != report.DeployUserUnread.Msg() || len(f.Details) != 1 || !strings.Contains(f.Details[0], "names ghost, but this server has no such user; it should hold only the deploy user's name, on one line") {
 		t.Errorf("a record naming no login: %#v", err)
 	}
-	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\nghost:x:1001:1001::/home/ghost:/bin/sh\n", 0o644)
+	write(t, h.path("/etc/passwd"), "admin:x:61010:61010::/home/admin:/bin/sh\nghost:x:61011:61011::/home/ghost:/bin/sh\n", 0o644)
 	if err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{}); !errors.As(err, &f) || f.Msg != report.NotDeployUser.Msg() {
 		t.Errorf("a record naming a login of the server's: %#v", err)
 	}

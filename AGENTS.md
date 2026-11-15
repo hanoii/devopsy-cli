@@ -172,14 +172,14 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 ## Checks
 
 - Unit tests are Go tests, and `cmd/devopsy` and `internal/remote` also run the server scripts against a fake `docker` and `ssh` (`fakeBin`): a script bug shows in seconds there, in minutes end to end.
-- Run the checks on Linux in Docker as a plain user, what servers run and how CI runs them, since macOS hides differences that matter (internals/gotchas.md) and runs them slower, and root passes what fails for any other user; the caches keep reruns fast:
+- Run the checks on Linux in Docker as a plain user, what servers run and how CI runs them, since macOS hides differences that matter (internals/gotchas.md) and runs them slower, and root passes what fails for any other user, as GitHub's runner's user (uid 1001, in a `docker` group), since a test can pass at one uid and fail at another; the caches keep reruns fast:
 
 ```sh
 docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false \
-  -v devopsy-gocache-runner:/home/runner/.cache -v devopsy-gomod:/go/pkg/mod \
-  golang:1.26-trixie sh -c 'useradd runner &&
+  -v devopsy-gocache-runner1001:/home/runner/.cache -v devopsy-gomod:/go/pkg/mod \
+  golang:1.26-trixie sh -c 'groupadd docker && useradd -u 1001 -G docker runner &&
   chown runner /home/runner /home/runner/.cache && go mod download &&
-  HOME=/home/runner setpriv --reuid runner --regid runner --clear-groups sh -c "
+  HOME=/home/runner setpriv --reuid runner --regid runner --init-groups sh -c "
   go vet ./... &&
   go test -count=1 -parallel 16 ./cmd/devopsy ./internal/remote &&
   go test -count=1 -race \$(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)"'
@@ -188,6 +188,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.
 
 - CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for completion, the race detector and shellcheck) and on macOS; run them on macOS too (`go vet ./... && go test -count=1 ./...`) for a change to what runs on the operator's machine, where owners are never checked and there is no GNU `tail`.
 - Run `TestActivationCuts` (`DEVOPSY_TEST_CUTS=1`, on Linux, nightly in `e2e.yml`) for a change to an activation's order or failure paths: it cuts each docker call in turn, too slow for every run.
+- A fake user in a test has a uid no login has, 61000 and up, or the running user's own (`loginLine`), never one in the login range (`TestFakeUsersOwnNoLoginUID`): a machine's real user there makes a test pass on one machine and fail on another.
 - A test writes a file it then runs through `testfile.Write`, or a helper on it (`write`), never `os.WriteFile`: a parallel test's fork can leave the file busy, and its first call fails (`TestWrittenFakeRunsBesideForks`, `DEVOPSY_TEST_FORKS=1`, nightly in `e2e.yml`).
 - End to end (`e2e/`, build tag `e2e`) runs servers in Docker: `go test -tags e2e -count=1 -v -timeout 40m ./e2e` runs the suite on four lanes, `-run '^TestName$'` one test; read `internals/e2e.md` before writing or changing one.
 - Never sleep for something to happen: poll for it (`eventually` in `e2e/`, 250 ms; a loop on the file or the state in a unit test), so a test takes as long as the behavior, not the worst case.

@@ -47,6 +47,32 @@ func TestNothingSaysAround(t *testing.T) {
 	}
 }
 
+// A fake passwd line in a test names its user by a uid no login has:
+// 61000 and up, or the running user's own through the test's helpers
+// (loginLine, os.Getuid). A literal in the login range (1000 to 49999)
+// is some machine's real user: GitHub's runner is uid 1001, so a fake
+// user there was the runner on CI and someone else locally, and a test
+// passed on one and failed on the other. The project users' range
+// (door.ProjectIDMin to ProjectIDMax) and system ids stay usable.
+func TestFakeUsersOwnNoLoginUID(t *testing.T) {
+	t.Parallel()
+	line := regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_.-]*:x:([0-9]+):[0-9]+:`)
+	for _, f := range sources.Go(t, true) {
+		if !strings.HasSuffix(f.Path, "_test.go") {
+			continue
+		}
+		for i, l := range strings.Split(string(f.Data), "\n") {
+			for _, m := range line.FindAllStringSubmatch(l, -1) {
+				var uid int
+				fmt.Sscan(m[1], &uid)
+				if uid >= 1000 && uid <= 49999 {
+					t.Errorf("%s:%d: a fake user with uid %d, a real login's range: use 61000 and up, or loginLine: %s", f.Path, i+1, uid, m[0])
+				}
+			}
+		}
+	}
+}
+
 // Unit tests run in parallel (AGENTS.md, Checks): every
 // test calls t.Parallel() first, or says why not in its doc comment, on
 // a line starting "Not parallel:" (it sets the environment, a global, or
