@@ -147,8 +147,8 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 	case me.uid == 0 && deploy == "", me.name == "":
 		return nil, nil
 	case deploy == "":
-		if other, evidence := otherDeployUser(h, me, root); other != "" {
-			r := otherDeployRefusal(other, evidence, me, s)
+		if o := otherDeployUser(h, me, root); o.name != "" {
+			r := otherDeployRefusal(o, me, s)
 			return nil, &r
 		}
 	}
@@ -161,9 +161,11 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 // (~/.config/devopsy/server.yaml), uid claims (.devopsy-uids) or an environment's releases
 // (homeReleases), a deploy user that never ran --server-setup included; else the owner of the
 // release root root, another user's but root's, by name, else "uid N", no login. "" for none.
+// bare is the member's setup record where that is all that shows it (no claims, no environment
+// in its home), one it may hold by mistake, "" otherwise.
 // The one judgment of it: the facts read it as the login can, and the root run asks it again
 // as root before it makes the record (DeployUserOtherFlag).
-func otherDeployUser(h setupHost, me login, root string) (user, evidence string) {
+func otherDeployUser(h setupHost, me login, root string) otherUser {
 	group, _ := os.ReadFile(h.path("/etc/group"))
 	passwd, _ := os.ReadFile(h.path("/etc/passwd"))
 	type entry struct{ name, uid, gid, home string }
@@ -198,14 +200,21 @@ func otherDeployUser(h setupHost, me login, root string) (user, evidence string)
 		home := users[i].home
 		record := filepath.Join(home, ".config", "devopsy", setup.RecordFile)
 		claims := filepath.Join(home, uids.DirName)
+		env := homeReleases(h.path(home))
+		holds := exists(h.path(claims)) || env != ""
+		o := otherUser{name: m, both: holds && holdsEnvironments(root)}
 		switch {
-		case exists(h.path(record)):
-			return m, "its setup record " + record
+		case exists(h.path(record)) && !holds:
+			o.evidence, o.bare = "its setup record "+record, record
 		case exists(h.path(claims)):
-			return m, "its uid claims " + claims
+			o.evidence = "its uid claims " + claims
+		case env != "":
+			o.evidence = "its environment " + filepath.Join(home, env)
+		case exists(h.path(record)):
+			o.evidence = "its setup record " + record
 		}
-		if env := homeReleases(h.path(home)); env != "" {
-			return m, "its environment " + filepath.Join(home, env)
+		if o.evidence != "" {
+			return o
 		}
 	}
 	var st syscall.Stat_t
@@ -214,9 +223,25 @@ func otherDeployUser(h setupHost, me login, root string) (user, evidence string)
 		if i := slices.IndexFunc(users, func(u entry) bool { return u.uid == strconv.Itoa(int(st.Uid)) }); i >= 0 {
 			owner = users[i].name
 		}
-		return owner, "the release root " + root + " is its"
+		return otherUser{name: owner, evidence: "the release root " + root + " is its"}
 	}
-	return "", ""
+	return otherUser{}
+}
+
+// otherUser is another deploy user a server shows (otherDeployUser): its name, what shows it,
+// its setup record where that is all (bare, one it may hold by mistake), and both where it holds
+// environments or claims and so does the login's own release root, a bigger issue than a choice.
+type otherUser struct {
+	name, evidence, bare string
+	both                 bool
+}
+
+// holdsEnvironments says whether the release root root holds devopsy's environments or uid
+// claims, the login's own (otherDeployUser), by what only devopsy makes (homeReleases): unlike
+// rootHolds, which errs toward held so that no root is moved under releases, a home's own .env
+// is none here, so it never turns a choice into the error of two users with environments.
+func holdsEnvironments(root string) bool {
+	return root != "" && (exists(filepath.Join(root, uids.DirName)) || homeReleases(root) != "")
 }
 
 // homeReleases is an environment devopsy released under home, as its release root, relative
@@ -247,10 +272,15 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// otherWire is the line --deploy-user-other prints, and otherLine reads back: other, the user
-// and what shows it, tab separated, a user with no name ("uid N") holding a space.
-func otherWire(user, evidence string) string {
-	return remote.SetupOther + "\t" + user + "\t" + evidence
+// otherWire is the line --deploy-user-other prints, and otherLine reads back: other, the user,
+// what shows it, its bare setup record ("" for none) and both (1 or ""), tab separated, a user
+// with no name ("uid N") holding a space.
+func otherWire(o otherUser) string {
+	both := ""
+	if o.both {
+		both = "1"
+	}
+	return remote.SetupOther + "\t" + o.name + "\t" + o.evidence + "\t" + o.bare + "\t" + both
 }
 
 // runDeployUserOther implements the hidden remote.DeployUserOtherFlag <login> <uid> <root>, run
@@ -272,10 +302,10 @@ func runDeployUserOther(args []string) int {
 	case err != nil:
 		fmt.Println(remote.SetupUnread + "\t" + err.Error())
 	case deploy != "" && deploy != me.name:
-		fmt.Println(otherWire(deploy, "the record "+setup.DeployUserFile+" names it"))
+		fmt.Println(otherWire(otherUser{name: deploy, evidence: "the record " + setup.DeployUserFile + " names it"}))
 	case deploy == "":
-		if other, evidence := otherDeployUser(h, me, args[2]); other != "" {
-			fmt.Println(otherWire(other, evidence))
+		if o := otherDeployUser(h, me, args[2]); o.name != "" {
+			fmt.Println(otherWire(o))
 		}
 	}
 	return 0
@@ -308,15 +338,30 @@ func deployUnreadRefusal(why string) setup.Refusal {
 		Fix: "correct it as root, naming the deploy user alone on a line, the file root's with mode 644", Howto: howto.DeployUser}
 }
 
-// otherDeployRefusal is the setup's refusal to record me where the server shows other set up by
-// devopsy already (evidence, otherDeployUser's or the root run's), with the way to run it as
-// other on the session's host, in words without one, and the steps to change the deploy user.
-func otherDeployRefusal(other, evidence string, me login, s remote.Session) setup.Refusal {
+// otherDeployRefusal is the setup's refusal to record me where the server shows o set up by
+// devopsy already (otherDeployUser's, or the root run's line), with the way to run it as o on
+// the session's host, in words without one, and the steps to change the deploy user. Where all
+// that shows o is its setup record (bare), two docker users each set up and unrecorded would
+// refuse toward each other, so the second way out is that record's removal, as root, where o was
+// set up by mistake. Where o and the login both hold environments or claims (both), no command
+// settles it: only the steps, by hand.
+func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
+	who := me.words()
 	r := setup.Refusal{Item: setup.RefusalDeployUser, Howto: howto.DeployUser,
-		Message: "devopsy was set up as " + other + " on this server (" + evidence + "), and this setup runs as " + me.words() + ": it would record " + me.words() + " as the deploy user, refusing " + other,
-		Fix:     "run it as " + other}
-	if s.Host != "" && remote.LoginName(other) {
-		r.Fix, r.Command = "run it as "+other+":", "devopsy @"+remote.AsUser(s.Host, other)+" --server-setup"
+		Message: "devopsy was set up as " + o.name + " on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name,
+		Fix:     "run it as " + o.name}
+	switch {
+	case o.both:
+		r.Message = "both " + who + " and " + o.name + " hold environments on this server (" + o.evidence + "): neither is recorded as the deploy user until one's are moved to the other"
+		r.Fix = "settle which one is the deploy user by hand, moving the other's environments to it"
+		return r
+	case s.Host != "" && remote.LoginName(o.name):
+		r.Fix, r.Command = "run it as "+o.name+":", "devopsy @"+remote.AsUser(s.Host, o.name)+" --server-setup"
+	}
+	if o.bare != "" {
+		r.Howto = ""
+		r.Message = o.name + " was set up too on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name
+		r.Or, r.OrCommand = "if "+o.name+" was set up by mistake and holds no environments, remove its setup record as root:", "sudo rm "+remote.QuoteWord(o.bare)
 	}
 	return r
 }

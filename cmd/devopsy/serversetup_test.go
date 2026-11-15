@@ -227,9 +227,27 @@ func TestServerSetupPlanNamesTheUserItRecords(t *testing.T) {
 	t.Errorf("no deploy user line in the plan:\n%s", out)
 }
 
+// --upgrade's apply refuses to record its login where the server shows another deploy user, as
+// --server-setup does, as a warning: the same two ways out from a bare record, nothing applied,
+// and the upgrade itself exits 0.
+func TestServerSetupApplyUpgradeRefusesWhereAnotherIsSetUp(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "devopsy: warning: deploy user: ops was set up too on this server") || !strings.Contains(out, "$ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
+		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) {
+		t.Errorf("--upgrade where another is set up (%d):\n%s", code, out)
+	}
+}
+
 // On a server with no record that shows another deploy user (a docker member with devopsy's
-// setup record), the setup refuses in its plan, before anything: who, the way to run it as that
-// user and the steps to change the deploy user; nothing put, no record of either kind written.
+// setup record alone), the setup refuses in its plan, before anything: who, and two numbered
+// ways out, running it as that user or removing its bare record as root; nothing put, no
+// record of either kind written.
 func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
@@ -238,8 +256,9 @@ func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
 	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
-	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: devopsy was set up as ops on this server (its setup record /home/ops/.config/devopsy/server.yaml), and this setup runs as "+me) ||
-		!strings.Contains(out, "$ devopsy @ops@one: --server-setup\n") || !strings.Contains(out, "$ "+howto.Command(howto.DeployUser)+"\n") ||
+	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: ops was set up too on this server (its setup record /home/ops/.config/devopsy/server.yaml), and this setup runs as "+me) ||
+		!strings.Contains(out, "devopsy: | 1. run it as ops:\ndevopsy: |    $ devopsy @ops@one: --server-setup\n") ||
+		!strings.Contains(out, "devopsy: | 2. if ops was set up by mistake and holds no environments, remove its setup record as root:\ndevopsy: |    $ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
 		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
 		t.Errorf("another deploy user set up (%d):\n%s", code, out)
 	}

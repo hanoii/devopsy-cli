@@ -42,7 +42,7 @@ func TestDeployUserRefusesAnotherLogin(t *testing.T) {
 	if out, code := srv(t, "mkdir -p ~/.config/devopsy && if [ ! -e ~/.config/devopsy/server.yaml ]; then echo '{}' >~/.config/devopsy/server.yaml && touch ~/.config/devopsy/server.yaml.e2e-made; fi"); code != 0 {
 		t.Fatalf("the deploy user's setup record (%d): %s", code, out)
 	}
-	if out, code := op(t, "/", "devopsy @admin2@server: --server-setup --yes 2>&1"); code != 1 || !saysWords(out, "devopsy was set up as devopsy on this server") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-setup") {
+	if out, code := op(t, "/", "devopsy @admin2@server: --server-setup --yes 2>&1"); code != 1 || !saysWords(out, "devopsy was set up as devopsy on this server") && !saysWords(out, "devopsy was set up too on this server") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-setup") {
 		t.Errorf("the second user's setup (%d): %s", code, out)
 	}
 	if _, code := asRoot(t, server, "test -e "+setup.DeployUserFile); code == 0 {

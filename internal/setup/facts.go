@@ -72,6 +72,10 @@ type Refusal struct {
 	// Command is the fix's command, offered after its text, "" for none (for example devopsy's
 	// on the server's address as its session named it, the text saying it in words without one).
 	Command string `json:"command,omitempty"`
+	// Or is a second way out, offered after Fix as one of the fixes, its command OrCommand ("" for
+	// none): another deploy user's bare setup record to remove where it may be a mistake.
+	Or        string `json:"or,omitempty"`
+	OrCommand string `json:"or_command,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
 	// file).

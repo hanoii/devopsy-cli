@@ -275,8 +275,19 @@ compose names they share. `--server-setup` run as another user refuses
 too, and so does one on a server with no record yet that shows another
 deploy user: another member of the `docker` group whose home holds
 devopsy's setup record (`~/.config/devopsy/server.yaml`), its uid claims
-or an environment's releases, or a release root another user owns. It names that user and the command to run it as that user, before
-anything changes. The record never changes by itself: making another
+or an environment's releases, or a release root another user owns. It
+refuses before anything changes, in one of three ways:
+
+- where that user's setup record is all it holds (an account set up by
+  mistake), two fixes: run it as that user, or remove that record as
+  root (`sudo rm`, its path named), after which this login is recorded;
+- where that user holds environments or uid claims and this login none:
+  run it as that user, or change the deploy user by hand;
+- where both hold environments or uid claims: an error saying so, with
+  only the steps to settle it by hand, since no command can choose.
+
+`--upgrade` refuses the same way, as a warning. The record never changes
+by itself: making another
 user the deploy user is by hand, with the steps `devopsy
 --server-setup-howto deploy-user` prints. A record that cannot be read,
 or names no one user, refuses every login but root and project users

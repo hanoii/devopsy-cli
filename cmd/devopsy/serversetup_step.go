@@ -1398,17 +1398,29 @@ func sayLevel(upgrade bool) report.Level {
 // (setup.Refusal.Command) or the command that prints its topic's steps (setup.Refusal.Howto)
 // when it has one.
 func fixWords(r setup.Refusal) []report.Remedy {
-	switch {
-	case r.Fix == "":
+	if r.Fix == "" {
 		return nil
-	case r.Command != "" && r.Howto != "":
-		return []report.Remedy{report.Fix(r.Fix, r.Command), stepsHint("or do it by hand", r.Howto)}
-	case r.Command != "":
-		return []report.Remedy{report.Fix(r.Fix, r.Command)}
-	case r.Howto == "":
-		return []report.Remedy{report.Fix(r.Fix)}
 	}
-	return []report.Remedy{stepsFix(r.Fix, r.Howto)}
+	var rs []report.Remedy
+	switch {
+	case r.Command != "":
+		rs = []report.Remedy{report.Fix(r.Fix, r.Command)}
+	case r.Howto != "" && r.Or == "":
+		return []report.Remedy{stepsFix(r.Fix, r.Howto)}
+	default:
+		rs = []report.Remedy{report.Fix(r.Fix)}
+	}
+	if r.Or != "" {
+		var cmds []string
+		if r.OrCommand != "" {
+			cmds = []string{r.OrCommand}
+		}
+		rs = append(rs, report.Fix(r.Or, cmds...))
+	}
+	if r.Howto != "" {
+		rs = append(rs, stepsHint("or do it by hand", r.Howto))
+	}
+	return rs
 }
 
 // rootSetupRun runs remote.SetupRootScript as root on the host (setupRun), its words into out,
@@ -1492,23 +1504,25 @@ func rootRunDid(asked bool, err error, out, failed string, went ...string) bool 
 	return slices.ContainsFunc(went, func(w string) bool { return hasLine(out, w) })
 }
 
-// otherLine is the root run's SetupOther line in out (otherWire), the user and what shows it,
-// ok false for none.
-func otherLine(out string) (user, evidence string, ok bool) {
+// otherLine is the root run's SetupOther line in out (otherWire), ok false for none.
+func otherLine(out string) (o otherUser, ok bool) {
 	for _, l := range strings.Split(out, "\n") {
 		if rest, found := strings.CutPrefix(l, remote.SetupOther+"\t"); found {
-			user, evidence, ok = strings.Cut(rest, "\t")
-			return user, evidence, ok
+			f := append(strings.SplitN(rest, "\t", 4), "", "", "")
+			if f[0] == "" || f[1] == "" {
+				return otherUser{}, false
+			}
+			return otherUser{name: f[0], evidence: f[1], bare: f[2], both: f[3] == "1"}, true
 		}
 	}
-	return "", "", false
+	return otherUser{}, false
 }
 
 // rootDeployRefusal is the refusal the root run said as root before it made the deploy user's
 // record (its SetupOther or SetupUnread line in out), nil for none.
 func rootDeployRefusal(out string) *setup.Refusal {
-	if other, evidence, ok := otherLine(out); ok {
-		r := otherDeployRefusal(other, evidence, currentLogin(), remote.SessionFrom(os.Getenv))
+	if o, ok := otherLine(out); ok {
+		r := otherDeployRefusal(o, currentLogin(), remote.SessionFrom(os.Getenv))
 		return &r
 	}
 	if why, ok := unreadLine(out); ok {

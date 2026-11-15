@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hanoii/devopsy-cli/internal/howto"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
@@ -154,10 +155,31 @@ func TestDeployUserFactSeesAnotherDeployUser(t *testing.T) {
 		switch {
 		case c.other == "" && (r != nil || x == nil || !x.Missing):
 			t.Errorf("%s: %v, %v", c.name, x, r)
-		case c.other != "" && (x != nil || r == nil || r.Item != setup.RefusalDeployUser || !strings.HasPrefix(r.Message, "devopsy was set up as "+c.other+" on this server (its setup record /home/"+c.other+"/.config/devopsy/server.yaml)") ||
-			r.Command != "devopsy @"+c.other+"@vm1: --server-setup" || r.Howto == ""):
+		// Its setup record alone: two ways out, running it as that user, or the record's removal.
+		case c.other != "" && (x != nil || r == nil || r.Item != setup.RefusalDeployUser || !strings.HasPrefix(r.Message, c.other+" was set up too on this server (its setup record /home/"+c.other+"/.config/devopsy/server.yaml)") ||
+			r.Command != "devopsy @"+c.other+"@vm1: --server-setup" || r.OrCommand != "sudo rm /home/"+c.other+"/.config/devopsy/server.yaml" || r.Howto != ""):
 			t.Errorf("%s: %v, %+v", c.name, x, r)
 		}
+	}
+	// A member that holds claims or environments, the login none: run it as that user, or the
+	// steps, never a removal.
+	h := server(t, "ops")
+	write(t, h.path("/home/ops/.devopsy-uids/env:shop:prod"), "x\n", 0o644)
+	if _, r := deployUserFact(h, me, "", remote.Session{Host: "admin@vm1"}); r == nil || !strings.HasPrefix(r.Message, "devopsy was set up as ops on this server (its uid claims /home/ops/.devopsy-uids)") ||
+		r.Command != "devopsy @ops@vm1: --server-setup" || r.Or != "" || r.Howto == "" {
+		t.Errorf("a member holding claims: %+v", r)
+	}
+	// Both hold environments or claims: a bigger issue, said as such, with no command and no
+	// removal, only the steps by hand.
+	mine := t.TempDir()
+	write(t, filepath.Join(mine, "blog", "prod", "releases", "1", "x"), "x\n", 0o644)
+	write(t, filepath.Join(mine, "blog", "prod", ".lock"), "", 0o644)
+	if _, r := deployUserFact(h, me, mine, remote.Session{Host: "admin@vm1"}); r == nil || !strings.HasPrefix(r.Message, "both admin and ops hold environments on this server (its uid claims /home/ops/.devopsy-uids)") ||
+		r.Command != "" || r.Or != "" || r.Howto == "" {
+		t.Errorf("both holding environments: %+v", r)
+	}
+	if ws := fixWords(*deployUserFactRefusal(t, h, me, mine)); len(ws) != 1 || ws[0].Hint || len(ws[0].Cmds) != 1 || ws[0].Cmds[0] != howto.Command(howto.DeployUser) {
+		t.Errorf("both holding environments, its fixes: %+v", ws)
 	}
 	// A release root another user owns: its owner, by the passwd file.
 	root := t.TempDir()
@@ -243,7 +265,7 @@ func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	write(t, waiting+".go", "", 0o644)
 	_ = cmd.Wait()
 	out := readString(outFile.Name())
-	if !strings.Contains(out, "devopsy was set up as ops on this server") {
+	if !strings.Contains(out, "ops was set up too on this server") {
 		t.Fatalf("the root run's refusal not said (%d):\n%s", cmd.ProcessState.ExitCode(), out)
 	}
 	record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
@@ -286,33 +308,31 @@ func TestReleaseSettingsTellsAProjectUserByItsUID(t *testing.T) {
 	}
 }
 
-// On a server with no record where two docker members both have a setup record, a way out is
-// left: not both refused toward the other, so neither is recordable.
+// On a server with no record where two docker members both have a setup record and nothing
+// else, each one's setup is refused, and each refusal offers, besides running it as the other,
+// the removal of the other's bare record as root: a way out from either side.
 func TestDeployUserFactTwoSetupRecordsLeaveAWayOut(t *testing.T) {
 	t.Parallel()
-	t.Skip("held: two docker users both set up and unrecorded wait on the owner's choice")
 	h := setupHost{root: t.TempDir()}
 	write(t, h.path("/etc/group"), "docker:x:990:admin,deploy\n", 0o644)
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndeploy:x:1001:1001::/home/deploy:/bin/sh\n", 0o644)
 	for _, u := range []string{"admin", "deploy"} {
 		write(t, h.path("/home/"+u+"/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
 	}
-	var refusals []string
-	for _, me := range []login{{uid: 1000, name: "admin"}, {uid: 1001, name: "deploy"}} {
-		if _, r := deployUserFact(h, me, "", remote.Session{Host: me.name + "@vm1"}); r != nil {
-			refusals = append(refusals, me.name+": "+r.Message+" ("+r.Command+")")
+	for me, other := range map[string]string{"admin": "deploy", "deploy": "admin"} {
+		uid := map[string]int{"admin": 1000, "deploy": 1001}[me]
+		_, r := deployUserFact(h, login{uid: uid, name: me}, "", remote.Session{Host: me + "@vm1"})
+		if r == nil || !strings.HasPrefix(r.Message, other+" was set up too on this server") || r.OrCommand != "sudo rm /home/"+other+"/.config/devopsy/"+setup.RecordFile {
+			t.Errorf("as %s: no way out by the removal of %s's bare record: %+v", me, other, r)
 		}
-	}
-	if len(refusals) == 2 {
-		t.Errorf("both docker users with a setup record refuse each other, neither recordable:\n%s", strings.Join(refusals, "\n"))
 	}
 }
 
-// On a server with no record where two docker users each have devopsy's setup record, a fix
-// devopsy offers is never a setup it refuses the same way: each one sent to run it as the other.
+// On a server with no record where two docker users each have devopsy's setup record alone, a
+// fix devopsy offers is never only a setup it refuses the same way: each refusal offers the
+// other's bare record's removal as a second way out, numbered after running it as the other.
 func TestDeployUserRefusalNeverOffersARefusedSetup(t *testing.T) {
 	t.Parallel()
-	t.Skip("held: two docker users both set up and unrecorded wait on the owner's choice")
 	h := setupHost{root: t.TempDir()}
 	write(t, h.path("/etc/group"), "docker:x:990:admin,devopsy\n", 0o644)
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndevopsy:x:1001:1001::/home/devopsy:/bin/sh\n", 0o644)
@@ -325,8 +345,14 @@ func TestDeployUserRefusalNeverOffersARefusedSetup(t *testing.T) {
 	if asDevopsy == nil || asAdmin == nil {
 		t.Fatalf("two users set up, neither refused: %+v, %+v", asDevopsy, asAdmin)
 	}
-	if asDevopsy.Command == "devopsy @admin@vm1: --server-setup" && asAdmin.Command == "devopsy @devopsy@vm1: --server-setup" {
-		t.Errorf("each user's refusal offers the setup as the other, which is refused too:\nas devopsy: %s\n  $ %s\nas admin: %s\n  $ %s", asDevopsy.Message, asDevopsy.Command, asAdmin.Message, asAdmin.Command)
+	for _, c := range []struct {
+		r     *setup.Refusal
+		other string
+	}{{asDevopsy, "admin"}, {asAdmin, "devopsy"}} {
+		ws := fixWords(*c.r)
+		if len(ws) != 2 || ws[0].Hint || ws[1].Hint || len(ws[1].Cmds) != 1 || ws[1].Cmds[0] != "sudo rm /home/"+c.other+"/.config/devopsy/"+setup.RecordFile {
+			t.Errorf("the refusal naming %s offers no removal of its bare record: %+v", c.other, ws)
+		}
 	}
 }
 
@@ -367,15 +393,15 @@ func TestDeployUserOtherIsOneJudgment(t *testing.T) {
 	}{
 		{"none", nil, ""},
 		{"a member's own work", []string{"/home/ops/work/.env", "/home/ops/notes/app/shared/todo"}, ""},
-		{"its setup record", []string{"/home/ops/.config/devopsy/" + setup.RecordFile}, otherWire("ops", "its setup record /home/ops/.config/devopsy/"+setup.RecordFile) + "\n"},
-		{"its uid claims", []string{"/home/ops/.devopsy-uids/env:shop:prod"}, otherWire("ops", "its uid claims /home/ops/.devopsy-uids") + "\n"},
-		{"an environment", []string{"/home/ops/shop/prod/releases/20261115000000/x", "/home/ops/shop/prod/.lock"}, otherWire("ops", "its environment /home/ops/shop/prod") + "\n"},
+		{"its setup record", []string{"/home/ops/.config/devopsy/" + setup.RecordFile}, otherWire(otherUser{name: "ops", evidence: "its setup record /home/ops/.config/devopsy/" + setup.RecordFile, bare: "/home/ops/.config/devopsy/" + setup.RecordFile}) + "\n"},
+		{"its uid claims", []string{"/home/ops/.devopsy-uids/env:shop:prod"}, otherWire(otherUser{name: "ops", evidence: "its uid claims /home/ops/.devopsy-uids"}) + "\n"},
+		{"an environment", []string{"/home/ops/shop/prod/releases/20261115000000/x", "/home/ops/shop/prod/.lock"}, otherWire(otherUser{name: "ops", evidence: "its environment /home/ops/shop/prod"}) + "\n"},
 		{"the record naming another", []string{setup.DeployUserFile}, ""},
 	} {
 		h := server(t, c.files...)
 		if c.name == "the record naming another" {
 			write(t, h.path(setup.DeployUserFile), setup.DeployUserText("ops"), 0o644)
-			c.want = otherWire("ops", "the record "+setup.DeployUserFile+" names it") + "\n"
+			c.want = otherWire(otherUser{name: "ops", evidence: "the record " + setup.DeployUserFile + " names it"}) + "\n"
 		}
 		if got := other(t, h, me, ""); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
@@ -389,9 +415,9 @@ func TestDeployUserOtherIsOneJudgment(t *testing.T) {
 	// The root, this test user's, read as another's by the uid given: no name in this passwd.
 	root := t.TempDir()
 	got := other(t, server(t), me+1, root)
-	user, evidence, ok := otherLine(got)
-	r := otherDeployRefusal(user, evidence, login{uid: me + 1, name: "admin"}, remote.Session{Host: "admin@vm1"})
-	if !ok || user != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "devopsy was set up as uid "+strconv.Itoa(me)+" on this server (the release root "+root+" is its)") {
+	o, ok := otherLine(got)
+	r := otherDeployRefusal(o, login{uid: me + 1, name: "admin"}, remote.Session{Host: "admin@vm1"})
+	if !ok || o.name != fmt.Sprint("uid ", me) || r.Command != "" || !strings.Contains(r.Message, "devopsy was set up as uid "+strconv.Itoa(me)+" on this server (the release root "+root+" is its)") {
 		t.Errorf("an owner with no name: %q, %+v", got, r)
 	}
 }
@@ -425,4 +451,14 @@ func TestShellHostChecksTheLogin(t *testing.T) {
 			t.Errorf("%s: --shell-host (%d):\n%s", c.name, code, out)
 		}
 	}
+}
+
+// deployUserFactRefusal is deployUserFact's refusal on h for me with root, failing without one.
+func deployUserFactRefusal(t *testing.T, h setupHost, me login, root string) *setup.Refusal {
+	t.Helper()
+	_, r := deployUserFact(h, me, root, remote.Session{Host: me.name + "@vm1"})
+	if r == nil {
+		t.Fatal("no refusal")
+	}
+	return r
 }
