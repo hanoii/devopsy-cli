@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -353,6 +354,7 @@ func serverFacts() (remote.ServerInfo, error) {
 		info.HidePID = p.HidePID
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
+		info.Docker.ClientProxies = clientProxies(dockerConfigDir())
 		if rd, err := readSetup(h, hd); err == nil {
 			info.Setup = &rd.facts
 			read = readChains(rd.facts.Firewall, rd.docker, false)
@@ -640,6 +642,68 @@ func parseDockerInfo(out []byte, d *remote.DockerFacts) error {
 	}
 	d.Proxy = cmp.Or(info.HTTPSProxy, info.HTTPProxy)
 	return nil
+}
+
+// dockerConfigDir is where the Docker client of this user reads its config.json: DOCKER_CONFIG,
+// else ~/.docker.
+func dockerConfigDir() string {
+	if d := os.Getenv("DOCKER_CONFIG"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".docker")
+}
+
+// clientProxies are the proxies config.json in dir gives the containers its client creates,
+// those naming one, by the daemon they are for; none when the file is missing or unreadable,
+// which gives containers none either.
+func clientProxies(dir string) []remote.ClientProxy {
+	file := filepath.Join(dir, "config.json")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	var c struct {
+		Proxies map[string]struct {
+			HTTPProxy  string `json:"httpProxy"`
+			HTTPSProxy string `json:"httpsProxy"`
+			AllProxy   string `json:"allProxy"`
+			NoProxy    string `json:"noProxy"`
+		} `json:"proxies"`
+	}
+	if json.Unmarshal(data, &c) != nil {
+		return nil
+	}
+	var ps []remote.ClientProxy
+	for _, k := range sortedKeysOf(c.Proxies) {
+		p := c.Proxies[k]
+		if proxy := cmp.Or(p.HTTPSProxy, p.HTTPProxy, p.AllProxy); proxy != "" {
+			ps = append(ps, remote.ClientProxy{For: k, File: file, Proxy: proxy, NoProxy: p.NoProxy})
+		}
+	}
+	return ps
+}
+
+// loopbackProxied is what of localhost, 127.0.0.1 and ::1 a noProxy list leaves to the proxy, as
+// curl and libcurl match it: each entry trimmed, its case and a leading dot ignored, * naming
+// every host, a range naming its addresses. Go never proxies them; curl does unless named.
+func loopbackProxied(noProxy string) []string {
+	var left []string
+	for _, h := range []string{"localhost", "127.0.0.1", "::1"} {
+		named := false
+		for _, e := range strings.Split(noProxy, ",") {
+			e = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(e)), ".")
+			if _, n, err := net.ParseCIDR(e); err == nil {
+				named = named || n.Contains(net.ParseIP(h))
+				continue
+			}
+			named = named || e == "*" || e == h || strings.Trim(e, "[]") == h
+		}
+		if !named {
+			left = append(left, h)
+		}
+	}
+	return left
 }
 
 // cmdError is a command's error with what it said on stderr.
@@ -1421,6 +1485,20 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		if d.Proxy != "" {
 			more("proxy " + d.Proxy)
+		}
+		// The proxy containers get, and the loopback a request to the container itself would send
+		// there: curl and libcurl do unless noProxy names it (an app calling itself on localhost).
+		// A note, not a warning: Go and most checks never do, and nothing devopsy runs needs it.
+		for _, p := range d.ClientProxies {
+			line := "containers' proxy " + p.Proxy
+			if p.For != "default" {
+				line += " (for " + p.For + ")"
+			}
+			more(line)
+			if left := loopbackProxied(p.NoProxy); len(left) > 0 {
+				note("its noProxy leaves "+strings.Join(left, ", ")+" to the proxy: an app's request to itself there goes through it (curl and libcurl send localhost unless noProxy names it)",
+					report.Hint("add "+strings.Join(left, ",")+" to noProxy in "+p.File+", as the deploy user: containers created after it get it"))
+			}
 		}
 		// Where Docker keeps its data, which disks then names alone.
 		var data []string

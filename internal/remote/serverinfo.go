@@ -179,6 +179,18 @@ type DockerFacts struct {
 	LogOpts      map[string]string `json:"log_opts,omitempty"`
 	LogOptsKnown bool              `json:"log_opts_known"`
 	Proxy        string            `json:"proxy,omitempty"`
+	// ClientProxies are the proxies the deploy user's Docker client config gives every
+	// container it creates (config.json's proxies), those that name one.
+	ClientProxies []ClientProxy `json:"client_proxies,omitempty"`
+}
+
+// ClientProxy is one of config.json's proxies: the daemon it is for ("default" for any), its
+// file, the proxy (HTTPS's, else HTTP's or all's) and what its noProxy leaves out.
+type ClientProxy struct {
+	For     string `json:"for"`
+	File    string `json:"file"`
+	Proxy   string `json:"proxy"`
+	NoProxy string `json:"no_proxy,omitempty"`
 }
 
 // DoorFacts are what a door needs of its host, as --server-info reports them.
