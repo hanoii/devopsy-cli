@@ -51,3 +51,38 @@ func TestRootRunsOtherOwnerWithNoNameIsNoLogin(t *testing.T) {
 		t.Errorf("an owner with no name is offered as a login: %q\n  $ %s", r.Message, r.Command)
 	}
 }
+
+// Bug (review round 2): the docs (docs/servers.md, docs/codes.md) and the area's rule
+// (internals/server-setup.md) say --shell-host is not checked, "the way in when something is
+// broken"; its scripts start with the prelude like every other (remote.RootShellScript,
+// ShellScript through enter), so a login the record does not name is refused W0009, and a
+// record that cannot be read (W0010) closes it for the deploy user too. Only --shell-host
+// --root runs no prelude. Either the check or the three texts are wrong.
+func TestShellHostIsNotCheckedAsTheDocsSay(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root is never checked")
+	}
+	// With no record the shell opens, whoever logs in.
+	s, _ := setupServer(t)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run([]string{"SHELL=/bin/sh"}, "@admin@one:", "--shell-host"); code != 0 {
+		t.Fatalf("no record (%d):\n%s", code, out)
+	}
+	for _, c := range []struct{ name, record, code string }{
+		{"another login", setup.DeployUserText("someone-else"), report.NotDeployUser.ID},
+		{"a record that cannot be read", "one\ntwo\n", report.DeployUserUnread.ID},
+	} {
+		s, host := setupServer(t)
+		if err := os.MkdirAll(s.root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(host, setup.DeployUserFile), c.record, 0o644)
+		out, code := s.run([]string{"SHELL=/bin/sh"}, "@admin@one:", "--shell-host")
+		if code != 0 || strings.Contains(out, c.code) {
+			t.Errorf("%s: --shell-host refused (%d):\n%s", c.name, code, out)
+		}
+	}
+}
