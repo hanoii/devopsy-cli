@@ -47,6 +47,16 @@ environments:
 	if _, err := LoadTarget(t.TempDir(), "vm1:prod", nil); err == nil {
 		t.Errorf("no config: want an error")
 	}
+	// An unknown environment names the ones there are, and a config with none says so in
+	// words, never an empty list.
+	if _, err := LoadTarget(dir, "vm1:missing", nil); err == nil || !strings.HasSuffix(err.Error(), "(environments: bad-mode, prod)") {
+		t.Errorf("an unknown environment: %v", err)
+	}
+	none := t.TempDir()
+	write(t, filepath.Join(none, ConfigFile), "project: app\n")
+	if _, err := LoadTarget(none, "vm1:prod", nil); err == nil || !strings.HasSuffix(err.Error(), ", which has no environments yet (add one under environments)") {
+		t.Errorf("a config with no environments: %v", err)
+	}
 	// A leftover targets.yaml does nothing.
 	old := t.TempDir()
 	write(t, filepath.Join(old, "targets.yaml"), "prod:\n  host: h\n  path: /srv/x\n")

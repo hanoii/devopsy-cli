@@ -1304,8 +1304,8 @@ image_unlock() {
 // downloaded), since Compose cannot pull a profile's non-buildable
 // services and the default buildable ones in one call.
 func fetchImages(projectName string) string {
-	build := devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
-		" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
+	pull := devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
+	build := pull + " && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
 	image := devopsyCall(projectName, []string{"--", "pull"}, false) +
 		" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
 	// Never with devopsy's own compose file: a rollback's or a restart's
@@ -1321,9 +1321,16 @@ func fetchImages(projectName string) string {
     devopsy --say info "pulling images (image mode)"
     fi_cmd=` + Quote(image) + ` fi_env=` + images.NoReleaseComposeEnv + `
   else
-    devopsy --say info "pulling and building images (build mode)"
-    img fetch-file "$1" || return
-    fi_cmd=` + Quote(build) + ` fi_env=` + images.FetchComposeEnv + `
+    fi_builds=$(img fetch-file "$1") || return
+    if [ "$fi_builds" = ` + images.FetchBuilds + ` ]; then
+      devopsy --say info "pulling and building images (build mode)"
+      fi_cmd=` + Quote(build) + `
+    else
+      # Nothing to build: compose's build would only warn that it has no service to build.
+      devopsy --say info "pulling images (build mode, nothing to build)"
+      fi_cmd=` + Quote(pull) + `
+    fi
+    fi_env=` + images.FetchComposeEnv + `
   fi
   (cd "$1/` + CodeDir + `" && export "$fi_env=1" && with_tty "$fi_cmd") || return
   ` + sayTook("fi_t", `"images fetched"`) + `}

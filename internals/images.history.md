@@ -47,3 +47,4 @@ History, not rules: `internals/images.md` wins where they differ.
 
 - `--server-info` and tool tags (2026-11-15, after round 3): its leftovers counted an image held by a hold among its tags alone, so a name a removal keeps for a live tool, on an image no hold is on, was offered for `rmi`. Held became one definition, `Held` (a hold, or a release's tool tag naming one of its names), shared with the removal's `ToolTagNames`.
 
+- A build-mode release of a project that builds nothing (its tools and default services all pulled) showed compose's raw `No services to build` warning on the same droplet test (2026-11-15): the fetch now skips the build where no service of any profile has one, as `img fetch-file` answers, and a removal's line says "which nothing but <id> used" where it said "which only <id> held".

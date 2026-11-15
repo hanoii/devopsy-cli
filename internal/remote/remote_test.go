@@ -947,11 +947,12 @@ exit 0
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
+	// Nothing builds in this release (services: {}), so the build-mode fetch only pulls.
 	// The pending files' path from before the checks (where the sync's
 	// inherited variables and its copy of the parent's server's levels
 	// are read, when they exist), to the run step; the record of what
 	// ran on the data after it (img ran) reads the listing, not compose.
-	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
+	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1747,7 +1748,7 @@ exit 0
 	}
 
 	// a's next release prunes a's first: b's bookmark holds X.
-	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "the images of 1 that other releases hold stay: registry/app:abc, mariadb:11") {
+	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "kept the images of 1 that other releases use too: registry/app:abc, mariadb:11") {
 		t.Errorf("pruning a release whose images others hold says nothing:\n%s", out)
 	}
 	if exists("app/a/prod/releases/1") || fakeImage(root, "registry/app:devopsy-app-a-prod-1") != "" {
@@ -1778,7 +1779,7 @@ exit 0
 	if exists("app/b/prod/releases/1") || exists("app/b/prod/releases/2") {
 		t.Errorf("b's releases 1 and 2 not pruned:\n%s", out)
 	}
-	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc, which only 1 held") {
+	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc, which nothing but 1 used") {
 		t.Errorf("registry/app:abc stays with no release holding it:\n%s", out)
 	}
 	if fakeImage(root, "mariadb:11") != "Y" || fakeImage(root, "registry/app:def") != "Y" {
