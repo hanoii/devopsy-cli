@@ -81,15 +81,15 @@ server whose Docker runs the containerd image store
 
 ## Behind an HTTP proxy
 
-On a server that reaches the Internet through an HTTP proxy, two settings
-name it: `proxies` in `daemon.json`, for Docker's own pulls, and
-`proxies` in the deploy user's `~/.docker/config.json`, which Docker
-gives every container that user creates, as `HTTP_PROXY`, `HTTPS_PROXY`
-and `NO_PROXY`, each in both cases. Most HTTP clients
-follow them for every request, a container's requests to another
-container included, so the server's `noProxy` would have to name every
-service a project calls. It names none: a project's own containers say
-what they reach directly.
+A server that reaches the Internet only through an HTTP proxy needs it
+in four places: apt, Docker's daemon, the deploy user's Docker client and
+the login environment, each with loopback left direct
+([`proxy`](server-setup-howto.md#proxy) has the steps). The deploy user's
+client gives every container that user creates the proxy, as
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, each in both cases, and most
+HTTP clients follow them for every request, a container's requests to
+another container included. The server's list names no project's
+services: a project's own containers say what they reach directly.
 
 - A container that makes an HTTP request to another container names it in
   its own `NO_PROXY` and `no_proxy` (for example `NO_PROXY: app` on a
@@ -113,9 +113,11 @@ what they reach directly.
 The server's own list still names loopback (`localhost,127.0.0.1,::1`):
 an app's request to itself through curl or libcurl (PHP's, for one) goes
 to the proxy otherwise, and no project can change that for its app's
-code. `--server-info` shows the proxy containers get under `docker`, and
-a note with the line to add when its `noProxy` leaves any of them out.
-Containers created after a change get it.
+code. `--server-info` shows the daemon's proxy and the containers' under
+`docker`, warns when one is set without the other, and notes a
+containers' `noProxy` that leaves loopback out. Containers created after
+a change get it: a release recreates none for it, `up -d
+--force-recreate` does.
 
 ## `--server-setup`
 

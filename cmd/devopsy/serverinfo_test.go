@@ -174,37 +174,42 @@ func TestLoopbackProxied(t *testing.T) {
 	}
 }
 
+// healthyServerInfo is a server with nothing to warn of: devopsy, Docker and the disks as
+// they should be, Traefik and two projects released.
+func healthyServerInfo() remote.ServerInfo {
+	return remote.ServerInfo{
+		Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
+		OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
+		MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
+		AppArmor: true, AppArmorParser: true,
+		Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: "0.38.2", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
+			RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
+			LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
+		Disks: []remote.Disk{{Paths: []string{"releases=/home/devopsy", "docker=/var/lib/docker", "/=/"}, Type: "xfs", Size: 80e9, Free: 40e9, Used: 40e9, Reflinks: "yes"}},
+		Containers: []remote.HostContainer{
+			{Project: "traefik-prod", Service: "traefik", State: "running", Labels: map[string]string{"devopsy.role": "proxy", "devopsy.export.BASE_DOMAIN": "vm1.example.com"}},
+			{Project: "shop-prod", Service: "app", State: "running", Health: "healthy"},
+			{Project: "shop-prod", Service: "migrate", State: "exited"},
+			// Stopped with a healthcheck: Docker says unhealthy once its
+			// monitor stopped (Docker 29.8), which is no warning (review).
+			{Project: "shop-prod", Service: "db", State: "exited", Health: "unhealthy"},
+			// An environment's name keeps its case in its directory, its
+			// compose name is lowercased (review).
+			{Project: "shop-staging", Service: "app", State: "running"},
+		},
+		Environments: []remote.Environment{
+			{Path: "traefik/prod", Status: "release\t20261026120000\t{\"mode\":\"image\",\"time\":\"2026-10-26T12:00:00Z\",\"by\":\"ci\"}\nkept\t1\nsynced\t\n"},
+			{Path: "shop/prod", Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t2\nsynced\t\n"},
+			{Path: "shop/Staging", Status: "release\t20261027110000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:00:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
+		},
+	}
+}
+
 func TestServerInfoReport(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
-	healthy := func() remote.ServerInfo {
-		return remote.ServerInfo{
-			Version: "0.53.0", Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
-			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
-			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
-			AppArmor: true, AppArmorParser: true,
-			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Buildx: "0.38.2", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
-				RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
-				LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
-			Disks: []remote.Disk{{Paths: []string{"releases=/home/devopsy", "docker=/var/lib/docker", "/=/"}, Type: "xfs", Size: 80e9, Free: 40e9, Used: 40e9, Reflinks: "yes"}},
-			Containers: []remote.HostContainer{
-				{Project: "traefik-prod", Service: "traefik", State: "running", Labels: map[string]string{"devopsy.role": "proxy", "devopsy.export.BASE_DOMAIN": "vm1.example.com"}},
-				{Project: "shop-prod", Service: "app", State: "running", Health: "healthy"},
-				{Project: "shop-prod", Service: "migrate", State: "exited"},
-				// Stopped with a healthcheck: Docker says unhealthy once its
-				// monitor stopped (Docker 29.8), which is no warning (review).
-				{Project: "shop-prod", Service: "db", State: "exited", Health: "unhealthy"},
-				// An environment's name keeps its case in its directory, its
-				// compose name is lowercased (review).
-				{Project: "shop-staging", Service: "app", State: "running"},
-			},
-			Environments: []remote.Environment{
-				{Path: "traefik/prod", Status: "release\t20261026120000\t{\"mode\":\"image\",\"time\":\"2026-10-26T12:00:00Z\",\"by\":\"ci\"}\nkept\t1\nsynced\t\n"},
-				{Path: "shop/prod", Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t2\nsynced\t\n"},
-				{Path: "shop/Staging", Status: "release\t20261027110000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:00:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
-			},
-		}
-	}
+	healthy := healthyServerInfo
+
 	out, warnings := serverInfoSays(healthy(), "vm1", "vm1:", "0.53.0", now)
 	for _, want := range []string{
 		"  devopsy    0.53.0\n",
@@ -251,13 +256,38 @@ func TestServerInfoReport(t *testing.T) {
 		!strings.Contains(out, "its noProxy leaves 127.0.0.1, ::1 to the proxy") {
 		t.Errorf("a proxy leaving loopback to it:\n%s", out)
 	}
-	if len(ws) != 1 || !ws[0].note || len(ws[0].fixes) != 1 || !ws[0].fixes[0].Hint ||
-		ws[0].fixes[0].Text != "add 127.0.0.1,::1 to noProxy in /home/devopsy/.docker/config.json, as the deploy user: containers created after it get it" {
+	// The daemon proxied too (none of it said: the containers' alone).
+	if len(ws) != 2 || !ws[0].note || len(ws[0].fixes) != 1 || !ws[0].fixes[0].Hint ||
+		ws[0].fixes[0].Text != "add 127.0.0.1,::1 to noProxy in /home/devopsy/.docker/config.json, as the deploy user: containers created after it get it"+stepsWords ||
+		!slices.Equal(ws[0].fixes[0].Cmds, []string{howto.Command(howto.Proxy)}) {
 		t.Errorf("a proxy leaving loopback to it: said %+v", ws)
 	}
+	proxied.Docker.Proxy = "http://proxy.example.com:3128"
 	proxied.Docker.ClientProxies[0].NoProxy = "LOCALHOST, 127.0.0.0/8,[::1]"
 	if out, ws := serverInfoSays(proxied, "vm1", "vm1:", "0.53.0", now); strings.Contains(out, "its noProxy") || len(ws) != 0 {
 		t.Errorf("a proxy leaving no loopback to it: said %+v in:\n%s", ws, out)
+	}
+	// One proxy without the other is a warning with the topic's steps, either way.
+	for _, c := range []struct {
+		daemon  string
+		clients []remote.ClientProxy
+		want    string
+	}{
+		{"http://proxy.example.com:3128", nil, "Docker's daemon pulls through a proxy and the deploy user's containers get none"},
+		{"", proxied.Docker.ClientProxies, "the deploy user's containers get a proxy and Docker's daemon none"},
+	} {
+		one := healthy()
+		one.Docker.Proxy, one.Docker.ClientProxies = c.daemon, c.clients
+		_, ws := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now)
+		var found bool
+		for _, w := range ws {
+			if strings.HasPrefix(w.msg, c.want) && !w.note && len(w.fixes) == 1 && slices.Equal(w.fixes[0].Cmds, []string{howto.Command(howto.Proxy)}) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("one proxy without the other: no warning %q with the topic's steps in %+v", c.want, ws)
+		}
 	}
 
 	for _, c := range []struct {
@@ -1481,5 +1511,31 @@ func TestServerInfoEveryClaimIsSaid(t *testing.T) {
 		if out := reportAt(info); !strings.Contains(out, "uid 101") && !strings.Contains(out, " 101 ") {
 			t.Errorf("%s: the claim of uid 101 is said nowhere:\n%s", name, out)
 		}
+	}
+}
+
+// The warning for one proxy without the other reads the proxy the server's own daemon's
+// containers get, config.json's proxies.default: an entry for another daemon (a tcp:// one the
+// deploy user builds on) gives this server's containers nothing.
+func TestServerInfoProxyWarningReadsThisDaemonsEntry(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	other := []remote.ClientProxy{{For: "tcp://build.example.com:2376", File: "/home/devopsy/.docker/config.json", Proxy: "http://proxy.example.com:3128", NoProxy: "localhost,127.0.0.1,::1"}}
+	warned := func(daemon, words string) bool {
+		info := healthyServerInfo()
+		info.Docker.Proxy, info.Docker.ClientProxies = daemon, other
+		_, ws := serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
+		for _, w := range ws {
+			if !w.note && strings.Contains(w.msg, words) {
+				return true
+			}
+		}
+		return false
+	}
+	if warned("", "Docker's daemon none") {
+		t.Error("a proxy for another daemon alone, and no proxy on this server: warned that its daemon has none")
+	}
+	if !warned("http://proxy.example.com:3128", "containers get none") {
+		t.Error("a proxied daemon whose containers get a proxy only on another daemon: no warning that they get none")
 	}
 }

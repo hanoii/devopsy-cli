@@ -8,6 +8,7 @@ devopsy offers for one of them names its command. It runs anywhere, needing
 no server, project or Docker.
 
 - [docker](#docker): Docker with the containerd image store, buildx and compose
+- [proxy](#proxy): an HTTP proxy for apt, Docker, containers and logins
 - [tools](#tools): tar, flock and the other tools devopsy uses
 - [processes](#processes): /proc hiding every user's processes from the others
 - [project-users](#project-users): sudo and acl, then --project-users setup
@@ -93,6 +94,97 @@ runuser -u "$user" -- docker version --format '{{.Server.Version}}'
 runuser -u "$user" -- docker info --format '{{.DriverStatus}}'
 runuser -u "$user" -- docker buildx version
 runuser -u "$user" -- docker compose version
+```
+
+## proxy
+
+An HTTP proxy
+
+A server that reaches the Internet only through an HTTP proxy needs it in
+four places: apt, for installs and unattended upgrades, which run with no
+proxy in their environment; Docker's daemon, for its pulls; the deploy
+user's Docker client, which passes it to every container and build that user
+makes; and the login environment, which every SSH session gets, devopsy
+--upgrade among what runs there. Each leaves loopback (localhost, 127.0.0.1,
+::1) and the hosts to reach without the proxy out of it: curl and libcurl
+send even localhost to a proxy unless its list names it. A project's own
+services never go in the list, since each container names those it reaches
+itself. The proxy's address carries no login: the login environment is every
+user's to read, and every container's environment shows it. --server-info
+shows the daemon's proxy and the containers' under docker, and warns when
+one is set without the other.
+
+Run each step as root on the server, Debian or Ubuntu with systemd. The
+deploy user is the Unix user devopsy logs in as, which must exist. A step's
+first line sets the values to change, if it has any (for example
+user=devopsy).
+
+1. Set the proxy and what to reach without it, comma separated (host names,
+   addresses, ranges), then give apt the proxy and each host name and
+   address of the list direct: apt reads no list of exceptions, only a host
+   at a time, never a range.
+
+   ```sh
+   proxy=http://proxy.example.com:3128 direct=
+   printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$proxy" "$proxy" > /etc/apt/apt.conf.d/90-devopsy-proxy
+   echo "$direct" | tr , '\n' | while read -r h; do case "$h" in '' | */* | .* | *[*:]*) ;; *) printf 'Acquire::http::Proxy::%s "DIRECT";\nAcquire::https::Proxy::%s "DIRECT";\n' "$h" "$h" >> /etc/apt/apt.conf.d/90-devopsy-proxy ;; esac; done
+   ```
+
+2. Give Docker's daemon the proxy for its pulls in a drop-in, loopback and
+   the list left direct, then restart it, since it reads the proxy when it
+   starts. With live-restore on in daemon.json, which --server-setup sets,
+   the containers keep running through the restart; without it every
+   container stops, so restart at a quiet time. A proxies key in
+   daemon.json, where someone set one, wins over the drop-in.
+
+   ```sh
+   proxy=http://proxy.example.com:3128 direct=
+   list=localhost,127.0.0.1,::1${direct:+,$direct}
+   mkdir -p /etc/systemd/system/docker.service.d
+   printf '[Service]\nEnvironment="HTTP_PROXY=%s" "HTTPS_PROXY=%s" "NO_PROXY=%s"\n' "$proxy" "$proxy" "$list" > /etc/systemd/system/docker.service.d/90-devopsy-proxy.conf
+   systemctl daemon-reload
+   systemctl restart docker
+   ```
+
+3. Give the deploy user's Docker client the proxy, which Docker passes to
+   every container and build that user makes, the file's other keys kept
+   (registry logins among them). Containers made before keep their old
+   values until recreated: from the operator's machine, devopsy with the
+   environment's address and up -d --force-recreate.
+
+   ```sh
+   user=devopsy proxy=http://proxy.example.com:3128 direct=
+   list=localhost,127.0.0.1,::1${direct:+,$direct}
+   apt-get update
+   apt-get install -y jq
+   home=$(getent passwd "$user" | cut -d: -f6)
+   [ -d "$home/.docker" ] || install -d -m 700 -o "$user" -g "$user" "$home/.docker"
+   if [ -s "$home/.docker/config.json" ]; then cat "$home/.docker/config.json"; else echo '{}'; fi | jq --arg p "$proxy" --arg n "$list" '.proxies.default += {httpProxy: $p, httpsProxy: $p, noProxy: $n}' > "$home/.docker/config.json.new" && install -m 600 -o "$user" -g "$user" "$home/.docker/config.json.new" "$home/.docker/config.json"
+   rm -f "$home/.docker/config.json.new"
+   ```
+
+4. Put the proxy in the login environment, /etc/environment, which pam_env
+   gives every login and SSH session, devopsy's included: the proxy's six
+   variables taken out wherever they are, then appended, every other line
+   kept.
+
+   ```sh
+   proxy=http://proxy.example.com:3128 direct=
+   list=localhost,127.0.0.1,::1${direct:+,$direct}
+   grep -vE '^[[:space:]]*(export[[:space:]]+)?(http_proxy|https_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|NO_PROXY)=' /etc/environment > /etc/environment.new
+   printf '%s\n' "http_proxy=\"$proxy\"" "https_proxy=\"$proxy\"" "no_proxy=\"$list\"" "HTTP_PROXY=\"$proxy\"" "HTTPS_PROXY=\"$proxy\"" "NO_PROXY=\"$list\"" >> /etc/environment.new
+   cat /etc/environment.new > /etc/environment
+   rm /etc/environment.new
+   ```
+
+To check it: Docker's daemon runs with the proxy, and --server-info shows it
+and the containers' proxy under docker, with no warning that one is set
+without the other; an SSH session started after it has the proxy in its
+environment.
+
+```sh
+docker info --format '{{.HTTPSProxy}} {{.NoProxy}}'
+grep -i _proxy= /etc/environment
 ```
 
 ## tools
