@@ -3800,3 +3800,21 @@ func TestServerScriptsExportNoEnvironmentDirectories(t *testing.T) {
 		t.Errorf("an environment's script exports no directories:\n%s", s)
 	}
 }
+
+// Bug (review round 2): docs/servers.md, docs/codes.md and internals/server-setup.md say
+// --shell-host is not checked for the deploy user, "the way in when something is broken", but
+// its sessions (RootShellScript for a server, ShellScript for an environment) open with the
+// prelude, whose --release-settings refuses a login the record does not name (W0009) and every
+// login but root's and project users' on a broken record (W0010): the rules and the code
+// disagree on who gets a shell.
+func TestShellHostSkipsTheDeployUserCheck(t *testing.T) {
+	t.Parallel()
+	for name, s := range map[string]string{
+		"a server":       RootShellScript(&Target{Host: "h"}),
+		"an environment": ShellScript(&Target{Host: "h", Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
+	} {
+		if strings.Contains(s, "devopsy --release-settings") {
+			t.Errorf("--shell-host on %s runs --release-settings, which checks the deploy user the docs say it skips", name)
+		}
+	}
+}
