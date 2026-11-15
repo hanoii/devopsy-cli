@@ -266,7 +266,7 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		root, f.NamesRoot = proposed, true
 	}
 	f.Root = resolveRoot(root)
-	if x, refusal := deployUserFact(h, currentLogin(), f.Root, remote.SessionFrom(os.Getenv)); refusal != nil {
+	if x, refusal := deployUserFact(h, loginOn(h), f.Root, remote.SessionFrom(os.Getenv)); refusal != nil {
 		f.Refusals = append(f.Refusals, *refusal)
 	} else if x != nil {
 		f.Files = append(f.Files, *x)
@@ -1154,7 +1154,7 @@ func applySetup(h setupHost, a setupApply) int {
 	}
 	deployText := ""
 	if file(setup.ItemDeployUser) && f.Goes(setup.StepDeployUser) {
-		deployText = setup.DeployUserText(currentLogin().name)
+		deployText = setup.DeployUserText(loginOn(h).name)
 	}
 	raise := f.Goes(setup.StepBuffers) && slices.ContainsFunc(f.Buffers, func(b setup.BufferFact) bool { return b.Low })
 	give := !a.upgrade && f.RootAction != "" && f.Goes(setup.StepRoot)
@@ -1233,7 +1233,7 @@ func applySetup(h setupHost, a setupApply) int {
 		// The run refused the deploy user's record as root (rootDeployRefusal): a refusal of the
 		// facts' from here on, which stops every later step and the setup record as one the
 		// facts read does, said once as the facts say theirs.
-		if r := rootDeployRefusal(out.String()); r != nil {
+		if r := rootDeployRefusal(h, out.String()); r != nil {
 			f.Refusals = append(f.Refusals, *r)
 			failures++
 			sayRefusalsOf([]setup.Refusal{*r}, nil, "", sayLevel(a.upgrade), nil, false)
@@ -1571,9 +1571,9 @@ func otherLine(out string) (o otherUser, ok bool) {
 
 // rootDeployRefusal is the refusal the root run said as root before it made the deploy user's
 // record (its SetupOther or SetupUnread line in out), nil for none.
-func rootDeployRefusal(out string) *setup.Refusal {
+func rootDeployRefusal(h setupHost, out string) *setup.Refusal {
 	if o, ok := otherLine(out); ok {
-		r := otherDeployRefusal(o, currentLogin(), remote.SessionFrom(os.Getenv))
+		r := otherDeployRefusal(o, loginOn(h), remote.SessionFrom(os.Getenv))
 		return &r
 	}
 	if why, ok := unreadLine(out); ok {

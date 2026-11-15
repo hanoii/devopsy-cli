@@ -235,7 +235,7 @@ func TestServerSetupApplyUpgradeRefusesWhereAnotherIsSetUp(t *testing.T) {
 	s, host := setupServer(t)
 	me := currentLogin().name
 	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
-	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
 	if code != 0 || !strings.Contains(out, "devopsy: warning: deploy user: ops was set up too on this server") || !strings.Contains(out, "$ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
@@ -253,7 +253,7 @@ func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
 	s, host := setupServer(t)
 	me := currentLogin().name
 	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
-	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: ops was set up too on this server (its setup record /home/ops/.config/devopsy/server.yaml), and this setup runs as "+me) ||
@@ -3262,7 +3262,7 @@ func TestServerSetupRefusedNamesNoRoot(t *testing.T) {
 	s, host, vol, config := rootChoice(t)
 	me := currentLogin().name
 	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
-	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
 	before := readString(config)
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol)
@@ -3283,7 +3283,7 @@ func TestUpgradeRefusedAsAnotherDeployUserOffersNoSetup(t *testing.T) {
 	s, host := setupServer(t)
 	me := currentLogin().name
 	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
-	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	write(t, filepath.Join(host, "home", "ops", ".devopsy-uids", "env:shop:prod"), "x\n", 0o644)
 	write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), "{}\n", 0o600)
 	out, code := s.run([]string{remote.HostEnv + "=admin@one"}, remote.ServerSetupFlag, "apply", "--upgrade")

@@ -31,7 +31,7 @@ func runUpgrade(args []string, color bool) int {
 	// session (the server's address it carries): the operator's own --upgrade, with no target,
 	// upgrades its own devopsy whatever user it is.
 	if s := remote.SessionFrom(os.Getenv); s.Host != "" || s.Server != "" {
-		if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, s); err != nil {
+		if err := checkDeployUser(deployUserHost(), loginOn(deployUserHost()), asProjectUser, s); err != nil {
 			return failErr(err)
 		}
 	}

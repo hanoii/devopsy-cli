@@ -133,8 +133,8 @@ func TestDeployUserFactSeesAnotherDeployUser(t *testing.T) {
 		t.Helper()
 		h := setupHost{root: t.TempDir()}
 		write(t, h.path("/etc/group"), "sudo:x:27:admin\ndocker:x:990:admin,ops\nstaff:x:50:\n", 0o644)
-		write(t, h.path("/etc/passwd"), "root:x:0:0::/root:/bin/sh\nadmin:x:1000:1000::/home/admin:/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n"+
-			"devopsy:x:1002:990::/home/devopsy:/bin/sh\nother:x:1003:1003::/home/other:/bin/sh\n", 0o644)
+		write(t, h.path("/etc/passwd"), "root:x:0:0::/root:/bin/sh\nadmin:x:61000:61000::/home/admin:/bin/sh\nops:x:61001:61001::/home/ops:/bin/sh\n"+
+			"devopsy:x:61002:990::/home/devopsy:/bin/sh\nother:x:61003:61003::/home/other:/bin/sh\n", 0o644)
 		for _, u := range records {
 			write(t, h.path("/home/"+u+"/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
 		}
@@ -245,7 +245,7 @@ func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	asRelease(t, s)
 	me := currentLogin().name
 	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
-	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
 	// The other user's setup record appears once the facts were read, before the root run.
 	waiting := filepath.Join(t.TempDir(), "waiting")
 	outFile, err := os.CreateTemp(t.TempDir(), "out")
@@ -622,5 +622,29 @@ func TestCheckDeployUserOfNoLogin(t *testing.T) {
 	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\nghost:x:1001:1001::/home/ghost:/bin/sh\n", 0o644)
 	if err := checkDeployUser(h, login{uid: 1000, name: "admin"}, func() bool { return false }, remote.Session{}); !errors.As(err, &f) || f.Msg != report.NotDeployUser.Msg() {
 		t.Errorf("a record naming a login of the server's: %#v", err)
+	}
+}
+
+// loginLine is the passwd line of the login these tests run as, named me, by its own uid: a
+// host root's user database names the login as the one every judgment of it reads (loginOn),
+// so a fake one lists it with the uid it has.
+func loginLine(me string) string {
+	uid := strconv.Itoa(os.Getuid())
+	return me + ":x:" + uid + ":" + uid + "::/home/" + me + ":/bin/sh\n"
+}
+
+// The login a judgment of a host root compares its users with comes from that root's own user
+// database, by the process's uid: never the host's name for it beside a passwd file that gives
+// that uid another name, which the judgment reads; a root with no passwd file of its own is the
+// host's.
+func TestLoginOnIsTheHostRootsUser(t *testing.T) {
+	t.Parallel()
+	h := setupHost{root: t.TempDir()}
+	if got := loginOn(h); got != currentLogin() {
+		t.Errorf("no passwd file: %+v, the host's %+v", got, currentLogin())
+	}
+	write(t, h.path("/etc/passwd"), "someone:x:"+strconv.Itoa(os.Getuid())+":0::/home/someone:/bin/sh\n", 0o644)
+	if got := loginOn(h); got.name != "someone" || got.uid != os.Getuid() {
+		t.Errorf("its own passwd file: %+v", got)
 	}
 }

@@ -106,6 +106,21 @@ func lookupLogin(h setupHost, key string, field int) *user.User {
 	return nil
 }
 
+// loginOn is this process's login as the host root h's user database names it, the one every
+// judgment of h reads (its passwd file; the host's own where h has none, currentLogin): its uid
+// and that file's name for it, so the login and the users a judgment compares it with never
+// come from two databases.
+func loginOn(h setupHost) login {
+	if h.root == "" || !exists(h.path("/etc/passwd")) {
+		return currentLogin()
+	}
+	l := login{uid: os.Getuid()}
+	if u := lookupLogin(h, strconv.Itoa(l.uid), 2); u != nil {
+		l.name = u.Username
+	}
+	return l
+}
+
 // currentLogin is this process's login (currentUser), its name "" where the system has none.
 func currentLogin() login {
 	l := login{uid: os.Getuid()}
@@ -357,7 +372,7 @@ func deployUserHost() setupHost {
 // of this login alone (checkDeployUser), for the scripts that run no prelude (the --ssh-keys
 // scripts), which neither a config nor a release root of the login's may hold up.
 func runDeployUserCheck() int {
-	if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
+	if err := checkDeployUser(deployUserHost(), loginOn(deployUserHost()), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
 		failErr(err)
 		return remote.SettingsRefusedExit
 	}
