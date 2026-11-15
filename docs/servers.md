@@ -79,6 +79,37 @@ which devopsy does not support: such a server's projects go to a new
 server whose Docker runs the containerd image store
 ([`docker`](server-setup-howto.md#docker)).
 
+## Behind an HTTP proxy
+
+On a server that reaches the Internet through an HTTP proxy, two settings
+name it: `proxies` in `daemon.json`, for Docker's own pulls, and
+`proxies` in the deploy user's `~/.docker/config.json`, which Docker
+gives every container that user creates, as `HTTP_PROXY`, `HTTPS_PROXY`
+and `NO_PROXY`, each in both cases. Most HTTP clients
+follow them for every request, a container's requests to another
+container included, so the server's `noProxy` would have to name every
+service a project calls. It names none: a project's own containers say
+what they reach directly.
+
+- A container that makes an HTTP request to another container names it in
+  its own `NO_PROXY` and `no_proxy` (for example `NO_PROXY: app` on a
+  service that calls `app:8080`). Set in `environment:`, they replace the
+  server's list, which is enough when the container calls nothing else
+  that must bypass the proxy; otherwise its entrypoint appends to the list
+  Docker gave it (for example `NO_PROXY="${NO_PROXY:+$NO_PROXY,}app"`
+  before it runs its command).
+- Both cases: Go reads `NO_PROXY` first today and `no_proxy` first in its
+  coming releases.
+- A name matches that host and its subdomains, never a shorter name, and
+  an address range (`172.16.0.0/12`) matches only a request made to an
+  address.
+- Connections that are not HTTP (a database, a cache, SMTP) never use the
+  proxy and need nothing.
+- A check on a container's own loopback skips the proxy explicitly:
+  `curl` sends `localhost` there unless the list names it
+  (`curl --noproxy '*'`), and busybox's `wget` ignores `no_proxy`
+  altogether (`wget -Y off`).
+
 ## `--server-setup`
 
 `devopsy @devopsy@vm1: --server-setup` sets up what devopsy needs of a
