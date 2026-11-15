@@ -219,3 +219,32 @@ func TestDockerRepositoryStepTakesOverAnOlderList(t *testing.T) {
 		t.Errorf("apt has %d sources of Docker's, %v, which apt refuses when their keys differ:\n%s", len(docker), docker, out)
 	}
 }
+
+// BUG (review round 1): the deploy-user topic's config step moves the old user's
+// ~/.config/devopsy with a plain mv, which puts it inside the new user's when that one has the
+// directory already (an admin's own account devopsy once took for the deploy user, the case
+// the topic is for): the setup's record and the project users' entries land in
+// ~/.config/devopsy/devopsy, where no devopsy reads them, and are gone from the old user's.
+// The step must leave them where devopsy reads them, the new user's or still the old one's.
+func TestDeployUserConfigStepNeverNestsTheConfig(t *testing.T) {
+	t.Parallel()
+	homes := t.TempDir()
+	old, next := filepath.Join(homes, "devopsy", ".config", "devopsy"), filepath.Join(homes, "deploy", ".config", "devopsy")
+	for _, d := range []string{filepath.Join(old, "door"), next} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(old, "server.yaml"), []byte("version: v1.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := fakes(t, map[string]string{
+		"getent":  `echo "$2:x:1000:1000::` + homes + `/$2:/bin/sh"` + "\n",
+		"install": `for a; do :; done; mkdir -p "$a"` + "\n",
+	}, "getent", "install", "chown")
+	out := pasted(t, stepWith(t, DeployUser, ".config/devopsy"), path)
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	if exists(filepath.Join(next, "devopsy")) || !exists(filepath.Join(next, "server.yaml")) && !exists(filepath.Join(old, "server.yaml")) {
+		t.Errorf("the old user's config went inside the new user's, where no devopsy reads it (nested: %v):\n%s", exists(filepath.Join(next, "devopsy", "server.yaml")), out)
+	}
+}
