@@ -27,6 +27,9 @@ const (
 	// ServerEnv is the address of the target the session is on as typed, a server named alone
 	// included (TypedAddress): what a hint of a server's command (cli.ServerScope) names.
 	ServerEnv = "DEVOPSY_INTERNAL_SERVER"
+	// HostEnv is the server the session reached, as its SSH destination (Target.Host, a login
+	// and a port included): what a hint to log in as another user names (AsUser).
+	HostEnv = "DEVOPSY_INTERNAL_HOST"
 )
 
 // commandMax and addressMax cap what a session's values may hold, wherever they are read
@@ -71,6 +74,8 @@ type Session struct {
 	Server string
 	// Name is the compose name of the environment Address and Hint name.
 	Name string
+	// Host is the server's SSH destination (HostEnv), a login and a port included.
+	Host string
 }
 
 // SessionFrom reads the session's values from getenv: the command only as Command writes
@@ -91,7 +96,26 @@ func SessionFrom(getenv func(string) string) Session {
 	if a := getenv(ServerEnv); isServerAddress(a) {
 		s.Server = a
 	}
+	if h := getenv(HostEnv); len(h) <= addressMax {
+		if _, _, ok := ParseServer(h); ok {
+			s.Host = h
+		}
+	}
 	return s
+}
+
+// AsUser is the server named alone (<server>:, as a server's command takes it) at host, an
+// SSH destination (Target.Host, ParseServer's form), logged in as user in place of its login:
+// what a hint to ask as the deploy user names. An IPv6 address without a port gets its
+// brackets, which the colon after it needs.
+func AsUser(host, user string) string {
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:]
+	}
+	if strings.Count(host, ":") > 1 && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return user + "@" + host + ":"
 }
 
 // isServerAddress says whether s is an address a server's command takes, within its cap: an
@@ -223,6 +247,9 @@ func sessionExports(t *Target) string {
 	}
 	if typed := TypedAddress(t); len(typed) <= addressMax {
 		s += ServerEnv + "=" + Quote(typed) + "; export " + ServerEnv + "\n"
+	}
+	if len(t.Host) <= addressMax {
+		s += HostEnv + "=" + Quote(t.Host) + "; export " + HostEnv + "\n"
 	}
 	if t.Name != "" {
 		if typed, hint := TypedAddress(t), HintAddress(t); len(typed) <= addressMax && len(hint) <= addressMax {

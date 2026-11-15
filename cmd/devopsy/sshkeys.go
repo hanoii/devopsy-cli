@@ -337,10 +337,10 @@ func refuseProjectUser(t *remote.Target, out, why, command string) {
 	if deploy == "" {
 		deploy = "<deploy user>"
 	}
-	login, host, ok := strings.Cut(t.Host, "@")
+	login, _, ok := strings.Cut(t.Host, "@")
 	if !ok {
-		login, host = "this login", t.Host
+		login = "this login"
 	}
 	report.Fail(errors.New(login+" is a project user, and "+why),
-		report.Fix("ask as the deploy user:", "devopsy @"+deploy+"@"+host+": "+command))
+		report.Fix("ask as the deploy user:", "devopsy @"+remote.AsUser(t.Host, deploy)+" "+command))
 }
