@@ -1318,3 +1318,66 @@ func TestNameMovingBetweenListingAndToolsIsNoNameLeft(t *testing.T) {
 		}
 	}
 }
+
+// namesRead is a fakeDocker noting every plain name read (ID, Inspect): none a hold, a
+// reference by digest or an id, which the door answers without a claim.
+type namesRead struct {
+	*fakeDocker
+	read []string
+}
+
+func (d *namesRead) note(ref string) {
+	if !isBookmark(ref) && !Pinned(ref) && !strings.HasPrefix(ref, "sha256:") {
+		d.read = append(d.read, ref)
+	}
+}
+
+func (d *namesRead) ID(ref string) (string, error) {
+	d.note(ref)
+	return d.fakeDocker.ID(ref)
+}
+
+func (d *namesRead) Inspect(ref string) (Image, error) {
+	d.note(ref)
+	return d.fakeDocker.Inspect(ref)
+}
+
+// Review round 3, a failing test of a bug: behind the door a removal reads each of its
+// release's tools by its plain name (Remove's "judged on the image it holds now", after it
+// untagged the tool's bookmark), though only a record reads a tool by name there. The door
+// answers an inspect of a plain name whose last claim's image is gone by claiming it, a pull:
+// the bookmark just untagged was that image's last name, so every removal of the last release
+// holding a tool pulls the tool again (left under a claim hold after a --destroy), and a
+// registry that no longer serves the tag fails the removal, the release staying for good. The
+// name is not the project user's to remove either way (toolNamed leaves the door out).
+func TestDoorRemovalReadsNoToolByName(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "shop-prod", ModeImage, &out)
+	e.set.Door = true
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	r1 := e.release(proxySvc)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.names[toolTag("shop-prod", r1, jq.Ref)]; got != "sha256:j1" {
+		t.Fatalf("the tool's bookmark holds %q", got)
+	}
+	reads := &namesRead{fakeDocker: d}
+	e.set.Docker = reads
+	if err := e.set.Remove(e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.names[toolTag("shop-prod", r1, jq.Ref)]; ok {
+		t.Errorf("the tool's bookmark stays after its release's removal")
+	}
+	if slices.Contains(reads.read, jq.Ref) {
+		t.Errorf("behind the door, a removal read its tool by its name, which claims it (a pull): %v", reads.read)
+	}
+}
