@@ -1381,3 +1381,43 @@ func TestDoorRemovalReadsNoToolByName(t *testing.T) {
 		t.Errorf("behind the door, a removal read its tool by its name, which claims it (a pull): %v", reads.read)
 	}
 }
+
+// Review round 3, a failing test of a bug: a removal keeps a name while any release's tool
+// tag names it, for that release to take, but a project user's release never takes a plain
+// name (behind the door its removal of one does nothing, and it looks for no tool tag). So a
+// deploy user's project sharing a tool's tag with a project user's leaves the name, and the
+// image it holds, for good once it is destroyed first: kept unrecorded, no pruning retries
+// it. Here the project user's claim landed the tag's newer image, so no bookmark of its holds
+// the image the server's name is on, which the removal took before the name rule.
+func TestProjectUsersToolTagKeepsNoNameForGood(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	a := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	a.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(a.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(proxySvc.Ref, "sha256:c1")
+	d.pull(jq.Ref, "sha256:j1")
+	ra := a.release(proxySvc)
+	if err := a.set.Record(a.rel(ra), ""); err != nil {
+		t.Fatal(err)
+	}
+	// A project user's release of the same tool: its claim loads the registry's image now
+	// (j2) and writes no plain name, its record bookmarking it under its own tool tag.
+	d.images["sha256:j2"] = true
+	theirs := familiar(toolTag("shop-prod", "20261016000001", jq.Ref))
+	d.names[theirs] = "sha256:j2"
+	if err := a.set.Remove(a.rel(ra)); err != nil {
+		t.Fatal(err)
+	}
+	// The project user's release goes: the door removes its hold, never the plain name.
+	if err := d.Remove(theirs); err != nil {
+		t.Fatal(err)
+	}
+	a.set.Prune()
+	if id, ok := d.names[familiar(jq.Ref)]; ok {
+		t.Errorf("%s (%s) outlived every release that ran it, recorded nowhere (%v): %v\n%s", jq.Ref, id, readLeft(a.set.Left), d.names, out.String())
+	}
+}
