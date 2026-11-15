@@ -863,32 +863,59 @@ func (g *gcScope) oldUtil() ([]gcTag, error) {
 	return tags, nil
 }
 
-// removeOldUtil removes the old util images of tags that are still such and used by no container,
-// decided again under the image lock (oldUtil), each by its name: docker image rm without -f
-// refuses one a container started on since, and takes only the name from an image that has
-// others. False when one stays.
+// removeOldUtil removes the old util images of tags that are still such and used by no
+// container (removeStill), saying each one removed. False when one stays.
 func (g *gcScope) removeOldUtil(tags []gcTag) bool {
-	if len(tags) == 0 {
-		return true
-	}
-	now, err := g.oldUtil()
-	if err != nil {
-		report.Warn("the old util images stay: " + err.Error())
-		return false
-	}
-	ok := true
-	for _, t := range tags {
-		if !slices.ContainsFunc(now, func(x gcTag) bool { return x.key() == t.key() }) {
-			continue
-		}
-		if out, err := exec.Command(g.docker, "image", "rm", t.Ref).CombinedOutput(); err != nil {
-			report.Warn(t.Ref+" stays", oneLine(cmp.Or(string(out), err.Error())))
-			ok = false
-			continue
-		}
+	gone, ok := removeStill(g.docker, "the old util images", tags, g.oldUtil)
+	for _, t := range gone {
 		report.Info("removed " + t.words())
 	}
 	return ok
+}
+
+// gcRemovable is an image --gc removes by docker image rm: by its key it is found again, by
+// its ref removed, and by its name said when it stays.
+type gcRemovable interface {
+	key() string
+	ref() string
+	name() string
+}
+
+func (t gcTag) ref() string  { return t.Ref }
+func (t gcTag) name() string { return t.Ref }
+
+// key, ref and name are a dangling image's id, which is all it has.
+func (i gcImage) key() string  { return i.ID }
+func (i gcImage) ref() string  { return i.ID }
+func (i gcImage) name() string { return "dangling image " + i.ID }
+
+// removeStill removes what of listed still goes, decided again under the image lock by list,
+// a new look, each by its key: docker image rm of its ref, without -f, which refuses one a
+// container started on since, and takes only a name from an image that has others. Each it
+// cannot remove is warned of, the whole of what (the kind's words) when list fails: what it
+// removed, and false when one stays.
+func removeStill[T gcRemovable](docker, what string, listed []T, list func() ([]T, error)) (removed []T, ok bool) {
+	if len(listed) == 0 {
+		return nil, true
+	}
+	now, err := list()
+	if err != nil {
+		report.Warn(what + " stay: " + err.Error())
+		return nil, false
+	}
+	ok = true
+	for _, x := range listed {
+		if !slices.ContainsFunc(now, func(y T) bool { return y.key() == x.key() }) {
+			continue
+		}
+		if out, err := exec.Command(docker, "image", "rm", x.ref()).CombinedOutput(); err != nil {
+			report.Warn(x.name()+" stays", oneLine(cmp.Or(string(out), err.Error())))
+			ok = false
+			continue
+		}
+		removed = append(removed, x)
+	}
+	return removed, ok
 }
 
 // dangling are the dangling images no container uses, with their size as Docker counts it
@@ -1070,32 +1097,14 @@ func (g *gcScope) remove(p gcPlan) int {
 }
 
 // removeDangling removes the dangling images of d that are still dangling and used by no
-// container, decided again under the image lock (dangling), each by its id: docker rm without
-// -f refuses one a container started on since. False when one stays.
+// container (removeStill), by their ids, saying how many and their size. False when one stays.
 func (g *gcScope) removeDangling(d gcDangling) bool {
-	if len(d.Images) == 0 {
-		return true
-	}
-	now, err := g.dangling()
-	if err != nil {
-		report.Warn("the dangling images stay: " + err.Error())
-		return false
-	}
-	ok, n, freed := true, 0, int64(0)
-	for _, i := range d.Images {
-		if !slices.ContainsFunc(now.Images, func(x gcImage) bool { return x.ID == i.ID }) {
-			continue
-		}
-		if out, err := exec.Command(g.docker, "image", "rm", i.ID).CombinedOutput(); err != nil {
-			report.Warn("dangling image "+i.ID+" stays", oneLine(cmp.Or(string(out), err.Error())))
-			ok = false
-			continue
-		}
-		n++
-		freed += i.Size
-	}
-	if n > 0 {
-		report.Info(fmt.Sprintf("removed %s, %s", plural(n, "dangling image"), humanBytes(freed)))
+	gone, ok := removeStill(g.docker, "the dangling images", d.Images, func() ([]gcImage, error) {
+		now, err := g.dangling()
+		return now.Images, err
+	})
+	if len(gone) > 0 {
+		report.Info(fmt.Sprintf("removed %s, %s", plural(len(gone), "dangling image"), humanBytes(gcDangling{Images: gone}.size())))
 	}
 	return ok
 }
