@@ -35,3 +35,19 @@ func TestDeployUserRefusalNeverOffersARefusedSetup(t *testing.T) {
 		t.Errorf("each user's refusal offers the setup as the other, which is refused too:\nas devopsy: %s\n  $ %s\nas admin: %s\n  $ %s", asDevopsy.Message, asDevopsy.Command, asAdmin.Message, asAdmin.Command)
 	}
 }
+
+// Bug (review round 2): the root run names a release root's owner the passwd file does not list
+// by its uid alone (remote.SetupOther, "other 1001 the release root ..."), where the plan's own
+// read says "uid 1001" (otherDeployUser): the refusal then takes the number for a login and
+// offers a command addressed as it, which no one can run, where the plan says the way in words.
+func TestRootRunsOtherOwnerWithNoNameIsNoLogin(t *testing.T) {
+	t.Parallel()
+	user, evidence, ok := otherLine(remote.SetupOther + " 1001 the release root /srv/devopsy is its\n")
+	if !ok {
+		t.Fatal("no other line read")
+	}
+	r := otherDeployRefusal(user, evidence, login{uid: 1000, name: "admin"}, remote.Session{Host: "admin@vm1"})
+	if r.Command != "" || !strings.Contains(r.Message, "uid 1001") {
+		t.Errorf("an owner with no name is offered as a login: %q\n  $ %s", r.Message, r.Command)
+	}
+}
