@@ -338,3 +338,34 @@ func TestDeployUserConfigStepLeavesTwoConfigsApart(t *testing.T) {
 		t.Errorf("the old user's config went inside the new user's:\n%s", out)
 	}
 }
+
+// Bug (review round 2): the deploy-user topic's move step, where the release root is the old
+// user's home, moves each project's directory and the uid claims with a plain mv, which puts
+// them inside the new user's own when that one is there already: on a server where two docker
+// users each took themselves for the deploy user (what the record is for), both homes hold a
+// .devopsy-uids, often the same project, and the old claims land in .devopsy-uids/.devopsy-uids
+// and shop/shop, where no devopsy reads them, with no word: the two owners on one uid stay.
+func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
+	t.Parallel()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes := t.TempDir()
+	for _, f := range []string{"devopsy/shop/prod/releases/1/x", "devopsy/.devopsy-uids/claims/shop-prod", "deploy/shop/dev/releases/1/x", "deploy/.devopsy-uids/claims/shop-dev"} {
+		p := filepath.Join(homes, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := fakes(t, map[string]string{"getent": `case $2 in ` + me.Username + `) h=devopsy ;; *) h=$2 ;; esac; echo "$2:x:1000:1000::` + homes + `/$h:/bin/sh"` + "\n"}, "getent")
+	out := pasted(t, stepWith(t, DeployUser, ".devopsy-images.lock; do [ ! -e \"$from/$p\" ]"), path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
+	for _, nested := range []string{"deploy/.devopsy-uids/.devopsy-uids", "deploy/shop/shop"} {
+		if _, err := os.Stat(filepath.Join(homes, nested)); err == nil {
+			t.Errorf("the move step put the old user's %s inside the new user's own, where no devopsy reads it:\n%s", filepath.Base(nested), out)
+		}
+	}
+}
