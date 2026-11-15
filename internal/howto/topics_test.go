@@ -369,3 +369,25 @@ func TestDeployUserMoveStepNeverNestsWhatTheNewHomeHolds(t *testing.T) {
 		}
 	}
 }
+
+// Bug (review round 2): on a server with project users, --project-users setup put the deploy
+// user in devopsy-proc (setup.ProcGroup, the group that sees every process once /proc hides
+// them), and the deploy-user topic hands the door to the new user (its directory, sudo rules,
+// sshd's drop-in) without putting it there, nor running --project-users setup, which would:
+// the new deploy user's /proc then hides the project users' processes, and the topic's own
+// check (--server-info with no refusal) shows that group's warning instead.
+func TestDeployUserTopicPutsTheNewUserInTheProcessesGroup(t *testing.T) {
+	t.Parallel()
+	tp, _ := Find(string(DeployUser))
+	for _, s := range tp.Steps {
+		if strings.Contains(s.Text, "--project-users setup") {
+			return
+		}
+		for _, c := range s.Cmds {
+			if strings.Contains(c, "devopsy-proc") {
+				return
+			}
+		}
+	}
+	t.Error("no step puts the new deploy user in devopsy-proc, which the door's /proc hiding lets see every process")
+}
