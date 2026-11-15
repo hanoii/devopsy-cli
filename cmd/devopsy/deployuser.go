@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -29,16 +32,21 @@ func deployUserRecord(h setupHost) (name string, text []byte, err error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil, nil
 	}
-	if err == nil {
-		if name, err = setup.ParseDeployUser(string(text), remote.LoginName); err == nil && !loginKnown(h, name) {
-			err = errors.New("it names " + name + ", which is no user of this server's")
-		}
-		if err == nil {
-			return name, text, nil
-		}
+	if err != nil {
+		return "", nil, fmt.Errorf("%s cannot be read: %w", setup.DeployUserFile, err)
 	}
-	return "", nil, fmt.Errorf("%s cannot tell the server's deploy user: %w", setup.DeployUserFile, err)
+	if name, err = setup.ParseDeployUser(string(text), remote.LoginName); err == nil && !loginKnown(h, name) {
+		err = errors.New("names " + name + ", but this server has no such user")
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("%s %w; it should hold only the deploy user's name, on one line", setup.DeployUserFile, err)
+	}
+	return name, text, nil
 }
+
+// deployRecordWrite is what root writes in a record that cannot be read, wherever its fix is
+// said (W0010, the setup's refusal).
+const deployRecordWrite = "write the deploy user's name in " + setup.DeployUserFile + ", on a line by itself (owner root, mode 644)"
 
 // loginKnown says whether name is a user of h's (lookupLogin), always where h is a host root of
 // the tests' with no passwd file of its own, which knows no user to judge by.
@@ -145,22 +153,26 @@ func checkDeployUser(h setupHost, me login, projectUser func() bool, s remote.Se
 	switch {
 	case err != nil:
 		// Root's own shell is the way in: --shell-host as any other login is checked too.
-		fix := report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644, in root's shell (--shell-host --root on this server)")
+		fix := report.Fix("open root's shell (--shell-host --root on this server) and " + deployRecordWrite)
 		if c := s.OnServer("--shell-host --root"); c != "" {
-			fix = report.Fix("correct it as root: the deploy user's name alone on a line, the file root's with mode 644, in root's shell:", c)
+			fix = report.Fix("open root's shell and "+deployRecordWrite+":", c)
 		}
 		return &report.Failure{Msg: report.DeployUserUnread.Msg(), Details: []string{err.Error()}, Remedies: []report.Remedy{fix}}
 	case deploy == "" || deploy == me.name:
 		return nil
 	}
-	f := &report.Failure{Msg: report.NotDeployUser.Msg(),
-		Details: []string{"this login is " + me.words() + ", and " + setup.DeployUserFile + " names " + deploy + " the deploy user: devopsy runs every release, uid claim and setup of a server as that one user"}}
-	if s.Host != "" {
+	f := &report.Failure{Msg: report.NotDeployUser.Msg(), Details: []string{
+		"logged in as " + me.words() + ", but this server's deploy user is " + deploy + " (" + setup.DeployUserFile + ")",
+		"devopsy works on a server as one user only, so that every release, uid claim and setup there stays in one place"}}
+	switch c := s.CommandAs(deploy); {
+	case c != "":
+		f.Remedies = append(f.Remedies, report.Fix("run it as "+deploy+":", c))
+	case s.Host != "":
 		f.Remedies = append(f.Remedies, report.Fix("address the server as "+deploy+", for example:", "devopsy @"+remote.AsUser(s.Host, deploy)+" --server-info"))
-	} else {
+	default:
 		f.Remedies = append(f.Remedies, report.Fix("address the server as "+deploy))
 	}
-	f.Remedies = append(f.Remedies, stepsHint("to make "+me.words()+" the deploy user instead, move what is "+deploy+"'s by hand", howto.DeployUser))
+	f.Remedies = append(f.Remedies, followHint("to make "+me.words()+" the deploy user instead", howto.DeployUser))
 	return f
 }
 
@@ -178,12 +190,26 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 		r := deployUnreadRefusal(err.Error())
 		return nil, &r
 	case deploy != "" && deploy != me.name:
-		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: setup.DeployUserFile + " names " + deploy + " the server's deploy user, and this setup runs as " + me.words(),
-			Fix: "run --server-setup as " + deploy + ", or make " + me.words() + " the deploy user by hand", Howto: howto.DeployUser}
+		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: "this server's deploy user is " + deploy + " (" + setup.DeployUserFile + "), and this setup runs as " + me.words(),
+			Info: "this server's deploy user is " + deploy + " (" + setup.DeployUserFile + "): a --server-setup as " + me.words() + " is refused",
+			Fix:  "run --server-setup as " + deploy + ", or make " + me.words() + " the deploy user by hand", Howto: howto.DeployUser}
 	case me.uid == 0 && deploy == "", me.name == "":
 		return nil, nil
 	case deploy == "":
-		if o := otherDeployUser(h, me, root); o.name != "" {
+		o, unseen := otherDeployUser(h, me, root)
+		// What this login cannot read is asked as root where the caller can (rootRead), the
+		// same judgment's line read back: never "would record" on a home it could not see.
+		if o.name == "" && len(unseen) > 0 && h.rootRead != nil {
+			out, err := h.rootRead(me, root)
+			if err != nil {
+				r := unseenRefusal(unseen, me, err)
+				return nil, &r
+			}
+			if r := rootDeployRefusal(h, out, s); r != nil {
+				return nil, r
+			}
+		}
+		if o.name != "" {
 			r := otherDeployRefusal(o, me, s)
 			return nil, &r
 		}
@@ -192,40 +218,55 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 }
 
 // otherDeployUser is the user other than me a server with no record shows set up by devopsy,
-// and what shows it: a member of the docker group (h's group and passwd files, a member listed
-// or its primary group), root never, with devopsy's setup record in its home's config
-// (~/.config/devopsy/server.yaml), or uid claims or an environment (devopsyEnvironment) under
-// its release root (its config's releases: root, else its home), a deploy user that never ran
-// --server-setup included; else the owner of the release root root, another user's but root's,
-// by name, else "uid N", no login. Its zero value for none. The one judgment of it: the facts
-// read it as the login can, and the root run asks it again as root before it makes the record
-// (DeployUserOtherFlag).
-func otherDeployUser(h setupHost, me login, root string) otherUser {
+// and what shows it, by the strongest evidence first: a member of the docker group (h's group
+// and passwd files, a member listed or its primary group), root never, holding uid claims or an
+// environment (devopsyEnvironment) under its release root (its config's releases: root, else
+// its home), a deploy user that never ran --server-setup included; then one whose evidence is
+// weak, its setup record alone in its home's config (~/.config/devopsy/server.yaml, bare), or
+// the server's devopsy its own (binaryOwner, binary), a member too; else the owner of the
+// release root root, another user's but root's, by name, else "uid N", no login. Its zero value
+// for none. unseen are the members whose home, config or release root this process may not read
+// (a home of mode 700, as Debian makes them), which read as no evidence: where nothing is found
+// and some are unseen, the facts ask the same as root (rootRead). The one judgment of it: the
+// facts read it as the login can, and the root run asks it again as root before it makes the
+// record (DeployUserOtherFlag).
+func otherDeployUser(h setupHost, me login, root string) (o otherUser, unseen []string) {
 	users, members := dockerMembers(h)
+	var weak otherUser
 	for _, m := range members {
 		i := slices.IndexFunc(users, func(u passwdEntry) bool { return u.name == m })
 		if m == me.name || i < 0 || users[i].home == "" || users[i].uid == strconv.Itoa(me.uid) || users[i].uid == "0" {
 			continue
 		}
 		home := users[i].home
+		config := filepath.Join(home, ".config", "devopsy", remote.ConfigFile)
+		if denied(h.path(home)) || denied(h.path(config)) {
+			unseen = append(unseen, m)
+			continue
+		}
 		record := filepath.Join(home, ".config", "devopsy", setup.RecordFile)
-		theirs := remote.ReleaseRootIn(h.path(filepath.Join(home, ".config", "devopsy", remote.ConfigFile)), home)
+		theirs := remote.ReleaseRootIn(h.path(config), home)
+		if theirs != home && denied(h.path(theirs)) {
+			unseen = append(unseen, m)
+			continue
+		}
 		claims := filepath.Join(theirs, uids.DirName)
 		env := devopsyEnvironment(h.path(theirs))
-		holds := exists(h.path(claims)) || env != ""
-		o := otherUser{name: m, both: holds && holdsEnvironments(root)}
 		switch {
-		case exists(h.path(record)) && !holds:
-			o.evidence, o.bare = "its setup record "+record, record
 		case exists(h.path(claims)):
-			o.evidence = "its uid claims " + claims
+			return otherUser{name: m, evidence: "its uid claims " + claims, both: holdsEnvironments(root)}, unseen
 		case env != "":
-			o.evidence = "its environment " + filepath.Join(theirs, env)
-		case exists(h.path(record)):
-			o.evidence = "its setup record " + record
+			return otherUser{name: m, evidence: "its environment " + filepath.Join(theirs, env), both: holdsEnvironments(root)}, unseen
+		case exists(h.path(record)) && weak.name == "":
+			weak = otherUser{name: m, evidence: "its setup record " + record, bare: record}
 		}
-		if o.evidence != "" {
-			return o
+	}
+	if weak.name != "" {
+		return weak, unseen
+	}
+	if path, uid, ok := h.binaryOwner(); ok && uid != 0 && uid != me.uid {
+		if i := slices.IndexFunc(users, func(u passwdEntry) bool { return u.uid == strconv.Itoa(uid) }); i >= 0 && slices.Contains(members, users[i].name) {
+			return otherUser{name: users[i].name, evidence: path, binary: filepath.Dir(path)}, unseen
 		}
 	}
 	var st syscall.Stat_t
@@ -234,17 +275,74 @@ func otherDeployUser(h setupHost, me login, root string) otherUser {
 		if i := slices.IndexFunc(users, func(u passwdEntry) bool { return u.uid == strconv.Itoa(int(st.Uid)) }); i >= 0 {
 			owner = users[i].name
 		}
-		return otherUser{name: owner, evidence: "the release root " + root + " is its"}
+		return otherUser{name: owner, evidence: "it owns the release root " + root}, unseen
 	}
-	return otherUser{}
+	return otherUser{}, unseen
+}
+
+// denied says whether reading path is refused to this process for its permissions (a home of
+// mode 700, as Debian makes them), which os's own lookups and filepath.Glob read as nothing
+// there.
+func denied(path string) bool {
+	f, err := os.Open(path)
+	if err == nil {
+		f.Close()
+	}
+	return errors.Is(err, fs.ErrPermission)
+}
+
+// binaryOwner is the server's devopsy, resolved (selfPath), and the uid it belongs to: who
+// upgrades it, so its owner is the deploy user where devopsy-server installed it. Read under h's
+// root, as every file the judgment reads, so its owner and the users it is compared with come
+// from one host (a test's host root holds no binary). h.binary in its place where set, the
+// tests'.
+func (h setupHost) binaryOwner() (path string, uid int, ok bool) {
+	if h.binary != nil {
+		return h.binary()
+	}
+	path = selfPath()
+	_, uid, ok = binaryOwnerOf(h.path(path))
+	return path, uid, ok
+}
+
+// binaryOwnerOf is path and the uid it belongs to, ok false where it has none (no path, gone):
+// the owner of the server's devopsy, which otherDeployUser weighs and the door's client takes
+// for the deploy user (deployUser).
+func binaryOwnerOf(path string) (string, int, bool) {
+	if path == "" {
+		return "", 0, false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", 0, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", 0, false
+	}
+	return path, int(st.Uid), true
+}
+
+// holding is what o holds, said after its name ("ops has ..."): an environment by its path, uid
+// claims by where they are.
+func (o otherUser) holding() string {
+	if p, ok := strings.CutPrefix(o.evidence, "its environment "); ok {
+		return p
+	}
+	if p, ok := strings.CutPrefix(o.evidence, "its uid claims "); ok {
+		return "uid claims in " + p
+	}
+	return o.evidence
 }
 
 // otherUser is another deploy user a server shows (otherDeployUser): its name, what shows it,
-// its setup record where that is all (bare, one it may hold by mistake), and both where it holds
-// environments or claims and so does the login's own release root, a bigger issue than a choice.
+// its setup record where that is all (bare, one it may hold by mistake), the directory of the
+// server's devopsy where owning it is all (binary, evidence that binary's path), and both where
+// it holds environments or claims and so does the login's own release root, a bigger issue
+// than a choice.
 type otherUser struct {
-	name, evidence, bare string
-	both                 bool
+	name, evidence, bare, binary string
+	both                         bool
 }
 
 // holdsEnvironments says whether the release root root holds devopsy's environments or uid
@@ -319,15 +417,15 @@ func exists(path string) bool {
 }
 
 // otherWire is the line --deploy-user-other prints, and otherLine reads back: other, then the
-// user, what shows it and its bare setup record ("" for none), each quoted as Go quotes a string
-// (strconv.Quote), so a tab or a newline in a path never shifts a field, and both (1 or ""),
-// tab separated.
+// user, what shows it, its bare setup record and the directory of the devopsy it owns ("" for
+// none), each quoted as Go quotes a string (strconv.Quote), so a tab or a newline in a path never
+// shifts a field, and both (1 or ""), tab separated.
 func otherWire(o otherUser) string {
 	both := ""
 	if o.both {
 		both = "1"
 	}
-	return remote.SetupOther + "\t" + strconv.Quote(o.name) + "\t" + strconv.Quote(o.evidence) + "\t" + strconv.Quote(o.bare) + "\t" + both
+	return remote.SetupOther + "\t" + strconv.Quote(o.name) + "\t" + strconv.Quote(o.evidence) + "\t" + strconv.Quote(o.bare) + "\t" + strconv.Quote(o.binary) + "\t" + both
 }
 
 // runDeployUserOther implements the hidden remote.DeployUserOtherFlag <login> <uid> <root>, run
@@ -351,7 +449,7 @@ func runDeployUserOther(args []string) int {
 	case deploy != "" && deploy != me.name:
 		fmt.Println(otherWire(otherUser{name: deploy, evidence: "the record " + setup.DeployUserFile + " names it"}))
 	case deploy == "":
-		if o := otherDeployUser(h, me, args[2]); o.name != "" {
+		if o, _ := otherDeployUser(h, me, args[2]); o.name != "" {
 			fmt.Println(otherWire(o))
 		}
 	}
@@ -382,7 +480,62 @@ func runDeployUserCheck() int {
 // deployUnreadRefusal is the setup's refusal of a deploy user's record that cannot be read, why.
 func deployUnreadRefusal(why string) setup.Refusal {
 	return setup.Refusal{Item: setup.RefusalDeployUser, Message: why,
-		Fix: "correct it as root, naming the deploy user alone on a line, the file root's with mode 644", Howto: howto.DeployUser}
+		Fix: "as root, " + deployRecordWrite, Howto: howto.DeployUser}
+}
+
+// unseenRefusal is the setup's refusal where what the docker members unseen keep could not be
+// read as me (otherDeployUser), nor as root (rootRead, err): whether one of them is the deploy
+// user already is not known, so nothing is recorded.
+func unseenRefusal(unseen []string, me login, err error) setup.Refusal {
+	whose, it := "its home", "it"
+	if len(unseen) > 1 {
+		whose, it = "their homes", "them"
+	}
+	r := setup.Refusal{Item: setup.RefusalDeployUser,
+		Message: "devopsy cannot tell whether " + joinOr(unseen) + " is already this server's deploy user: " + whose + " cannot be read as " + me.words() + ", nor as root (" + err.Error() + ")",
+		Fix:     "run --server-setup again once root can read " + it + ", or run it as the user who should be the deploy user"}
+	if errors.Is(err, errNoUtilImage) {
+		r.Fix = "run --server-setup, which builds devopsy's util image and reads those homes as root"
+	}
+	return r
+}
+
+// wouldRecord is what a setup as who would do where the server shows other set up, as
+// --server-info says it to a reader who runs no setup (setup.Refusal.Info).
+func wouldRecord(who, other string) string {
+	return "a --server-setup as " + who + " would record " + who + " and lock " + other + " out"
+}
+
+// joinOr names names in a sentence of a choice: "a", "a or b", "a, b or c".
+func joinOr(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// rootReadOther is a setupHost's rootRead for h: the hidden DeployUserOtherFlag run as root on
+// the host, read-only and with no network, through a Docker that is this host's (hostRun.Here),
+// its line as the root run reads it. build readies the util image first, as the setup's first
+// facts do; without it the image must be there already (runIfReady), as --server-info and an
+// apply read, which then say it unread.
+func rootReadOther(h setupHost, build bool) func(me login, root string) (string, error) {
+	return func(me login, root string) (string, error) {
+		ctx := context.Background()
+		if build {
+			if !dockerHere(dockerInfoWith(ctx, "docker")) {
+				return "", errNotThisHost
+			}
+			if err := ensureUtilImageSaying(ctx, "building devopsy's util image, to read the other docker users' homes as root", "docker"); err != nil {
+				return "", err
+			}
+		}
+		var out bytes.Buffer
+		run := hostRun{Here: true, Script: remote.HostRootEnv + `="$1" exec "$2" ` + remote.DeployUserOtherFlag + ` "$3" "$4" "$5"`,
+			Args: []string{h.root, selfPath(), me.name, strconv.Itoa(me.uid), root}}
+		err := run.runIfReady(ctx, &out, func(err error) error { return fmt.Errorf("its run as root: %w", err) })
+		return out.String(), err
+	}
 }
 
 // otherDeployRefusal is the setup's refusal to record me where the server shows o set up by
@@ -395,12 +548,13 @@ func deployUnreadRefusal(why string) setup.Refusal {
 func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	who := me.words()
 	r := setup.Refusal{Item: setup.RefusalDeployUser, Howto: howto.DeployUser, HowtoAside: true,
-		Message: "devopsy was set up as " + o.name + " on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name}
+		Message: o.name + " is set up as this server's deploy user already (" + o.evidence + "): recording " + who + " instead would lock " + o.name + " out",
+		Info:    o.name + " is set up as this server's deploy user already (" + o.evidence + "): " + wouldRecord(who, o.name)}
 	login := remote.LoginName(o.name)
 	switch {
 	case o.both:
-		r.Message = "both " + who + " and " + o.name + " hold environments on this server (" + o.evidence + "): neither is recorded as the deploy user until one's are moved to the other"
-		r.Fix, r.HowtoAside = "settle which one is the deploy user by hand, moving the other's environments to it", false
+		r.Message = who + " and " + o.name + " both have environments on this server (" + o.name + " has " + o.holding() + "): one of them has to take over the other's before either can be recorded as the deploy user"
+		r.Fix, r.Command, r.Howto = "decide which of the two is the deploy user, and move the other's environments to it by hand, with the steps this prints:", howto.Command(howto.DeployUser), ""
 		return r
 	case !login:
 		// An owner with no name in the passwd file: no login to run it as.
@@ -410,10 +564,22 @@ func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	default:
 		r.Fix, r.Command = "run it as "+o.name+":", "devopsy @"+remote.AsUser(s.Host, o.name)+" --server-setup"
 	}
-	if o.bare != "" {
+	switch {
+	case o.bare != "":
 		r.Howto = ""
-		r.Message = o.name + " was set up too on this server (" + o.evidence + "), and this setup runs as " + who + ": it would record " + who + " as the deploy user, refusing " + o.name
+		r.Message = o.name + " is set up on this server too (" + o.evidence + "): recording " + who + " as the deploy user would lock " + o.name + " out"
+		r.Info = o.name + " is set up on this server too (" + o.evidence + "): " + wouldRecord(who, o.name)
 		r.Or, r.OrCommand = "if "+o.name+" was set up by mistake and holds no environments, remove its setup record as root:", "sudo rm "+remote.QuoteWord(o.bare)
+	case o.binary != "":
+		// The devopsy that upgrades itself as its owner: weak as a bare record is, so the way
+		// out is the binary given over, never an error of two users.
+		r.Howto = ""
+		r.Message = "the server's devopsy belongs to " + o.name + " (" + o.evidence + "), and this setup runs as " + who + ": recording " + who + " would lock " + o.name + " out"
+		r.Info = "the server's devopsy belongs to " + o.name + " (" + o.evidence + "): " + wouldRecord(who, o.name)
+		r.Or, r.OrCommand = "if "+who+" should be the deploy user, make it the owner of the server's devopsy, as root:", "sudo chown -R "+remote.QuoteWord(who+":")+" "+remote.QuoteWord(o.binary)
+		if !remote.LoginName(who) {
+			r.Or, r.OrCommand = "if "+who+" should be the deploy user, make it the owner of the server's devopsy ("+o.binary+"), as root", ""
+		}
 	}
 	return r
 }

@@ -19,7 +19,7 @@ import (
 )
 
 // errDeclined is an answer of no: nothing changed, said.
-var errDeclined = errors.New("nothing changed")
+var errDeclined = errors.New(nothingChanged)
 
 // runServerSetup implements devopsy @<server> --server-setup [--yes] [--root <dir>]: the
 // server's setup as devopsy wants it, in two sessions as the deploy user, three with a volume
@@ -102,7 +102,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, ask)
 	if err == errDeclined {
-		report.Error("nothing changed")
+		report.Error(nothingChanged)
 		return 1
 	}
 	if err != nil {
@@ -120,7 +120,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	}
 	if !run {
 		if refused {
-			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
+			report.Error(cmp.Or(refusedLine(f), nothingChanged))
 			return 1
 		}
 		inSync()
@@ -324,9 +324,9 @@ func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 func fileWords(x setup.FileFact) string {
 	switch {
 	case x.Item == setup.ItemDeployUser && x.Missing:
-		return "would record " + x.User + " as the server's deploy user, in " + x.Path
+		return "would record " + x.User + " as this server's deploy user (" + x.Path + "): from then on any other login is refused, except root and project users"
 	case x.Item == setup.ItemDeployUser:
-		return x.Path + " differs from what devopsy writes, naming " + x.User
+		return x.Path + " names " + x.User + ", but not in the form devopsy writes"
 	case x.Missing:
 		return x.Path + " does not exist yet"
 	}
@@ -541,7 +541,17 @@ func sayRefusalsOf(rs []setup.Refusal, missing []string, daemonError string, lev
 // refusedLine names what f's refusals stop that had a change to make (setup.Facts.Stopped),
 // "" when nothing: the first session's question, a run with nothing to apply and an apply's
 // end say it.
-func refusedLine(f setup.Facts) string { return refusedWords(f.Stopped()) }
+func refusedLine(f setup.Facts) string {
+	stopped := f.Stopped()
+	if len(stopped) > 0 && f.NoneGoes() {
+		return nothingChanged
+	}
+	return refusedWords(stopped)
+}
+
+// nothingChanged is what a setup that changed nothing says of what it did: every step refused
+// (the refusals above it say what to fix), declined, or with nothing to apply.
+const nothingChanged = "nothing was changed"
 
 // refusedWords is refusedLine of the steps stopped, by name, "" for none: one sentence naming
 // what devopsy did not set up, each step as a sentence says it (stepPhrase).
@@ -554,9 +564,9 @@ func refusedWords(stopped []string) string {
 	case 0:
 		return ""
 	case 1:
-		return "devopsy left " + words[0] + " as it is, since what it needs is refused above"
+		return "devopsy left " + words[0] + " as it is"
 	}
-	return "devopsy left " + joinAnd(words) + " as they are, since what they need is refused above"
+	return "devopsy left " + joinAnd(words) + " as they are"
 }
 
 // stepPhrase is a step's name in a sentence, where its name is an item's key with no article.

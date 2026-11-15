@@ -360,9 +360,14 @@ func runImages(args []string, color bool) int {
 		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		if err := s.WriteFetch(rest[0]); err != nil {
+		builds, err := s.WriteFetch(rest[0])
+		if err != nil {
 			report.Error("could not write the fetch's compose file: " + err.Error())
 			return 1
+		}
+		// The script builds only what there is to build (fetchImages).
+		if builds {
+			fmt.Println(images.FetchBuilds)
 		}
 	case "undo":
 		if len(rest) != 1 {

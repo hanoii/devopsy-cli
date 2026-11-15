@@ -259,3 +259,35 @@ func sessionExports(t *Target) string {
 	}
 	return s
 }
+
+// CommandAs is the session's command (Command) with its address logged in as user on the
+// session's host (AsUser of Host), the rest of the address and every other word as typed: what
+// a hint to run it again as another login offers. "" without the command or the host, and for
+// a command whose address names no server (an alias, a server from variables), which a hint
+// then says in words.
+func (s Session) CommandAs(user string) string {
+	if s.Command == "" || s.Host == "" {
+		return ""
+	}
+	// Command's words are QuoteWord's: an address is its word after "@", or, quoted as a shell
+	// would read it otherwise (an IPv6 address in brackets), inside its quotes.
+	words := strings.Split(s.Command, " ")
+	for i, w := range words {
+		if q, ok := strings.CutPrefix(w, "'"); ok && strings.HasSuffix(q, "'") && !strings.Contains(q[:len(q)-1], "'") {
+			w = q[:len(q)-1]
+		}
+		addr, ok := strings.CutPrefix(w, "@")
+		if i == 0 || !ok {
+			continue
+		}
+		// The last ':' ends the server, as parseAddress reads it: a port or an IPv6
+		// address before it is the server's.
+		j := strings.LastIndex(addr, ":")
+		if j < 0 {
+			return ""
+		}
+		words[i] = QuoteWord("@" + AsUser(s.Host, user) + addr[j+1:])
+		return strings.Join(words, " ")
+	}
+	return ""
+}

@@ -24,6 +24,10 @@ import (
 // as it was.
 const FetchFile = "devopsy-fetch.yaml"
 
+// FetchBuilds is what img fetch-file prints when the fetch has something to build
+// (WriteFetch): the script then builds, and only pulls otherwise.
+const FetchBuilds = "builds"
+
 // FetchComposeEnv set makes devopsy's own file of a release its FetchFile, or none when it
 // has none: never ComposeFile, whose holds name images nothing builds.
 const FetchComposeEnv = "DEVOPSY_INTERNAL_FETCH_COMPOSE"
@@ -48,11 +52,13 @@ func markedTag(name, id, ref, mark string) string {
 // WriteFetch writes rel's FetchFile before its fetch (img fetch-file): in build mode, each
 // service whose image is one the release builds, by its fetch tag; none otherwise, with
 // nothing built, or behind the door, which names a project user's builds itself and refuses
-// a tag of devopsy's.
-func (s *Set) WriteFetch(rel string) error {
+// a tag of devopsy's. It says whether the fetch has anything to build, of any profile: always
+// behind the door, which it does not list; in build mode with none, the fetch builds nothing,
+// and compose's build would only warn that it has no service to build.
+func (s *Set) WriteFetch(rel string) (builds bool, err error) {
 	path := filepath.Join(rel, FetchFile)
 	if ModeOf(rel) != ModeBuild || s.Door {
-		return removeIfThere(path)
+		return s.Door, removeIfThere(path)
 	}
 	list := s.ListAll
 	if list == nil {
@@ -60,7 +66,7 @@ func (s *Set) WriteFetch(rel string) error {
 	}
 	svcs, err := list(rel)
 	if err != nil {
-		return err
+		return false, err
 	}
 	built := map[string]bool{}
 	for _, svc := range svcs {
@@ -79,9 +85,9 @@ func (s *Set) WriteFetch(rel string) error {
 		s.sayAll(report.WarnLevel, "a build on another service's image by its name:", lines)
 	}
 	if b.Len() == 0 {
-		return removeIfThere(path)
+		return false, removeIfThere(path)
 	}
-	return writeFile(path, "# devopsy's own, for this release's fetch alone: removed once it is adopted.\nservices:\n"+b.String())
+	return true, writeFile(path, "# devopsy's own, for this release's fetch alone: removed once it is adopted.\nservices:\n"+b.String())
 }
 
 // fetchTags are rel's FetchFile's tags by service, nil without one: a fetch devopsy named.

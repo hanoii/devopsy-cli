@@ -1001,9 +1001,15 @@ func ensureUtilImage(ctx context.Context) error { return ensureUtilImageWith(ctx
 // ensureUtilImageWith is ensureUtilImage through the docker given: the door's own, for
 // its grants.
 func ensureUtilImageWith(ctx context.Context, docker string) error {
+	return ensureUtilImageSaying(ctx, "building "+remote.UtilImage, docker)
+}
+
+// ensureUtilImageSaying is ensureUtilImageWith saying building, before a build, as its caller
+// words why it needs the image where nothing else said so (the setup's plan).
+func ensureUtilImageSaying(ctx context.Context, building, docker string) error {
 	out, err := exec.CommandContext(ctx, docker, "image", "inspect", "-f", "{{.Id}} {{.Created}}", remote.UtilImage).Output()
 	if err != nil {
-		report.Info("building " + remote.UtilImage)
+		report.Info(building)
 		if err := buildUtilImage(ctx, false, docker); err != nil {
 			return fmt.Errorf("building %s: %w", remote.UtilImage, err)
 		}

@@ -1732,6 +1732,9 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 				names = append(names, n)
 			}
 			sort.Strings(names)
+			if len(names) == 0 {
+				return nil, fmt.Errorf("no environment %q in %s, which has no environments yet (add one under environments)", a.env, filepath.Join(project.Dir, ConfigFile))
+			}
 			return nil, fmt.Errorf("no environment %q in %s (environments: %s)", a.env, filepath.Join(project.Dir, ConfigFile), strings.Join(names, ", "))
 		}
 		t = *found

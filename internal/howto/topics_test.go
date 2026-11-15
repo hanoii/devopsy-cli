@@ -306,10 +306,8 @@ func TestDeployUserTopicHandsOverTheBinary(t *testing.T) {
 	t.Parallel()
 	tp, _ := Find(string(DeployUser))
 	for _, s := range tp.Steps {
-		for _, c := range s.Cmds {
-			if strings.Contains(c, "command -v devopsy") && strings.Contains(c, "chown") {
-				return
-			}
+		if c := strings.Join(s.Cmds, "\n"); strings.Contains(c, "command -v devopsy") && strings.Contains(c, "chown") {
+			return
 		}
 	}
 	t.Error("no step gives the new user the devopsy binary the old one owns")
@@ -429,5 +427,27 @@ func TestDeployUserRecordStepMakesItsDirectory(t *testing.T) {
 	out := pasted(t, stepWith(t, DeployUser, "/etc/devopsy/deploy-user"), "/usr/bin:/bin", "/etc/devopsy/deploy-user", record)
 	if got, err := os.ReadFile(record); err != nil || string(got) != "deploy\n" {
 		t.Errorf("the record on a server with no /etc/devopsy: %q, %v\n%s", got, err, out)
+	}
+}
+
+// The deploy-user topic's record step replaces the record only once the new one is written
+// whole: a write that fails (a full disk here) leaves the record as it was, never a partial
+// file, which a stale .new from an earlier try would otherwise become.
+func TestDeployUserRecordStepKeepsTheRecordOnAFailedWrite(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/full"); err != nil {
+		t.Skip("no /dev/full")
+	}
+	record := filepath.Join(t.TempDir(), "deploy-user")
+	if err := os.WriteFile(record, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(record+".new", []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := pasted(t, stepWith(t, DeployUser, "/etc/devopsy/deploy-user"), "/usr/bin:/bin",
+		"> /etc/devopsy/deploy-user.new", "> /dev/full", "/etc/devopsy/deploy-user", record)
+	if got, _ := os.ReadFile(record); string(got) != "old\n" {
+		t.Errorf("the record after a failed write: %q\n%s", got, out)
 	}
 }

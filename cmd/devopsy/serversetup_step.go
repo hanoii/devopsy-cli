@@ -40,6 +40,12 @@ const restartWait = 2 * time.Minute
 type setupHost struct {
 	root        string
 	restartWait time.Duration
+	// binary is the server's devopsy and its owner's uid in place of selfPath's (binaryOwner),
+	// the tests'.
+	binary func() (path string, uid int, ok bool)
+	// rootRead is how the facts ask, as root, what this login cannot read of another deploy
+	// user (otherDeployUser's unseen): none, or the run's output (DeployUserOtherFlag's line).
+	rootRead func(me login, root string) (string, error)
 }
 
 func (h setupHost) path(p string) string { return h.root + p }
@@ -153,6 +159,12 @@ func runServerSetupStep(args []string) int {
 			if !name {
 				proposed = ""
 			}
+		}
+		// The first facts, before the question, ask as root what this login cannot read of
+		// another deploy user, readying the util image for it; facts --root, after a volume is
+		// chosen, never again.
+		if len(args) == 1 {
+			h.rootRead = rootReadOther(h, true)
 		}
 		rd, err := readSetupAt(h, readHostDocker(h), proposed)
 		if err != nil {
@@ -1060,7 +1072,11 @@ func applySetup(h setupHost, a setupApply) int {
 	if naming {
 		proposed = a.root
 	}
-	rd, err := readSetupAt(h, readHostDocker(h), proposed)
+	// As root only with the util image there (the first facts readied it), --upgrade's
+	// included: without it the deploy user's record is said unread, never made blind.
+	ha := h
+	ha.rootRead = rootReadOther(h, false)
+	rd, err := readSetupAt(ha, readHostDocker(h), proposed)
 	if err != nil {
 		return failed(err.Error())
 	}
@@ -1084,7 +1100,7 @@ func applySetup(h setupHost, a setupApply) int {
 				fail(err.Error())
 			}
 		}
-		return failed(cmp.Or(refusedLine(f), "nothing changed"))
+		return failed(cmp.Or(refusedLine(f), nothingChanged))
 	}
 	// The chains read as root (an apply may build the util image), so a wipe reads to load
 	// again.
@@ -1233,7 +1249,7 @@ func applySetup(h setupHost, a setupApply) int {
 		// The run refused the deploy user's record as root (rootDeployRefusal): a refusal of the
 		// facts' from here on, which stops every later step and the setup record as one the
 		// facts read does, said once as the facts say theirs.
-		if r := rootDeployRefusal(h, out.String()); r != nil {
+		if r := rootDeployRefusal(h, out.String(), remote.SessionFrom(os.Getenv)); r != nil {
 			f.Refusals = append(f.Refusals, *r)
 			failures++
 			sayRefusalsOf([]setup.Refusal{*r}, nil, "", sayLevel(a.upgrade), nil, false)
@@ -1461,7 +1477,11 @@ func fixWords(r setup.Refusal) []report.Remedy {
 		rs = append(rs, report.Fix(r.Or, cmds...))
 	}
 	if r.Howto != "" {
-		rs = append(rs, stepsHint("or do it by hand", r.Howto))
+		by := "do it"
+		if r.Howto == howto.DeployUser {
+			by = "change the deploy user"
+		}
+		rs = append(rs, byHandHint(by, r.Howto))
 	}
 	return rs
 }
@@ -1551,8 +1571,8 @@ func rootRunDid(asked bool, err error, out, failed string, went ...string) bool 
 func otherLine(out string) (o otherUser, ok bool) {
 	for _, l := range strings.Split(out, "\n") {
 		if rest, found := strings.CutPrefix(l, remote.SetupOther+"\t"); found {
-			f := append(strings.SplitN(rest, "\t", 4), "", "", "")
-			var q [3]string
+			f := append(strings.SplitN(rest, "\t", 5), "", "", "", "")
+			var q [4]string
 			for i := range q {
 				v, err := strconv.Unquote(f[i])
 				if err != nil {
@@ -1563,17 +1583,18 @@ func otherLine(out string) (o otherUser, ok bool) {
 			if q[0] == "" || q[1] == "" {
 				return otherUser{}, false
 			}
-			return otherUser{name: q[0], evidence: q[1], bare: q[2], both: f[3] == "1"}, true
+			return otherUser{name: q[0], evidence: q[1], bare: q[2], binary: q[3], both: f[4] == "1"}, true
 		}
 	}
 	return otherUser{}, false
 }
 
-// rootDeployRefusal is the refusal the root run said as root before it made the deploy user's
-// record (its SetupOther or SetupUnread line in out), nil for none.
-func rootDeployRefusal(h setupHost, out string) *setup.Refusal {
+// rootDeployRefusal is the refusal a run as root said of the deploy user's record (its
+// SetupOther or SetupUnread line in out, the root run's or the facts' read), with the way out on
+// the session s, nil for none.
+func rootDeployRefusal(h setupHost, out string, s remote.Session) *setup.Refusal {
 	if o, ok := otherLine(out); ok {
-		r := otherDeployRefusal(o, loginOn(h), remote.SessionFrom(os.Getenv))
+		r := otherDeployRefusal(o, loginOn(h), s)
 		return &r
 	}
 	if why, ok := unreadLine(out); ok {
@@ -1641,7 +1662,7 @@ func sayRootLines(out string, parts []string, root string) {
 			case rest == setup.DaemonFile && len(parts) > 0:
 				report.Info("put " + rest + ": " + strings.Join(parts, ", "))
 			case rest == setup.DeployUserFile:
-				report.Info("recorded " + who + " as the server's deploy user in " + rest + ": devopsy refuses any other login but root and project users")
+				report.Info(who + " is now this server's deploy user (" + rest + "): any other login is refused, except root and project users")
 			default:
 				report.Info("put " + rest)
 			}

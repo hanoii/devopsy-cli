@@ -263,7 +263,7 @@ func projectUsersSetup(kind func(string, ...string) report.Remedy, ref string, t
 		cmd = "devopsy @" + ref + " --project-users setup"
 	}
 	return []report.Remedy{offer(kind, "set the server up for project users:", cmd, "run --project-users setup for this server, as its deploy user"),
-		byHandHint(topic)}
+		byHandHint("set it up", topic)}
 }
 
 // processesShownWarning is the one wording, in --server-info and --project-users add, of a host
@@ -355,7 +355,11 @@ func serverFacts() (remote.ServerInfo, error) {
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
 		info.Docker.ClientProxies = clientProxies(dockerConfigDir())
-		if rd, err := readSetup(h, hd); err == nil {
+		// What the login cannot read of another deploy user, as root where the util image is
+		// there already, else said unread.
+		hr := h
+		hr.rootRead = rootReadOther(h, false)
+		if rd, err := readSetup(hr, hd); err == nil {
 			info.Setup = &rd.facts
 			read = readChains(rd.facts.Firewall, rd.docker, false)
 		} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {
@@ -2127,9 +2131,13 @@ func sortedKeysOf[V any](m map[string]V) []string {
 // again here.
 func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.StatusEntry {
 	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
-	// With every step refused, --server-setup applies nothing: the way out is the refusal's.
+	// With every step refused, --server-setup applies nothing: the way out is the refusal's,
+	// the deploy user's by name, whose own fixes say what to run.
 	if f.NoneGoes() {
 		fix = report.Fix("fix what refuses every step of the setup first, then run --server-setup")
+		if slices.ContainsFunc(f.Refusals, func(r setup.Refusal) bool { return r.Item == setup.RefusalDeployUser }) {
+			fix = report.Fix("fix the deploy user first, then run --server-setup")
+		}
 	}
 	var es []remote.StatusEntry
 	line := func(level, msg string, fixes ...report.Remedy) {
@@ -2140,13 +2148,29 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 	} else {
 		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
 	}
-	// The deploy user not recorded yet is a server set up before the record, which the next
-	// apply writes: said, and no warning, as nothing it refuses differs from before.
-	if i := slices.IndexFunc(f.Files, func(x setup.FileFact) bool { return x.Item == setup.ItemDeployUser && x.Missing }); i >= 0 {
-		who := f.Files[i].User
-		f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
-		if f.Record != "" {
-			line(remote.StatusInfo, "the deploy user is not recorded yet in "+setup.DeployUserFile+": any user in the docker group passes for it, and --server-setup as "+who+" records "+who, report.Hint(fix.Text, fix.Cmds...))
+	// The deploy user, by name once recorded. Not recorded yet, on a server set up before the
+	// record or never set up, the next setup records whoever runs it, which the reader learns
+	// before it does: said, and no warning, as nothing it refuses differs from before.
+	if i := slices.IndexFunc(f.Files, func(x setup.FileFact) bool { return x.Item == setup.ItemDeployUser }); i >= 0 {
+		x := f.Files[i]
+		// The login named where the read knew it.
+		here, record := "", report.Hint("to record the deploy user, run --server-setup as that user")
+		if x.User != "" {
+			here = " (" + x.User + " here)"
+			record = report.Hint("to record " + x.User + " as the deploy user, run --server-setup as " + x.User)
+			if len(fix.Cmds) > 0 {
+				record = report.Hint(record.Text+":", fix.Cmds...)
+			}
+		}
+		switch {
+		case x.Missing && f.Record != "":
+			f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
+			line(remote.StatusInfo, "no deploy user recorded yet ("+setup.DeployUserFile+"), so any user in the docker group can act as one; the next --server-setup records the login it runs as"+here, record)
+		case x.Missing:
+			f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
+			line(remote.StatusInfo, "no deploy user recorded yet: the first --server-setup records the login it runs as"+here+", and from then on refuses every other login")
+		case x.InSync && x.User != "":
+			line(remote.StatusInfo, "deploy user "+x.User+" ("+setup.DeployUserFile+")")
 		}
 	}
 	var docker []string
@@ -2156,6 +2180,8 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 	for _, r := range f.Refusals {
 		// The tools are said once, with the others the server needs (serverTools).
 		if r.Item != toolsItem && !slices.Contains(docker, r.ID()) {
+			// Said to a reader who runs no setup, where the refusal has words for one.
+			r.Message = cmp.Or(r.Info, r.Message)
 			msg, fixes := refusalWords(r)
 			line(remote.StatusWarning, msg, fixes...)
 		}

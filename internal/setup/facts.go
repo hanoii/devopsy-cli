@@ -65,7 +65,10 @@ const (
 type Refusal struct {
 	Item    string `json:"item"`
 	Message string `json:"message"`
-	Fix     string `json:"fix,omitempty"`
+	// Info is Message as --server-info says it, "" for the same: a reader who runs no setup,
+	// where Message speaks to the setup it refuses ("this setup runs as ...").
+	Info string `json:"info,omitempty"`
+	Fix  string `json:"fix,omitempty"`
 	// Howto is the topic of devopsy --server-setup-howto that has the fix's steps, "" for none:
 	// the operator's devopsy offers its command after the fix's text (fixWords).
 	Howto howto.Name `json:"howto,omitempty"`

@@ -289,20 +289,23 @@ is that note writes it and says there is nothing to change.
 
 A server has one deploy user, which `--server-setup` records in
 `/etc/devopsy/deploy-user` as the user it runs as, its plan naming that
-user before it asks. From then on every session's devopsy refuses,
-before it reads or changes anything, a login that is not that user, root
-or a project user, with `W0009` ([Codes](codes.md#w0009)) and the deploy
-user's address, `--shell-host` included; only `--shell-host --root`,
-root's own shell, and `--match-server-version`, which reads the version
-alone, are not checked:
+user before it asks. From then on devopsy refuses any login other than
+that user, root or a project user, before it reads or changes anything,
+`--shell-host` included. The refusal is `W0009` ([Codes](codes.md#w0009))
+and gives the deploy user's address, offering the command that was
+refused with it where the address names the server (an alias's gets
+`--server-info` on the deploy user's address). Two things are not
+checked: `--shell-host --root`, root's own shell, and
+`--match-server-version`, which only reads the version.
 
 ```
 devopsy: error: W0009: this login is not the server's deploy user
-devopsy: | this login is admin, and /etc/devopsy/deploy-user names devopsy the deploy user: devopsy runs every release, uid claim and setup of a server as that one user
+devopsy: | logged in as admin, but this server's deploy user is devopsy (/etc/devopsy/deploy-user)
+devopsy: | devopsy works on a server as one user only, so that every release, uid claim and setup there stays in one place
 devopsy: | to fix it:
-devopsy: | address the server as devopsy, for example:
-devopsy: | $ devopsy @devopsy@vm1: --server-info
-devopsy: | to make admin the deploy user instead, move what is devopsy's by hand; this prints the steps:
+devopsy: | run it as devopsy:
+devopsy: | $ devopsy @devopsy@vm1: --upgrade
+devopsy: | to make admin the deploy user instead, follow the steps this prints:
 devopsy: | $ devopsy --server-setup-howto deploy-user
 ```
 
@@ -314,28 +317,37 @@ too, and so does one on a server with no record yet that shows another
 deploy user: another member of the `docker` group, root aside, with
 devopsy's setup record in its home (`~/.config/devopsy/server.yaml`), or
 uid claims or an environment of devopsy's under its release root (its
-`releases: root`, else its home), or a release root another user owns. It
+`releases: root`, else its home), the server's devopsy as its own (the
+binary `--upgrade` replaces, which devopsy-server installs as the deploy
+user's), or a release root another user owns. A home this login cannot
+read (mode 700, as Debian and Ubuntu make them) is read as root in the
+plan, which builds devopsy's util image for it; where that fails, the
+setup refuses rather than record this login on what it could not see. It
 refuses before anything changes, in one of three ways:
 
 - where that user's setup record is all it holds (an account set up by
   mistake), two fixes: run it as that user, or remove that record as
   root (`sudo rm`, its path named), after which this login is recorded;
+  where owning the server's devopsy is all, the same two, the second
+  giving this login the binary's directory as root (`sudo chown -R`);
 - where that user holds environments or uid claims and this login none:
   run it as that user, or change the deploy user by hand;
 - where both hold environments or uid claims: an error saying so, with
   only the steps to settle it by hand, since no command can choose.
 
 `--upgrade` refuses the same way, as a warning. The record never changes
-by itself: making another
-user the deploy user is by hand, with the steps `devopsy
---server-setup-howto deploy-user` prints. A record that cannot be read,
+by itself: to make another user the deploy user, follow the steps
+`devopsy --server-setup-howto deploy-user` prints. A record that cannot be read,
 or names no one user or a user the server does not have, refuses every
 login but root and project users
 with `W0010` until root corrects it, in root's own shell
 (`--shell-host --root`). A server set up before the record
 gets it at its next `--server-setup` or `--upgrade`, and until then
 `--server-info` says it is not recorded yet, naming the user the next
-`--server-setup` would record, and nothing is refused.
+`--server-setup` would record, and nothing is refused. On a server never
+set up, `--server-info` says the same: the first `--server-setup` records
+the login it runs as. Once recorded, `--server-info` names the deploy
+user under `setup`.
 
 ## `--server-setup-howto`
 

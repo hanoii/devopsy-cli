@@ -77,7 +77,7 @@ func (m *sim) fetch(svcs []Service) {
 // what is pulled pulled.
 func (m *sim) fetchID(id string) {
 	rel := m.e.rel(id)
-	if err := m.e.set.WriteFetch(rel); err != nil {
+	if _, err := m.e.set.WriteFetch(rel); err != nil {
 		m.t.Fatalf("fetch file %s: %v", id, err)
 	}
 	tags := fetchTags(rel)
@@ -115,7 +115,7 @@ func (m *sim) fetchID(id string) {
 // built anew.
 func (m *sim) fetchCached(id string, ids map[string]string) {
 	rel := m.e.rel(id)
-	if err := m.e.set.WriteFetch(rel); err != nil {
+	if _, err := m.e.set.WriteFetch(rel); err != nil {
 		m.t.Fatalf("fetch file %s: %v", id, err)
 	}
 	for svc, t := range fetchTags(rel) {
@@ -3053,7 +3053,7 @@ func TestRecordNeedsItsFetch(t *testing.T) {
 	m := newSim(t, d, "app-prod", &out)
 	d.pull("shop-app", "theirs")
 	id := m.e.release(web)
-	if err := m.e.set.WriteFetch(m.e.rel(id)); err != nil {
+	if _, err := m.e.set.WriteFetch(m.e.rel(id)); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.e.set.Record(m.e.rel(id), ""); err == nil || !errors.Is(err, errFetchedNone) {
@@ -3329,7 +3329,7 @@ func TestDoorProjectFetchesWithoutAFetchFile(t *testing.T) {
 	m := newSim(t, d, "app-prod", &out)
 	m.e.set.Door = true
 	id := m.e.release(web)
-	if err := m.e.set.WriteFetch(m.e.rel(id)); err != nil || fetchTags(m.e.rel(id)) != nil {
+	if _, err := m.e.set.WriteFetch(m.e.rel(id)); err != nil || fetchTags(m.e.rel(id)) != nil {
 		t.Fatalf("a door project's fetch file: %v, %v", err, fetchTags(m.e.rel(id)))
 	}
 	m.cur = ""
@@ -3548,7 +3548,7 @@ func TestDoorRecordNeedsItsBuild(t *testing.T) {
 	m.e.set.Door = true
 	id := m.e.release(web)
 	rel := m.e.rel(id)
-	if err := m.e.set.WriteFetch(rel); err != nil {
+	if _, err := m.e.set.WriteFetch(rel); err != nil {
 		t.Fatal(err)
 	}
 	// The fetch built nothing the record can read.

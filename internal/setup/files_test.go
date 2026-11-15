@@ -86,4 +86,14 @@ func TestDeployUserText(t *testing.T) {
 			t.Errorf("ParseDeployUser(%q) = %q, %v; want %q", text, got, err, want)
 		}
 	}
+	// A refused record says what it holds instead, for W0010's detail.
+	for text, want := range map[string]string{
+		"# only a comment\n": "holds none",
+		"deploy\nother\n":    "holds several: deploy, other",
+		"two words\n":        `holds "two words"`,
+	} {
+		if _, err := ParseDeployUser(text, valid); err == nil || err.Error() != want {
+			t.Errorf("ParseDeployUser(%q): %v, want %q", text, err, want)
+		}
+	}
 }

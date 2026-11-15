@@ -22,8 +22,8 @@ func recordDeployUser(t *testing.T, name, user string) {
 }
 
 // A second user in the docker group, logged in by sshd with the operator's key, is refused by
-// its session's first call once the server records its deploy user, W0009 with the deploy
-// user's address on the host as typed, and nothing read; the deploy user goes on.
+// its session's first call once the server records its deploy user, W0009 offering the command
+// it ran as the deploy user on the host as typed, and nothing read; the deploy user goes on.
 func TestDeployUserRefusesAnotherLogin(t *testing.T) {
 	t.Cleanup(func() { asRoot(t, server, "userdel -r admin2 2>/dev/null; true") })
 	if out, code := asRoot(t, server, "useradd -m -s /bin/sh -G docker admin2 && install -d -m 700 -o admin2 -g admin2 /home/admin2/.ssh && "+
@@ -42,15 +42,24 @@ func TestDeployUserRefusesAnotherLogin(t *testing.T) {
 	if out, code := srv(t, "mkdir -p ~/.config/devopsy && if [ ! -e ~/.config/devopsy/server.yaml ]; then echo '{}' >~/.config/devopsy/server.yaml && touch ~/.config/devopsy/server.yaml.e2e-made; fi"); code != 0 {
 		t.Fatalf("the deploy user's setup record (%d): %s", code, out)
 	}
-	if out, code := op(t, "/", "devopsy @admin2@server: --server-setup --yes 2>&1"); code != 1 || !saysWords(out, "devopsy was set up as devopsy on this server") && !saysWords(out, "devopsy was set up too on this server") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-setup") {
+	// Its home closed to other users (mode 700, as Debian makes them): the plan asks as root
+	// what the second user cannot read, and refuses before the question, never offering to
+	// record the second user.
+	mode, _ := asRoot(t, server, "stat -c %a /home/devopsy")
+	t.Cleanup(func() { asRoot(t, server, "chmod "+strings.TrimSpace(mode)+" /home/devopsy") })
+	if out, code := asRoot(t, server, "chmod 700 /home/devopsy"); code != 0 {
+		t.Fatalf("the deploy user's home closed (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @admin2@server: --server-setup 2>&1"); code != 1 || !saysWords(out, "devopsy is set up as this server's deploy user already") && !saysWords(out, "devopsy is set up on this server too") ||
+		!strings.Contains(out, "$ devopsy @devopsy@server: --server-setup") || strings.Contains(out, "would record") {
 		t.Errorf("the second user's setup (%d): %s", code, out)
 	}
 	if _, code := asRoot(t, server, "test -e "+setup.DeployUserFile); code == 0 {
 		t.Errorf("the second user's setup recorded it")
 	}
 	recordDeployUser(t, server, "devopsy")
-	out, code := op(t, "/", "devopsy @admin2@server: --server-info 2>&1")
-	if code != 1 || !saysWords(out, "error: "+report.NotDeployUser.Msg()) || !saysWords(out, "this login is admin2") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-info") || strings.Contains(out, "projects") {
+	out, code := op(t, "/", "devopsy @admin2@server: --gc --dry-run 2>&1")
+	if code != 1 || !saysWords(out, "error: "+report.NotDeployUser.Msg()) || !saysWords(out, "logged in as admin2, but this server's deploy user is devopsy") || !strings.Contains(out, "$ devopsy @devopsy@server: --gc --dry-run") || strings.Contains(out, "nothing to remove") {
 		t.Errorf("another login (%d): %s", code, out)
 	}
 	if out, code := op(t, "/", "devopsy @devopsy@server: --server-info 2>&1"); strings.Contains(out, report.NotDeployUser.ID) || code != 0 && code != 3 {

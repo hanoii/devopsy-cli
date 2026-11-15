@@ -100,7 +100,8 @@ its `mode:`, before it goes live:
 
 - In build mode, `docker compose --profile '*' pull --ignore-buildable`
   for the services without a `build:`, then `docker compose build
-  --pull` for the rest, their base images refreshed.
+  --pull` for the rest, their base images refreshed. With no `build:` in
+  any profile, only the pull runs.
 - In image mode, `docker compose pull` for every service with an
   `image:`, including buildable ones, so a tag missing from the registry
   fails the release there; then the same `--profile '*' pull
