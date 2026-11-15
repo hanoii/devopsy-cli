@@ -51,3 +51,34 @@ func TestRestoredToolKeepsItsName(t *testing.T) {
 		t.Errorf("%s is gone while the current release %s lists its tool jq: %v\n%s", jq.Ref, r1, d.names, out.String())
 	}
 }
+
+// A release's record lists every profile's services once: the sharers of its own images
+// (resolveBookmarks) and its tools (keepTools) are both every profile's services beside the
+// listing, read from one compose config.
+//
+// Bug (review round 1 of feat/tool-bookmarks): with an own image and no fetch file (a
+// pull_policy: never service in image mode, a door project in build mode), sharers runs
+// ListAll and keepTools runs it again: two compose configs of every profile per record, the
+// same reading written twice.
+func TestRecordListsEveryProfileOnce(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeImage, &out)
+	local := Service{Name: "local", Ref: "local-app", NeverPull: true}
+	jq := Service{Name: "jq", Ref: "ghcr.io/jqlang/jq:1.8"}
+	calls := 0
+	e.set.ListAll = func(rel string) ([]Service, error) {
+		calls++
+		return append(slices.Clone(e.svcs[filepath.Base(rel)]), jq), nil
+	}
+	d.pull(local.Ref, "sha256:l1")
+	d.pull(jq.Ref, "sha256:j1")
+	id := e.release(local)
+	if err := e.set.Record(e.rel(id), ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("every profile listed %d times in one record\n%s", calls, out.String())
+	}
+}
