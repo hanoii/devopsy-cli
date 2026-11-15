@@ -450,7 +450,11 @@ records the highest it gave, so a project user added after another's
 removal never owns what that one left on the host. An `add` that
 stopped after it made the user's group goes on from that group, its id
 the group's, when asked again; a group of that name with members, or
-with a gid outside the range, is refused.
+with a gid outside the range, is refused. An `add` of a project user
+that is there already, one `remove` kept included, is no failure: it
+says the user is there already, puts on the server again what the
+first `add` does, and names the way to the user's keys while it has
+none.
 When the release root (`releases: root`) is outside the deploy user's
 home, it also makes the project's tree under that root. The project
 user's entry goes in the deploy user's config directory ([Shared

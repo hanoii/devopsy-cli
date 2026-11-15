@@ -389,7 +389,9 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	// taken as it is, and so is the group of its name an add cut after it left (leftGroupID),
 	// so that a failed or cut add takes no id again.
 	id := ""
+	_, had := d.Users[who]
 	if _, err := user.Lookup(who); errors.As(err, new(user.UnknownUserError)) {
+		had = false
 		h := setupHost{root: os.Getenv(remote.HostRootEnv)}
 		n, left, err := leftGroupID(h.path("/etc/group"), who)
 		if err == nil && !left {
@@ -421,7 +423,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 			return failErr(err)
 		}
 	}
-	sayAdded(report.Default(), who, project, entry, ref)
+	sayAdded(report.Default(), who, project, entry, ref, had, remote.KeysLeft(remote.DoorKeysFile(who)))
 	if strings.Contains(out.String(), "reboot") {
 		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
 			"any reboot takes it, one the server does by itself for /run/reboot-required included")
@@ -513,14 +515,23 @@ func leftGroupID(group, who string) (gid int, left bool, err error) {
 	return 0, false, nil
 }
 
-// sayAdded says on l that add made project's user who, its entry at entry, with the way to its
-// keys in words, on ref as typed when there is one: the key's file is the operator's to name.
-func sayAdded(l *report.Logger, who, project, entry, ref string) {
-	keys := "add its keys with --ssh-keys --for " + project + " add and each public key's file"
-	if ref != "" {
-		keys += ", on @" + ref
+// sayAdded says on l that add made project's user who, its entry at entry, or that it was there
+// already (had: its entry and its Unix user), with the way to its keys in words while it has
+// none (keys), on ref as typed when there is one: the key's file is the operator's to name.
+func sayAdded(l *report.Logger, who, project, entry, ref string, had, keys bool) {
+	msg := "project user " + who + " for " + project + ", its entry in " + entry
+	if had {
+		msg = "project user " + who + " for " + project + " is there already, its entry in " + entry
 	}
-	l.Say(report.InfoLevel, "project user "+who+" for "+project+", its entry in "+entry, nil, report.Hint(keys))
+	var remedies []report.Remedy
+	if !keys {
+		way := "add its keys with --ssh-keys --for " + project + " add and each public key's file"
+		if ref != "" {
+			way += ", on @" + ref
+		}
+		remedies = append(remedies, report.Hint(way))
+	}
+	l.Say(report.InfoLevel, msg, nil, remedies...)
 }
 
 // projectDir says whether a directory named name in a release root is a project's: none

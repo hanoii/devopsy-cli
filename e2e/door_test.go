@@ -2010,7 +2010,7 @@ sshd -t`); code != 0 {
 		t.Errorf("add beside an earlier drop-in that runs ~/.ssh/rc (%d): %s", code, out)
 	}
 	root("rm -f /etc/ssh/sshd_config.d/00-doorinc.conf")
-	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 {
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 || strings.Contains(out, "there already") {
 		t.Errorf("the control: add with the Include back (%d): %s", code, out)
 	}
 	// What add leaves on the host for the user it made: no cron or at job (they run with no
@@ -2026,8 +2026,9 @@ echo "entry $(ls /home/devopsy/.config/devopsy/door/users/ 2>/dev/null | grep -c
 		t.Errorf("the host after add:\n%s\nwant:\n%sentry 1", out, made)
 	}
 	// remove keeps its entry, which holds its names and its tree, and its Unix user, which
-	// holds a tree and data; and an add of a user that is there takes the subordinate ids it
-	// was given meanwhile, and lists it once more nowhere.
+	// holds a tree and data; and an add of a user that is there says so, with the way to its
+	// keys while it has none, takes the subordinate ids it was given meanwhile, and lists it
+	// once more nowhere.
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users remove "+project+" 2>&1"); code != 0 {
 		t.Fatalf("remove (%d): %s", code, out)
 	}
@@ -2037,7 +2038,8 @@ echo "entry $(ls /home/devopsy/.config/devopsy/door/users/ 2>/dev/null | grep -c
 	if out, code := root("echo " + user + ":100000:65536 | tee -a /etc/subuid >>/etc/subgid"); code != 0 {
 		t.Fatalf("subordinate ids for %s (%d): %s", user, code, out)
 	}
-	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 {
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add "+project+" 2>&1"); code != 0 ||
+		!strings.Contains(out, "project user "+user+" for "+project+" is there already") || !strings.Contains(out, "add its keys with --ssh-keys --for "+project) {
 		t.Fatalf("add again (%d): %s", code, out)
 	}
 	if out, _ := root(host); out != made+"entry 1\n" {

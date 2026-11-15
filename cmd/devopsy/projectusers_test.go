@@ -452,19 +452,27 @@ func TestProjectUsersAddWarnsOfProcessesShown(t *testing.T) {
 	}
 }
 
-// --project-users add's last line names the user and its entry, and the way to its keys in
-// words, a key's file being the operator's to name, on the server as typed when the session
-// named it.
+// --project-users add's last line names the user and its entry, and whether it was there
+// already, a second add being no failure (it finishes a cut add, brings back a removed user);
+// while the user has no key, the way to its keys in words, a key's file being the operator's
+// to name, on the server as typed when the session named it.
 func TestProjectUsersAddSaysTheWayToKeys(t *testing.T) {
 	t.Parallel()
-	for ref, want := range map[string]string{
-		"devopsy@one:": "devopsy: project user devopsy-shop for shop, its entry in /e\ndevopsy: | add its keys with --ssh-keys --for shop add and each public key's file, on @devopsy@one:\n",
-		"":             "devopsy: project user devopsy-shop for shop, its entry in /e\ndevopsy: | add its keys with --ssh-keys --for shop add and each public key's file\n",
+	way := "devopsy: | add its keys with --ssh-keys --for shop add and each public key's file"
+	for _, c := range []struct {
+		ref       string
+		had, keys bool
+		want      string
+	}{
+		{"devopsy@one:", false, false, "devopsy: project user devopsy-shop for shop, its entry in /e\n" + way + ", on @devopsy@one:\n"},
+		{"", false, false, "devopsy: project user devopsy-shop for shop, its entry in /e\n" + way + "\n"},
+		{"devopsy@one:", true, false, "devopsy: project user devopsy-shop for shop is there already, its entry in /e\n" + way + ", on @devopsy@one:\n"},
+		{"devopsy@one:", true, true, "devopsy: project user devopsy-shop for shop is there already, its entry in /e\n"},
 	} {
 		var out bytes.Buffer
-		sayAdded(report.New(&out, false, 0), "devopsy-shop", "shop", "/e", ref)
-		if out.String() != want {
-			t.Errorf("%q: said %q, want %q", ref, out.String(), want)
+		sayAdded(report.New(&out, false, 0), "devopsy-shop", "shop", "/e", c.ref, c.had, c.keys)
+		if out.String() != c.want {
+			t.Errorf("%+v: said %q, want %q", c, out.String(), c.want)
 		}
 	}
 }
