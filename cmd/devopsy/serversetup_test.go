@@ -264,6 +264,32 @@ func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
 	}
 }
 
+// A home the login cannot read (mode 700, as Debian makes them) is asked as root in the plan,
+// the util image built for it: where that build fails, the setup refuses before the question,
+// saying what it could not read, and never offers to record the login on a home it could not
+// see; nothing put, no record written.
+func TestServerSetupPlanRefusesWhereRootCannotRead(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root reads every home")
+	}
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), loginLine(me)+"ops:x:61001:61001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".devopsy-uids", "env:shop:prod"), "x\n", 0o644)
+	ops := filepath.Join(host, "home", "ops")
+	if err := os.Chmod(ops, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ops, 0o755) })
+	out, code := s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@admin@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: what ops keep cannot be read as "+me+", nor as root (") ||
+		strings.Contains(out, "would record") || fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) {
+		t.Errorf("a home unread, the util image not built (%d):\n%s", code, out)
+	}
+}
+
 // A server whose record names another deploy user refuses the setup in its first session's
 // prelude, W0009 with the command itself to run again as the deploy user on the host as typed,
 // before anything: no file put, no release root made, no second session.

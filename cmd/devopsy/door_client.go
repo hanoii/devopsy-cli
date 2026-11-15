@@ -174,19 +174,11 @@ func realDocker() string {
 
 // deployUser is who owns this binary: devopsy upgrades itself as its deploy user.
 func deployUser() (*user.User, error) {
-	self := selfPath()
-	if self == "" {
-		return nil, errors.New("this binary's path is not known")
-	}
-	fi, err := os.Stat(self)
-	if err != nil {
-		return nil, err
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
+	self, uid, ok := binaryOwnerOf(selfPath())
 	if !ok {
-		return nil, errors.New("no owner for " + self)
+		return nil, errors.New("this binary's owner is not known (" + self + ")")
 	}
-	return user.LookupId(strconv.Itoa(int(st.Uid)))
+	return user.LookupId(strconv.Itoa(uid))
 }
 
 // runDocker is `docker` for whoever finds devopsy under that name.

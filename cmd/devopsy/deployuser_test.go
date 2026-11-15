@@ -543,7 +543,7 @@ func TestOtherDeployUserHoldsWhatItsReleaseRootHolds(t *testing.T) {
 
 	h := otherServer(t, "docker:x:990:admin,ops\n", append([]string{"/home/ops/.config/devopsy/" + setup.RecordFile}, held...)...)
 	write(t, h.path(config), "releases:\n  root: /srv/releases\n", 0o644)
-	o := otherDeployUser(h, me, "")
+	o, _ := otherDeployUser(h, me, "")
 	if o.name != "ops" || o.bare != "" {
 		t.Errorf("a member set up on a release root of its config's, holding environments there, is judged bare (its record's removal offered): %+v", o)
 	}
@@ -553,7 +553,7 @@ func TestOtherDeployUserHoldsWhatItsReleaseRootHolds(t *testing.T) {
 
 	h = otherServer(t, "docker:x:990:admin,ops\n", held...)
 	write(t, h.path(config), "releases:\n  root: /srv/releases\n", 0o644)
-	if o := otherDeployUser(h, me, ""); o.name != "ops" {
+	if o, _ := otherDeployUser(h, me, ""); o.name != "ops" {
 		t.Errorf("a member that never ran the setup, its environments on a release root of its config's, is not seen: %+v", o)
 	}
 }
@@ -564,7 +564,7 @@ func TestOtherDeployUserHoldsWhatItsReleaseRootHolds(t *testing.T) {
 func TestOtherDeployUserIsNeverRoot(t *testing.T) {
 	t.Parallel()
 	h := otherServer(t, "docker:x:990:admin,root\n", "/root/.config/devopsy/"+setup.RecordFile)
-	if o := otherDeployUser(h, login{uid: 1000, name: "admin"}, ""); o.name != "" {
+	if o, _ := otherDeployUser(h, login{uid: 1000, name: "admin"}, ""); o.name != "" {
 		t.Errorf("root taken for another deploy user: %+v", o)
 	}
 }
@@ -577,7 +577,7 @@ func TestHomeReleasesAreDevopsysOwn(t *testing.T) {
 	t.Parallel()
 	h := otherServer(t, "docker:x:990:admin,ops\n", "/home/ops/apps/shop/releases/20261115000000/REVISION", "/home/ops/apps/shop/shared/config/database.yml")
 	write(t, h.path("/home/ops/apps/shop/current/REVISION"), "x\n", 0o644)
-	if o := otherDeployUser(h, login{uid: 1000, name: "admin"}, ""); o.name != "" {
+	if o, _ := otherDeployUser(h, login{uid: 1000, name: "admin"}, ""); o.name != "" {
 		t.Errorf("another tool's releases taken for an environment of devopsy's: %+v", o)
 	}
 }
@@ -656,5 +656,121 @@ func TestLoginOnIsTheHostRootsUser(t *testing.T) {
 	write(t, h.path("/etc/passwd"), "someone:x:"+strconv.Itoa(os.Getuid())+":0::/home/someone:/bin/sh\n", 0o644)
 	if got := loginOn(h); got.name != "someone" || got.uid != os.Getuid() {
 		t.Errorf("its own passwd file: %+v", got)
+	}
+}
+
+// otherHost is a host root whose docker group is admin (the login, by this process's uid), ops,
+// devopsy (by its primary group) and a non-member, other; root is no member.
+func otherHost(t *testing.T) (setupHost, login) {
+	t.Helper()
+	h := setupHost{root: t.TempDir()}
+	write(t, h.path("/etc/group"), "docker:x:990:admin,ops\n", 0o644)
+	write(t, h.path("/etc/passwd"), "root:x:0:0::/root:/bin/sh\n"+loginLine("admin")+"ops:x:61001:61001::/home/ops:/bin/sh\n"+
+		"devopsy:x:61002:990::/home/devopsy:/bin/sh\nother:x:61003:61003::/home/other:/bin/sh\n", 0o644)
+	return h, login{uid: os.Getuid(), name: "admin"}
+}
+
+// A home the login cannot read (mode 700, as Debian makes them) is no evidence of no deploy
+// user: the judgment says it unseen, and the setup's facts ask as root (rootRead), refusing on
+// what root sees before the question, never saying "would record" of a home it could not see.
+// With no root read the item reads as before (a caller that asks nothing), and a root read
+// that fails, or finds no util image, refuses with words.
+func TestDeployUserFactAsksRootWhatItCannotRead(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root reads every home")
+	}
+	h, me := otherHost(t)
+	write(t, h.path("/home/ops/.devopsy-uids/env:shop:prod"), "x\n", 0o644)
+	if err := os.Chmod(h.path("/home/ops"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(h.path("/home/ops"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(h.path("/home/ops"), 0o755) })
+	if o, unseen := otherDeployUser(h, me, ""); o.name != "" || len(unseen) != 1 || unseen[0] != "ops" {
+		t.Fatalf("a home it cannot read: %+v, unseen %q", o, unseen)
+	}
+	asked := 0
+	h.rootRead = func(l login, root string) (string, error) {
+		asked++
+		if l != me || root != "/srv/releases" {
+			t.Errorf("the root read asked for %+v on %q", l, root)
+		}
+		return otherWire(otherUser{name: "ops", evidence: "its uid claims /home/ops/.devopsy-uids"}) + "\n", nil
+	}
+	s := remote.Session{Host: "admin@vm1"}
+	if x, r := deployUserFact(h, me, "/srv/releases", s); x != nil || r == nil || asked != 1 ||
+		r.Message != "ops is set up as this server's deploy user already (its uid claims /home/ops/.devopsy-uids): recording admin instead would lock ops out" || r.Command != "devopsy @ops@vm1: --server-setup" {
+		t.Errorf("as root, another deploy user: %+v, %+v (asked %d)", x, r, asked)
+	}
+	h.rootRead = func(login, string) (string, error) { return "", nil }
+	if x, r := deployUserFact(h, me, "", s); r != nil || x == nil || !x.Missing {
+		t.Errorf("as root, nothing against it: %+v, %+v", x, r)
+	}
+	h.rootRead = func(login, string) (string, error) { return "", errors.New("its run as root: exit status 125") }
+	if x, r := deployUserFact(h, me, "", s); x != nil || r == nil || r.Item != setup.RefusalDeployUser ||
+		r.Message != "what ops keep cannot be read as admin, nor as root (its run as root: exit status 125): devopsy cannot tell whether one of them is this server's deploy user already" {
+		t.Errorf("the root read failed: %+v, %+v", x, r)
+	}
+	h.rootRead = func(login, string) (string, error) { return "", errNoUtilImage }
+	if _, r := deployUserFact(h, me, "", s); r == nil || r.Fix != "run --server-setup, which builds devopsy's util image and reads them as root" {
+		t.Errorf("no util image: %+v", r)
+	}
+	h.rootRead = nil
+	if x, r := deployUserFact(h, me, "", s); r != nil || x == nil || !x.Missing {
+		t.Errorf("no root read: %+v, %+v", x, r)
+	}
+}
+
+// The owner of the server's devopsy, a docker member other than the login and root, is weak
+// evidence of another deploy user (devopsy-server installs it as the deploy user's, which
+// upgrades it): the way to run it as that user, or to give the login the binary, as root.
+// Ranked below environments and claims and below a bare setup record, so it never makes the
+// error of two users; an owner that is root, the login or no member is none.
+func TestOtherDeployUserWeighsTheBinarysOwner(t *testing.T) {
+	t.Parallel()
+	bin := func(uid int) func() (string, int, bool) {
+		return func() (string, int, bool) { return "/usr/local/lib/devopsy/devopsy", uid, true }
+	}
+	h, me := otherHost(t)
+	h.binary = bin(61002)
+	s := remote.Session{Host: "admin@vm1"}
+	o, _ := otherDeployUser(h, me, "")
+	if o.name != "devopsy" || o.binary != "/usr/local/lib/devopsy" || o.both {
+		t.Fatalf("the binary's owner: %+v", o)
+	}
+	r := otherDeployRefusal(o, me, s)
+	if r.Message != "the server's devopsy belongs to devopsy (/usr/local/lib/devopsy/devopsy), and this setup runs as admin: recording admin would lock devopsy out" ||
+		r.Command != "devopsy @devopsy@vm1: --server-setup" || r.OrCommand != "sudo chown -R admin: /usr/local/lib/devopsy" || r.Howto != "" {
+		t.Errorf("its refusal: %+v", r)
+	}
+	// Back on the wire as the root run prints it.
+	if back, ok := otherLine(otherWire(o) + "\n"); !ok || back != o {
+		t.Errorf("the wire: %+v, %v", back, ok)
+	}
+	// The login holding environments: no error of two users, the binary offered over.
+	root := t.TempDir()
+	write(t, filepath.Join(root, "shop", "prod", ".lock"), "", 0o644)
+	write(t, filepath.Join(root, "shop", "prod", "releases", "1", "x"), "x\n", 0o644)
+	if o, _ := otherDeployUser(h, me, root); o.name != "devopsy" || o.both {
+		t.Errorf("the login holding environments: %+v", o)
+	}
+	// A bare setup record ranks above it, and claims above both, whatever the members' order.
+	write(t, h.path("/home/ops/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
+	if o, _ := otherDeployUser(h, me, ""); o.name != "ops" || o.bare == "" {
+		t.Errorf("a bare record beside the binary's owner: %+v", o)
+	}
+	write(t, h.path("/home/devopsy/.devopsy-uids/env:shop:prod"), "x\n", 0o644)
+	if o, _ := otherDeployUser(h, me, ""); o.name != "devopsy" || !strings.HasPrefix(o.evidence, "its uid claims") {
+		t.Errorf("claims beside a bare record: %+v", o)
+	}
+	for name, uid := range map[string]int{"root": 0, "the login": os.Getuid(), "no member": 61003} {
+		h, me := otherHost(t)
+		h.binary = bin(uid)
+		if o, _ := otherDeployUser(h, me, ""); o.name != "" {
+			t.Errorf("an owner that is %s: %+v", name, o)
+		}
 	}
 }

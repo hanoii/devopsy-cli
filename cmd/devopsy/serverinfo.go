@@ -355,7 +355,11 @@ func serverFacts() (remote.ServerInfo, error) {
 		hd := readHostDocker(h)
 		info.Docker = hd.facts
 		info.Docker.ClientProxies = clientProxies(dockerConfigDir())
-		if rd, err := readSetup(h, hd); err == nil {
+		// What the login cannot read of another deploy user, as root where the util image is
+		// there already, else said unread.
+		hr := h
+		hr.rootRead = rootReadOther(h, false)
+		if rd, err := readSetup(hr, hd); err == nil {
 			info.Setup = &rd.facts
 			read = readChains(rd.facts.Firewall, rd.docker, false)
 		} else if kind, _ := firewallHere(h); kind != setup.NoFirewall {

@@ -314,12 +314,19 @@ too, and so does one on a server with no record yet that shows another
 deploy user: another member of the `docker` group, root aside, with
 devopsy's setup record in its home (`~/.config/devopsy/server.yaml`), or
 uid claims or an environment of devopsy's under its release root (its
-`releases: root`, else its home), or a release root another user owns. It
+`releases: root`, else its home), the server's devopsy as its own (the
+binary `--upgrade` replaces, which devopsy-server installs as the deploy
+user's), or a release root another user owns. A home this login cannot
+read (mode 700, as Debian and Ubuntu make them) is read as root in the
+plan, which builds devopsy's util image for it; where that fails, the
+setup refuses rather than record this login on what it could not see. It
 refuses before anything changes, in one of three ways:
 
 - where that user's setup record is all it holds (an account set up by
   mistake), two fixes: run it as that user, or remove that record as
   root (`sudo rm`, its path named), after which this login is recorded;
+  where owning the server's devopsy is all, the same two, the second
+  giving this login the binary's directory as root (`sudo chown -R`);
 - where that user holds environments or uid claims and this login none:
   run it as that user, or change the deploy user by hand;
 - where both hold environments or uid claims: an error saying so, with
