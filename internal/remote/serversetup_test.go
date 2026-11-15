@@ -211,3 +211,27 @@ func TestSetupRootScriptKeepsADaemonFileBehindALink(t *testing.T) {
 		t.Errorf("the file the link names holds %q, not the merge", data)
 	}
 }
+
+// BUG (review round 1): the root run puts the deploy user's record over whatever is there,
+// trusting what the setup read before it, under a lock that is each user's own. Two docker
+// users whose setups both read no record (a server set up before the record, an admin's
+// account and the deploy user applying at once) both put it: the second replaces the first
+// one's name, and the first, already set up, is locked out. devopsy never rewrites a record
+// naming another user: the root run must leave it, and say no put.
+func TestSetupRootScriptKeepsARecordNamingAnotherUser(t *testing.T) {
+	t.Parallel()
+	host, bin := setupHostRoot(t)
+	file := filepath.Join(host, setup.DeployUserFile)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(setup.DeployUserText("deploy")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("sh", "-c", SetupRootScript, "sh", host, "0:0", "", filepath.Join(host, "srv"), "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"))
+	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls"))
+	out, _ := c.CombinedOutput()
+	if got, _ := os.ReadFile(file); string(got) != setup.DeployUserText("deploy") || strings.Contains(string(out), SetupPut+" "+setup.DeployUserFile) {
+		t.Errorf("the root run replaced a record naming another user: %q\n%s", got, out)
+	}
+}
