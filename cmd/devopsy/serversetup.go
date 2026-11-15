@@ -19,7 +19,7 @@ import (
 )
 
 // errDeclined is an answer of no: nothing changed, said.
-var errDeclined = errors.New("nothing changed")
+var errDeclined = errors.New(nothingChanged)
 
 // runServerSetup implements devopsy @<server> --server-setup [--yes] [--root <dir>]: the
 // server's setup as devopsy wants it, in two sessions as the deploy user, three with a volume
@@ -102,7 +102,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	refused := len(f.Refused()) > 0
 	applyArgs, run, err := planSetup(f, yes, ask)
 	if err == errDeclined {
-		report.Error("nothing changed")
+		report.Error(nothingChanged)
 		return 1
 	}
 	if err != nil {
@@ -120,7 +120,7 @@ func runServerSetup(t *remote.Target, args []string) int {
 	}
 	if !run {
 		if refused {
-			report.Error(cmp.Or(refusedLine(f), "nothing changed"))
+			report.Error(cmp.Or(refusedLine(f), nothingChanged))
 			return 1
 		}
 		inSync()
@@ -549,9 +549,9 @@ func refusedLine(f setup.Facts) string {
 	return refusedWords(stopped)
 }
 
-// nothingChanged is what a setup with every step refused says of what it did, the refusals
-// said above it.
-const nothingChanged = "nothing changed, until what is refused above is fixed"
+// nothingChanged is what a setup that changed nothing says of what it did: every step refused
+// (the refusals above it say what to fix), declined, or with nothing to apply.
+const nothingChanged = "nothing was changed"
 
 // refusedWords is refusedLine of the steps stopped, by name, "" for none: one sentence naming
 // what devopsy did not set up, each step as a sentence says it (stepPhrase).
@@ -564,9 +564,9 @@ func refusedWords(stopped []string) string {
 	case 0:
 		return ""
 	case 1:
-		return "devopsy left " + words[0] + " as it is, until what is refused above is fixed"
+		return "devopsy left " + words[0] + " as it is"
 	}
-	return "devopsy left " + joinAnd(words) + " as they are, until what is refused above is fixed"
+	return "devopsy left " + joinAnd(words) + " as they are"
 }
 
 // stepPhrase is a step's name in a sentence, where its name is an item's key with no article.

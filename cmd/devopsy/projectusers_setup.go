@@ -72,7 +72,7 @@ func runProjectUsersSetup(t *remote.Target, args []string) int {
 	refused := len(f.Refused()) > 0
 	if !f.Applies() {
 		if refused {
-			report.Error(cmp.Or(refusedWords(f.Stopped()), "nothing changed"))
+			report.Error(cmp.Or(refusedWords(f.Stopped()), nothingChanged))
 			return 1
 		}
 		report.Info("nothing to change: " + t.Host + " is ready for project users")
@@ -90,7 +90,7 @@ func runProjectUsersSetup(t *remote.Target, args []string) int {
 			return failErr(err)
 		}
 		if !ok {
-			report.Error("nothing changed")
+			report.Error(nothingChanged)
 			return 1
 		}
 	}
@@ -636,7 +636,7 @@ func applyDoorSetup(h setupHost, dir string, said []string, ref string) int {
 		return 0
 	}
 	if f.NoneGoes() {
-		report.Error(cmp.Or(refusedWords(f.Stopped()), "nothing changed"))
+		report.Error(cmp.Or(refusedWords(f.Stopped()), nothingChanged))
 		return 1
 	}
 	does := func(s setup.Step) bool { return f.Goes(s) && f.Changes(s) }

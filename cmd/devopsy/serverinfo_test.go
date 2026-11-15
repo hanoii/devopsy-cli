@@ -491,6 +491,17 @@ func TestServerInfoReport(t *testing.T) {
 	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(out, "deploy user devopsy ("+setup.DeployUserFile+")\n") {
 		t.Errorf("the deploy user recorded: %+v\n%s", warnings, out)
 	}
+	// A deploy user's refusal, said to a reader who runs no setup (its Info), and the setup's
+	// closing fix naming the deploy user, whose own fixes say what to run.
+	info1 := healthy()
+	info1.Setup = setUp("")
+	info1.Setup.Files = info1.Setup.Files[:2]
+	info1.Setup.Refusals = []setup.Refusal{otherDeployRefusal(otherUser{name: "devopsy", evidence: "/usr/local/lib/devopsy/devopsy", binary: "/usr/local/lib/devopsy"}, login{uid: 1001, name: "admin"}, remote.Session{Host: "admin@vm1"})}
+	info1.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
+	if out, _ := serverInfoSays(info1, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "deploy user: the server's devopsy belongs to devopsy (/usr/local/lib/devopsy/devopsy): a --server-setup as admin would record admin and lock devopsy out") ||
+		strings.Contains(out, "this setup runs as") || !strings.Contains(out, "fix the deploy user first, then run --server-setup") || strings.Contains(out, "fix what refuses every step") {
+		t.Errorf("a deploy user's refusal in --server-info:\n%s", out)
+	}
 	// Never set up: the first setup records whoever runs it, said before it does.
 	info0.Setup.Record, info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing, info0.Setup.Files[2].User = "", false, true, "admin"
 	if out, _ := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); !strings.Contains(out, "no deploy user recorded yet: the first --server-setup records the login it runs as (admin here), and from then on refuses every other login") {

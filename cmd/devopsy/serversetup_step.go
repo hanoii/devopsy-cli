@@ -1100,7 +1100,7 @@ func applySetup(h setupHost, a setupApply) int {
 				fail(err.Error())
 			}
 		}
-		return failed(cmp.Or(refusedLine(f), "nothing changed"))
+		return failed(cmp.Or(refusedLine(f), nothingChanged))
 	}
 	// The chains read as root (an apply may build the util image), so a wipe reads to load
 	// again.

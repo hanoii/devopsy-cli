@@ -191,7 +191,8 @@ func deployUserFact(h setupHost, me login, root string, s remote.Session) (*setu
 		return nil, &r
 	case deploy != "" && deploy != me.name:
 		return nil, &setup.Refusal{Item: setup.RefusalDeployUser, Message: "this server's deploy user is " + deploy + " (" + setup.DeployUserFile + "), and this setup runs as " + me.words(),
-			Fix: "run --server-setup as " + deploy + ", or make " + me.words() + " the deploy user by hand", Howto: howto.DeployUser}
+			Info: "this server's deploy user is " + deploy + " (" + setup.DeployUserFile + "): a --server-setup as " + me.words() + " is refused",
+			Fix:  "run --server-setup as " + deploy + ", or make " + me.words() + " the deploy user by hand", Howto: howto.DeployUser}
 	case me.uid == 0 && deploy == "", me.name == "":
 		return nil, nil
 	case deploy == "":
@@ -499,6 +500,12 @@ func unseenRefusal(unseen []string, me login, err error) setup.Refusal {
 	return r
 }
 
+// wouldRecord is what a setup as who would do where the server shows other set up, as
+// --server-info says it to a reader who runs no setup (setup.Refusal.Info).
+func wouldRecord(who, other string) string {
+	return "a --server-setup as " + who + " would record " + who + " and lock " + other + " out"
+}
+
 // joinOr names names in a sentence of a choice: "a", "a or b", "a, b or c".
 func joinOr(names []string) string {
 	if len(names) < 2 {
@@ -519,7 +526,7 @@ func rootReadOther(h setupHost, build bool) func(me login, root string) (string,
 			if !dockerHere(dockerInfoWith(ctx, "docker")) {
 				return "", errNotThisHost
 			}
-			if err := ensureUtilImage(ctx); err != nil {
+			if err := ensureUtilImageSaying(ctx, "building devopsy's util image, to read the other docker users' homes as root", "docker"); err != nil {
 				return "", err
 			}
 		}
@@ -541,7 +548,8 @@ func rootReadOther(h setupHost, build bool) func(me login, root string) (string,
 func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	who := me.words()
 	r := setup.Refusal{Item: setup.RefusalDeployUser, Howto: howto.DeployUser, HowtoAside: true,
-		Message: o.name + " is set up as this server's deploy user already (" + o.evidence + "): recording " + who + " instead would lock " + o.name + " out"}
+		Message: o.name + " is set up as this server's deploy user already (" + o.evidence + "): recording " + who + " instead would lock " + o.name + " out",
+		Info:    o.name + " is set up as this server's deploy user already (" + o.evidence + "): " + wouldRecord(who, o.name)}
 	login := remote.LoginName(o.name)
 	switch {
 	case o.both:
@@ -560,12 +568,14 @@ func otherDeployRefusal(o otherUser, me login, s remote.Session) setup.Refusal {
 	case o.bare != "":
 		r.Howto = ""
 		r.Message = o.name + " is set up on this server too (" + o.evidence + "): recording " + who + " as the deploy user would lock " + o.name + " out"
+		r.Info = o.name + " is set up on this server too (" + o.evidence + "): " + wouldRecord(who, o.name)
 		r.Or, r.OrCommand = "if "+o.name+" was set up by mistake and holds no environments, remove its setup record as root:", "sudo rm "+remote.QuoteWord(o.bare)
 	case o.binary != "":
 		// The devopsy that upgrades itself as its owner: weak as a bare record is, so the way
 		// out is the binary given over, never an error of two users.
 		r.Howto = ""
 		r.Message = "the server's devopsy belongs to " + o.name + " (" + o.evidence + "), and this setup runs as " + who + ": recording " + who + " would lock " + o.name + " out"
+		r.Info = "the server's devopsy belongs to " + o.name + " (" + o.evidence + "): " + wouldRecord(who, o.name)
 		r.Or, r.OrCommand = "if "+who+" should be the deploy user, make it the owner of the server's devopsy, as root:", "sudo chown -R "+remote.QuoteWord(who+":")+" "+remote.QuoteWord(o.binary)
 		if !remote.LoginName(who) {
 			r.Or, r.OrCommand = "if "+who+" should be the deploy user, make it the owner of the server's devopsy ("+o.binary+"), as root", ""

@@ -285,6 +285,7 @@ func TestServerSetupPlanRefusesWhereRootCannotRead(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(ops, 0o755) })
 	out, code := s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@admin@one:", "--server-setup", "--yes")
 	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: devopsy cannot tell whether ops is already this server's deploy user: its home cannot be read as "+me+", nor as root (") ||
+		!strings.Contains(out, "devopsy: building devopsy's util image, to read the other docker users' homes as root\n") ||
 		strings.Contains(out, "would record") || fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) {
 		t.Errorf("a home unread, the util image not built (%d):\n%s", code, out)
 	}
@@ -570,7 +571,7 @@ func TestServerSetupApplyUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade"); code != 0 || !strings.Contains(out, "devopsy: warning: Docker: systemd is not this host's init") ||
-		!strings.Contains(out, "devopsy: warning: nothing changed, until what is refused above is fixed\n") || !strings.Contains(out, "run --server-setup for this server") {
+		!strings.Contains(out, "devopsy: warning: nothing was changed\n") || !strings.Contains(out, "run --server-setup for this server") {
 		t.Errorf("--upgrade on a failure (%d):\n%s", code, out)
 	}
 	if r, _, _ := setup.ReadRecord(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)); r.Version != "" {
@@ -1284,7 +1285,7 @@ func TestServerSetupAsksWhereReleasesLiveAtATerminal(t *testing.T) {
 
 	out, code := at("\nn\n")
 	if code != 1 || strings.Count(out, "where do releases live?") != 1 || !strings.Contains(out, "devopsy: | 1. "+home+", the deploy user's home\n") ||
-		!strings.Contains(out, "devopsy: | 2. "+vol+" (xfs on /dev/sdb") || !strings.Contains(out, "apply these?") || !strings.Contains(out, "nothing changed") ||
+		!strings.Contains(out, "devopsy: | 2. "+vol+" (xfs on /dev/sdb") || !strings.Contains(out, "apply these?") || !strings.Contains(out, "nothing was changed") ||
 		strings.Contains(out, "to keep releases on") || strings.Contains(out, "names it as releases: root") || readString(config) != before || fileExists(vol) {
 		t.Fatalf("Enter, then no (%d), config %q:\n%s", code, readString(config), out)
 	}
@@ -2883,7 +2884,7 @@ func TestServerSetupAppliesBesideARefusedRoot(t *testing.T) {
 	write(t, s.root, "a file\n", 0o644)
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if code != 1 || readString(filepath.Join(host, setup.SysctlFile)) != setup.SysctlText() || !fileExists(filepath.Join(host, remote.FirewallScript)) ||
-		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "devopsy left the release root and the mounts drop-in as they are, until what is refused above is fixed\n") {
+		fileExists(filepath.Join(host, setup.MountsDropIn)) || !strings.Contains(out, "devopsy left the release root and the mounts drop-in as they are\n") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -3079,7 +3080,7 @@ func TestUpgradeWithEveryStepStoppedRunsNothing(t *testing.T) {
 	write(t, filepath.Join(host, "active-state"), "inactive\n", 0o644)
 	s.logs()
 	out, code := s.run([]string{"FAKE_UTIL_MISSING=1"}, remote.ServerSetupFlag, "apply", "--upgrade")
-	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: nothing changed, until what is refused above is fixed\n") {
+	if code != 0 || !strings.Contains(out, "docker.service is not active") || !strings.Contains(out, "warning: nothing was changed\n") {
 		t.Fatalf("(%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, remote.UtilImage) {
@@ -3126,7 +3127,7 @@ func TestPlanSetupNamesWhatIsRefused(t *testing.T) {
 	if _, _, err := planSetup(f, false, ask); err != nil || len(ask.asked) != 1 {
 		t.Fatalf("%v, asked %q", err, ask.asked)
 	}
-	if ask.asked[0] != "apply these? | devopsy left daemon.json's parts and Docker's restart as they are, until what is refused above is fixed" {
+	if ask.asked[0] != "apply these? | devopsy left daemon.json's parts and Docker's restart as they are" {
 		t.Errorf("the question: %q", ask.asked[0])
 	}
 	f.Refusals = append(f.Refusals, setup.Refusal{Item: setup.RefusalDocker})
@@ -3152,14 +3153,14 @@ func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
 	}{
 		"daemon.json not judged": {func(t *testing.T, s *syncSetup, host string) {
 			write(t, filepath.Join(host, setup.DaemonFile), "[]\n", 0o644)
-		}, "devopsy leaves the file as it is", "daemon.json's parts and Docker's restart as they are, until what is refused above"},
+		}, "devopsy leaves the file as it is", "daemon.json's parts and Docker's restart as they are"},
 		"a root no unit holds": {func(t *testing.T, s *syncSetup, host string) {
 			root := filepath.Join(filepath.Dir(s.root), "re\tleases")
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			write(t, filepath.Join(filepath.Dir(s.root), "home", "config.yaml"), "releases:\n  root: \""+strings.ReplaceAll(root, "\t", `\t`)+"\"\n", 0o644)
-		}, "a unit file cannot hold", "the mounts drop-in as it is, until what is refused above"},
+		}, "a unit file cannot hold", "the mounts drop-in as it is"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -3171,7 +3172,7 @@ func TestUpgradeNotesNoVersionBesideAStepNotComputed(t *testing.T) {
 			record := filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)
 			write(t, record, "daemon.json: {}\n", 0o600)
 			out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
-			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: devopsy left "+c.stopped+" is fixed\n") {
+			if code != 0 || !strings.Contains(out, c.said) || !strings.Contains(out, "devopsy: warning: devopsy left "+c.stopped+"\n") {
 				t.Errorf("(%d):\n%s", code, out)
 			}
 			if r, _, _ := setup.ReadRecord(record); r.Version != "" {

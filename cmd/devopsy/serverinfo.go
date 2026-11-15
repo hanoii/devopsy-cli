@@ -2131,9 +2131,13 @@ func sortedKeysOf[V any](m map[string]V) []string {
 // again here.
 func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.StatusEntry {
 	fix := setupFix(ref, "", "run --server-setup for this server, as its deploy user")
-	// With every step refused, --server-setup applies nothing: the way out is the refusal's.
+	// With every step refused, --server-setup applies nothing: the way out is the refusal's,
+	// the deploy user's by name, whose own fixes say what to run.
 	if f.NoneGoes() {
 		fix = report.Fix("fix what refuses every step of the setup first, then run --server-setup")
+		if slices.ContainsFunc(f.Refusals, func(r setup.Refusal) bool { return r.Item == setup.RefusalDeployUser }) {
+			fix = report.Fix("fix the deploy user first, then run --server-setup")
+		}
 	}
 	var es []remote.StatusEntry
 	line := func(level, msg string, fixes ...report.Remedy) {
@@ -2176,6 +2180,8 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 	for _, r := range f.Refusals {
 		// The tools are said once, with the others the server needs (serverTools).
 		if r.Item != toolsItem && !slices.Contains(docker, r.ID()) {
+			// Said to a reader who runs no setup, where the refusal has words for one.
+			r.Message = cmp.Or(r.Info, r.Message)
 			msg, fixes := refusalWords(r)
 			line(remote.StatusWarning, msg, fixes...)
 		}

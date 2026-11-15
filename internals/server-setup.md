@@ -106,7 +106,9 @@
 - A record that cannot be read says what it holds and then what it should hold (`setup.ParseDeployUser`'s words), and one fix says what root writes in it (`deployRecordWrite`), in W0010 and the setup's refusal alike.
 - A setup run as root with no record writes none: root's sessions are never checked, so root is no deploy user to record.
 - `--server-info` names the deploy user under setup once recorded, and says a record not written yet as a note with the login the next `--server-setup` records, never a warning: on a server set up by devopsy with `--server-setup` as a hint, since it refuses nothing until its next apply, `--upgrade`'s included; on one never set up, saying that the first setup records whoever runs it.
-- A setup whose every step a refusal stops says that nothing changed (`refusedLine`), never a list of the steps it left, which the refusals above it already explain.
+- A setup whose every step a refusal stops says that nothing was changed (`refusedLine`, `nothingChanged`), and one that stops some names the steps it left as they are, never what to fix, which the refusals above it say.
+- `--server-info` says a refusal by its words for a reader who runs no setup (`setup.Refusal.Info`) where it has them (the deploy user's: "a --server-setup as admin would record admin and lock devopsy out", `wouldRecord`), and its closing fix, with every step refused by the deploy user's, names the deploy user.
+- A build of the util image says why where nothing before it did (`ensureUtilImageSaying`): the plan's read as root says it reads the other docker users' homes.
 
 ## `daemon.json` and the record
 
