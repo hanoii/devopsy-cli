@@ -442,6 +442,9 @@ func Pinned(ref string) bool {
 
 var wholeID = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
+// RepoKey is the repository as Docker shows it (repoKey), for grouping a server's names.
+func RepoKey(ref string) string { return repoKey(ref) }
+
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
 func repoKey(ref string) string {
@@ -1238,14 +1241,37 @@ func (tt *toolTagsOf) names(ref string, skip map[string]bool) (bool, error) {
 		}
 		tt.read[repo] = tags
 	}
+	return ToolTagNames(ref, tags, skip), nil
+}
+
+// ToolTagNames says whether one of repoTags (the tags of ref's repository), none of skip's, is
+// a release's tool tag naming ref (toolTag: the cksum of the name after -t): never a bookmark
+// or a reference by digest, which no tool runs by.
+func ToolTagNames(ref string, repoTags []string, skip map[string]bool) bool {
+	if isBookmark(ref) || strings.Contains(ref, "@") {
+		return false
+	}
 	mark := "-t" + strconv.FormatUint(uint64(cksum([]byte(familiar(ref)))), 36)
-	for _, t := range tags {
+	for _, t := range repoTags {
 		_, tag := SplitRef(t)
-		if !skip[familiar(t)] && toolTagOf.MatchString(tag) && strings.HasSuffix(tag, mark) {
-			return true, nil
+		if !skip[familiar(t)] && repoKey(t) == repoKey(ref) && toolTagOf.MatchString(tag) && strings.HasSuffix(tag, mark) {
+			return true
 		}
 	}
-	return false, nil
+	return false
+}
+
+// Held says whether devopsy holds an image whose names are tags, by the two rules a removal
+// keeps by: one of them is a hold (HoldOf: a release's bookmark, a snapshot's, a tool's, a
+// claim's), or a release's tool tag names one of them (ToolTagNames, with repoTags a
+// repository's tags), whatever image that tool tag is on, since a tool runs by its name.
+func Held(tags []string, repoTags func(repo string) []string) bool {
+	for _, t := range tags {
+		if _, hold := HoldOf(t); hold || ToolTagNames(t, repoTags(repoKey(t)), nil) {
+			return true
+		}
+	}
+	return false
 }
 
 // releaseEntries are a release's listing and its tools, in that order, with their bookmarks'

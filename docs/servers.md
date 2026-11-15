@@ -397,7 +397,8 @@ The rest is the server's, under `leftovers`:
 - images with a tag that no release holds and no container uses (a
   tool's tag a `--vars set` changed since its release, a tool a profile
   builds, the admin's own), one row each with its size, then one
-  `docker rmi` of all of them as the hint;
+  `docker rmi` of all of them as the hint; a release holds a name its
+  tool runs by, whatever image that name is on now;
 - anonymous volumes no container uses (an image's `VOLUME` after a
   `down` without `-v`, which may be a database's data), `docker volume
   prune` as the hint, once checked.

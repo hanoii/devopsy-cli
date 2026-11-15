@@ -120,6 +120,7 @@
 - A retry keeps a name a tool tag still names (`toolRuns`) and removes it once none does, whichever release's tag it was: a project user's never takes a plain name.
 - `--releases` lists the names kept for a tool apart from what a removal could not take (`FormatReleases`), and `--gc` counts none: a kept name is no failure.
 - Behind the door no tool tag is looked for: a project user's removal of a name it does not write does nothing.
+- An image is devopsy's by one definition (`Held`: a hold among its tags, or a release's tool tag naming one of its names, `ToolTagNames`), which a removal keeps by and `--server-info`'s leftovers read (internals/other.md).
 - Never `docker rmi -f`; a refusal is recorded: `-f` strips the names of an image a container uses, which a removal keeps and records instead.
 - Removals are idempotent, and one cut off anywhere is finished by the next; Docker failing (anything but a missing image) stops one with exit 1 and the release stays, `RemoveReleases` removing a directory only after its images, and `--destroy` then keeps the directory and says to run it again.
 - A release's removals scan no directory, sweep nothing server-wide and keep no trash directory: a removal decides from its release's listing and Docker's state, and reads nothing above its project. `--gc` and a project user's destroy are the sweeps: `--gc` by each of the deploy user's projects' records and Docker's own rule (internals/other.md), the destroy by the names only that project writes (`Policy.OwnRef`, internals/door.md).

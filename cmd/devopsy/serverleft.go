@@ -427,12 +427,21 @@ func leftEntries(info remote.ServerInfo, host, ref string) (groups map[string][]
 		// One row each, then one line for all of them and one rmi of every tag.
 		var tags []string
 		n := 0
+		byRepo := map[string][]string{}
 		for _, img := range info.Images {
-			if slices.ContainsFunc(img.Tags, func(t string) bool {
-				_, hold := images.HoldOf(t)
+			for _, t := range img.Tags {
+				r := images.RepoKey(t)
+				byRepo[r] = append(byRepo[r], t)
+			}
+		}
+		repoTags := func(repo string) []string { return byRepo[repo] }
+		for _, img := range info.Images {
+			// Held as a removal keeps it (images.Held): a hold on it, or a release's tool tag
+			// naming one of its names, which a live tool runs by.
+			if images.Held(img.Tags, repoTags) || slices.ContainsFunc(img.Tags, func(t string) bool {
 				_, _, build := images.IsDoorBuild(t)
 				// The util image is devopsy's, and an old one --gc's to remove (its count above).
-				return hold || build || images.Familiar(t) == images.Familiar(remote.UtilImage) || remote.OldUtilTag(t)
+				return build || images.Familiar(t) == images.Familiar(remote.UtilImage) || remote.OldUtilTag(t)
 			}) || img.Containers > 0 {
 				continue
 			}

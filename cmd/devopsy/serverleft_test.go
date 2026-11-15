@@ -43,8 +43,9 @@ func leftSays(info remote.ServerInfo, host, ref string) []string {
 }
 
 // What --server-info shows of what may be dead or gone, each with its hint: what --gc would
-// remove, tagged images no release holds and no container uses (never a hold, a build, the
-// util image, an old util image --gc counts, or one a container uses), what is left of a
+// remove, tagged images no release holds and no container uses (never a hold, a name a
+// release's tool tag names, a build, the util image, an old util image --gc counts, or one a
+// container uses), what is left of a
 // compose name with no environment directory and no uid claim (a release's tags, anchored, so
 // shop-stage's never take shop-stage-2's nor the other way, a name over 94 characters by its
 // cut prefix; a project user's builds; a release's containers; volumes of such a name only,
@@ -84,6 +85,10 @@ func TestServerInfoLeft(t *testing.T) {
 			{ID: "i7", Tags: []string{remote.UtilImage}},
 			{ID: "i9", Tags: []string{remote.UtilRepo + ":4"}},
 			{ID: "i8", Tags: []string{"alpine:3", "alpine:3.22"}, Size: 8e6},
+			// A tool's name on an image no hold is on, which shop-prod's tool tag (its cksum
+			// of the name after -t, on an older image) names: a live tool runs by it.
+			{ID: "i10", Tags: []string{"ghcr.io/jqlang/jq:1.8"}, Size: 2e6},
+			{ID: "i11", Tags: []string{"ghcr.io/jqlang/jq:devopsy-shop-prod-20261101000000-th4s7i1"}, Size: 2e6},
 		},
 		Volumes: []remote.HostVolume{
 			{Name: "shop-prod_db", Project: "shop-prod"},
