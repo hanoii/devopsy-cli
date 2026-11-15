@@ -289,3 +289,27 @@ func TestReleaseSettingsTellsAProjectUserByItsUID(t *testing.T) {
 		t.Errorf("a login of uid %d naming the project user %s in $USER passed the deploy user's check (%v):\n%s", os.Getuid(), pu, err, out)
 	}
 }
+
+// Bug (review round 2): on a server with no record where two docker members both have a setup
+// record (an admin's own account devopsy once took for the deploy user, the case the record is
+// for), each one's --server-setup and --upgrade refuse to record it, naming the other and
+// offering "run it as" the other: neither ever gets the record without the topic's steps by
+// hand, and the deploy user that holds the server's environments is told to record the admin.
+func TestDeployUserFactTwoSetupRecordsLeaveAWayOut(t *testing.T) {
+	t.Parallel()
+	h := setupHost{root: t.TempDir()}
+	write(t, h.path("/etc/group"), "docker:x:990:admin,deploy\n", 0o644)
+	write(t, h.path("/etc/passwd"), "admin:x:1000:1000::/home/admin:/bin/sh\ndeploy:x:1001:1001::/home/deploy:/bin/sh\n", 0o644)
+	for _, u := range []string{"admin", "deploy"} {
+		write(t, h.path("/home/"+u+"/.config/devopsy/"+setup.RecordFile), "{}\n", 0o600)
+	}
+	var refusals []string
+	for _, me := range []login{{uid: 1000, name: "admin"}, {uid: 1001, name: "deploy"}} {
+		if _, r := deployUserFact(h, me, "", remote.Session{Host: me.name + "@vm1"}); r != nil {
+			refusals = append(refusals, me.name+": "+r.Message+" ("+r.Command+")")
+		}
+	}
+	if len(refusals) == 2 {
+		t.Errorf("both docker users with a setup record refuse each other, neither recordable:\n%s", strings.Join(refusals, "\n"))
+	}
+}
