@@ -5,9 +5,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
 )
 
@@ -282,5 +284,34 @@ func TestKeysListingFinishesARemoval(t *testing.T) {
 	write(t, keys+".ending", "")
 	if out := list(); !strings.Contains(out, "devopsy "+EndProjectUserFlag+" devopsy-shop") || strings.Contains(readFile(keys), "AAAA") {
 		t.Errorf("a user's removal finished by a listing (its keys emptied):\n%s\n%q", out, readFile(keys))
+	}
+}
+
+// BUG (review round 1): the --ssh-keys scripts run no prelude, so they never reach the deploy
+// user's check (--release-settings): a login the server's record does not name, in the docker
+// group, authorizes a project user's key in a door directory of its own home, which sshd
+// never asks, and is told nothing. The session here is such a login: the record under the
+// host root names another user, and the server's devopsy refuses it as --release-settings
+// does. The key must not be written, and the script must fail.
+func TestKeysScriptsRefuseAnotherLogin(t *testing.T) {
+	t.Parallel()
+	home, bin, root := t.TempDir(), t.TempDir(), t.TempDir()
+	for name, body := range map[string]string{
+		"flock":   "exit 0",
+		"id":      `case "$1" in -nG) echo admin docker ;; -un) echo admin ;; -u) [ "${2:-}" = devopsy-shop ] && echo 10002 || echo 1001 ;; *) exit 1 ;; esac`,
+		"devopsy": `case "$1" in --release-settings) echo "devopsy: error: W0009: this login is not the server's deploy user" >&2; exit ` + strconv.Itoa(SettingsRefusedExit) + ` ;; esac`,
+	} {
+		if err := testfile.Write(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(root, setup.DeployUserFile), setup.DeployUserText("deploy"))
+	keys := filepath.Join(home, "door", "keys", "devopsy-shop")
+	cmd := exec.Command("sh", "-c", KeysAddScript("devopsy-shop", "vm1"))
+	cmd.Env = []string{"HOME=" + home, "DEVOPSY_HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin", HostRootEnv + "=" + root}
+	cmd.Stdin = strings.NewReader("ssh-ed25519 AAAAlaptop laptop\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil || readFile(keys) != "" {
+		t.Errorf("a login the record does not name authorized a project user's key (%v), in a directory sshd never asks:\n%s\n%q", err, out, readFile(keys))
 	}
 }
