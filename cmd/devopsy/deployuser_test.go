@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -251,5 +253,39 @@ func TestServerSetupRefusedAsRootAppliesNothingElse(t *testing.T) {
 	}
 	if fileExists(filepath.Join(host, "iptables.log")) || fileExists(filepath.Join(host, remote.FirewallMark)) {
 		t.Errorf("a login refused as root loaded the metadata firewall:\n%s", out)
+	}
+}
+
+// Bug (review round 2): checkDeployUser lets a project user through by asProjectUser, which
+// tells it by user.Current: in a build without cgo (every release), a uid the passwd file does
+// not list (a login from LDAP or sssd) falls back to $USER, which the login sets itself, so a
+// docker member naming a project user in $USER passes for one and skips W0009, the fallback
+// round 1 took out of currentLogin left in the other half of the check. It runs only as a uid
+// the passwd file does not list, beside a project user of the system's (in Linux, as root:
+// groupadd devopsy-projects && useradd -G devopsy-projects devopsy-shop, then setpriv --reuid
+// 4242 --regid 4242 --clear-groups).
+func TestReleaseSettingsTellsAProjectUserByItsUID(t *testing.T) {
+	t.Parallel()
+	if _, err := user.LookupId(strconv.Itoa(os.Getuid())); err == nil || os.Getuid() == 0 {
+		t.Skip("needs a uid the passwd file does not list")
+	}
+	pu := ""
+	for line := range strings.SplitSeq(readString("/etc/passwd"), "\n") {
+		if name, _, _ := strings.Cut(line, ":"); name != "" && inDoorGroup(name) {
+			pu = name
+			break
+		}
+	}
+	if pu == "" {
+		t.Skip("needs a project user of the system's, in " + remote.DoorGroup)
+	}
+	home := t.TempDir()
+	h := recordAt(t, setup.DeployUserText("someone-else"))
+	cmd := exec.Command(binary, "--release-settings")
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "USER=" + pu, "HOME=" + home, "DEVOPSY_HOME=" + home, remote.HostRootEnv + "=" + h.root, remote.HostEnv + "=vm1"}
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != remote.SettingsRefusedExit || !strings.Contains(string(out), report.NotDeployUser.Msg()) {
+		t.Errorf("a login of uid %d naming the project user %s in $USER passed the deploy user's check (%v):\n%s", os.Getuid(), pu, err, out)
 	}
 }
