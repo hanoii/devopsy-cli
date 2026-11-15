@@ -3800,3 +3800,21 @@ func TestServerScriptsExportNoEnvironmentDirectories(t *testing.T) {
 		t.Errorf("an environment's script exports no directories:\n%s", s)
 	}
 }
+
+// --shell-host as a login checks it as every session does, by the prelude's --release-settings,
+// whether on a server or an environment; --shell-host --root, root's own shell, runs none, the
+// way in when the deploy user's record shuts every other login out (W0010).
+func TestShellHostChecksTheDeployUserButRoots(t *testing.T) {
+	t.Parallel()
+	for name, s := range map[string]string{
+		"a server":       RootShellScript(&Target{Host: "h"}),
+		"an environment": ShellScript(&Target{Host: "h", Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
+	} {
+		if !strings.Contains(s, "devopsy --release-settings") {
+			t.Errorf("--shell-host on %s runs no --release-settings, the deploy user's check", name)
+		}
+	}
+	if strings.Contains(RootUserShellScript(), "devopsy") {
+		t.Error("--shell-host --root runs devopsy, which root's shell must never need")
+	}
+}

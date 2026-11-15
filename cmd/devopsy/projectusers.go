@@ -355,7 +355,7 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	if err := foreignUnder(door.Policy{Project: project, User: who, Others: projects}, dockerCommand); err != nil {
 		return failErr(err)
 	}
-	me, err := user.Current()
+	me, err := currentUser()
 	if err != nil {
 		return failErr(err)
 	}

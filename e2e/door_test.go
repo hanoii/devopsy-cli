@@ -282,6 +282,8 @@ const doorService = `    image: busybox:1.37
 // The whole of a project's life as a user the daemon refuses, with today's scripts: a
 // release, a rollback, its data out and back, a snapshot and its restore, a child.
 func TestDoorProjectsLife(t *testing.T) {
+	// The deploy user recorded: a project user's sessions pass its check (checkDeployUser).
+	recordDeployUser(t, doorServer(t), "devopsy")
 	dir := doorProject(t, "doorlife", `services:
   web:
 `+doorService+`    command: [sleep, infinity]

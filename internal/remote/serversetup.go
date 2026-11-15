@@ -41,7 +41,23 @@ const (
 	SetupAsked    = "asked"       // the marker written, Docker's restart about to be asked
 	SetupQueued   = "queued"      // Docker's restart queued
 	SetupNoSystem = "nosystemctl" // systemctl refused from the chroot: marked instead
+	// SetupOther: other <user> <evidence>, the deploy user's record not made, the server showing
+	// another deploy user (a docker member's setup record, a release root of another's), and
+	// nothing else applied (exit 4).
+	SetupOther = "other"
+	// SetupUnread: unread\t<why>, the deploy user's record there and not readable, nothing else
+	// applied (exit 4).
+	SetupUnread = "unread"
 )
+
+// DeployUserOtherFlag is the hidden flag the setup's root run asks, as root, before it makes the
+// deploy user's record: what shows the login may not be recorded (cmd/devopsy's otherDeployUser),
+// the one judgment of it, which the facts read too.
+const DeployUserOtherFlag = "--deploy-user-other"
+
+// DeployUserCheckFlag is the hidden flag a script with no prelude asks for the deploy user's
+// check of its login alone (the --ssh-keys scripts, deployUserGate).
+const DeployUserCheckFlag = "--deploy-user-check"
 
 // hostDropIn puts the mounts drop-in, $dropin ("" to leave it), under $host_root, says so and
 // sets reload: --server-setup's root run and --project-users setup's (ProjectUsersSetupScript)
@@ -68,17 +84,44 @@ fi
 // (now) or mark (the marker and flag, whatever changed; "" marks only when daemon.json
 // changed), the InvocationID for the marker, the unit's dockerd flags, one a line, and the
 // run's own token, which a restart's marker carries after the id: the id is what pending
-// compares, the token which run asked the restart.
+// compares, the token which run asked the restart; then the deploy user's record's text ("" to
+// leave it), put first of all, and the server's devopsy that judges it (devopsy in PATH when
+// "").
 var SetupRootScript = `set -eu
 umask 022
 host_root=$1 owner=$2 give=$3 root=$4 daemon=$5 sysctl=$6 dropin=$7 raise=$8 after=$9 id=${10}
-dockerd_flags=${11:-} token=${12:-}
+dockerd_flags=${11:-} token=${12:-} deploy_user=${13:-} devopsy_bin=${14:-devopsy}
 export dockerd_flags
 ` + hostPut + hostRestartFlag + `# dockerd's own check of a daemon.json ($1) with the flags docker.service starts it with (one
 # a line), as Docker starts on it: saying only what it refuses.
 validate='set -f; IFS="
 "; out=$(dockerd --validate --config-file "$1" $dockerd_flags 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }'
 changed=
+# The deploy user's record, put only where the server's devopsy, asked as root under this run's
+# own write (DeployUserOtherFlag), finds nothing against it: a record naming another user, one
+# it cannot read, or with none yet a server that shows another deploy user, each said on its
+# line, nothing else applied (exit 4), whatever the facts read before (another user's setup at
+# once, a home the login could not see). A missing one is made by a link of a whole file, which
+# fails where a run at once made it first, then asked again.
+if [ -n "$deploy_user" ]; then
+  du=$host_root` + setup.DeployUserFile + `
+  mkdir -p "${du%/*}"
+  ` + deployUserNameShell + `du_check() {
+    du_said=$(` + HostRootEnv + `=$host_root "$devopsy_bin" ` + DeployUserOtherFlag + ` "$du_want" "${owner%%:*}" "$root") || du_said="` + SetupUnread + `	the server's devopsy could not tell"
+    [ -z "$du_said" ] || { printf '%s\n' "$du_said"; exit 4; }
+  }
+  du_want=$(printf '%s' "$deploy_user" | deploy_user_name /dev/stdin)
+  du_check
+  # The whole file only once nothing is against it, so no refusal leaves it behind.
+  du_made=
+  if [ ! -e "$du" ] && [ ! -L "$du" ]; then
+    du_tmp=$(mktemp "$du.XXXXXX")
+    if printf '%s' "$deploy_user" >"$du_tmp" && chmod 644 "$du_tmp" && ln "$du_tmp" "$du" 2>/dev/null; then du_made=1; fi
+    rm -f "$du_tmp"
+  fi
+  du_check
+  if [ -n "$du_made" ] || put "$du" 644 true "$deploy_user"; then echo "` + SetupPut + ` ` + setup.DeployUserFile + `"; fi
+fi
 if [ -n "$give" ]; then
   p=$root
   if [ ! -e "$p" ]; then install -d -m 755 "$p"; echo "` + SetupMade + ` $root"; fi

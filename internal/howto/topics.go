@@ -1,5 +1,7 @@
 package howto
 
+import "github.com/hanoii/devopsy-cli/internal/vocab"
+
 // The topics' names: every fix that offers a topic's steps names it by its constant (Command),
 // never by a string of its own.
 const (
@@ -10,6 +12,7 @@ const (
 	KexecHandOver Name = "kexec-handover"
 	Kdump         Name = "kdump"
 	XFS           Name = "xfs"
+	DeployUser    Name = "deploy-user"
 )
 
 // Topics are the topics, in the order the list shows them.
@@ -220,6 +223,75 @@ var Topics = []Topic{
 			`home=$(getent passwd "$user" | cut -d: -f6)`,
 			`echo check > "$home/.reflink-a" && cp --reflink=always "$home/.reflink-a" "$home/.reflink-b" && echo reflinks`,
 			`rm -f "$home/.reflink-a" "$home/.reflink-b"`,
+		}},
+	},
+	{
+		Name:    DeployUser,
+		Summary: "the one deploy user, and changing it",
+		Title:   "The server's deploy user, and changing it",
+		Why: "devopsy runs every release, uid claim and setup of a server as one deploy user, which --server-setup records in /etc/devopsy/deploy-user, root's, with the user it runs as. " +
+			"Every session's devopsy refuses any other login but root and the project users, and --server-setup refuses to run as another user, or to record one where the server shows another set up: two users in the docker group would share one Docker's compose names and uids, each with releases, claims and a setup of its own. " +
+			"devopsy never changes the record. These steps hand what devopsy made for the old deploy user to the new one by hand, then rewrite it, with no release running; the old user's own files, its ~/.ssh and dotfiles, stay its own.",
+		Steps: []Step{
+			{Text: "Name the two users, and put the new one in the docker group, which applies from its next login.", Cmds: []string{
+				`old=devopsy new=deploy`,
+				`usermod -aG docker "$new"`,
+			}},
+			{Text: "Authorize for the new user the keys that log in as the old one, " + vocab.Operator.Poss + ", CI's and every sync's: the steps after it log in as the new user.", Cmds: []string{
+				`old=devopsy new=deploy`,
+				`from=$(getent passwd "$old" | cut -d: -f6) to=$(getent passwd "$new" | cut -d: -f6) group=$(id -gn "$new")`,
+				`install -d -m 700 -o "$new" -g "$group" "$to/.ssh"`,
+				`cat "$from/.ssh/authorized_keys" >> "$to/.ssh/authorized_keys"`,
+				`chown "$new:$group" "$to/.ssh/authorized_keys" && chmod 600 "$to/.ssh/authorized_keys"`,
+			}},
+			{Text: "Move the old user's devopsy config to the new user's: its config.yaml, the setup's record server.yaml, and the project users' entries under door/. " +
+				"Where the new user has a devopsy config of its own already, with files in it, rmdir refuses it and nothing moves: merge the two by hand, keeping one server.yaml.", Cmds: []string{
+				`old=devopsy new=deploy`,
+				`from=$(getent passwd "$old" | cut -d: -f6)/.config/devopsy to=$(getent passwd "$new" | cut -d: -f6)/.config/devopsy group=$(id -gn "$new")`,
+				`install -d -o "$new" -g "$group" "${to%/*}"`,
+				`{ [ ! -e "$to" ] || rmdir "$to"; } && mv "$from" "$to" && chown -R -h "$new:$group" "$to"`,
+			}},
+			{Text: "Where the release root is the old user's home (the config names no releases: root), stop every environment first, the project users' too, with devopsy down in its current, then move what devopsy made there into the new user's home, the new release root: each project's directory (one holding an environment's releases/ beside its release lock, .lock, or a release holding its devopsy-target.env, what only devopsy makes; another tool's releases/ beside current and shared/ is none), the uid claims in .devopsy-uids and the image lock. " +
+				"What the new home holds of the same name already stays, said and not moved: merge the two by hand. Containers keep the paths their bind mounts had, so each environment is started again at the end; snapshots in an environment's directory move with it, and a snapshots: root elsewhere stays where it is. Where the config names a releases: root, nothing moves: skip this step.", Cmds: []string{
+				`old=devopsy new=deploy`,
+				`from=$(getent passwd "$old" | cut -d: -f6) to=$(getent passwd "$new" | cut -d: -f6)`,
+				`projects=$(cd "$from" && for r in */*/releases */*/*/releases; do [ -d "$r" ] && { [ -e "${r%/releases}/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; } && echo "${r%%/*}"; done | sort -u)`,
+				`for p in $projects .devopsy-uids .devopsy-images.lock; do if [ -e "$to/$p" ]; then echo "$to/$p is there already: merge it by hand"; elif [ -e "$from/$p" ]; then mv "$from/$p" "$to/$p"; fi; done`,
+			}},
+			{Text: "Give the new user what devopsy made under the release root, by owner alone: the projects' directories, the uid claims and the image lock, the containers' files keeping their own owners. " +
+				"The root is the new user's home after the step before, else the releases: root the config names: set root to it. Do the same under snapshots: root where the config names one.", Cmds: []string{
+				`old=devopsy new=deploy`,
+				`root=$(getent passwd "$new" | cut -d: -f6) og=$(id -gn "$old") ng=$(id -gn "$new")`,
+				`[ -z "$(find "$root" -maxdepth 0 -user "$old")" ] || chown "$new:$ng" "$root"`,
+				`projects=$(cd "$root" && for r in */*/releases */*/*/releases; do [ -d "$r" ] && { [ -e "${r%/releases}/.lock" ] || [ -n "$(ls "$r"/*/devopsy-target.env 2>/dev/null)" ]; } && echo "${r%%/*}"; done | sort -u)`,
+				`for p in $projects .devopsy-uids .devopsy-images.lock; do [ ! -e "$root/$p" ] || find "$root/$p" -xdev -user "$old" -exec chown -h "$new" {} +; done`,
+				`for p in $projects .devopsy-uids .devopsy-images.lock; do [ ! -e "$root/$p" ] || find "$root/$p" -xdev -group "$og" -exec chgrp -h "$ng" {} +; done`,
+			}},
+			{Text: "Give the new user the devopsy binary and its directory where the old one owns them, as devopsy-server installs it, so that --upgrade replaces it.", Cmds: []string{
+				`old=devopsy new=deploy`,
+				`bin=$(readlink -f "$(command -v devopsy)"); for p in "$bin" "${bin%/*}"; do [ -z "$(find "$p" -maxdepth 0 -user "$old")" ] || chown "$new" "$p"; done`,
+			}},
+			{Text: "Where the server has project users, give the new user the project users' directory (door: space: in the config, else /var/lib/devopsy-door) by owner alone, put it in the group that sees every process once /proc hides them, from its next login, and name it in the door's sudo rules and sshd's drop-in, both checked before sshd reads them again.", Cmds: []string{
+				`old=devopsy new=deploy space=/var/lib/devopsy-door`,
+				`find "$space" -xdev -user "$old" -exec chown -h "$new" {} +`,
+				`usermod -aG devopsy-proc "$new"`,
+				`sed -i "s/(${old} :/(${new} :/; s/^${old} ALL=/${new} ALL=/" /etc/sudoers.d/devopsy-projects`,
+				`visudo -cf /etc/sudoers.d/devopsy-projects`,
+				`sed -i "s/^\(\tAuthorizedKeysCommandUser \)${old}\$/\1${new}/" /etc/ssh/sshd_config.d/devopsy.conf`,
+				`sshd -t && systemctl reload ssh`,
+			}},
+			{Text: "Rewrite the record with the new user, readable by every user, as each session reads it; the next step's --server-setup writes it as devopsy does.", Cmds: []string{
+				`new=deploy`,
+				`install -d -m 755 "$(dirname /etc/devopsy/deploy-user)"`,
+				`printf '%s\n' "$new" > /etc/devopsy/deploy-user.new && chmod 644 /etc/devopsy/deploy-user.new && mv /etc/devopsy/deploy-user.new /etc/devopsy/deploy-user`,
+			}},
+			{Text: "run --server-setup for this server as the new user, which finds the record its own and sets up the rest for it, then start each environment stopped before (its deploy, or a release).", Operator: true},
+		},
+		Check: Step{Text: "the record names the new user, nothing devopsy made under the release root is the old user's any more, and --server-info as the new user shows the server's environments, with no refusal of the login.", Cmds: []string{
+			`old=devopsy new=deploy`,
+			`cat /etc/devopsy/deploy-user`,
+			`root=$(getent passwd "$new" | cut -d: -f6)`,
+			`find "$root" -maxdepth 4 -user "$old" -print | head`,
 		}},
 	},
 }

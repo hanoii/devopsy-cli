@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 )
 
 func TestUpgradeCommand(t *testing.T) {
@@ -163,5 +165,41 @@ func TestServerRelease(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q: %q, want %q", out, got, want)
 		}
+	}
+}
+
+// --upgrade's session runs no prelude: on a server whose record names another user, it refuses
+// the login itself, W0009, before anything (no release asked of GitHub, no binary replaced).
+func TestUpgradeRefusesAnotherLogin(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root is never checked")
+	}
+	host := t.TempDir()
+	write(t, filepath.Join(host, setup.DeployUserFile), setup.DeployUserText("someone-else"), 0o644)
+	cmd := exec.Command(binary, "--upgrade")
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + t.TempDir(), remote.HostRootEnv + "=" + host, remote.HostEnv + "=vm1"}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "error: "+report.NotDeployUser.Msg()) || !strings.Contains(string(out), "$ devopsy @someone-else@vm1: --server-info") {
+		t.Errorf("another login's --upgrade (%v):\n%s", err, out)
+	}
+}
+
+// --upgrade without a target upgrades this devopsy, the operator's: run outside any session
+// (none of a session's variables) on a machine whose record names another deploy user, it is
+// never refused as a login that is not that user, as no other command run there is.
+
+func TestUpgradeOutsideASessionChecksNoLogin(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root is never checked")
+	}
+	host := t.TempDir()
+	write(t, filepath.Join(host, setup.DeployUserFile), setup.DeployUserText("someone-else"), 0o644)
+	cmd := exec.Command(binary, "--upgrade")
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + t.TempDir(), remote.HostRootEnv + "=" + host}
+	out, _ := cmd.CombinedOutput()
+	if strings.Contains(string(out), report.NotDeployUser.Msg()) {
+		t.Errorf("the operator's own --upgrade refused as a login that is not the deploy user:\n%s", out)
 	}
 }

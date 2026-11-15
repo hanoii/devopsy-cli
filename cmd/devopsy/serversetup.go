@@ -322,7 +322,12 @@ func setupEntries(f setup.Facts, ref string, hint bool) []remote.StatusEntry {
 // missing, or its text another's, an older devopsy's included (a mounts drop-in naming the
 // root before a move).
 func fileWords(x setup.FileFact) string {
-	if x.Missing {
+	switch {
+	case x.Item == setup.ItemDeployUser && x.Missing:
+		return "would record " + x.User + " as the server's deploy user, in " + x.Path
+	case x.Item == setup.ItemDeployUser:
+		return x.Path + " differs from what devopsy writes, naming " + x.User
+	case x.Missing:
 		return x.Path + " does not exist yet"
 	}
 	return x.Path + " differs from what devopsy writes"
@@ -556,7 +561,8 @@ func refusedWords(stopped []string) string {
 
 // stepPhrase is a step's name in a sentence, where its name is an item's key with no article.
 var stepPhrase = map[string]string{
-	string(setup.StepBuffers):  "the " + setup.ItemBuffers,
-	string(setup.StepMounts):   "the " + setup.ItemMounts,
-	string(setup.StepFirewall): "the " + setup.FirewallItemName,
+	string(setup.StepDeployUser): "the " + setup.ItemDeployUser + "'s record",
+	string(setup.StepBuffers):    "the " + setup.ItemBuffers,
+	string(setup.StepMounts):     "the " + setup.ItemMounts,
+	string(setup.StepFirewall):   "the " + setup.FirewallItemName,
 }

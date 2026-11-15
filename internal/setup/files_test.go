@@ -61,3 +61,29 @@ func TestMountsDropInText(t *testing.T) {
 		t.Error("the sysctl file lacks the header")
 	}
 }
+
+// TestDeployUserText keeps the deploy user's record: the header, then the user, which
+// ParseDeployUser reads back; a file naming none, several or a name valid refuses is refused,
+// comments, blank lines and spaces around the name read past, so a record edited by hand still
+// reads.
+func TestDeployUserText(t *testing.T) {
+	t.Parallel()
+	if got := DeployUserText("deploy"); got != "# Written by devopsy (--server-setup).\ndeploy\n" {
+		t.Errorf("record: %q", got)
+	}
+	valid := func(s string) bool { return !strings.Contains(s, " ") }
+	for text, want := range map[string]string{
+		DeployUserText("deploy"):          "deploy",
+		"deploy":                          "deploy",
+		"# by hand\n\n  ops-1  \n# end\n": "ops-1",
+		"":                                "",
+		"# only a comment\n":              "",
+		"deploy\nother\n":                 "",
+		"two words\n":                     "",
+	} {
+		got, err := ParseDeployUser(text, valid)
+		if got != want || (err == nil) != (want != "") {
+			t.Errorf("ParseDeployUser(%q) = %q, %v; want %q", text, got, err, want)
+		}
+	}
+}

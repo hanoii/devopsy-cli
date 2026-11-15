@@ -74,9 +74,14 @@ func TestSetupRootScript(t *testing.T) {
 	}
 	owner := "0:0" // never used: nothing here is root's
 	daemon := "{\n  \"live-restore\": true\n}\n"
-	all := []string{host, owner, "1", root, daemon, setup.SysctlText(), dropin, "1", "", "inv-1"}
+	// The server's devopsy finds nothing against the deploy user's record (DeployUserOtherFlag).
+	nothing := filepath.Join(t.TempDir(), "devopsy")
+	if err := testfile.Write(nothing, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	all := []string{host, owner, "1", root, daemon, setup.SysctlText(), dropin, "1", "", "inv-1", "", "", setup.DeployUserText("deploy"), nothing}
 	out, code := run(nil, all...)
-	for _, want := range []string{"made " + root + "\n", "put " + setup.DaemonFile + "\n", "put " + setup.SysctlFile + "\n", "raised net.core.rmem_max\n", "raised net.core.wmem_max\n", "put " + setup.MountsDropIn + "\n", "marked\n"} {
+	for _, want := range []string{"put " + setup.DeployUserFile + "\n", "made " + root + "\n", "put " + setup.DaemonFile + "\n", "put " + setup.SysctlFile + "\n", "raised net.core.rmem_max\n", "raised net.core.wmem_max\n", "put " + setup.MountsDropIn + "\n", "marked\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("first run: no %q (%d):\n%s", want, code, out)
 		}
@@ -86,6 +91,9 @@ func TestSetupRootScript(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(host, setup.DaemonFile)); err != nil || fi.Mode().Perm() != 0o644 {
 		t.Errorf("a daemon.json made: %v, %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(filepath.Join(host, setup.DeployUserFile)); err != nil || fi.Mode().Perm() != 0o644 || read(setup.DeployUserFile) != setup.DeployUserText("deploy") {
+		t.Errorf("the deploy user's record: %v, %q", err, read(setup.DeployUserFile))
 	}
 	if read(setup.DaemonFile) != daemon || read(setup.SysctlFile) != setup.SysctlText() || read(setup.MountsDropIn) != dropin {
 		t.Errorf("the files:\n%s\n%s\n%s", read(setup.DaemonFile), read(setup.SysctlFile), read(setup.MountsDropIn))
@@ -206,5 +214,70 @@ func TestSetupRootScriptKeepsADaemonFileBehindALink(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(kept); string(data) != merged {
 		t.Errorf("the file the link names holds %q, not the merge", data)
+	}
+}
+
+// The root run puts the deploy user's record only where the server's devopsy, asked as root
+// under the run's host root (DeployUserOtherFlag) before it makes the record and again after,
+// says nothing against it; whatever it says (another deploy user, a record naming another or
+// one it cannot read) is printed on its own line and ends the run with 4 before anything else,
+// a record there left as it is, and a devopsy that fails to answer reads as one it cannot read.
+func TestSetupRootScriptAsksTheServersDevopsy(t *testing.T) {
+	t.Parallel()
+	host, bin := setupHostRoot(t)
+	calls := filepath.Join(t.TempDir(), "du-calls")
+	fake := filepath.Join(t.TempDir(), "devopsy")
+	if err := testfile.Write(fake, []byte("#!/bin/sh\necho \"$DEVOPSY_INTERNAL_HOST_ROOT $*\" >>"+calls+"\n[ -z \"${FAKE_DU_EXIT:-}\" ] || exit \"$FAKE_DU_EXIT\"\nprintf '%s' \"${FAKE_DU_SAID:-}\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(host, "srv")
+	record := filepath.Join(host, setup.DeployUserFile)
+	run := func(env ...string) (string, int) {
+		t.Helper()
+		os.Remove(calls)
+		c := exec.Command("sh", "-c", SetupRootScript, "sh", host, "1000:1000", "", root, "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"), fake)
+		c.Env = append(append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls")), env...)
+		out, _ := c.CombinedOutput()
+		return string(out), c.ProcessState.ExitCode()
+	}
+	other := SetupOther + "\tops\tits setup record /home/ops/.config/devopsy/server.yaml"
+	if out, code := run("FAKE_DU_SAID=" + other); code != 4 || !strings.Contains(out, other+"\n") || readFile(record) != "" || strings.Contains(out, SetupPut) {
+		t.Errorf("another deploy user (%d), the record %q:\n%s", code, readFile(record), out)
+	}
+	if out, code := run("FAKE_DU_EXIT=1"); code != 4 || !strings.Contains(out, SetupUnread+"\t") || readFile(record) != "" {
+		t.Errorf("a devopsy that does not answer (%d):\n%s", code, out)
+	}
+	if out, code := run(); code != 0 || !strings.Contains(out, SetupPut+" "+setup.DeployUserFile+"\n") || readFile(record) != setup.DeployUserText("admin") ||
+		readFile(calls) != strings.Repeat(host+" "+DeployUserOtherFlag+" admin 1000 "+root+"\n", 2) {
+		t.Errorf("nothing against it (%d), asked %q:\n%s", code, readFile(calls), out)
+	}
+	// A record there naming another user, which the server's devopsy says: left as it is.
+	write(t, record, setup.DeployUserText("deploy"))
+	said := SetupOther + "\tdeploy\tthe record " + setup.DeployUserFile + " names it"
+	if out, code := run("FAKE_DU_SAID=" + said); code != 4 || readFile(record) != setup.DeployUserText("deploy") || strings.Contains(out, SetupPut+" "+setup.DeployUserFile) {
+		t.Errorf("the root run replaced a record naming another user (%d): %q\n%s", code, readFile(record), out)
+	}
+}
+
+// A root run the server's devopsy refuses the deploy user's record to leaves nothing beside
+// where the record goes: no file of its own making stays in /etc/devopsy.
+
+func TestSetupRootScriptRefusedLeavesNoFile(t *testing.T) {
+	t.Parallel()
+	host, bin := setupHostRoot(t)
+	fake := filepath.Join(t.TempDir(), "devopsy")
+	said := SetupOther + "\tops\tits setup record /home/ops/.config/devopsy/server.yaml"
+	if err := testfile.Write(fake, []byte("#!/bin/sh\nprintf '%s' \""+said+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("sh", "-c", SetupRootScript, "sh", host, "1000:1000", "", filepath.Join(host, "srv"), "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"), fake)
+	c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls"))
+	out, _ := c.CombinedOutput()
+	if code := c.ProcessState.ExitCode(); code != 4 {
+		t.Fatalf("the run was not refused (%d):\n%s", code, out)
+	}
+	left, _ := filepath.Glob(filepath.Join(host, filepath.Dir(setup.DeployUserFile), "*"))
+	if len(left) != 0 {
+		t.Errorf("a refused run left %v", left)
 	}
 }

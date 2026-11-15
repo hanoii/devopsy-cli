@@ -97,11 +97,16 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 // project and compose name, it refuses the deploy user one whose name is a project user's
 // (doorNameOwner), before the script
 // changes anything, with remote.SettingsRefusedExit: compose acts on a project by its name
-// alone, so a --destroy there takes that user's containers and volumes down.
+// alone, so a --destroy there takes that user's containers and volumes down. Before anything,
+// it refuses a login that is not the server's deploy user (checkDeployUser) the same way.
 func runReleaseSettings(args []string) int {
 	if len(args) != 0 && len(args) != 2 {
 		report.Error("usage: devopsy --release-settings [<project> <compose name>]")
 		return 2
+	}
+	if err := checkDeployUser(deployUserHost(), currentLogin(), asProjectUser, remote.SessionFrom(os.Getenv)); err != nil {
+		failErr(err)
+		return remote.SettingsRefusedExit
 	}
 	r, err := remote.ReleaseSettings()
 	if err != nil {

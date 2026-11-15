@@ -174,6 +174,10 @@ func run() int {
 			}
 		case "--release-settings":
 			return runReleaseSettings(args[1:])
+		case remote.DeployUserCheckFlag:
+			return runDeployUserCheck()
+		case remote.DeployUserOtherFlag:
+			return runDeployUserOther(args[1:])
 		case remote.MntReadyFlag:
 			return runMntReady(args[1:])
 		case remote.FreeUIDsFlag:

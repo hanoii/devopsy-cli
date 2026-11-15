@@ -2062,6 +2062,15 @@ func setupInfoEntries(f setup.Facts, d remote.DockerFacts, ref string) []remote.
 	} else {
 		line(remote.StatusInfo, "by devopsy, its record "+f.Record)
 	}
+	// The deploy user not recorded yet is a server set up before the record, which the next
+	// apply writes: said, and no warning, as nothing it refuses differs from before.
+	if i := slices.IndexFunc(f.Files, func(x setup.FileFact) bool { return x.Item == setup.ItemDeployUser && x.Missing }); i >= 0 {
+		who := f.Files[i].User
+		f.Files = slices.Delete(slices.Clone(f.Files), i, i+1)
+		if f.Record != "" {
+			line(remote.StatusInfo, "the deploy user is not recorded yet in "+setup.DeployUserFile+": any user in the docker group passes for it, and --server-setup as "+who+" records "+who, report.Hint(fix.Text, fix.Cmds...))
+		}
+	}
 	var docker []string
 	for _, r := range dockerAnswers(d) {
 		docker = append(docker, r.ID())

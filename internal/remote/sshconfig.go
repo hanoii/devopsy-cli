@@ -73,8 +73,8 @@ func ParseServer(server string) (dest, port string, ok bool) {
 	default:
 		host, port, hasPort = strings.Cut(rest, ":")
 	}
-	if host == "" || strings.HasPrefix(user, "-") || strings.HasPrefix(host, "-") || hasControl(rest) ||
-		strings.ContainsAny(user, "[]/:"+shellSpecial) || strings.ContainsAny(host, "[]/"+shellSpecial) || hasPort && !validPort(port) {
+	if host == "" || user != "" && !LoginName(strings.TrimSuffix(user, "@")) || strings.HasPrefix(host, "-") || hasControl(rest) ||
+		strings.ContainsAny(host, "[]/"+shellSpecial) || hasPort && !validPort(port) {
 		return "", "", false
 	}
 	if hasPort {
@@ -82,6 +82,13 @@ func ParseServer(server string) (dest, port string, ok bool) {
 		port = strconv.Itoa(n)
 	}
 	return user + host, port, true
+}
+
+// LoginName says whether s is a login an address takes before its @ (ParseServer): not empty,
+// not starting with - (ssh would take it for an option), and holding no @, no character of a
+// shell's or an address's own, and no control character, so a command naming it parses.
+func LoginName(s string) bool {
+	return s != "" && !strings.HasPrefix(s, "-") && !strings.ContainsAny(s, "@[]/:"+shellSpecial) && !hasControl(s)
 }
 
 // shellSpecial are the characters no user or host holds, which a shell

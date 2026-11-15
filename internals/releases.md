@@ -5,6 +5,7 @@ A release uploads the project as a new directory, then one activation session sw
 ## The gate
 
 - The server's devopsy must have what a script calls: `--release-settings` reports `features=`, and `basePrelude` checks them before anything changes, read-only commands too, naming the upgrade.
+- `--release-settings` refuses first of all a login that is not the server's deploy user (`checkDeployUser`, internals/server-setup.md), so every script with a prelude stops there before anything.
 - Features are the gate's only mechanism, never a version or protocol number: a number gating every command refuses releases and `--status` on servers that could run them.
 - A change every script depends on (the prelude, `--say`'s format) is a named feature found in the prelude's text, and one no script's text shows is added to the needs where it is known (`remote.WithAlsoNeeds`, `projectFeatures`).
 - Every devopsy flag a script calls is a feature (`featureFlags`), and a behavior of a flag that came after it is a named feature found by what the script calls (`namedFeatures`); compose's flags a step or the operator's command starts with (for example `--profile web up`) are none.

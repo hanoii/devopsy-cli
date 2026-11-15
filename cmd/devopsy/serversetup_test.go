@@ -163,15 +163,16 @@ func readRecordOf(t *testing.T, s *syncSetup) map[string]setup.Entry {
 	return r.Daemon
 }
 
-// --server-setup --yes on a fresh server, in two sessions: the release root made, every part
-// of daemon.json put and recorded, the buffers' file and live values, the mounts drop-in, and
-// Docker restarted with no container running, confirmed by its InvocationID and docker info.
-// A second run changes nothing and opens no second session.
+// --server-setup --yes on a fresh server, in two sessions: the deploy user recorded, the
+// release root made, every part of daemon.json put and recorded, the buffers' file and live
+// values, the mounts drop-in, and Docker restarted with no container running, confirmed by its
+// InvocationID and docker info. A second run changes nothing and opens no second session.
 func TestServerSetupYes(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
+	me := currentLogin().name
 	out, code := s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
-	for _, want := range []string{"release root", "made the release root " + s.root, "put " + setup.DaemonFile + ": logs, live-restore, default-address-pools",
+	for _, want := range []string{"release root", "recorded " + me + " as the server's deploy user in " + setup.DeployUserFile, "made the release root " + s.root, "put " + setup.DaemonFile + ": logs, live-restore, default-address-pools",
 		"put " + setup.SysctlFile, "raised net.core.rmem_max to 7500000", "put " + setup.MountsDropIn, "this server is set up by devopsy now"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q (%d):\n%s", want, code, out)
@@ -179,6 +180,9 @@ func TestServerSetupYes(t *testing.T) {
 	}
 	if code != 0 {
 		t.Fatalf("exit %d", code)
+	}
+	if got := readString(filepath.Join(host, setup.DeployUserFile)); got != setup.DeployUserText(me) {
+		t.Errorf("the deploy user's record: %q", got)
 	}
 	d, err := setup.ParseDaemon([]byte(readString(filepath.Join(host, setup.DaemonFile))))
 	if err != nil {
@@ -202,6 +206,80 @@ func TestServerSetupYes(t *testing.T) {
 	out, code = s.run(nil, "@devopsy@one:", "--server-setup", "--yes")
 	if _, sessions := s.logs(); code != 0 || !strings.Contains(out, "nothing to change") || strings.Count(sessions, "\n") != 1 {
 		t.Errorf("a second run (%d):\n%s\nsessions:\n%s", code, out, sessions)
+	}
+}
+
+// The setup's plan, read before the question, names the login it would record as the deploy
+// user: one that does not know which login @<server>: reached learns it before confirming.
+func TestServerSetupPlanNamesTheUserItRecords(t *testing.T) {
+	t.Parallel()
+	s, _ := setupServer(t)
+	me := currentLogin().name
+	out, _ := s.run(nil, "@devopsy@one:", "--server-setup")
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, setup.ItemDeployUser+" ") {
+			if !strings.Contains(l, me) {
+				t.Errorf("the plan's deploy user line names no user (%s): %q\n%s", me, l, out)
+			}
+			return
+		}
+	}
+	t.Errorf("no deploy user line in the plan:\n%s", out)
+}
+
+// --upgrade's apply refuses to record its login where the server shows another deploy user, as
+// --server-setup does, as a warning: the same two ways out from a bare record, nothing applied,
+// and the upgrade itself exits 0.
+func TestServerSetupApplyUpgradeRefusesWhereAnotherIsSetUp(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "devopsy: warning: deploy user: ops was set up too on this server") || !strings.Contains(out, "$ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
+		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) {
+		t.Errorf("--upgrade where another is set up (%d):\n%s", code, out)
+	}
+}
+
+// On a server with no record that shows another deploy user (a docker member with devopsy's
+// setup record alone), the setup refuses in its plan, before anything: who, and two numbered
+// ways out, running it as that user or removing its bare record as root; nothing put, no
+// record of either kind written.
+func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: ops was set up too on this server (its setup record /home/ops/.config/devopsy/server.yaml), and this setup runs as "+me) ||
+		!strings.Contains(out, "devopsy: | 1. run it as ops:\ndevopsy: |    $ devopsy @ops@one: --server-setup\n") ||
+		!strings.Contains(out, "devopsy: | 2. if ops was set up by mistake and holds no environments, remove its setup record as root:\ndevopsy: |    $ sudo rm /home/ops/.config/devopsy/server.yaml\n") ||
+		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
+		t.Errorf("another deploy user set up (%d):\n%s", code, out)
+	}
+}
+
+// A server whose record names another deploy user refuses the setup in its first session's
+// prelude, W0009 with the deploy user's address on the host as typed, before anything: no
+// file put, no release root made, no second session.
+func TestServerSetupRefusesAnotherDeployUser(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root is never checked")
+	}
+	s, host := setupServer(t)
+	write(t, filepath.Join(host, setup.DeployUserFile), setup.DeployUserText("someone-else"), 0o644)
+	s.logs()
+	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
+	if _, sessions := s.logs(); code == 0 || !strings.Contains(out, "devopsy: error: "+report.NotDeployUser.Msg()+"\n") || !strings.Contains(out, "$ devopsy @someone-else@one: --server-info\n") ||
+		!strings.Contains(out, "$ "+howto.Command(howto.DeployUser)+"\n") || strings.Count(sessions, "\n") != 1 ||
+		fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(s.root) || readString(filepath.Join(host, setup.DeployUserFile)) != setup.DeployUserText("someone-else") {
+		t.Errorf("another deploy user (%d):\n%s\nsessions:\n%s", code, out, sessions)
 	}
 }
 
@@ -3171,5 +3249,50 @@ func TestUpgradeNotesItsVersionByWhatARefusalStopped(t *testing.T) {
 				t.Errorf("no %s: version %q noted, want noted %v:\n%s", tool, r.Version, noted, out)
 			}
 		})
+	}
+}
+
+// An apply refused as another deploy user's server changes nothing of the login's, its
+// config included: a volume chosen (--root) is never named as its releases: root, as no
+// server.yaml of its is written, since a setup as another user would make that user's release
+// root and config.
+
+func TestServerSetupRefusedNamesNoRoot(t *testing.T) {
+	t.Parallel()
+	s, host, vol, config := rootChoice(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	before := readString(config)
+	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--root", vol)
+	if code == 0 || !strings.Contains(out, "ops was set up too on this server") {
+		t.Fatalf("the apply was not refused as another deploy user's (%d):\n%s", code, out)
+	}
+	if got := readString(config); got != before {
+		t.Errorf("a refused apply named the root in the login's config:\n%s\n%s", got, out)
+	}
+}
+
+// --upgrade's apply refused as another deploy user's server warns with that refusal's own ways
+// out and nothing else: never --server-setup as the login, which refuses the same way, as the
+// fix of what it left or as what makes the release root.
+
+func TestUpgradeRefusedAsAnotherDeployUserOffersNoSetup(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".devopsy-uids", "env:shop:prod"), "x\n", 0o644)
+	write(t, filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile), "{}\n", 0o600)
+	out, code := s.run([]string{remote.HostEnv + "=admin@one"}, remote.ServerSetupFlag, "apply", "--upgrade")
+	if code != 0 || !strings.Contains(out, "warning: deploy user: devopsy was set up as ops on this server") {
+		t.Fatalf("--upgrade's apply not refused as another deploy user's, as a warning (%d):\n%s", code, out)
+	}
+	for _, said := range []string{"run --server-setup for this server", "--server-setup makes it the deploy user's"} {
+		if strings.Contains(out, said) {
+			t.Errorf("a refused --upgrade offers a setup refused the same way, %q:\n%s", said, out)
+		}
 	}
 }

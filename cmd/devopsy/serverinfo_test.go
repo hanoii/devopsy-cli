@@ -408,6 +408,16 @@ func TestServerInfoReport(t *testing.T) {
 		t.Errorf("clock ahead: %+v\n%s", warnings, out)
 	}
 
+	// The deploy user not recorded yet, on a server set up before the record: a line under
+	// setup with --server-setup as a hint, a note and no warning, so no exit 3.
+	info0 = healthy()
+	info0.Setup = setUp("")
+	info0.Setup.Files[2].InSync, info0.Setup.Files[2].Missing = false, true
+	if out, warnings := serverInfoSays(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 1 || !warnings[0].note || !warnings[0].fixes[0].Hint || !strings.Contains(out, "the deploy user is not recorded yet in "+setup.DeployUserFile+": any user in the docker group passes for it") ||
+		!strings.Contains(out, "$ devopsy @vm1: --server-setup") {
+		t.Errorf("the deploy user not recorded: %+v\n%s", warnings, out)
+	}
+
 	// Other users' processes are never said with them hidden (a name, a number, noaccess's
 	// closed /proc/<pid>) or unknown (an older server's facts, a project user's, which hold
 	// none); shown with no project user, with or without a door, they are a line with the
@@ -1199,7 +1209,8 @@ func TestServerInfoReadsNoTreeOfARemovedProjectUser(t *testing.T) {
 // action rootAction.
 func setUp(rootAction string) *setup.Facts {
 	f := &setup.Facts{Root: "/home/devopsy", RootAction: rootAction, Record: "/home/devopsy/.config/devopsy/server.yaml",
-		Files: []setup.FileFact{{Item: setup.ItemBuffers, Path: setup.SysctlFile, InSync: true}, {Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: true}}}
+		Files: []setup.FileFact{{Item: setup.ItemBuffers, Path: setup.SysctlFile, InSync: true}, {Item: setup.ItemMounts, Path: setup.MountsDropIn, InSync: true},
+			{Item: setup.ItemDeployUser, Path: setup.DeployUserFile, InSync: true}}}
 	for _, p := range setup.Parts {
 		f.Parts = append(f.Parts, setup.PartFact{Name: p.Name, State: setup.InSync, Observed: p.Want, Want: p.Want})
 	}

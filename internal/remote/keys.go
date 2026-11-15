@@ -11,6 +11,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 )
 
 // RestrictedKeyOptions is what a CI key gets in authorized_keys: no shell,
@@ -112,12 +113,33 @@ func ParseAuthorizedKeys(content string) []AuthorizedKey {
 // whose keys are its deploy user's to edit: the deploy user's name is on stdout.
 const AskedAsProjectUser = 5
 
-// askedAsProjectUser exits AskedAsProjectUser, the deploy user's name on stdout (the owner of
-// the devopsy it finds), when the session's user is a project user: what follows is the
-// deploy user's to do.
+// askedAsProjectUser exits AskedAsProjectUser, the deploy user's name on stdout (the one the
+// server's record names, else the owner of the devopsy it finds, "" when neither tells), when
+// the session's user is a project user: what follows is the deploy user's to do.
 var askedAsProjectUser = `if id -nG | tr ' ' '\n' | grep -qx ` + DoorGroup + `; then
-  stat -c %U "$(readlink -f "$(command -v devopsy)")" 2>/dev/null || :
+  ` + deployUserNameShell + `du=$(deploy_user_name "${` + HostRootEnv + `:-}` + setup.DeployUserFile + `")
+  case $du in *[[:space:]]*) du= ;; esac
+  [ -n "$du" ] || du=$(ls -ld "$(readlink -f "$(command -v devopsy)")" 2>/dev/null | awk '{ print $3 }' || :)
+  printf '%s\n' "$du"
   exit ` + fmt.Sprint(AskedAsProjectUser) + `
+fi
+`
+
+// deployUserNameShell defines deploy_user_name <file>: what the deploy user's record names, its
+// lines that are neither blank nor a comment, trimmed, as setup.ParseDeployUser reads them
+// (several on lines of their own, which no one name matches; "" with no file), for a script
+// that compares it with a name.
+const deployUserNameShell = `deploy_user_name() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" 2>/dev/null | grep -v -e '^#' -e '^$' || :; }
+`
+
+// deployUserGate stops a --ssh-keys script of a login the server's record does not name, by the
+// server's devopsy's check of the login alone (DeployUserCheckFlag), which neither a config nor
+// a release root holds up, only where the record is there: only a server's devopsy writes it, so
+// one with the check is there too, and a server without it needs nothing new of its devopsy.
+// The host's own path is tested whatever the tests' host root says, so a login that set that
+// never skips the check.
+var deployUserGate = `if [ -e ` + setup.DeployUserFile + ` ] || [ -L ` + setup.DeployUserFile + ` ] || { [ -n "${` + HostRootEnv + `:-}" ] && [ -e "$` + HostRootEnv + `` + setup.DeployUserFile + `" ]; }; then
+  devopsy ` + DeployUserCheckFlag + ` || exit 1
 fi
 `
 
@@ -128,12 +150,12 @@ func keysPrelude(user string) string {
 	if user == "" {
 		return `set -eu
 umask 077
-f=$HOME/.ssh/authorized_keys
+` + deployUserGate + `f=$HOME/.ssh/authorized_keys
 `
 	}
 	return `set -eu
 umask 077
-` + askedAsProjectUser + `id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
+` + askedAsProjectUser + deployUserGate + `id -u ` + Quote(user) + ` >/dev/null 2>&1 || { ` + echoLine(report.ErrorLevel, "no project user "+user+" here") + `; exit 3; }
 ` + doorDirShell + `
 f=$door/keys/` + user + `
 sf=$door/sync-keys/` + user + `

@@ -72,6 +72,13 @@ type Refusal struct {
 	// Command is the fix's command, offered after its text, "" for none (for example devopsy's
 	// on the server's address as its session named it, the text saying it in words without one).
 	Command string `json:"command,omitempty"`
+	// Or is a second way out, offered after Fix as one of the fixes, its command OrCommand ("" for
+	// none): another deploy user's bare setup record to remove where it may be a mistake.
+	Or        string `json:"or,omitempty"`
+	OrCommand string `json:"or_command,omitempty"`
+	// HowtoAside offers Howto's steps as a hint after the fixes, never as the command of Fix: a
+	// fix whose words are no steps (run it as another user).
+	HowtoAside bool `json:"howto_aside,omitempty"`
 	// Stops is what of the apply it stops (stepNeeds), Item when empty: a refusal said under
 	// one item may stop less than that item's others (Docker's plugins, its unit's config
 	// file).
@@ -105,6 +112,9 @@ type FileFact struct {
 	InSync  bool   `json:"in_sync"`
 	Missing bool   `json:"missing,omitempty"`
 	Link    string `json:"link,omitempty"`
+	// User is the user the deploy user's record names as devopsy writes it (ItemDeployUser):
+	// the login the setup runs as, which the operator reads before it is recorded.
+	User string `json:"user,omitempty"`
 }
 
 // BufferFact is a live socket buffer: Low when below BufferSize.

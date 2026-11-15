@@ -226,11 +226,6 @@ func oldDir(t *testing.T, path string, age time.Duration) {
 	}
 }
 
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
-}
-
 // A killed door's work goes a day on, its own project's, and what is younger stays: it may
 // be running.
 func TestDoorSweepsItsOwnWork(t *testing.T) {

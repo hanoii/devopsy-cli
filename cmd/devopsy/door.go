@@ -45,7 +45,7 @@ import (
 // checks it) is read first and returned, so nothing the door starts sees it.
 func doorEnvironment() (home string, asked remote.Session, err error) {
 	asked = remote.SessionFrom(os.Getenv)
-	u, err := user.Current()
+	u, err := currentUser()
 	if err != nil {
 		return "", remote.Session{}, err
 	}
@@ -1183,7 +1183,7 @@ func doorPolicy(who string, s remote.DoorUser) (door.Policy, error) {
 	if tree == "" {
 		tree = filepath.Join(u.HomeDir, s.Project)
 	}
-	deploy, err := user.Current()
+	deploy, err := currentUser()
 	if err != nil {
 		return door.Policy{}, err
 	}

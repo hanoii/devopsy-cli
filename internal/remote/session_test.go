@@ -56,6 +56,9 @@ func TestSessionFromTakesOnlyWhatParses(t *testing.T) {
 		{map[string]string{ServerEnv: "vm1;reboot:"}, Session{}},
 		{map[string]string{ServerEnv: "vm1\nx:"}, Session{}},
 		{map[string]string{ServerEnv: strings.Repeat("a", addressMax) + ":"}, Session{}},
+		// The server's SSH destination, which a hint to log in as another user names.
+		{map[string]string{HostEnv: "admin@vm1:2222"}, Session{Host: "admin@vm1:2222"}},
+		{map[string]string{HostEnv: "vm1;reboot"}, Session{}},
 	} {
 		if got := SessionFrom(getenv(c.env)); got != c.want {
 			t.Errorf("%v: %+v, want %+v", c.env, got, c.want)
@@ -107,15 +110,35 @@ func TestSessionAddressHoldsNoControlCharacter(t *testing.T) {
 }
 
 // A session on a server named alone carries its address for a server's command, and no
-// environment's; one on an environment carries both, as typed.
+// environment's; one on an environment carries both, as typed; each carries its SSH destination.
 func TestSessionExportsTheServer(t *testing.T) {
 	t.Parallel()
 	alone := sessionExports(&Target{Host: "devopsy@vm1"})
-	if !strings.Contains(alone, ServerEnv+"='devopsy@vm1:'; export "+ServerEnv+"\n") || strings.Contains(alone, AddressEnv) {
+	if !strings.Contains(alone, ServerEnv+"='devopsy@vm1:'; export "+ServerEnv+"\n") || strings.Contains(alone, AddressEnv) || !strings.Contains(alone, HostEnv+"='devopsy@vm1'; export "+HostEnv+"\n") {
 		t.Errorf("a server named alone:\n%s", alone)
 	}
 	env := sessionExports(&Target{Host: "devopsy@vm1", Name: "prod", Alias: "box", Path: "shop/prod"})
 	if !strings.Contains(env, ServerEnv+"='box'; export "+ServerEnv+"\n") || !strings.Contains(env, AddressEnv+"='box'") {
 		t.Errorf("an environment:\n%s", env)
+	}
+}
+
+// AsUser names the server at a destination logged in as another user, its login replaced, its
+// port kept, an IPv6 address without one bracketed for the colon after it.
+func TestAsUser(t *testing.T) {
+	t.Parallel()
+	for host, want := range map[string]string{
+		"vm1":                    "deploy@vm1:",
+		"admin@vm1":              "deploy@vm1:",
+		"admin@vm1:2222":         "deploy@vm1:2222:",
+		"2001:db8::1":            "deploy@[2001:db8::1]:",
+		"admin@[2001:db8::1]:22": "deploy@[2001:db8::1]:22:",
+	} {
+		if got := AsUser(host, "deploy"); got != want {
+			t.Errorf("AsUser(%q) = %q, want %q", host, got, want)
+		}
+		if _, _, ok := ParseServer(strings.TrimSuffix(AsUser(host, "deploy"), ":")); !ok {
+			t.Errorf("AsUser(%q) does not parse back", host)
+		}
 	}
 }
