@@ -23,6 +23,7 @@ devopsy: | report W0001 to the server's admin
 | W0007 | the snapshot root is on the release root's filesystem | Mount the volume meant for snapshots on the snapshot root, which `--server-info` names. |
 | W0008 | the server lacks a tool devopsy uses | Install it with the system's packages; `--server-info` names it, with the topic whose steps install it. |
 | W0009 | this login is not the server's deploy user | Address the server as the user the error names, for example `devopsy @devopsy@<server>: --server-info`; `devopsy --server-setup-howto deploy-user` prints the steps to make another user the deploy user. |
+| W0010 | the server's record of its deploy user cannot be read | Correct `/etc/devopsy/deploy-user` as root: the deploy user's name alone on a line, the file root's with mode 644. |
 
 ## W0001
 
@@ -61,11 +62,18 @@ mount gone (a boot where it failed) or without the two options.
 
 `--server-setup` records the user it runs as in `/etc/devopsy/deploy-user`,
 root's, and every session's devopsy then refuses any other login, but root
-and project users, before it changes or reads anything. The reader is
-anyone else in the `docker` group, often the admin logged in under their
-own account by default. Two such users would each have a release root,
-uid claims and a setup of their own on one Docker, sharing its compose
-names: a release of one target from the second would take over the
-first one's containers and volumes. A server set up before the record
-gets it at its next `--server-setup` or `--upgrade`; until then nothing
-is refused.
+and project users, before it changes or reads anything (`--shell-host` and
+`--match-server-version` aside). The reader is anyone else in the `docker`
+group, often the admin logged in under their own account by default. Two
+such users would each have a release root, uid claims and a setup of their
+own on one Docker, sharing its compose names: a release of one target from
+the second would take over the first one's containers and volumes. A server
+set up before the record gets it at its next `--server-setup` or
+`--upgrade`; until then nothing is refused.
+
+## W0010
+
+The record of the deploy user is there but cannot be read, or names no one
+user: no line, several, or a name no login has. devopsy does not guess who
+it names, so it refuses every login but root and project users, the deploy
+user's too, until root corrects the file.

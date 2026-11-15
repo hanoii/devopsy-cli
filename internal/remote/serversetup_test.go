@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -212,12 +213,9 @@ func TestSetupRootScriptKeepsADaemonFileBehindALink(t *testing.T) {
 	}
 }
 
-// BUG (review round 1): the root run puts the deploy user's record over whatever is there,
-// trusting what the setup read before it, under a lock that is each user's own. Two docker
-// users whose setups both read no record (a server set up before the record, an admin's
-// account and the deploy user applying at once) both put it: the second replaces the first
-// one's name, and the first, already set up, is locked out. devopsy never rewrites a record
-// naming another user: the root run must leave it, and say no put.
+// The root run reads the deploy user's record again as root, under its own write, whatever the
+// setup read before: one naming another user (another docker user's setup that applied at once)
+// is never rewritten, and the run says no put.
 func TestSetupRootScriptKeepsARecordNamingAnotherUser(t *testing.T) {
 	t.Parallel()
 	host, bin := setupHostRoot(t)
@@ -233,5 +231,44 @@ func TestSetupRootScriptKeepsARecordNamingAnotherUser(t *testing.T) {
 	out, _ := c.CombinedOutput()
 	if got, _ := os.ReadFile(file); string(got) != setup.DeployUserText("deploy") || strings.Contains(string(out), SetupPut+" "+setup.DeployUserFile) {
 		t.Errorf("the root run replaced a record naming another user: %q\n%s", got, out)
+	}
+}
+
+// With no record yet, the root run refuses to make one, as root and before anything else, on a
+// server that shows another deploy user, what the login's own facts could not see: a docker
+// member other than the one it records with devopsy's setup record in its home, or a release
+// root another user than root owns. It says who and what shows it (SetupOther) and exits 4; a
+// member with no record lets it make the record.
+func TestSetupRootScriptRefusesWithAnotherDeployUser(t *testing.T) {
+	t.Parallel()
+	host, bin := setupHostRoot(t)
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:admin\n")
+	write(t, filepath.Join(host, "etc", "passwd"), "admin:x:61000:61000::/home/admin:/bin/sh\ndevopsy:x:61002:990::/home/devopsy:/bin/sh\n")
+	root := filepath.Join(host, "srv")
+	run := func(owner string) (string, int) {
+		t.Helper()
+		c := exec.Command("sh", "-c", SetupRootScript, "sh", host, owner, "", root, "", "", "", "", "", "inv-1", "", "", setup.DeployUserText("admin"))
+		c.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "HOST="+host, "CALLS="+filepath.Join(host, "calls"))
+		out, _ := c.CombinedOutput()
+		return string(out), c.ProcessState.ExitCode()
+	}
+	record := filepath.Join(host, setup.DeployUserFile)
+	write(t, filepath.Join(host, "home", "devopsy", ".config", "devopsy", setup.RecordFile), "{}\n")
+	if out, code := run("1000:1000"); code != 4 || !strings.Contains(out, SetupOther+" devopsy its setup record /home/devopsy/.config/devopsy/"+setup.RecordFile+"\n") || readFile(record) != "" {
+		t.Errorf("another member's setup record (%d), the record %q:\n%s", code, readFile(record), out)
+	}
+	if err := os.Remove(filepath.Join(host, "home", "devopsy", ".config", "devopsy", setup.RecordFile)); err != nil {
+		t.Fatal(err)
+	}
+	// The release root, there and this test's user's, read as another's by the owner given.
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := strconv.Itoa(os.Getuid()+1) + ":0"
+	if out, code := run(other); code != 4 || !strings.Contains(out, SetupOther+" "+strconv.Itoa(os.Getuid())+" the release root "+root+" is its\n") || readFile(record) != "" {
+		t.Errorf("a release root of another's (%d):\n%s", code, out)
+	}
+	if out, code := run(strconv.Itoa(os.Getuid()) + ":0"); code != 0 || !strings.Contains(out, SetupPut+" "+setup.DeployUserFile+"\n") || readFile(record) != setup.DeployUserText("admin") {
+		t.Errorf("no other deploy user (%d):\n%s", code, out)
 	}
 }

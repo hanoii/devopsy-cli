@@ -34,6 +34,20 @@ func TestDeployUserRefusesAnotherLogin(t *testing.T) {
 	if out, code := op(t, "/", "devopsy @admin2@server: --server-info 2>&1"); strings.Contains(out, report.NotDeployUser.ID) || code != 0 && code != 3 {
 		t.Fatalf("no record (%d): %s", code, out)
 	}
+	// The deploy user set up by devopsy and not recorded yet: the second user's setup refuses to
+	// record itself, in its plan, naming the deploy user and the way to run it as that user.
+	t.Cleanup(func() {
+		srv(t, "[ ! -e ~/.config/devopsy/server.yaml.e2e-made ] || rm -f ~/.config/devopsy/server.yaml ~/.config/devopsy/server.yaml.e2e-made")
+	})
+	if out, code := srv(t, "mkdir -p ~/.config/devopsy && if [ ! -e ~/.config/devopsy/server.yaml ]; then echo '{}' >~/.config/devopsy/server.yaml && touch ~/.config/devopsy/server.yaml.e2e-made; fi"); code != 0 {
+		t.Fatalf("the deploy user's setup record (%d): %s", code, out)
+	}
+	if out, code := op(t, "/", "devopsy @admin2@server: --server-setup --yes 2>&1"); code != 1 || !saysWords(out, "devopsy was set up as devopsy on this server") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-setup") {
+		t.Errorf("the second user's setup (%d): %s", code, out)
+	}
+	if _, code := asRoot(t, server, "test -e "+setup.DeployUserFile); code == 0 {
+		t.Errorf("the second user's setup recorded it")
+	}
 	recordDeployUser(t, server, "devopsy")
 	out, code := op(t, "/", "devopsy @admin2@server: --server-info 2>&1")
 	if code != 1 || !saysWords(out, "error: "+report.NotDeployUser.Msg()) || !saysWords(out, "this login is admin2") || !strings.Contains(out, "$ devopsy @devopsy@server: --server-info") || strings.Contains(out, "projects") {

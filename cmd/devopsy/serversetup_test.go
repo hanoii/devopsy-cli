@@ -209,6 +209,42 @@ func TestServerSetupYes(t *testing.T) {
 	}
 }
 
+// The setup's plan, read before the question, names the login it would record as the deploy
+// user: one that does not know which login @<server>: reached learns it before confirming.
+func TestServerSetupPlanNamesTheUserItRecords(t *testing.T) {
+	t.Parallel()
+	s, _ := setupServer(t)
+	me := currentLogin().name
+	out, _ := s.run(nil, "@devopsy@one:", "--server-setup")
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, setup.ItemDeployUser+" ") {
+			if !strings.Contains(l, me) {
+				t.Errorf("the plan's deploy user line names no user (%s): %q\n%s", me, l, out)
+			}
+			return
+		}
+	}
+	t.Errorf("no deploy user line in the plan:\n%s", out)
+}
+
+// On a server with no record that shows another deploy user (a docker member with devopsy's
+// setup record), the setup refuses in its plan, before anything: who, the way to run it as that
+// user and the steps to change the deploy user; nothing put, no record of either kind written.
+func TestServerSetupRefusesWhereAnotherIsSetUp(t *testing.T) {
+	t.Parallel()
+	s, host := setupServer(t)
+	me := currentLogin().name
+	write(t, filepath.Join(host, "etc", "group"), "docker:x:990:"+me+",ops\n", 0o644)
+	write(t, filepath.Join(host, "etc", "passwd"), me+":x:1000:1000::/home/"+me+":/bin/sh\nops:x:1001:1001::/home/ops:/bin/sh\n", 0o644)
+	write(t, filepath.Join(host, "home", "ops", ".config", "devopsy", setup.RecordFile), "{}\n", 0o600)
+	out, code := s.run(nil, "@admin@one:", "--server-setup", "--yes")
+	if code != 1 || !strings.Contains(out, "devopsy: error: deploy user: devopsy was set up as ops on this server (its setup record /home/ops/.config/devopsy/server.yaml), and this setup runs as "+me) ||
+		!strings.Contains(out, "$ devopsy @ops@one: --server-setup\n") || !strings.Contains(out, "$ "+howto.Command(howto.DeployUser)+"\n") ||
+		fileExists(filepath.Join(host, setup.DeployUserFile)) || fileExists(filepath.Join(host, setup.SysctlFile)) || fileExists(filepath.Join(filepath.Dir(s.root), "home", setup.RecordFile)) {
+		t.Errorf("another deploy user set up (%d):\n%s", code, out)
+	}
+}
+
 // A server whose record names another deploy user refuses the setup in its first session's
 // prelude, W0009 with the deploy user's address on the host as typed, before anything: no
 // file put, no release root made, no second session.

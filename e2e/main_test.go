@@ -286,7 +286,7 @@ func runLanes(n int) (int, error) {
 func resetLane(l lane) {
 	_, _ = docker("exec", l.operator, "sh", "-c", "pkill -x devopsy; pkill -x ssh; pkill -x script; iptables -F; tc qdisc del dev eth0 root 2>/dev/null; true")
 	_, _ = docker("exec", l.server, "sh", "-c", remote.FirewallRemove())
-	_, _ = docker("exec", l.server, "sh", "-c", "ip link del srvfwmd0 2>/dev/null; docker rm -f srvfw-md >/dev/null 2>&1; tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; rm -f /etc/devopsy/deploy-user; userdel -r admin2 2>/dev/null; for m in $(awk '$2 ~ \"^/home/devopsy/\" {print $2}' /proc/mounts); do umount -l \"$m\"; done; true")
+	_, _ = docker("exec", l.server, "sh", "-c", "ip link del srvfwmd0 2>/dev/null; docker rm -f srvfw-md >/dev/null 2>&1; tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; rm -f /etc/devopsy/deploy-user; userdel -r admin2 2>/dev/null; c=/home/devopsy/.config/devopsy; [ ! -e $c/server.yaml.e2e-made ] || rm -f $c/server.yaml $c/server.yaml.e2e-made; for m in $(awk '$2 ~ \"^/home/devopsy/\" {print $2}' /proc/mounts); do umount -l \"$m\"; done; true")
 	_, _ = docker("exec", l.server2(), "iptables", "-F", "INPUT")
 	// The door server's mounts a test made below the door's space (TestDoorReflinks' XFS), never
 	// the space's own: none there when the lane has no door server.

@@ -330,17 +330,22 @@ func runSSHKeysGenerate(args []string, color bool) int {
 func targetRef(t *remote.Target) string { return remote.TypedAddress(t) }
 
 // refuseProjectUser says a session asked as a project user (remote.AskedAsProjectUser, the
-// deploy user's name in out) was refused, why, with the command again as the deploy user:
-// only the server knows that user's name, and the host is the one typed.
+// deploy user's name in out) was refused (projectUserRefusal).
 func refuseProjectUser(t *remote.Target, out, why, command string) {
-	deploy := strings.TrimSpace(out)
-	if deploy == "" {
-		deploy = "<deploy user>"
-	}
+	report.Fail(projectUserRefusal(t, out, why, command))
+}
+
+// projectUserRefusal is the refusal of a session asked as a project user, why, with the command
+// again as the deploy user: only the server knows that user's name (out, the record's, else its
+// devopsy's owner), and the host is the one typed; with no name it says so in words.
+func projectUserRefusal(t *remote.Target, out, why, command string) *report.Failure {
 	login, _, ok := strings.Cut(t.Host, "@")
 	if !ok {
 		login = "this login"
 	}
-	report.Fail(errors.New(login+" is a project user, and "+why),
-		report.Fix("ask as the deploy user:", "devopsy @"+remote.AsUser(t.Host, deploy)+" "+command))
+	fix := report.Fix("ask as the deploy user, its login in the address")
+	if deploy := strings.TrimSpace(out); remote.LoginName(deploy) {
+		fix = report.Fix("ask as the deploy user:", "devopsy @"+remote.AsUser(t.Host, deploy)+" "+command)
+	}
+	return &report.Failure{Msg: login + " is a project user, and " + why, Remedies: []report.Remedy{fix}}
 }

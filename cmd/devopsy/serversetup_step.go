@@ -266,7 +266,7 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 		root, f.NamesRoot = proposed, true
 	}
 	f.Root = resolveRoot(root)
-	if x, refusal := deployUserFact(h, currentLogin()); refusal != nil {
+	if x, refusal := deployUserFact(h, currentLogin(), f.Root, remote.SessionFrom(os.Getenv)); refusal != nil {
 		f.Refusals = append(f.Refusals, *refusal)
 	} else if x != nil {
 		f.Files = append(f.Files, *x)
@@ -1116,7 +1116,7 @@ func applySetup(h setupHost, a setupApply) int {
 	if file(setup.ItemMounts) && f.Goes(setup.StepMounts) {
 		dropinText = rd.dropin
 	}
-	deployText := ""
+	deployText, deployRefused := "", false
 	if file(setup.ItemDeployUser) && f.Goes(setup.StepDeployUser) {
 		deployText = setup.DeployUserText(currentLogin().name)
 	}
@@ -1210,13 +1210,25 @@ func applySetup(h setupHost, a setupApply) int {
 			dropinText = ""
 		}
 		if !did(remote.SetupPut + " " + setup.DeployUserFile) {
+			// The run read, as root, another deploy user this login could not see: it refused
+			// before anything, and no setup record of this login's goes either.
+			if other, evidence, ok := otherLine(out.String()); ok {
+				r := otherDeployRefusal(other, evidence, currentLogin(), remote.SessionFrom(os.Getenv))
+				failures++
+				level := report.ErrorLevel
+				if a.upgrade {
+					level = report.WarnLevel
+				}
+				report.Say(level, r.Message, nil, fixWords(r)...)
+			}
+			deployRefused = deployText != ""
 			deployText = ""
 		}
 		raise, give = raise && did(remote.SetupRaised), give && did(remote.SetupMade+" "+f.Root, remote.SetupGave+" "+f.Root)
 	}
 	// The record follows the file, whatever the restart does next; none over a record
 	// devopsy could not read, which it says to remove.
-	if (recorded || (!rd.exists && !a.upgrade)) && !slices.Contains(f.Refused(), setup.RefusalRecord) {
+	if (recorded || (!rd.exists && !a.upgrade)) && !slices.Contains(f.Refused(), setup.RefusalRecord) && !deployRefused {
 		if err := setup.WriteRecord(record, next); err != nil {
 			fail(err.Error())
 		} else if !rd.exists {
@@ -1393,6 +1405,8 @@ func fixWords(r setup.Refusal) []report.Remedy {
 	switch {
 	case r.Fix == "":
 		return nil
+	case r.Command != "" && r.Howto != "":
+		return []report.Remedy{report.Fix(r.Fix, r.Command), stepsHint("or do it by hand", r.Howto)}
 	case r.Command != "":
 		return []report.Remedy{report.Fix(r.Fix, r.Command)}
 	case r.Howto == "":
@@ -1482,6 +1496,18 @@ func rootRunDid(asked bool, err error, out, failed string, went ...string) bool 
 	return slices.ContainsFunc(went, func(w string) bool { return hasLine(out, w) })
 }
 
+// otherLine is the root run's SetupOther line in out, the user and what shows it, ok false for
+// none.
+func otherLine(out string) (user, evidence string, ok bool) {
+	for _, l := range strings.Split(out, "\n") {
+		if rest, found := strings.CutPrefix(l, remote.SetupOther+" "); found {
+			user, evidence, ok = strings.Cut(rest, " ")
+			return user, evidence, ok
+		}
+	}
+	return "", "", false
+}
+
 // hasLine says whether out holds the line word, alone or first.
 func hasLine(out, word string) bool {
 	for _, l := range strings.Split(out, "\n") {
@@ -1518,8 +1544,8 @@ func soonerHint(ref string) report.Remedy {
 // sayRootLines says what the root run changed, line by line (remote.SetupRootScript's).
 func sayRootLines(out string, parts []string, root string) {
 	who := "the deploy user"
-	if u, err := user.Current(); err == nil {
-		who = u.Username
+	if me := currentLogin(); me.name != "" {
+		who = me.name
 	}
 	for _, l := range strings.Split(out, "\n") {
 		word, rest, _ := strings.Cut(l, " ")

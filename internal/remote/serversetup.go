@@ -41,6 +41,10 @@ const (
 	SetupAsked    = "asked"       // the marker written, Docker's restart about to be asked
 	SetupQueued   = "queued"      // Docker's restart queued
 	SetupNoSystem = "nosystemctl" // systemctl refused from the chroot: marked instead
+	// SetupOther: other <user> <evidence>, the deploy user's record not made, the server showing
+	// another deploy user (a docker member's setup record, a release root of another's), and
+	// nothing else applied (exit 4).
+	SetupOther = "other"
 )
 
 // hostDropIn puts the mounts drop-in, $dropin ("" to leave it), under $host_root, says so and
@@ -80,9 +84,49 @@ export dockerd_flags
 validate='set -f; IFS="
 "; out=$(dockerd --validate --config-file "$1" $dockerd_flags 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }'
 changed=
+# The deploy user's record, put only while it is missing or names the user it would: a record
+# naming another is never rewritten, read here as root under this run's own write, whatever the
+# facts read before (another user's setup at once). A missing one is made by a link of a whole
+# file, which fails where a run at once made it first.
 if [ -n "$deploy_user" ]; then
-  mkdir -p "$host_root` + path.Dir(setup.DeployUserFile) + `"
-  if put "$host_root` + setup.DeployUserFile + `" 644 true "$deploy_user"; then echo "` + SetupPut + ` ` + setup.DeployUserFile + `"; fi
+  du=$host_root` + setup.DeployUserFile + `
+  mkdir -p "${du%/*}"
+  ` + deployUserNameShell + `du_tmp=$(mktemp "$du.XXXXXX")
+  printf '%s' "$deploy_user" >"$du_tmp" && chmod 644 "$du_tmp"
+  du_want=$(deploy_user_name "$du_tmp")
+  du_made= du_other=
+  if [ ! -e "$du" ] && [ ! -L "$du" ]; then
+    # With no record yet, a server that shows another deploy user is no one's to record: a
+    # docker member other than this one with devopsy's setup record in its home's config, else
+    # a release root another user than root owns (cmd/devopsy's otherDeployUser, as this login
+    # could see it).
+    du_gid=$(awk -F: '$1 == "docker" { print $3 }' "$host_root/etc/group" 2>/dev/null || :)
+    for u in $(awk -F: '$1 == "docker" { gsub(",", " ", $4); print $4 }' "$host_root/etc/group" 2>/dev/null || :) \
+      $(awk -F: -v g="$du_gid" 'g != "" && $4 == g { print $1 }' "$host_root/etc/passwd" 2>/dev/null || :); do
+      [ "$u" != "$du_want" ] || continue
+      h=$(awk -F: -v u="$u" '$1 == u { print $6; exit }' "$host_root/etc/passwd" 2>/dev/null || :)
+      if [ -n "$h" ] && [ -e "$host_root$h/.config/devopsy/` + setup.RecordFile + `" ]; then du_other="$u its setup record $h/.config/devopsy/` + setup.RecordFile + `"; break; fi
+    done
+    if [ -z "$du_other" ] && [ -e "$root" ]; then
+      o=$(ls -nd "$root" | awk '{ print $3 }')
+      if [ "$o" != 0 ] && [ "$o" != "${owner%%:*}" ]; then
+        on=$(awk -F: -v i="$o" '$3 == i { print $1; exit }' "$host_root/etc/passwd" 2>/dev/null || :)
+        du_other="${on:-$o} the release root $root is its"
+      fi
+    fi
+    if [ -n "$du_other" ]; then
+      rm -f "$du_tmp"
+      echo "` + SetupOther + ` $du_other"
+      exit 4
+    fi
+    if ln "$du_tmp" "$du" 2>/dev/null; then du_made=1; fi
+  fi
+  rm -f "$du_tmp"
+  if [ "$(deploy_user_name "$du")" != "$du_want" ]; then
+    ` + echoLine(report.ErrorLevel, setup.DeployUserFile+" names another deploy user than this setup runs as: left as it is, and nothing else applied") + `
+    exit 4
+  fi
+  if [ -n "$du_made" ] || put "$du" 644 true "$deploy_user"; then echo "` + SetupPut + ` ` + setup.DeployUserFile + `"; fi
 fi
 if [ -n "$give" ]; then
   p=$root

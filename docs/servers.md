@@ -250,10 +250,13 @@ is that note writes it and says there is nothing to change.
 ### The deploy user
 
 A server has one deploy user, which `--server-setup` records in
-`/etc/devopsy/deploy-user` as the user it runs as. From then on every
-session's devopsy refuses, before it reads or changes anything, a login
-that is not that user, root or a project user, with `W0009`
-([Codes](codes.md#w0009)) and the deploy user's address:
+`/etc/devopsy/deploy-user` as the user it runs as, its plan naming that
+user before it asks. From then on every session's devopsy refuses,
+before it reads or changes anything, a login that is not that user, root
+or a project user, with `W0009` ([Codes](codes.md#w0009)) and the deploy
+user's address; only `--shell-host`, the way in when something is
+broken, and `--match-server-version`, which reads the version alone, are
+not checked:
 
 ```
 devopsy: error: W0009: this login is not the server's deploy user
@@ -261,17 +264,26 @@ devopsy: | this login is admin, and /etc/devopsy/deploy-user names devopsy the d
 devopsy: | to fix it:
 devopsy: | address the server as devopsy, for example:
 devopsy: | $ devopsy @devopsy@vm1: --server-info
+devopsy: | to make admin the deploy user instead, move what is devopsy's by hand; this prints the steps:
+devopsy: | $ devopsy --server-setup-howto deploy-user
 ```
 
 Two users in the `docker` group, each taken for the deploy user (an
 admin's own account the default SSH user, say), would each have a
 release root, uid claims and a setup of their own on one Docker, whose
 compose names they share. `--server-setup` run as another user refuses
-too, so the record never changes by itself: making another user the
-deploy user is by hand, with the steps `devopsy --server-setup-howto
-deploy-user` prints. A server set up before the record gets it at its
-next `--server-setup` or `--upgrade`, and until then `--server-info`
-says it is not recorded yet and nothing is refused.
+too, and so does one on a server with no record yet that shows another
+deploy user: another member of the `docker` group with devopsy's setup
+record (`~/.config/devopsy/server.yaml`), or a release root another user
+owns. It names that user and the command to run it as that user, before
+anything changes. The record never changes by itself: making another
+user the deploy user is by hand, with the steps `devopsy
+--server-setup-howto deploy-user` prints. A record that cannot be read,
+or names no one user, refuses every login but root and project users
+with `W0010` until root corrects it. A server set up before the record
+gets it at its next `--server-setup` or `--upgrade`, and until then
+`--server-info` says it is not recorded yet, naming the user the next
+`--server-setup` would record, and nothing is refused.
 
 ## `--server-setup-howto`
 

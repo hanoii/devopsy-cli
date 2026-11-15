@@ -105,6 +105,9 @@ type FileFact struct {
 	InSync  bool   `json:"in_sync"`
 	Missing bool   `json:"missing,omitempty"`
 	Link    string `json:"link,omitempty"`
+	// User is the user the deploy user's record names as devopsy writes it (ItemDeployUser):
+	// the login the setup runs as, which the operator reads before it is recorded.
+	User string `json:"user,omitempty"`
 }
 
 // BufferFact is a live socket buffer: Low when below BufferSize.

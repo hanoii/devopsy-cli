@@ -3,6 +3,7 @@ package remote
 import (
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -287,12 +288,10 @@ func TestKeysListingFinishesARemoval(t *testing.T) {
 	}
 }
 
-// BUG (review round 1): the --ssh-keys scripts run no prelude, so they never reach the deploy
-// user's check (--release-settings): a login the server's record does not name, in the docker
-// group, authorizes a project user's key in a door directory of its own home, which sshd
-// never asks, and is told nothing. The session here is such a login: the record under the
-// host root names another user, and the server's devopsy refuses it as --release-settings
-// does. The key must not be written, and the script must fail.
+// The --ssh-keys scripts run no prelude: where the server records its deploy user, they ask the
+// server's devopsy's check first (--release-settings), so a login the record does not name, in
+// the docker group, writes no key (a project user's in a door directory of its own home, which
+// sshd never asks) and the script fails.
 func TestKeysScriptsRefuseAnotherLogin(t *testing.T) {
 	t.Parallel()
 	home, bin, root := t.TempDir(), t.TempDir(), t.TempDir()
@@ -313,5 +312,38 @@ func TestKeysScriptsRefuseAnotherLogin(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err == nil || readFile(keys) != "" {
 		t.Errorf("a login the record does not name authorized a project user's key (%v), in a directory sshd never asks:\n%s\n%q", err, out, readFile(keys))
+	}
+}
+
+// A project user's server command is refused with the deploy user's name on stdout: the one the
+// server's record names, else the owner of the devopsy it runs; a record naming several lines
+// is no one's, and the owner answers.
+func TestAskedAsProjectUserNamesTheDeployUser(t *testing.T) {
+	t.Parallel()
+	bin, root := t.TempDir(), t.TempDir()
+	if err := testfile.Write(filepath.Join(bin, "id"), []byte("#!/bin/sh\necho devopsy-shop "+DoorGroup+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := testfile.Write(filepath.Join(bin, "devopsy"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ask := func() (string, int) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", askedAsProjectUser)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", HostRootEnv + "=" + root}
+		out, _ := cmd.Output()
+		return string(out), cmd.ProcessState.ExitCode()
+	}
+	write(t, filepath.Join(root, setup.DeployUserFile), setup.DeployUserText("deploy"))
+	if out, code := ask(); code != AskedAsProjectUser || out != "deploy\n" {
+		t.Errorf("the record's (%d): %q", code, out)
+	}
+	write(t, filepath.Join(root, setup.DeployUserFile), "deploy\nadmin\n")
+	owner, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ask(); code != AskedAsProjectUser || out != owner.Username+"\n" {
+		t.Errorf("several lines, the owner's (%d): %q", code, out)
 	}
 }

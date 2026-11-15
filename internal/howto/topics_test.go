@@ -3,6 +3,7 @@ package howto
 import (
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -220,12 +221,10 @@ func TestDockerRepositoryStepTakesOverAnOlderList(t *testing.T) {
 	}
 }
 
-// BUG (review round 1): the deploy-user topic's config step moves the old user's
-// ~/.config/devopsy with a plain mv, which puts it inside the new user's when that one has the
-// directory already (an admin's own account devopsy once took for the deploy user, the case
-// the topic is for): the setup's record and the project users' entries land in
-// ~/.config/devopsy/devopsy, where no devopsy reads them, and are gone from the old user's.
-// The step must leave them where devopsy reads them, the new user's or still the old one's.
+// The deploy-user topic's config step never moves the old user's ~/.config/devopsy inside the
+// new user's, where no devopsy would read it, when that one is there already (an admin's own
+// account devopsy once took for the deploy user): an empty one is replaced, one with files
+// left for a merge by hand.
 func TestDeployUserConfigStepNeverNestsTheConfig(t *testing.T) {
 	t.Parallel()
 	homes := t.TempDir()
@@ -246,5 +245,96 @@ func TestDeployUserConfigStepNeverNestsTheConfig(t *testing.T) {
 	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 	if exists(filepath.Join(next, "devopsy")) || !exists(filepath.Join(next, "server.yaml")) && !exists(filepath.Join(old, "server.yaml")) {
 		t.Errorf("the old user's config went inside the new user's, where no devopsy reads it (nested: %v):\n%s", exists(filepath.Join(next, "devopsy", "server.yaml")), out)
+	}
+}
+
+// The deploy-user topic's record step leaves the record readable whatever root's umask (027,
+// 077 on a hardened server): every session of the new deploy user reads it, and refuses itself
+// on one it cannot read, before the next step's --server-setup could set its mode back.
+func TestDeployUserRecordStepLeavesItReadable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	record := filepath.Join(dir, "deploy-user")
+	s := stepWith(t, DeployUser, "/etc/devopsy/deploy-user")
+	out := pasted(t, s, "/usr/bin:/bin", "/etc/devopsy/deploy-user", record, "new=deploy", "umask 077; new=deploy")
+	fi, err := os.Stat(record)
+	if err != nil || fi.Mode().Perm() != 0o644 {
+		t.Errorf("the record written under umask 077: %v, %v\n%s", fi, err, out)
+	}
+}
+
+// The deploy-user topic's owners step hands over only what devopsy made under the release root,
+// never the old user's ~/.ssh or dotfiles where the root is its home: with an admin's own
+// account as the old deploy user, sshd's StrictModes would refuse that admin's keys.
+func TestDeployUserOwnersStepLeavesTheOldUsersLogin(t *testing.T) {
+	t.Parallel()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	for _, f := range []string{filepath.Join(home, ".ssh", "authorized_keys"), filepath.Join(home, "shop", "prod", "current")} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := filepath.Join(t.TempDir(), "log")
+	logged := "shift 2\nfor a; do echo \"$a\"; done >> " + log + "\n"
+	path := fakes(t, map[string]string{
+		"getent": "echo " + me.Username + ":x:1000:1000::" + home + ":/bin/sh\n",
+		"chown":  logged, "chgrp": logged,
+	}, "getent", "chown", "chgrp")
+	s := stepWith(t, DeployUser, `-exec chown -h "$new"`)
+	out := pasted(t, s, path, "old=devopsy new=deploy", "old="+me.Username+" new=deploy")
+	got, _ := os.ReadFile(log)
+	for _, l := range strings.Split(string(got), "\n") {
+		if strings.HasPrefix(l, filepath.Join(home, ".ssh")) {
+			t.Errorf("the owners step handed the old user's ~/.ssh to the new one:\n%s\n%s", got, out)
+			break
+		}
+	}
+}
+
+// The deploy-user topic gives the new user the devopsy binary the old one owns, as
+// devopsy-server installs it, so that it upgrades itself: otherwise the new deploy user's
+// --upgrade fails, and the door's sudo rules and sshd's keys command run a binary the old user
+// can still replace.
+func TestDeployUserTopicHandsOverTheBinary(t *testing.T) {
+	t.Parallel()
+	tp, _ := Find(string(DeployUser))
+	for _, s := range tp.Steps {
+		for _, c := range s.Cmds {
+			if strings.Contains(c, "command -v devopsy") && strings.Contains(c, "chown") {
+				return
+			}
+		}
+	}
+	t.Error("no step gives the new user the devopsy binary the old one owns")
+}
+
+// Where the new user's devopsy config holds files of its own, the config step moves nothing:
+// both stay where they are, for a merge by hand.
+func TestDeployUserConfigStepLeavesTwoConfigsApart(t *testing.T) {
+	t.Parallel()
+	homes := t.TempDir()
+	old, next := filepath.Join(homes, "devopsy", ".config", "devopsy"), filepath.Join(homes, "deploy", ".config", "devopsy")
+	for _, f := range []string{filepath.Join(old, "server.yaml"), filepath.Join(next, "config.yaml")} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := fakes(t, map[string]string{"getent": `echo "$2:x:1000:1000::` + homes + `/$2:/bin/sh"` + "\n"}, "getent", "install", "chown", "id")
+	out := pasted(t, stepWith(t, DeployUser, ".config/devopsy"), path)
+	if _, err := os.Stat(filepath.Join(old, "server.yaml")); err != nil {
+		t.Errorf("the old user's config moved over the new user's own:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(next, "devopsy")); err == nil {
+		t.Errorf("the old user's config went inside the new user's:\n%s", out)
 	}
 }
