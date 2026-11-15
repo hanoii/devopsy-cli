@@ -659,7 +659,10 @@ deploy user already runs moves this way:
    (`devopsy @prod --import <service> <prod-db.tar`).
 
 Once the project has its user, a release by the deploy user under its
-names is refused before it goes live.
+names is refused before it goes live, and so is any release by the
+deploy user of a project whose name is the project's followed by a
+dash, or the start of it (`shop-eu` beside `shop`), whatever its
+environment.
 
 ## Removing a project user
 

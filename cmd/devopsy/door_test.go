@@ -907,6 +907,31 @@ func TestProjectNameClash(t *testing.T) {
 	}
 }
 
+// A project the deploy user releases is refused when it shares compose names with a project
+// user's, either extending the other's name, as --project-users add refuses that user beside
+// it: a name of its own could be one the user runs as an instance's. Its own name is the
+// project user's to release, which the names' check refuses on its own.
+func TestDoorProjectClash(t *testing.T) {
+	t.Parallel()
+	d := &remote.Door{Users: map[string]remote.DoorUser{"devopsy-shop": {Project: "shop"}, "devopsy-blog-admin": {Project: "blog-admin"}}}
+	for project, want := range map[string]string{
+		"shop-eu":       "devopsy-shop",
+		"blog":          "devopsy-blog-admin",
+		"shop":          "",
+		"shopadmin":     "",
+		"blog-admin":    "",
+		"traefik":       "",
+		"blog-admin-eu": "devopsy-blog-admin",
+	} {
+		if who, why := doorProjectClash(d, project); who != want || (who != "") != (why != "") {
+			t.Errorf("%s: %q, %q, want %q", project, who, why, want)
+		}
+	}
+	if who, _ := doorProjectClash(nil, "shop-eu"); who != "" {
+		t.Errorf("no door: %q", who)
+	}
+}
+
 // No compose command runs while a container the door did not make for this user is under the
 // project's names, the deploy user's or another project user's: compose acts on whatever its
 // project's label finds, and such a container runs as root with any mount.

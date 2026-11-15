@@ -95,7 +95,8 @@ func runPrepareRelease(cwd string, args []string, color bool) int {
 // run first by every script on a server: the machine's releases: and snapshots: settings
 // and the features it has (remote.FeaturesList), as key=value lines. Given an environment's
 // project and compose name, it refuses the deploy user one whose name is a project user's
-// (doorNameOwner), before the script
+// (doorNameOwner), or that of a project sharing compose names with a project user's
+// (doorProjectClash), before the script
 // changes anything, with remote.SettingsRefusedExit: compose acts on a project by its name
 // alone, so a --destroy there takes that user's containers and volumes down. Before anything,
 // it refuses a login that is not the server's deploy user (checkDeployUser) the same way.
@@ -117,6 +118,11 @@ func runReleaseSettings(args []string) int {
 		d, err := remote.ServerDoor()
 		if err != nil {
 			failErr(err)
+			return remote.SettingsRefusedExit
+		}
+		if who, why := doorProjectClash(d, args[0]); who != "" {
+			failErr(&report.Failure{Msg: "project " + args[0] + " shares compose names with project user " + who + " here, " + why + ": as the deploy user, devopsy would act on that user's containers and volumes",
+				Remedies: []report.Remedy{report.Fix("give the project a name of its own, in project: of .devopsy/config.yaml")}})
 			return remote.SettingsRefusedExit
 		}
 		who, err := doorNameOwner(d, r.Root, args[0], args[1])

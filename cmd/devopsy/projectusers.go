@@ -227,15 +227,40 @@ func projectNameClash(project string, others []string) string {
 		return "its user, " + u + ", would bear the name of a group of devopsy's"
 	}
 	for _, o := range others {
-		switch {
-		case o == project:
-		case door.Extends(project, o):
-			return project + " extends " + o + "'s name"
-		case door.Extends(o, project):
-			return o + " extends " + project + "'s name"
+		if why := namesClash(project, o); why != "" {
+			return why
 		}
 	}
 	return ""
+}
+
+// namesClash is why projects a and b share compose names, "" when they do not: one's name is
+// the other's followed by a dash, so a's environment c-d and a-c's d are one name.
+func namesClash(a, b string) string {
+	switch {
+	case door.Extends(a, b):
+		return a + " extends " + b + "'s name"
+	case door.Extends(b, a):
+		return b + " extends " + a + "'s name"
+	}
+	return ""
+}
+
+// doorProjectClash is the project user whose project shares compose names with the deploy
+// user's project (namesClash), and why, "" for none: --project-users add refuses a project
+// user beside such a project, and a project the deploy user releases after the user is
+// refused the same, whichever environments it has, since a name of its own could be one the
+// user runs as an instance's.
+func doorProjectClash(d *remote.Door, project string) (string, string) {
+	if d == nil {
+		return "", ""
+	}
+	for _, who := range slices.Sorted(maps.Keys(d.Users)) {
+		if why := namesClash(project, d.Users[who].Project); why != "" {
+			return who, why
+		}
+	}
+	return "", ""
 }
 
 // serverProjects are the projects a name could clash with: the door's users' (door), and the

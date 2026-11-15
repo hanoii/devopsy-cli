@@ -142,6 +142,24 @@ func TestDeployUserLeavesAProjectUsersNames(t *testing.T) {
 	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
 		t.Errorf("--destroy beside another project user's names (%d):\n%s", code, out)
 	}
+	// A project user's project extending this one's name refuses its release, whatever its
+	// environment: shop's environment eu-prod would be shop-eu's prod.
+	users := filepath.Join(home, "door", "users")
+	if err := os.Rename(filepath.Join(users, "devopsy-blog.yaml"), filepath.Join(users, "devopsy-shop-eu.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(users, "devopsy-shop-eu.yaml"), "project: shop-eu\n", 0o644)
+	before = releases()
+	if out, code := s.run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "project shop shares compose names with project user devopsy-shop-eu here, shop-eu extends shop's name") {
+		t.Errorf("a release beside a project user whose name extends the project's (%d):\n%s", code, out)
+	}
+	if n := releases(); n != before {
+		t.Errorf("a refused release left a release: %d, %d before", n, before)
+	}
+	write(t, filepath.Join(users, "devopsy-shop-eu.yaml"), "project: blog\n", 0o644)
+	if err := os.Rename(filepath.Join(users, "devopsy-shop-eu.yaml"), filepath.Join(users, "devopsy-blog.yaml")); err != nil {
+		t.Fatal(err)
+	}
 	// A server's script addressed by that environment acts on none, so a project user's
 	// names are no refusal there: --project-users add, run again, must reach the server.
 	write(t, filepath.Join(home, "door", "users", "devopsy-shop.yaml"), "project: shop\n", 0o644)
