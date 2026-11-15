@@ -251,13 +251,38 @@ func TestServerInfoReport(t *testing.T) {
 		!strings.Contains(out, "its noProxy leaves 127.0.0.1, ::1 to the proxy") {
 		t.Errorf("a proxy leaving loopback to it:\n%s", out)
 	}
-	if len(ws) != 1 || !ws[0].note || len(ws[0].fixes) != 1 || !ws[0].fixes[0].Hint ||
-		ws[0].fixes[0].Text != "add 127.0.0.1,::1 to noProxy in /home/devopsy/.docker/config.json, as the deploy user: containers created after it get it" {
+	// The daemon proxied too (none of it said: the containers' alone).
+	if len(ws) != 2 || !ws[0].note || len(ws[0].fixes) != 1 || !ws[0].fixes[0].Hint ||
+		ws[0].fixes[0].Text != "add 127.0.0.1,::1 to noProxy in /home/devopsy/.docker/config.json, as the deploy user: containers created after it get it"+stepsWords ||
+		!slices.Equal(ws[0].fixes[0].Cmds, []string{howto.Command(howto.Proxy)}) {
 		t.Errorf("a proxy leaving loopback to it: said %+v", ws)
 	}
+	proxied.Docker.Proxy = "http://proxy.example.com:3128"
 	proxied.Docker.ClientProxies[0].NoProxy = "LOCALHOST, 127.0.0.0/8,[::1]"
 	if out, ws := serverInfoSays(proxied, "vm1", "vm1:", "0.53.0", now); strings.Contains(out, "its noProxy") || len(ws) != 0 {
 		t.Errorf("a proxy leaving no loopback to it: said %+v in:\n%s", ws, out)
+	}
+	// One proxy without the other is a warning with the topic's steps, either way.
+	for _, c := range []struct {
+		daemon  string
+		clients []remote.ClientProxy
+		want    string
+	}{
+		{"http://proxy.example.com:3128", nil, "Docker's daemon pulls through a proxy and the deploy user's containers get none"},
+		{"", proxied.Docker.ClientProxies, "the deploy user's containers get a proxy and Docker's daemon none"},
+	} {
+		one := healthy()
+		one.Docker.Proxy, one.Docker.ClientProxies = c.daemon, c.clients
+		_, ws := serverInfoSays(one, "vm1", "vm1:", "0.53.0", now)
+		var found bool
+		for _, w := range ws {
+			if strings.HasPrefix(w.msg, c.want) && !w.note && len(w.fixes) == 1 && slices.Equal(w.fixes[0].Cmds, []string{howto.Command(howto.Proxy)}) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("one proxy without the other: no warning %q with the topic's steps in %+v", c.want, ws)
+		}
 	}
 
 	for _, c := range []struct {

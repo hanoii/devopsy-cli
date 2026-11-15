@@ -113,6 +113,57 @@ func TestProcessesStepKeepsFstab(t *testing.T) {
 	}
 }
 
+// The proxy topic's login step puts the six variables in /etc/environment once, an admin's
+// earlier ones taken out in whatever form they had (export, quotes, another proxy), every other
+// line kept, a second run changing nothing; its apt step gives a host to reach directly its
+// own line, as apt reads no list.
+func TestProxyStepsKeepTheirFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	env := filepath.Join(dir, "environment")
+	before := "PATH=\"/usr/local/sbin:/usr/bin\"\n" +
+		"export https_proxy=\"http://old.example.com:8080/\"\n" +
+		"\n" +
+		"FTP_PROXY=\"http://old.example.com:8080/\"\n" +
+		"  NO_PROXY=localhost\n"
+	if err := os.WriteFile(env, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list := "localhost,127.0.0.1,::1"
+	want := "PATH=\"/usr/local/sbin:/usr/bin\"\n" +
+		"\n" +
+		"FTP_PROXY=\"http://old.example.com:8080/\"\n" +
+		"http_proxy=\"http://proxy.example.com:3128\"\n" +
+		"https_proxy=\"http://proxy.example.com:3128\"\n" +
+		"no_proxy=\"" + list + "\"\n" +
+		"HTTP_PROXY=\"http://proxy.example.com:3128\"\n" +
+		"HTTPS_PROXY=\"http://proxy.example.com:3128\"\n" +
+		"NO_PROXY=\"" + list + "\"\n"
+	s := stepWith(t, Proxy, "/etc/environment.new")
+	for run := 1; run <= 2; run++ {
+		out := pasted(t, s, "/usr/bin:/bin", "/etc/environment", env)
+		got, err := os.ReadFile(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("run %d left /etc/environment as:\n%s\nwant:\n%s\n%s", run, got, want, out)
+		}
+	}
+
+	apt := filepath.Join(dir, "90-devopsy-proxy")
+	a := stepWith(t, Proxy, "90-devopsy-proxy")
+	pasted(t, Step{Cmds: append([]string{a.Cmds[0], "direct=intranet.example.com"}, a.Cmds[2:]...)}, "/usr/bin:/bin", "/etc/apt/apt.conf.d/90-devopsy-proxy", apt)
+	got, err := os.ReadFile(apt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Acquire::http::Proxy \"http://proxy.example.com:3128\";\nAcquire::https::Proxy \"http://proxy.example.com:3128\";\n" +
+		"Acquire::http::Proxy::intranet.example.com \"DIRECT\";\nAcquire::https::Proxy::intranet.example.com \"DIRECT\";\n"; string(got) != want {
+		t.Errorf("apt's file:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 // The door's config step adds door: on a line of its own to a config that ends without a
 // newline, the file's last key kept as it was, and a second run changes nothing.
 func TestDoorConfigStepKeepsTheConfigsLastLine(t *testing.T) {

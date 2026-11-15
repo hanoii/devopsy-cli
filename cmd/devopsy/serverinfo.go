@@ -1501,8 +1501,19 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			more(line)
 			if left := loopbackProxied(p.NoProxy); len(left) > 0 {
 				note("its noProxy leaves "+strings.Join(left, ", ")+" to the proxy: an app's request to itself there goes through it (curl and libcurl send localhost unless noProxy names it)",
-					report.Hint("add "+strings.Join(left, ",")+" to noProxy in "+p.File+", as the deploy user: containers created after it get it"))
+					stepsHint("add "+strings.Join(left, ",")+" to noProxy in "+p.File+", as the deploy user: containers created after it get it", howto.Proxy))
 			}
+		}
+		// One proxy without the other: the containers' requests out going direct while Docker's
+		// pulls go through it, or the reverse. On a network whose only way out is the proxy,
+		// what goes direct fails.
+		switch {
+		case d.Proxy != "" && len(d.ClientProxies) == 0:
+			warn("Docker's daemon pulls through a proxy and the deploy user's containers get none: their requests to the Internet go direct",
+				stepsFix("give the deploy user's Docker client the proxy (config.json's proxies)", howto.Proxy))
+		case d.Proxy == "" && len(d.ClientProxies) > 0:
+			warn("the deploy user's containers get a proxy and Docker's daemon none: its pulls go direct",
+				stepsFix("give Docker's daemon the proxy, as root", howto.Proxy))
 		}
 		// Where Docker keeps its data, which disks then names alone.
 		var data []string
