@@ -717,11 +717,11 @@ func TestServerInfoReport(t *testing.T) {
 	info.Setup.Firewall = &setup.FirewallFact{State: setup.FirewallLoad}
 	info.Setup.Refusals = []setup.Refusal{{Item: "Docker", Message: "Docker has no compose plugin", Fix: "install Docker's compose plugin", Stops: setup.RefusalPlugins}}
 	out, warnings = serverInfoSays(info, "vm1", "vm1:", "0.53.0", now)
-	want := "! setup      never set up by devopsy: --upgrade applies nothing here\n" +
-		"!            Docker: Docker has no compose plugin\n             to fix it:\n             install Docker's compose plugin\n" +
-		"!            socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
-		"!            mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
-		"!            metadata firewall: containers reach the cloud's metadata services"
+	want := "  setup      warning: never set up by devopsy: --upgrade applies nothing here\n" +
+		"             warning: Docker: Docker has no compose plugin\n             to fix it:\n             install Docker's compose plugin\n" +
+		"             warning: socket buffers: /etc/sysctl.d/90-devopsy-net.conf differs from what devopsy writes\n" +
+		"             warning: mounts drop-in: /etc/systemd/system/docker.service.d/devopsy-mounts.conf differs from what devopsy writes\n" +
+		"             warning: metadata firewall: containers reach the cloud's metadata services"
 	if !strings.Contains(out, want) || strings.Count(out, "$ devopsy @vm1: --server-setup") != 1 ||
 		!strings.Contains(out[strings.Index(out, "metadata firewall"):], "\n             to fix it:\n             $ devopsy @vm1: --server-setup\n") {
 		t.Errorf("the setup's one fix, once:\n%s", out)
@@ -904,21 +904,21 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"  disks      /  ",
 		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
 		"  shop       project uid ",
-		"\n    dev      not released yet\n  !          none: 19990101000000 failed\n             in shop's checkout:\n             $ devopsy @devopsy@one:dev --status\n",
+		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n             in shop's checkout:\n             $ devopsy @devopsy@one:dev --status\n",
 		"\n    eu/prod  not released yet\n",
 		"\n    prod     released just now by ",
 		"0 of 1 running  uid ",
-		"\n  !          db restarting\n",
+		"\n             warning: db restarting\n",
 		// The server's clock, taken last and compared on arrival.
 		"clock not synchronized, ",
 		"$ timedatectl timesync-status",
 		// The setup as --server-setup judges it, with its fixes: no systemd here refuses every
 		// step, so --server-setup is offered only past that refusal, once after the last line
 		// it fixes. A server never set up says the first setup records the login it runs as.
-		"! setup      never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as",
+		"  setup      warning: never set up by devopsy: --upgrade applies nothing here\n             no deploy user recorded yet: the first --server-setup records the login it runs as",
 		"(its instance's credentials)\n             to fix it:\n             fix what refuses every step of the setup first, then run --server-setup\n",
-		"!            Docker: systemd is not this host's init",
-		"!            daemon.json: logs: none, devopsy's",
+		"             warning: Docker: systemd is not this host's init",
+		"             warning: daemon.json: logs: none, devopsy's",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
@@ -983,7 +983,7 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"this machine (",
 		"  releases   " + s.root,
 		"  roles      traefik-prod: role proxy, exports BASE_DOMAIN=vm1.example.com\n",
-		"\n    dev      not released yet\n  !          none: 19990101000000 failed\n",
+		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n",
 		"$ cd " + filepath.Join(s.root, "shop", "dev", "current") + " && devopsy --status",
 	} {
 		if !strings.Contains(out, want) {

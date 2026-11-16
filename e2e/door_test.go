@@ -336,7 +336,7 @@ func TestDoorProjectsLife(t *testing.T) {
 	}
 	// Its --server-info says it too, with no setup of the admin's in it.
 	if out, _ := op(t, "/", "devopsy @devopsy-doorlife@doorsrv: --server-info 2>&1"); !saysWords(out, "W0001: the server's firewall is not loaded as devopsy loads it") ||
-		!saysWords(out, "report W0001 to the server's admin") || strings.Contains(out, "\n  setup ") || strings.Contains(out, "\n! setup ") || strings.Contains(out, "--server-setup") {
+		!saysWords(out, "report W0001 to the server's admin") || strings.Contains(out, "\n  setup ") || strings.Contains(out, "--server-setup") {
 		t.Errorf("a project user's --server-info beside a wiped firewall:\n%s", out)
 	}
 	if out, code := doorRoot(t, remote.FirewallScript); code != 0 {

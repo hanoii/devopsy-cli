@@ -2412,7 +2412,7 @@ func TestServerInfoSeesAWipedFirewall(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := s.run(nil, "@devopsy@one:", "--server-info")
-	if !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\n") || !strings.Contains(out, "iptables: nothing in PREROUTING jumps to "+remote.FirewallContainerChain) ||
+	if !saysWords(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it\n") || !strings.Contains(out, "iptables: nothing in PREROUTING jumps to "+remote.FirewallContainerChain) ||
 		!strings.Contains(out, "$ devopsy @devopsy@one: --server-setup") {
 		t.Errorf("wiped:\n%s", out)
 	}
@@ -2438,7 +2438,7 @@ func TestServerSetupRetiresTheFirewallsTimer(t *testing.T) {
 	if err := os.Symlink(timer, filepath.Join(host, link)); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !strings.Contains(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") {
+	if out, _ := s.run(nil, "@devopsy@one:", "--server-info"); !saysWords(out, "metadata firewall: W0001: the server's firewall is not loaded as devopsy loads it") {
 		t.Errorf("a retired timer there, --server-info:\n%s", out)
 	}
 	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--upgrade")

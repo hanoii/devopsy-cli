@@ -154,7 +154,6 @@ type laidLine struct {
 	section string
 	indent  int
 	key     string // shown on this line only
-	mark    bool   // a warning's first line, "! " in its indent
 	value   string
 	cells   []string // a row of cells, as they show
 	widths  []int    // a row of cells: its run's widths, of all but its last
@@ -166,7 +165,8 @@ type laidLine struct {
 // layOut lays out es in the order print shows them: a section's heading
 // on each change of section, a project's heading on each change of
 // group when its first entry is not one of the heading's (Head), a key
-// on the first line of each run of it, a warning's first line marked,
+// on the first line of each run of it, a warning's first line in a
+// section starting with its level's mark (report.WarnLevel.Mark),
 // a row of cells with its run's widths (cellWidths), each key, name,
 // line and cell quoted as
 // report.Copyable quotes it. Remedies a later entry of the same key
@@ -198,8 +198,10 @@ func layOut(es []remote.StatusEntry) []laidLine {
 			key = report.Copyable(e.Group)
 		}
 		for j, l := range e.Lines {
-			line := laidLine{kind: lineEntry, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level,
-				mark: j == 0 && e.Level == remote.StatusWarning}
+			line := laidLine{kind: lineEntry, section: e.Section, indent: indent, value: report.Copyable(l), level: e.Level}
+			if j == 0 && e.Level == remote.StatusWarning && e.Section != "" {
+				line.value = report.WarnLevel.Mark() + line.value
+			}
 			if j == 0 && newKey {
 				line.key, line.group = key, e.Head
 			}
@@ -266,10 +268,7 @@ func cellWidths(es []remote.StatusEntry) map[int][]int {
 
 // print prints es as layOut lays them out: a section's heading bold
 // after a blank line, a project's name in its color, a warning's lines
-// and texts yellow, its first line with "! " in the last two columns of
-// its indent (a warning shows in a pipe and greps; a report with no
-// sections has no indent to hold it, and a key column widened for it
-// would move every line whenever a warning shows), a highlight's bold,
+// and texts yellow, a highlight's bold,
 // each command bold; in a section, prose past the width wraps at a word
 // to its column (wrapAt), and a row of cells past it moves its last
 // cell whole to a line of its own at the column (cellRow).
@@ -292,9 +291,6 @@ func (t entryTable) print(es []remote.StatusEntry) {
 		case lineGroup:
 			fmt.Fprintln(t.w, indent+t.st.name(l.key))
 		case lineEntry:
-			if l.mark && l.indent >= 2 {
-				indent = strings.Repeat(" ", l.indent-2) + "! "
-			}
 			key := pad(indent+l.key, col)
 			if l.group {
 				// The project's name in its color, its facts as any line's.

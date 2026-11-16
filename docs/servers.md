@@ -404,7 +404,7 @@ Prose wraps at 100 columns, a command never, and a row of cells moves
 its last cell whole to a line of its own instead.
 
 What needs attention is a warning under the line it is about, its first
-line marked `!`, with its fix; a fix that serves several lines in a row
+line starting with `warning: `, with its fix; a fix that serves several lines in a row
 (`--server-setup` for the setup's items) comes once, after the last of
 them:
 

@@ -30,8 +30,8 @@ func TestEntryTableQuotesBeforePainting(t *testing.T) {
 // A report in sections: a section's heading after a blank line, one key
 // column for every section, so each section's values start where the
 // others' do; a project's heading, its rows indented under it, their
-// cells aligned across projects; a warning marked "! " in its indent,
-// which no key column widens; cells under one key outside a project
+// cells aligned across projects; a warning's first line starting with
+// "warning: " at its text's column, which no key column widens; cells under one key outside a project
 // aligned with each other; prose past reportWidth wrapped at a word to
 // its column, a command never.
 func TestEntryTableSections(t *testing.T) {
@@ -76,7 +76,7 @@ func TestEntryTableSections(t *testing.T) {
 server
   system     Linux
   disks      /  xfs
-!            / is 95% full
+             warning: / is 95% full
              to fix it:
              $ devopsy @vm1: --gc --dry-run --and-a-command-much-longer-than-the-width-left-for-it-to-show-whole
   setup      a line long enough to wrap at a word once it runs past the report's width, which it
@@ -87,7 +87,7 @@ projects
     prod     released just now by ci          1 of 1 running  uid 2
   shop       project uid 3
     staging  released 2 days ago by somebody  1 of 2 running  uid 4
-  !          app restarting
+             warning: app restarting
   web
     dev      gone                             x
 
@@ -153,7 +153,7 @@ func TestEntryCellsAlignAcrossAWarning(t *testing.T) {
 	want := `
 server
   disks  /            ext4  releases
-!        / is 94% full
+         warning: / is 94% full
          /mnt/backup  ext4  snapshots
 `
 	if b.String() != want {

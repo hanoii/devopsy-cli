@@ -220,7 +220,7 @@ func TestServerInfoListsUIDClaims(t *testing.T) {
 	for _, want := range []string{
 		"\n  blog       project uid " + uid["project:blog"] + "\n    prod     gone, only its uid claim " + uid["env:blog:prod"] + " is left\n",
 		"\n  shop       project uid " + uid["project:shop"] + "\n    prod     not released yet  uid " + uid["env:shop:prod"] + "\n",
-		"\n! uids       stray in " + info.UIDsDir + " is no claim: ",
+		"\n  uids       warning: stray in " + info.UIDsDir + " is no claim: ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in:\n%s", want, out)

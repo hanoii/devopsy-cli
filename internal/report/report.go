@@ -72,14 +72,18 @@ var tags = map[Level]string{TraceLevel: "trace", DebugLevel: "debug", WarnLevel:
 // Tag is the level's word after the prefix: "" for info.
 func (l Level) Tag() string { return tags[l] }
 
+// Mark is what a line of level l says after the prefix: "<tag>: ", ""
+// for info.
+func (l Level) Mark() string {
+	if t := l.Tag(); t != "" {
+		return t + ": "
+	}
+	return ""
+}
+
 // Head is what a line of level l starts with: "devopsy: " for info,
 // "devopsy: <tag>: " otherwise.
-func Head(l Level) string {
-	if t := l.Tag(); t != "" {
-		return Prefix + t + ": "
-	}
-	return Prefix
-}
+func Head(l Level) string { return Prefix + l.Mark() }
 
 // Line is msg as one line of level l. A newline in msg is the caller's
 // mistake; Lines splits them.
