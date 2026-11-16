@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -926,7 +927,6 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"\n    dev      not released yet\n             warning: none: 19990101000000 failed\n             | in shop's checkout:\n             | $ devopsy @devopsy@one:dev --status\n",
 		"\n    eu/prod  not released yet\n",
 		"\n    prod     released just now by ",
-		"0 of 1 running  uid ",
 		"\n             warning: db restarting\n",
 		// The server's clock, taken last and compared on arrival.
 		"clock not synchronized, ",
@@ -942,6 +942,11 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
 		}
+	}
+	// The environment's uid after its containers: on the same line, or wrapped to the next one
+	// past a long name of the operator's host in "released ... by" (a CI runner's).
+	if !regexp.MustCompile(`0 of 1 running(  |\n {13})uid `).MatchString(out) {
+		t.Errorf("no uid after prod's containers in (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
 		"\nleftovers\n",
