@@ -658,6 +658,57 @@ func TestCheckFileBuildLandsWhereAStartReads(t *testing.T) {
 	}
 }
 
+// A service with no build: whose image: is the name a service's build has (a sharer: migrate
+// on web's shop-web, or on shop-prod-web, compose's name for a build with no image:) runs that
+// build, by the door's name for it, for every verb but a pull: the name it wrote is a
+// registry's, which no one but compose's build ever meant. One devopsy's own file names (a pin,
+// a bookmark) stays as it is, and one whose image two services build is refused: each is an
+// image of its own here, so its name says neither.
+func TestCheckFileRunsASharerOnItsBuildersBuild(t *testing.T) {
+	t.Parallel()
+	const ctx = `"build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]`
+	builder := func(name, image string) string {
+		if image != "" {
+			image = `"image":"` + image + `",`
+		}
+		return `"` + name + `":{` + image + ctx + `}`
+	}
+	migrate := func(image string) string {
+		return `"migrate":{"image":"` + image + `","user":"10001:10001","security_opt":["no-new-privileges"]}`
+	}
+	check := func(verb string, services ...string) (string, []error) {
+		file := parse(t, `{"name":"shop-prod","services":{`+strings.Join(services, ",")+`}}`)
+		errs := CheckFile(file, testPolicy, verb, &fakePaths{})
+		got, _ := file["services"].(map[string]any)["migrate"].(map[string]any)["image"].(string)
+		return got, errs
+	}
+	const build = "devopsy.internal/shop-prod/web"
+	for _, c := range []struct{ verb, web, image string }{
+		{"up", "shop-web", "shop-web"},
+		{"build", "shop-web", "shop-web"},
+		{"run", "shop-web", "shop-web:latest"},
+		{"up", "", "shop-prod-web"},
+	} {
+		if got, errs := check(c.verb, builder("web", c.web), migrate(c.image)); len(errs) != 0 || got != build {
+			t.Errorf("%s, web on %q, migrate on %q: migrate runs %q (%v), want %s", c.verb, c.web, c.image, got, errs, build)
+		}
+	}
+	pin := "shop-web@sha256:" + strings.Repeat("a", 64)
+	bookmark := build + ":devopsy-shop-prod-20260101000000"
+	for _, c := range []struct{ verb, image string }{{"pull", "shop-web"}, {"up", pin}, {"up", bookmark}, {"up", "other-web"}} {
+		if got, errs := check(c.verb, builder("web", "shop-web"), migrate(c.image)); len(errs) != 0 || got != c.image {
+			t.Errorf("the control: %s, migrate on %s: runs %q (%v)", c.verb, c.image, got, errs)
+		}
+	}
+	if _, errs := check("up", builder("web", "shop-web"), builder("worker", "shop-web"), migrate("shop-web")); len(errs) != 1 ||
+		!strings.Contains(errs[0].Error(), "migrate: its image shop-web is built by both web and worker") {
+		t.Errorf("a sharer of two builds: %v", errs)
+	}
+	if _, errs := check("pull", builder("web", "shop-web"), builder("worker", "shop-web"), migrate("shop-web")); len(errs) != 0 {
+		t.Errorf("a pull of a sharer of two builds: %v", errs)
+	}
+}
+
 // A hostname on a shared network is one of the project's names (OwnName), as its service's is:
 // Docker (Engine 25 on) answers for a container's hostname on each of its networks, so one of
 // another's (traefik, another project's service) would draw visitors' requests meant for it.

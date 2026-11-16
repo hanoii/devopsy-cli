@@ -11,7 +11,8 @@ import (
 // active ones, their dependencies only with --include-deps, in the order of their names, each
 // image once. It skips a service with no image, one of the project's own (a build's name, a
 // hold), one the project set to pull_policy never, and one that builds with --ignore-buildable;
-// one that builds is otherwise claimed. A service the file does not have is refused.
+// one that builds is otherwise claimed. A service that shares a build's image is skipped or
+// claimed as that build is. A service the file does not have is refused.
 func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{
@@ -20,13 +21,14 @@ func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 		"cache":  {"image":"valkey:8"},
 		"worker": {"image":"registry.example.com/web:1"},
 		"built":  {"image":"registry.example.com/built:1","build":{"context":"."}},
+		"share":  {"image":"registry.example.com/built:1"},
 		"own":    {"image":"devopsy.internal/shop-prod/own"},
 		"hold":   {"image":"busybox:devopsy-shop-prod-20240101000000"},
 		"never":  {"image":"registry.example.com/never:1","pull_policy":"never"},
 		"none":   {"build":{"context":"."}},
 		"extra":  {"image":"registry.example.com/extra:1","profiles":["debug"]}
 	}}`)
-	active := []string{"web", "db", "cache", "worker", "built", "own", "hold", "never", "none"}
+	active := []string{"web", "db", "cache", "worker", "built", "share", "own", "hold", "never", "none"}
 	for _, c := range []struct {
 		argv []string
 		want []string
@@ -34,6 +36,8 @@ func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 		{[]string{"pull"}, []string{"registry.example.com/built:1", "valkey:8", "postgres:16", "registry.example.com/web:1"}},
 		{[]string{"pull", "--ignore-buildable"}, []string{"valkey:8", "postgres:16", "registry.example.com/web:1"}},
 		{[]string{"pull", "web"}, []string{"registry.example.com/web:1"}},
+		{[]string{"pull", "share"}, []string{"registry.example.com/built:1"}},
+		{[]string{"pull", "--ignore-buildable", "share"}, nil},
 		{[]string{"pull", "--include-deps", "web"}, []string{"valkey:8", "postgres:16", "registry.example.com/web:1"}},
 		{[]string{"pull", "extra", "-q"}, []string{"registry.example.com/extra:1"}},
 		{[]string{"pull", "own", "hold", "never", "none"}, nil},

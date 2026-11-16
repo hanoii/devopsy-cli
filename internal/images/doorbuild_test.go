@@ -3,6 +3,7 @@ package images
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,19 +39,26 @@ func TestDoorBuildName(t *testing.T) {
 // Behind the door the listing names a build by DoorBuild, whatever image: says, as the
 // door's render does, so the record, the bookmarks and the holds go by the name compose
 // runs; a service only pulled keeps its image, and so does every service of a release in
-// image mode, whose builds a registry serves. The deploy user's listing is compose's.
+// image mode, whose builds a registry serves. A service that shares a build's image (its
+// image: the build's name, compose's for a build with none, a tag or not, a pull_policy or
+// not) is named as the build is; one whose image two services build is an error naming both.
+// The deploy user's listing is compose's.
 func TestListingNamesADoorProjectsBuilds(t *testing.T) {
 	t.Parallel()
 	config := []byte(`{"name":"shop-prod","services":{
 		"app":{"build":{"context":"."}},
 		"named":{"build":{"context":"."},"image":"mongo-express:1"},
+		"migrate":{"image":"mongo-express:1","pull_policy":"never"},
+		"seed":{"image":"shop-prod-app:latest"},
 		"db":{"image":"mariadb:11.8"}}}`)
 	for _, tt := range []struct {
 		door bool
 		want map[string]string
 	}{
-		{true, map[string]string{"app": "devopsy.internal/shop-prod/app", "named": "devopsy.internal/shop-prod/named", "db": "mariadb:11.8"}},
-		{false, map[string]string{"app": "shop-prod-app", "named": "mongo-express:1", "db": "mariadb:11.8"}},
+		{true, map[string]string{"app": "devopsy.internal/shop-prod/app", "named": "devopsy.internal/shop-prod/named", "db": "mariadb:11.8",
+			"migrate": "devopsy.internal/shop-prod/named", "seed": "devopsy.internal/shop-prod/app"}},
+		{false, map[string]string{"app": "shop-prod-app", "named": "mongo-express:1", "db": "mariadb:11.8",
+			"migrate": "mongo-express:1", "seed": "shop-prod-app:latest"}},
 	} {
 		svcs, err := ParseComposeConfig(config, tt.door)
 		if err != nil {
@@ -61,6 +69,16 @@ func TestListingNamesADoorProjectsBuilds(t *testing.T) {
 				t.Errorf("door %v: %s listed as %s, want %s", tt.door, s.Name, s.Ref, tt.want[s.Name])
 			}
 		}
+	}
+	twice := []byte(`{"name":"shop-prod","services":{
+		"web":{"build":{"context":"."},"image":"shop-web"},
+		"worker":{"build":{"context":"."},"image":"shop-web"},
+		"migrate":{"image":"shop-web"}}}`)
+	if _, err := ParseComposeConfig(twice, true); err == nil || !strings.Contains(err.Error(), "migrate runs shop-web, which both web and worker build") {
+		t.Errorf("a sharer of two builds behind the door: %v", err)
+	}
+	if _, err := ParseComposeConfig(twice, false); err != nil {
+		t.Errorf("the control: the deploy user's listing of a sharer of two builds: %v", err)
 	}
 	build, image := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(image, RecordFile), []byte(`{"mode":"image"}`), 0o644); err != nil {
