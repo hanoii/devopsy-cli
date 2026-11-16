@@ -433,3 +433,28 @@ esac
 		t.Error("a stop whose inspect was killed past its bound said the builder is stopped")
 	}
 }
+
+// BUG (review): stopBuilder bounds its inspect and its buildx stop each by the whole bound, so
+// a stop holds the builder's lock exclusive for up to twice it (a minute on a server, where a
+// build waits a minute for that lock and is then refused), not the 30 s its rule says. One
+// bound covers the step: an inspect that took most of it leaves the stop only the rest.
+func TestStopIsBoundedAsAWhole(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+case "$*" in
+  'buildx inspect devopsy-shop') sleep 1; echo 'Status: running' ;;
+  'buildx stop devopsy-shop') exec sleep 30 ;;
+esac
+`, 0o755)
+	const within = 1500 * time.Millisecond
+	start := time.Now()
+	err := stopBuilder(docker, builderEnv(os.Environ(), filepath.Join(dir, "space")), "shop", within)
+	if err == nil {
+		t.Error("a stop killed past its bound says the builder is stopped")
+	}
+	if took := time.Since(start); took >= within+time.Second {
+		t.Errorf("the stop took %s, bounded by %s: its inspect and its buildx stop each took the whole bound", took.Round(10*time.Millisecond), within)
+	}
+}
