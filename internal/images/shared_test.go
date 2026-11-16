@@ -52,3 +52,34 @@ func TestActiveOfKeepsThePlainServicesAndRefusesAnUnbuiltShare(t *testing.T) {
 		t.Errorf("a sharer of a build no release builds: %v, %q, %+v", err, report.Details(err), report.Remedies(err))
 	}
 }
+
+// Behind the door a release that builds lists every profile's config, and the plain one too
+// only when a service is under a profile: a project without profiles costs one config, as
+// before sharers were read, and one with them gets the active services of the two.
+func TestDoorListingReadsThePlainConfigOnlyWithProfiles(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		all, plain []Service
+		calls      int
+		want       []string
+	}{
+		{[]Service{{Name: "web", Build: true}, {Name: "migrate", Shares: "web"}}, nil, 1, []string{"web", "migrate"}},
+		{[]Service{{Name: "web", Build: true}, {Name: "tool", Shares: "web", Profiled: true}}, []Service{{Name: "web"}}, 2, []string{"web"}},
+	} {
+		var asked [][]string
+		got, err := listDoorBuilds(func(args []string) ([]Service, error) {
+			asked = append(asked, args)
+			if slices.Equal(args, everyProfileConfig) {
+				return c.all, nil
+			}
+			return c.plain, nil
+		})
+		var names []string
+		for _, s := range got {
+			names = append(names, s.Name)
+		}
+		if err != nil || len(asked) != c.calls || !slices.Equal(asked[0], everyProfileConfig) || !slices.Equal(names, c.want) {
+			t.Errorf("%+v: listed %v (%v), asking %q", c.all, names, err, asked)
+		}
+	}
+}

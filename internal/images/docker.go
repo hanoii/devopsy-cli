@@ -182,14 +182,22 @@ const NoReleaseComposeEnv = "DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE"
 // otherwise keeps of it the services the plain config has (activeOf), so
 // which are active is compose's own reading.
 func ListCompose(rel string, door bool) ([]Service, error) {
+	config := func(args []string) ([]Service, error) { return listCompose(rel, door, args...) }
 	if !doorBuildsIn(rel, door) {
-		return listCompose(rel, door, plainConfig...)
+		return config(plainConfig)
 	}
-	all, err := listCompose(rel, door, everyProfileConfig...)
+	return listDoorBuilds(config)
+}
+
+// listDoorBuilds is ListCompose behind the door in a release that builds, config one compose
+// config of its (plainConfig or everyProfileConfig): every profile's first, and the plain one
+// too only when a service is under a profile, joined (activeOf).
+func listDoorBuilds(config func(args []string) ([]Service, error)) ([]Service, error) {
+	all, err := config(everyProfileConfig)
 	if err != nil || !slices.ContainsFunc(all, func(s Service) bool { return s.Profiled }) {
 		return all, err
 	}
-	plain, err := listCompose(rel, door, plainConfig...)
+	plain, err := config(plainConfig)
 	if err != nil {
 		return nil, err
 	}
