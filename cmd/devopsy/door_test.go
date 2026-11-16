@@ -922,6 +922,46 @@ esac
 	running.Close()
 }
 
+// A builder whose inspect fails is not a builder gone: its container and its cache stay.
+//
+// The bug this proves (ensureBuilder, door.go): any failure of docker buildx inspect is taken
+// for no builder there, and removeLeftover then removes the container and the state volume by
+// their names, as left by a removed key. An inspect that failed for another reason (killed for
+// memory, a limit of its process, a signal from the terminal) beside a builder that is there
+// and running loses the project's whole build cache and ends the builds on it, and the build
+// goes on as if nothing happened, the create failing on the builder's name and the inspect
+// after it answering.
+func TestDoorKeepsABuildersCacheWhenItsInspectFails(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	failed := filepath.Join(dir, "failed")
+	space := filepath.Join(dir, "space")
+	// The builder is there by everything but the first inspect: buildx's record of it, its
+	// listing, its container (running, as devopsy makes it) and its state volume.
+	write(t, filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop"), `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  "buildx inspect "*)
+    [ -e `+failed+` ] || { : >`+failed+`; echo 'signal: killed' >&2; exit 137; }
+    echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
+  "buildx ls --format json") echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}' ;;
+  "container inspect --format "*) echo no ;;
+  "buildx create "*) echo 'ERROR: existing instance for "devopsy-shop" but no append mode' >&2; exit 1 ;;
+  "volume inspect "*|"network inspect "*) ;;
+esac
+`, 0o755)
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
+	_, err := side.builder()
+	for _, removal := range []string{"rm -f buildx_buildkit_devopsy-shop0", "volume rm buildx_buildkit_devopsy-shop0_state", "buildx rm "} {
+		if strings.Contains(readString(log), removal) {
+			t.Errorf("an inspect that failed beside a builder that is there (%v) ran %q:\n%s", err, removal, readString(log))
+		}
+	}
+}
+
 // A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
 // mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
 func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
