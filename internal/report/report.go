@@ -267,6 +267,19 @@ func bracketsIPv6(w string) bool {
 	return ok && closed && err == nil && a.Is6()
 }
 
+// JoinAnd names names in a sentence: "a", "a and b", "a, b and c".
+func JoinAnd(names []string) string { return joinWords(names, " and ") }
+
+// JoinOr names names in a sentence of a choice: "a", "a or b", "a, b or c".
+func JoinOr(names []string) string { return joinWords(names, " or ") }
+
+func joinWords(names []string, last string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + last + names[len(names)-1]
+}
+
 // Failure is an error with details (why it happens) and remedies (what
 // to do about it: fixes and hints). Error() is the message alone, so
 // wrapping keeps the usual "context: message" shape; Fail prints the

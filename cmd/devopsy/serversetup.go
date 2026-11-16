@@ -566,7 +566,7 @@ func refusedWords(stopped []string) string {
 	case 1:
 		return "devopsy left " + words[0] + " as it is"
 	}
-	return "devopsy left " + joinAnd(words) + " as they are"
+	return "devopsy left " + report.JoinAnd(words) + " as they are"
 }
 
 // stepPhrase is a step's name in a sentence, where its name is an item's key with no article.

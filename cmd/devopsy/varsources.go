@@ -217,5 +217,5 @@ func sayHidden(k, oursSays, addr string, nearer []cli.EnvTracedDef, own, parent 
 		}
 		hints = append(hints, report.Hint(fmt.Sprintf("to stop inheriting it: drop %s from %s's inherit: in config.yaml and release %s, then:", k, from, from), "devopsy @"+addr+" --inherit"))
 	}
-	report.Say(report.WarnLevel, fmt.Sprintf("%s in %s has no effect on @%s: %s %s it", k, oursSays, addr, joinAnd(says), verb), nil, hints...)
+	report.Say(report.WarnLevel, fmt.Sprintf("%s in %s has no effect on @%s: %s %s it", k, oursSays, addr, report.JoinAnd(says), verb), nil, hints...)
 }

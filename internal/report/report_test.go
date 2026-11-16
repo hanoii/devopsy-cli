@@ -191,3 +191,24 @@ func TestColorize(t *testing.T) {
 		t.Errorf("got\n%q\nwant\n%q", got, want)
 	}
 }
+
+// Names in a sentence: none, one, two with the word, more with commas before it.
+func TestJoinNamesInASentence(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		names   []string
+		and, or string
+	}{
+		{nil, "", ""},
+		{[]string{"a"}, "a", "a"},
+		{[]string{"a", "b"}, "a and b", "a or b"},
+		{[]string{"a", "b", "c"}, "a, b and c", "a, b or c"},
+	} {
+		if got := JoinAnd(c.names); got != c.and {
+			t.Errorf("JoinAnd(%q) = %q, want %q", c.names, got, c.and)
+		}
+		if got := JoinOr(c.names); got != c.or {
+			t.Errorf("JoinOr(%q) = %q, want %q", c.names, got, c.or)
+		}
+	}
+}
