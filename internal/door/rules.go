@@ -56,6 +56,12 @@ type Policy struct {
 	// ProjectUIDs are every uid the project's claims hold, for an owner devopsy gives the
 	// project's data (the owners form, an rsync's --chown), which the project user asks for.
 	ProjectUIDs []uint32
+	// ImageMode says whether the request's release is in image mode, where a registry serves
+	// its builds and the listing names no sharer of one (sharers), so neither does the render;
+	// asked only of a file with a sharer, nil for none. A release's record is the project
+	// user's to write, and either mode names only images of the project's own or claims one
+	// with its logins.
+	ImageMode func() bool
 }
 
 // ImagesFile is the door's record of a project user's claimed images, in its space: a line
@@ -232,15 +238,46 @@ func CheckFile(file map[string]any, p Policy, verb string, paths Paths) []error 
 	checkTopVolumes(file, name, fail)
 	checkTopNetworks(file, name, p, fail)
 	services, _ := file["services"].(map[string]any)
+	shared := sharers(name, services, p)
 	for _, svc := range sortedKeys(services) {
 		s, ok := services[svc].(map[string]any)
 		if !ok {
 			fail("%s: not a service", svc)
 			continue
 		}
-		checkService(file, name, svc, s, p, verb, paths, fail)
+		checkService(file, name, svc, s, shared[svc], p, verb, paths, fail)
 	}
 	return errs
+}
+
+// sharers are the services of a file that share a build's image (images.Shared: no build:,
+// their image: the name a service's build has), each with the services that build it, in a
+// release that builds (none in image mode, as its listing names none); one devopsy's own
+// file names (named) keeps its name.
+func sharers(name string, services map[string]any, p Policy) map[string][]string {
+	specs := map[string]images.ImageSpec{}
+	for svc, v := range services {
+		s, _ := v.(map[string]any)
+		image, _ := s["image"].(string)
+		specs[svc] = images.ImageSpec{Image: image, Builds: s["build"] != nil}
+	}
+	shared := images.Shared(name, specs)
+	for svc := range shared {
+		if p.named(specs[svc].Image) {
+			delete(shared, svc)
+		}
+	}
+	if len(shared) == 0 || p.ImageMode != nil && p.ImageMode() {
+		return nil
+	}
+	return shared
+}
+
+// named says whether image is one devopsy's own file gives a service, which the render keeps:
+// a pin (image mode's pull, a pulled image held) or a name only the project writes (a
+// release's bookmark, a hold, another environment's build).
+func (p Policy) named(image string) bool {
+	return images.Pinned(image) || p.OwnRef(image)
 }
 
 // variableIn is a string of the file, keys included, holding a `$` not doubled.
@@ -331,7 +368,7 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 	}
 }
 
-func checkService(file map[string]any, name, svc string, s map[string]any, p Policy, verb string, paths Paths, fail func(string, ...any)) {
+func checkService(file map[string]any, name, svc string, s map[string]any, shares []string, p Policy, verb string, paths Paths, fail func(string, ...any)) {
 	// Compose reads other forms of these too, which the rules would not read at all.
 	for _, want := range []struct {
 		key   string
@@ -351,6 +388,17 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		delete(labels, "")
 	}
 	switch b := s["build"]; {
+	case b == nil && len(shares) > 0 && verb != "pull":
+		// A sharer of a build runs that build, by the name this render gives it: the name it
+		// wrote is a registry's, which only compose's build of it ever meant. Two builds of
+		// its name are two images here, and the name says neither. A pull leaves it as it is:
+		// in image mode a registry serves the name to the builder and to it alike.
+		if len(shares) > 1 {
+			image, _ := s["image"].(string)
+			fail("%s", images.SharedTwiceLine(svc, image, shares))
+		} else {
+			s["image"] = images.DoorBuild(name, shares[0])
+		}
 	case b == nil:
 	case verb == "build":
 		block, _ := b.(map[string]any)
@@ -372,8 +420,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		// file holds the service on a pin (image mode's pull, a pulled image held) or on a
 		// name of this project's own (a hold, another environment's build).
 		delete(s, "build")
-		image, _ := s["image"].(string)
-		if !images.Pinned(image) && !p.OwnRef(image) {
+		if image, _ := s["image"].(string); !p.named(image) {
 			s["image"] = images.DoorBuild(name, svc)
 		}
 	}

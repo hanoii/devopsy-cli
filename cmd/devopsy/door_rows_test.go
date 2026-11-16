@@ -129,7 +129,7 @@ func TestDoorVetSeesWhatComposeRuns(t *testing.T) {
 	file := func(label string) map[string]any {
 		return map[string]any{"name": "shop-prod", "services": map[string]any{
 			"web": map[string]any{
-				"image": "busybox:1.37", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
+				"image": "shop-web:1", "user": "10001:10001", "security_opt": []any{"no-new-privileges"},
 				"build":  map[string]any{"context": "/etc", "ssh": []any{"default"}},
 				"labels": map[string]any{label: "1"},
 			},

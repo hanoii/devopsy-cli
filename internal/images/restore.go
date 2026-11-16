@@ -80,7 +80,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	tid := filepath.Base(target)
 	svcs, err := s.List(target)
 	if err != nil {
-		s.say(report.ErrorLevel, "could not list the images of %s: %v", tid, err)
+		s.sayListing("images", target, err)
 		return err
 	}
 	old := readList(target)

@@ -492,7 +492,7 @@ func unseenRefusal(unseen []string, me login, err error) setup.Refusal {
 		whose, it = "their homes", "them"
 	}
 	r := setup.Refusal{Item: setup.RefusalDeployUser,
-		Message: "devopsy cannot tell whether " + joinOr(unseen) + " is already this server's deploy user: " + whose + " cannot be read as " + me.words() + ", nor as root (" + err.Error() + ")",
+		Message: "devopsy cannot tell whether " + report.JoinOr(unseen) + " is already this server's deploy user: " + whose + " cannot be read as " + me.words() + ", nor as root (" + err.Error() + ")",
 		Fix:     "run --server-setup again once root can read " + it + ", or run it as the user who should be the deploy user"}
 	if errors.Is(err, errNoUtilImage) {
 		r.Fix = "run --server-setup, which builds devopsy's util image and reads those homes as root"
@@ -504,14 +504,6 @@ func unseenRefusal(unseen []string, me login, err error) setup.Refusal {
 // --server-info says it to a reader who runs no setup (setup.Refusal.Info).
 func wouldRecord(who, other string) string {
 	return "a --server-setup as " + who + " would record " + who + " and lock " + other + " out"
-}
-
-// joinOr names names in a sentence of a choice: "a", "a or b", "a, b or c".
-func joinOr(names []string) string {
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
 }
 
 // rootReadOther is a setupHost's rootRead for h: the hidden DeployUserOtherFlag run as root on

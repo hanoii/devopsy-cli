@@ -68,16 +68,16 @@ func (s *Set) WriteFetch(rel string) (builds bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	built := map[string]bool{}
+	// Each build and each service sharing one (Shared), which runs it.
+	specs := map[string]ImageSpec{}
 	for _, svc := range svcs {
-		if svc.Build {
-			built[familiar(svc.Ref)] = true
-		}
+		specs[svc.Name] = ImageSpec{Image: svc.Ref, Builds: svc.Build}
 	}
+	shared := Shared(s.Name, specs)
 	id := s.idOf(rel)
 	var b strings.Builder
 	for _, svc := range svcs {
-		if built[familiar(svc.Ref)] {
+		if svc.Build || len(shared[svc.Name]) > 0 {
 			b.WriteString("  " + strconv.Quote(svc.Name) + ":\n    image: " + strconv.Quote(fetchTag(s.Name, id, svc.Ref)) + "\n")
 		}
 	}

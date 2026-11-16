@@ -403,12 +403,19 @@ func TestDoorProjectsLife(t *testing.T) {
 // A door project's life in build mode: what it builds runs under devopsy's name for it
 // (devopsy.internal/<compose name>/<service>), whatever image: says, so a name a registry
 // serves, which another project may pull and run, is never the project's to write; a
-// rollback runs the build it restores by its release's bookmark, and --status reads it. (The life in
+// rollback runs the build it restores by its release's bookmark, and --status reads it. A
+// service with no build: on the build's image: (migrate, no pull_policy either) runs that
+// build too, through every release and the rollback, never the registry's name. (The life in
 // image mode: TestDoorProjectsLife.)
 func TestDoorBuildModeLife(t *testing.T) {
 	dir := doorProject(t, "doorbuild", `services:
   web:
     build: .
+    image: doorbuild-shared:1
+    user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
+    security_opt: [no-new-privileges]
+    command: [sleep, infinity]
+  migrate:
     image: doorbuild-shared:1
     user: "${DEVOPSY_UID:?}:${DEVOPSY_UID:?}"
     security_opt: [no-new-privileges]
@@ -437,9 +444,11 @@ func TestDoorBuildModeLife(t *testing.T) {
 	// whatever the name holds since.
 	runs := func(after, want string) {
 		t.Helper()
-		out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-web-1 && docker exec doorbuild-prod-web-1 cat /v")
-		if got := strings.Fields(out); len(got) != 2 || !strings.HasPrefix(got[0], "sha256:") || got[1] != want {
-			t.Errorf("after %s, web runs %q, want its release's build with %s", after, out, want)
+		for _, svc := range []string{"web", "migrate"} {
+			out, _ := doorRoot(t, "docker inspect -f '{{.Config.Image}}' doorbuild-prod-"+svc+"-1 && docker exec doorbuild-prod-"+svc+"-1 cat /v")
+			if got := strings.Fields(out); len(got) != 2 || !strings.HasPrefix(got[0], "sha256:") || got[1] != want {
+				t.Errorf("after %s, %s runs %q, want its release's build with %s", after, svc, out, want)
+			}
 		}
 	}
 	commitAll(t, dir)

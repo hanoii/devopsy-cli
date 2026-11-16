@@ -233,7 +233,7 @@ func saidCopied(c, src *remote.Target, keys, before []string, log *report.Logger
 		}
 	}
 	if len(fresh) > 0 {
-		log.Warn(fmt.Sprintf("@%s's shared/%s now holds %s (in secrets:), copied from @%s's server", c.Address, remote.ParentEnvFile, joinAnd(fresh), src.Address),
+		log.Warn(fmt.Sprintf("@%s's shared/%s now holds %s (in secrets:), copied from @%s's server", c.Address, remote.ParentEnvFile, report.JoinAnd(fresh), src.Address),
 			"a value that must stay on that server belongs in its environment's shared/.env (--vars set), which only inherit: copies, key by key")
 	}
 }

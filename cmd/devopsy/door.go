@@ -1297,9 +1297,10 @@ func (b *capBuffer) Bytes() []byte { return b.buf.Bytes() }
 // limit, which sshd's look at every project user's keys runs under.
 const doorReadWait = time.Minute
 
-// maxRendered, maxLogins, maxPath and maxEnvironments are what the deploy user reads at most
-// of a project user's answer: a rendered compose file, a project's docker config, a path's
-// resolution, and its environments for --server-info; maxManifest of a registry's manifest or
+// maxRendered, maxLogins, maxPath, maxEnvironments and maxRecord are what the deploy user
+// reads at most of a project user's answer: a rendered compose file, a project's docker
+// config, a path's resolution, its environments for --server-info and a release's record;
+// maxManifest of a registry's manifest or
 // index, which the door holds whole (a registry's own limit is 4 MiB).
 const (
 	maxRendered     = 8 << 20
@@ -1307,6 +1308,7 @@ const (
 	maxPath         = 64 << 10
 	maxEnvironments = 4 << 20
 	maxManifest     = 4 << 20
+	maxRecord       = 1 << 20
 )
 
 // closedDir makes a directory only the deploy user and this project user can reach.
@@ -1524,6 +1526,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 	}
 	s.policy.UIDs = uidsOfOwners(s.claims, owners)
+	s.policy.ImageMode = sync.OnceValue(func() bool { return s.imageMode(real) })
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
@@ -1747,6 +1750,36 @@ func (s *doorSide) mayStart(file map[string]any, profiles, dir string, argv []st
 		return nil, err
 	}
 	return door.MayStart(file, active, argv), nil
+}
+
+// releaseOf is the release a request's directory real is in, by its path under tree:
+// <tree>/[<instance>/]<environment>/releases/<id>/code, or a directory below it, where devopsy
+// finds its project too. ok false for any other directory.
+func releaseOf(tree, real string) (rel string, ok bool) {
+	under, found := strings.CutPrefix(real, strings.TrimRight(tree, "/")+"/")
+	if !found {
+		return "", false
+	}
+	parts := strings.Split(under, "/")
+	for i := 1; i <= 2 && i+2 < len(parts); i++ {
+		if parts[i] == "releases" && parts[i+1] != "" && parts[i+2] == "code" {
+			return filepath.Join(append([]string{tree}, parts[:i+2]...)...), true
+		}
+	}
+	return "", false
+}
+
+// imageMode says whether real, a request's directory, is in a release in image mode
+// (releaseOf), its record read as the project user (doorAnswer: the deploy user never reads
+// the project's tree, whose user can make the record a FIFO); build mode, devopsy's default,
+// for any other directory or a record that does not read.
+func (s *doorSide) imageMode(real string) bool {
+	rel, ok := releaseOf(s.policy.Tree, real)
+	if !ok {
+		return false
+	}
+	out, err := doorAnswer(s.read("cat", filepath.Join(rel, images.RecordFile)), maxRecord, doorReadWait)
+	return err == nil && images.ModeIn(out) == images.ModeImage
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a

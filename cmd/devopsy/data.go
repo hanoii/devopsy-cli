@@ -2217,13 +2217,13 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		others := slices.DeleteFunc(slices.Clone(down), func(s string) bool { return s == name })
 		switch {
 		case slices.Contains(down, name) && len(others) > 0:
-			left = name + " was left stopped with " + joinAnd(others)
+			left = name + " was left stopped with " + report.JoinAnd(others)
 		case slices.Contains(down, name):
 			left = name + " was left stopped"
 		case len(others) == 1:
 			left = others[0] + " was left stopped"
 		case len(others) > 1:
-			left = joinAnd(others) + " were left stopped"
+			left = report.JoinAnd(others) + " were left stopped"
 		}
 		what := fmt.Sprintf("the import of %s into %s did not complete; %s: this starts them on the data the import left", name, confirmWord(t), left)
 		if err := typeToGoOn(what, confirmWord(t), "nothing resolved", false); err != nil {
@@ -2239,14 +2239,6 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 			report.Hint("this shows whether its mark is still there:", "devopsy @"+targetRef(t)+" --status"), report.Fix("", "devopsy @"+targetRef(t)+" --import "+name+" --resolved"))
 	}
 	return code
-}
-
-// joinAnd joins names with commas and a final "and".
-func joinAnd(names []string) string {
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // confirmWord is what a prompt that replaces or removes an environment's

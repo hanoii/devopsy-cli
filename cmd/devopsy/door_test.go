@@ -2081,3 +2081,67 @@ var testShopClaims = []uids.Claim{
 	{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 10001},
 	{Owner: uids.Owner{Project: "shop"}, UID: 10001},
 }
+
+// A request's release is found by its directory's path under the tree, the code of a release
+// or any directory below it, where devopsy finds its project too, an instance's included; any
+// other directory is in no release.
+func TestDoorFindsTheReleaseOfARequest(t *testing.T) {
+	t.Parallel()
+	const tree = "/home/devopsy-shop/shop"
+	for real, want := range map[string]string{
+		tree + "/prod/releases/20260101000000/code":                  tree + "/prod/releases/20260101000000",
+		tree + "/prod/releases/20260101000000/code/.devopsy":         tree + "/prod/releases/20260101000000",
+		tree + "/eu/prod/releases/20260101000000/code/src/app":       tree + "/eu/prod/releases/20260101000000",
+		tree + "/prod/releases/20260101000000":                       "",
+		tree + "/prod/shared":                                        "",
+		tree + "/prod":                                               "",
+		"/home/devopsy-other/shop/prod/releases/20260101000000/code": "",
+	} {
+		if got, ok := releaseOf(tree, real); got != want || ok != (want != "") {
+			t.Errorf("%s: %q, %v, want %q", real, got, ok, want)
+		}
+	}
+}
+
+// A compose request takes its release's mode from the directory it runs in: a sharer of an
+// image two services build refuses a request in a release that builds, and is no refusal in
+// one in image mode, whose builds a registry serves. In a helper process (doorComposeHelper).
+func TestDoorComposeTakesTheReleasesMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	doorImageFake(t, dir)
+	// The project user's reads: a path is itself, and a file reads as it is.
+	write(t, filepath.Join(dir, "sudo"), `#!/bin/sh
+shift 5
+case "$1" in
+  real) printf '%s\n' "$2" ;;
+  cat) exec cat -- "$2" ;;
+  *) exit 1 ;;
+esac
+`, 0o755)
+	rel := filepath.Join(dir, "prod", "releases", "1")
+	code := filepath.Join(rel, "code")
+	if err := os.MkdirAll(code, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builder := `{"image":"registry.example.com/shop/web:1","build":{"context":"` + code + `"},"user":"10001:10001","security_opt":["no-new-privileges"]}`
+	file := `{"name":"shop-prod","services":{"web":` + builder + `,"worker":` + builder +
+		`,"migrate":{"image":"registry.example.com/shop/web:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}`
+	run := func() (string, error) {
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=logs", "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_DIR="+code, "DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run(); err == nil || !strings.Contains(out, "migrate: its image registry.example.com/shop/web:1 is built by both web and worker") {
+		t.Errorf("a release that builds took a sharer of two builds (%v):\n%s", err, out)
+	}
+	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"image"}`, 0o644)
+	if out, err := run(); err != nil || !strings.Contains(out, "ARGS: compose ") {
+		t.Errorf("a release in image mode refused a sharer of two builds (%v):\n%s", err, out)
+	}
+}
