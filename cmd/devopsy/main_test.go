@@ -37,6 +37,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == builderIdleFlag {
 		os.Exit(runBuilderIdle(os.Args[2:]))
 	}
+	if dir := os.Getenv("DEVOPSY_TEST_GC_ON_BUILDER"); dir != "" {
+		gcOnBuilderHelper(dir) // TestGCCutMidBootLeavesTheBuilderStopped
+	}
 	if spec := os.Getenv("DEVOPSY_TEST_LOCKED_DOCKER"); spec != "" {
 		lockedDockerHelper(spec) // TestComposeRunHoldsStartLocks
 	}

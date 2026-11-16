@@ -548,3 +548,55 @@ esac
 		t.Errorf("pruned with until=%s at least 2s after the listing: past the listing's cutoff", got)
 	}
 }
+
+// gcOnBuilderHelper is --gc's use of shop's builder (onBuilder) in dir's space, by dir/bin/docker,
+// for a test to cut mid-boot as a session's end cuts a --gc step
+// (TestGCCutMidBootLeavesTheBuilderStopped).
+func gcOnBuilderHelper(dir string) {
+	g := &gcScope{docker: filepath.Join(dir, "bin", "docker"), self: os.Args[0],
+		door:   &remote.Door{Space: filepath.Join(dir, "space"), Users: map[string]remote.DoorUser{door.UserOf("shop"): {Project: "shop"}}},
+		timing: builderTiming{lock: time.Minute, answer: 5 * time.Second, every: time.Second, bound: time.Minute, stop: 3 * time.Second}}
+	_ = g.onBuilder("shop", func() error { return nil })
+	os.Exit(0)
+}
+
+// A --gc step cut while it boots a project user's builder (the session gone: its group sent
+// SIGTERM, as the watcher and sshd do) leaves the builder stopped, its stopper the backstop.
+//
+// The bug this proves (gcScope.onBuilder, gc.go): --gc holds the builder's lock in its own
+// process only, close-on-exec, and runs the boot (docker buildx inspect --bootstrap), the read
+// and the prune in a process group of their own (outputWithin), so a cut kills --gc and frees
+// the lock while its boot goes on, holding nothing. The stopper takes the lock, finds no
+// container running yet, and ends; the boot then starts the builder, which runs with no
+// stopper until the project's next build. A build's compose holds the lock through its
+// children (kept across its exec), so nothing it starts outlives its hold.
+func TestGCCutMidBootLeavesTheBuilderStopped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	bin := filepath.Join(dir, "bin")
+	booting, running := filepath.Join(dir, "booting"), filepath.Join(dir, "running")
+	// The boot's start lands seconds after it began, as a loaded Docker's does.
+	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
+case "$*" in
+  'buildx inspect --bootstrap devopsy-shop') : >`+booting+`; sleep 3; : >`+running+` ;;
+  'ps -q --filter name=^/buildx_buildkit_devopsy-shop0$ --filter status=running') if [ -e `+running+` ]; then echo c0ffee; fi ;;
+  'stop buildx_buildkit_devopsy-shop0') rm -f `+running+` ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	c := exec.Command(os.Args[0])
+	c.Env = []string{"DEVOPSY_TEST_GC_ON_BUILDER=" + dir, "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "DEVOPSY_HOME=" + doorHome(dir)}
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, booting, "--gc's boot of the builder", startWait, func() string { return "" })
+	_ = syscall.Kill(-c.Process.Pid, syscall.SIGTERM)
+	_ = c.Wait()
+	waitFile(t, running, "the boot's start", startWait, func() string { return "" })
+	waitStoppersGone(t, space, "shop")
+	if _, err := os.Stat(running); err == nil {
+		t.Error("a --gc cut mid-boot left the builder running with no stopper")
+	}
+}
