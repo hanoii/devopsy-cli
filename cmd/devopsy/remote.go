@@ -989,23 +989,28 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	where := t.Host + ":" + t.Path
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		// Its snapshots go too: how many, said. Only a count for the
-		// prompt, so what the session says goes nowhere, and a count that
-		// fails is left out.
+		// Its snapshots go too: how many, said. The count's session runs under the
+		// destroy's needs, so an older server refuses before the name is typed, and a
+		// count that fails stops it, as --gc's listing does, saying its own words.
 		snaps := ""
 		var out bytes.Buffer
-		if code, err := remote.SSHStreams(context.Background(), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
-			n := 0
-			for _, line := range strings.Split(out.String(), "\n") {
-				if len(strings.Split(line, "\t")) >= 6 {
-					n++
-				}
+		code, err := remote.SSHContext(remote.WithAlsoNeeds(context.Background(), remote.DestroyScript(t, projectName)), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false, nil)
+		if err != nil {
+			return failErr(err)
+		}
+		if code != 0 {
+			return code
+		}
+		n := 0
+		for _, line := range strings.Split(out.String(), "\n") {
+			if len(strings.Split(line, "\t")) >= 6 {
+				n++
 			}
-			if n == 1 {
-				snaps = ", and its snapshot"
-			} else if n > 1 {
-				snaps = fmt.Sprintf(", and its %d snapshots", n)
-			}
+		}
+		if n == 1 {
+			snaps = ", and its snapshot"
+		} else if n > 1 {
+			snaps = fmt.Sprintf(", and its %d snapshots", n)
 		}
 		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)%s", t.Name, where, snaps),
 			confirmWord(t), "nothing removed", false); err != nil {

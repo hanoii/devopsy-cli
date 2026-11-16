@@ -417,6 +417,11 @@ It takes the server's image lock before removing anything, waiting up to
 10 minutes for releases that are fetching images, and fetches wait while
 it runs. A failure before the removal removes nothing.
 
+It first asks for the environment's name, saying how many snapshots go
+with it. That count is a session of its own, which fails before the
+question where the destroy would (a server's devopsy too old for it, for
+example); `--yes` asks nothing and goes straight to the destroy.
+
 With nothing at the environment's directory, as a cut `--destroy` leaves
 it, it frees the environment's uid and ends. When a part of that path in
 the release root is a link to no directory (a disk not mounted), it
