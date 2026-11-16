@@ -412,3 +412,24 @@ esac
 		t.Errorf("a stop whose inspect was killed past its bound says the builder is stopped; docker was asked:\n%s", readString(filepath.Join(dir, "docker.log")))
 	}
 }
+
+// A stop whose inspect does not answer within its bound (a daemon slow or hung) has not found
+// the builder gone: it failed, and the stopper tries again (stopWhenIdle), its own lock kept.
+// Bug: stopBuilder takes any failure of its inspect, its kill past the bound included, for a
+// builder gone and returns nil, so the stopper ends as if it stopped it, the builder left
+// running with no stopper until the next build.
+func TestStopBuilderFailsOnAnInspectPastItsBound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+case "$*" in
+  'buildx inspect devopsy-shop') sleep 10; echo 'Status: running' ;;
+  'buildx stop devopsy-shop') ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	if err := stopBuilder(docker, nil, "shop", 200*time.Millisecond); err == nil {
+		t.Error("a stop whose inspect was killed past its bound said the builder is stopped")
+	}
+}
