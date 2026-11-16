@@ -878,8 +878,9 @@ func TestImportRestartAlways(t *testing.T) {
 }
 
 // What a prompt that replaces or removes an environment's data asks to
-// type: its full name, with the instance in a project that has them.
-func TestConfirmWord(t *testing.T) {
+// type: its full name, with the instance in a project that has them, said
+// as its path.
+func TestEnvWord(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ config, address, want string }{
 		{"project: whoami\nenvironments:\n  prod: {}\n", "vm1:prod", "whoami/prod"},
@@ -892,7 +893,7 @@ func TestConfirmWord(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := confirmWord(tg); got != c.want {
+		if got := envWord(tg); got != (typed{"this environment's path", c.want}) {
 			t.Errorf("%s: %q, want %q", c.address, got, c.want)
 		}
 	}

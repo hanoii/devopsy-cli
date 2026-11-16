@@ -85,7 +85,7 @@ func runDestroyProjectUser(t *remote.Target, typed []string, yes bool) int {
 			return code
 		}
 		if err := typeToGoOn("this removes "+door.UserOf(project)+" with all it holds, as listed: its keys, its environments' containers, volumes and data, its images, its tree, its home and its Unix user, and runs no destroy: step of "+project+"'s",
-			project, "nothing removed", false); err != nil {
+			projectWord(project), "nothing removed", false); err != nil {
 			return failErr(err)
 		}
 	}

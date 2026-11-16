@@ -78,7 +78,7 @@ func runReboot(t *remote.Target, args []string) int {
 		if err := json.Unmarshal(out.Bytes(), &look); err != nil {
 			return fail("the server's devopsy answered what this one cannot read: " + err.Error())
 		}
-		if err := typeToGoOn(rebootWhat(t, look), look.Hostname, "nothing rebooted", false); err != nil {
+		if err := typeToGoOn(rebootWhat(t, look), typed{"this server's hostname", look.Hostname}, "nothing rebooted", false); err != nil {
 			return failErr(err)
 		}
 	}

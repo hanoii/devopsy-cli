@@ -794,7 +794,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if !yes {
 		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
 		if reset {
-			confirm = typeToGoOn(fmt.Sprintf("this throws away all of @%s's data (%s:%s: every container and volume, all of shared/mnt, data no copy carries included; shared/.env stays) and copies @%s's (%s:%s) into it, then reruns its release's run step there", t.Address, t.Host, t.Path, p.Address, p.Host, p.Path), confirmWord(t), "nothing reset", false)
+			confirm = typeToGoOn(fmt.Sprintf("this throws away all of @%s's data (%s:%s: every container and volume, all of shared/mnt, data no copy carries included; shared/.env stays) and copies @%s's (%s:%s) into it, then reruns its release's run step there", t.Address, t.Host, t.Path, p.Address, p.Host, p.Path), envWord(t), "nothing reset", false)
 		}
 		if err := confirm; err != nil {
 			return failErr(err)
@@ -837,7 +837,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 func confirmSync(t, p *remote.Target, then, nothing string) error {
 	where := t.Host + ":" + t.Path
 	return typeToGoOn(fmt.Sprintf("this replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then %s", t.Address, where, p.Address, p.Host, p.Path, then),
-		confirmWord(t), nothing, false)
+		envWord(t), nothing, false)
 }
 
 // Server side: the hidden flags a sync runs.

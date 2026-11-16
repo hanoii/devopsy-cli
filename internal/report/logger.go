@@ -173,9 +173,10 @@ func (l *Logger) Input(in LineReader, question, def string) string {
 	return def
 }
 
-// ConfirmName asks to type name to go on: true only when it was.
-func (l *Logger) ConfirmName(in LineReader, name string) bool {
-	return l.Ask(in, "type "+name+" to go on:") == name
+// ConfirmName asks to type name, what of names (for example "this server's hostname"), to go
+// on: true only when it was. The name comes last, before what is typed.
+func (l *Logger) ConfirmName(in LineReader, of, name string) bool {
+	return l.Ask(in, "to go on, type "+of+", "+name+":") == name
 }
 
 // Say writes msg, its details and its remedies at level lv, through

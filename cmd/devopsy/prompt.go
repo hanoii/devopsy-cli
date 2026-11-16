@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"golang.org/x/term"
 )
@@ -18,11 +19,22 @@ var stdinReader = bufio.NewReader(os.Stdin)
 // atTerminal says whether devopsy can ask on stdin.
 func atTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
-// typeToGoOn says what (what follows, the risk) and asks to type name to
-// go on: nothing (what was not done, "nothing removed") as the error when
+// typed is the word a prompt asks to type and what it is, said with it ("this server's
+// hostname"): a word alone reads as a token, not as the name it proves.
+type typed struct{ of, word string }
+
+// envWord is what a prompt that replaces or removes an environment's data asks to type: its
+// path, <project>/[<instance>/]<environment>, the same as its directory under the release root.
+func envWord(t *remote.Target) typed { return typed{"this environment's path", t.Path} }
+
+// projectWord is a project's word to type, its name.
+func projectWord(name string) typed { return typed{"the project's name", name} }
+
+// typeToGoOn says what (what follows, the risk) and asks to type the word
+// to go on: nothing (what was not done, "nothing removed") as the error when
 // something else is typed. Without a terminal it fails, with --yes as the
 // fix. tty asks on the terminal itself, when stdin carries data.
-func typeToGoOn(what, name, nothing string, tty bool, hints ...report.Remedy) error {
+func typeToGoOn(what string, word typed, nothing string, tty bool, hints ...report.Remedy) error {
 	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: []string{what}, Remedies: append(hints, report.Fix("add --yes to go on without asking"))}
 	in, log := report.LineReader(stdinReader), report.Default()
 	if tty {
@@ -36,7 +48,7 @@ func typeToGoOn(what, name, nothing string, tty bool, hints ...report.Remedy) er
 		return noTerminal
 	}
 	log.Say(report.InfoLevel, what, nil, hints...)
-	if !log.ConfirmName(in, name) {
+	if !log.ConfirmName(in, word.of, word.word) {
 		return errors.New(nothing)
 	}
 	return nil

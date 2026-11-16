@@ -155,7 +155,7 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 			what = "runs 'devopsy " + strings.Join(step, " ") + "', then "
 		}
 		if err := typeToGoOn(fmt.Sprintf("this %stakes %s's containers, volumes and built images down and empties %s", what, name, filepath.Join(projectDir, "mnt")),
-			name, "nothing removed", false); err != nil {
+			projectWord(name), "nothing removed", false); err != nil {
 			return failErr(err)
 		}
 	}
