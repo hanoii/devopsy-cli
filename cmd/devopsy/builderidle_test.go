@@ -340,6 +340,45 @@ esac
 	}
 }
 
+// A key's removal goes through a buildx rm that takes longer than a wait on the builder's lock:
+// the rm removes the builder's state volume, its whole build cache, which on a large cache and
+// a slow disk takes minutes, and the removal waits for it as it did.
+//
+// The bug this proves (removeBuilder, enduser.go, its docker calls through dockerRunner): every
+// call of the removal is bounded by builderTimes.lock, the bound of a build's wait on the
+// builder's lock (a minute), a bound the removal never had and its fix did not mean to add (it
+// meant --gc's looks before a boot), so a buildx rm, a container's rm -f or the state volume's
+// rm past a minute is killed (outputWithin) and the key's removal fails ("the key is removed,
+// but ...: docker buildx rm failed"), buildx's record of the builder left, while the daemon
+// goes on removing what it was asked to. The fake's buildx rm takes longer than the bound,
+// shortened for the test.
+//
+// Not parallel: it sets builderTimes, the one timing removeBuilder reads.
+func TestBuilderRemovalOutlastsALockWait(t *testing.T) {
+	saved := builderTimes
+	t.Cleanup(func() { builderTimes = saved })
+	builderTimes.lock = 200 * time.Millisecond
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	log := filepath.Join(dir, "docker.log")
+	record := filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop")
+	write(t, record, `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  'buildx rm devopsy-shop') sleep 1; rm -f `+record+` ;;
+  'container inspect '*|'volume inspect '*) exit 1 ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') echo netid ;;
+  'network rm devopsy-shop-build') ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	if err := removeBuilder(docker, nil, space, "devopsy-shop"); err != nil {
+		t.Errorf("a removal whose buildx rm outlasts a lock's wait failed: %v; docker was asked:\n%s", err, readString(log))
+	}
+}
+
 // A key's removal whose look at the builder failed has not removed it, and says so.
 //
 // The bug this proves (removeBuilder, enduser.go): any failure of docker buildx inspect is
@@ -365,6 +404,36 @@ esac
 `, 0o755)
 	if err := removeBuilder(docker, nil, space, "devopsy-shop"); err == nil && !strings.Contains(readString(log), "buildx rm devopsy-shop") {
 		t.Errorf("a removal whose inspect failed left the builder's record and said nothing, asked:\n%s", readString(log))
+	}
+}
+
+// A key's removal looks at the builder's network by its exact listing: one gone is no failure
+// and is not removed, and a look that fails fails the removal, which never reads it as a
+// network gone, nor removes by name what it did not see.
+func TestBuilderRemovalGoesByItsNetworksListing(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		ls     string
+		failed bool
+	}{
+		"gone":           {ls: ":", failed: false},
+		"a look failing": {ls: "echo 'Cannot connect to the Docker daemon' >&2; exit 1", failed: true},
+	} {
+		dir := t.TempDir()
+		log := filepath.Join(dir, "docker.log")
+		docker := filepath.Join(dir, "docker")
+		write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  'container inspect '*|'volume inspect '*) exit 1 ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') `+c.ls+` ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+		err := removeBuilder(docker, nil, filepath.Join(dir, "space"), "devopsy-shop")
+		if (err != nil) != c.failed || strings.Contains(readString(log), "network rm") {
+			t.Errorf("a removal, its builder's network %s: %v; docker was asked:\n%s", name, err, readString(log))
+		}
 	}
 }
 
