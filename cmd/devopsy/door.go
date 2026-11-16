@@ -1524,6 +1524,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 		}
 	}
 	s.policy.UIDs = uidsOfOwners(s.claims, owners)
+	s.policy.ImageMode = releaseImageMode(real)
 	if err := s.policy.CheckVerb(argv); err != nil {
 		return doorRefused(err)
 	}
@@ -1747,6 +1748,13 @@ func (s *doorSide) mayStart(file map[string]any, profiles, dir string, argv []st
 		return nil, err
 	}
 	return door.MayStart(file, active, argv), nil
+}
+
+// releaseImageMode says whether real, a request's directory, is the code of a release in
+// image mode (images.ModeOf of the release beside it): compose runs a release from its code/.
+// Any other directory reads as build mode, devopsy's default.
+func releaseImageMode(real string) bool {
+	return filepath.Base(real) == "code" && images.ModeOf(filepath.Dir(real)) == images.ModeImage
 }
 
 // checkImageLabels refuses an image that labels its containers with what devopsy or a

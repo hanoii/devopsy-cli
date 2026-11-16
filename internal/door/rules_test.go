@@ -702,10 +702,9 @@ func TestCheckFileRunsASharerOnItsBuildersBuild(t *testing.T) {
 			t.Errorf("the control: %s, migrate on %s: runs %q (%v)", c.verb, c.image, got, errs)
 		}
 	}
-	// The controls above can pass with no exclusion at all: migrate's pin or bookmark is
-	// never web's image there. Devopsy's own file names both on one image (a release's
-	// bookmark, a pin): migrate is then a sharer by its name, and keeps it (sharers' Pinned
-	// and OwnRef), never moved onto devopsy's name for the build, which holds the newest one.
+	// Devopsy's own file names web and migrate on one image (a release's bookmark, a pin):
+	// migrate keeps it (named), never moved onto devopsy's name for the build, which holds the
+	// environment's newest build, not the release's.
 	for _, image := range []string{pin, bookmark} {
 		if got, errs := check("up", builder("web", image), migrate(image)); len(errs) != 0 || got != image {
 			t.Errorf("web and migrate both on %s from devopsy's own file: migrate runs %q (%v)", image, got, errs)
@@ -771,20 +770,14 @@ func TestCheckFileRefusesABindInsideAnEntry(t *testing.T) {
 	}
 }
 
-// Bug: in image mode nothing builds on the server, and the listing names no sharer there
-// (images.ParseComposeConfig without doorBuilds: the record claims a profile's tool by the
-// name it wrote, from its registry), but the render cannot tell the mode and still moves a
-// sharer onto devopsy's name for its builder's build, which no release in image mode ever
-// builds: a tool under a profile that shares a profile's build's registry image (neither
-// named by devopsy's own file) was claimed and run before, and its start is now refused as
-// "its image devopsy.internal/shop-prod/tool is not here". The listing and the render must
-// name a service's image alike.
-func TestCheckFileNamesAnImageModeSharerAsItsListingDoes(t *testing.T) {
+// In image mode a registry serves the builds, and the listing names no sharer (images.ParseComposeConfig
+// without doorBuilds), so neither does the render: a service on a build's image keeps the
+// name it wrote, which the record claimed, and two builds of one name are no refusal there.
+func TestCheckFileLeavesAnImageModeSharerAsItsListingDoes(t *testing.T) {
 	t.Parallel()
 	const config = `{"name":"shop-prod","services":{
 		"tool":{"image":"registry.example.com/shop/tool:1","profiles":["tools"],"build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]},
 		"migrate":{"image":"registry.example.com/shop/tool:1","profiles":["tools"],"user":"10001:10001","security_opt":["no-new-privileges"]}}}`
-	// Image mode's listing: doorBuilds false (doorBuildsIn).
 	svcs, err := images.ParseComposeConfig([]byte(config), false)
 	if err != nil {
 		t.Fatal(err)
@@ -795,11 +788,20 @@ func TestCheckFileNamesAnImageModeSharerAsItsListingDoes(t *testing.T) {
 			listed = s.Ref
 		}
 	}
+	imageMode := testPolicy
+	imageMode.ImageMode = true
 	file := parse(t, config)
-	if errs := CheckFile(file, testPolicy, "run", &fakePaths{}); len(errs) != 0 {
+	if errs := CheckFile(file, imageMode, "run", &fakePaths{}); len(errs) != 0 {
 		t.Fatal(errs)
 	}
 	if got, _ := file["services"].(map[string]any)["migrate"].(map[string]any)["image"].(string); got != listed {
 		t.Errorf("in image mode a start runs migrate on %q, and its release listed and claimed %q", got, listed)
+	}
+	twice := parse(t, `{"name":"shop-prod","services":{
+		"web":{"image":"registry.example.com/shop/web:1","build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]},
+		"worker":{"image":"registry.example.com/shop/web:1","build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]},
+		"migrate":{"image":"registry.example.com/shop/web:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+	if errs := CheckFile(twice, imageMode, "logs", &fakePaths{}); len(errs) != 0 {
+		t.Errorf("in image mode, a sharer of two builds: %v", errs)
 	}
 }

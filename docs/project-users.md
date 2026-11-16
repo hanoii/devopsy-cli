@@ -124,8 +124,10 @@ so a build never lands on a name a registry serves, which another
 project could pull and run. `--releases` shows that name, and
 `devopsy -- config` the `image:` the project wrote.
 
-A service with no `build:` whose `image:` is the name another service's
-build has runs that build, as it would with plain compose:
+In a release that builds (not in image mode, where a registry serves
+the builds), a service with no `build:` whose `image:` is the name
+another service's build has runs that build, as it would with plain
+compose:
 
 ```yaml
 services:
@@ -138,8 +140,9 @@ services:
 ```
 
 A release refuses such a service when its image is built by more than
-one service, since each build is an image of its own here, and when its
-build is only under a profile the release does not use.
+one service, since each build is an image of its own here, and when the
+release runs it but its build is only under a profile the release does
+not use.
 
 Any other image belongs to a project only once it has fetched the
 image with its own registry logins (the `auths` of its

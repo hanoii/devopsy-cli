@@ -56,6 +56,11 @@ type Policy struct {
 	// ProjectUIDs are every uid the project's claims hold, for an owner devopsy gives the
 	// project's data (the owners form, an rsync's --chown), which the project user asks for.
 	ProjectUIDs []uint32
+	// ImageMode: the request's release is in image mode (images.ModeOf), where a registry
+	// serves its builds and the listing names no sharer of one (sharers), so neither does
+	// the render. A release's record is the project user's to write, and either mode
+	// names only images of the project's own or claims one with its logins.
+	ImageMode bool
 }
 
 // ImagesFile is the door's record of a project user's claimed images, in its space: a line
@@ -245,10 +250,13 @@ func CheckFile(file map[string]any, p Policy, verb string, paths Paths) []error 
 }
 
 // sharers are the services of a file that share a build's image (images.Shared: no build:,
-// their image: the name a service's build has), each with the services that build it; one
-// devopsy's own file names (a pin, a name only the project writes: a bookmark, a hold) keeps
-// its name.
+// their image: the name a service's build has), each with the services that build it, in a
+// release that builds (none in image mode, as its listing names none); one devopsy's own
+// file names (named) keeps its name.
 func sharers(name string, services map[string]any, p Policy) map[string][]string {
+	if p.ImageMode {
+		return nil
+	}
 	specs := map[string]images.ImageSpec{}
 	for svc, v := range services {
 		s, _ := v.(map[string]any)
@@ -257,11 +265,18 @@ func sharers(name string, services map[string]any, p Policy) map[string][]string
 	}
 	shared := images.Shared(name, specs)
 	for svc := range shared {
-		if image := specs[svc].Image; images.Pinned(image) || p.OwnRef(image) {
+		if p.named(specs[svc].Image) {
 			delete(shared, svc)
 		}
 	}
 	return shared
+}
+
+// named says whether image is one devopsy's own file gives a service, which the render keeps:
+// a pin (image mode's pull, a pulled image held) or a name only the project writes (a
+// release's bookmark, a hold, another environment's build).
+func (p Policy) named(image string) bool {
+	return images.Pinned(image) || p.OwnRef(image)
 }
 
 // variableIn is a string of the file, keys included, holding a `$` not doubled.
@@ -404,8 +419,7 @@ func checkService(file map[string]any, name, svc string, s map[string]any, share
 		// file holds the service on a pin (image mode's pull, a pulled image held) or on a
 		// name of this project's own (a hold, another environment's build).
 		delete(s, "build")
-		image, _ := s["image"].(string)
-		if !images.Pinned(image) && !p.OwnRef(image) {
+		if image, _ := s["image"].(string); !p.named(image) {
 			s["image"] = images.DoorBuild(name, svc)
 		}
 	}

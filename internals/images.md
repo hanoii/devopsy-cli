@@ -14,7 +14,7 @@
 
 ## The listing
 
-- Each release lists its images per service in `devopsy-images` (`ListFile`: name, image id, service, kind, registry digest, version label, build key), from `compose config --format json` without profiles and without devopsy's own compose file (`NoReleaseComposeEnv`), a door project's builds in build mode named as the door's render names them (`DoorBuild`, `doorBuildsIn`), and their sharers with them (`Shared`), since its config runs unrendered: that listing reads every profile's config, and the plain one too only when a service is under a profile (`ListCompose`, `activeOf`).
+- Each release lists its images per service in `devopsy-images` (`ListFile`: name, image id, service, kind, registry digest, version label, build key), from the services `compose config --format json` gives without profiles, without devopsy's own compose file (`NoReleaseComposeEnv`); a door project's builds in build mode are named as the door's render names them (`DoorBuild`, `doorBuildsIn`), with their sharers (`Shared`), since its config runs unrendered, read from every profile's config, kept to the plain config's services when one is under a profile (`listDoorBuilds`, `activeOf`).
 - Own or pulled comes from compose and the mode of the release listed (`Service.own`, a build in build mode or `pull_policy: never`), never from `RepoDigests` alone: on Docker's containerd store built and loaded images carry `RepoDigests` too, and a pulled image's id is its index digest.
 - A pulled image without a registry digest is restored as own: nothing could hold it.
 - The version label is display only: no field is common to images.

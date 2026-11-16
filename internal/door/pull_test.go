@@ -12,7 +12,8 @@ import (
 // image once. It skips a service with no image, one of the project's own (a build's name, a
 // hold), one the project set to pull_policy never, and one that builds with --ignore-buildable;
 // one that builds is otherwise claimed. A service that shares a build's image is skipped or
-// claimed as that build is. A service the file does not have is refused.
+// claimed as that build is, but in image mode, where a registry serves builds. A service the
+// file does not have is refused.
 func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 	t.Parallel()
 	file := parse(t, `{"name":"shop-prod","services":{
@@ -56,6 +57,12 @@ func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 	}}`)
 	if pull, err := PlanPull(missing, []string{"a", "b", "c"}, []string{"pull"}, testPolicy); err != nil || !pull.IfMissing["postgres:16"] || pull.IfMissing["valkey:8"] {
 		t.Errorf("pulled only when missing: %+v (%v)", pull, err)
+	}
+	// In image mode a registry serves the builds, and a sharer is no build's: it is pulled.
+	imageMode := testPolicy
+	imageMode.ImageMode = true
+	if pull, err := PlanPull(file, active, []string{"pull", "--ignore-buildable", "share"}, imageMode); err != nil || !slices.Equal(pull.Images, []string{"registry.example.com/built:1"}) {
+		t.Errorf("an image mode sharer under --ignore-buildable: %q (%v)", pull.Images, err)
 	}
 	pull, err := PlanPull(file, active, []string{"pull", "--quiet", "--ignore-pull-failures"}, testPolicy)
 	if err != nil || !pull.Quiet || !pull.IgnoreFailures {

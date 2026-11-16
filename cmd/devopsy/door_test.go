@@ -2081,3 +2081,24 @@ var testShopClaims = []uids.Claim{
 	{Owner: uids.Owner{Project: "shop", Env: "prod"}, UID: 10001},
 	{Owner: uids.Owner{Project: "shop"}, UID: 10001},
 }
+
+// The door reads a request's mode from the release whose code it runs in (its record): image
+// mode only there, and any other directory as build mode, devopsy's default.
+func TestDoorReadsTheReleasesMode(t *testing.T) {
+	t.Parallel()
+	rel := t.TempDir()
+	code := filepath.Join(rel, "code")
+	if err := os.Mkdir(code, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if releaseImageMode(code) {
+		t.Error("a release with no record is in image mode")
+	}
+	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"image"}`, 0o644)
+	if !releaseImageMode(code) {
+		t.Error("a release recorded in image mode is not")
+	}
+	if releaseImageMode(rel) {
+		t.Error("a release's own directory, not its code, is in image mode")
+	}
+}
