@@ -361,6 +361,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			{"--root", "where releases live: a directory, named as releases: root", GroupDevopsy}, help})
 	case "--gc":
 		return flags([]Candidate{{"--dry-run", "list what it would remove, ask nothing", GroupDevopsy}, {"--yes", "remove without asking", GroupDevopsy}, help})
+	case "--reboot":
+		return flags([]Candidate{{"--yes", "reboot without asking for the hostname", GroupDevopsy}, help})
 	case "--project-users":
 		switch {
 		case len(words) == 2:

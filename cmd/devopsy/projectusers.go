@@ -95,8 +95,7 @@ func runDestroyProjectUser(t *remote.Target, typed []string, yes bool) int {
 	}
 	if code == sshLost {
 		// Each step stands alone, the user held by the destroy's mark meanwhile.
-		report.Say(report.ErrorLevel, lostSays(t, "", "the destroy may have stopped halfway there, "+door.UserOf(project)+" held by its mark"), nil,
-			report.Fix("", "devopsy @"+targetRef(t)+" --project-users remove "+project+" --destroy"))
+		lostRerun(t, "the destroy may have stopped halfway there, "+door.UserOf(project)+" held by its mark", "--project-users remove "+project+" --destroy")
 	}
 	return code
 }
@@ -192,7 +191,7 @@ func listProjectUsers(d *remote.Door) int {
 			destroyPendingHint(sessionServer(), destroying[who]))
 	}
 	if _, err := os.Stat(remote.DoorRebootMarker); err == nil {
-		report.Warn("sshd takes the door at the next reboot: until then no project user logs in")
+		report.Say(report.WarnLevel, "sshd takes the door at the next reboot: until then no project user logs in", nil, rebootFix(sessionServer()))
 	}
 	return 0
 }
@@ -450,8 +449,8 @@ func addProjectUser(d *remote.Door, project, who, entry, ref string) int {
 	}
 	sayAdded(report.Default(), who, project, entry, ref, had, remote.KeysLeft(remote.DoorKeysFile(who)))
 	if strings.Contains(out.String(), "reboot") {
-		report.Warn("sshd takes the door at the next reboot: until then no project user logs in",
-			"any reboot takes it, one the server does by itself for /run/reboot-required included")
+		report.Say(report.WarnLevel, "sshd takes the door at the next reboot: until then no project user logs in",
+			[]string{"any reboot takes it, one the server does by itself for /run/reboot-required included"}, rebootFix(ref))
 	}
 	warnProcesses(report.Default(), setupHost{root: os.Getenv(remote.HostRootEnv)}, ref, groupOf)
 	return 0

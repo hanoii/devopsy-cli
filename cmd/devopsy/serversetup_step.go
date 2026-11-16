@@ -1191,31 +1191,18 @@ func applySetup(h setupHost, a setupApply) int {
 	// The release locks of the deploy user's environments, held until the restart is
 	// confirmed or given up: Docker never restarts under a release.
 	if restart {
-		var held []*os.File
-		defer func() {
-			for _, l := range held {
-				l.Close()
-			}
-		}()
-		bases, err := deployEnvBases(f.Root)
+		// The apply holds the setup lock already (applyLock).
+		hold, busy, err := holdServer(f.Root, holdHow{})
 		if err != nil {
 			return failed(err.Error() + ": nothing changed")
 		}
-		for _, base := range bases {
-			l, err := os.OpenFile(filepath.Join(base, ".lock"), os.O_CREATE|os.O_WRONLY, 0o644)
-			if err != nil {
-				return failed(err.Error() + ": nothing changed")
-			}
-			held = append(held, l)
-			if ok, _ := tryFlock(l, syscall.LOCK_EX); !ok {
-				report.Fail(errors.New("a release or another change runs in "+base+": Docker is not restarted under it, and nothing changed"),
-					report.Fix("run --server-setup again once it ends"))
-				return 1
-			}
+		if busy != "" {
+			report.Fail(errors.New(busy+": Docker is not restarted under it, and nothing changed"),
+				report.Fix("run --server-setup again once it ends"))
+			return 1
 		}
-		if d, err := remote.ServerDoor(); err == nil && d != nil && len(d.Users) > 0 {
-			report.Info("project users' releases are not waited for: one under way is cut by the restart")
-		}
+		defer hold.release()
+		projectUsersNotWaited("the restart")
 	}
 
 	// docker.service's InvocationID just before the run: the marker's, and what a restart

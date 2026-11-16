@@ -1297,6 +1297,11 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (release-settings, ") || !strings.Contains(out, "\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. upgrade it:\ndevopsy: |    $ devopsy @devopsy@server: --upgrade\ndevopsy: | 2. set DEVOPSY_FEATURE_CHECK=warn") || strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server (%d):\n%s", code, out)
 	}
+	// --destroy's count runs under the destroy's needs: the older server refuses before the
+	// environment's name is asked for.
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--destroy"); code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (") || strings.Contains(out, "no terminal to confirm it on") {
+		t.Fatalf("an older server's --destroy (%d):\n%s", code, out)
+	}
 	// Older still, without --release-settings: the hint upgrades the
 	// server's devopsy too, never the local one (Conventions: hints work
 	// when copied).

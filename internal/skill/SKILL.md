@@ -251,7 +251,8 @@ what `config.yaml` sets.
   then each made as the deploy user with `devopsy @devopsy@<server>:
   --project-users add <project>`, its keys `--ssh-keys --for <project>
   add <key>.pub`. A project user cannot edit its own keys. The first
-  `add` on a server waits for a reboot before project users log in.
+  `add` on a server waits for a reboot (`--reboot`) before project users
+  log in.
   `--project-users remove <project>` drops its keys and keeps the rest;
   `--destroy` after it removes everything the user holds, its Unix user
   last, listed and asked by the project's name first (`--yes` asks
@@ -289,6 +290,11 @@ what `config.yaml` sets.
   removed by hand left, unused anonymous volumes, a cut `--destroy`, a
   project user with no key that still holds something), each with a
   command as its hint, none removed and none an exit 3.
+- `devopsy @<server> --reboot` reboots a server as its deploy user, once
+  its hostname is typed (`--yes`: not asked), and waits up to 10 minutes
+  for it to answer on a new boot; it is refused while a release or a
+  setup runs there. It is the fix wherever devopsy says a reboot is
+  needed.
 - What devopsy checks on a server and does not set up (Docker, the tools,
   `/proc`'s `hidepid`, what project users need, the kernel's command line,
   the data on XFS)

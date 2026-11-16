@@ -1127,6 +1127,29 @@ Examples:
   devopsy @vm1 --gc --dry-run
   devopsy @vm1 --gc
 `,
+	"--reboot": `Usage: devopsy @<server> --reboot [--yes]
+
+Reboots the server, as its deploy user, through systemd as root in
+devopsy's util image, then waits up to 10 minutes for it to answer on a
+new boot. It first says how many containers stop and what waits for a
+reboot (/run/reboot-required), and asks for the server's hostname.
+
+It is refused while a release, or another change that holds an
+environment's lock, runs in one of the deploy user's environments, or a
+setup of the server runs: nothing waits for them. Project users'
+releases are not waited for, and one under way is cut. It is refused
+too when Docker does not answer or is not this host's, or systemd is
+not its init: reboot it as root then.
+
+The containers Docker restarts (a restart policy) come back with it;
+--server-info shows the server once it is back.
+
+Options:
+  --yes   reboot without asking
+
+Examples:
+  devopsy @vm1 --reboot
+`,
 	"--server-setup": `Usage: devopsy @<server> --server-setup [--yes] [--root <dir>]
 
 Sets up the server for devopsy, as its deploy user, the server named with
