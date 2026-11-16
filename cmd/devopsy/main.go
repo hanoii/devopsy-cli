@@ -126,6 +126,9 @@ func run() int {
 	// directory cannot be read (another user's, as root's is for a deploy
 	// user).
 	if len(args) > 0 {
+		if err := deployUserStep(args[0], asProjectUser); err != nil {
+			return failErr(err)
+		}
 		switch args[0] {
 		case "--version":
 			fmt.Printf("devopsy %s\n", version)
