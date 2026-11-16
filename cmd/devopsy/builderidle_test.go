@@ -547,3 +547,35 @@ esac
 		t.Errorf("--gc on a stopped builder whose network a prune took: exit %d, its cache not pruned; docker was asked:\n%s", code, asked)
 	}
 }
+
+// A build that loses the making of its builder's network to another build of the project goes
+// on: the network is there, which is all its boot needs.
+//
+// The bug this proves (builderBootable, builderidle.go): the network's look and its making
+// are two docker calls under no lock, so two builds of one project that both find it gone (a
+// project's first builds, two environments released at once; or the first builds after a
+// docker network prune) both make it, and Docker refuses the second ("network with name
+// devopsy-shop-build already exists", Docker 29.8.2, eight docker network create of one name
+// at once: one made it, seven refused). builderBootable takes that refusal for a builder that
+// cannot boot and the door refuses the build, where ensureBuilder forgives the same lost race
+// on buildx create right after. The fake's create is the loser's: the network is there by
+// then, made by the other build, and the create fails as Docker's does.
+func TestBuilderBootableBesideAnotherBuildMakingItsNetwork(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	net := filepath.Join(dir, "net")
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+case "$*" in
+  'container inspect '*) echo 'Error response from daemon: No such container' >&2; exit 1 ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') if [ -e `+net+` ]; then cat `+net+`; fi ;;
+  'network create devopsy-shop-build') echo netid >`+net+`; echo 'Error response from daemon: network with name devopsy-shop-build already exists' >&2; exit 1 ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	run := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
+	if err := builderBootable(run, run, space, "shop", testBuilderTiming); err != nil {
+		t.Errorf("a build whose builder's network another build made first is refused, the network there: %v", err)
+	}
+}
