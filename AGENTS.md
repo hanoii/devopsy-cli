@@ -125,6 +125,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - A message is found from its output by its words apart from a term's, or by the term's words, which lead to its form in `internal/vocab` and from there to every message that uses it.
 - Details and remedies travel through wrapping in a `report.Failure` (`report.Fail(err, more...)`), and a command adds only the remedies it alone knows.
 - Prompts (`Logger.Confirm`, `Input`, `ConfirmName`) run only at a terminal; without one the command fails, naming `--yes`.
+- A word to type names what it is and comes last, before the answer (`typed`, for example `to go on, type this server's hostname, vm1:`): a word alone reads as a token, not as the name it proves.
 - A server script says things through the hidden `devopsy --say <level> <message> [<detail>...] [--fix|--hint <text> [<command>...]]...` (its remedies through `sayRemedies`), and prints the lines `report` builds (`echoLine`, remedies included) only where it cannot rely on the server's devopsy (`basePrelude`'s checks, the `--ssh-keys` scripts).
 - `--say` fails when its write fails, as `echo` does: a release's script relies on that before its switch.
 - A stretch likely to take long (for example a fetch, a copy, a lock wait) says its time on a new line once it went through, never on a failure, through `report.Timer` in Go and `sayTook` in a script: a line the code or a test matches stops matching with a time on it.

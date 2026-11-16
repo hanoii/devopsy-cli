@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -101,10 +103,28 @@ func holdServer(root string, how holdHow) (serverHold, string, error) {
 	return hold, "", nil
 }
 
-// projectUsersNotWaited says, when the server has project users, that a change of the whole
-// server (what) cuts their releases: holdServer holds the deploy user's alone.
-func projectUsersNotWaited(what string) {
-	if d, err := remote.ServerDoor(); err == nil && d != nil && len(d.Users) > 0 {
-		report.Info("project users' releases are not waited for: one under way is cut by " + what)
+// projectLines are what a question before a change of the whole server (what, "the reboot")
+// says of its projects, the deploy user's (own) and the project users' (users): names the
+// operator knows the server by, and, where it has project users, that what cuts their
+// releases, since holdServer holds the deploy user's alone.
+func projectLines(own, users []string, what string) []string {
+	lines := []string{"no project is released there"}
+	if len(own) > 0 {
+		lines[0] = "its projects: " + fewNames(own)
 	}
+	if len(users) > 0 {
+		lines = append(lines, "project users' projects: "+fewNames(users),
+			"project users' releases are not waited for: one under way is cut by "+what)
+	}
+	return lines
+}
+
+// fewNames names names in a sentence, the first ten and how many more: a question never
+// scrolls.
+func fewNames(names []string) string {
+	const shown = 10
+	if len(names) > shown {
+		names = append(slices.Clone(names[:shown]), strconv.Itoa(len(names)-shown)+" more")
+	}
+	return report.JoinAnd(names)
 }

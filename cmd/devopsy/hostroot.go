@@ -28,6 +28,9 @@ type hostRun struct {
 	// Ptrace adds CAP_SYS_PTRACE, which a host hiding other users' processes (/proc's hidepid)
 	// asks of a root without every capability of the process it looks at.
 	Ptrace bool
+	// Unconfined runs without Docker's AppArmor profile, which a host whose dbus-daemon applies
+	// AppArmor's rules refuses the system bus: the reboot's call to logind alone.
+	Unconfined bool
 	// Script runs as /bin/sh -c, its arguments after "sh" as $0.
 	Script string
 	Args   []string
@@ -58,6 +61,9 @@ func (r hostRun) dockerArgs() []string {
 	}
 	if r.Ptrace {
 		a = append(a, "--cap-add", "SYS_PTRACE")
+	}
+	if r.Unconfined {
+		a = append(a, "--security-opt", "apparmor=unconfined")
 	}
 	bind := "/:/host:ro"
 	if r.Write {

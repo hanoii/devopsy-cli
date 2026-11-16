@@ -2926,7 +2926,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		if noCode {
 			how = ""
 		}
-		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes", t.Address, what, how, t.Host, t.Path), confirmWord(t), "nothing restored", false, report.Hint("a snapshot first keeps it:", "devopsy @"+targetRef(t)+" --snapshot")); err != nil {
+		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes", t.Address, what, how, t.Host, t.Path), nil, envWord(t), "nothing restored", false, report.Hint("a snapshot first keeps it:", "devopsy @"+targetRef(t)+" --snapshot")); err != nil {
 			return failErr(err)
 		}
 	}

@@ -2225,8 +2225,8 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		case len(others) > 1:
 			left = report.JoinAnd(others) + " were left stopped"
 		}
-		what := fmt.Sprintf("the import of %s into %s did not complete; %s: this starts them on the data the import left", name, confirmWord(t), left)
-		if err := typeToGoOn(what, confirmWord(t), "nothing resolved", false); err != nil {
+		what := fmt.Sprintf("the import of %s into %s did not complete; %s: this starts them on the data the import left", name, t.Path, left)
+		if err := typeToGoOn(what, nil, envWord(t), "nothing resolved", false); err != nil {
 			return failErr(err)
 		}
 	}
@@ -2241,20 +2241,13 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	return code
 }
 
-// confirmWord is what a prompt that replaces or removes an environment's
-// data asks to type: its full name, <project>/[<instance>/]<environment>,
-// the same as its directory under the release root.
-func confirmWord(t *remote.Target) string {
-	return t.Path
-}
-
 // confirmImport asks for the environment's name before its data is
 // replaced, like --sync, on the terminal itself: stdin carries the data.
 // Without a terminal it fails: --yes is the way there.
 func confirmImport(t *remote.Target, name string) error {
 	where := t.Host + ":" + t.Path
-	return typeToGoOn(fmt.Sprintf("this replaces %s's data on @%s (%s) with what stdin carries", name, t.Address, where),
-		confirmWord(t), "nothing imported", true)
+	return typeToGoOn(fmt.Sprintf("this replaces %s's data on @%s (%s) with what stdin carries", name, t.Address, where), nil,
+		envWord(t), "nothing imported", true)
 }
 
 // stdinFailure is an import of name run at a terminal: it reads the data

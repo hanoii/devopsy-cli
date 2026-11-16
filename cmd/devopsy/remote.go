@@ -1012,8 +1012,8 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		} else if n > 1 {
 			snaps = fmt.Sprintf(", and its %d snapshots", n)
 		}
-		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)%s", t.Name, where, snaps),
-			confirmWord(t), "nothing removed", false); err != nil {
+		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)%s", t.Name, where, snaps), nil,
+			envWord(t), "nothing removed", false); err != nil {
 			return failErr(err)
 		}
 	}

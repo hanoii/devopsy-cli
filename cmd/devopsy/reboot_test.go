@@ -23,9 +23,12 @@ import (
 // this host's, logs each call, and runs the reboot as the state files say (state/<name>):
 // shutdown gives the host a new boot id and kills the act once systemd answered, as a
 // shutdown does; cutrun does both before systemd answers; cutearly kills the act before it
-// says its boot; runfail fails the root run; rootless answers as a rootless daemon; stopping
-// has systemctl say the system is stopping. Its ssh ends 255 on a session killed, as one cut
-// by a reboot does.
+// says its boot; runfail fails the root run; blocklate fails it as logind does on a block
+// inhibitor taken since the check, which it takes; rootless answers as a rootless daemon; stopping
+// has systemctl say the system is stopping. Its busctl is logind's as the state files say:
+// none answers without logind; block adds a block inhibitor of shutdowns to the delay one
+// every list has; preparing has logind prepare the shutdown. Its ssh ends 255 on a session
+// killed, as one cut by a reboot does.
 type rebootServer struct {
 	t                                   *testing.T
 	home, host, state, log, bin, config string
@@ -59,8 +62,9 @@ case "$*" in
   'image inspect -f {{.Id}} {{.Created}} '*)
     [ -e `+s.state+`/cutearly ] && kill -TERM $PPID
     echo "sha256:u $(date -u +%Y-%m-%dT%H:%M:%SZ)" ;;
-  'run --rm --network none --pid host -v /:/host:ro --pull never '*)
+  'run --rm --network none --pid host '*)
     [ -e `+s.state+`/runfail ] && { echo "Failed to reboot: Access denied" >&2; exit 1; }
+    [ -e `+s.state+`/blocklate ] && { : >`+s.state+`/block; echo "Call failed: Operation denied due to active block inhibitor" >&2; exit 1; }
     if [ -e `+s.state+`/cutrun ]; then echo boot-2 >`+s.host+`/proc/sys/kernel/random/boot_id; kill -TERM $PPID; fi
     # systemd answers, then the shutdown comes: the act says asked and holds the locks until
     # it is killed, which waits on nothing the test does.
@@ -69,6 +73,18 @@ case "$*" in
 esac
 `, 0o755)
 	write(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\n[ \"$*\" = is-system-running ] || exit 9\nif [ -e "+s.state+"/stopping ]; then echo stopping; else echo running; fi\nexit 1\n", 0o755)
+	// A host's own busctl would ask the machine's logind.
+	write(t, filepath.Join(bin, "busctl"), `#!/bin/sh
+[ -e `+s.state+`/logind ] || { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }
+delay='["shutdown","Unattended Upgrades Shutdown","Stop ongoing upgrades","delay",0,8]'
+case "$*" in
+  *' ListInhibitors')
+    if [ -e `+s.state+`/block ]; then echo '{"type":"a(ssssuu)","data":[[["shutdown:sleep","apt","installing packages","block",0,7],'"$delay"']]}'
+    else echo '{"type":"a(ssssuu)","data":[['"$delay"']]}'; fi ;;
+  *' PreparingForShutdown') if [ -e `+s.state+`/preparing ]; then echo "b true"; else echo "b false"; fi ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + s.home, remote.HostRootEnv + "=" + s.host, "DEVOPSY_HOME=" + s.config}
 	return s
 }
@@ -130,16 +146,26 @@ func (s *rebootServer) hold(path string, how int) {
 }
 
 // TestRebootLook keeps the look's facts what the prompt says (the hostname, the boot id, the
-// running containers, the reboot flag and its packages once each), the look creating no lock
-// file, and the prompt refused without a terminal before any act, naming --yes.
+// running containers, the reboot flag and its packages once each, the deploy user's projects
+// and the project users', with what the reboot cuts of theirs), the look creating no lock
+// file, and the prompt refused without a terminal before any act, naming --yes; a server with
+// no project says so.
 func TestRebootLook(t *testing.T) {
 	t.Parallel()
 	s := newRebootServer(t)
 	write(t, filepath.Join(s.host, remote.RebootRequired), "", 0o644)
 	write(t, filepath.Join(s.host, remote.RebootRequired+".pkgs"), "linux-image-amd64\ndevopsy\nlinux-image-amd64\n", 0o644)
+	for _, p := range []string{"blog10", "blog9"} {
+		if err := os.MkdirAll(filepath.Join(s.home, p, "prod", "releases"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(s.config, remote.ConfigFile), "door:\n  space: "+filepath.Join(s.config, "space")+"\n", 0o644)
+	write(t, filepath.Join(s.config, "door", "users", "devopsy-site.yaml"), "project: site\n", 0o600)
+	write(t, filepath.Join(s.config, "door", "users", "devopsy-app.yaml"), "project: app\n", 0o600)
 	out, errs, code := s.step("look")
 	host, _ := os.Hostname()
-	if code != 0 || strings.TrimSpace(out) != `{"hostname":"`+host+`","running":2,"reboot_required":true,"packages":["linux-image-amd64","devopsy"]}` {
+	if code != 0 || strings.TrimSpace(out) != `{"hostname":"`+host+`","running":2,"reboot_required":true,"packages":["linux-image-amd64","devopsy"],"projects":["blog9","blog10","shop"],"user_projects":["app","site"]}` {
 		t.Fatalf("look (%d): %s%s", code, out, errs)
 	}
 	if fileExists(filepath.Join(s.home, "shop", "prod", ".lock")) || fileExists(setup.LockPath(setup.RecordPath(filepath.Join(s.config, remote.ConfigFile)))) {
@@ -147,8 +173,35 @@ func TestRebootLook(t *testing.T) {
 	}
 	said, code := s.run()
 	if code != 1 || !strings.Contains(said, "devopsy: error: nothing rebooted: no terminal to confirm it on\n") ||
-		!strings.Contains(said, "devopsy: | this reboots "+host+" (devopsy@server): its 2 running containers stop") || !strings.Contains(said, "add --yes to go on without asking") || s.rebooted() != "" {
+		!strings.Contains(said, "devopsy: | this reboots "+host+" (devopsy@server): its 2 running containers stop") ||
+		!strings.Contains(said, "devopsy: | its projects: blog9, blog10 and shop\n"+
+			"devopsy: | project users' projects: app and site\n"+
+			"devopsy: | project users' releases are not waited for: one under way is cut by the reboot\n") ||
+		!strings.Contains(said, "add --yes to go on without asking") || s.rebooted() != "" {
 		t.Errorf("no terminal (%d):\n%s", code, said)
+	}
+	if err := os.RemoveAll(filepath.Join(s.config, "door")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"blog10", "blog9", "shop"} {
+		if err := os.RemoveAll(filepath.Join(s.home, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if said, code := s.run(); code != 1 || !strings.Contains(said, "devopsy: | no project is released there\n") || strings.Contains(said, "project users") {
+		t.Errorf("no project (%d):\n%s", code, said)
+	}
+}
+
+// TestFewNames keeps a list in a prompt short: ten names, then how many more.
+func TestFewNames(t *testing.T) {
+	t.Parallel()
+	names := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	if got := fewNames(names); got != "a, b, c, d, e, f, g, h, i and j" {
+		t.Errorf("ten: %q", got)
+	}
+	if got := fewNames(append(names, "k", "l")); got != "a, b, c, d, e, f, g, h, i, j and 2 more" {
+		t.Errorf("twelve: %q", got)
 	}
 }
 
@@ -175,6 +228,8 @@ func TestRebootRefuses(t *testing.T) {
 			s.hold(filepath.Join(base, remote.SyncLockFile), syscall.LOCK_EX)
 		}, false},
 		{"rootless", "devopsy: error: Docker: the Docker devopsy reaches is not this host's docker.service (rootless, or another host's: ", func(s *rebootServer) { s.set("rootless") }, false},
+		// logind refuses a reboot while a block inhibitor of shutdowns holds, root's included.
+		{"block inhibitor", "devopsy: error: apt holds off a shutdown (installing packages), which logind refuses while it holds: nothing rebooted\n", func(s *rebootServer) { s.set("logind"); s.set("block") }, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -206,30 +261,46 @@ func TestRebootRefuses(t *testing.T) {
 func TestReboot(t *testing.T) {
 	t.Parallel()
 	host, _ := os.Hostname()
+	// Asked of logind where it answers, so its inhibitors hold, without Docker's AppArmor
+	// profile only where the host's AppArmor rules dbus-daemon; systemctl reboot without it.
 	t.Run("back", func(t *testing.T) {
 		t.Parallel()
-		s := newRebootServer(t)
-		s.set("shutdown")
-		// With project users, whose releases are not waited for.
-		write(t, filepath.Join(s.config, remote.ConfigFile), "door:\n  space: "+filepath.Join(s.config, "space")+"\n", 0o644)
-		write(t, filepath.Join(s.config, "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
-		said, code := s.run("--yes")
-		run := s.rebooted()
-		if code != 0 || !strings.Contains(said, "devopsy: "+host+" reboots\n") || !strings.HasSuffix(run, "chroot /host /bin/sh -c SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot") ||
-			!strings.Contains(said, "devopsy: project users' releases are not waited for: one under way is cut by the reboot\n") {
-			t.Errorf("back (%d): %s\n%s", code, run, said)
-		}
-		b, _ := os.ReadFile(s.log)
-		if calls := string(b); strings.Index(calls, "image inspect") > strings.Index(calls, "run ") {
-			t.Errorf("the image readied after the run:\n%s", calls)
+		logind := "--pid host -v /:/host:ro --pull never " + remote.UtilImage + " chroot /host /bin/sh -c exec busctl call " + logindManager + " Reboot b false"
+		for _, c := range []struct {
+			name   string
+			states []string
+			dbus   bool
+			run    string
+		}{
+			{"no logind", nil, false, "--pid host -v /:/host:ro --pull never " + remote.UtilImage + " chroot /host /bin/sh -c SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot"},
+			{"logind", []string{"logind"}, false, logind},
+			{"logind, AppArmor on the bus", []string{"logind"}, true, "--pid host --security-opt apparmor=unconfined -v /:/host:ro --pull never " + remote.UtilImage + " chroot /host /bin/sh -c exec busctl call " + logindManager + " Reboot b false"},
+		} {
+			s := newRebootServer(t)
+			for _, st := range append(c.states, "shutdown") {
+				s.set(st)
+			}
+			if c.dbus {
+				write(t, filepath.Join(s.host, "sys", "kernel", "security", "apparmor", "features", "dbus", "mask"), "acquire send receive\n", 0o644)
+			}
+			said, code := s.run("--yes")
+			run := s.rebooted()
+			if code != 0 || !strings.Contains(said, "devopsy: "+host+" reboots\n") || run != "run --rm --network none "+c.run {
+				t.Errorf("%s (%d): %s\n%s", c.name, code, run, said)
+			}
+			b, _ := os.ReadFile(s.log)
+			if calls := string(b); strings.Index(calls, "image inspect") > strings.Index(calls, "run ") {
+				t.Errorf("%s: the image readied after the run:\n%s", c.name, calls)
+			}
 		}
 	})
-	// Cut before systemd answered: it may reboot, and the wait tells.
+	// Cut before the act could say whether systemd took the reboot (its answer lost as the
+	// shutdown began, or the session cut): it may reboot, and the wait tells.
 	t.Run("cut at the run", func(t *testing.T) {
 		t.Parallel()
 		s := newRebootServer(t)
 		s.set("cutrun")
-		if said, code := s.run("--yes"); code != 0 || !strings.Contains(said, "devopsy: "+host+" may reboot: the session was cut before systemd answered\n") {
+		if said, code := s.run("--yes"); code != 0 || !strings.Contains(said, "devopsy: "+host+" may reboot: the session was cut before devopsy could tell whether systemd took it\n") {
 			t.Errorf("(%d):\n%s", code, said)
 		}
 	})
@@ -249,11 +320,23 @@ func TestReboot(t *testing.T) {
 		s := newRebootServer(t)
 		s.set("runfail")
 		out, errs, code := s.step("act", "1")
-		if code != 1 || out != "boot boot-1 "+host+"\nfailed\n" || !strings.Contains(errs, "devopsy: error: the reboot was not asked: systemctl reboot, as root") {
+		if code != 1 || out != "boot boot-1 "+host+"\nfailed\n" || !strings.Contains(errs, "devopsy: error: the reboot was not asked: Failed to reboot: Access denied\n") {
 			t.Errorf("act (%d): %q\n%s", code, out, errs)
 		}
 		if said, code := s.run("--yes"); code != 1 || strings.Contains(said, "reboots\n") || strings.Contains(said, "waiting for") {
 			t.Errorf("--yes (%d):\n%s", code, said)
+		}
+	})
+	// logind refusing for a block inhibitor taken since the check names its holder.
+	t.Run("blocked since the check", func(t *testing.T) {
+		t.Parallel()
+		s := newRebootServer(t)
+		s.set("logind")
+		s.set("blocklate")
+		out, errs, code := s.step("act", "1")
+		if code != 1 || out != "boot boot-1 "+host+"\nfailed\n" || !strings.Contains(errs, "devopsy: error: apt holds off a shutdown (installing packages), which logind refuses while it holds: nothing rebooted\n") ||
+			strings.Contains(errs, "not asked") {
+			t.Errorf("act (%d): %q\n%s", code, out, errs)
 		}
 	})
 	t.Run("not down", func(t *testing.T) {
@@ -264,18 +347,23 @@ func TestReboot(t *testing.T) {
 			t.Errorf("act (%d): %q\n%s", code, out, errs)
 		}
 	})
-	// While systemd stops the system, a run that failed (Docker went down under it) and a
+	// While systemd stops the system, or logind prepares the shutdown a delay inhibitor holds
+	// off (the system still running), a run that failed (Docker went down under it) and a
 	// shutdown longer than the bound both took the reboot, which the operator's wait follows.
 	t.Run("stopping", func(t *testing.T) {
 		t.Parallel()
-		for _, state := range []string{"runfail", ""} {
-			s := newRebootServer(t)
-			s.set("stopping")
-			if state != "" {
-				s.set(state)
-			}
-			if out, errs, code := s.step("act", "1"); code != 0 || out != "boot boot-1 "+host+"\nasked\n" || strings.Contains(errs, "error") {
-				t.Errorf("%s (%d): %q\n%s", state, code, out, errs)
+		for _, down := range [][]string{{"stopping"}, {"logind", "preparing"}} {
+			for _, state := range []string{"runfail", ""} {
+				s := newRebootServer(t)
+				for _, st := range down {
+					s.set(st)
+				}
+				if state != "" {
+					s.set(state)
+				}
+				if out, errs, code := s.step("act", "1"); code != 0 || out != "boot boot-1 "+host+"\nasked\n" || strings.Contains(errs, "error") {
+					t.Errorf("%s %s (%d): %q\n%s", down, state, code, out, errs)
+				}
 			}
 		}
 	})

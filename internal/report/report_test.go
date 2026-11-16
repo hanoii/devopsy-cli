@@ -122,7 +122,7 @@ func TestPrompts(t *testing.T) {
 	if got := l.Input(in, "the project's name", "dflt"); got != "whoami" {
 		t.Errorf("answer: %q", got)
 	}
-	if !l.ConfirmName(in, "prod") {
+	if !l.ConfirmName(in, "this environment's path", "prod") {
 		t.Error("prod typed")
 	}
 	if l.Confirm(in, "go on?") {
@@ -131,7 +131,7 @@ func TestPrompts(t *testing.T) {
 	if l.Confirm(in, "go on?") {
 		t.Error("nothing is a no")
 	}
-	want := "devopsy: go on anyway? [y/N] devopsy: the project's name [dflt]: devopsy: the project's name [dflt]: devopsy: type prod to go on: devopsy: go on? [y/N] devopsy: go on? [y/N] "
+	want := "devopsy: go on anyway? [y/N] devopsy: the project's name [dflt]: devopsy: the project's name [dflt]: devopsy: to go on, type this environment's path, prod: devopsy: go on? [y/N] devopsy: go on? [y/N] "
 	if out.String() != want {
 		t.Errorf("got\n%q\nwant\n%q", out.String(), want)
 	}

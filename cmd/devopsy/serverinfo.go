@@ -952,6 +952,22 @@ func ownProjects(root string, trees map[string]string, owned func(path string) b
 	return out, err
 }
 
+// projectNames are the names of the server's projects, the deploy user's under the release
+// root root (ownProjects) and the project users' (doorProjects), each sorted as people count:
+// what the operator knows a server by. A directory that does not read is left out.
+func projectNames(root string) (own, users []string) {
+	ps, _ := ownProjects(root, doorTrees(root), ownedByMe)
+	for _, p := range ps {
+		own = append(own, filepath.Base(p))
+	}
+	if d, err := remote.ServerDoor(); err == nil {
+		users = doorProjects(d)
+	}
+	slices.SortFunc(own, byName)
+	slices.SortFunc(users, byName)
+	return own, users
+}
+
 // deployEnvBases are the deploy user's environments' directories in root (ownProjects), with
 // an error for a directory it could not read.
 func deployEnvBases(root string) ([]string, error) {

@@ -39,6 +39,10 @@ type Facts struct {
 	// through its restart.
 	Running     int  `json:"running"`
 	LiveRestore bool `json:"live_restore"`
+	// Projects are the deploy user's projects, UserProjects the project users', which a
+	// restart's question names.
+	Projects     []string `json:"projects,omitempty"`
+	UserProjects []string `json:"user_projects,omitempty"`
 	// Candidates are the volumes the root could be on, each offered or not (Candidate.Refusal,
 	// the path's or the config's), none while devopsy names no other root (the config names one,
 	// or the root holds something of devopsy's).
