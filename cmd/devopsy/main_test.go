@@ -33,6 +33,10 @@ var binary string
 const startWait = time.Minute
 
 func TestMain(m *testing.M) {
+	// A door build's stopper, the test binary as devopsy (selfPath).
+	if len(os.Args) > 1 && os.Args[1] == builderIdleFlag {
+		os.Exit(runBuilderIdle(os.Args[2:]))
+	}
 	if spec := os.Getenv("DEVOPSY_TEST_LOCKED_DOCKER"); spec != "" {
 		lockedDockerHelper(spec) // TestComposeRunHoldsStartLocks
 	}

@@ -114,7 +114,14 @@ to the project user again when the container exits.
 
 Each project builds on a BuildKit builder of its own (`devopsy-shop`),
 on a Docker network of its own (`devopsy-shop-build`), so no project's
-build shares another's cache or reaches another's builder.
+build shares another's cache or reaches another's builder. The builder
+runs only while a build of the project does: a build starts it, and it
+is stopped, its cache kept, once no build of the project is left, so an
+idle project user holds no builder's memory. Docker never restarts it on
+its own, after a reboot included. Its stop is a process of the deploy
+user's that outlives the build, which logind's `KillUserProcesses=yes`
+(not its default) would end with the project user's session, leaving
+the builder up until the next build or `--gc`.
 
 What a project user builds is named `devopsy.internal/<compose
 name>/<service>`, whatever the service's `image:` says, and a release's

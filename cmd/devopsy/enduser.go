@@ -139,22 +139,40 @@ func endUser(who string) error {
 
 // endBuilder removes the project user who's builder and its network, which the door makes anew
 // at the next build (doorSide.builder, both named from its project, door.BuilderOf): what a removed key built is
-// in its caches (cache mounts, layers), which a later build of the owner's would trust.
+// in its caches (cache mounts, layers), which a later build of the owner's would trust. It takes
+// no lock: a build it must end holds the builder's lock shared, and the removal is what ends
+// that build. A stopped builder goes as a running one does, and a container and state volume
+// left with no builder (a boot racing a removal) go by their names.
 func endBuilder(who string) error {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return err
 	}
-	env := append(os.Environ(), "BUILDX_CONFIG="+filepath.Join(d.Space, "buildx"))
+	return removeBuilder("docker", builderEnv(os.Environ(), d.Space), who)
+}
+
+// removeBuilder is endBuilder's removal, by docker under env (the door's BUILDX_CONFIG).
+func removeBuilder(dockerPath string, env []string, who string) error {
 	docker := func(args ...string) *exec.Cmd {
-		c := exec.Command("docker", args...)
+		c := exec.Command(dockerPath, args...)
 		c.Env = env
 		return c
 	}
-	builder, network := door.BuilderOf(door.ProjectOfUser(who)), door.BuilderNetworkOf(door.ProjectOfUser(who))
+	project := door.ProjectOfUser(who)
+	builder, network := door.BuilderOf(project), door.BuilderNetworkOf(project)
 	if docker("buildx", "inspect", builder).Run() == nil {
 		if out, err := docker("buildx", "rm", builder).CombinedOutput(); err != nil {
 			return fmt.Errorf("its builder %s: %w: %s", builder, err, strings.TrimSpace(string(out)))
+		}
+	}
+	if container := door.BuilderContainerOf(project); docker("container", "inspect", container).Run() == nil {
+		if out, err := docker("rm", "-f", container).CombinedOutput(); err != nil {
+			return fmt.Errorf("its builder's container: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	if state := door.BuilderStateOf(project); docker("volume", "inspect", state).Run() == nil {
+		if out, err := docker("volume", "rm", state).CombinedOutput(); err != nil {
+			return fmt.Errorf("its builder's cache: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 	if docker("network", "inspect", network).Run() == nil {

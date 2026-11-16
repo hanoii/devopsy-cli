@@ -21,6 +21,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -158,12 +159,11 @@ func (c gcOneOff) words(now time.Time) string {
 
 // gcBuilder is a builder's build cache unused for the age, by its Name: the daemon's own (no
 // Project), named for the Docker context the listing read it through (daemonBuilder), or a
-// project user's project's (door.BuilderOf), which a stopped one keeps (Stopped). Records is
-// how many records go, Size what of them no image shares.
+// project user's project's (door.BuilderOf). Records is how many records go, Size what of
+// them no image shares.
 type gcBuilder struct {
 	Name    string `json:"name,omitempty"`
 	Project string `json:"project,omitempty"`
-	Stopped bool   `json:"stopped,omitempty"`
 	Records int    `json:"records"`
 	Size    int64  `json:"size"`
 }
@@ -176,9 +176,6 @@ func (b gcBuilder) who() string {
 }
 
 func (b gcBuilder) words(age time.Duration) string {
-	if b.Stopped {
-		return b.who() + ": not running, its cache stays until it runs again"
-	}
 	return fmt.Sprintf("%s: %s unused for %s, %s of them no image shares", b.who(), plural(b.Records, "record"), duration(age), humanBytes(b.Size))
 }
 
@@ -247,15 +244,9 @@ func (d gcDangling) size() int64 {
 	return n
 }
 
-// count is how many things the plan removes: a stopped builder's cache stays.
+// count is how many things the plan removes.
 func (p gcPlan) count() int {
-	n := len(p.OneOffs) + len(p.Snapshots) + len(p.Left) + len(p.Util) + len(p.Dangling.Images)
-	for _, b := range p.Builders {
-		if !b.Stopped {
-			n++
-		}
-	}
-	return n
+	return len(p.OneOffs) + len(p.Builders) + len(p.Snapshots) + len(p.Left) + len(p.Util) + len(p.Dangling.Images)
 }
 
 // entries are the plan as --gc lists it: a key per kind, a line per thing with its size, what
@@ -309,6 +300,10 @@ func (p gcPlan) entries() []remote.StatusEntry {
 	return es
 }
 
+// gcPruneWait bounds a builder's prune: one that hangs would hold the builder's lock, and a
+// remake of it waits on that lock.
+const gcPruneWait = 10 * time.Minute
+
 // gcScope is the server --gc goes over, as its deploy user: Docker by its command docker, the
 // release root root, the ages of the server's gc: settings, the door's project users (nil for
 // none), now. find fills in the rest, which remove decides by again.
@@ -333,6 +328,13 @@ type gcScope struct {
 	// listedAt is when what remove removes was listed, the server's time: the build cache goes
 	// by the cutoff its listing had.
 	listedAt time.Time
+	// mode is the step's (list, remove, remove-listed): only the listing reads a project
+	// user's builder's cache in find, booting it; the removals boot each one in remove, once.
+	mode string
+	// timing is the builders' waits (builderTiming), a test's own when set; self is the
+	// devopsy that starts their stoppers (devopsyPath when "").
+	timing builderTiming
+	self   string
 }
 
 // runGCStep implements the hidden GCStepFlag list|remove|remove-listed, as the deploy user on
@@ -361,7 +363,7 @@ func runGCStep(args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	g := &gcScope{docker: "docker", root: r.Root, ages: r.GC, door: d, now: time.Now()}
+	g := &gcScope{docker: "docker", root: r.Root, ages: r.GC, door: d, now: time.Now(), mode: args[0]}
 	plan := g.find()
 	switch args[0] {
 	case "list":
@@ -378,13 +380,12 @@ func runGCStep(args []string) int {
 }
 
 // only is what of p the listing listed too, each by its id: a one-off by its container's,
-// a builder by its project and name (the daemon's by its context's), unless the listing said its cache stays (Stopped), a release snapshot
+// a builder by its project and name (the daemon's by its context's), a release snapshot
 // by its environment and id, a name left by its environment, name and image, an old util image
 // by its name and image, a dangling image by its id. What p could not read stays in.
 func (p gcPlan) only(listing gcPlan) gcPlan {
 	p.OneOffs = keepListed(p.OneOffs, listing.OneOffs, func(c gcOneOff) string { return c.ID })
-	p.Builders = keepListed(p.Builders, slices.DeleteFunc(slices.Clone(listing.Builders), func(b gcBuilder) bool { return b.Stopped }),
-		func(b gcBuilder) string { return b.Project + "\x00" + b.Name })
+	p.Builders = keepListed(p.Builders, listing.Builders, func(b gcBuilder) string { return b.Project + "\x00" + b.Name })
 	p.Snapshots = keepListed(p.Snapshots, listing.Snapshots, gcSnapshot.key)
 	p.Left = keepListed(p.Left, listing.Left, func(l gcLeft) string { return leftKey(l.Retried) })
 	p.Util = keepListed(p.Util, listing.Util, gcTag.key)
@@ -595,8 +596,12 @@ func (g *gcScope) goes(status string, oneOff bool, c gcOneOff) bool {
 //   - BuildKit's own GC keeps, by default, local sources, cache mounts and git checkouts 48
 //     hours, anything 60 days, then caps the space.
 //
-// So --gc lists, per builder, the records prune -a --filter until removes (cacheGoing), and
-// leaves a builder not running as it is.
+//   - BuildKit's own GC also runs a second after a builder boots, with no build;
+//   - a cache hit marks only the last record a build used, its parents keeping their times,
+//     held by it, with or without a stop of the builder in between.
+//
+// So --gc lists, per builder, the records prune -a --filter until removes (cacheGoing),
+// booting a project user's builder that is stopped to read or prune it (onBuilder).
 
 // cacheRecord is one record of a builder's build cache.
 type cacheRecord struct {
@@ -645,8 +650,9 @@ func cacheGoing(records []cacheRecord, now time.Time, age time.Duration) (n int,
 
 // builders are the builders whose build cache --gc removes: the daemon's own, then each
 // project user's project's (door.BuilderOf, under the door's BUILDX_CONFIG as the door makes
-// them), one not running listed as kept; one with nothing to remove is left out, and one
-// that does not read is an error.
+// them), read in the listing alone, each booted in turn (onBuilder), and in a removal each
+// one with a container as a candidate it reads or prunes where it boots it; one never booted
+// is left out, one with nothing to remove too, and one that does not read is an error.
 func (g *gcScope) builders() ([]gcBuilder, []error) {
 	var bs []gcBuilder
 	var errs []error
@@ -670,30 +676,98 @@ func (g *gcScope) builders() ([]gcBuilder, []error) {
 	for _, who := range slices.Sorted(maps.Keys(g.door.Users)) {
 		project := g.door.Users[who].Project
 		name := door.BuilderOf(project)
-		node, ok := nodes[name]
-		switch {
-		case !ok:
-			// No builder: no build yet, or its user ended.
-		case node.Status != "running":
-			bs = append(bs, gcBuilder{Name: name, Project: project, Stopped: true})
-		default:
-			rs, err := g.builderCache(node.Name)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("the build cache of %s: %w", name, err))
-				continue
-			}
-			if n, size := cacheGoing(rs, g.now, g.ages.BuildCache); n > 0 {
-				bs = append(bs, gcBuilder{Name: name, Project: project, Records: n, Size: size})
-			}
+		// No builder (no build yet, or its user ended), or one never booted, with no cache.
+		if _, ok := nodes[name]; !ok || !g.builderBooted(project) {
+			continue
+		}
+		// The removals read it where they prune it, under one boot (remove).
+		if g.mode != "list" {
+			bs = append(bs, gcBuilder{Name: name, Project: project})
+			continue
+		}
+		var rs []cacheRecord
+		err := g.onBuilder(project, func() (err error) {
+			rs, err = g.builderCache(door.BuilderContainerOf(project))
+			return err
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("the build cache of %s: %w", name, err))
+			continue
+		}
+		if n, size := cacheGoing(rs, g.now, g.ages.BuildCache); n > 0 {
+			bs = append(bs, gcBuilder{Name: name, Project: project, Records: n, Size: size})
 		}
 	}
 	return bs, errs
 }
 
+// builderBooted says whether project's builder has a container, made at its first boot: one
+// with none has no cache, and --gc boots none for nothing.
+func (g *gcScope) builderBooted(project string) bool {
+	return exec.Command(g.docker, "container", "inspect", door.BuilderContainerOf(project)).Run() == nil
+}
+
+// onBuilder runs act on project's builder, one builder at a time: under its lock shared, as a
+// build uses it, its stopper started (the backstop for a --gc cut), booted, then, its lock let
+// go, stopped unless a build holds it, before the next builder boots.
+func (g *gcScope) onBuilder(project string, act func() error) error {
+	t := g.builderTiming()
+	env := builderEnv(os.Environ(), g.door.Space)
+	l, err := useBuilder(g.door.Space, project, cmp.Or(g.self, devopsyPath()), os.Environ(), t)
+	if err != nil {
+		return err
+	}
+	c := exec.Command(g.docker, "buildx", "inspect", "--bootstrap", door.BuilderOf(project))
+	c.Env = env
+	if _, err = outputWithin(c, t.lock); err != nil {
+		err = dockerFailed("docker buildx inspect --bootstrap", err)
+	} else {
+		err = act()
+	}
+	l.Close()
+	g.stopBuilder(project, env, t)
+	return err
+}
+
+// stopBuilder stops project's builder after --gc's use when it takes its lock exclusive within
+// a few tries (a fork of this process holds what it closed until its exec); refused, a build
+// holds it, or its stopper took it first to stop it, so --gc waits for it shared and lets it
+// go: past a stop, never beside one, the next builder boots.
+func (g *gcScope) stopBuilder(project string, env []string, t builderTiming) {
+	path := door.BuilderLockOf(g.door.Space, project)
+	l, err := pathlock.Open(path)
+	if err != nil {
+		return
+	}
+	defer l.Close()
+	for try := 0; try < 5; try++ {
+		taken, err := l.Try(syscall.LOCK_EX)
+		if err != nil {
+			return
+		}
+		if taken {
+			_ = stopBuilder(g.docker, env, project, t.stop)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if w, err := builderLockWait(path, project+"'s builder being made or stopped", syscall.LOCK_SH, t.lock, 0, nil); err == nil && w != nil {
+		w.Close()
+	}
+}
+
+// builderTiming is the builders' waits for --gc: builderTimes unless a test set its own.
+func (g *gcScope) builderTiming() builderTiming {
+	if g.timing != (builderTiming{}) {
+		return g.timing
+	}
+	return builderTimes
+}
+
 // buildxEnv is the environment of a docker command on the project users' builders: the door's
 // BUILDX_CONFIG.
 func (g *gcScope) buildxEnv() []string {
-	return append(os.Environ(), "BUILDX_CONFIG="+filepath.Join(g.door.Space, "buildx"))
+	return append(os.Environ(), "BUILDX_CONFIG="+door.BuildxConfigOf(g.door.Space))
 }
 
 // builderNode is a builder's one node, as docker buildx ls names it: its name, which its
@@ -780,10 +854,10 @@ func readDockerUsage(docker string) (dockerUsage, error) {
 // dockerTime is how docker's formats print a time (Go's time.Time.String).
 const dockerTime = "2006-01-02 15:04:05.999999999 -0700 MST"
 
-// builderCache is a docker-container builder's records, by its node's name, as buildctl in its
-// container gives them with their times (buildx's container is buildx_buildkit_<node>).
-func (g *gcScope) builderCache(node string) ([]cacheRecord, error) {
-	out, err := exec.Command(g.docker, "exec", "buildx_buildkit_"+node, "buildctl", "du", "--format", "{{json .}}").Output()
+// builderCache is a docker-container builder's records, by its container
+// (door.BuilderContainerOf), as buildctl in it gives them with their times, bounded.
+func (g *gcScope) builderCache(container string) ([]cacheRecord, error) {
+	out, err := outputWithin(exec.Command(g.docker, "exec", container, "buildctl", "du", "--format", "{{json .}}"), g.builderTiming().lock)
 	if err != nil {
 		return nil, dockerFailed("buildctl du", err)
 	}
@@ -1011,26 +1085,47 @@ func (g *gcScope) remove(p gcPlan) int {
 	// duration, so the time since the listing is added, a second over, so that no record
 	// used after the cutoff goes.
 	until := "until=" + (g.ages.BuildCache + time.Since(g.listedAt).Truncate(time.Second) + time.Second).String()
-	for _, b := range p.Builders {
-		if b.Stopped {
-			continue
-		}
+	prune := func(b gcBuilder) error {
 		// Each builder by the name its listing gave, the daemon's its context's (daemonBuilder).
 		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 		if b.Project != "" {
 			cmd.Env = g.buildxEnv()
 		}
 		log.Info("removing the build cache of " + b.who() + " unused for " + duration(g.ages.BuildCache))
-		out, err := cmd.Output()
+		out, err := outputWithin(cmd, gcPruneWait)
 		if err != nil {
-			log.Warn("the build cache of "+b.who()+" stays", dockerFailed("docker buildx prune", err).Error())
-			left = true
-			continue
+			return dockerFailed("docker buildx prune", err)
 		}
 		for _, line := range strings.Split(string(out), "\n") {
 			if v, ok := strings.CutPrefix(line, "Total:"); ok {
 				log.Info(b.who() + ": " + humanBytes(parseDockerSize(v)) + " removed, as Docker counts it")
 			}
+		}
+		return nil
+	}
+	for _, b := range p.Builders {
+		var err error
+		if b.Project == "" {
+			err = prune(b)
+		} else {
+			// A project user's builder, booted once: read here in remove, where something goes
+			// is said only once it is known to.
+			err = g.onBuilder(b.Project, func() error {
+				if g.mode == "remove" {
+					rs, err := g.builderCache(door.BuilderContainerOf(b.Project))
+					if err != nil {
+						return err
+					}
+					if n, _ := cacheGoing(rs, g.now, g.ages.BuildCache); n == 0 {
+						return nil
+					}
+				}
+				return prune(b)
+			})
+		}
+		if err != nil {
+			log.Warn("the build cache of "+b.who()+" stays", err.Error())
+			left = true
 		}
 	}
 	// 3. Release snapshots whose release is gone, each environment under its snapshot lock,

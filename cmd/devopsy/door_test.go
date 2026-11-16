@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -23,6 +24,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/testfile"
@@ -805,22 +807,27 @@ esac
 }
 
 // A project's build runs on a BuildKit of its own, made at its first build, on a network of
-// its own: on one builder, a cache mount is shared across projects by its id, and on Docker's
-// default bridge, which every container shares, one project's build step reaches another's
-// builder and what its build listens on. A builder made otherwise (on that bridge) is made
-// again. Its settings stay the door's.
+// its own and restarted by nothing: on one builder, a cache mount is shared across projects by
+// its id, on Docker's default bridge, which every container shares, one project's build step
+// reaches another's builder and what its build listens on, and one Docker restarts comes back
+// after a reboot with no build to stop it. A builder made otherwise (on that bridge, restarted
+// by Docker, its container's own policy, never buildx's words) is made again, under its lock
+// exclusive: beside a running build of another environment the remake waits, says so and
+// removes nothing, and a wait that sees another build make it again ends there. One never
+// booted (no container) is judged by its network alone. Its settings stay the door's.
 func TestDoorBuildsOnTheProjectsBuilder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "docker.log")
-	made := filepath.Join(dir, "made")
+	made, policy := filepath.Join(dir, "made"), filepath.Join(dir, "policy")
 	docker := filepath.Join(dir, "docker")
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 echo "$BUILDX_CONFIG $*" >>`+log+`
 case "$*" in
   "buildx inspect "*) [ -e `+made+` ] && cat `+made+` ;;
-  "buildx create "*) echo "Driver Options: network=\"${8#network=}\"" >`+made+` ;;
-  "buildx rm "*) rm -f `+made+` ;;
+  "container inspect --format "*) [ -e `+policy+` ] && cat `+policy+` ;;
+  "buildx create "*) echo "Driver Options: network=\"${8#network=}\" restart-policy=\"${10#restart-policy=}\"" >`+made+`; rm -f `+policy+` ;;
+  "buildx rm "*) rm -f `+made+` `+policy+` ;;
   "network inspect "*) [ -e `+dir+`/net ] ;;
   "network create "*) touch `+dir+`/net ;;
 esac
@@ -828,14 +835,15 @@ esac
 		t.Fatal(err)
 	}
 	space := filepath.Join(dir, "space", "buildx")
+	timing := builderTiming{lock: 300 * time.Millisecond}
 	// build is a request's build, its own door process.
-	build := func() string {
+	build := func() (string, error) {
 		t.Helper()
 		os.Remove(log)
-		side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}, real: docker}
+		side := &doorSide{policy: door.Policy{Project: "shop", Space: filepath.Join(dir, "space")}, real: docker, timing: timing}
 		env, err := side.builder()
 		if err != nil {
-			t.Fatal(err)
+			return readString(log), err
 		}
 		if !slices.Contains(env, "BUILDX_BUILDER=devopsy-shop") || !slices.Contains(env, "BUILDX_CONFIG="+space) {
 			t.Errorf("a build's environment: %q", env)
@@ -845,20 +853,57 @@ esac
 		if again, err := side.builder(); err != nil || !slices.Equal(again, env) || readString(log) != string(got) {
 			t.Errorf("the builder read again in one request (%v):\n%s", err, readString(log))
 		}
-		return string(got)
+		return string(got), nil
 	}
-	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build\n"
-	if got := build(); got != space+" buildx inspect devopsy-shop\n"+space+" network inspect devopsy-shop-build\n"+space+" network create devopsy-shop-build\n"+create {
-		t.Errorf("the first build asked:\n%s", got)
+	inspect := space + " buildx inspect devopsy-shop\n" + space + " container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\n"
+	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build --driver-opt restart-policy=no\n"
+	if got, err := build(); err != nil || got != space+" buildx inspect devopsy-shop\n"+space+" network inspect devopsy-shop-build\n"+space+" network create devopsy-shop-build\n"+create {
+		t.Errorf("the first build (%v) asked:\n%s", err, got)
 	}
-	if got := build(); got != space+" buildx inspect devopsy-shop\n" {
-		t.Errorf("a build on the builder made asked:\n%s", got)
+	// What a claim runs too (builder): no lock taken, no stopper started, the builder booted by
+	// nothing it asks.
+	if _, err := os.Stat(door.BuildersLocksOf(filepath.Join(dir, "space"))); !errors.Is(err, os.ErrNotExist) || strings.Contains(readString(log), "bootstrap") {
+		t.Errorf("a claim's builder took a lock or booted it: %v", err)
 	}
-	// One made on the default bridge, before builders had networks of their own.
-	write(t, made, "Driver Options: \n", 0o644)
-	if got := build(); got != space+" buildx inspect devopsy-shop\n"+space+" buildx rm devopsy-shop\n"+space+" network inspect devopsy-shop-build\n"+create {
-		t.Errorf("a builder on the default bridge, asked:\n%s", got)
+	// Made, never booted, then booted as devopsy makes it.
+	if got, err := build(); err != nil || got != inspect {
+		t.Errorf("a build on the builder made (%v) asked:\n%s", err, got)
 	}
+	write(t, policy, "no\n", 0o644)
+	if got, err := build(); err != nil || got != inspect {
+		t.Errorf("a build on the builder booted (%v) asked:\n%s", err, got)
+	}
+	// Made otherwise: on the default bridge, before builders had networks of their own; then
+	// one Docker restarts, booted with no policy of devopsy's.
+	// Inspected before, as the lock's wait begins, and again under it: another build may end
+	// its remake between the last two.
+	remade := inspect + inspect + inspect + space + " buildx rm devopsy-shop\n" + space + " network inspect devopsy-shop-build\n" + create
+	for name, c := range map[string][2]string{"on the default bridge": {"Driver Options: \n", "no\n"}, "restarted by Docker": {"Driver Options: network=\"devopsy-shop-build\"\n", "unless-stopped\n"}} {
+		write(t, made, c[0], 0o644)
+		write(t, policy, c[1], 0o644)
+		if got, err := build(); err != nil || got != remade {
+			t.Errorf("a builder %s (%v), asked:\n%s", name, err, got)
+		}
+	}
+	// Beside a running build, the remake waits, then gives up, removing nothing.
+	lock := door.BuilderLockOf(filepath.Join(dir, "space"), "shop")
+	running, err := pathlock.Take(lock, "", syscall.LOCK_SH, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, policy, "unless-stopped\n", 0o644)
+	if got, err := build(); err == nil || !strings.Contains(err.Error(), "shop's builder is not as devopsy makes it, and stays") || strings.Contains(got, "buildx rm") {
+		t.Errorf("a remake beside a running build (%v), asked:\n%s", err, got)
+	}
+	// Another build makes it again meanwhile: the wait ends there, with no remake of its own.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		os.WriteFile(policy, []byte("no\n"), 0o644)
+	}()
+	if got, err := build(); err != nil || strings.Contains(got, "buildx rm") {
+		t.Errorf("a remake another build did meanwhile (%v), asked:\n%s", err, got)
+	}
+	running.Close()
 }
 
 // A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
@@ -1681,6 +1726,7 @@ esac
 	if out, err := run("2.33.0"); err != nil || !strings.Contains(out, `"shop-base":"service:base"`) {
 		t.Errorf("the control, compose 2.33.0 (%v):\n%s", err, out)
 	}
+	waitStoppersGone(t, filepath.Join(dir, "space"), "shop")
 }
 
 // The compose whose version the door reads is the compose that then builds: Docker's client
@@ -1827,12 +1873,31 @@ esac
 // fakes in dir and the verb in DEVOPSY_TEST_DOOR_VERB (TestDoorComposeHandsThePinnedFile),
 // or the request in DEVOPSY_TEST_DOOR_REQUEST (TestDoorClaimActsByDigest), and exits as it
 // does: compose or Docker is exec'd, so what it prints is the fake docker's.
+// doorHome is the deploy user's config under dir as a door build's stopper reads it: the door's
+// space and shop's project user, the side's own (doorComposeHelper).
+func doorHome(dir string) string {
+	home := filepath.Join(dir, "home")
+	users := filepath.Join(home, "door", "users")
+	if err := os.MkdirAll(users, 0o700); err != nil {
+		panic(err)
+	}
+	for f, body := range map[string]string{
+		filepath.Join(home, "config.yaml"):        "door:\n  space: " + filepath.Join(dir, "space") + "\n",
+		filepath.Join(users, "devopsy-shop.yaml"): "project: shop\n",
+	} {
+		if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+			panic(err)
+		}
+	}
+	return home
+}
+
 func doorComposeHelper(dir string) {
 	doorLog = os.Getenv("DEVOPSY_TEST_DOOR_LOG")
 	side := &doorSide{
 		policy: door.Policy{Project: "shop", User: "devopsy-shop", Space: filepath.Join(dir, "space"), Tree: dir, ForbiddenIDs: []int{0}},
 		claims: testShopClaims, imagesRoot: dir,
-		real: filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION")},
+		real: filepath.Join(dir, "docker"), env: []string{"PATH=" + os.Getenv("PATH"), "FAKE_COMPOSE_VERSION=" + os.Getenv("FAKE_COMPOSE_VERSION"), "DEVOPSY_HOME=" + doorHome(dir)},
 		// As runDoor reads it from what its sudo kept (doorEnvironment).
 		asked: remote.SessionFrom(os.Getenv),
 	}

@@ -2111,13 +2111,19 @@ docker run -d --name doorhostsvc-lo --network host busybox:1.37 sh -c 'mkdir -p 
 // cache mount is shared across projects by its id, and one project's build fills a cache
 // another's trusts; on Docker's default bridge, one project's build step reaches another's
 // builder. The control: the same two builds on the server's own builder see each other's.
+// Each builder runs only while a build does: a build's step of seconds goes through on it,
+// stopped once the build is over, and the next build boots it and finds its cache; --gc's
+// listing boots each stopped one and stops it again.
 func TestDoorBuildersStayApart(t *testing.T) {
 	target := fmt.Sprintf("/cache-%d", time.Now().UnixNano())
 	// sharing=locked: a build waits for the mount while the builder holds it, to read its size
 	// (its garbage collection, a `docker system df`); the default, shared, takes a new, empty
 	// one then, and the control, or a leak between two projects, would read as apart.
+	// A step of seconds: a lock lost on the way to the build (the door, docker, compose, bake)
+	// would let its stopper stop the builder under it, and the build fail.
+	// Each build's step its own (a nonce in it), never a cached one.
 	dockerfile := func(name string) string {
-		return "FROM busybox:1.37\nRUN --mount=type=cache,target=" + target + ",sharing=locked sh -c 'cat " + target + "/mark 2>/dev/null || echo none; echo " + name + " >" + target + "/mark' >/seen\n"
+		return "FROM busybox:1.37\nRUN --mount=type=cache,target=" + target + ",sharing=locked sh -c ': " + strconv.FormatInt(time.Now().UnixNano(), 10) + "; sleep 3; cat " + target + "/mark 2>/dev/null || echo none; echo " + name + " >" + target + "/mark' >/seen\n"
 	}
 	build := func(project string) string {
 		user := doorUser(t, project)
@@ -2142,8 +2148,28 @@ DEVOPSY_UID=%[3]s COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, proj
 	if got := build("doorcacheb"); got != "none" {
 		t.Errorf("a project's build saw another's cache: %q", got)
 	}
+	stopped := func(what string) {
+		t.Helper()
+		eventually(t, startWaitE2E, what, func() bool {
+			out, _ := doorRoot(t, "docker inspect -f '{{.State.Running}}' buildx_buildkit_devopsy-doorcachea0 buildx_buildkit_devopsy-doorcacheb0")
+			return out == "false\nfalse\n"
+		})
+	}
+	stopped("both builders stopped once their builds are over")
+	// Its next build boots it and finds its own cache.
+	if got := build("doorcachea"); got != "doorcachea" {
+		t.Errorf("a build after its builder's stop lost its cache: %q", got)
+	}
+	stopped("the builder stopped after its next build")
 	// Nor another's builder on the network: a build step is a member of its builder's, which
-	// is its project's own, not Docker's default bridge that every container shares.
+	// is its project's own, not Docker's default bridge that every container shares. Both
+	// started by hand for the look, and stopped after.
+	if out, code := doorRoot(t, "docker start buildx_buildkit_devopsy-doorcachea0 buildx_buildkit_devopsy-doorcacheb0"); code != 0 {
+		t.Fatalf("starting the builders (%d): %s", code, out)
+	}
+	t.Cleanup(func() {
+		doorRoot(t, "docker stop buildx_buildkit_devopsy-doorcachea0 buildx_buildkit_devopsy-doorcacheb0 >/dev/null 2>&1")
+	})
 	ip, _ := doorRoot(t, "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' buildx_buildkit_devopsy-doorcacheb0")
 	if strings.TrimSpace(ip) == "" {
 		t.Fatalf("doorcacheb's builder has no address: %q", ip)
@@ -2151,6 +2177,14 @@ DEVOPSY_UID=%[3]s COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, proj
 	if out, code := doorRoot(t, "docker exec buildx_buildkit_devopsy-doorcachea0 ping -c1 -W2 "+strings.TrimSpace(ip)); code == 0 {
 		t.Errorf("doorcachea's builder reaches doorcacheb's (%s):\n%s", strings.TrimSpace(ip), out)
 	}
+	if out, code := doorRoot(t, "docker stop buildx_buildkit_devopsy-doorcachea0 buildx_buildkit_devopsy-doorcacheb0"); code != 0 {
+		t.Fatalf("stopping the builders (%d): %s", code, out)
+	}
+	// --gc's listing boots each stopped builder to read it, and stops it again.
+	if out, code := op(t, "/", "devopsy @devopsy@doorsrv: --gc --dry-run 2>&1"); strings.Contains(out, "the build cache of devopsy-doorcache") {
+		t.Errorf("--gc --dry-run did not read a stopped builder (%d):\n%s", code, out)
+	}
+	stopped("both builders stopped after --gc's listing")
 	// The control: the deploy user's own builds share the server's builder.
 	control := fmt.Sprintf(`set -e
 mkdir -p /tmp/doorcachec /tmp/doorcached

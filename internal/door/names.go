@@ -31,6 +31,33 @@ func BuilderOf(project string) string { return UserOf(project) }
 // BuilderNetworkOf is a project's builder's network, its own.
 func BuilderNetworkOf(project string) string { return BuilderOf(project) + "-build" }
 
+// BuilderContainerOf is the container buildx runs a project's builder in, its one node's
+// (buildx_buildkit_<node>, the node <builder>0).
+func BuilderContainerOf(project string) string { return "buildx_buildkit_" + BuilderOf(project) + "0" }
+
+// BuilderStateOf is the volume a project's builder keeps its cache in.
+func BuilderStateOf(project string) string { return BuilderContainerOf(project) + "_state" }
+
+// BuildxConfigOf is the project users' builders' BUILDX_CONFIG in space: their settings and
+// the builders' records, apart from the deploy user's own.
+func BuildxConfigOf(space string) string { return filepath.Join(space, "buildx") }
+
+// BuildersLocksOf is the directory of the builders' locks in space, the deploy user's alone,
+// apart from BuildxConfigOf, whose files are buildx's.
+func BuildersLocksOf(space string) string { return filepath.Join(space, "builders") }
+
+// BuilderLockOf is a project's builder's lock in space: shared by each build and --gc's use,
+// exclusive for a stop or a remake.
+func BuilderLockOf(space, project string) string {
+	return filepath.Join(BuildersLocksOf(space), UserOf(project)+".lock")
+}
+
+// BuilderIdleLockOf is the lock a project's one stopper holds in space: with a dot, which no
+// project's name has, so it is never another project's builder's lock.
+func BuilderIdleLockOf(space, project string) string {
+	return filepath.Join(BuildersLocksOf(space), UserOf(project)+".idle.lock")
+}
+
 // LoginsDirOf is the directory of a project's registry logins in space, the door's copy of
 // their auths.
 func LoginsDirOf(space, project string) string { return filepath.Join(space, "logins", project) }

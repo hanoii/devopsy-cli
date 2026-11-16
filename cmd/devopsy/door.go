@@ -28,6 +28,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/uids"
@@ -227,6 +228,8 @@ type doorSide struct {
 	// asked is what the caller's session carries (doorEnvironment), for the commands its
 	// remedies offer alone: never in a refusal's log, never a decision.
 	asked remote.Session
+	// timing is the builders' waits (builderTiming), a test's own when set.
+	timing builderTiming
 }
 
 // memo is a value a door process reads once, its answer (an error included) kept for the
@@ -1598,14 +1601,13 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if door.KeepsSealed(argv[0]) {
 		s.warnSealed(file, argv, real)
 	}
-	fd, err := unlinkedFile(checked)
-	if err != nil {
-		return doorRefused(err)
-	}
 	env, err := s.composeEnv(config, argv[0] == "build")
 	if err != nil {
 		return doorRefused(err)
 	}
+	// A build holds its builder's lock shared, kept across the exec as the start locks are,
+	// so its stopper stops the builder once the build and every child of it are gone.
+	var built *pathlock.Lock
 	if argv[0] == "build" {
 		b, err := s.builder()
 		if err != nil {
@@ -1619,6 +1621,14 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 				return doorRefused(err)
 			}
 		}
+		// Ahead of the file's descriptor, which the stopper would otherwise inherit.
+		if built, err = useBuilder(s.policy.Space, s.policy.Project, devopsyPath(), s.env, s.builderTiming()); err != nil {
+			return doorRefused(fmt.Errorf("refused: %w", err))
+		}
+	}
+	fd, err := unlinkedFile(checked)
+	if err != nil {
+		return doorRefused(err)
 	}
 	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
 	if err := s.stillAsked(); err != nil {
@@ -1627,9 +1637,15 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err := keepAcrossExec(locks); err != nil {
 		return doorRefused(err)
 	}
+	if built != nil {
+		if err := built.KeepAcrossExec(); err != nil {
+			return doorRefused(err)
+		}
+	}
 	err = execDecided(s.real, append(cmd, argv...), env)
 	// The locks' descriptors stay open up to the exec (main's KeepAlive says why).
 	runtime.KeepAlive(locks)
+	runtime.KeepAlive(built)
 	return doorRefused(err)
 }
 
@@ -1943,7 +1959,7 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 	// about the context it builds, and a sealed copy is the deploy user's own, so git trusts
 	// the repository config the project user put in it, which can name a program (a promisor
 	// remote's uploadpack) git then runs as the deploy user, Docker's socket in hand.
-	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
+	b := []string{"BUILDX_CONFIG=" + door.BuildxConfigOf(s.policy.Space), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
 	env := append(slices.Clone(s.env), b[0])
 	run := func(args ...string) ([]byte, error) {
 		c := s.docker(args...)
@@ -1957,14 +1973,43 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		c.Env = env
 		return c.Output()
 	}
-	out, err := probe("buildx", "inspect", name)
-	if err == nil && strings.Contains(string(out), `network="`+network+`"`) {
+	// right says whether the builder is there (there) and as devopsy makes it (madeRight), its
+	// restart policy its container's own, never buildx's words for it.
+	right := func() (there, ok bool) {
+		out, err := probe("buildx", "inspect", name)
+		if err != nil {
+			return false, false
+		}
+		policy, err := probe("container", "inspect", "--format", "{{.HostConfig.RestartPolicy.Name}}", door.BuilderContainerOf(s.policy.Project))
+		return true, madeRight(string(out), network, strings.TrimSpace(string(policy)), err == nil)
+	}
+	there, ok := right()
+	if ok {
 		return b, nil
 	}
-	if err == nil {
-		// Made otherwise, on the default bridge: made again.
-		if _, err := run("buildx", "rm", name); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder is on Docker's default bridge, and could not be removed: %v", s.policy.Project, err)
+	if there {
+		// Made otherwise (on the default bridge, restarted by Docker): made again, under its
+		// lock exclusive, so that no build of another environment runs on it meanwhile; a
+		// wait that sees another build make it again ends there.
+		t := s.builderTiming()
+		lock, err := builderLockWait(door.BuilderLockOf(s.policy.Space, s.policy.Project), "another use of "+s.policy.Project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
+			_, ok := right()
+			return ok
+		})
+		if err != nil {
+			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and stays: %v", s.policy.Project, err)
+		}
+		if lock == nil {
+			return b, nil
+		}
+		defer lock.Close()
+		if there, ok = right(); ok {
+			return b, nil
+		}
+		if there {
+			if _, err := run("buildx", "rm", name); err != nil {
+				return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and could not be removed: %v", s.policy.Project, err)
+			}
 		}
 	}
 	if _, err := probe("network", "inspect", network); err != nil {
@@ -1972,14 +2017,22 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
 		}
 	}
-	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network); err != nil {
+	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no"); err != nil {
 		// Another environment's build may have made it meanwhile.
-		if out, ierr := probe("buildx", "inspect", name); ierr == nil && strings.Contains(string(out), `network="`+network+`"`) {
+		if _, ok := right(); ok {
 			return b, nil
 		}
 		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
 	}
 	return b, nil
+}
+
+// builderTiming is the builders' waits for this side: builderTimes unless a test set its own.
+func (s *doorSide) builderTiming() builderTiming {
+	if s.timing != (builderTiming{}) {
+		return s.timing
+	}
+	return builderTimes
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)
