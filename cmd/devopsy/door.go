@@ -28,6 +28,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/door"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/uids"
@@ -227,6 +228,8 @@ type doorSide struct {
 	// asked is what the caller's session carries (doorEnvironment), for the commands its
 	// remedies offer alone: never in a refusal's log, never a decision.
 	asked remote.Session
+	// timing is the builders' waits (builderTiming), a test's own when set.
+	timing builderTiming
 }
 
 // memo is a value a door process reads once, its answer (an error included) kept for the
@@ -1598,14 +1601,13 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if door.KeepsSealed(argv[0]) {
 		s.warnSealed(file, argv, real)
 	}
-	fd, err := unlinkedFile(checked)
-	if err != nil {
-		return doorRefused(err)
-	}
 	env, err := s.composeEnv(config, argv[0] == "build")
 	if err != nil {
 		return doorRefused(err)
 	}
+	// A build holds its builder's lock shared, kept across the exec as the start locks are,
+	// so its stopper stops the builder once the build and every child of it are gone.
+	var built *pathlock.Lock
 	if argv[0] == "build" {
 		b, err := s.builder()
 		if err != nil {
@@ -1619,6 +1621,14 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 				return doorRefused(err)
 			}
 		}
+		// Ahead of the file's descriptor, which the stopper would otherwise inherit.
+		if built, err = useBuilder(s.policy.Space, s.policy.Project, devopsyPath(), s.env, s.timing.orServer()); err != nil {
+			return doorRefused(fmt.Errorf("refused: %w", err))
+		}
+	}
+	fd, err := unlinkedFile(checked)
+	if err != nil {
+		return doorRefused(err)
 	}
 	cmd := slices.Concat([]string{"docker", "compose", "-p", name, "--project-directory", dir, "--env-file", "/dev/null", "-f", fmt.Sprintf("/dev/fd/%d", fd)}, profileArgs(profiles))
 	if err := s.stillAsked(); err != nil {
@@ -1627,9 +1637,15 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	if err := keepAcrossExec(locks); err != nil {
 		return doorRefused(err)
 	}
+	if built != nil {
+		if err := built.KeepAcrossExec(); err != nil {
+			return doorRefused(err)
+		}
+	}
 	err = execDecided(s.real, append(cmd, argv...), env)
 	// The locks' descriptors stay open up to the exec (main's KeepAlive says why).
 	runtime.KeepAlive(locks)
+	runtime.KeepAlive(built)
 	return doorRefused(err)
 }
 
@@ -1943,43 +1959,89 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 	// about the context it builds, and a sealed copy is the deploy user's own, so git trusts
 	// the repository config the project user put in it, which can name a program (a promisor
 	// remote's uploadpack) git then runs as the deploy user, Docker's socket in hand.
-	b := []string{"BUILDX_CONFIG=" + filepath.Join(s.policy.Space, "buildx"), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
-	env := append(slices.Clone(s.env), b[0])
-	run := func(args ...string) ([]byte, error) {
-		c := s.docker(args...)
-		c.Env, c.Stderr = env, os.Stderr
-		return c.Output()
-	}
-	// A look whose failure is an answer (no builder yet, no network yet) says nothing: its
-	// words read as a failure of the build.
+	b := []string{"BUILDX_CONFIG=" + door.BuildxConfigOf(s.policy.Space), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
+	env := builderEnv(s.env, s.policy.Space)
+	// Every docker call here is quiet, its words in the refusal alone: a look whose failure is an
+	// answer, or a make another use won (a lost race), says nothing, as its words would read as
+	// a failure of the build.
 	probe := func(args ...string) ([]byte, error) {
 		c := s.docker(args...)
 		c.Env = env
 		return c.Output()
 	}
-	out, err := probe("buildx", "inspect", name)
-	if err == nil && strings.Contains(string(out), `network="`+network+`"`) {
-		return b, nil
+	// right says whether the builder is there, by buildx's record of it (a look that fails is an
+	// error, never a builder gone), and as devopsy makes it (madeRight), its restart policy its
+	// container's own, never buildx's words for it.
+	right := func() (there, ok bool, err error) {
+		if there, err = builderRecorded(s.policy.Space, s.policy.Project); err != nil || !there {
+			return false, false, err
+		}
+		out, err := probe("buildx", "inspect", name)
+		if err != nil {
+			return true, false, dockerFailed("docker buildx inspect", err)
+		}
+		policy, booted := builderContainer(probe, s.policy.Project)
+		return true, madeRight(string(out), network, policy, booted), nil
 	}
-	if err == nil {
-		// Made otherwise, on the default bridge: made again.
-		if _, err := run("buildx", "rm", name); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder is on Docker's default bridge, and could not be removed: %v", s.policy.Project, err)
+	// Its network, made again when a prune took it, and its container on it (builderBootable).
+	network_ := func() error {
+		if err := builderBootable(probe, s.policy.Space, s.policy.Project, s.timing.orServer()); err != nil {
+			return fmt.Errorf("refused: %s's builder cannot boot: %v", s.policy.Project, err)
+		}
+		return nil
+	}
+	// create records the builder, quiet (a lost race says nothing), its network made after, at
+	// its boot's look (network_).
+	create := func() error {
+		err := madeOrThere(func() ([]byte, error) {
+			return probe("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no")
+		}, func() bool {
+			_, ok, _ := right()
+			return ok
+		})
+		if err != nil {
+			return fmt.Errorf("could not be made: %v", dockerFailed("docker buildx create", err))
+		}
+		return nil
+	}
+	there, ok, err := right()
+	if err != nil {
+		return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
+	}
+	switch {
+	case ok:
+	case there || leftoverThere(probe, s.policy.Project):
+		// Made otherwise (on the default bridge, restarted by Docker), or a container and cache
+		// of its name left with no builder (a boot racing a key's removal), which a builder
+		// made anew would take, a removed key's cache with them: removed and made again
+		// (repairUnder), so that no build boots or runs on it meanwhile.
+		// Its refusal says which step stopped it: the wait (it stays as it is), a look (it does
+		// not read), the removal (it stays) or the make (it is gone).
+		err := repairUnder(s.policy.Space, s.policy.Project, s.timing.orServer(), func() (bool, error) {
+			_, ok, err := right()
+			if err != nil {
+				return false, fmt.Errorf("does not read: %v", err)
+			}
+			return ok, nil
+		}, func() error {
+			if err := dropBuilder(probe, s.policy.Space, s.policy.Project); err != nil {
+				return fmt.Errorf("is not as devopsy makes it, and could not be removed: %v", err)
+			}
+			return create()
+		})
+		var waited waitEnded
+		if errors.As(err, &waited) {
+			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and stays: %v", s.policy.Project, err)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("refused: %s's builder %v", s.policy.Project, err)
+		}
+	default:
+		if err := create(); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder %v", s.policy.Project, err)
 		}
 	}
-	if _, err := probe("network", "inspect", network); err != nil {
-		if _, err := run("network", "create", network); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
-		}
-	}
-	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network); err != nil {
-		// Another environment's build may have made it meanwhile.
-		if out, ierr := probe("buildx", "inspect", name); ierr == nil && strings.Contains(string(out), `network="`+network+`"`) {
-			return b, nil
-		}
-		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
-	}
-	return b, nil
+	return b, network_()
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)

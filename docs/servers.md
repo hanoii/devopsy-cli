@@ -555,8 +555,11 @@ gone. In this order:
   never started, stays too;
 - build cache unused for its `build_cache` age, on the server's Docker
   and on each project user's builder, as `docker buildx prune -a
-  --filter until=` decides it. A project user's builder that is not
-  running keeps its cache;
+  --filter until=` decides it. A project user's builder is stopped
+  between builds: `--gc`, its `--dry-run` included, starts each in
+  turn to read or prune it, and stops it again before the next, first
+  giving it back its network when a prune took it (its container made
+  again, its cache kept);
 - release snapshots whose release is gone, as `--snapshots remove`
   prunes them, for every environment of the deploy user's. An
   environment whose snapshots are in use (a snapshot taken, a restore, a

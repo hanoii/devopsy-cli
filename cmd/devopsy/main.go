@@ -149,6 +149,8 @@ func run() int {
 			return runUpgrade(args[1:], color)
 		case upgradeCheck:
 			return runUpgradeCheck()
+		case builderIdleFlag:
+			return runBuilderIdle(args[1:])
 		case "--completion":
 			return runCompletion(args[1:], color)
 		case "--ai-skill":

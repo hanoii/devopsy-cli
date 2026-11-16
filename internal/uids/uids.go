@@ -21,7 +21,7 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/sys/unix"
+	"github.com/hanoii/devopsy-cli/internal/pathlock"
 )
 
 // The variables devopsy passes an environment's compose files its uids in
@@ -387,19 +387,11 @@ func (s Store) lockDir() (func(), error) {
 }
 
 func (s Store) wait(what string, f *os.File, how int) error {
-	try := func() (bool, error) { return tryFlock(f, how) }
+	try := func() (bool, error) { return pathlock.TryFlock(f, how) }
 	if s.Wait == nil {
 		return syscall.Flock(int(f.Fd()), how)
 	}
 	return s.Wait(what, try)
-}
-
-func tryFlock(f *os.File, how int) (bool, error) {
-	err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
-	if errors.Is(err, syscall.EWOULDBLOCK) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 // List is every claim in the directory, sorted by name; an entry that is no claim is listed
@@ -441,10 +433,7 @@ const locksDir = "locks"
 
 // Lock is an owner's start lock: shared by every start of containers on its uid, exclusive
 // while its claim is freed, so no container is ever made on a uid just freed.
-type Lock struct {
-	f    *os.File
-	path string
-}
+type Lock struct{ *pathlock.Lock }
 
 // LockStart takes o's start lock, shared (syscall.LOCK_SH) or exclusive (LOCK_EX), its wait
 // announced and bounded. It is opened close-on-exec, so nothing the caller starts holds it,
@@ -457,62 +446,23 @@ func (s Store) LockStart(o Owner, how int) (*Lock, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, o.String())
-	for {
-		// Read-write: flock is fcntl's lock on NFS, where an exclusive one needs it.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_CLOEXEC, 0o600)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.wait("the start lock of "+o.String(), f, how); err != nil {
-			f.Close()
-			return nil, err
-		}
-		// A free removes the file while it holds it: a lock taken on the file it removed is
-		// on nothing, so open the one there now and lock again.
-		if same, err := samePath(f, path); err != nil || !same {
-			f.Close()
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return nil, err
-			}
-			continue
-		}
-		return &Lock{f: f, path: path}, nil
-	}
-}
-
-func samePath(f *os.File, path string) (bool, error) {
-	held, err := f.Stat()
+	l, err := pathlock.Take(filepath.Join(dir, o.String()), "the start lock of "+o.String(), how, s.Wait)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	now, err := os.Stat(path)
-	if err != nil {
-		return false, err
-	}
-	return os.SameFile(held, now), nil
+	return &Lock{l}, nil
 }
-
-// KeepAcrossExec clears the lock's close-on-exec flag, right before an exec, so the command
-// exec'd holds the lock for as long as it runs and the kernel drops it when it ends.
-func (l *Lock) KeepAcrossExec() error {
-	_, err := unix.FcntlInt(l.f.Fd(), unix.F_SETFD, 0)
-	return err
-}
-
-// Close releases the lock.
-func (l *Lock) Close() error { return l.f.Close() }
 
 // Free removes o's claim, and its start lock's file, which held must be: o's start lock
 // taken exclusive, so no start is on its uid meanwhile. A claim already gone is no error.
 func (s Store) Free(o Owner, held *Lock) error {
-	if held == nil || held.path != filepath.Join(s.Dir, locksDir, o.String()) {
+	if held == nil || held.Path() != filepath.Join(s.Dir, locksDir, o.String()) {
 		return fmt.Errorf("freeing %s needs its start lock held", o)
 	}
 	if err := os.Remove(s.path(o)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Remove(held.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(held.Path()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil

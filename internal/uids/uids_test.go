@@ -318,14 +318,14 @@ func TestStartLock(t *testing.T) {
 	if _, err := s.LockStart(o, syscall.LOCK_EX); err == nil || waited == "" {
 		t.Fatalf("exclusive taken beside starts: %v, waited %q", err, waited)
 	}
-	flags, err := unix.FcntlInt(a.f.Fd(), unix.F_GETFD, 0)
+	flags, err := unix.FcntlInt(a.Fd(), unix.F_GETFD, 0)
 	if err != nil || flags&unix.FD_CLOEXEC == 0 {
 		t.Fatalf("not close-on-exec: %d, %v", flags, err)
 	}
 	if err := a.KeepAcrossExec(); err != nil {
 		t.Fatal(err)
 	}
-	if flags, _ := unix.FcntlInt(a.f.Fd(), unix.F_GETFD, 0); flags&unix.FD_CLOEXEC != 0 {
+	if flags, _ := unix.FcntlInt(a.Fd(), unix.F_GETFD, 0); flags&unix.FD_CLOEXEC != 0 {
 		t.Fatal("still close-on-exec")
 	}
 	a.Close()
@@ -369,7 +369,12 @@ func TestStartLockAfterFree(t *testing.T) {
 	ex.Close()
 	start := <-got
 	defer start.Close()
-	if same, err := samePath(start.f, start.path); err != nil || !same {
+	var held unix.Stat_t
+	now, err := os.Stat(start.Path())
+	if err := unix.Fstat(int(start.Fd()), &held); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok := now.Sys().(*syscall.Stat_t); err != nil || !ok || uint64(st.Dev) != uint64(held.Dev) || st.Ino != held.Ino {
 		t.Fatalf("the start holds a removed file: %v", err)
 	}
 	s.Wait = func(string, func() (bool, error)) error { return syscall.EWOULDBLOCK }

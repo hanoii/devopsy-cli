@@ -14,6 +14,7 @@ var deployUserSteps = map[string][2]string{
 	remote.ServerSetupFlag:    {"the server's setup is its deploy user's", "nothing changed"},
 	remote.ProjectUsersFlag:   {"project users are the server's deploy user's", "nothing changed"},
 	remote.EndProjectUserFlag: {"ending a project user is the server's deploy user's", "nothing ended"},
+	builderIdleFlag:           {"stopping a project user's builder is the server's deploy user's", "nothing stopped"},
 }
 
 // deployUserStep refuses flag's step to a project user (projectUser, asked only for one of

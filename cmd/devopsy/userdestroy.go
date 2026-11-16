@@ -764,7 +764,7 @@ func (x *userDestroy) last(*destroyMark) error {
 	if err := os.Remove(x.entry); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := dropUserLocks(x.who); err != nil {
+	if err := dropUserLocks(x.who, x.policy.Space); err != nil {
 		return err
 	}
 	return os.Remove(x.mark)
@@ -772,10 +772,23 @@ func (x *userDestroy) last(*destroyMark) error {
 
 // dropUserLocks removes the locks beside who's keys and sync keys (dropKeysLock), which the
 // removal, the end and the keys scripts take while the user is there: before the mark, which
-// keeps whoever takes one meanwhile from changing anything.
-func dropUserLocks(who string) error {
+// keeps whoever takes one meanwhile from changing anything. Its builder's two locks in space
+// are unlinked without being taken: a stopper holds one for as long as a build runs, the user
+// and its builder are gone by then, and a stopper left on them finds its file replaced and
+// stops nothing.
+func dropUserLocks(who, space string) error {
 	for _, f := range []string{remote.DoorKeysFile(who), remote.DoorSyncKeysFile(who)} {
 		if err := dropKeysLock(f); err != nil {
+			return err
+		}
+	}
+	return dropBuilderLocks(space, door.ProjectOfUser(who))
+}
+
+// dropBuilderLocks unlinks project's builder's two locks in space, taking neither.
+func dropBuilderLocks(space, project string) error {
+	for _, f := range []string{door.BuilderLockOf(space, project), door.BuilderIdleLockOf(space, project)} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
@@ -805,7 +818,7 @@ func (x *userDestroy) afterEntry() int {
 			report.Fix("once what is left is known to be no longer "+x.project+"'s, remove "+x.mark+" by hand"))
 		return 1
 	}
-	if err := dropUserLocks(x.who); err != nil {
+	if err := dropUserLocks(x.who, x.policy.Space); err != nil {
 		return failErr(err)
 	}
 	if err := os.Remove(x.mark); err != nil {

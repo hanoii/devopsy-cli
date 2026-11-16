@@ -139,27 +139,35 @@ func endUser(who string) error {
 
 // endBuilder removes the project user who's builder and its network, which the door makes anew
 // at the next build (doorSide.builder, both named from its project, door.BuilderOf): what a removed key built is
-// in its caches (cache mounts, layers), which a later build of the owner's would trust.
+// in its caches (cache mounts, layers), which a later build of the owner's would trust. It takes
+// no lock: a build it must end holds the builder's lock shared, and the removal is what ends
+// that build. A stopped builder goes as a running one does, and a container and state volume
+// left with no builder (a boot racing a removal) go by their names.
 func endBuilder(who string) error {
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
 		return err
 	}
-	env := append(os.Environ(), "BUILDX_CONFIG="+filepath.Join(d.Space, "buildx"))
-	docker := func(args ...string) *exec.Cmd {
-		c := exec.Command("docker", args...)
-		c.Env = env
-		return c
+	return removeBuilder("docker", os.Environ(), d.Space, who)
+}
+
+// removeBuilder is endBuilder's removal, by docker under base and the door's BUILDX_CONFIG in
+// space.
+func removeBuilder(dockerPath string, base []string, space, who string) error {
+	// Unbounded: removing a large cache takes as long as its disk does, and a removal killed
+	// halfway leaves buildx's record behind.
+	run := dockerRunner(dockerPath, builderEnv(base, space), 0)
+	project := door.ProjectOfUser(who)
+	if err := dropBuilder(run, space, project); err != nil {
+		return err
 	}
-	builder, network := door.BuilderOf(door.ProjectOfUser(who)), door.BuilderNetworkOf(door.ProjectOfUser(who))
-	if docker("buildx", "inspect", builder).Run() == nil {
-		if out, err := docker("buildx", "rm", builder).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder %s: %w: %s", builder, err, strings.TrimSpace(string(out)))
-		}
+	id, err := builderNetworkID(run, project)
+	if err != nil {
+		return fmt.Errorf("its builder's network: %w", err)
 	}
-	if docker("network", "inspect", network).Run() == nil {
-		if out, err := docker("network", "rm", network).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder's network: %w: %s", err, strings.TrimSpace(string(out)))
+	if id != "" {
+		if _, err := run("network", "rm", door.BuilderNetworkOf(project)); err != nil {
+			return fmt.Errorf("its builder's network: %w", dockerFailed("docker network rm", err))
 		}
 	}
 	return nil

@@ -1,6 +1,6 @@
 # Container uids
 
-Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `internal/cli/uids.go` (the variables as a project loads), `cmd/devopsy/uids.go` (the claims as the deploy user, the door's `uids` request).
+Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `internal/pathlock` (a lock on a file by its path), `internal/cli/uids.go` (the variables as a project loads), `cmd/devopsy/uids.go` (the claims as the deploy user, the door's `uids` request).
 
 - Containers of different owners never share a uid: a process escaped from one reaches another's environment, root and signals through `/proc` with the same uid and gid alone.
 - An owner is named by its parts joined with `:` (`env:<project>[:<instance>]:<environment>`, `project:<project>[:<instance>]`, `Owner.String`), never by its compose name: compose names are flat, so two owners would share one name.
@@ -11,8 +11,8 @@ Code: `internal/uids/` (owners, ranges, the hash, claims, start locks), `interna
 - A claim is made only under the claims directory's lock, after reading again, taking the hashed slot or the next free one going round, never a slot `Taken` names or any entry points at, a name that is no claim included (`Claim.Target`).
 - A project holds at most `MaxClaims` claims in a domain: a tenant makes environments freely, and a first claim reads its domain's.
 - Start locks live in `locks/` under the claims directory, never beside a claim: an environment may be named like a lock file.
-- A start lock is opened close-on-exec, read-write, and cleared only right before the exec (`Lock.KeepAcrossExec`), so nothing started before it holds the lock.
-- A start lock is checked against its path after it is taken and taken again on the file there now: a free removes the file while it holds it.
+- A lock on a file by its path, a start lock or a project user's builder's (`internal/pathlock`, one for every such lock), is opened close-on-exec, read-write, and cleared only right before the exec (`KeepAcrossExec`), so nothing started before it holds the lock.
+- Such a lock is checked against its path after every take, taken again on the file there now (`Take`) or let go with `ErrReplaced` (`Try`): a free removes a start lock's file while it holds it, and a project user's destroy its builder's.
 - A claim is freed only with its owner's start lock held exclusive (`Store.Free`), which removes the lock's file too.
 - Only the server's devopsy computes a uid, at every load of a release (`setUIDs` in `internal/cli/uids.go`), setting `DEVOPSY_UID` and `DEVOPSY_PROJECT_UID` over every layer and the caller's value, and stores them nowhere: a restore would bring another environment's back.
 - A release's owner is read from where it is (`releaseOwners`), its target lines checked against its place under the release root, never from a variable a `.env` could set.

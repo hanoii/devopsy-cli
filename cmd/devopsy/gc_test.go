@@ -88,22 +88,22 @@ func TestParseDockerSize(t *testing.T) {
 	}
 }
 
-// What --gc lists: each kind under its key with sizes, a stopped builder said and not counted,
-// what does not read warned, the total last; nothing to remove lists no total.
+// What --gc lists: each kind under its key with sizes, what does not read warned, the total
+// last; nothing to remove lists no total.
 func TestGCPlanEntries(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	p := gcPlan{Now: now, Containers: 24 * time.Hour, BuildCache: 30 * 24 * time.Hour,
 		OneOffs:   []gcOneOff{{ID: "c1", Name: "shop-prod-web-run-1a2b", Project: "shop-prod", Finished: now.Add(-72 * time.Hour), Size: 12e6}},
-		Builders:  []gcBuilder{{Records: 34, Size: 1.2e9}, {Name: "devopsy-blog", Project: "blog", Stopped: true}},
+		Builders:  []gcBuilder{{Records: 34, Size: 1.2e9}, {Name: "devopsy-blog", Project: "blog", Records: 2, Size: 3e6}},
 		Snapshots: []gcSnapshot{{Env: "shop/prod", ID: "20261101120000", Release: "20261020120000", Size: 300e6}},
 		Left:      []gcLeft{{Retried: images.Retried{Ref: "shop-web:old", Release: "20261020120000", Name: "shop-prod"}, Last: true, Size: 100e6}, {Retried: images.Retried{Ref: "app:2", Release: "1", Name: "shop-stage"}}},
 		Util:      []gcTag{{Ref: "devopsy.internal/util:4", ID: "u4", Last: true, Size: 25e6}, {Ref: "devopsy.internal/util:3", ID: "u5"}},
 		Dangling:  gcDangling{Images: []gcImage{{"d1", 150e6}, {"d2", 150e6}, {"d3", 150e6}, {"d4", 150e6}}},
 		Unread:    []string{"the environments of /home/devopsy/blog: permission denied"},
 	}
-	if p.count() != 11 {
-		t.Errorf("count %d, want 11: the stopped builder's cache stays", p.count())
+	if p.count() != 12 {
+		t.Errorf("count %d, want 12", p.count())
 	}
 	var lines []string
 	for _, e := range p.entries() {
@@ -114,7 +114,7 @@ func TestGCPlanEntries(t *testing.T) {
 	want := []string{
 		"one-offs: shop-prod-web-run-1a2b (shop-prod), exited 3 days ago, 12.0 MB",
 		"build cache: the server's Docker: 34 records unused for 30 days, 1.2 GB of them no image shares",
-		"build cache: devopsy-blog (blog's builder): not running, its cache stays until it runs again",
+		"build cache: devopsy-blog (blog's builder): 2 records unused for 30 days, 3.0 MB of them no image shares",
 		"snapshots: shop/prod 20261101120000, its release 20261020120000 gone, 300.0 MB",
 		"images: shop-web:old, left by release 20261020120000 of shop-prod, 100.0 MB",
 		"images: app:2, left by release 1 of shop-stage, a name only (the image has others)",
@@ -176,21 +176,28 @@ func TestGCOneOffs(t *testing.T) {
 // The builders --gc goes over: the daemon's own by its records' times (docker system df), named
 // for the current Docker context (docker context show), as buildx names the docker driver's
 // builder, each project user's project's under the door's BUILDX_CONFIG by buildctl in its
-// container, one not running kept and never asked, one with nothing old and a project with no
-// builder left out; one that does not read is an error, the rest listed.
+// container, booted for the listing, one at a time, and stopped before the next boots (one
+// never booted, with no container, left alone); one with nothing old and a project with no
+// builder left out; one that does not read is an error, the rest listed. The removals read
+// none of them here: each is pruned where it is booted, once.
+//
+// Not parallel: it checks that --gc takes a lock it let go at once, which a parallel test's
+// fork holds until its exec.
 func TestGCBuilders(t *testing.T) {
-	t.Parallel()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
-	space := t.TempDir()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
 	df := `[{"ID":"a","Parent":"","Size":"6.06MB","LastUsedAt":"2026-09-01 10:00:00.5 +0000 UTC","InUse":"false","Shared":"false"},` +
 		`{"ID":"b","Parent":"a","Size":"1kB","LastUsedAt":"","CreatedAt":"2026-09-01 10:00:00 +0000 UTC","InUse":"false","Shared":"true"},` +
 		`{"ID":"c","Parent":"","Size":"1GB","LastUsedAt":"2026-11-12 10:00:00 +0000 UTC","InUse":"false","Shared":"false"}]`
 	du := `[{"id":"x","inUse":false,"size":3000,"createdAt":"2026-09-01T00:00:00Z","lastUsedAt":"2026-09-02T00:00:00Z","parents":null,"shared":false}]`
-	ls := `{"Name":"devopsy-shop","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}
-{"Name":"devopsy-blog","Nodes":[{"Name":"devopsy-blog0","Status":"stopped"}]}
+	// shop's and news's builders are stopped, wiki's runs, blog's was never booted.
+	ls := `{"Name":"devopsy-shop","Nodes":[{"Name":"devopsy-shop0","Status":"stopped"}]}
+{"Name":"devopsy-blog","Nodes":[{"Name":"devopsy-blog0","Status":"inactive"}]}
 {"Name":"devopsy-wiki","Nodes":[{"Name":"devopsy-wiki0","Status":"running"}]}
-{"Name":"devopsy-news","Nodes":[{"Name":"devopsy-news0","Status":"running"}]}`
-	docker := filepath.Join(t.TempDir(), "docker")
+{"Name":"devopsy-news","Nodes":[{"Name":"devopsy-news0","Status":"stopped"}]}`
+	log := filepath.Join(dir, "docker.log")
+	docker := filepath.Join(dir, "docker")
 	write(t, docker, `#!/bin/sh
 case "$*" in
   'context show') echo ctx1 ;;
@@ -199,37 +206,63 @@ case "$*" in
 `+ls+`
 EOF
   ;;
-  'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo '`+du+`' ;;
-  'exec buildx_buildkit_devopsy-wiki0 buildctl du --format {{json .}}') echo '[]' ;;
-  'exec buildx_buildkit_devopsy-news0 buildctl du --format {{json .}}') echo 'connection refused' >&2; exit 1 ;;
+  'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-blog0') exit 1 ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}'*|'network ls -q --no-trunc --filter '*) echo netid ;;
+  'container inspect '*) ;;
+  'buildx inspect --bootstrap '*) [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; echo "$*" >>`+log+` ;;
+  'ps -q '*) echo c0ffee ;;
+  'stop '*) echo "$*" >>`+log+` ;;
+  'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '`+du+`' ;;
+  'exec buildx_buildkit_devopsy-wiki0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '[]' ;;
+  'exec buildx_buildkit_devopsy-news0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo 'connection refused' >&2; exit 1 ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
 esac
 `, 0o755)
+	// A stopper that answers another holds the builder's stopper lock, and ends.
+	stopper := filepath.Join(dir, "stopper")
+	write(t, stopper, "#!/bin/sh\nprintf d >&3\n", 0o755)
 	users := map[string]remote.DoorUser{}
 	for _, p := range []string{"shop", "blog", "wiki", "news", "mail"} {
 		users[door.UserOf(p)] = remote.DoorUser{Project: p}
 	}
-	g := &gcScope{docker: docker, now: now, ages: remote.ServerGC{BuildCache: 30 * 24 * time.Hour}, door: &remote.Door{Space: space, Users: users}}
+	g := &gcScope{docker: docker, now: now, ages: remote.ServerGC{BuildCache: 30 * 24 * time.Hour}, door: &remote.Door{Space: space, Users: users},
+		mode: "list", self: stopper, timing: testBuilderTiming}
 	bs, errs := g.builders()
-	want := []gcBuilder{{Name: "ctx1", Records: 2, Size: 6060000}, {Name: "devopsy-blog", Project: "blog", Stopped: true}, {Name: "devopsy-shop", Project: "shop", Records: 1, Size: 3000}}
+	want := []gcBuilder{{Name: "ctx1", Records: 2, Size: 6060000}, {Name: "devopsy-shop", Project: "shop", Records: 1, Size: 3000}}
 	if !slices.Equal(bs, want) {
 		t.Errorf("builders %+v, want %+v", bs, want)
 	}
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "the build cache of devopsy-news") || !strings.Contains(errs[0].Error(), "connection refused") {
 		t.Errorf("errors %v, want news's", errs)
 	}
+	// Each booted, read and stopped before the next boots; the one never booted left alone.
+	var calls []string
+	for _, p := range []string{"news", "shop", "wiki"} {
+		calls = append(calls, "buildx inspect --bootstrap devopsy-"+p, "exec buildx_buildkit_devopsy-"+p+"0 buildctl du --format {{json .}}", "stop buildx_buildkit_devopsy-"+p+"0")
+	}
+	if got := readString(log); got != strings.Join(calls, "\n")+"\n" {
+		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, strings.Join(calls, "\n"))
+	}
+	// The removals read no builder here: each is a candidate, pruned where it is booted once.
+	os.Remove(log)
+	g.mode = "remove-listed"
+	bs, errs = g.builders()
+	want = []gcBuilder{{Name: "ctx1", Records: 2, Size: 6060000}, {Name: "devopsy-news", Project: "news"}, {Name: "devopsy-shop", Project: "shop"}, {Name: "devopsy-wiki", Project: "wiki"}}
+	if !slices.Equal(bs, want) || len(errs) != 0 || readString(log) != "" {
+		t.Errorf("a removal's builders %+v, %v, asked:\n%s", bs, errs, readString(log))
+	}
 }
 
 // The listed removal prunes a builder's cache only as its listing listed it: never one the
-// listing said keeps its cache (not running then, started before the answer), nor the daemon's
-// under another name than the listing's, its Docker context's, which would be another daemon's.
+// listing did not list, nor the daemon's under another name than the listing's, its Docker
+// context's, which would be another daemon's.
 func TestGCOnlyBuildersAsListed(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		listed, now gcBuilder
 		pruned      bool
 	}{
-		"listed as kept":                     {gcBuilder{Name: "devopsy-blog", Project: "blog", Stopped: true}, gcBuilder{Name: "devopsy-blog", Project: "blog", Records: 3, Size: 10e6}, false},
+		"another's listed":                   {gcBuilder{Name: "devopsy-wiki", Project: "wiki", Records: 3}, gcBuilder{Name: "devopsy-blog", Project: "blog"}, false},
 		"listed":                             {gcBuilder{Name: "devopsy-blog", Project: "blog", Records: 3}, gcBuilder{Name: "devopsy-blog", Project: "blog", Records: 4}, true},
 		"the daemon's under another context": {gcBuilder{Name: "ctx1", Records: 2}, gcBuilder{Name: "ctx2", Records: 2}, false},
 		"the daemon's":                       {gcBuilder{Name: "ctx1", Records: 2}, gcBuilder{Name: "ctx1", Records: 2}, true},
@@ -483,5 +516,84 @@ esac
 	write(t, filepath.Join(bin, "id"), "#!/bin/sh\necho "+remote.DoorGroup+"\n", 0o755)
 	if out, code := run("--dry-run"); code != 1 || !strings.Contains(out, "is a project user, and what --gc removes is the server's, its deploy user's") {
 		t.Errorf("a project user (%d):\n%s", code, out)
+	}
+}
+
+// A project user's builder's prune goes by the listing's cutoff as it stands when the prune
+// runs: its boot (and the previous builder's stop, the lock's waits) comes between the start
+// of the removal and the prune, and each second of it would move a cutoff taken before it past
+// the listing's, removing records used after it.
+func TestGCPruneCutoffCountsTheBoot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	until := filepath.Join(dir, "until")
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+case "$*" in
+  'buildx inspect --bootstrap '*) sleep 2 ;;
+  'buildx prune '*) echo "${8#until=}" >`+until+` ;;
+esac
+`, 0o755)
+	stopper := filepath.Join(dir, "stopper")
+	write(t, stopper, "#!/bin/sh\nprintf d >&3\n", 0o755)
+	listed := time.Now()
+	g := &gcScope{docker: docker, now: listed, listedAt: listed, ages: remote.ServerGC{BuildCache: time.Hour},
+		door: &remote.Door{Space: space, Users: map[string]remote.DoorUser{door.UserOf("shop"): {Project: "shop"}}},
+		mode: "remove-listed", self: stopper, timing: testBuilderTiming}
+	g.remove(gcPlan{Builders: []gcBuilder{{Name: "devopsy-shop", Project: "shop"}}})
+	got := mustDuration(t, strings.TrimSpace(readString(until)))
+	// The prune ran at least the boot's 2 s after the listing: a cutoff of the listing's
+	// takes at least those 2 s over the age.
+	if got < time.Hour+2*time.Second {
+		t.Errorf("pruned with until=%s at least 2s after the listing: past the listing's cutoff", got)
+	}
+}
+
+// gcOnBuilderHelper is --gc's use of shop's builder (onBuilder) in dir's space, by dir/bin/docker,
+// for a test to cut mid-boot as a session's end cuts a --gc step
+// (TestGCCutMidBootLeavesTheBuilderStopped).
+func gcOnBuilderHelper(dir string) {
+	g := &gcScope{docker: filepath.Join(dir, "bin", "docker"), self: os.Args[0],
+		door:   &remote.Door{Space: filepath.Join(dir, "space"), Users: map[string]remote.DoorUser{door.UserOf("shop"): {Project: "shop"}}},
+		timing: builderTiming{lock: time.Minute, answer: 5 * time.Second, every: time.Second, bound: time.Minute, stop: 3 * time.Second}}
+	_ = g.onBuilder("shop", func(*os.File) error { return nil })
+	os.Exit(0)
+}
+
+// A --gc step cut while it boots a project user's builder (the session gone: its group sent
+// SIGTERM, as the watcher and sshd do) leaves the builder stopped, its stopper the backstop:
+// every command of --gc's on the builder holds its lock (builderCmd), as a build's compose
+// does, so the stopper waits for the boot to end.
+func TestGCCutMidBootLeavesTheBuilderStopped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	bin := filepath.Join(dir, "bin")
+	booting, running, booted := filepath.Join(dir, "booting"), filepath.Join(dir, "running"), filepath.Join(dir, "booted")
+	// The boot's start lands seconds after it began, as a loaded Docker's does; booted says the
+	// boot is over, which the builder's stop leaves (running goes with the stop).
+	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
+case "$*" in
+  'buildx inspect --bootstrap devopsy-shop') : >`+booting+`; sleep 3; : >`+running+`; : >`+booted+` ;;
+  'ps -q --filter name=^/buildx_buildkit_devopsy-shop0$ --filter status=running') if [ -e `+running+` ]; then echo c0ffee; fi ;;
+  'stop buildx_buildkit_devopsy-shop0') rm -f `+running+` ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') echo netid ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	c := exec.Command(os.Args[0])
+	c.Env = []string{"DEVOPSY_TEST_GC_ON_BUILDER=" + dir, "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "DEVOPSY_HOME=" + doorHome(dir)}
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, booting, "--gc's boot of the builder", startWait, func() string { return "" })
+	_ = syscall.Kill(-c.Process.Pid, syscall.SIGTERM)
+	_ = c.Wait()
+	waitFile(t, booted, "the boot's end", startWait, func() string { return "" })
+	waitStoppersGone(t, space, "shop")
+	if _, err := os.Stat(running); err == nil {
+		t.Error("a --gc cut mid-boot left the builder running with no stopper")
 	}
 }
