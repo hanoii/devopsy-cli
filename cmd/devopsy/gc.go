@@ -704,14 +704,15 @@ func (g *gcScope) builders() ([]gcBuilder, []error) {
 // builderBooted says whether project's builder has a container, made at its first boot: one
 // with none has no cache, and --gc boots none for nothing.
 func (g *gcScope) builderBooted(project string) bool {
-	return exec.Command(g.docker, "container", "inspect", door.BuilderContainerOf(project)).Run() == nil
+	_, ok := builderContainer(func(args ...string) ([]byte, error) { return exec.Command(g.docker, args...).Output() }, project)
+	return ok
 }
 
 // onBuilder runs act on project's builder, one builder at a time: under its lock shared, as a
 // build uses it, its stopper started (the backstop for a --gc cut), booted, then, its lock let
 // go, stopped unless a build holds it, before the next builder boots.
 func (g *gcScope) onBuilder(project string, act func() error) error {
-	t := g.builderTiming()
+	t := g.timing.orServer()
 	env := builderEnv(os.Environ(), g.door.Space)
 	l, err := useBuilder(g.door.Space, project, cmp.Or(g.self, devopsyPath()), os.Environ(), t)
 	if err != nil {
@@ -729,10 +730,10 @@ func (g *gcScope) onBuilder(project string, act func() error) error {
 	return err
 }
 
-// stopBuilder stops project's builder after --gc's use when it takes its lock exclusive within
-// a few tries (a fork of this process holds what it closed until its exec); refused, a build
-// holds it, or its stopper took it first to stop it, so --gc waits for it shared and lets it
-// go: past a stop, never beside one, the next builder boots.
+// stopBuilder stops project's builder after --gc's use when it takes its lock exclusive at
+// once; refused, a build holds it, or its stopper took it first to stop it, so --gc waits for
+// it shared and lets it go: past a stop, never beside one, the next builder boots. A stop that
+// fails, or a wait past its bound, is a warning: the builder's stopper stays its backstop.
 func (g *gcScope) stopBuilder(project string, env []string, t builderTiming) {
 	path := door.BuilderLockOf(g.door.Space, project)
 	l, err := pathlock.Open(path)
@@ -740,34 +741,24 @@ func (g *gcScope) stopBuilder(project string, env []string, t builderTiming) {
 		return
 	}
 	defer l.Close()
-	for try := 0; try < 5; try++ {
-		taken, err := l.Try(syscall.LOCK_EX)
-		if err != nil {
-			return
-		}
-		if taken {
-			_ = stopBuilder(g.docker, env, project, t.stop)
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	taken, err := l.Try(syscall.LOCK_EX)
+	if err != nil {
+		return
 	}
-	if w, err := builderLockWait(path, project+"'s builder being made or stopped", syscall.LOCK_SH, t.lock, 0, nil); err == nil && w != nil {
+	if taken {
+		if err := stopBuilder(g.docker, env, project, t.stop); err != nil {
+			report.Warn(project+"'s builder stays up, its stopper to stop it", err.Error())
+		}
+		return
+	}
+	w, err := builderLockWait(path, project+"'s builder being made or stopped", syscall.LOCK_SH, t.lock, 0, nil)
+	if err != nil {
+		report.Warn(project+"'s builder may still be stopping as the next one boots", err.Error())
+		return
+	}
+	if w != nil {
 		w.Close()
 	}
-}
-
-// builderTiming is the builders' waits for --gc: builderTimes unless a test set its own.
-func (g *gcScope) builderTiming() builderTiming {
-	if g.timing != (builderTiming{}) {
-		return g.timing
-	}
-	return builderTimes
-}
-
-// buildxEnv is the environment of a docker command on the project users' builders: the door's
-// BUILDX_CONFIG.
-func (g *gcScope) buildxEnv() []string {
-	return append(os.Environ(), "BUILDX_CONFIG="+door.BuildxConfigOf(g.door.Space))
 }
 
 // builderNode is a builder's one node, as docker buildx ls names it: its name, which its
@@ -777,7 +768,7 @@ type builderNode struct{ Name, Status string }
 // doorBuilders are the builders under the door's BUILDX_CONFIG, each to its node.
 func (g *gcScope) doorBuilders() (map[string]builderNode, error) {
 	cmd := exec.Command(g.docker, "buildx", "ls", "--format", "json")
-	cmd.Env = g.buildxEnv()
+	cmd.Env = builderEnv(os.Environ(), g.door.Space)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, dockerFailed("docker buildx ls", err)
@@ -857,7 +848,7 @@ const dockerTime = "2006-01-02 15:04:05.999999999 -0700 MST"
 // builderCache is a docker-container builder's records, by its container
 // (door.BuilderContainerOf), as buildctl in it gives them with their times, bounded.
 func (g *gcScope) builderCache(container string) ([]cacheRecord, error) {
-	out, err := outputWithin(exec.Command(g.docker, "exec", container, "buildctl", "du", "--format", "{{json .}}"), g.builderTiming().lock)
+	out, err := outputWithin(exec.Command(g.docker, "exec", container, "buildctl", "du", "--format", "{{json .}}"), g.timing.orServer().lock)
 	if err != nil {
 		return nil, dockerFailed("buildctl du", err)
 	}
@@ -1084,12 +1075,15 @@ func (g *gcScope) remove(p gcPlan) int {
 	// 2. Build cache, decided by BuildKit itself, by the listing's cutoff: prune takes only a
 	// duration, so the time since the listing is added, a second over, so that no record
 	// used after the cutoff goes.
-	until := "until=" + (g.ages.BuildCache + time.Since(g.listedAt).Truncate(time.Second) + time.Second).String()
 	prune := func(b gcBuilder) error {
+		// Taken at the prune itself: a builder's boot, and the previous one's stop, come between
+		// the removal's start and its prune, and would move a cutoff taken before them past the
+		// listing's.
+		until := "until=" + (g.ages.BuildCache + time.Since(g.listedAt).Truncate(time.Second) + time.Second).String()
 		// Each builder by the name its listing gave, the daemon's its context's (daemonBuilder).
 		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 		if b.Project != "" {
-			cmd.Env = g.buildxEnv()
+			cmd.Env = builderEnv(os.Environ(), g.door.Space)
 		}
 		log.Info("removing the build cache of " + b.who() + " unused for " + duration(g.ages.BuildCache))
 		out, err := outputWithin(cmd, gcPruneWait)

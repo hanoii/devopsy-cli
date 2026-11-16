@@ -86,7 +86,8 @@ var doorVerbs = map[string]string{
 	"build": "", "compose": "", "exec": "", "image": "", "inspect": "", "login": "", "network": "", "ps": "", "pull": "", "rm": "", "run": "",
 	"tag": "", "version": "", "volume": "", "__complete": "",
 	"buildx": "--context-hash, local; --server-setup, --gc and the deploy user's --server-ready, the deploy user's", "info": "--server-info, --server-setup and the deploy user's --server-ready, the admin's", "system": "--server-info, the admin's; --gc, the deploy user's",
-	"builder": "--gc, the deploy user's", "container": "--gc, the deploy user's", "context": "--gc, the deploy user's", "not": "a message",
+	"builder": "--gc, the deploy user's", "container": "--gc and the door's own builder, the deploy user's", "context": "--gc, the deploy user's", "not": "a message",
+	"stop": "a project user's builder's stopper and --gc, the deploy user's",
 }
 
 // TestDoorKnowsDevopsysDockerCommands fails when devopsy calls a Docker command the
@@ -814,7 +815,8 @@ esac
 // by Docker, its container's own policy, never buildx's words) is made again, under its lock
 // exclusive: beside a running build of another environment the remake waits, says so and
 // removes nothing, and a wait that sees another build make it again ends there. One never
-// booted (no container) is judged by its network alone. Its settings stay the door's.
+// booted (no container) is judged by its network alone. A container and cache of its name left
+// with no builder go before one is made anew. Its settings stay the door's.
 func TestDoorBuildsOnTheProjectsBuilder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -828,6 +830,9 @@ case "$*" in
   "container inspect --format "*) [ -e `+policy+` ] && cat `+policy+` ;;
   "buildx create "*) echo "Driver Options: network=\"${8#network=}\" restart-policy=\"${10#restart-policy=}\"" >`+made+`; rm -f `+policy+` ;;
   "buildx rm "*) rm -f `+made+` `+policy+` ;;
+  "volume inspect "*) [ -e `+dir+`/state ] ;;
+  "rm -f "*) rm -f `+policy+` ;;
+  "volume rm "*) rm -f `+dir+`/state ;;
   "network inspect "*) [ -e `+dir+`/net ] ;;
   "network create "*) touch `+dir+`/net ;;
 esac
@@ -856,8 +861,9 @@ esac
 		return string(got), nil
 	}
 	inspect := space + " buildx inspect devopsy-shop\n" + space + " container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\n"
+	leftover := space + " container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\n" + space + " volume inspect buildx_buildkit_devopsy-shop0_state\n"
 	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build --driver-opt restart-policy=no\n"
-	if got, err := build(); err != nil || got != space+" buildx inspect devopsy-shop\n"+space+" network inspect devopsy-shop-build\n"+space+" network create devopsy-shop-build\n"+create {
+	if got, err := build(); err != nil || got != space+" buildx inspect devopsy-shop\n"+leftover+space+" network inspect devopsy-shop-build\n"+space+" network create devopsy-shop-build\n"+create {
 		t.Errorf("the first build (%v) asked:\n%s", err, got)
 	}
 	// What a claim runs too (builder): no lock taken, no stopper started, the builder booted by
@@ -877,13 +883,23 @@ esac
 	// one Docker restarts, booted with no policy of devopsy's.
 	// Inspected before, as the lock's wait begins, and again under it: another build may end
 	// its remake between the last two.
-	remade := inspect + inspect + inspect + space + " buildx rm devopsy-shop\n" + space + " network inspect devopsy-shop-build\n" + create
+	remade := inspect + inspect + inspect + space + " buildx rm devopsy-shop\n" + leftover + space + " network inspect devopsy-shop-build\n" + create
 	for name, c := range map[string][2]string{"on the default bridge": {"Driver Options: \n", "no\n"}, "restarted by Docker": {"Driver Options: network=\"devopsy-shop-build\"\n", "unless-stopped\n"}} {
 		write(t, made, c[0], 0o644)
 		write(t, policy, c[1], 0o644)
 		if got, err := build(); err != nil || got != remade {
 			t.Errorf("a builder %s (%v), asked:\n%s", name, err, got)
 		}
+	}
+	// A container and cache left with no builder (a boot racing a key's removal) go before a
+	// builder is made anew, which would take them, a removed key's cache with them.
+	os.Remove(made)
+	write(t, policy, "no\n", 0o644)
+	write(t, filepath.Join(dir, "state"), "", 0o644)
+	want := space + " buildx inspect devopsy-shop\n" + leftover[:strings.Index(leftover, "\n")+1] + space + " rm -f buildx_buildkit_devopsy-shop0\n" +
+		space + " volume inspect buildx_buildkit_devopsy-shop0_state\n" + space + " volume rm buildx_buildkit_devopsy-shop0_state\n" + space + " network inspect devopsy-shop-build\n" + create
+	if got, err := build(); err != nil || got != want {
+		t.Errorf("a builder made beside a leftover container (%v), asked:\n%s", err, got)
 	}
 	// Beside a running build, the remake waits, then gives up, removing nothing.
 	lock := door.BuilderLockOf(filepath.Join(dir, "space"), "shop")

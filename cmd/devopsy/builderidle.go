@@ -35,6 +35,14 @@ type builderTiming struct {
 
 var builderTimes = builderTiming{lock: time.Minute, answer: 5 * time.Second, every: time.Second, bound: 24 * time.Hour, stop: 30 * time.Second}
 
+// orServer is t, a test's own, or builderTimes when t is unset.
+func (t builderTiming) orServer() builderTiming {
+	if t == (builderTiming{}) {
+		return builderTimes
+	}
+	return t
+}
+
 // builderEnv is the environment of a docker command on the project users' builders: base and
 // the door's BUILDX_CONFIG.
 func builderEnv(base []string, space string) []string {
@@ -109,6 +117,13 @@ const (
 	stopperDeclined = 'd'
 )
 
+// errNoAnswer is a stopper's end with no answer: it did not start, or a gate refused it.
+var errNoAnswer = errors.New("it ended with no answer")
+
+// detach starts c in a session of its own, for a process that outlives its starter (a
+// builder's stopper, --upgrade-check).
+func detach(c *exec.Cmd) { c.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
+
 // startStopper starts self's builderIdleFlag for project, detached in a session of its own,
 // stdin, stdout and stderr /dev/null, in /, with env, its answer on a pipe (descriptor 3),
 // read within t.answer: none, it did not start or a gate refused it. One that declined is
@@ -121,7 +136,7 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 	defer r.Close()
 	c := exec.Command(self, builderIdleFlag, project)
 	c.Env, c.Dir, c.ExtraFiles = env, "/", []*os.File{w}
-	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detach(c)
 	err = c.Start()
 	w.Close()
 	if err != nil {
@@ -139,7 +154,7 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 		if n == 1 {
 			return true, nil
 		}
-		return false, errors.New("it ended with no answer")
+		return false, errNoAnswer
 	}
 	// A grace before the wait says anything: it answers within it, every time but a slow one.
 	grace := min(t.answer, time.Second)
@@ -150,7 +165,11 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 		})
 	}
 	if err != nil {
-		_ = c.Process.Kill()
+		// One that ended is reaped; one late is let go, never killed: it may hold the stopper's
+		// lock by now, the one a declined stopper of another use counts on.
+		if !errors.Is(err, errNoAnswer) {
+			return false, errors.Join(err, c.Process.Release())
+		}
 		_ = c.Wait()
 		return false, err
 	}
@@ -169,12 +188,17 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 
 // runBuilderIdle implements builderIdleFlag <project>: the stopper of a project user's
 // builder, the deploy user's (deployUserSteps). It closes what it inherited but its answer's
-// descriptor (3), takes the project's stopper lock, answering whether it holds it or another
-// stopper does, and, holding it, stops the builder once nothing holds the builder's lock
+// descriptor (3, when it inherited it: run by hand it has none, and 3 is then the first file it
+// opens), takes the project's stopper lock, answering whether it holds it or another stopper
+// does, and, holding it, stops the builder once nothing holds the builder's lock
 // (stopWhenIdle).
 func runBuilderIdle(args []string) int {
-	closeInherited(3)
-	answer := os.NewFile(3, "answer")
+	var answer *os.File
+	keep := -1
+	if flags, err := unix.FcntlInt(3, unix.F_GETFD, 0); err == nil && flags&unix.FD_CLOEXEC == 0 {
+		answer, keep = os.NewFile(3, "answer"), 3
+	}
+	closeInherited(keep)
 	if len(args) != 1 || !remote.ValidName(args[0]) {
 		return 2
 	}
@@ -245,28 +269,60 @@ func stopWhenIdle(lock, idle *pathlock.Lock, stop func() error, t builderTiming)
 	}
 }
 
-// stopBuilder stops project's builder with docker, under env (the door's BUILDX_CONFIG), its
-// caller holding the builder's lock exclusive: nothing when it is gone (an inspect, never
-// buildx's words) or stopped already, a stop bounded by within, its process group killed past
-// it. The one stop of the stopper and of --gc.
+// stopBuilder stops project's builder's container with docker, under env, its caller holding
+// the builder's lock exclusive, the whole step bounded by within: nothing when no container of
+// its name runs (docker ps, which answers that for a builder gone too, and fails only when
+// Docker does), else docker stop, which stops a container left with no builder's record as
+// much. Any failure, Docker's not answering included, is the step's. The one stop of the
+// stopper and of --gc.
 func stopBuilder(docker string, env []string, project string, within time.Duration) error {
-	name := door.BuilderOf(project)
+	deadline := time.Now().Add(within)
 	run := func(args ...string) ([]byte, error) {
 		c := exec.Command(docker, args...)
 		c.Env = env
-		return outputWithin(c, within)
+		left := time.Until(deadline)
+		if left <= 0 {
+			return nil, errors.New("past its bound")
+		}
+		return outputWithin(c, left)
 	}
-	out, err := run("buildx", "inspect", name)
+	container := door.BuilderContainerOf(project)
+	out, err := run("ps", "-q", "--filter", "name=^/"+container+"$", "--filter", "status=running")
 	if err != nil {
+		return dockerFailed("docker ps", err)
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
 		return nil
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if v, ok := strings.CutPrefix(line, "Status:"); ok && strings.TrimSpace(v) != "running" {
-			return nil
+	if _, err := run("stop", container); err != nil {
+		return dockerFailed("docker stop", err)
+	}
+	return nil
+}
+
+// builderContainer is project's builder's container's restart policy, and whether it has one
+// (made at its first boot), by run's docker: a builder with none was never booted.
+func builderContainer(run func(args ...string) ([]byte, error), project string) (policy string, ok bool) {
+	out, err := run("container", "inspect", "--format", "{{.HostConfig.RestartPolicy.Name}}", door.BuilderContainerOf(project))
+	return strings.TrimSpace(string(out)), err == nil
+}
+
+// removeLeftover removes project's builder's container and state volume by their names, with
+// run's docker, when they are there with no builder of devopsy's (a boot racing a key's
+// removal): a builder made anew would take them as its own, a removed key's cache with them.
+func removeLeftover(run func(args ...string) ([]byte, error), project string) error {
+	if _, ok := builderContainer(run, project); ok {
+		if _, err := run("rm", "-f", door.BuilderContainerOf(project)); err != nil {
+			return fmt.Errorf("its builder's container: %w", dockerFailed("docker rm", err))
 		}
 	}
-	_, err = run("buildx", "stop", name)
-	return err
+	state := door.BuilderStateOf(project)
+	if _, err := run("volume", "inspect", state); err == nil {
+		if _, err := run("volume", "rm", state); err != nil {
+			return fmt.Errorf("its builder's cache: %w", dockerFailed("docker volume rm", err))
+		}
+	}
+	return nil
 }
 
 // outputWithin runs c for what it prints on stdout, as Output does, its stderr in the

@@ -1622,7 +1622,7 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 			}
 		}
 		// Ahead of the file's descriptor, which the stopper would otherwise inherit.
-		if built, err = useBuilder(s.policy.Space, s.policy.Project, devopsyPath(), s.env, s.builderTiming()); err != nil {
+		if built, err = useBuilder(s.policy.Space, s.policy.Project, devopsyPath(), s.env, s.timing.orServer()); err != nil {
 			return doorRefused(fmt.Errorf("refused: %w", err))
 		}
 	}
@@ -1980,8 +1980,8 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		if err != nil {
 			return false, false
 		}
-		policy, err := probe("container", "inspect", "--format", "{{.HostConfig.RestartPolicy.Name}}", door.BuilderContainerOf(s.policy.Project))
-		return true, madeRight(string(out), network, strings.TrimSpace(string(policy)), err == nil)
+		policy, booted := builderContainer(probe, s.policy.Project)
+		return true, madeRight(string(out), network, policy, booted)
 	}
 	there, ok := right()
 	if ok {
@@ -1991,7 +1991,7 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		// Made otherwise (on the default bridge, restarted by Docker): made again, under its
 		// lock exclusive, so that no build of another environment runs on it meanwhile; a
 		// wait that sees another build make it again ends there.
-		t := s.builderTiming()
+		t := s.timing.orServer()
 		lock, err := builderLockWait(door.BuilderLockOf(s.policy.Space, s.policy.Project), "another use of "+s.policy.Project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
 			_, ok := right()
 			return ok
@@ -2012,6 +2012,11 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 			}
 		}
 	}
+	// A container and cache of its name left with no builder (a boot racing a key's removal)
+	// would be the new one's: they go first.
+	if err := removeLeftover(probe, s.policy.Project); err != nil {
+		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
+	}
 	if _, err := probe("network", "inspect", network); err != nil {
 		if _, err := run("network", "create", network); err != nil {
 			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
@@ -2025,14 +2030,6 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
 	}
 	return b, nil
-}
-
-// builderTiming is the builders' waits for this side: builderTimes unless a test set its own.
-func (s *doorSide) builderTiming() builderTiming {
-	if s.timing != (builderTiming{}) {
-		return s.timing
-	}
-	return builderTimes
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)

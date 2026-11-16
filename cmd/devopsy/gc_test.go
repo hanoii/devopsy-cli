@@ -180,8 +180,10 @@ func TestGCOneOffs(t *testing.T) {
 // never booted, with no container, left alone); one with nothing old and a project with no
 // builder left out; one that does not read is an error, the rest listed. The removals read
 // none of them here: each is pruned where it is booted, once.
+//
+// Not parallel: it checks that --gc takes a lock it let go at once, which a parallel test's
+// fork holds until its exec.
 func TestGCBuilders(t *testing.T) {
-	t.Parallel()
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	space := filepath.Join(dir, "space")
@@ -204,10 +206,11 @@ case "$*" in
 `+ls+`
 EOF
   ;;
-  'container inspect buildx_buildkit_devopsy-blog0') exit 1 ;;
+  'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-blog0') exit 1 ;;
   'container inspect '*) ;;
-  'buildx inspect --bootstrap '*|'buildx stop '*) [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; echo "$*" >>`+log+` ;;
-  'buildx inspect '*) echo 'Status: running' ;;
+  'buildx inspect --bootstrap '*) [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; echo "$*" >>`+log+` ;;
+  'ps -q '*) echo c0ffee ;;
+  'stop '*) echo "$*" >>`+log+` ;;
   'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '`+du+`' ;;
   'exec buildx_buildkit_devopsy-wiki0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '[]' ;;
   'exec buildx_buildkit_devopsy-news0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo 'connection refused' >&2; exit 1 ;;
@@ -234,7 +237,7 @@ esac
 	// Each booted, read and stopped before the next boots; the one never booted left alone.
 	var calls []string
 	for _, p := range []string{"news", "shop", "wiki"} {
-		calls = append(calls, "buildx inspect --bootstrap devopsy-"+p, "exec buildx_buildkit_devopsy-"+p+"0 buildctl du --format {{json .}}", "buildx stop devopsy-"+p)
+		calls = append(calls, "buildx inspect --bootstrap devopsy-"+p, "exec buildx_buildkit_devopsy-"+p+"0 buildctl du --format {{json .}}", "stop buildx_buildkit_devopsy-"+p+"0")
 	}
 	if got := readString(log); got != strings.Join(calls, "\n")+"\n" {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, strings.Join(calls, "\n"))
@@ -517,9 +520,8 @@ esac
 
 // A project user's builder's prune goes by the listing's cutoff as it stands when the prune
 // runs: its boot (and the previous builder's stop, the lock's waits) comes between the start
-// of the removal and the prune, and each second of it moves a cutoff taken before it past the
-// listing's, removing records used after it. Bug: remove takes prune's until once, before the
-// builders are booted (onBuilder), so a boot of 2 s prunes 1 s past the listing's cutoff.
+// of the removal and the prune, and each second of it would move a cutoff taken before it past
+// the listing's, removing records used after it.
 func TestGCPruneCutoffCountsTheBoot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -529,7 +531,6 @@ func TestGCPruneCutoffCountsTheBoot(t *testing.T) {
 	write(t, docker, `#!/bin/sh
 case "$*" in
   'buildx inspect --bootstrap '*) sleep 2 ;;
-  'buildx inspect '*) echo 'Status: running' ;;
   'buildx prune '*) echo "${8#until=}" >`+until+` ;;
 esac
 `, 0o755)

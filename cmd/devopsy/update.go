@@ -204,7 +204,7 @@ func updateNotice(color bool) {
 		update.Remember(file, latest)
 		if exe, err := os.Executable(); err == nil {
 			cmd := exec.Command(exe, upgradeCheck)
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			detach(cmd)
 			_ = cmd.Start()
 		}
 	}

@@ -198,8 +198,8 @@ func TestStopperStopsNothingOnAReplacedLockOrPastItsBound(t *testing.T) {
 }
 
 // stopperAt is what a stopper started through the binary needs for project shop: a door
-// config under dir (doorHome), its locks' directory, and a docker that answers inspect for a
-// running builder and records its stop in dir/stopped.
+// config under dir (doorHome), its locks' directory, and a docker whose builder's container
+// runs, recording its stop in dir/stopped.
 func stopperAt(t *testing.T) (dir, space string, env []string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -207,8 +207,8 @@ func stopperAt(t *testing.T) (dir, space string, env []string) {
 	bin := filepath.Join(dir, "bin")
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 case "$*" in
-  'buildx inspect devopsy-shop') [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] && echo 'Status: running' ;;
-  'buildx stop devopsy-shop') echo stopped >>`+filepath.Join(dir, "stopped")+` ;;
+  'ps -q --filter name=^/buildx_buildkit_devopsy-shop0$ --filter status=running') echo c0ffee ;;
+  'stop buildx_buildkit_devopsy-shop0') echo stopped >>`+filepath.Join(dir, "stopped")+` ;;
   *) exit 9 ;;
 esac
 `, 0o755)
@@ -301,7 +301,7 @@ func TestBuilderRemovalWaitsOnNoBuild(t *testing.T) {
 	write(t, docker, `#!/bin/sh
 echo "$*" >>`+log+`
 case "$*" in
-  'buildx inspect devopsy-shop'|'container inspect buildx_buildkit_devopsy-shop0'|'volume inspect buildx_buildkit_devopsy-shop0_state'|'network inspect devopsy-shop-build') ;;
+  'buildx inspect devopsy-shop'|'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0'|'volume inspect buildx_buildkit_devopsy-shop0_state'|'network inspect devopsy-shop-build') ;;
   'buildx rm devopsy-shop'|'rm -f buildx_buildkit_devopsy-shop0'|'volume rm buildx_buildkit_devopsy-shop0_state'|'network rm devopsy-shop-build') ;;
   *) exit 9 ;;
 esac
@@ -326,7 +326,7 @@ esac
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("the removal took %s beside a build", took)
 	}
-	want := "buildx inspect devopsy-shop\nbuildx rm devopsy-shop\ncontainer inspect buildx_buildkit_devopsy-shop0\nrm -f buildx_buildkit_devopsy-shop0\n" +
+	want := "buildx inspect devopsy-shop\nbuildx rm devopsy-shop\ncontainer inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\nrm -f buildx_buildkit_devopsy-shop0\n" +
 		"volume inspect buildx_buildkit_devopsy-shop0_state\nvolume rm buildx_buildkit_devopsy-shop0_state\nnetwork inspect devopsy-shop-build\nnetwork rm devopsy-shop-build\n"
 	if got := readString(log); got != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
@@ -341,8 +341,10 @@ esac
 // --gc's removals boot each project user's builder once, one at a time, and stop it before the
 // next: the listed removal prunes it; --yes reads it first and prunes only one with something
 // to remove, said only then.
+//
+// Not parallel: it checks that --gc takes a lock it let go at once, which a parallel test's
+// fork holds until its exec.
 func TestGCPrunesEachBuilderBootedOnce(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	space := filepath.Join(dir, "space")
 	log := filepath.Join(dir, "docker.log")
@@ -350,7 +352,7 @@ func TestGCPrunesEachBuilderBootedOnce(t *testing.T) {
 	docker := filepath.Join(dir, "docker")
 	write(t, docker, `#!/bin/sh
 case "$*" in
-  'buildx inspect devopsy-'*) echo 'Status: running' ;;
+  'ps -q '*) echo c0ffee ;;
   'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '`+old+`' ;;
   'exec buildx_buildkit_devopsy-wiki0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '[]' ;;
   'buildx prune '*) [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; echo "$*" >>`+log+`; printf 'Total:\t3kB\n' ;;
@@ -363,8 +365,8 @@ esac
 	plan := gcPlan{Builders: []gcBuilder{{Name: "devopsy-shop", Project: "shop"}, {Name: "devopsy-wiki", Project: "wiki"}}}
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	for mode, want := range map[string][]string{
-		"remove-listed": {"buildx inspect --bootstrap devopsy-shop", "prune", "buildx stop devopsy-shop", "buildx inspect --bootstrap devopsy-wiki", "prune", "buildx stop devopsy-wiki"},
-		"remove":        {"buildx inspect --bootstrap devopsy-shop", "du", "prune", "buildx stop devopsy-shop", "buildx inspect --bootstrap devopsy-wiki", "du", "buildx stop devopsy-wiki"},
+		"remove-listed": {"buildx inspect --bootstrap devopsy-shop", "prune", "stop buildx_buildkit_devopsy-shop0", "buildx inspect --bootstrap devopsy-wiki", "prune", "stop buildx_buildkit_devopsy-wiki0"},
+		"remove":        {"buildx inspect --bootstrap devopsy-shop", "du", "prune", "stop buildx_buildkit_devopsy-shop0", "buildx inspect --bootstrap devopsy-wiki", "du", "stop buildx_buildkit_devopsy-wiki0"},
 	} {
 		os.Remove(log)
 		g := &gcScope{docker: docker, now: now, listedAt: time.Now(), ages: remote.ServerGC{BuildCache: 30 * 24 * time.Hour}, door: &remote.Door{Space: space, Users: users},
@@ -388,83 +390,55 @@ esac
 	}
 }
 
-// BUG (review): stopBuilder takes any inspect that fails for an absent builder, one killed past
-// its bound included (a builder that runs but does not answer: inspect asks its BuildKit), and
-// answers that nothing is left to stop, so its stopper lets both locks go and ends, the
-// builder left running with no stopper. A stop whose inspect does not end must fail, as one
-// whose buildx stop does not, so the stopper tries again (stopWhenIdle).
-func TestStopFailsWhenItsInspectDoesNotEnd(t *testing.T) {
+// A stop goes by the builder's container running, and by nothing else: none running (none at
+// all, a builder gone) is nothing to stop, and every failure, a Docker that does not answer
+// within the bound included, is the stop's, so its stopper tries again (stopWhenIdle) rather
+// than ending as if it had stopped it. The bound is the whole step's: a look that took most of
+// it leaves the stop the rest, so a stop holds the builder's lock exclusive no longer than it.
+func TestStopGoesByTheContainerWithinOneBound(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	docker := filepath.Join(dir, "docker")
-	write(t, docker, `#!/bin/sh
-echo "$*" >>`+filepath.Join(dir, "docker.log")+`
+	log := filepath.Join(dir, "docker.log")
+	stop := func(ps, stopped string) (string, error) {
+		t.Helper()
+		os.Remove(log)
+		docker := filepath.Join(dir, "docker")
+		write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
 case "$*" in
-  'buildx inspect devopsy-shop') exec sleep 30 ;;
-esac
-`, 0o755)
-	start := time.Now()
-	err := stopBuilder(docker, builderEnv(os.Environ(), filepath.Join(dir, "space")), "shop", 300*time.Millisecond)
-	if took := time.Since(start); took > 10*time.Second {
-		t.Errorf("the stop took %s, its inspect bounded by 300ms", took)
-	}
-	if err == nil {
-		t.Errorf("a stop whose inspect was killed past its bound says the builder is stopped; docker was asked:\n%s", readString(filepath.Join(dir, "docker.log")))
-	}
-}
-
-// A stop whose inspect does not answer within its bound (a daemon slow or hung) has not found
-// the builder gone: it failed, and the stopper tries again (stopWhenIdle), its own lock kept.
-// Bug: stopBuilder takes any failure of its inspect, its kill past the bound included, for a
-// builder gone and returns nil, so the stopper ends as if it stopped it, the builder left
-// running with no stopper until the next build.
-func TestStopBuilderFailsOnAnInspectPastItsBound(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	docker := filepath.Join(dir, "docker")
-	write(t, docker, `#!/bin/sh
-case "$*" in
-  'buildx inspect devopsy-shop') sleep 10; echo 'Status: running' ;;
-  'buildx stop devopsy-shop') ;;
+  'ps -q --filter name=^/buildx_buildkit_devopsy-shop0$ --filter status=running') `+ps+` ;;
+  'stop buildx_buildkit_devopsy-shop0') `+stopped+` ;;
   *) exit 9 ;;
 esac
 `, 0o755)
-	if err := stopBuilder(docker, nil, "shop", 200*time.Millisecond); err == nil {
-		t.Error("a stop whose inspect was killed past its bound said the builder is stopped")
+		return readString(log), stopBuilder(docker, nil, "shop", 1500*time.Millisecond)
 	}
-}
-
-// BUG (review): stopBuilder bounds its inspect and its buildx stop each by the whole bound, so
-// a stop holds the builder's lock exclusive for up to twice it (a minute on a server, where a
-// build waits a minute for that lock and is then refused), not the 30 s its rule says. One
-// bound covers the step: an inspect that took most of it leaves the stop only the rest.
-func TestStopIsBoundedAsAWhole(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	docker := filepath.Join(dir, "docker")
-	write(t, docker, `#!/bin/sh
-case "$*" in
-  'buildx inspect devopsy-shop') sleep 1; echo 'Status: running' ;;
-  'buildx stop devopsy-shop') exec sleep 30 ;;
-esac
-`, 0o755)
-	const within = 1500 * time.Millisecond
+	if _, err := stop("echo c0ffee", ":"); err != nil {
+		t.Errorf("a running builder's stop: %v", err)
+	}
+	if got, err := stop(":", "exit 9"); err != nil || strings.Contains(readString(log), "stop buildx") {
+		t.Errorf("a builder not running (%v), asked:\n%s", err, got)
+	}
+	if _, err := stop("echo 'Cannot connect to the Docker daemon' >&2; exit 1", ":"); err == nil || !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Errorf("a look Docker failed: %v", err)
+	}
 	start := time.Now()
-	err := stopBuilder(docker, builderEnv(os.Environ(), filepath.Join(dir, "space")), "shop", within)
-	if err == nil {
-		t.Error("a stop killed past its bound says the builder is stopped")
+	if _, err := stop("exec sleep 30", ":"); err == nil {
+		t.Error("a look past its bound says the builder is stopped")
 	}
-	if took := time.Since(start); took >= within+time.Second {
-		t.Errorf("the stop took %s, bounded by %s: its inspect and its buildx stop each took the whole bound", took.Round(10*time.Millisecond), within)
+	start = time.Now()
+	if _, err := stop("sleep 1; echo c0ffee", "exec sleep 30"); err == nil {
+		t.Error("a stop past its bound says the builder is stopped")
+	}
+	if took := time.Since(start); took >= 2500*time.Millisecond {
+		t.Errorf("the stop took %s, its bound 1.5s: the look and the stop each had the whole bound", took.Round(10*time.Millisecond))
 	}
 }
 
 // A stopper started with no answer's descriptor (by hand: only its starters hand it one) still
-// stops an idle builder, writing nothing anywhere. Bug: runBuilderIdle takes descriptor 3 for
-// its answer whatever it is, so on macOS the first file it opens lands there, the builder's
-// lock: its answer is written into it and the lock's descriptor closed under it, and the
-// stopper ends stopping nothing (fails on macOS; on Linux descriptor 3 is another of the
-// process's own, which it writes to and closes, and the test passes).
+// stops an idle builder, writing nothing anywhere: descriptor 3 is its answer only when it
+// inherited it, else the first file it opens, the builder's lock, would take the answer and be
+// closed under it.
 func TestStopperWithNoAnswerStillStops(t *testing.T) {
 	t.Parallel()
 	dir, space, env := stopperAt(t)

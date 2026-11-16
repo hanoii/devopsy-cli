@@ -158,6 +158,7 @@ func removeBuilder(dockerPath string, env []string, who string) error {
 		c.Env = env
 		return c
 	}
+	run := func(args ...string) ([]byte, error) { return docker(args...).Output() }
 	project := door.ProjectOfUser(who)
 	builder, network := door.BuilderOf(project), door.BuilderNetworkOf(project)
 	if docker("buildx", "inspect", builder).Run() == nil {
@@ -165,15 +166,8 @@ func removeBuilder(dockerPath string, env []string, who string) error {
 			return fmt.Errorf("its builder %s: %w: %s", builder, err, strings.TrimSpace(string(out)))
 		}
 	}
-	if container := door.BuilderContainerOf(project); docker("container", "inspect", container).Run() == nil {
-		if out, err := docker("rm", "-f", container).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder's container: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-	}
-	if state := door.BuilderStateOf(project); docker("volume", "inspect", state).Run() == nil {
-		if out, err := docker("volume", "rm", state).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder's cache: %w: %s", err, strings.TrimSpace(string(out)))
-		}
+	if err := removeLeftover(run, project); err != nil {
+		return err
 	}
 	if docker("network", "inspect", network).Run() == nil {
 		if out, err := docker("network", "rm", network).CombinedOutput(); err != nil {
