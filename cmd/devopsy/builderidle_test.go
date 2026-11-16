@@ -458,3 +458,34 @@ esac
 		t.Errorf("the stop took %s, bounded by %s: its inspect and its buildx stop each took the whole bound", took.Round(10*time.Millisecond), within)
 	}
 }
+
+// A stopper started with no answer's descriptor (by hand: only its starters hand it one) still
+// stops an idle builder, writing nothing anywhere. Bug: runBuilderIdle takes descriptor 3 for
+// its answer whatever it is, so on macOS the first file it opens lands there, the builder's
+// lock: its answer is written into it and the lock's descriptor closed under it, and the
+// stopper ends stopping nothing (fails on macOS; on Linux descriptor 3 is another of the
+// process's own, which it writes to and closes, and the test passes).
+func TestStopperWithNoAnswerStillStops(t *testing.T) {
+	t.Parallel()
+	dir, space, env := stopperAt(t)
+	l, err := builderLockWait(door.BuilderLockOf(space, "shop"), "", syscall.LOCK_SH, time.Second, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	if f, err := os.OpenFile(door.BuilderIdleLockOf(space, "shop"), os.O_CREATE|os.O_RDONLY, 0o600); err == nil {
+		f.Close()
+	}
+	c := exec.Command(os.Args[0], builderIdleFlag, "shop")
+	c.Env, c.Dir = env, "/"
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Errorf("the stopper (%v): %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stopped")); err != nil {
+		t.Error("an idle builder left running by a stopper with no answer's descriptor")
+	}
+	if b := readString(door.BuilderLockOf(space, "shop")); b != "" {
+		t.Errorf("the builder's lock file holds %q", b)
+	}
+}
