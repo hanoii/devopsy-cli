@@ -1,6 +1,7 @@
 package door
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -58,5 +59,39 @@ func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 	}
 	if _, err := PlanPull(file, active, []string{"pull", "web", "nosuch"}, testPolicy); err == nil || !strings.Contains(err.Error(), "no such service: nosuch") {
 		t.Errorf("an unknown service: %v", err)
+	}
+}
+
+// A start can start the active services, every service its words name (a run's, an up's),
+// and what those depend on; nothing else. A word that is a service's name only by chance (a
+// command's argument) widens it, never narrows it.
+func TestMayStartIsActiveNamedAndDependencies(t *testing.T) {
+	t.Parallel()
+	file := map[string]any{"services": map[string]any{
+		"web":   map[string]any{"depends_on": map[string]any{"cache": map[string]any{}}},
+		"cache": map[string]any{"profiles": []any{"extra"}},
+		"tool":  map[string]any{"profiles": []any{"tools"}, "depends_on": []any{"db"}},
+		"db":    map[string]any{"profiles": []any{"tools"}},
+		"other": map[string]any{"profiles": []any{"tools"}},
+	}}
+	keys := func(m map[string]bool) []string { return slices.Sorted(maps.Keys(m)) }
+	for _, c := range []struct {
+		argv []string
+		want []string
+	}{
+		{[]string{"up", "-d"}, []string{"cache", "web"}},
+		{[]string{"run", "--rm", "tool", "sh"}, []string{"cache", "db", "tool", "web"}},
+		{[]string{"run", "--rm", "-e", "X=1", "web", "echo", "other"}, []string{"cache", "other", "web"}},
+		{[]string{"up"}, []string{"cache", "web"}},
+	} {
+		if got := keys(MayStart(file, []string{"web"}, c.argv)); !slices.Equal(got, c.want) {
+			t.Errorf("%v: %v, want %v", c.argv, got, c.want)
+		}
+	}
+	if !Profiled(file) {
+		t.Error("a file with profiles is not profiled")
+	}
+	if Profiled(map[string]any{"services": map[string]any{"web": map[string]any{"profiles": []any{}}}}) {
+		t.Error("an empty profiles list is a profile")
 	}
 }

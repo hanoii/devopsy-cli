@@ -69,12 +69,12 @@ func (s *doorSide) pull(config string, file map[string]any, profiles, dir string
 }
 
 // activeServices are the services of the checked file compose takes as active under profiles,
-// read with compose's own config: its reading of profiles is compose's. The file goes on
-// stdin, its build blocks left out, compose with the empty config directory, since it pulls
-// nothing.
+// read with compose's own config: its reading of profiles is compose's, for a pull and for a
+// start (mayStart). The file goes on stdin, its build blocks left out, compose with the empty
+// config directory, since it pulls nothing.
 func (s *doorSide) activeServices(file map[string]any, profiles, dir string) ([]string, error) {
-	// Without the services' build blocks, which the pull's checks do not read (CheckFile): it
-	// reads whether a service builds from the file itself (PlanPull), so compose gets none. A
+	// Without the services' build blocks, which no check reads here (CheckFile): whether a
+	// service builds is read from the file itself (PlanPull), so compose gets none. A
 	// service with a build and no image goes by devopsy's name for its build, as compose needs
 	// one or the other.
 	services, _ := file["services"].(map[string]any)
@@ -115,13 +115,13 @@ func (s *doorSide) activeServices(file map[string]any, profiles, dir string) ([]
 	out, err := c.Output()
 	if err != nil {
 		os.Stderr.Write(said.Bytes())
-		return nil, fmt.Errorf("refused: pull: compose could not read the file: %v", err)
+		return nil, fmt.Errorf("refused: compose could not read the file: %v", err)
 	}
 	var read struct {
 		Services map[string]any `json:"services"`
 	}
 	if err := json.Unmarshal(out, &read); err != nil {
-		return nil, errors.New("refused: pull: compose's config is no JSON")
+		return nil, errors.New("refused: compose's config is no JSON")
 	}
 	var active []string
 	for svc := range read.Services {

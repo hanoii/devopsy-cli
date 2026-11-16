@@ -1546,7 +1546,11 @@ func (s *doorSide) compose(config string, file map[string]any, profiles, dir str
 	// The image check pins what it checked into the file (startImage), so the file compose
 	// gets, and the vets judge, is marshalled after it.
 	if starts {
-		if err := s.checkImageLabels(file, config); err != nil {
+		may, err := s.mayStart(file, profiles, dir, argv)
+		if err != nil {
+			return doorRefused(err)
+		}
+		if err := s.checkImageLabels(file, config, may); err != nil {
 			return doorRefused(err)
 		}
 		// What starts is the image claimed: one gone in the moment since fails the start, never
@@ -1731,13 +1735,32 @@ func checkedProjectDown(p door.Policy, docker func(args ...string) *exec.Cmd, na
 	return down()
 }
 
+// mayStart is the services a start (argv) can start, door.MayStart under the request's
+// profiles, read with compose's own config (activeServices); nil, every service, when none is
+// under a profile, which asks compose nothing.
+func (s *doorSide) mayStart(file map[string]any, profiles, dir string, argv []string) (map[string]bool, error) {
+	if !door.Profiled(file) {
+		return nil, nil
+	}
+	active, err := s.activeServices(file, profiles, dir)
+	if err != nil {
+		return nil, err
+	}
+	return door.MayStart(file, active, argv), nil
+}
+
 // checkImageLabels refuses an image that labels its containers with what devopsy or a
 // proxy reads: a build's or an image's LABEL lands in a container's labels, past any check
 // of a file's. It also decides the image compose runs, written into the file (startImage):
-// one compose must not resolve again after this check.
-func (s *doorSide) checkImageLabels(file map[string]any, config string) error {
+// one compose must not resolve again after this check. It judges the services the start can
+// start (may, mayStart; nil is every one): a profile's build no release built is not there,
+// and compose starts nothing outside them.
+func (s *doorSide) checkImageLabels(file map[string]any, config string, may map[string]bool) error {
 	services, _ := file["services"].(map[string]any)
 	for _, svc := range slices.Sorted(maps.Keys(services)) {
+		if may != nil && !may[svc] {
+			continue
+		}
 		sv, _ := services[svc].(map[string]any)
 		// The render named every build (images.DoorBuild) and dropped its build: section.
 		image, _ := sv["image"].(string)

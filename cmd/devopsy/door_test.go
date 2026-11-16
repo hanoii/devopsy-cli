@@ -715,28 +715,92 @@ esac
 		return f
 	}
 	plain := file("plain")
-	if err := side.checkImageLabels(plain, ""); err != nil {
+	if err := side.checkImageLabels(plain, "", nil); err != nil {
 		t.Errorf("the control: a plain build is refused: %v", err)
 	}
 	// Compose gets it by the id checked.
 	if got := plain["services"].(map[string]any)["plain"].(map[string]any)["image"]; got != "sha256:p" {
 		t.Errorf("a build goes to compose as %v", got)
 	}
-	if err := side.checkImageLabels(file("labelled"), ""); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
+	if err := side.checkImageLabels(file("labelled"), "", nil); err == nil || !strings.Contains(err.Error(), "devopsy.role") {
 		t.Errorf("a build labelled devopsy.role: %v", err)
 	}
-	if err := side.checkImageLabels(file("missing"), ""); err == nil || !strings.Contains(err.Error(), "not here") {
+	if err := side.checkImageLabels(file("missing"), "", nil); err == nil || !strings.Contains(err.Error(), "not here") {
 		t.Errorf("a build not here yet, which compose would build at the start: %v", err)
 	}
-	if err := side.checkImageLabels(file("routed"), ""); err != nil {
+	if err := side.checkImageLabels(file("routed"), "", nil); err != nil {
 		t.Errorf("the control: with no vet, a label of no one's is refused: %v", err)
 	}
 	side.vets = []remote.DoorVet{{Prefix: "vetted.", Command: "/bin/false"}}
-	if err := side.checkImageLabels(file("routed"), ""); err == nil || !strings.Contains(err.Error(), "Vetted.Enable") {
+	if err := side.checkImageLabels(file("routed"), "", nil); err == nil || !strings.Contains(err.Error(), "Vetted.Enable") {
 		t.Errorf("a build labelled under a vet's prefix, in another case: %v", err)
 	}
-	if err := side.checkImageLabels(file("plain"), ""); err != nil {
+	if err := side.checkImageLabels(file("plain"), "", nil); err != nil {
 		t.Errorf("the control: with a vet, a plain build is refused: %v", err)
+	}
+}
+
+// A start judges the images of what it can start (mayStart): a build under a profile no
+// release builds (a release's fetch builds the default services only) is not there, and
+// refuses no start that leaves it out; a start that takes its profile, or names it, still
+// refuses. Which services are active is compose's own reading, asked only of a file with a
+// profile.
+func TestDoorStartPassesAProfilesUnbuiltBuild(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	docker := filepath.Join(bin, "docker")
+	if err := testfile.Write(docker, []byte(`#!/bin/sh
+echo "$*" >>`+calls+`
+case "$*" in
+  "compose "*"--profile tools config"*) echo '{"services":{"web":{},"tool":{}}}' ;;
+  "compose "*" config"*) echo '{"services":{"web":{}}}' ;;
+  *" devopsy.internal/shop-prod/web") echo '{"Id":"sha256:w","Config":{"Labels":{}}}' ;;
+  *) exit 1 ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	side := &doorSide{policy: door.Policy{Project: "shop", UIDs: []uint32{10001}, Space: t.TempDir()}, claims: testShopClaims, real: docker}
+	build := func(extra map[string]any) map[string]any {
+		m := map[string]any{"build": map[string]any{"context": "."}, "user": "10001:10001", "security_opt": []any{"no-new-privileges"}}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	start := func(profiles string, argv ...string) (map[string]any, error) {
+		f := map[string]any{"name": "shop-prod", "services": map[string]any{
+			"web":  build(nil),
+			"tool": build(map[string]any{"profiles": []any{"tools"}}),
+		}}
+		if errs := door.CheckFile(f, side.policy, argv[0], side); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		may, err := side.mayStart(f, profiles, bin, argv)
+		if err != nil {
+			return f, err
+		}
+		return f, side.checkImageLabels(f, "", may)
+	}
+	f, err := start("", "up", "-d")
+	if err != nil {
+		t.Errorf("a start without the tools profile is refused for its unbuilt build: %v", err)
+	}
+	if got := f["services"].(map[string]any)["web"].(map[string]any)["image"]; got != "sha256:w" {
+		t.Errorf("the control: web goes to compose as %v", got)
+	}
+	if _, err := start("tools", "up", "-d"); err == nil || !strings.Contains(err.Error(), "tool: its image devopsy.internal/shop-prod/tool is not here") {
+		t.Errorf("a start with the tools profile, its build missing: %v", err)
+	}
+	if _, err := start("", "run", "--rm", "tool"); err == nil || !strings.Contains(err.Error(), "not here") {
+		t.Errorf("a run naming the profile's service, its build missing: %v", err)
+	}
+	// A file with no profile asks compose nothing.
+	before := readString(calls)
+	plain := map[string]any{"name": "shop-prod", "services": map[string]any{"web": build(nil)}}
+	if may, err := side.mayStart(plain, "", bin, []string{"up"}); may != nil || err != nil || readString(calls) != before {
+		t.Errorf("a file with no profile: %v, %v, compose asked: %v", may, err, readString(calls) != before)
 	}
 }
 
@@ -1180,7 +1244,7 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 		t.Helper()
 		os.Remove(calls)
 		file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
-		err := side.checkImageLabels(file, filepath.Join(dir, "none.json"))
+		err := side.checkImageLabels(file, filepath.Join(dir, "none.json"), nil)
 		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
 		return got, err
 	}
@@ -1327,7 +1391,7 @@ func TestDoorStartsItsOwnOrClaimedImages(t *testing.T) {
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{
 		"a": map[string]any{"image": "registry.example.com/two:1"}, "b": map[string]any{"image": "registry.example.com/two:1"},
 	}}
-	if err := side.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil || strings.Count(readString(calls), "imagetools inspect ") != 1 {
+	if err := side.checkImageLabels(file, filepath.Join(dir, "none.json"), nil); err != nil || strings.Count(readString(calls), "imagetools inspect ") != 1 {
 		t.Errorf("two services on one image (%v) claim it more than once:\n%s", err, readString(calls))
 	}
 	for _, svc := range []string{"a", "b"} {
@@ -1941,7 +2005,7 @@ func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
 	for _, image := range []string{repo + ":1@" + idx, repo + "@" + idx} {
 		os.Remove(filepath.Join(dir, "calls"))
 		file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
-		if err := side.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil {
+		if err := side.checkImageLabels(file, filepath.Join(dir, "none.json"), nil); err != nil {
 			t.Fatal(err)
 		}
 		got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)
@@ -1964,7 +2028,7 @@ func TestDoorStartOfAnIndexPinRunsWhatItLoaded(t *testing.T) {
 		for _, image := range []string{repo + ":1@" + idx, repo + "@" + idx} {
 			os.Remove(filepath.Join(dir, "calls"))
 			file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image}}}
-			if err := again.checkImageLabels(file, filepath.Join(dir, "none.json")); err != nil {
+			if err := again.checkImageLabels(file, filepath.Join(dir, "none.json"), nil); err != nil {
 				t.Fatal(err)
 			}
 			got, _ := file["services"].(map[string]any)["web"].(map[string]any)["image"].(string)

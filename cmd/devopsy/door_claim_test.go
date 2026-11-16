@@ -797,7 +797,7 @@ func TestDoorClaimStopsAtTheUsersEnd(t *testing.T) {
 	file := map[string]any{"name": "shop-prod", "services": map[string]any{"web": map[string]any{"image": image + ":1"}}}
 	// What compose's up runs before the door execs compose (doorSide.compose).
 	started := make(chan error, 1)
-	go func() { started <- side.checkImageLabels(file, filepath.Join(dir, "none.json")) }()
+	go func() { started <- side.checkImageLabels(file, filepath.Join(dir, "none.json"), nil) }()
 	for deadline := time.Now().Add(startWait); ; time.Sleep(20 * time.Millisecond) {
 		if _, err := os.Stat(filepath.Join(dir, "copying")); err == nil {
 			break

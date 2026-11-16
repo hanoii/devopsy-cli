@@ -55,14 +55,7 @@ func PlanPull(file map[string]any, active []string, argv []string, p Policy) (Pu
 		selected = slices.Clone(active)
 	}
 	if includeDeps {
-		for i := 0; i < len(selected); i++ {
-			s, _ := services[selected[i]].(map[string]any)
-			for _, dep := range dependencies(s["depends_on"]) {
-				if _, ok := services[dep]; ok && !slices.Contains(selected, dep) {
-					selected = append(selected, dep)
-				}
-			}
-		}
+		selected = withDependencies(services, selected)
 	}
 	slices.Sort(selected)
 	pulled := map[string]bool{}
@@ -89,6 +82,54 @@ func PlanPull(file map[string]any, active []string, argv []string, p Policy) (Pu
 		}
 	}
 	return pull, nil
+}
+
+// withDependencies is selected and every service of services they depend on, through
+// depends_on, as far as it goes: what compose starts or pulls with them.
+func withDependencies(services map[string]any, selected []string) []string {
+	selected = slices.Clone(selected)
+	for i := 0; i < len(selected); i++ {
+		s, _ := services[selected[i]].(map[string]any)
+		for _, dep := range dependencies(s["depends_on"]) {
+			if _, ok := services[dep]; ok && !slices.Contains(selected, dep) {
+				selected = append(selected, dep)
+			}
+		}
+	}
+	return selected
+}
+
+// MayStart is the services of file a start verb (argv, StartsContainers) can start, given
+// those compose takes as active under its profiles: the active ones, every one argv names
+// (any word of it that is a service's name, so a value or a command that happens to be one
+// only widens it), and what they depend on. Compose starts nothing outside it, so an image a
+// start judges is one of these.
+func MayStart(file map[string]any, active, argv []string) map[string]bool {
+	services, _ := file["services"].(map[string]any)
+	selected := slices.Clone(active)
+	for _, a := range argv[min(1, len(argv)):] {
+		if _, ok := services[a]; ok {
+			selected = append(selected, a)
+		}
+	}
+	may := map[string]bool{}
+	for _, s := range withDependencies(services, selected) {
+		may[s] = true
+	}
+	return may
+}
+
+// Profiled says whether any service of file is under a profile: without one, every service
+// is active, whatever the profiles a command names.
+func Profiled(file map[string]any) bool {
+	services, _ := file["services"].(map[string]any)
+	for _, svc := range services {
+		m, _ := svc.(map[string]any)
+		if p, _ := m["profiles"].([]any); len(p) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // dependencies are the services a depends_on names, as a list or as compose renders it, a map.
