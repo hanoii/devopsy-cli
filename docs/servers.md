@@ -206,8 +206,10 @@ Docker takes `daemon.json` when it restarts, so `--server-setup` asks to
 restart it now when the run changes the file or Docker has not taken it
 yet, and restarts it only if that is still so once it holds its lock. A
 restart cuts every docker command under way, and stops every container
-unless Docker keeps them (`live-restore`); it is refused while a release
-runs in one of the deploy user's environments, or while
+unless Docker keeps them (`live-restore`). The question names the
+projects there, the deploy user's and the project users', whose releases
+are not waited for: one under way is cut. The restart is refused while a
+release runs in one of the deploy user's environments, or while
 `dockerd --validate`, given `docker.service`'s own flags, refuses
 `daemon.json` (Docker would not start again), and
 waits up to two minutes for Docker to come back (it clears the unit's

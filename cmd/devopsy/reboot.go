@@ -140,23 +140,7 @@ func rebootWhat(t *remote.Target, look rebootLook) (string, []string) {
 		}
 		what += ")"
 	}
-	details := []string{"no project is released there"}
-	if len(look.Projects) > 0 {
-		details[0] = "its projects: " + fewNames(look.Projects)
-	}
-	if len(look.UserProjects) > 0 {
-		details = append(details, "project users' projects: "+fewNames(look.UserProjects), projectUsersNotWaited("the reboot"))
-	}
-	return what, details
-}
-
-// fewNames names names in a sentence, the first ten and how many more: a prompt never scrolls.
-func fewNames(names []string) string {
-	const shown = 10
-	if len(names) > shown {
-		names = append(slices.Clone(names[:shown]), strconv.Itoa(len(names)-shown)+" more")
-	}
-	return report.JoinAnd(names)
+	return what, projectLines(look.Projects, look.UserProjects, "the reboot")
 }
 
 // rebootEnd is what the act's stdout said: the boot it left and its hostname once it was about

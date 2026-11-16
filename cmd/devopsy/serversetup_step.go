@@ -295,6 +295,7 @@ func readSetupAt(h setupHost, hd hostDocker, proposed string) (setupRead, error)
 	f.Refusals = append(f.Refusals, refusals...)
 	rd.docker = dockerHere(hd.facts)
 	f.Running, f.LiveRestore, rd.running = info.running, hd.facts.Running.LiveRestore, hd.facts.Running
+	f.Projects, f.UserProjects = projectNames(f.Root)
 	rd.invocation, rd.flags, rd.flagKeys = info.invocation, info.flags, info.flagKeys
 
 	recordPath := setup.RecordPath(remote.UserConfigFile())
@@ -1202,9 +1203,6 @@ func applySetup(h setupHost, a setupApply) int {
 			return 1
 		}
 		defer hold.release()
-		if d, err := remote.ServerDoor(); err == nil && len(doorProjects(d)) > 0 {
-			report.Info(projectUsersNotWaited("the restart"))
-		}
 	}
 
 	// docker.service's InvocationID just before the run: the marker's, and what a restart

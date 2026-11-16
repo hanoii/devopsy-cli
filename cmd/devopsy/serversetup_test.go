@@ -647,14 +647,21 @@ func TestPlanSetup(t *testing.T) {
 		{"in sync, no record yet", facts("", 0, false, setup.InSync, setup.InSync, setup.InSync), false, &scripted{}, nil, true, nil, nil},
 		{"kept, replace asked, restart asked", facts("/r", 0, false, setup.InSync, setup.InSync, setup.Changed), false,
 			&scripted{replaces: map[string]bool{"default-address-pools": true}, confirms: []bool{true, true}}, []string{"--replace", sum, "--restart"}, true,
-			[]string{"replace default-address-pools", "apply these?", "restart Docker now? it cuts every docker command under way"}, nil},
+			[]string{"replace default-address-pools", "apply these?", "restart Docker now? | this restarts Docker: it cuts every docker command under way | no project is released there"}, nil},
 		{"kept: nothing put, no restart offered", facts("/r", 0, false, setup.InSync, setup.InSync, setup.Changed), false,
 			&scripted{}, []string{"--keep", sum}, true, []string{"replace default-address-pools"}, nil},
 		{"declined", facts("/r", 0, false, setup.Devopsys), false, &scripted{confirms: []bool{false}}, nil, false, []string{"apply these?"}, errDeclined},
 		{"restart declined, containers cut", facts("/r", 2, false, setup.Devopsys), false, &scripted{confirms: []bool{true, false}}, nil, true,
-			[]string{"apply these?", "restart Docker now? it cuts every docker command under way and stops every container (2 running), Docker keeping none through its restart"}, nil},
+			[]string{"apply these?", "restart Docker now? | this restarts Docker: it cuts every docker command under way and stops every container (2 running), Docker keeping none through its restart | no project is released there"}, nil},
 		{"pending alone", facts("/r", 0, true, setup.InSync), false, &scripted{confirms: []bool{true}}, []string{"--restart"}, true,
-			[]string{"restart Docker now? it cuts every docker command under way"}, nil},
+			[]string{"restart Docker now? | this restarts Docker: it cuts every docker command under way | no project is released there"}, nil},
+		// The restart names the projects there, and what it cuts of the project users'.
+		{"restart asked, projects named", func() setup.Facts {
+			f := facts("/r", 0, true, setup.InSync)
+			f.Projects, f.UserProjects = []string{"shop"}, []string{"blog"}
+			return f
+		}(), false, &scripted{confirms: []bool{true}}, []string{"--restart"}, true,
+			[]string{"restart Docker now? | this restarts Docker: it cuts every docker command under way | its projects: shop | project users' projects: blog | project users' releases are not waited for: one under way is cut by the restart"}, nil},
 		// --yes passes the restart's condition, which the apply judges under its locks.
 		{"--yes, no container", facts("", 0, false, setup.Devopsys, setup.InSync, setup.Changed), true, &scripted{}, []string{"--keep", sum, "--restart-idle"}, true, nil, nil},
 		{"--yes, containers running", facts("/r", 1, false, setup.Devopsys), true, &scripted{}, []string{"--restart-idle"}, true, nil, nil},
@@ -1992,18 +1999,25 @@ func TestServerSetupCutBeforeTheRecord(t *testing.T) {
 	}
 }
 
-// A restart on a server with project users says their releases are not waited for: their
-// trees are theirs, never walked or locked.
-func TestServerSetupRestartSaysProjectUsersAreNotWaitedFor(t *testing.T) {
+// The facts carry the server's projects for the restart's question, the deploy user's and the
+// project users', whose releases a restart cuts: their trees are theirs, never walked or
+// locked. The apply says nothing of them, the question having said it.
+func TestServerSetupFactsNameProjects(t *testing.T) {
 	t.Parallel()
 	s, host := setupServer(t)
 	home := filepath.Join(filepath.Dir(s.root), "home")
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\ndoor:\n  space: "+filepath.Join(home, "space")+"\n", 0o644)
 	write(t, filepath.Join(home, "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
 	firewallLoaded(t, host, true)
-	out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--restart")
-	if code != 0 || !strings.Contains(out, "project users' releases are not waited for") {
-		t.Errorf("(%d):\n%s", code, out)
+	if err := os.MkdirAll(filepath.Join(s.root, "shop", "prod", "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, out, code := setupFactsOf(s)
+	if code != 0 || !slices.Equal(f.UserProjects, []string{"blog"}) || !slices.Equal(f.Projects, []string{"shop"}) {
+		t.Errorf("facts (%d): %q, %q\n%s", code, f.Projects, f.UserProjects, out)
+	}
+	if out, code := s.run(nil, remote.ServerSetupFlag, "apply", "--restart"); code != 0 || strings.Contains(out, "releases are not waited for") {
+		t.Errorf("apply (%d):\n%s", code, out)
 	}
 }
 

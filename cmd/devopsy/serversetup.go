@@ -226,7 +226,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 	}
 	restart := false
 	if (daemon || f.Pending) && f.Goes(setup.StepRestart) {
-		cut := "it cuts every docker command under way"
+		cut := "this restarts Docker: it cuts every docker command under way"
 		if f.Running > 0 && !f.LiveRestore {
 			cut += fmt.Sprintf(" and stops every container (%d running), Docker keeping none through its restart", f.Running)
 		}
@@ -235,7 +235,7 @@ func planSetup(f setup.Facts, yes bool, ask setupAsker) (args []string, run bool
 			// The apply judges it under its locks, with the containers running then.
 			args, restart = append(args, "--restart-idle"), true
 		default:
-			if restart, err = ask.confirm("restart Docker now? " + cut); err != nil {
+			if restart, err = ask.confirm("restart Docker now?", append([]string{cut}, projectLines(f.Projects, f.UserProjects, "the restart")...)...); err != nil {
 				return nil, false, err
 			}
 			if restart {
