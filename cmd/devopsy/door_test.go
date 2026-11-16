@@ -962,6 +962,46 @@ esac
 	}
 }
 
+// Two first builds at once both pass, the second leaving the builder the first made and booted
+// as it is.
+//
+// The bug this proves (ensureBuilder, door.go): a build that found no builder (buildx's own
+// answer, no failure of its) removes a container and state volume of its name as left by a
+// removed key (removeLeftover), holding no lock, so another build of the project that made the
+// builder meanwhile and booted it under its shared lock loses its builder mid-build, and the
+// project its cache; the second build then finds the builder made and goes on. Its inspect was
+// right when it ran: it is only stale by the removal, which nothing orders after the other
+// build's boot.
+func TestDoorFirstBuildsAtOnceKeepTheBuilder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	looked := filepath.Join(dir, "looked")
+	space := filepath.Join(dir, "space")
+	// No builder at this build's first look; by its next, the other build made it and booted it.
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  "buildx inspect "*)
+    [ -e `+looked+` ] || { : >`+looked+`; echo 'ERROR: no builder "devopsy-shop" found' >&2; exit 1; }
+    echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
+  "container inspect --format "*) echo no ;;
+  "buildx create "*) echo 'ERROR: existing instance for "devopsy-shop" but no append mode' >&2; exit 1 ;;
+  "volume inspect "*|"network inspect "*) ;;
+esac
+`, 0o755)
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
+	if _, err := side.builder(); err != nil {
+		t.Fatalf("the second first build: %v", err)
+	}
+	for _, removal := range []string{"rm -f buildx_buildkit_devopsy-shop0", "volume rm buildx_buildkit_devopsy-shop0_state"} {
+		if strings.Contains(readString(log), removal) {
+			t.Errorf("a first build beside another that made and booted the builder ran %q:\n%s", removal, readString(log))
+		}
+	}
+}
+
 // A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
 // mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
 func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
