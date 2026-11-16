@@ -60,7 +60,7 @@ func TestPlanPullSelectsAsComposeDoes(t *testing.T) {
 	}
 	// In image mode a registry serves the builds, and a sharer is no build's: it is pulled.
 	imageMode := testPolicy
-	imageMode.ImageMode = true
+	imageMode.ImageMode = func() bool { return true }
 	if pull, err := PlanPull(file, active, []string{"pull", "--ignore-buildable", "share"}, imageMode); err != nil || !slices.Equal(pull.Images, []string{"registry.example.com/built:1"}) {
 		t.Errorf("an image mode sharer under --ignore-buildable: %q (%v)", pull.Images, err)
 	}

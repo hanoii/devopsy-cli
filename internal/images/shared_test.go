@@ -48,14 +48,14 @@ func TestActiveOfKeepsThePlainServicesAndRefusesAnUnbuiltShare(t *testing.T) {
 	_, err = activeOf(all[:2], []Service{{Name: "migrate"}})
 	if err == nil || err.Error() != "migrate runs web's image, but this release does not build web" ||
 		!slices.Equal(report.Details(err), []string{"web is only under a profile this release does not use"}) ||
-		len(report.Remedies(err)) != 1 || !strings.Contains(report.Remedies(err)[0].Text, "take web out of its profile, or put migrate under the same profile") {
+		len(report.Remedies(err)) != 1 || !strings.Contains(report.Remedies(err)[0].Text, "take web out of its profile, put migrate under the same profile, or give migrate an image: of its own") {
 		t.Errorf("a sharer of a build no release builds: %v, %q, %+v", err, report.Details(err), report.Remedies(err))
 	}
 }
 
 // Behind the door a release that builds lists every profile's config, and the plain one too
-// only when a service is under a profile: a project without profiles costs one config, as
-// before sharers were read, and one with them gets the active services of the two.
+// only when a service is under a profile: a project without profiles costs one config, and
+// one with them gets the active services of the two.
 func TestDoorListingReadsThePlainConfigOnlyWithProfiles(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

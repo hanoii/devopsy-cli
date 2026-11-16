@@ -789,7 +789,7 @@ func TestCheckFileLeavesAnImageModeSharerAsItsListingDoes(t *testing.T) {
 		}
 	}
 	imageMode := testPolicy
-	imageMode.ImageMode = true
+	imageMode.ImageMode = func() bool { return true }
 	file := parse(t, config)
 	if errs := CheckFile(file, imageMode, "run", &fakePaths{}); len(errs) != 0 {
 		t.Fatal(errs)

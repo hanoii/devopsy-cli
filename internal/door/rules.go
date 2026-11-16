@@ -56,11 +56,12 @@ type Policy struct {
 	// ProjectUIDs are every uid the project's claims hold, for an owner devopsy gives the
 	// project's data (the owners form, an rsync's --chown), which the project user asks for.
 	ProjectUIDs []uint32
-	// ImageMode: the request's release is in image mode (images.ModeOf), where a registry
-	// serves its builds and the listing names no sharer of one (sharers), so neither does
-	// the render. A release's record is the project user's to write, and either mode
-	// names only images of the project's own or claims one with its logins.
-	ImageMode bool
+	// ImageMode says whether the request's release is in image mode, where a registry serves
+	// its builds and the listing names no sharer of one (sharers), so neither does the render;
+	// asked only of a file with a sharer, nil for none. A release's record is the project
+	// user's to write, and either mode names only images of the project's own or claims one
+	// with its logins.
+	ImageMode func() bool
 }
 
 // ImagesFile is the door's record of a project user's claimed images, in its space: a line
@@ -254,9 +255,6 @@ func CheckFile(file map[string]any, p Policy, verb string, paths Paths) []error 
 // release that builds (none in image mode, as its listing names none); one devopsy's own
 // file names (named) keeps its name.
 func sharers(name string, services map[string]any, p Policy) map[string][]string {
-	if p.ImageMode {
-		return nil
-	}
 	specs := map[string]images.ImageSpec{}
 	for svc, v := range services {
 		s, _ := v.(map[string]any)
@@ -268,6 +266,9 @@ func sharers(name string, services map[string]any, p Policy) map[string][]string
 		if p.named(specs[svc].Image) {
 			delete(shared, svc)
 		}
+	}
+	if len(shared) == 0 || p.ImageMode != nil && p.ImageMode() {
+		return nil
 	}
 	return shared
 }

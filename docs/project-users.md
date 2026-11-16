@@ -139,9 +139,10 @@ services:
     pull_policy: never  # still needed for a deploy user's release
 ```
 
-A release refuses such a service when its image is built by more than
-one service, since each build is an image of its own here, and when the
-release runs it but its build is only under a profile the release does
+devopsy refuses such a service, at a release and at the project user's
+own compose command, when its image is built by more than one service,
+since each build is an image of its own here; a release refuses it too
+when it runs it but its build is only under a profile the release does
 not use.
 
 Any other image belongs to a project only once it has fetched the
@@ -552,7 +553,8 @@ project runs the registry's image.
 
 A project user's `docker compose pull` is the door's own: it fetches
 each service's image as above, skipping the project's own builds
-(and, with `--ignore-buildable`, the services that run one),
+(and, with `--ignore-buildable` in a release that builds, the services
+that run one),
 services with `pull_policy: never`, and those with `missing` or
 `if_not_present` whose image the project has already, and says `pulling <image>` and then
 its time on stderr, nothing with `-q`. It takes compose's `-q`,

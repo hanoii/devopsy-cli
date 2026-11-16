@@ -70,7 +70,7 @@ func SharedUnbuilt(sharer, builder string) error {
 	return &report.Failure{
 		Msg:      fmt.Sprintf("%s runs %s's image, but this release does not build %s", sharer, builder, builder),
 		Details:  []string{fmt.Sprintf("%s is only under a profile this release does not use", builder)},
-		Remedies: []report.Remedy{report.Fix(fmt.Sprintf("take %s out of its profile, or put %s under the same profile", builder, sharer))},
+		Remedies: []report.Remedy{report.Fix(fmt.Sprintf("take %s out of its profile, put %s under the same profile, or give %s an image: of its own", builder, sharer, sharer))},
 	}
 }
 

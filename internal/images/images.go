@@ -174,11 +174,20 @@ const (
 // deployed decides on the server"). ModeBuild without a record or a
 // mode in it (the default; a test's bare directory).
 func ModeOf(rel string) string {
+	data, err := os.ReadFile(filepath.Join(rel, RecordFile))
+	if err != nil {
+		return ModeBuild
+	}
+	return ModeIn(data)
+}
+
+// ModeIn is the mode a release's record (RecordFile) holds, data: ModeBuild when it says none
+// or is no record.
+func ModeIn(data []byte) string {
 	var r struct {
 		Mode string `json:"mode"`
 	}
-	data, err := os.ReadFile(filepath.Join(rel, RecordFile))
-	if err != nil || json.Unmarshal(data, &r) != nil || r.Mode == "" {
+	if json.Unmarshal(data, &r) != nil || r.Mode == "" {
 		return ModeBuild
 	}
 	return r.Mode

@@ -2082,75 +2082,66 @@ var testShopClaims = []uids.Claim{
 	{Owner: uids.Owner{Project: "shop"}, UID: 10001},
 }
 
-// The door reads a request's mode from the release whose code it runs in (its record): image
-// mode only there, and any other directory as build mode, devopsy's default.
-func TestDoorReadsTheReleasesMode(t *testing.T) {
+// A request's release is found by its directory's path under the tree, the code of a release
+// or any directory below it, where devopsy finds its project too, an instance's included; any
+// other directory is in no release.
+func TestDoorFindsTheReleaseOfARequest(t *testing.T) {
 	t.Parallel()
-	rel := t.TempDir()
-	code := filepath.Join(rel, "code")
-	if err := os.Mkdir(code, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if releaseImageMode(code) {
-		t.Error("a release with no record is in image mode")
-	}
-	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"image"}`, 0o644)
-	if !releaseImageMode(code) {
-		t.Error("a release recorded in image mode is not")
-	}
-	if releaseImageMode(rel) {
-		t.Error("a release's own directory, not its code, is in image mode")
-	}
-}
-
-// Bug (review round 2): devopsy finds its project from any directory below a release's code/
-// (cli.FindProjectDir walks up), and the door's client sends the directory it was called in,
-// so a compose command run from code/.devopsy or code/src reaches the door with that
-// directory. releaseImageMode takes only code/ itself for a release, so the same image mode
-// release reads as build mode from below it, and the render names its sharers again as a
-// build nothing builds there (the listing, which always runs in code/, names none).
-func TestDoorReadsTheReleasesModeBelowItsCode(t *testing.T) {
-	t.Parallel()
-	rel := t.TempDir()
-	below := filepath.Join(rel, "code", ".devopsy")
-	if err := os.MkdirAll(below, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"image"}`, 0o644)
-	if !releaseImageMode(filepath.Join(rel, "code")) {
-		t.Fatal("the control: the release's code is not in image mode")
-	}
-	if !releaseImageMode(below) {
-		t.Error("a directory below the code of a release in image mode reads as build mode")
-	}
-}
-
-// Bug (review round 2): the door reads the release's record itself, as the deploy user, from
-// the project user's tree (images.ModeOf's os.ReadFile), against internals/door.md ("the
-// deploy user never reads a project's tree", every answer through doorAnswer's cap and
-// deadline): a record its user made a FIFO holds the door for good, under the start locks a
-// start took just before, and one linked to a device fills its memory.
-func TestDoorModeReadIsNotHeldByTheProjectsRecord(t *testing.T) {
-	t.Parallel()
-	rel := t.TempDir()
-	code := filepath.Join(rel, "code")
-	if err := os.Mkdir(code, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	record := filepath.Join(rel, images.RecordFile)
-	if err := syscall.Mkfifo(record, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan bool, 1)
-	go func() { done <- releaseImageMode(code) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Error("the door still waits on a record its project user made a FIFO")
-		// Let the read go: a writer that opens and closes ends it.
-		if w, err := os.OpenFile(record, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			w.Close()
+	const tree = "/home/devopsy-shop/shop"
+	for real, want := range map[string]string{
+		tree + "/prod/releases/20260101000000/code":                  tree + "/prod/releases/20260101000000",
+		tree + "/prod/releases/20260101000000/code/.devopsy":         tree + "/prod/releases/20260101000000",
+		tree + "/eu/prod/releases/20260101000000/code/src/app":       tree + "/eu/prod/releases/20260101000000",
+		tree + "/prod/releases/20260101000000":                       "",
+		tree + "/prod/shared":                                        "",
+		tree + "/prod":                                               "",
+		"/home/devopsy-other/shop/prod/releases/20260101000000/code": "",
+	} {
+		if got, ok := releaseOf(tree, real); got != want || ok != (want != "") {
+			t.Errorf("%s: %q, %v, want %q", real, got, ok, want)
 		}
-		<-done
+	}
+}
+
+// A compose request takes its release's mode from the directory it runs in: a sharer of an
+// image two services build refuses a request in a release that builds, and is no refusal in
+// one in image mode, whose builds a registry serves. In a helper process (doorComposeHelper).
+func TestDoorComposeTakesTheReleasesMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	doorImageFake(t, dir)
+	// The project user's reads: a path is itself, and a file reads as it is.
+	write(t, filepath.Join(dir, "sudo"), `#!/bin/sh
+shift 5
+case "$1" in
+  real) printf '%s\n' "$2" ;;
+  cat) exec cat -- "$2" ;;
+  *) exit 1 ;;
+esac
+`, 0o755)
+	rel := filepath.Join(dir, "prod", "releases", "1")
+	code := filepath.Join(rel, "code")
+	if err := os.MkdirAll(code, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builder := `{"image":"registry.example.com/shop/web:1","build":{"context":"` + code + `"},"user":"10001:10001","security_opt":["no-new-privileges"]}`
+	file := `{"name":"shop-prod","services":{"web":` + builder + `,"worker":` + builder +
+		`,"migrate":{"image":"registry.example.com/shop/web:1","user":"10001:10001","security_opt":["no-new-privileges"]}}}`
+	run := func() (string, error) {
+		c := exec.Command(os.Args[0], "-test.run", "^$")
+		c.Env = append(os.Environ(), "DEVOPSY_TEST_DOOR_COMPOSE="+dir, "DEVOPSY_TEST_DOOR_VERB=logs", "DEVOPSY_TEST_DOOR_FILE="+file,
+			"DEVOPSY_TEST_DOOR_DIR="+code, "DEVOPSY_TEST_DOOR_LOG="+filepath.Join(dir, "refused.log"), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run(); err == nil || !strings.Contains(out, "migrate: its image registry.example.com/shop/web:1 is built by both web and worker") {
+		t.Errorf("a release that builds took a sharer of two builds (%v):\n%s", err, out)
+	}
+	write(t, filepath.Join(rel, images.RecordFile), `{"mode":"image"}`, 0o644)
+	if out, err := run(); err != nil || !strings.Contains(out, "ARGS: compose ") {
+		t.Errorf("a release in image mode refused a sharer of two builds (%v):\n%s", err, out)
 	}
 }
