@@ -240,6 +240,7 @@ drop() { awk -F'	' -v col="$2" -v v="$3" '$col != v' "$S/$1" >"$S/$1.tmp" && mv 
 case "$1 ${2:-}" in
   "version "*) exit 0 ;;
   "image inspect") echo "sha256:util $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit 0 ;;
+  "buildx ls") exit 0 ;;
   "buildx "*|"network inspect") exit 1 ;;
   "ps -a")
     case "$*" in

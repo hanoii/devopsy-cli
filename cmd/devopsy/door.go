@@ -1960,40 +1960,49 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 	// the repository config the project user put in it, which can name a program (a promisor
 	// remote's uploadpack) git then runs as the deploy user, Docker's socket in hand.
 	b := []string{"BUILDX_CONFIG=" + door.BuildxConfigOf(s.policy.Space), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
-	env := append(slices.Clone(s.env), b[0])
+	env := builderEnv(s.env, s.policy.Space)
 	run := func(args ...string) ([]byte, error) {
 		c := s.docker(args...)
 		c.Env, c.Stderr = env, os.Stderr
 		return c.Output()
 	}
-	// A look whose failure is an answer (no builder yet, no network yet) says nothing: its
-	// words read as a failure of the build.
+	// A look whose failure is an answer (no network yet) says nothing: its words read as a
+	// failure of the build.
 	probe := func(args ...string) ([]byte, error) {
 		c := s.docker(args...)
 		c.Env = env
 		return c.Output()
 	}
-	// right says whether the builder is there (there) and as devopsy makes it (madeRight), its
-	// restart policy its container's own, never buildx's words for it.
-	right := func() (there, ok bool) {
+	// right says whether the builder is there, by buildx's listing (a look that fails is an
+	// error, never a builder gone), and as devopsy makes it (madeRight), its restart policy its
+	// container's own, never buildx's words for it.
+	right := func() (there, ok bool, err error) {
+		if there, err = builderListed(probe, s.policy.Project); err != nil || !there {
+			return false, false, err
+		}
 		out, err := probe("buildx", "inspect", name)
 		if err != nil {
-			return false, false
+			return true, false, dockerFailed("docker buildx inspect", err)
 		}
 		policy, booted := builderContainer(probe, s.policy.Project)
-		return true, madeRight(string(out), network, policy, booted)
+		return true, madeRight(string(out), network, policy, booted), nil
 	}
-	there, ok := right()
+	there, ok, err := right()
+	if err != nil {
+		return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
+	}
 	if ok {
 		return b, nil
 	}
-	if there {
-		// Made otherwise (on the default bridge, restarted by Docker): made again, under its
-		// lock exclusive, so that no build of another environment runs on it meanwhile; a
-		// wait that sees another build make it again ends there.
+	if there || leftoverThere(probe, s.policy.Project) {
+		// Made otherwise (on the default bridge, restarted by Docker), or a container and cache
+		// of its name left with no builder (a boot racing a key's removal), which a builder
+		// made anew would take, a removed key's cache with them: removed, under its lock
+		// exclusive, so that no build boots or runs on it meanwhile, and looked at again under
+		// it; a wait that sees another build make it right ends there.
 		t := s.timing.orServer()
 		lock, err := builderLockWait(door.BuilderLockOf(s.policy.Space, s.policy.Project), "another use of "+s.policy.Project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
-			_, ok := right()
+			_, ok, _ := right()
 			return ok
 		})
 		if err != nil {
@@ -2003,19 +2012,15 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 			return b, nil
 		}
 		defer lock.Close()
-		if there, ok = right(); ok {
+		if _, ok, err := right(); err != nil || ok {
+			if err != nil {
+				return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
+			}
 			return b, nil
 		}
-		if there {
-			if _, err := run("buildx", "rm", name); err != nil {
-				return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and could not be removed: %v", s.policy.Project, err)
-			}
+		if err := dropBuilder(probe, s.policy.Project); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and could not be removed: %v", s.policy.Project, err)
 		}
-	}
-	// A container and cache of its name left with no builder (a boot racing a key's removal)
-	// would be the new one's: they go first.
-	if err := removeLeftover(probe, s.policy.Project); err != nil {
-		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
 	}
 	if _, err := probe("network", "inspect", network); err != nil {
 		if _, err := run("network", "create", network); err != nil {
@@ -2024,7 +2029,7 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 	}
 	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no"); err != nil {
 		// Another environment's build may have made it meanwhile.
-		if _, ok := right(); ok {
+		if _, ok, _ := right(); ok {
 			return b, nil
 		}
 		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)

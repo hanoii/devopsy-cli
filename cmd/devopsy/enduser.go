@@ -160,15 +160,10 @@ func removeBuilder(dockerPath string, env []string, who string) error {
 	}
 	run := func(args ...string) ([]byte, error) { return docker(args...).Output() }
 	project := door.ProjectOfUser(who)
-	builder, network := door.BuilderOf(project), door.BuilderNetworkOf(project)
-	if docker("buildx", "inspect", builder).Run() == nil {
-		if out, err := docker("buildx", "rm", builder).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder %s: %w: %s", builder, err, strings.TrimSpace(string(out)))
-		}
-	}
-	if err := removeLeftover(run, project); err != nil {
+	if err := dropBuilder(run, project); err != nil {
 		return err
 	}
+	network := door.BuilderNetworkOf(project)
 	if docker("network", "inspect", network).Run() == nil {
 		if out, err := docker("network", "rm", network).CombinedOutput(); err != nil {
 			return fmt.Errorf("its builder's network: %w: %s", err, strings.TrimSpace(string(out)))

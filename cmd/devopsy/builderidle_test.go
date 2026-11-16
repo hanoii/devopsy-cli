@@ -301,7 +301,8 @@ func TestBuilderRemovalWaitsOnNoBuild(t *testing.T) {
 	write(t, docker, `#!/bin/sh
 echo "$*" >>`+log+`
 case "$*" in
-  'buildx inspect devopsy-shop'|'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0'|'volume inspect buildx_buildkit_devopsy-shop0_state'|'network inspect devopsy-shop-build') ;;
+  'buildx ls --format json') echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}' ;;
+  'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0'|'volume inspect buildx_buildkit_devopsy-shop0_state'|'network inspect devopsy-shop-build') ;;
   'buildx rm devopsy-shop'|'rm -f buildx_buildkit_devopsy-shop0'|'volume rm buildx_buildkit_devopsy-shop0_state'|'network rm devopsy-shop-build') ;;
   *) exit 9 ;;
 esac
@@ -326,7 +327,7 @@ esac
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("the removal took %s beside a build", took)
 	}
-	want := "buildx inspect devopsy-shop\nbuildx rm devopsy-shop\ncontainer inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\nrm -f buildx_buildkit_devopsy-shop0\n" +
+	want := "buildx ls --format json\nbuildx rm devopsy-shop\ncontainer inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\nrm -f buildx_buildkit_devopsy-shop0\n" +
 		"volume inspect buildx_buildkit_devopsy-shop0_state\nvolume rm buildx_buildkit_devopsy-shop0_state\nnetwork inspect devopsy-shop-build\nnetwork rm devopsy-shop-build\n"
 	if got := readString(log); got != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)

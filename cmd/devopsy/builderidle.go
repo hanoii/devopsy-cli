@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -159,7 +160,9 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 	// A grace before the wait says anything: it answers within it, every time but a slow one.
 	grace := min(t.answer, time.Second)
 	got, err := read(grace)
-	if err == nil && !got {
+	if err == nil && !got && t.answer <= grace {
+		err = errNoAnswer
+	} else if err == nil && !got {
 		err = (boundedWait{what: project + "'s builder's stopper to start", bound: t.answer - grace}).wait(context.Background(), report.Default(), func() (bool, error) {
 			return read(100 * time.Millisecond)
 		})
@@ -300,6 +303,34 @@ func stopBuilder(docker string, env []string, project string, within time.Durati
 	return nil
 }
 
+// builderNodes are the builders buildx lists (docker buildx ls --format json, out), each to its
+// one node: a builder with several is none of devopsy's.
+func builderNodes(out []byte) map[string]builderNode {
+	nodes := map[string]builderNode{}
+	for _, line := range strings.Split(string(out), "\n") {
+		var b struct {
+			Name  string
+			Nodes []builderNode
+		}
+		if json.Unmarshal([]byte(line), &b) == nil && len(b.Nodes) == 1 {
+			nodes[b.Name] = b.Nodes[0]
+		}
+	}
+	return nodes
+}
+
+// builderListed says whether buildx has project's builder, by run's docker under the door's
+// BUILDX_CONFIG: its listing, the one answer that tells a builder gone from a look that
+// failed, which is an error.
+func builderListed(run func(args ...string) ([]byte, error), project string) (bool, error) {
+	out, err := run("buildx", "ls", "--format", "json")
+	if err != nil {
+		return false, dockerFailed("docker buildx ls", err)
+	}
+	_, ok := builderNodes(out)[door.BuilderOf(project)]
+	return ok, nil
+}
+
 // builderContainer is project's builder's container's restart policy, and whether it has one
 // (made at its first boot), by run's docker: a builder with none was never booted.
 func builderContainer(run func(args ...string) ([]byte, error), project string) (policy string, ok bool) {
@@ -307,9 +338,36 @@ func builderContainer(run func(args ...string) ([]byte, error), project string) 
 	return strings.TrimSpace(string(out)), err == nil
 }
 
+// dropBuilder removes project's builder with run's docker: its record when buildx lists it,
+// then its container and state volume by their names (removeLeftover). A look that fails is
+// an error, never a builder gone.
+func dropBuilder(run func(args ...string) ([]byte, error), project string) error {
+	listed, err := builderListed(run, project)
+	if err != nil {
+		return err
+	}
+	if listed {
+		if _, err := run("buildx", "rm", door.BuilderOf(project)); err != nil {
+			return fmt.Errorf("its builder %s: %w", door.BuilderOf(project), dockerFailed("docker buildx rm", err))
+		}
+	}
+	return removeLeftover(run, project)
+}
+
+// leftoverThere says whether a container or state volume of project's builder's names is there,
+// by run's docker.
+func leftoverThere(run func(args ...string) ([]byte, error), project string) bool {
+	if _, ok := builderContainer(run, project); ok {
+		return true
+	}
+	_, err := run("volume", "inspect", door.BuilderStateOf(project))
+	return err == nil
+}
+
 // removeLeftover removes project's builder's container and state volume by their names, with
 // run's docker, when they are there with no builder of devopsy's (a boot racing a key's
 // removal): a builder made anew would take them as its own, a removed key's cache with them.
+// Its caller holds the builder's lock exclusive, or is the removal: a build may be booting it.
 func removeLeftover(run func(args ...string) ([]byte, error), project string) error {
 	if _, ok := builderContainer(run, project); ok {
 		if _, err := run("rm", "-f", door.BuilderContainerOf(project)); err != nil {

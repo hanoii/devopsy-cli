@@ -85,6 +85,10 @@ func (l *Lock) Try(how int) (bool, error) {
 // Unlock lets the lock go, its file kept open for another Try.
 func (l *Lock) Unlock() error { return syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN) }
 
+// File is the lock's open file, for a command that is to hold the lock while it runs
+// (exec.Cmd's ExtraFiles): its descriptor there shares the lock.
+func (l *Lock) File() *os.File { return l.f }
+
 // Fd is the lock's descriptor.
 func (l *Lock) Fd() uintptr { return l.f.Fd() }
 

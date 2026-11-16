@@ -332,9 +332,11 @@ type gcScope struct {
 	// user's builder's cache in find, booting it; the removals boot each one in remove, once.
 	mode string
 	// timing is the builders' waits (builderTiming), a test's own when set; self is the
-	// devopsy that starts their stoppers (devopsyPath when "").
-	timing builderTiming
-	self   string
+	// devopsy that starts their stoppers (devopsyPath when ""); holding the builder's lock
+	// onBuilder holds, which its commands hold too (builderCmd).
+	timing  builderTiming
+	self    string
+	holding *os.File
 }
 
 // runGCStep implements the hidden GCStepFlag list|remove|remove-listed, as the deploy user on
@@ -718,16 +720,29 @@ func (g *gcScope) onBuilder(project string, act func() error) error {
 	if err != nil {
 		return err
 	}
-	c := exec.Command(g.docker, "buildx", "inspect", "--bootstrap", door.BuilderOf(project))
-	c.Env = env
-	if _, err = outputWithin(c, t.lock); err != nil {
+	// What runs on the builder holds its lock too, as a build's compose does: a --gc cut mid-boot
+	// frees its own hold, never the boot's, which would start the builder past its stopper.
+	g.holding = l.File()
+	if _, err = outputWithin(g.builderCmd("buildx", "inspect", "--bootstrap", door.BuilderOf(project)), t.lock); err != nil {
 		err = dockerFailed("docker buildx inspect --bootstrap", err)
 	} else {
 		err = act()
 	}
+	g.holding = nil
 	l.Close()
 	g.stopBuilder(project, env, t)
 	return err
+}
+
+// builderCmd is a docker command on a project user's builder, under the door's BUILDX_CONFIG,
+// holding the builder's lock (its descriptor in ExtraFiles) while onBuilder holds it.
+func (g *gcScope) builderCmd(args ...string) *exec.Cmd {
+	c := exec.Command(g.docker, args...)
+	c.Env = builderEnv(os.Environ(), g.door.Space)
+	if g.holding != nil {
+		c.ExtraFiles = []*os.File{g.holding}
+	}
+	return c
 }
 
 // stopBuilder stops project's builder after --gc's use when it takes its lock exclusive at
@@ -773,17 +788,7 @@ func (g *gcScope) doorBuilders() (map[string]builderNode, error) {
 	if err != nil {
 		return nil, dockerFailed("docker buildx ls", err)
 	}
-	nodes := map[string]builderNode{}
-	for _, line := range strings.Split(string(out), "\n") {
-		var b struct {
-			Name  string
-			Nodes []builderNode
-		}
-		if json.Unmarshal([]byte(line), &b) == nil && len(b.Nodes) == 1 {
-			nodes[b.Name] = b.Nodes[0]
-		}
-	}
-	return nodes, nil
+	return builderNodes(out), nil
 }
 
 // daemonBuilder is the name of the daemon's own builder, the docker driver's, which buildx
@@ -848,7 +853,7 @@ const dockerTime = "2006-01-02 15:04:05.999999999 -0700 MST"
 // builderCache is a docker-container builder's records, by its container
 // (door.BuilderContainerOf), as buildctl in it gives them with their times, bounded.
 func (g *gcScope) builderCache(container string) ([]cacheRecord, error) {
-	out, err := outputWithin(exec.Command(g.docker, "exec", container, "buildctl", "du", "--format", "{{json .}}"), g.timing.orServer().lock)
+	out, err := outputWithin(g.builderCmd("exec", container, "buildctl", "du", "--format", "{{json .}}"), g.timing.orServer().lock)
 	if err != nil {
 		return nil, dockerFailed("buildctl du", err)
 	}
@@ -1083,7 +1088,7 @@ func (g *gcScope) remove(p gcPlan) int {
 		// Each builder by the name its listing gave, the daemon's its context's (daemonBuilder).
 		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 		if b.Project != "" {
-			cmd.Env = builderEnv(os.Environ(), g.door.Space)
+			cmd = g.builderCmd("buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 		}
 		log.Info("removing the build cache of " + b.who() + " unused for " + duration(g.ages.BuildCache))
 		out, err := outputWithin(cmd, gcPruneWait)
