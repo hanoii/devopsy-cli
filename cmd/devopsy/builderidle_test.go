@@ -338,6 +338,34 @@ esac
 	}
 }
 
+// A key's removal whose look at the builder failed has not removed it, and says so.
+//
+// The bug this proves (removeBuilder, enduser.go): any failure of docker buildx inspect is
+// taken for no builder there, so buildx rm is skipped, and the container, the state volume and
+// the network then go by their names, with no error: the removal reports the builder gone
+// while buildx's record of it stays, on a network that is no more. The next build finds that
+// record as devopsy makes it (its network named, no container), makes nothing, and its boot
+// fails on the missing network, until someone removes the builder by hand.
+func TestBuilderRemovalFailsWhenItsInspectFails(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	log := filepath.Join(dir, "docker.log")
+	// The builder is there by buildx's record of it and its listing; only the inspect fails.
+	write(t, filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop"), `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  'buildx inspect devopsy-shop') echo 'signal: killed' >&2; exit 137 ;;
+  'buildx ls --format json') echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"stopped"}]}' ;;
+esac
+`, 0o755)
+	if err := removeBuilder(docker, builderEnv(nil, space), "devopsy-shop"); err == nil && !strings.Contains(readString(log), "buildx rm devopsy-shop") {
+		t.Errorf("a removal whose inspect failed left the builder's record and said nothing, asked:\n%s", readString(log))
+	}
+}
+
 // --gc's removals boot each project user's builder once, one at a time, and stop it before the
 // next: the listed removal prunes it; --yes reads it first and prunes only one with something
 // to remove, said only then.
