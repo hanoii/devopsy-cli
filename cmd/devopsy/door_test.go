@@ -1071,6 +1071,49 @@ esac
 	}
 }
 
+// A remake that removed the builder and could not make it again says the builder could not be
+// made, never that it stays.
+//
+// The bug this proves (ensureBuilder, door.go, the repair's one path): every failure of the
+// repair, its fix's included, is said as "is not as devopsy makes it, and stays", which is
+// true of a wait that gave up and of a removal that failed, and false once the fix removed the
+// builder (buildx rm, its container and its cache with it) and buildx create then failed: the
+// builder is gone, with the project's cache, and the refusal tells its reader it is still
+// there as it was. Before the repair went through repairUnder that failure said "<project>'s
+// builder could not be made". The fake's builder is made otherwise (on the default bridge),
+// its removal works and its create fails.
+func TestDoorSaysABuilderRemovedAndNotMadeAgainIsGone(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	space := filepath.Join(dir, "space")
+	record := filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop")
+	write(t, record, `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  "buildx inspect devopsy-shop") [ -e `+record+` ] && echo 'Driver Options: ' ;;
+  "buildx rm devopsy-shop") rm -f `+record+` ;;
+  "buildx create "*) echo 'ERROR: could not create a builder instance' >&2; exit 1 ;;
+  "container inspect "*|"volume inspect "*) exit 1 ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') echo netid ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
+	_, err := side.builder()
+	if err == nil {
+		t.Fatalf("a builder removed and not made again passed; docker was asked:\n%s", readString(log))
+	}
+	if _, serr := os.Stat(record); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("the fake's builder was not removed (%v); docker was asked:\n%s", serr, readString(log))
+	}
+	if strings.Contains(err.Error(), "stays") || !strings.Contains(err.Error(), "could not be made") {
+		t.Errorf("a builder removed and not made again is said to stay: %v", err)
+	}
+}
+
 // A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
 // mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
 func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
