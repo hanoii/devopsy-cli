@@ -113,7 +113,7 @@ func runReboot(t *remote.Target, args []string) int {
 	if end.asked {
 		report.Info(end.hostname + " reboots")
 	} else {
-		report.Info(end.hostname + " may reboot: the session was cut before systemd answered")
+		report.Info(end.hostname + " may reboot: the session was cut before devopsy could tell whether systemd took it")
 	}
 	if err := awaitBoot(context.Background(), report.Default(), end, rebootBackBound, rebootTryEvery, bootTry(t)); err != nil {
 		return failErr(err, remote.SeeHint(targetRef(t), "what it runs, once it answers", "--server-info"))

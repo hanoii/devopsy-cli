@@ -257,12 +257,13 @@ func TestReboot(t *testing.T) {
 			t.Errorf("the image readied after the run:\n%s", calls)
 		}
 	})
-	// Cut before systemd answered: it may reboot, and the wait tells.
+	// Cut before the act could say whether systemd took the reboot (its answer lost as the
+	// shutdown began, or the session cut): it may reboot, and the wait tells.
 	t.Run("cut at the run", func(t *testing.T) {
 		t.Parallel()
 		s := newRebootServer(t)
 		s.set("cutrun")
-		if said, code := s.run("--yes"); code != 0 || !strings.Contains(said, "devopsy: "+host+" may reboot: the session was cut before systemd answered\n") {
+		if said, code := s.run("--yes"); code != 0 || !strings.Contains(said, "devopsy: "+host+" may reboot: the session was cut before devopsy could tell whether systemd took it\n") {
 			t.Errorf("(%d):\n%s", code, said)
 		}
 	})
