@@ -384,67 +384,100 @@ func dropBuilder(run func(args ...string) ([]byte, error), space, project string
 	return removeLeftover(run, project)
 }
 
+// repairUnder repairs project's builder in space under its lock exclusive, its caller holding
+// none of its locks: waited for, said and bounded, the wait ending with nothing done once fine
+// says so (another use repaired it meanwhile), fine asked again under the lock, and fix run only
+// when it still says no. No build boots or runs on the builder meanwhile: each holds the lock
+// shared. The one way a builder is repaired (a remake, a leftover's removal, a container on a
+// network gone).
+func repairUnder(space, project string, t builderTiming, fine func() (bool, error), fix func() error) error {
+	lock, err := builderLockWait(door.BuilderLockOf(space, project), "another use of "+project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
+		ok, err := fine()
+		return err == nil && ok
+	})
+	if err != nil || lock == nil {
+		return err
+	}
+	defer lock.Close()
+	if ok, err := fine(); err != nil || ok {
+		return err
+	}
+	return fix()
+}
+
+// builderNetworkID is the id of project's builder's network by run's docker, "" when it is gone,
+// an error only when Docker fails (an exact docker network ls, never a failed inspect).
+func builderNetworkID(run func(args ...string) ([]byte, error), project string) (string, error) {
+	out, err := run("network", "ls", "-q", "--no-trunc", "--filter", "name=^"+door.BuilderNetworkOf(project)+"$")
+	if err != nil {
+		return "", dockerFailed("docker network ls", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // builderBootable makes project's builder in space bootable, with probe's docker for its looks
 // and run's for its changes, its caller holding none of its locks: its network there, made
 // again when gone (a prune takes it from a builder stopped between builds, no endpoint on it),
 // and its container on that network. A stopped container keeps the id of the network it was
 // made on, never the name alone, so one on a network made again cannot start: it is removed,
-// its state volume, the cache, kept, for the next boot to make it on the network now, under
-// the builder's lock exclusive and looked at again under it (no build boots it meanwhile).
+// its state volume, the cache, kept, for the next boot to make it on the network now
+// (repairUnder).
 func builderBootable(probe, run func(args ...string) ([]byte, error), space, project string, t builderTiming) error {
 	network, container := door.BuilderNetworkOf(project), door.BuilderContainerOf(project)
-	// The network's id: "" when it is gone, an error only when Docker fails.
-	networkID := func() (string, error) {
-		out, err := probe("network", "ls", "-q", "--no-trunc", "--filter", "name=^"+network+"$")
-		if err != nil {
-			return "", dockerFailed("docker network ls", err)
+	// stale says whether the container is on a network that is not the one now, with the
+	// network's id ("" when gone).
+	look := func() (stale bool, id string, err error) {
+		if id, err = builderNetworkID(probe, project); err != nil {
+			return false, "", err
 		}
-		return strings.TrimSpace(string(out)), nil
-	}
-	stale := func() (bool, error) {
 		on, err := probe("container", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}", container)
 		if err != nil {
 			// No container: its boot makes one on the network as named.
-			return false, nil
+			return false, id, nil
 		}
-		id, err := networkID()
-		return err == nil && !slices.Contains(strings.Fields(string(on)), id), err
+		return !slices.Contains(strings.Fields(string(on)), id), id, nil
 	}
-	isStale, err := stale()
+	stale, id, err := look()
 	if err != nil {
 		return err
 	}
-	if isStale {
-		lock, err := builderLockWait(door.BuilderLockOf(space, project), "another use of "+project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
-			s, err := stale()
-			return err == nil && !s
+	if stale {
+		err := repairUnder(space, project, t, func() (bool, error) {
+			stale, _, err := look()
+			return !stale, err
+		}, func() error {
+			if _, err := run("rm", "-f", container); err != nil {
+				return fmt.Errorf("its container on a network gone: %w", dockerFailed("docker rm", err))
+			}
+			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("its container is on a network gone, and stays: %w", err)
+			return err
 		}
-		if lock != nil {
-			isStale, err = stale()
-			if err == nil && isStale {
-				if _, rerr := run("rm", "-f", container); rerr != nil {
-					err = fmt.Errorf("its container on a network gone: %w", dockerFailed("docker rm", rerr))
-				}
-			}
-			lock.Close()
-			if err != nil {
-				return err
-			}
+		if id, err = builderNetworkID(probe, project); err != nil {
+			return err
 		}
-	}
-	id, err := networkID()
-	if err != nil {
-		return err
 	}
 	if id == "" {
 		if _, err := run("network", "create", network); err != nil {
+			// Another use may have made it meanwhile: Docker makes no second of a name.
+			if again, lerr := builderNetworkID(probe, project); lerr == nil && again != "" {
+				return nil
+			}
 			return fmt.Errorf("its network could not be made: %w", dockerFailed("docker network create", err))
 		}
 	}
 	return nil
+}
+
+// dockerRunner runs docker at path under env for what it prints, each call bounded by within
+// (outputWithin): the builders' looks and changes outside a request.
+func dockerRunner(path string, env []string, within time.Duration) func(args ...string) ([]byte, error) {
+	return func(args ...string) ([]byte, error) {
+		c := exec.Command(path, args...)
+		c.Env = env
+		return outputWithin(c, within)
+	}
 }
 
 // leftoverThere says whether a container or state volume of project's builder's names is there,

@@ -1994,54 +1994,46 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		}
 		return nil
 	}
+	// create records the builder, its network made after, at its boot's look (network_).
+	create := func() error {
+		if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no"); err != nil {
+			// Another environment's build may have made it meanwhile.
+			if _, ok, _ := right(); ok {
+				return nil
+			}
+			return fmt.Errorf("it could not be made: %v", err)
+		}
+		return nil
+	}
 	there, ok, err := right()
 	if err != nil {
 		return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
 	}
-	if ok {
-		return b, network_()
-	}
-	if there || leftoverThere(probe, s.policy.Project) {
+	switch {
+	case ok:
+	case there || leftoverThere(probe, s.policy.Project):
 		// Made otherwise (on the default bridge, restarted by Docker), or a container and cache
 		// of its name left with no builder (a boot racing a key's removal), which a builder
-		// made anew would take, a removed key's cache with them: removed, under its lock
-		// exclusive, so that no build boots or runs on it meanwhile, and looked at again under
-		// it; a wait that sees another build make it right ends there.
-		t := s.timing.orServer()
-		lock, err := builderLockWait(door.BuilderLockOf(s.policy.Space, s.policy.Project), "another use of "+s.policy.Project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
-			_, ok, _ := right()
-			return ok
+		// made anew would take, a removed key's cache with them: removed and made again
+		// (repairUnder), so that no build boots or runs on it meanwhile.
+		err := repairUnder(s.policy.Space, s.policy.Project, s.timing.orServer(), func() (bool, error) {
+			_, ok, err := right()
+			return ok, err
+		}, func() error {
+			if err := dropBuilder(probe, s.policy.Space, s.policy.Project); err != nil {
+				return fmt.Errorf("it could not be removed: %v", err)
+			}
+			return create()
 		})
 		if err != nil {
 			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and stays: %v", s.policy.Project, err)
 		}
-		if lock == nil {
-			return b, network_()
-		}
-		defer lock.Close()
-		if _, ok, err := right(); err != nil || ok {
-			// Let go before its network's look, which may take the lock itself.
-			lock.Close()
-			if err != nil {
-				return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
-			}
-			return b, network_()
-		}
-		if err := dropBuilder(probe, s.policy.Space, s.policy.Project); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and could not be removed: %v", s.policy.Project, err)
+	default:
+		if err := create(); err != nil {
+			return nil, fmt.Errorf("refused: %s's builder: %v", s.policy.Project, err)
 		}
 	}
-	if err := network_(); err != nil {
-		return nil, err
-	}
-	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no"); err != nil {
-		// Another environment's build may have made it meanwhile.
-		if _, ok, _ := right(); ok {
-			return b, network_()
-		}
-		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
-	}
-	return b, nil
+	return b, network_()
 }
 
 var composeProfile = regexp.MustCompile(`^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$`)

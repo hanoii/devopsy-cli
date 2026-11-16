@@ -704,7 +704,7 @@ func (g *gcScope) builders() ([]gcBuilder, []error) {
 // builderBooted says whether project's builder has a container, made at its first boot: one
 // with none has no cache, and --gc boots none for nothing.
 func (g *gcScope) builderBooted(project string) bool {
-	_, ok := builderContainer(func(args ...string) ([]byte, error) { return exec.Command(g.docker, args...).Output() }, project)
+	_, ok := builderContainer(dockerRunner(g.docker, os.Environ(), g.timing.orServer().lock), project)
 	return ok
 }
 
@@ -716,11 +716,7 @@ func (g *gcScope) onBuilder(project string, act func(held *os.File) error) error
 	t := g.timing.orServer()
 	env := builderEnv(os.Environ(), g.door.Space)
 	// Bootable first, as a build makes it: its network back after a prune, its container on it.
-	run := func(args ...string) ([]byte, error) {
-		c := exec.Command(g.docker, args...)
-		c.Env = env
-		return c.Output()
-	}
+	run := dockerRunner(g.docker, env, t.lock)
 	if err := builderBootable(run, run, g.door.Space, project, t); err != nil {
 		return err
 	}

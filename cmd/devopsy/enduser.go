@@ -154,21 +154,18 @@ func endBuilder(who string) error {
 // removeBuilder is endBuilder's removal, by docker under base and the door's BUILDX_CONFIG in
 // space.
 func removeBuilder(dockerPath string, base []string, space, who string) error {
-	env := builderEnv(base, space)
-	docker := func(args ...string) *exec.Cmd {
-		c := exec.Command(dockerPath, args...)
-		c.Env = env
-		return c
-	}
-	run := func(args ...string) ([]byte, error) { return docker(args...).Output() }
+	run := dockerRunner(dockerPath, builderEnv(base, space), builderTimes.lock)
 	project := door.ProjectOfUser(who)
 	if err := dropBuilder(run, space, project); err != nil {
 		return err
 	}
-	network := door.BuilderNetworkOf(project)
-	if docker("network", "inspect", network).Run() == nil {
-		if out, err := docker("network", "rm", network).CombinedOutput(); err != nil {
-			return fmt.Errorf("its builder's network: %w: %s", err, strings.TrimSpace(string(out)))
+	id, err := builderNetworkID(run, project)
+	if err != nil {
+		return fmt.Errorf("its builder's network: %w", err)
+	}
+	if id != "" {
+		if _, err := run("network", "rm", door.BuilderNetworkOf(project)); err != nil {
+			return fmt.Errorf("its builder's network: %w", dockerFailed("docker network rm", err))
 		}
 	}
 	return nil

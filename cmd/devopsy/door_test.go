@@ -864,16 +864,16 @@ esac
 		return string(got), nil
 	}
 	container := space + " container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\n"
-	// Its network's look (builderBootable): the container's network id when it has one, and the
-	// network's.
+	// Its boot's look (builderBootable), once its record is right: the network's id, and the
+	// container's when it has one.
 	cnets := space + " container inspect --format {{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}} buildx_buildkit_devopsy-shop0\n"
 	nls := space + " network ls -q --no-trunc --filter name=^devopsy-shop-build$\n"
-	net := cnets + nls
+	boot := nls + cnets
 	inspect := space + " buildx inspect devopsy-shop\n" + container
 	// A look for a container and cache of its name left with no builder: none.
 	leftover := container + space + " volume inspect buildx_buildkit_devopsy-shop0_state\n"
 	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build --driver-opt restart-policy=no\n"
-	if got, err := build(); err != nil || got != leftover+net+space+" network create devopsy-shop-build\n"+create {
+	if got, err := build(); err != nil || got != leftover+create+boot+space+" network create devopsy-shop-build\n" {
 		t.Errorf("the first build (%v) asked:\n%s", err, got)
 	}
 	// What a claim runs too (builder): no lock taken, no stopper started, the builder booted by
@@ -883,18 +883,18 @@ esac
 	}
 	// Made, never booted, then booted as devopsy makes it: its network looked at each time, as
 	// a prune takes it from a builder stopped between builds.
-	if got, err := build(); err != nil || got != inspect+net {
+	if got, err := build(); err != nil || got != inspect+boot {
 		t.Errorf("a build on the builder made (%v) asked:\n%s", err, got)
 	}
 	write(t, policy, "no\n", 0o644)
-	if got, err := build(); err != nil || got != inspect+cnets+nls+nls {
+	if got, err := build(); err != nil || got != inspect+boot {
 		t.Errorf("a build on the builder booted (%v) asked:\n%s", err, got)
 	}
 	// Made otherwise: on the default bridge, before builders had networks of their own; then
 	// one Docker restarts, booted with no policy of devopsy's.
 	// Inspected before, as the lock's wait begins, and again under it: another build may end
 	// its remake between the last two.
-	remade := inspect + inspect + inspect + space + " buildx rm devopsy-shop\n" + leftover + net + create
+	remade := inspect + inspect + inspect + space + " buildx rm devopsy-shop\n" + leftover + create + boot
 	for name, c := range map[string][2]string{"on the default bridge": {"Driver Options: \n", "no\n"}, "restarted by Docker": {"Driver Options: network=\"devopsy-shop-build\"\n", "unless-stopped\n"}} {
 		write(t, made, c[0], 0o644)
 		write(t, policy, c[1], 0o644)
@@ -910,7 +910,7 @@ esac
 	write(t, policy, "no\n", 0o644)
 	write(t, filepath.Join(dir, "state"), "", 0o644)
 	want := container + container + space + " rm -f buildx_buildkit_devopsy-shop0\n" +
-		space + " volume inspect buildx_buildkit_devopsy-shop0_state\n" + space + " volume rm buildx_buildkit_devopsy-shop0_state\n" + net + create
+		space + " volume inspect buildx_buildkit_devopsy-shop0_state\n" + space + " volume rm buildx_buildkit_devopsy-shop0_state\n" + create + boot
 	if got, err := build(); err != nil || got != want {
 		t.Errorf("a builder made beside a leftover container (%v), asked:\n%s", err, got)
 	}
