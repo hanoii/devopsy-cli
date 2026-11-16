@@ -1987,13 +1987,10 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		policy, booted := builderContainer(probe, s.policy.Project)
 		return true, madeRight(string(out), network, policy, booted), nil
 	}
-	// Its network, which a prune takes from a builder stopped between builds (no endpoint on
-	// it): made again whenever it is gone, the builder cannot boot without it.
+	// Its network, made again when a prune took it, and its container on it (builderBootable).
 	network_ := func() error {
-		if _, err := probe("network", "inspect", network); err != nil {
-			if _, err := run("network", "create", network); err != nil {
-				return fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
-			}
+		if err := builderBootable(probe, run, s.policy.Space, s.policy.Project, s.timing.orServer()); err != nil {
+			return fmt.Errorf("refused: %s's builder cannot boot: %v", s.policy.Project, err)
 		}
 		return nil
 	}
@@ -2023,6 +2020,8 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		}
 		defer lock.Close()
 		if _, ok, err := right(); err != nil || ok {
+			// Let go before its network's look, which may take the lock itself.
+			lock.Close()
 			if err != nil {
 				return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
 			}

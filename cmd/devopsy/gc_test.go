@@ -207,6 +207,7 @@ case "$*" in
 EOF
   ;;
   'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-blog0') exit 1 ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}'*|'network ls -q --no-trunc --filter '*) echo netid ;;
   'container inspect '*) ;;
   'buildx inspect --bootstrap '*) [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; echo "$*" >>`+log+` ;;
   'ps -q '*) echo c0ffee ;;
@@ -583,6 +584,7 @@ case "$*" in
   'buildx inspect --bootstrap devopsy-shop') : >`+booting+`; sleep 3; : >`+running+`; : >`+booted+` ;;
   'ps -q --filter name=^/buildx_buildkit_devopsy-shop0$ --filter status=running') if [ -e `+running+` ]; then echo c0ffee; fi ;;
   'stop buildx_buildkit_devopsy-shop0') rm -f `+running+` ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') echo netid ;;
   *) exit 9 ;;
 esac
 `, 0o755)

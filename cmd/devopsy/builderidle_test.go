@@ -382,6 +382,7 @@ func TestGCPrunesEachBuilderBootedOnce(t *testing.T) {
 	write(t, docker, `#!/bin/sh
 case "$*" in
   'ps -q '*) echo c0ffee ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}'*|'network ls -q --no-trunc --filter '*) echo netid ;;
   'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '`+old+`' ;;
   'exec buildx_buildkit_devopsy-wiki0 buildctl du --format {{json .}}') echo "$*" >>`+log+`; echo '[]' ;;
   'buildx prune '*) [ "$BUILDX_CONFIG" = '`+space+`/buildx' ] || exit 7; echo "$*" >>`+log+`; printf 'Total:\t3kB\n' ;;
@@ -526,6 +527,8 @@ case "$*" in
     cmp -s `+net+` `+attached+` || { echo "failed to set up container networking: network $(cat `+attached+`) not found" >&2; exit 1; } ;;
   'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo '`+old+`' ;;
   'buildx prune '*) printf 'Total:\t3kB\n' ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}} buildx_buildkit_devopsy-shop0') [ -e `+attached+` ] && cat `+attached+` ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') if [ -e `+net+` ]; then cat `+net+`; fi ;;
   'container inspect '*) [ -e `+attached+` ] && echo no ;;
   'rm -f buildx_buildkit_devopsy-shop0'|'rm buildx_buildkit_devopsy-shop0') rm -f `+attached+` ;;
   'network inspect devopsy-shop-build') [ -e `+net+` ] ;;

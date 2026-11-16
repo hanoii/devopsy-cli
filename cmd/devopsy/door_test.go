@@ -827,6 +827,8 @@ func TestDoorBuildsOnTheProjectsBuilder(t *testing.T) {
 echo "$BUILDX_CONFIG $*" >>`+log+`
 case "$*" in
   "buildx inspect "*) [ -e `+made+` ] && cat `+made+` ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}} buildx_buildkit_devopsy-shop0') [ -e `+policy+` ] && echo netid ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') if [ -e `+dir+`/net ]; then echo netid; fi ;;
   "container inspect --format "*) [ -e `+policy+` ] && cat `+policy+` ;;
   "buildx create "*) echo "Driver Options: network=\"${8#network=}\" restart-policy=\"${10#restart-policy=}\"" >`+made+`; rm -f `+policy+`
     mkdir -p "$BUILDX_CONFIG/instances" && : >"$BUILDX_CONFIG/instances/devopsy-shop" ;;
@@ -862,7 +864,11 @@ esac
 		return string(got), nil
 	}
 	container := space + " container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\n"
-	net := space + " network inspect devopsy-shop-build\n"
+	// Its network's look (builderBootable): the container's network id when it has one, and the
+	// network's.
+	cnets := space + " container inspect --format {{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}} buildx_buildkit_devopsy-shop0\n"
+	nls := space + " network ls -q --no-trunc --filter name=^devopsy-shop-build$\n"
+	net := cnets + nls
 	inspect := space + " buildx inspect devopsy-shop\n" + container
 	// A look for a container and cache of its name left with no builder: none.
 	leftover := container + space + " volume inspect buildx_buildkit_devopsy-shop0_state\n"
@@ -881,7 +887,7 @@ esac
 		t.Errorf("a build on the builder made (%v) asked:\n%s", err, got)
 	}
 	write(t, policy, "no\n", 0o644)
-	if got, err := build(); err != nil || got != inspect+net {
+	if got, err := build(); err != nil || got != inspect+cnets+nls+nls {
 		t.Errorf("a build on the builder booted (%v) asked:\n%s", err, got)
 	}
 	// Made otherwise: on the default bridge, before builders had networks of their own; then
@@ -994,6 +1000,8 @@ case "$*" in
   "buildx inspect "*)
     [ -e `+looked+` ] || { : >`+looked+`; echo 'ERROR: no builder "devopsy-shop" found' >&2; exit 1; }
     echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}} buildx_buildkit_devopsy-shop0') echo netid ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') echo netid ;;
   "container inspect --format "*) mkdir -p "$(dirname `+record+`)"; : >`+record+`; : >`+looked+`; echo no ;;
   "buildx create "*) echo 'ERROR: existing instance for "devopsy-shop" but no append mode' >&2; exit 1 ;;
   "volume inspect "*|"network inspect "*) ;;
@@ -1007,46 +1015,6 @@ esac
 		if strings.Contains(readString(log), removal) {
 			t.Errorf("a first build beside another that made and booted the builder ran %q:\n%s", removal, readString(log))
 		}
-	}
-}
-
-// A builder as devopsy makes it whose network is gone gets its network back before the build:
-// a stopped builder's container has no endpoint on it, so Docker's network prune (docker
-// network prune, docker system prune) removes it, and the builder cannot boot without it.
-//
-// The bug this proves (ensureBuilder, door.go): the network is looked at and made only when
-// the builder is made, never when the builder is found as devopsy makes it, so once a prune
-// took the network of a builder stopped between builds, every build of the project fails at
-// its boot ("network devopsy-shop-build not found", Docker 29: a stopped container's network
-// is pruned and the container then refuses to start), the door finding the builder right each
-// time, until someone removes the builder by hand. A builder that ran forever kept an endpoint
-// on its network, which no prune removed.
-func TestDoorBuildsOnABuilderWhoseNetworkWasPruned(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	log := filepath.Join(dir, "docker.log")
-	space := filepath.Join(dir, "space")
-	net := filepath.Join(dir, "net")
-	// The builder is there as devopsy makes it, booted once and stopped (its container's policy
-	// no); its network is gone.
-	docker := filepath.Join(dir, "docker")
-	write(t, docker, `#!/bin/sh
-echo "$*" >>`+log+`
-case "$*" in
-  "buildx inspect devopsy-shop") echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
-  "container inspect --format "*) echo no ;;
-  "network inspect devopsy-shop-build") [ -e `+net+` ] ;;
-  "network create devopsy-shop-build") : >`+net+` ;;
-  *) exit 9 ;;
-esac
-`, 0o755)
-	write(t, filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop"), `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
-	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
-	if _, err := side.builder(); err != nil {
-		t.Fatalf("a build on a builder whose network is gone: %v", err)
-	}
-	if _, err := os.Stat(net); err != nil {
-		t.Errorf("a build went on to a builder whose network is gone, which its boot needs; docker was asked:\n%s", readString(log))
 	}
 }
 
@@ -1080,6 +1048,8 @@ case "$*" in
   "buildx inspect devopsy-shop") [ -e `+record+` ] && echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
   "buildx create "*) mkdir -p "$BUILDX_CONFIG/instances" && : >`+record+` ;;
   "buildx rm devopsy-shop") rm -f `+record+` `+attached+` ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}} buildx_buildkit_devopsy-shop0') [ -e `+attached+` ] && cat `+attached+` ;;
+  'network ls -q --no-trunc --filter name=^devopsy-shop-build$') if [ -e `+net+` ]; then cat `+net+`; fi ;;
   "container inspect --format "*) [ -e `+attached+` ] && echo no ;;
   "rm -f buildx_buildkit_devopsy-shop0"|"rm buildx_buildkit_devopsy-shop0") rm -f `+attached+` ;;
   "network inspect devopsy-shop-build") [ -e `+net+` ] ;;
@@ -1316,6 +1286,7 @@ case "$all" in
     # What a registry serves for a ref (fakeManifest), nothing for one it does not know.
     f=`+in("raw")+`/$(printf '%s' "$ref" | tr '/:@' '___'); [ -f "$f" ] || exit 1; cat "$f" ;;
   'version --format '*) echo "linux amd64" ;;
+  'container inspect --format {{range .NetworkSettings.Networks}}'*|'network ls -q --no-trunc --filter '*) echo netid ;;
   'info --format '*) echo '[[driver-type io.containerd.snapshotter.v1]]' ;;
   'buildx version') echo "github.com/docker/buildx v0.38.2 e25e2b7a4b6a" ;;
   'buildx imagetools create '*)

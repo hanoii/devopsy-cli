@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -381,6 +382,69 @@ func dropBuilder(run func(args ...string) ([]byte, error), space, project string
 		}
 	}
 	return removeLeftover(run, project)
+}
+
+// builderBootable makes project's builder in space bootable, with probe's docker for its looks
+// and run's for its changes, its caller holding none of its locks: its network there, made
+// again when gone (a prune takes it from a builder stopped between builds, no endpoint on it),
+// and its container on that network. A stopped container keeps the id of the network it was
+// made on, never the name alone, so one on a network made again cannot start: it is removed,
+// its state volume, the cache, kept, for the next boot to make it on the network now, under
+// the builder's lock exclusive and looked at again under it (no build boots it meanwhile).
+func builderBootable(probe, run func(args ...string) ([]byte, error), space, project string, t builderTiming) error {
+	network, container := door.BuilderNetworkOf(project), door.BuilderContainerOf(project)
+	// The network's id: "" when it is gone, an error only when Docker fails.
+	networkID := func() (string, error) {
+		out, err := probe("network", "ls", "-q", "--no-trunc", "--filter", "name=^"+network+"$")
+		if err != nil {
+			return "", dockerFailed("docker network ls", err)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	stale := func() (bool, error) {
+		on, err := probe("container", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}", container)
+		if err != nil {
+			// No container: its boot makes one on the network as named.
+			return false, nil
+		}
+		id, err := networkID()
+		return err == nil && !slices.Contains(strings.Fields(string(on)), id), err
+	}
+	isStale, err := stale()
+	if err != nil {
+		return err
+	}
+	if isStale {
+		lock, err := builderLockWait(door.BuilderLockOf(space, project), "another use of "+project+"'s builder", syscall.LOCK_EX, t.lock, time.Second, func() bool {
+			s, err := stale()
+			return err == nil && !s
+		})
+		if err != nil {
+			return fmt.Errorf("its container is on a network gone, and stays: %w", err)
+		}
+		if lock != nil {
+			isStale, err = stale()
+			if err == nil && isStale {
+				if _, rerr := run("rm", "-f", container); rerr != nil {
+					err = fmt.Errorf("its container on a network gone: %w", dockerFailed("docker rm", rerr))
+				}
+			}
+			lock.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	id, err := networkID()
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		if _, err := run("network", "create", network); err != nil {
+			return fmt.Errorf("its network could not be made: %w", dockerFailed("docker network create", err))
+		}
+	}
+	return nil
 }
 
 // leftoverThere says whether a container or state volume of project's builder's names is there,

@@ -715,6 +715,15 @@ func (g *gcScope) builderBooted(project string) bool {
 func (g *gcScope) onBuilder(project string, act func(held *os.File) error) error {
 	t := g.timing.orServer()
 	env := builderEnv(os.Environ(), g.door.Space)
+	// Bootable first, as a build makes it: its network back after a prune, its container on it.
+	run := func(args ...string) ([]byte, error) {
+		c := exec.Command(g.docker, args...)
+		c.Env = env
+		return c.Output()
+	}
+	if err := builderBootable(run, run, g.door.Space, project, t); err != nil {
+		return err
+	}
 	l, err := useBuilder(g.door.Space, project, cmp.Or(g.self, devopsyPath()), os.Environ(), t)
 	if err != nil {
 		return err

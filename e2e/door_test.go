@@ -2112,8 +2112,8 @@ docker run -d --name doorhostsvc-lo --network host busybox:1.37 sh -c 'mkdir -p 
 // another's trusts; on Docker's default bridge, one project's build step reaches another's
 // builder. The control: the same two builds on the server's own builder see each other's.
 // Each builder runs only while a build does: a build's step of seconds goes through on it,
-// stopped once the build is over, and the next build boots it and finds its cache; --gc's
-// listing boots each stopped one and stops it again.
+// stopped once the build is over, and the next build boots it and finds its cache, a network
+// a prune took included; --gc's listing boots each stopped one and stops it again.
 func TestDoorBuildersStayApart(t *testing.T) {
 	target := fmt.Sprintf("/cache-%d", time.Now().UnixNano())
 	// sharing=locked: a build waits for the mount while the builder holds it, to read its size
@@ -2161,6 +2161,15 @@ DEVOPSY_UID=%[3]s COMPOSE_PROJECT_NAME=%[1]s-prod docker compose build -q`, proj
 		t.Errorf("a build after its builder's stop lost its cache: %q", got)
 	}
 	stopped("the builder stopped after its next build")
+	// A prune takes a stopped builder's network, no endpoint on it, and the container keeps
+	// the old one's id: the next build gets it a network and a container again, its cache kept.
+	if out, code := doorRoot(t, "docker network rm devopsy-doorcachea-build"); code != 0 {
+		t.Fatalf("removing doorcachea's builder's network (%d): %s", code, out)
+	}
+	if got := build("doorcachea"); got != "doorcachea" {
+		t.Errorf("a build after its builder's network was pruned lost its cache: %q", got)
+	}
+	stopped("the builder stopped after the build that got it its network again")
 	// Nor another's builder on the network: a build step is a member of its builder's, which
 	// is its project's own, not Docker's default bridge that every container shares. Both
 	// started by hand for the look, and stopped after.
