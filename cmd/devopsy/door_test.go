@@ -1010,6 +1010,46 @@ esac
 	}
 }
 
+// A builder as devopsy makes it whose network is gone gets its network back before the build:
+// a stopped builder's container has no endpoint on it, so Docker's network prune (docker
+// network prune, docker system prune) removes it, and the builder cannot boot without it.
+//
+// The bug this proves (ensureBuilder, door.go): the network is looked at and made only when
+// the builder is made, never when the builder is found as devopsy makes it, so once a prune
+// took the network of a builder stopped between builds, every build of the project fails at
+// its boot ("network devopsy-shop-build not found", Docker 29: a stopped container's network
+// is pruned and the container then refuses to start), the door finding the builder right each
+// time, until someone removes the builder by hand. A builder that ran forever kept an endpoint
+// on its network, which no prune removed.
+func TestDoorBuildsOnABuilderWhoseNetworkWasPruned(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	space := filepath.Join(dir, "space")
+	net := filepath.Join(dir, "net")
+	// The builder is there as devopsy makes it, booted once and stopped (its container's policy
+	// no); its network is gone.
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  "buildx ls --format json") echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"stopped"}]}' ;;
+  "buildx inspect devopsy-shop") echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
+  "container inspect --format "*) echo no ;;
+  "network inspect devopsy-shop-build") [ -e `+net+` ] ;;
+  "network create devopsy-shop-build") : >`+net+` ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
+	if _, err := side.builder(); err != nil {
+		t.Fatalf("a build on a builder whose network is gone: %v", err)
+	}
+	if _, err := os.Stat(net); err != nil {
+		t.Errorf("a build went on to a builder whose network is gone, which its boot needs; docker was asked:\n%s", readString(log))
+	}
+}
+
 // A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
 // mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
 func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
