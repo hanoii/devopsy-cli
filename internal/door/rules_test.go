@@ -702,6 +702,15 @@ func TestCheckFileRunsASharerOnItsBuildersBuild(t *testing.T) {
 			t.Errorf("the control: %s, migrate on %s: runs %q (%v)", c.verb, c.image, got, errs)
 		}
 	}
+	// The controls above can pass with no exclusion at all: migrate's pin or bookmark is
+	// never web's image there. Devopsy's own file names both on one image (a release's
+	// bookmark, a pin): migrate is then a sharer by its name, and keeps it (sharers' Pinned
+	// and OwnRef), never moved onto devopsy's name for the build, which holds the newest one.
+	for _, image := range []string{pin, bookmark} {
+		if got, errs := check("up", builder("web", image), migrate(image)); len(errs) != 0 || got != image {
+			t.Errorf("web and migrate both on %s from devopsy's own file: migrate runs %q (%v)", image, got, errs)
+		}
+	}
 	if _, errs := check("up", builder("web", "shop-web"), builder("worker", "shop-web"), migrate("shop-web")); len(errs) != 1 ||
 		!strings.Contains(errs[0].Error(), "migrate: its image shop-web is built by both web and worker") {
 		t.Errorf("a sharer of two builds: %v", errs)
