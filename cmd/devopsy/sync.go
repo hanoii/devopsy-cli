@@ -493,9 +493,10 @@ const sshLost = 255
 // killed outright, which ssh reports the same way (a script that runs
 // devopsy as its child says the kill itself: remote's killedLine). when
 // places it ("before the switch", or empty); left is what that may have
-// left there, true of both, and the caller's details name what shows it.
+// left there, true of both, and the caller's details name what shows it. A server's command's
+// target has no environment's address, and is named as typed (targetRef).
 func lostSays(t *remote.Target, when, left string) string {
-	s := "the connection to @" + t.Address + " failed or was lost"
+	s := "the connection to @" + cmp.Or(t.Address, targetRef(t)) + " failed or was lost"
 	if when != "" {
 		s += " " + when
 	}

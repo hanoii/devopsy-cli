@@ -39,7 +39,6 @@ var rebootTryOptions = []string{"-o", "ConnectTimeout=5", "-o", "ControlPath=non
 // rebootLook is what --reboot's look finds, for its prompt.
 type rebootLook struct {
 	Hostname string `json:"hostname"`
-	BootID   string `json:"boot_id"`
 	Running  int    `json:"running"`
 	// Required is the system's restart flag (remote.RebootRequired), Packages what it names.
 	Required bool     `json:"reboot_required,omitempty"`
@@ -98,7 +97,7 @@ func runReboot(t *remote.Target, args []string) int {
 		}
 		if code == sshLost {
 			report.Say(report.ErrorLevel, lostSays(t, "", "the reboot may have been asked there"), nil,
-				report.Hint("whether it was:", "devopsy @"+targetRef(t)+" --server-info"))
+				remote.SeeHint(targetRef(t), "whether it was", "--server-info"))
 			return code
 		}
 		if code == 0 {
@@ -106,9 +105,13 @@ func runReboot(t *remote.Target, args []string) int {
 		}
 		return code
 	}
-	report.Info(end.hostname + " reboots")
+	if end.asked {
+		report.Info(end.hostname + " reboots")
+	} else {
+		report.Info(end.hostname + " may reboot: the session was cut before systemd answered")
+	}
 	if err := awaitBoot(context.Background(), report.Default(), end, rebootBackBound, rebootTryEvery, bootTry(t)); err != nil {
-		return failErr(err, report.Hint("what it runs, once it answers:", "devopsy @"+targetRef(t)+" --server-info"))
+		return failErr(err, remote.SeeHint(targetRef(t), "what it runs, once it answers", "--server-info"))
 	}
 	return 0
 }
@@ -221,7 +224,9 @@ func runRebootStep(args []string) int {
 	if err != nil {
 		return failErr(err)
 	}
-	asRoot := report.Fix("reboot it as root, in a shell --shell-host --root opens")
+	// Root's own shell is the way in, by the session's address where it carries one.
+	asRoot := offer(report.Fix, "reboot it as root, in root's shell:", remote.SessionFrom(os.Getenv).OnServer("--shell-host --root"),
+		"reboot it as root, in root's shell (--shell-host --root on this server)")
 	d := dockerInfo()
 	if d.Error != "" {
 		report.Say(report.ErrorLevel, "Docker's daemon does not answer, and devopsy reboots the server through it: nothing rebooted", []string{d.Error}, asRoot)
@@ -259,7 +264,7 @@ func runRebootStep(args []string) int {
 		return fail("devopsy cannot read this server's hostname or boot id, which tell it came back: nothing rebooted")
 	}
 	if look {
-		l := rebootLook{Hostname: hostname, BootID: bootID}
+		l := rebootLook{Hostname: hostname}
 		if ids, err := exec.Command("docker", "ps", "-q").Output(); err == nil {
 			l.Running = len(strings.Fields(string(ids)))
 		}
@@ -274,17 +279,30 @@ func runRebootStep(args []string) int {
 	// systemctl refuses a command from a chroot without SYSTEMD_IGNORE_CHROOT, exiting 0;
 	// what it says goes to stderr, so stdout keeps the act's lines alone.
 	run := hostRun{PID: true, Script: "SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot", Stderr: os.Stderr}
-	if err := run.runReady(context.Background(), os.Stderr, func(err error) error { return err }); err != nil {
+	// A run that failed while systemd shuts down took the reboot: Docker went down under it.
+	if err := run.runReady(context.Background(), os.Stderr, func(err error) error { return err }); err != nil && !shuttingDown() {
 		report.Say(report.ErrorLevel, "the reboot was not asked: systemctl reboot, as root: "+oneLine(err.Error()), nil, asRoot)
 		fmt.Println(remote.RebootFailed)
 		return 1
 	}
 	fmt.Println(remote.RebootAsked)
 	// The locks stay held until the shutdown ends this session: nothing starts in between.
-	err = (boundedWait{what: "the server to go down", bound: down, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) { return false, nil })
-	report.Say(report.ErrorLevel, "the reboot was asked, and the server did not go down: "+err.Error(), nil, asRoot)
+	_ = (boundedWait{what: "the server to go down", bound: down, every: time.Second}).wait(context.Background(), report.Default(), func() (bool, error) { return false, nil })
+	// A shutdown longer than the bound (a container's long stop) goes on: the operator's wait
+	// follows it.
+	if shuttingDown() {
+		return 0
+	}
+	report.Say(report.ErrorLevel, "the reboot was asked, and the server is still up after "+boundWords(down), nil, asRoot)
 	fmt.Println(remote.RebootFailed)
 	return 1
+}
+
+// shuttingDown says whether systemd is stopping the system, as any user may ask it.
+func shuttingDown() bool {
+	// It exits non-zero for every state but running, stopping among them: its words decide.
+	out, _ := exec.Command("systemctl", "is-system-running").Output()
+	return strings.TrimSpace(string(out)) == "stopping"
 }
 
 // rebootFix is the fix of what waits for a reboot: --reboot on ref, the server as an address

@@ -28,27 +28,28 @@ type holdHow struct {
 	// inside an apply holds it already, and a second flock on a new open of the file would
 	// refuse itself.
 	Setup bool
-	// Look takes every lock shared and lets nothing be created: a file not there has no
-	// holder. A look changes nothing, and two looks never refuse each other.
+	// Look lets nothing be created, a file not there having no holder, and lets go at once: a
+	// look changes nothing. It takes each lock exclusively as the act does, since a sync's
+	// push and an export hold an environment's shared, and the act refuses them.
 	Look bool
 }
 
 // holdServer takes, at once and never waiting, the release lock of every deploy-user
 // environment in root and, with how.Setup, the apply lock: what a change of the whole server
-// (Docker's restart, a reboot) must never cut. busy says what holds one, "" when it took them
-// all, the caller's words following it; a look lets go of them at once, its caller only
-// asking whether it could. Releases wait for their lock (lockWait), so the instant a look
-// holds delays none.
-func holdServer(root string, how holdHow) (hold serverHold, busy string, err error) {
-	defer func() {
-		if busy != "" || err != nil {
-			hold.release()
-			hold = nil
-		}
-	}()
-	lockHow, flags := syscall.LOCK_EX, os.O_CREATE|os.O_WRONLY
+// (Docker's restart, a reboot) must never cut. Its string says what holds one, "" when it took
+// them all, the caller's words following it; a busy or failed hold lets go of what it took, and
+// a look lets go of them at once, its caller only asking whether it could. Releases wait for
+// their lock (lockWait), so the instant a look holds delays none.
+func holdServer(root string, how holdHow) (serverHold, string, error) {
+	var hold serverHold
+	// What was taken before a busy or failed lock is let go: the caller gets nothing to hold.
+	refuse := func(busy string, err error) (serverHold, string, error) {
+		hold.release()
+		return nil, busy, err
+	}
+	flags := os.O_CREATE | os.O_WRONLY
 	if how.Look {
-		lockHow, flags = syscall.LOCK_SH, os.O_RDONLY
+		flags = os.O_RDONLY
 	}
 	take := func(path string) (bool, error) {
 		l, err := os.OpenFile(path, flags, 0o644)
@@ -59,31 +60,38 @@ func holdServer(root string, how holdHow) (hold serverHold, busy string, err err
 			return false, err
 		}
 		hold = append(hold, l)
-		return tryFlock(l, lockHow)
+		return tryFlock(l, syscall.LOCK_EX)
 	}
 	if how.Setup {
-		// No record's home, or no lock there, is no apply running: an apply creates it.
+		// For a look, no record's home or no lock there is no apply running: an apply makes them.
 		if lock := setup.LockPath(setup.RecordPath(remote.UserConfigFile())); lock != "" {
+			// A hold that keeps its locks makes the record's home, as an apply does
+			// (applyLock): one made after the hold would let an apply start under it.
+			if !how.Look {
+				if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+					return refuse("", err)
+				}
+			}
 			ok, err := take(lock)
 			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, "", err
+				return refuse("", err)
 			}
 			if err == nil && !ok {
-				return nil, "a setup of this server runs", nil
+				return refuse("a setup of this server runs", nil)
 			}
 		}
 	}
 	bases, err := deployEnvBases(root)
 	if err != nil {
-		return nil, "", err
+		return refuse("", err)
 	}
 	for _, base := range bases {
 		ok, err := take(filepath.Join(base, ".lock"))
 		if err != nil {
-			return nil, "", err
+			return refuse("", err)
 		}
 		if !ok {
-			return nil, "a release or another change runs in " + base, nil
+			return refuse("a release or another change runs in "+base, nil)
 		}
 	}
 	if how.Look {
