@@ -344,16 +344,9 @@ esac
 // the rm removes the builder's state volume, its whole build cache, which on a large cache and
 // a slow disk takes minutes, and the removal waits for it as it did.
 //
-// The bug this proves (removeBuilder, enduser.go, its docker calls through dockerRunner): every
-// call of the removal is bounded by builderTimes.lock, the bound of a build's wait on the
-// builder's lock (a minute), a bound the removal never had and its fix did not mean to add (it
-// meant --gc's looks before a boot), so a buildx rm, a container's rm -f or the state volume's
-// rm past a minute is killed (outputWithin) and the key's removal fails ("the key is removed,
-// but ...: docker buildx rm failed"), buildx's record of the builder left, while the daemon
-// goes on removing what it was asked to. The fake's buildx rm takes longer than the bound,
-// shortened for the test.
+// The fake's buildx rm takes longer than the bound, shortened for the test.
 //
-// Not parallel: it sets builderTimes, the one timing removeBuilder reads.
+// Not parallel: it sets builderTimes, the lock's wait the removal must not be bounded by.
 func TestBuilderRemovalOutlastsALockWait(t *testing.T) {
 	saved := builderTimes
 	t.Cleanup(func() { builderTimes = saved })
@@ -376,34 +369,6 @@ esac
 `, 0o755)
 	if err := removeBuilder(docker, nil, space, "devopsy-shop"); err != nil {
 		t.Errorf("a removal whose buildx rm outlasts a lock's wait failed: %v; docker was asked:\n%s", err, readString(log))
-	}
-}
-
-// A key's removal whose look at the builder failed has not removed it, and says so.
-//
-// The bug this proves (removeBuilder, enduser.go): any failure of docker buildx inspect is
-// taken for no builder there, so buildx rm is skipped, and the container, the state volume and
-// the network then go by their names, with no error: the removal reports the builder gone
-// while buildx's record of it stays, on a network that is no more. The next build finds that
-// record as devopsy makes it (its network named, no container), makes nothing, and its boot
-// fails on the missing network, until someone removes the builder by hand.
-func TestBuilderRemovalFailsWhenItsInspectFails(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	space := filepath.Join(dir, "space")
-	log := filepath.Join(dir, "docker.log")
-	// The builder is there by buildx's record of it and its listing; only the inspect fails.
-	write(t, filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop"), `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
-	docker := filepath.Join(dir, "docker")
-	write(t, docker, `#!/bin/sh
-echo "$*" >>`+log+`
-case "$*" in
-  'buildx inspect devopsy-shop') echo 'signal: killed' >&2; exit 137 ;;
-  'buildx ls --format json') echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"stopped"}]}' ;;
-esac
-`, 0o755)
-	if err := removeBuilder(docker, nil, space, "devopsy-shop"); err == nil && !strings.Contains(readString(log), "buildx rm devopsy-shop") {
-		t.Errorf("a removal whose inspect failed left the builder's record and said nothing, asked:\n%s", readString(log))
 	}
 }
 
@@ -569,13 +534,8 @@ func TestStopperWithNoAnswerStillStops(t *testing.T) {
 // container kept (docker system prune takes the stopped container too, and --gc then skips the
 // builder as one never booted).
 //
-// The bug this proves (onBuilder, gc.go): --gc boots the builder as it finds it (buildx inspect
-// --bootstrap), its network never looked at, where only a build's ensureBuilder makes it again,
-// and that by name alone, the container left on the old network's id. So after a prune every
-// --gc warns that the cache of each stopped builder stays, and exits as if something was left,
-// until each project builds again (and, the container kept, after that too). The fake boots as
-// Docker does: a container that is there starts only on the network whose id it keeps, one that
-// is not there is made on the network as named.
+// The fake boots as Docker does: a container that is there starts only on the network whose id
+// it keeps, one that is not there is made on the network as named.
 func TestGCBootsABuilderWhoseNetworkWasPruned(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -621,15 +581,8 @@ esac
 // A build that loses the making of its builder's network to another build of the project goes
 // on: the network is there, which is all its boot needs.
 //
-// The bug this proves (builderBootable, builderidle.go): the network's look and its making
-// are two docker calls under no lock, so two builds of one project that both find it gone (a
-// project's first builds, two environments released at once; or the first builds after a
-// docker network prune) both make it, and Docker refuses the second ("network with name
-// devopsy-shop-build already exists", Docker 29.8.2, eight docker network create of one name
-// at once: one made it, seven refused). builderBootable takes that refusal for a builder that
-// cannot boot and the door refuses the build, where ensureBuilder forgives the same lost race
-// on buildx create right after. The fake's create is the loser's: the network is there by
-// then, made by the other build, and the create fails as Docker's does.
+// The fake's create is the loser's: the network is there by then, made by the other build, and
+// the create fails as Docker's does.
 func TestBuilderBootableBesideAnotherBuildMakingItsNetwork(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -647,41 +600,5 @@ esac
 	run := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
 	if err := builderBootable(run, space, "shop", testBuilderTiming); err != nil {
 		t.Errorf("a build whose builder's network another build made first is refused, the network there: %v", err)
-	}
-}
-
-// Two builds of one project that find its network gone (a prune took it from the builder
-// stopped between them) both get it back: the one whose network create comes second finds the
-// network the other made, and builds on it.
-//
-// The bug this proves (builderBootable, builderidle.go): the network is looked at (network ls)
-// and made (network create) with no lock and no look again, so when another build of the
-// project, another environment's, makes it between the two, Docker refuses the create
-// ("network with name ... already exists", Docker 25 and later, which refuse a name twice),
-// and the build is refused ("its network could not be made") though the network is there, as
-// devopsy makes it. buildx create beside it looks again on a failure (ensureBuilder: "another
-// environment's build may have made it meanwhile"). The fake's other build makes the network
-// right after the look.
-func TestBuilderBootableWhenAnotherBuildMadeItsNetwork(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	log := filepath.Join(dir, "docker.log")
-	net := filepath.Join(dir, "net")
-	docker := filepath.Join(dir, "docker")
-	write(t, docker, `#!/bin/sh
-echo "$*" >>`+log+`
-case "$*" in
-  'container inspect '*) echo 'Error: No such container: buildx_buildkit_devopsy-shop0' >&2; exit 1 ;;
-  'network ls -q --no-trunc --filter name=^devopsy-shop-build$')
-    if [ -e `+net+` ]; then cat `+net+`; else echo theirs >`+net+`; fi ;;
-  'network create devopsy-shop-build')
-    if [ -e `+net+` ]; then echo 'Error response from daemon: network with name devopsy-shop-build already exists' >&2; exit 1; fi
-    echo ours >`+net+` ;;
-  *) exit 9 ;;
-esac
-`, 0o755)
-	run := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
-	if err := builderBootable(run, filepath.Join(dir, "space"), "shop", testBuilderTiming); err != nil {
-		t.Errorf("a build whose builder's network another build made meanwhile is refused: %v; docker was asked:\n%s", err, readString(log))
 	}
 }

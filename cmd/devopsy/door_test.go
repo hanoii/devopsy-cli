@@ -936,14 +936,6 @@ esac
 }
 
 // A builder whose inspect fails is not a builder gone: its container and its cache stay.
-//
-// The bug this proves (ensureBuilder, door.go): any failure of docker buildx inspect is taken
-// for no builder there, and removeLeftover then removes the container and the state volume by
-// their names, as left by a removed key. An inspect that failed for another reason (killed for
-// memory, a limit of its process, a signal from the terminal) beside a builder that is there
-// and running loses the project's whole build cache and ends the builds on it, and the build
-// goes on as if nothing happened, the create failing on the builder's name and the inspect
-// after it answering.
 func TestDoorKeepsABuildersCacheWhenItsInspectFails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -975,15 +967,8 @@ esac
 }
 
 // Two first builds at once both pass, the second leaving the builder the first made and booted
-// as it is.
-//
-// The bug this proves (ensureBuilder, door.go): a build that found no builder (buildx's own
-// answer, no failure of its) removes a container and state volume of its name as left by a
-// removed key (removeLeftover), holding no lock, so another build of the project that made the
-// builder meanwhile and booted it under its shared lock loses its builder mid-build, and the
-// project its cache; the second build then finds the builder made and goes on. Its inspect was
-// right when it ran: it is only stale by the removal, which nothing orders after the other
-// build's boot.
+// as it is: a container of its name goes only under the builder's lock exclusive, looked at
+// again under it, which the first build's boot holds shared.
 func TestDoorFirstBuildsAtOnceKeepTheBuilder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1022,14 +1007,7 @@ esac
 // stopped container, the id of each network it was on, never the name alone, so a network made
 // again under the same name is another to it, and its start fails on the old id.
 //
-// The bug this proves (ensureBuilder's network_, door.go, round 3's fix): the network is made
-// again by name, the builder's container left as it is, so its next boot still fails ("failed
-// to set up container networking: network <old id> not found", Docker 29.8.2 and buildx
-// 0.37.2, checked by hand: a docker-container builder on a network of its own, booted,
-// stopped, docker network prune, the network made again, then buildx inspect --bootstrap), and
-// every build of the project fails at its boot. Removing the container, its state volume
-// kept, let buildx make it again at the boot on the new network, its cache kept. The fake
-// keeps the network's id in the container as Docker does.
+// The fake keeps the network's id in the container as Docker does.
 func TestDoorBuilderBootsOnItsNetworkMadeAgain(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1074,14 +1052,8 @@ esac
 // A remake that removed the builder and could not make it again says the builder could not be
 // made, never that it stays.
 //
-// The bug this proves (ensureBuilder, door.go, the repair's one path): every failure of the
-// repair, its fix's included, is said as "is not as devopsy makes it, and stays", which is
-// true of a wait that gave up and of a removal that failed, and false once the fix removed the
-// builder (buildx rm, its container and its cache with it) and buildx create then failed: the
-// builder is gone, with the project's cache, and the refusal tells its reader it is still
-// there as it was. Before the repair went through repairUnder that failure said "<project>'s
-// builder could not be made". The fake's builder is made otherwise (on the default bridge),
-// its removal works and its create fails.
+// The fake's builder is made otherwise (on the default bridge), its removal works and its
+// create fails.
 func TestDoorSaysABuilderRemovedAndNotMadeAgainIsGone(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

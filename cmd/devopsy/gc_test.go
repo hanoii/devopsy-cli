@@ -562,15 +562,9 @@ func gcOnBuilderHelper(dir string) {
 }
 
 // A --gc step cut while it boots a project user's builder (the session gone: its group sent
-// SIGTERM, as the watcher and sshd do) leaves the builder stopped, its stopper the backstop.
-//
-// The bug this proves (gcScope.onBuilder, gc.go): --gc holds the builder's lock in its own
-// process only, close-on-exec, and runs the boot (docker buildx inspect --bootstrap), the read
-// and the prune in a process group of their own (outputWithin), so a cut kills --gc and frees
-// the lock while its boot goes on, holding nothing. The stopper takes the lock, finds no
-// container running yet, and ends; the boot then starts the builder, which runs with no
-// stopper until the project's next build. A build's compose holds the lock through its
-// children (kept across its exec), so nothing it starts outlives its hold.
+// SIGTERM, as the watcher and sshd do) leaves the builder stopped, its stopper the backstop:
+// every command of --gc's on the builder holds its lock (builderCmd), as a build's compose
+// does, so the stopper waits for the boot to end.
 func TestGCCutMidBootLeavesTheBuilderStopped(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
