@@ -122,7 +122,10 @@ containers run its own build by a tag of that release's. `.internal` is
 reserved for private networks and never exists on the public internet,
 so a build never lands on a name a registry serves, which another
 project could pull and run. `--releases` shows that name, and
-`devopsy -- config` the `image:` the project wrote.
+`devopsy -- config` the `image:` the project wrote. In image mode a
+registry serves the builds, so a service with `build:` runs its
+`image:`, fetched with the project's logins, and only a build by hand
+lands on devopsy's name.
 
 In a release that builds (not in image mode, where a registry serves
 the builds), a service with no `build:` whose `image:` is the name

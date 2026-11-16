@@ -805,3 +805,23 @@ func TestCheckFileLeavesAnImageModeSharerAsItsListingDoes(t *testing.T) {
 		t.Errorf("in image mode, a sharer of two builds: %v", errs)
 	}
 }
+
+// In image mode a registry serves a project's builds: a service with build: runs the image:
+// it names, claimed as any registry's is, so one devopsy's own file does not pin (a build
+// only under a profile, which no release pulls) keeps that name for a start; a build by hand
+// still lands on devopsy's name for it, never a registry's.
+func TestCheckFileKeepsAnImageModeBuildsRegistryName(t *testing.T) {
+	t.Parallel()
+	const tool = "registry.example.com/shop/tool:1"
+	imageMode := testPolicy
+	imageMode.ImageMode = func() bool { return true }
+	for verb, want := range map[string]string{"run": tool, "up": tool, "build": "devopsy.internal/shop-prod/tool"} {
+		file := parse(t, `{"name":"shop-prod","services":{"tool":{"image":"`+tool+`","profiles":["tools"],"build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]}}}`)
+		if errs := CheckFile(file, imageMode, verb, &fakePaths{}); len(errs) != 0 {
+			t.Fatalf("%s: %v", verb, errs)
+		}
+		if got, _ := file["services"].(map[string]any)["tool"].(map[string]any)["image"].(string); got != want {
+			t.Errorf("image mode, %s: tool runs %q, want %q", verb, got, want)
+		}
+	}
+}

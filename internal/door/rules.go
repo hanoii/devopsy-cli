@@ -57,8 +57,9 @@ type Policy struct {
 	// project's data (the owners form, an rsync's --chown), which the project user asks for.
 	ProjectUIDs []uint32
 	// ImageMode says whether the request's release is in image mode, where a registry serves
-	// its builds and the listing names no sharer of one (sharers), so neither does the render;
-	// asked only of a file with a sharer, nil for none. A release's record is the project
+	// its builds: the listing names no sharer of one (sharers), and a build runs its image:,
+	// so neither does the render name them as built here; asked only of a file with a sharer
+	// or a build devopsy's own file does not name, nil for none. A release's record is the project
 	// user's to write, and either mode names only images of the project's own or claims one
 	// with its logins.
 	ImageMode func() bool
@@ -267,10 +268,15 @@ func sharers(name string, services map[string]any, p Policy) map[string][]string
 			delete(shared, svc)
 		}
 	}
-	if len(shared) == 0 || p.ImageMode != nil && p.ImageMode() {
+	if len(shared) == 0 || p.imageMode() {
 		return nil
 	}
 	return shared
+}
+
+// imageMode is ImageMode's answer, false without one.
+func (p Policy) imageMode() bool {
+	return p.ImageMode != nil && p.ImageMode()
 }
 
 // named says whether image is one devopsy's own file gives a service, which the render keeps:
@@ -418,9 +424,11 @@ func checkService(file map[string]any, name, svc string, s map[string]any, share
 	default:
 		// A build is its own request. Its image is the build's name, unless devopsy's own
 		// file holds the service on a pin (image mode's pull, a pulled image held) or on a
-		// name of this project's own (a hold, another environment's build).
+		// name of this project's own (a hold, another environment's build), or the release is
+		// in image mode, where a registry serves its image: (a build only under a profile,
+		// which no release pulls and devopsy's file does not pin), claimed as any registry's.
 		delete(s, "build")
-		if image, _ := s["image"].(string); !p.named(image) {
+		if image, _ := s["image"].(string); !p.named(image) && (image == "" || !p.imageMode()) {
 			s["image"] = images.DoorBuild(name, svc)
 		}
 	}
