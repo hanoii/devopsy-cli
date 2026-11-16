@@ -3819,3 +3819,67 @@ func TestShellHostChecksTheDeployUserButRoots(t *testing.T) {
 		t.Error("--shell-host --root runs devopsy, which root's shell must never need")
 	}
 }
+
+// with_tty types nothing into its terminal: script's stdin never ends, so
+// script never types an EOF there, which the first command to make the
+// terminal raw (sudo's use_pty for a project user, compose run or exec)
+// would read as a NUL and echo as ^@. The command's stdin stays the
+// terminal (compose exec attaches a tty from no other), and the fifo is
+// gone once script has it. The read's bound only says nothing came.
+func TestWithTTYTypesNothing(t *testing.T) {
+	t.Parallel()
+	if out, err := exec.Command("script", "--version").Output(); err != nil || !strings.Contains(string(out), "util-linux") {
+		t.Skip("needs util-linux's script")
+	}
+	base := t.TempDir()
+	cmd := exec.Command("sh", "-c", withTTY+`with_tty '[ -t 0 ] && echo stdin a terminal; ls -A "$base"; timeout --foreground 0.5 cat >/dev/null; echo "read $?"'`)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "base=" + base, TTYEnv + "=80 24"}
+	out, err := cmd.CombinedOutput()
+	if got := strings.ReplaceAll(string(out), "\r", ""); err != nil || got != "stdin a terminal\nread 124\n" {
+		t.Errorf("with_tty's command (%v), want its stdin a terminal nothing was typed into, no fifo left:\n%q", err, got)
+	}
+}
+
+// prelude removes what a script cut off left in $base, its watcher's file
+// and with_tty's fifo, once that script is gone, and keeps a live one's.
+func TestPreludeSweepsGoneScriptsFiles(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nimages=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT" "$FAKE_ROOT"; fi
+exit 0
+`)
+	fakeImageTools(t, bin)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(filepath.Join(bin, "flock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
+	root := t.TempDir()
+	base := filepath.Join(root, tg.Path)
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	dead, live := strconv.Itoa(gone.Process.Pid), strconv.Itoa(os.Getpid())
+	left := []string{".devopsy-watch." + dead + ".off", ".devopsy-tty." + dead}
+	kept := []string{".devopsy-watch." + live, ".devopsy-tty." + live}
+	for _, f := range append(slices.Clone(left), kept...) {
+		write(t, filepath.Join(base, f), "")
+	}
+	cmd := exec.Command("sh", "-c", prelude(tg, false)+"echo released\n")
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "released") {
+		t.Fatalf("the prelude (%v):\n%s", err, out)
+	}
+	for _, f := range left {
+		if fileExists(filepath.Join(base, f)) {
+			t.Errorf("%s, its script gone, is left", f)
+		}
+	}
+	for _, f := range kept {
+		if !fileExists(filepath.Join(base, f)) {
+			t.Errorf("%s, its script alive, is removed", f)
+		}
+	}
+}

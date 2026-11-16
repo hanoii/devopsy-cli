@@ -550,6 +550,29 @@ done
 // session (SSHStreams).
 const FeatureCheckEnv = "DEVOPSY_FEATURE_CHECK"
 
+// withTTY defines with_tty, which runs its command on a pseudo-terminal
+// of the operator's size (TTY) under script, plainly without one.
+//
+// script's stdin is a fifo nobody writes ($base/.devopsy-tty.<pid>,
+// unlinked once open, a stray swept by prelude), never /dev/null: at its
+// stdin's end script types an EOF into the terminal, and the first
+// command to make that terminal raw (sudo's use_pty for a project user,
+// compose run or exec) reads it as a NUL and echoes ^@ into the output.
+// The command's stdin stays the terminal: compose exec refuses to attach
+// a tty from any other.
+const withTTY = `with_tty() {
+  # Past a fetch, script only in a session of its own (tty_detach): it
+  # reads the terminal's signals even ignored. Without setsid, plainly.
+  if [ -n "${` + TTYEnv + `:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
+    tty_in="$base/.devopsy-tty.$$"
+    rm -f "$tty_in" && mkfifo "$tty_in" || return
+    { rm -f "$tty_in"; ${tty_detach:+setsid -w} script -qec "stty cols ${` + TTYEnv + `%% *} rows ${` + TTYEnv + `#* } 2>/dev/null; $1" /dev/null; } <>"$tty_in"
+  else
+    eval "$1"
+  fi
+}
+`
+
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:), $base to the
 // target's directory (its path under $root), and $snaps to where its
@@ -569,16 +592,7 @@ export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
 	// and 9) and hold them while it asks GitHub. The checks of the
 	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
-` + serverCheck(upgradeRef(t), t) + `with_tty() {
-  # Past a fetch, script only in a session of its own (tty_detach): it
-  # reads the terminal's signals even ignored. Without setsid, plainly.
-  if [ -n "${` + TTYEnv + `:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
-    ${tty_detach:+setsid -w} script -qec "stty cols ${` + TTYEnv + `%% *} rows ${` + TTYEnv + `#* } 2>/dev/null; $1" /dev/null
-  else
-    eval "$1"
-  fi
-}
-root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
+` + serverCheck(upgradeRef(t), t) + withTTY + `root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
 images_dir=$(printf '%s\n' "$settings" | sed -n 's/^images=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
@@ -702,11 +716,12 @@ fi
 ` + releaseLock(false, create) + closeProject(strings.SplitN(t.Path, "/", 2)[0]) + `mkdir -p "$base/releases" "$base/shared"
 devopsy ` + MntReadyFlag + ` "$base"
 # An upload cut off leaves its .tmp, none running while the lock is held.
-# A watcher's file goes with its script: a sync's holder arms its own
-# before it waits for this lock.
+# A watcher's file, and with_tty's fifo, go with their script: a sync's
+# holder arms its own before it waits for this lock.
 rm -rf "$base"/releases/*.tmp
-for ws_f in "$base"/.devopsy-watch.*; do
-  ws_p=${ws_f##*/.devopsy-watch.}
+for ws_f in "$base"/.devopsy-watch.* "$base"/.devopsy-tty.*; do
+  ws_p=${ws_f##*/.devopsy-}
+  ws_p=${ws_p#*.}
   [ ! -e "$ws_f" ] || kill -0 "${ws_p%%.*}" 2>/dev/null || rm -f "$ws_f"
 done
 # make_current releases/<id>: current points at its code.
