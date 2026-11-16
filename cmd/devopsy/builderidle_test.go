@@ -387,3 +387,28 @@ esac
 		}
 	}
 }
+
+// BUG (review): stopBuilder takes any inspect that fails for an absent builder, one killed past
+// its bound included (a builder that runs but does not answer: inspect asks its BuildKit), and
+// answers that nothing is left to stop, so its stopper lets both locks go and ends, the
+// builder left running with no stopper. A stop whose inspect does not end must fail, as one
+// whose buildx stop does not, so the stopper tries again (stopWhenIdle).
+func TestStopFailsWhenItsInspectDoesNotEnd(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+filepath.Join(dir, "docker.log")+`
+case "$*" in
+  'buildx inspect devopsy-shop') exec sleep 30 ;;
+esac
+`, 0o755)
+	start := time.Now()
+	err := stopBuilder(docker, builderEnv(os.Environ(), filepath.Join(dir, "space")), "shop", 300*time.Millisecond)
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("the stop took %s, its inspect bounded by 300ms", took)
+	}
+	if err == nil {
+		t.Errorf("a stop whose inspect was killed past its bound says the builder is stopped; docker was asked:\n%s", readString(filepath.Join(dir, "docker.log")))
+	}
+}
