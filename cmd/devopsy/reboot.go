@@ -43,6 +43,10 @@ type rebootLook struct {
 	// Required is the system's restart flag (remote.RebootRequired), Packages what it names.
 	Required bool     `json:"reboot_required,omitempty"`
 	Packages []string `json:"packages,omitempty"`
+	// Projects are the deploy user's projects, UserProjects the project users': names the
+	// operator knows the server by, beside its hostname.
+	Projects     []string `json:"projects,omitempty"`
+	UserProjects []string `json:"user_projects,omitempty"`
 }
 
 // runReboot implements devopsy @<server> --reboot [--yes]: a look session refuses what would
@@ -78,7 +82,8 @@ func runReboot(t *remote.Target, args []string) int {
 		if err := json.Unmarshal(out.Bytes(), &look); err != nil {
 			return fail("the server's devopsy answered what this one cannot read: " + err.Error())
 		}
-		if err := typeToGoOn(rebootWhat(t, look), typed{"this server's hostname", look.Hostname}, "nothing rebooted", false); err != nil {
+		what, details := rebootWhat(t, look)
+		if err := typeToGoOn(what, details, typed{"this server's hostname", look.Hostname}, "nothing rebooted", false); err != nil {
 			return failErr(err)
 		}
 	}
@@ -116,8 +121,9 @@ func runReboot(t *remote.Target, args []string) int {
 	return 0
 }
 
-// rebootWhat is what --reboot's prompt says it does.
-func rebootWhat(t *remote.Target, look rebootLook) string {
+// rebootWhat is what --reboot's prompt says it does, with the projects there and what the
+// reboot cuts as its details.
+func rebootWhat(t *remote.Target, look rebootLook) (string, []string) {
 	what := "this reboots " + look.Hostname + " (" + t.Host + "): "
 	switch look.Running {
 	case 0:
@@ -134,7 +140,23 @@ func rebootWhat(t *remote.Target, look rebootLook) string {
 		}
 		what += ")"
 	}
-	return what
+	details := []string{"no project is released there"}
+	if len(look.Projects) > 0 {
+		details[0] = "its projects: " + fewNames(look.Projects)
+	}
+	if len(look.UserProjects) > 0 {
+		details = append(details, "project users' projects: "+fewNames(look.UserProjects), projectUsersNotWaited("the reboot"))
+	}
+	return what, details
+}
+
+// fewNames names names in a sentence, the first ten and how many more: a prompt never scrolls.
+func fewNames(names []string) string {
+	const shown = 10
+	if len(names) > shown {
+		names = append(slices.Clone(names[:shown]), strconv.Itoa(len(names)-shown)+" more")
+	}
+	return report.JoinAnd(names)
 }
 
 // rebootEnd is what the act's stdout said: the boot it left and its hostname once it was about
@@ -269,12 +291,12 @@ func runRebootStep(args []string) int {
 			l.Running = len(strings.Fields(string(ids)))
 		}
 		l.Required, l.Packages = rebootFlag(h.root)
+		l.Projects, l.UserProjects = projectNames(r.Root)
 		if err := json.NewEncoder(os.Stdout).Encode(l); err != nil {
 			return failErr(err)
 		}
 		return 0
 	}
-	projectUsersNotWaited("the reboot")
 	fmt.Println(remote.RebootBoot, bootID, hostname)
 	// systemctl refuses a command from a chroot without SYSTEMD_IGNORE_CHROOT, exiting 0;
 	// what it says goes to stderr, so stdout keeps the act's lines alone.

@@ -8,7 +8,6 @@ import (
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
-	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/setup"
 )
 
@@ -101,10 +100,8 @@ func holdServer(root string, how holdHow) (serverHold, string, error) {
 	return hold, "", nil
 }
 
-// projectUsersNotWaited says, when the server has project users, that a change of the whole
-// server (what) cuts their releases: holdServer holds the deploy user's alone.
-func projectUsersNotWaited(what string) {
-	if d, err := remote.ServerDoor(); err == nil && d != nil && len(d.Users) > 0 {
-		report.Info("project users' releases are not waited for: one under way is cut by " + what)
-	}
+// projectUsersNotWaited is what a change of the whole server (what) says where it has project
+// users: holdServer holds the deploy user's releases alone, and cuts theirs.
+func projectUsersNotWaited(what string) string {
+	return "project users' releases are not waited for: one under way is cut by " + what
 }

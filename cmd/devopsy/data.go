@@ -2226,7 +2226,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 			left = report.JoinAnd(others) + " were left stopped"
 		}
 		what := fmt.Sprintf("the import of %s into %s did not complete; %s: this starts them on the data the import left", name, t.Path, left)
-		if err := typeToGoOn(what, envWord(t), "nothing resolved", false); err != nil {
+		if err := typeToGoOn(what, nil, envWord(t), "nothing resolved", false); err != nil {
 			return failErr(err)
 		}
 	}
@@ -2246,7 +2246,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 // Without a terminal it fails: --yes is the way there.
 func confirmImport(t *remote.Target, name string) error {
 	where := t.Host + ":" + t.Path
-	return typeToGoOn(fmt.Sprintf("this replaces %s's data on @%s (%s) with what stdin carries", name, t.Address, where),
+	return typeToGoOn(fmt.Sprintf("this replaces %s's data on @%s (%s) with what stdin carries", name, t.Address, where), nil,
 		envWord(t), "nothing imported", true)
 }
 

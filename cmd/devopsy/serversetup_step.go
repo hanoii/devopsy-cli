@@ -1202,7 +1202,9 @@ func applySetup(h setupHost, a setupApply) int {
 			return 1
 		}
 		defer hold.release()
-		projectUsersNotWaited("the restart")
+		if d, err := remote.ServerDoor(); err == nil && len(doorProjects(d)) > 0 {
+			report.Info(projectUsersNotWaited("the restart"))
+		}
 	}
 
 	// docker.service's InvocationID just before the run: the marker's, and what a restart

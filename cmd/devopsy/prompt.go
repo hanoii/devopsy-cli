@@ -30,12 +30,13 @@ func envWord(t *remote.Target) typed { return typed{"this environment's path", t
 // projectWord is a project's word to type, its name.
 func projectWord(name string) typed { return typed{"the project's name", name} }
 
-// typeToGoOn says what (what follows, the risk) and asks to type the word
-// to go on: nothing (what was not done, "nothing removed") as the error when
-// something else is typed. Without a terminal it fails, with --yes as the
-// fix. tty asks on the terminal itself, when stdin carries data.
-func typeToGoOn(what string, word typed, nothing string, tty bool, hints ...report.Remedy) error {
-	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: []string{what}, Remedies: append(hints, report.Fix("add --yes to go on without asking"))}
+// typeToGoOn says what (what follows, the risk) with its details and asks
+// to type the word to go on: nothing (what was not done, "nothing removed")
+// as the error when something else is typed. Without a terminal it fails,
+// with --yes as the fix. tty asks on the terminal itself, when stdin carries
+// data.
+func typeToGoOn(what string, details []string, word typed, nothing string, tty bool, hints ...report.Remedy) error {
+	noTerminal := &report.Failure{Msg: nothing + ": no terminal to confirm it on", Details: append([]string{what}, details...), Remedies: append(hints, report.Fix("add --yes to go on without asking"))}
 	in, log := report.LineReader(stdinReader), report.Default()
 	if tty {
 		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
@@ -47,7 +48,7 @@ func typeToGoOn(what string, word typed, nothing string, tty bool, hints ...repo
 	} else if !atTerminal() {
 		return noTerminal
 	}
-	log.Say(report.InfoLevel, what, nil, hints...)
+	log.Say(report.InfoLevel, what, details, hints...)
 	if !log.ConfirmName(in, word.of, word.word) {
 		return errors.New(nothing)
 	}

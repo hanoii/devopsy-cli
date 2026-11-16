@@ -130,16 +130,26 @@ func (s *rebootServer) hold(path string, how int) {
 }
 
 // TestRebootLook keeps the look's facts what the prompt says (the hostname, the boot id, the
-// running containers, the reboot flag and its packages once each), the look creating no lock
-// file, and the prompt refused without a terminal before any act, naming --yes.
+// running containers, the reboot flag and its packages once each, the deploy user's projects
+// and the project users', with what the reboot cuts of theirs), the look creating no lock
+// file, and the prompt refused without a terminal before any act, naming --yes; a server with
+// no project says so.
 func TestRebootLook(t *testing.T) {
 	t.Parallel()
 	s := newRebootServer(t)
 	write(t, filepath.Join(s.host, remote.RebootRequired), "", 0o644)
 	write(t, filepath.Join(s.host, remote.RebootRequired+".pkgs"), "linux-image-amd64\ndevopsy\nlinux-image-amd64\n", 0o644)
+	for _, p := range []string{"blog10", "blog9"} {
+		if err := os.MkdirAll(filepath.Join(s.home, p, "prod", "releases"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(s.config, remote.ConfigFile), "door:\n  space: "+filepath.Join(s.config, "space")+"\n", 0o644)
+	write(t, filepath.Join(s.config, "door", "users", "devopsy-site.yaml"), "project: site\n", 0o600)
+	write(t, filepath.Join(s.config, "door", "users", "devopsy-app.yaml"), "project: app\n", 0o600)
 	out, errs, code := s.step("look")
 	host, _ := os.Hostname()
-	if code != 0 || strings.TrimSpace(out) != `{"hostname":"`+host+`","running":2,"reboot_required":true,"packages":["linux-image-amd64","devopsy"]}` {
+	if code != 0 || strings.TrimSpace(out) != `{"hostname":"`+host+`","running":2,"reboot_required":true,"packages":["linux-image-amd64","devopsy"],"projects":["blog9","blog10","shop"],"user_projects":["app","site"]}` {
 		t.Fatalf("look (%d): %s%s", code, out, errs)
 	}
 	if fileExists(filepath.Join(s.home, "shop", "prod", ".lock")) || fileExists(setup.LockPath(setup.RecordPath(filepath.Join(s.config, remote.ConfigFile)))) {
@@ -147,8 +157,35 @@ func TestRebootLook(t *testing.T) {
 	}
 	said, code := s.run()
 	if code != 1 || !strings.Contains(said, "devopsy: error: nothing rebooted: no terminal to confirm it on\n") ||
-		!strings.Contains(said, "devopsy: | this reboots "+host+" (devopsy@server): its 2 running containers stop") || !strings.Contains(said, "add --yes to go on without asking") || s.rebooted() != "" {
+		!strings.Contains(said, "devopsy: | this reboots "+host+" (devopsy@server): its 2 running containers stop") ||
+		!strings.Contains(said, "devopsy: | its projects: blog9, blog10 and shop\n"+
+			"devopsy: | project users' projects: app and site\n"+
+			"devopsy: | project users' releases are not waited for: one under way is cut by the reboot\n") ||
+		!strings.Contains(said, "add --yes to go on without asking") || s.rebooted() != "" {
 		t.Errorf("no terminal (%d):\n%s", code, said)
+	}
+	if err := os.RemoveAll(filepath.Join(s.config, "door")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"blog10", "blog9", "shop"} {
+		if err := os.RemoveAll(filepath.Join(s.home, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if said, code := s.run(); code != 1 || !strings.Contains(said, "devopsy: | no project is released there\n") || strings.Contains(said, "project users") {
+		t.Errorf("no project (%d):\n%s", code, said)
+	}
+}
+
+// TestFewNames keeps a list in a prompt short: ten names, then how many more.
+func TestFewNames(t *testing.T) {
+	t.Parallel()
+	names := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	if got := fewNames(names); got != "a, b, c, d, e, f, g, h, i and j" {
+		t.Errorf("ten: %q", got)
+	}
+	if got := fewNames(append(names, "k", "l")); got != "a, b, c, d, e, f, g, h, i, j and 2 more" {
+		t.Errorf("twelve: %q", got)
 	}
 }
 
@@ -210,13 +247,9 @@ func TestReboot(t *testing.T) {
 		t.Parallel()
 		s := newRebootServer(t)
 		s.set("shutdown")
-		// With project users, whose releases are not waited for.
-		write(t, filepath.Join(s.config, remote.ConfigFile), "door:\n  space: "+filepath.Join(s.config, "space")+"\n", 0o644)
-		write(t, filepath.Join(s.config, "door", "users", "devopsy-blog.yaml"), "project: blog\n", 0o600)
 		said, code := s.run("--yes")
 		run := s.rebooted()
-		if code != 0 || !strings.Contains(said, "devopsy: "+host+" reboots\n") || !strings.HasSuffix(run, "chroot /host /bin/sh -c SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot") ||
-			!strings.Contains(said, "devopsy: project users' releases are not waited for: one under way is cut by the reboot\n") {
+		if code != 0 || !strings.Contains(said, "devopsy: "+host+" reboots\n") || !strings.HasSuffix(run, "chroot /host /bin/sh -c SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot") {
 			t.Errorf("back (%d): %s\n%s", code, run, said)
 		}
 		b, _ := os.ReadFile(s.log)

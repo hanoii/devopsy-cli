@@ -609,9 +609,11 @@ restart policy) come back with Docker; [`--server-info`](#--server-info)
 shows the server once it is back.
 
 It first looks, in a session that changes nothing, and says how many
-containers stop and what waits for a reboot (`/run/reboot-required` and
-its packages), then asks for the server's hostname: the name proves the
-machine, whatever alias or address reached it. A second session decides
+containers stop, what waits for a reboot (`/run/reboot-required` and its
+packages) and the projects there, the deploy user's and the project
+users', with what it cuts of theirs, then asks for the server's
+hostname: the name proves the machine, whatever alias or address reached
+it. A second session decides
 everything again before it asks systemd. `--yes` reboots without looking
 or asking; without a terminal and without `--yes` nothing is rebooted.
 
