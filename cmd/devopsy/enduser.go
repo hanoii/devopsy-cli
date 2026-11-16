@@ -148,11 +148,13 @@ func endBuilder(who string) error {
 	if err != nil || d == nil || d.Space == "" {
 		return err
 	}
-	return removeBuilder("docker", builderEnv(os.Environ(), d.Space), who)
+	return removeBuilder("docker", os.Environ(), d.Space, who)
 }
 
-// removeBuilder is endBuilder's removal, by docker under env (the door's BUILDX_CONFIG).
-func removeBuilder(dockerPath string, env []string, who string) error {
+// removeBuilder is endBuilder's removal, by docker under base and the door's BUILDX_CONFIG in
+// space.
+func removeBuilder(dockerPath string, base []string, space, who string) error {
+	env := builderEnv(base, space)
 	docker := func(args ...string) *exec.Cmd {
 		c := exec.Command(dockerPath, args...)
 		c.Env = env
@@ -160,7 +162,7 @@ func removeBuilder(dockerPath string, env []string, who string) error {
 	}
 	run := func(args ...string) ([]byte, error) { return docker(args...).Output() }
 	project := door.ProjectOfUser(who)
-	if err := dropBuilder(run, project); err != nil {
+	if err := dropBuilder(run, space, project); err != nil {
 		return err
 	}
 	network := door.BuilderNetworkOf(project)

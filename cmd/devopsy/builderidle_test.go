@@ -219,7 +219,7 @@ esac
 // A use of the builder (useBuilder: a build, --gc) starts its stopper, which answers before the
 // use goes on and stops the builder once the use lets the lock go, killed or refused before
 // its exec as much as done: one per project, ten uses beside a held one leaving one. A
-// stopper for a project that is no door user's answers nothing, and the use is refused.
+// stopper for a project that is no door user's ends saying why, and the use is refused with it.
 func TestUseOfTheBuilderStartsItsStopper(t *testing.T) {
 	t.Parallel()
 	dir, space, env := stopperAt(t)
@@ -243,7 +243,7 @@ func TestUseOfTheBuilderStartsItsStopper(t *testing.T) {
 	if got := readString(filepath.Join(dir, "stopped")); got != "stopped\n" {
 		t.Errorf("stops: %q, want one", got)
 	}
-	if _, err := useBuilder(space, "blog", os.Args[0], env, testBuilderTiming); err == nil || !strings.Contains(err.Error(), "blog's builder's stopper: it ended with no answer") {
+	if _, err := useBuilder(space, "blog", os.Args[0], env, testBuilderTiming); err == nil || !strings.Contains(err.Error(), "blog's builder's stopper: it ended with no answer: blog is no project user's") {
 		t.Errorf("a use of a builder no door user's: %v", err)
 	}
 }
@@ -269,7 +269,7 @@ func TestStopperClosesWhatItInherits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := exec.Command(os.Args[0], builderIdleFlag, "shop")
+	c := exec.Command(os.Args[0], builderIdleFlag, "shop", answerFdFlag, "3")
 	c.Env, c.ExtraFiles = env, []*os.File{answerW, inheritedW}
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
@@ -301,7 +301,6 @@ func TestBuilderRemovalWaitsOnNoBuild(t *testing.T) {
 	write(t, docker, `#!/bin/sh
 echo "$*" >>`+log+`
 case "$*" in
-  'buildx ls --format json') echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}' ;;
   'container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0'|'volume inspect buildx_buildkit_devopsy-shop0_state'|'network inspect devopsy-shop-build') ;;
   'buildx rm devopsy-shop'|'rm -f buildx_buildkit_devopsy-shop0'|'volume rm buildx_buildkit_devopsy-shop0_state'|'network rm devopsy-shop-build') ;;
   *) exit 9 ;;
@@ -317,8 +316,9 @@ esac
 		t.Fatal(err)
 	}
 	defer stopper.Close()
+	write(t, filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop"), `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
 	start := time.Now()
-	if err := removeBuilder(docker, builderEnv(nil, space), "devopsy-shop"); err != nil {
+	if err := removeBuilder(docker, nil, space, "devopsy-shop"); err != nil {
 		t.Fatal(err)
 	}
 	if err := dropBuilderLocks(space, "shop"); err != nil {
@@ -327,7 +327,7 @@ esac
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("the removal took %s beside a build", took)
 	}
-	want := "buildx ls --format json\nbuildx rm devopsy-shop\ncontainer inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\nrm -f buildx_buildkit_devopsy-shop0\n" +
+	want := "buildx rm devopsy-shop\ncontainer inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\nrm -f buildx_buildkit_devopsy-shop0\n" +
 		"volume inspect buildx_buildkit_devopsy-shop0_state\nvolume rm buildx_buildkit_devopsy-shop0_state\nnetwork inspect devopsy-shop-build\nnetwork rm devopsy-shop-build\n"
 	if got := readString(log); got != want {
 		t.Errorf("docker was asked:\n%s\nwant:\n%s", got, want)
@@ -362,7 +362,7 @@ case "$*" in
   'buildx ls --format json') echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"stopped"}]}' ;;
 esac
 `, 0o755)
-	if err := removeBuilder(docker, builderEnv(nil, space), "devopsy-shop"); err == nil && !strings.Contains(readString(log), "buildx rm devopsy-shop") {
+	if err := removeBuilder(docker, nil, space, "devopsy-shop"); err == nil && !strings.Contains(readString(log), "buildx rm devopsy-shop") {
 		t.Errorf("a removal whose inspect failed left the builder's record and said nothing, asked:\n%s", readString(log))
 	}
 }

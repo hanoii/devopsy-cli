@@ -1973,11 +1973,11 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		c.Env = env
 		return c.Output()
 	}
-	// right says whether the builder is there, by buildx's listing (a look that fails is an
+	// right says whether the builder is there, by buildx's record of it (a look that fails is an
 	// error, never a builder gone), and as devopsy makes it (madeRight), its restart policy its
 	// container's own, never buildx's words for it.
 	right := func() (there, ok bool, err error) {
-		if there, err = builderListed(probe, s.policy.Project); err != nil || !there {
+		if there, err = builderRecorded(s.policy.Space, s.policy.Project); err != nil || !there {
 			return false, false, err
 		}
 		out, err := probe("buildx", "inspect", name)
@@ -1987,12 +1987,22 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		policy, booted := builderContainer(probe, s.policy.Project)
 		return true, madeRight(string(out), network, policy, booted), nil
 	}
+	// Its network, which a prune takes from a builder stopped between builds (no endpoint on
+	// it): made again whenever it is gone, the builder cannot boot without it.
+	network_ := func() error {
+		if _, err := probe("network", "inspect", network); err != nil {
+			if _, err := run("network", "create", network); err != nil {
+				return fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
+			}
+		}
+		return nil
+	}
 	there, ok, err := right()
 	if err != nil {
 		return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
 	}
 	if ok {
-		return b, nil
+		return b, network_()
 	}
 	if there || leftoverThere(probe, s.policy.Project) {
 		// Made otherwise (on the default bridge, restarted by Docker), or a container and cache
@@ -2009,28 +2019,26 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and stays: %v", s.policy.Project, err)
 		}
 		if lock == nil {
-			return b, nil
+			return b, network_()
 		}
 		defer lock.Close()
 		if _, ok, err := right(); err != nil || ok {
 			if err != nil {
 				return nil, fmt.Errorf("refused: %s's builder does not read: %v", s.policy.Project, err)
 			}
-			return b, nil
+			return b, network_()
 		}
-		if err := dropBuilder(probe, s.policy.Project); err != nil {
+		if err := dropBuilder(probe, s.policy.Space, s.policy.Project); err != nil {
 			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and could not be removed: %v", s.policy.Project, err)
 		}
 	}
-	if _, err := probe("network", "inspect", network); err != nil {
-		if _, err := run("network", "create", network); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder's network could not be made: %v", s.policy.Project, err)
-		}
+	if err := network_(); err != nil {
+		return nil, err
 	}
 	if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no"); err != nil {
 		// Another environment's build may have made it meanwhile.
 		if _, ok, _ := right(); ok {
-			return b, nil
+			return b, network_()
 		}
 		return nil, fmt.Errorf("refused: %s's builder could not be made: %v", s.policy.Project, err)
 	}

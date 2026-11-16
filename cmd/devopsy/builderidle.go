@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,15 +112,24 @@ func useBuilder(space, project, self string, env []string, t builderTiming) (*pa
 	return l, nil
 }
 
-// Its answer: it holds the stopper's lock and stays (stopperHolds), or another stopper does
-// (stopperDeclined), and it ends.
+// Its answer: it holds the stopper's lock and stays (stopperHolds), another stopper does
+// (stopperDeclined), and it ends, or it cannot (stopperFailed, why after it), and it ends.
 const (
 	stopperHolds    = 'h'
 	stopperDeclined = 'd'
+	stopperFailed   = 'e'
 )
 
-// errNoAnswer is a stopper's end with no answer: it did not start, or a gate refused it.
-var errNoAnswer = errors.New("it ended with no answer")
+// answerFdFlag tells the stopper the descriptor its answer goes to, its starter's pipe: run by
+// hand it has none, and answers nothing.
+const answerFdFlag = "--answer-fd"
+
+// errNoAnswer is a stopper's end with no answer: it did not start, or a gate refused it; errLate
+// one that has not answered in time, which may still hold the stopper's lock.
+var (
+	errNoAnswer = errors.New("it ended with no answer")
+	errLate     = errors.New("it did not answer in time")
+)
 
 // detach starts c in a session of its own, for a process that outlives its starter (a
 // builder's stopper, --upgrade-check).
@@ -135,7 +145,7 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 		return false, err
 	}
 	defer r.Close()
-	c := exec.Command(self, builderIdleFlag, project)
+	c := exec.Command(self, builderIdleFlag, project, answerFdFlag, "3")
 	c.Env, c.Dir, c.ExtraFiles = env, "/", []*os.File{w}
 	detach(c)
 	err = c.Start()
@@ -152,6 +162,12 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return false, nil
 		}
+		if n == 1 && answer[0] == stopperFailed {
+			// Why it ends, the rest of what it wrote, bounded: its stderr is /dev/null.
+			r.SetReadDeadline(time.Now().Add(time.Second))
+			why, _ := io.ReadAll(io.LimitReader(r, 512))
+			return false, fmt.Errorf("%w: %s", errNoAnswer, strings.TrimSpace(string(why)))
+		}
 		if n == 1 {
 			return true, nil
 		}
@@ -161,11 +177,14 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 	grace := min(t.answer, time.Second)
 	got, err := read(grace)
 	if err == nil && !got && t.answer <= grace {
-		err = errNoAnswer
+		err = errLate
 	} else if err == nil && !got {
 		err = (boundedWait{what: project + "'s builder's stopper to start", bound: t.answer - grace}).wait(context.Background(), report.Default(), func() (bool, error) {
 			return read(100 * time.Millisecond)
 		})
+		if errors.As(err, new(waitEnded)) {
+			err = errLate
+		}
 	}
 	if err != nil {
 		// One that ended is reaped; one late is let go, never killed: it may hold the stopper's
@@ -198,34 +217,44 @@ func startStopper(self, project string, env []string, t builderTiming) (bool, er
 func runBuilderIdle(args []string) int {
 	var answer *os.File
 	keep := -1
-	if flags, err := unix.FcntlInt(3, unix.F_GETFD, 0); err == nil && flags&unix.FD_CLOEXEC == 0 {
-		answer, keep = os.NewFile(3, "answer"), 3
+	if len(args) == 3 && args[1] == answerFdFlag {
+		if fd, err := strconv.Atoi(args[2]); err == nil && fd > 2 {
+			answer, keep = os.NewFile(uintptr(fd), "answer"), fd
+		}
+		args = args[:1]
 	}
 	closeInherited(keep)
+	fail := func(why string) int {
+		if answer != nil {
+			_, _ = answer.Write(append([]byte{stopperFailed}, why...))
+			answer.Close()
+		}
+		return 1
+	}
 	if len(args) != 1 || !remote.ValidName(args[0]) {
 		return 2
 	}
 	project := args[0]
 	d, err := remote.ServerDoor()
 	if err != nil || d == nil || d.Space == "" {
-		return 1
+		return fail(fmt.Sprintf("the server's door does not read: %v", err))
 	}
 	if u, ok := d.Users[door.UserOf(project)]; !ok || u.Project != project {
-		return 1
+		return fail(project + " is no project user's")
 	}
 	lock, err := pathlock.Open(door.BuilderLockOf(d.Space, project))
 	if err != nil {
-		return 1
+		return fail(err.Error())
 	}
 	defer lock.Close()
 	idle, err := pathlock.Open(door.BuilderIdleLockOf(d.Space, project))
 	if err != nil {
-		return 1
+		return fail(err.Error())
 	}
 	defer idle.Close()
 	held, err := idle.Try(syscall.LOCK_EX)
 	if err != nil {
-		return 1
+		return fail(err.Error())
 	}
 	say := byte(stopperDeclined)
 	if held {
@@ -319,16 +348,16 @@ func builderNodes(out []byte) map[string]builderNode {
 	return nodes
 }
 
-// builderListed says whether buildx has project's builder, by run's docker under the door's
-// BUILDX_CONFIG: its listing, the one answer that tells a builder gone from a look that
-// failed, which is an error.
-func builderListed(run func(args ...string) ([]byte, error), project string) (bool, error) {
-	out, err := run("buildx", "ls", "--format", "json")
-	if err != nil {
-		return false, dockerFailed("docker buildx ls", err)
+// builderRecorded says whether buildx has project's builder in space: buildx's own record of
+// it (<BUILDX_CONFIG>/instances/<builder>, made by buildx create, removed by buildx rm), the one
+// answer that tells a builder gone from a look that failed, which is an error; one project's
+// alone, where buildx ls would load every project's builder, and wait on a builder that hangs.
+func builderRecorded(space, project string) (bool, error) {
+	_, err := os.Stat(filepath.Join(door.BuildxConfigOf(space), "instances", door.BuilderOf(project)))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
 	}
-	_, ok := builderNodes(out)[door.BuilderOf(project)]
-	return ok, nil
+	return err == nil, err
 }
 
 // builderContainer is project's builder's container's restart policy, and whether it has one
@@ -338,15 +367,15 @@ func builderContainer(run func(args ...string) ([]byte, error), project string) 
 	return strings.TrimSpace(string(out)), err == nil
 }
 
-// dropBuilder removes project's builder with run's docker: its record when buildx lists it,
-// then its container and state volume by their names (removeLeftover). A look that fails is
-// an error, never a builder gone.
-func dropBuilder(run func(args ...string) ([]byte, error), project string) error {
-	listed, err := builderListed(run, project)
+// dropBuilder removes project's builder in space with run's docker: its record when buildx has
+// it (builderRecorded), then its container and state volume by their names (removeLeftover). A
+// look that fails is an error, never a builder gone.
+func dropBuilder(run func(args ...string) ([]byte, error), space, project string) error {
+	recorded, err := builderRecorded(space, project)
 	if err != nil {
 		return err
 	}
-	if listed {
+	if recorded {
 		if _, err := run("buildx", "rm", door.BuilderOf(project)); err != nil {
 			return fmt.Errorf("its builder %s: %w", door.BuilderOf(project), dockerFailed("docker buildx rm", err))
 		}
@@ -389,6 +418,8 @@ func removeLeftover(run func(args ...string) ([]byte, error), project string) er
 func outputWithin(c *exec.Cmd, within time.Duration) ([]byte, error) {
 	var out, said bytes.Buffer
 	c.Stdout, c.Stderr = &out, &said
+	// A descendant that left the group holding stdout ends the wait a second after the command.
+	c.WaitDelay = time.Second
 	ownGroup(c)
 	if err := c.Start(); err != nil {
 		return nil, err

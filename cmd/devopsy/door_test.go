@@ -826,11 +826,11 @@ func TestDoorBuildsOnTheProjectsBuilder(t *testing.T) {
 	if err := testfile.Write(docker, []byte(`#!/bin/sh
 echo "$BUILDX_CONFIG $*" >>`+log+`
 case "$*" in
-  "buildx ls --format json") if [ -e `+made+` ]; then echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}'; fi ;;
   "buildx inspect "*) [ -e `+made+` ] && cat `+made+` ;;
   "container inspect --format "*) [ -e `+policy+` ] && cat `+policy+` ;;
-  "buildx create "*) echo "Driver Options: network=\"${8#network=}\" restart-policy=\"${10#restart-policy=}\"" >`+made+`; rm -f `+policy+` ;;
-  "buildx rm "*) rm -f `+made+` `+policy+` `+dir+`/state ;;
+  "buildx create "*) echo "Driver Options: network=\"${8#network=}\" restart-policy=\"${10#restart-policy=}\"" >`+made+`; rm -f `+policy+`
+    mkdir -p "$BUILDX_CONFIG/instances" && : >"$BUILDX_CONFIG/instances/devopsy-shop" ;;
+  "buildx rm "*) rm -f `+made+` `+policy+` `+dir+`/state "$BUILDX_CONFIG/instances/devopsy-shop" ;;
   "volume inspect "*) [ -e `+dir+`/state ] ;;
   "rm -f "*) rm -f `+policy+` ;;
   "volume rm "*) rm -f `+dir+`/state ;;
@@ -861,13 +861,13 @@ esac
 		}
 		return string(got), nil
 	}
-	ls := space + " buildx ls --format json\n"
 	container := space + " container inspect --format {{.HostConfig.RestartPolicy.Name}} buildx_buildkit_devopsy-shop0\n"
-	inspect := ls + space + " buildx inspect devopsy-shop\n" + container
+	net := space + " network inspect devopsy-shop-build\n"
+	inspect := space + " buildx inspect devopsy-shop\n" + container
 	// A look for a container and cache of its name left with no builder: none.
 	leftover := container + space + " volume inspect buildx_buildkit_devopsy-shop0_state\n"
 	create := space + " buildx create --name devopsy-shop --driver docker-container --driver-opt network=devopsy-shop-build --driver-opt restart-policy=no\n"
-	if got, err := build(); err != nil || got != ls+leftover+space+" network inspect devopsy-shop-build\n"+space+" network create devopsy-shop-build\n"+create {
+	if got, err := build(); err != nil || got != leftover+net+space+" network create devopsy-shop-build\n"+create {
 		t.Errorf("the first build (%v) asked:\n%s", err, got)
 	}
 	// What a claim runs too (builder): no lock taken, no stopper started, the builder booted by
@@ -875,19 +875,20 @@ esac
 	if _, err := os.Stat(door.BuildersLocksOf(filepath.Join(dir, "space"))); !errors.Is(err, os.ErrNotExist) || strings.Contains(readString(log), "bootstrap") {
 		t.Errorf("a claim's builder took a lock or booted it: %v", err)
 	}
-	// Made, never booted, then booted as devopsy makes it.
-	if got, err := build(); err != nil || got != inspect {
+	// Made, never booted, then booted as devopsy makes it: its network looked at each time, as
+	// a prune takes it from a builder stopped between builds.
+	if got, err := build(); err != nil || got != inspect+net {
 		t.Errorf("a build on the builder made (%v) asked:\n%s", err, got)
 	}
 	write(t, policy, "no\n", 0o644)
-	if got, err := build(); err != nil || got != inspect {
+	if got, err := build(); err != nil || got != inspect+net {
 		t.Errorf("a build on the builder booted (%v) asked:\n%s", err, got)
 	}
 	// Made otherwise: on the default bridge, before builders had networks of their own; then
 	// one Docker restarts, booted with no policy of devopsy's.
 	// Inspected before, as the lock's wait begins, and again under it: another build may end
 	// its remake between the last two.
-	remade := inspect + inspect + inspect + ls + space + " buildx rm devopsy-shop\n" + leftover + space + " network inspect devopsy-shop-build\n" + create
+	remade := inspect + inspect + inspect + space + " buildx rm devopsy-shop\n" + leftover + net + create
 	for name, c := range map[string][2]string{"on the default bridge": {"Driver Options: \n", "no\n"}, "restarted by Docker": {"Driver Options: network=\"devopsy-shop-build\"\n", "unless-stopped\n"}} {
 		write(t, made, c[0], 0o644)
 		write(t, policy, c[1], 0o644)
@@ -899,10 +900,11 @@ esac
 	// builder is made anew, which would take them, a removed key's cache with them: under its
 	// lock exclusive, looked at again under it, where no build boots it.
 	os.Remove(made)
+	os.Remove(filepath.Join(space, "instances", "devopsy-shop"))
 	write(t, policy, "no\n", 0o644)
 	write(t, filepath.Join(dir, "state"), "", 0o644)
-	want := ls + container + ls + ls + ls + container + space + " rm -f buildx_buildkit_devopsy-shop0\n" +
-		space + " volume inspect buildx_buildkit_devopsy-shop0_state\n" + space + " volume rm buildx_buildkit_devopsy-shop0_state\n" + space + " network inspect devopsy-shop-build\n" + create
+	want := container + container + space + " rm -f buildx_buildkit_devopsy-shop0\n" +
+		space + " volume inspect buildx_buildkit_devopsy-shop0_state\n" + space + " volume rm buildx_buildkit_devopsy-shop0_state\n" + net + create
 	if got, err := build(); err != nil || got != want {
 		t.Errorf("a builder made beside a leftover container (%v), asked:\n%s", err, got)
 	}
@@ -952,7 +954,6 @@ case "$*" in
   "buildx inspect "*)
     [ -e `+failed+` ] || { : >`+failed+`; echo 'signal: killed' >&2; exit 137; }
     echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
-  "buildx ls --format json") echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}' ;;
   "container inspect --format "*) echo no ;;
   "buildx create "*) echo 'ERROR: existing instance for "devopsy-shop" but no append mode' >&2; exit 1 ;;
   "volume inspect "*|"network inspect "*) ;;
@@ -983,18 +984,17 @@ func TestDoorFirstBuildsAtOnceKeepTheBuilder(t *testing.T) {
 	log := filepath.Join(dir, "docker.log")
 	looked := filepath.Join(dir, "looked")
 	space := filepath.Join(dir, "space")
-	// No builder at this build's first look, by its listing or its inspect; by its next, the
-	// other build made it and booted it.
+	// No builder at this build's first look, by buildx's record or its inspect; by its next
+	// look, at a container of its name, the other build made it and booted it.
+	record := filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop")
 	docker := filepath.Join(dir, "docker")
 	write(t, docker, `#!/bin/sh
 echo "$*" >>`+log+`
-first() { [ -e `+looked+` ] && return 1; : >`+looked+`; }
 case "$*" in
-  "buildx ls --format json") first && exit 0; echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"running"}]}' ;;
   "buildx inspect "*)
-    first && { echo 'ERROR: no builder "devopsy-shop" found' >&2; exit 1; }
+    [ -e `+looked+` ] || { : >`+looked+`; echo 'ERROR: no builder "devopsy-shop" found' >&2; exit 1; }
     echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
-  "container inspect --format "*) echo no ;;
+  "container inspect --format "*) mkdir -p "$(dirname `+record+`)"; : >`+record+`; : >`+looked+`; echo no ;;
   "buildx create "*) echo 'ERROR: existing instance for "devopsy-shop" but no append mode' >&2; exit 1 ;;
   "volume inspect "*|"network inspect "*) ;;
 esac
@@ -1033,7 +1033,6 @@ func TestDoorBuildsOnABuilderWhoseNetworkWasPruned(t *testing.T) {
 	write(t, docker, `#!/bin/sh
 echo "$*" >>`+log+`
 case "$*" in
-  "buildx ls --format json") echo '{"Name":"devopsy-shop","Driver":"docker-container","Nodes":[{"Name":"devopsy-shop0","Status":"stopped"}]}' ;;
   "buildx inspect devopsy-shop") echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
   "container inspect --format "*) echo no ;;
   "network inspect devopsy-shop-build") [ -e `+net+` ] ;;
@@ -1041,6 +1040,7 @@ case "$*" in
   *) exit 9 ;;
 esac
 `, 0o755)
+	write(t, filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop"), `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
 	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
 	if _, err := side.builder(); err != nil {
 		t.Fatalf("a build on a builder whose network is gone: %v", err)

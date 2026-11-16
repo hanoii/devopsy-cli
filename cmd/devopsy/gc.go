@@ -332,11 +332,9 @@ type gcScope struct {
 	// user's builder's cache in find, booting it; the removals boot each one in remove, once.
 	mode string
 	// timing is the builders' waits (builderTiming), a test's own when set; self is the
-	// devopsy that starts their stoppers (devopsyPath when ""); holding the builder's lock
-	// onBuilder holds, which its commands hold too (builderCmd).
-	timing  builderTiming
-	self    string
-	holding *os.File
+	// devopsy that starts their stoppers (devopsyPath when "").
+	timing builderTiming
+	self   string
 }
 
 // runGCStep implements the hidden GCStepFlag list|remove|remove-listed, as the deploy user on
@@ -688,8 +686,8 @@ func (g *gcScope) builders() ([]gcBuilder, []error) {
 			continue
 		}
 		var rs []cacheRecord
-		err := g.onBuilder(project, func() (err error) {
-			rs, err = g.builderCache(door.BuilderContainerOf(project))
+		err := g.onBuilder(project, func(held *os.File) (err error) {
+			rs, err = g.builderCache(held, door.BuilderContainerOf(project))
 			return err
 		})
 		if err != nil {
@@ -712,8 +710,9 @@ func (g *gcScope) builderBooted(project string) bool {
 
 // onBuilder runs act on project's builder, one builder at a time: under its lock shared, as a
 // build uses it, its stopper started (the backstop for a --gc cut), booted, then, its lock let
-// go, stopped unless a build holds it, before the next builder boots.
-func (g *gcScope) onBuilder(project string, act func() error) error {
+// go, stopped unless a build holds it, before the next builder boots. act gets the lock's file,
+// which every command it runs on the builder holds (builderCmd).
+func (g *gcScope) onBuilder(project string, act func(held *os.File) error) error {
 	t := g.timing.orServer()
 	env := builderEnv(os.Environ(), g.door.Space)
 	l, err := useBuilder(g.door.Space, project, cmp.Or(g.self, devopsyPath()), os.Environ(), t)
@@ -722,34 +721,30 @@ func (g *gcScope) onBuilder(project string, act func() error) error {
 	}
 	// What runs on the builder holds its lock too, as a build's compose does: a --gc cut mid-boot
 	// frees its own hold, never the boot's, which would start the builder past its stopper.
-	g.holding = l.File()
-	if _, err = outputWithin(g.builderCmd("buildx", "inspect", "--bootstrap", door.BuilderOf(project)), t.lock); err != nil {
+	if _, err = outputWithin(g.builderCmd(l.File(), "buildx", "inspect", "--bootstrap", door.BuilderOf(project)), t.lock); err != nil {
 		err = dockerFailed("docker buildx inspect --bootstrap", err)
 	} else {
-		err = act()
+		err = act(l.File())
 	}
-	g.holding = nil
 	l.Close()
-	g.stopBuilder(project, env, t)
+	g.stopAfterUse(project, env, t)
 	return err
 }
 
 // builderCmd is a docker command on a project user's builder, under the door's BUILDX_CONFIG,
-// holding the builder's lock (its descriptor in ExtraFiles) while onBuilder holds it.
-func (g *gcScope) builderCmd(args ...string) *exec.Cmd {
+// holding held, the builder's lock onBuilder holds (its descriptor in ExtraFiles).
+func (g *gcScope) builderCmd(held *os.File, args ...string) *exec.Cmd {
 	c := exec.Command(g.docker, args...)
 	c.Env = builderEnv(os.Environ(), g.door.Space)
-	if g.holding != nil {
-		c.ExtraFiles = []*os.File{g.holding}
-	}
+	c.ExtraFiles = []*os.File{held}
 	return c
 }
 
-// stopBuilder stops project's builder after --gc's use when it takes its lock exclusive at
+// stopAfterUse stops project's builder after --gc's use when it takes its lock exclusive at
 // once; refused, a build holds it, or its stopper took it first to stop it, so --gc waits for
 // it shared and lets it go: past a stop, never beside one, the next builder boots. A stop that
 // fails, or a wait past its bound, is a warning: the builder's stopper stays its backstop.
-func (g *gcScope) stopBuilder(project string, env []string, t builderTiming) {
+func (g *gcScope) stopAfterUse(project string, env []string, t builderTiming) {
 	path := door.BuilderLockOf(g.door.Space, project)
 	l, err := pathlock.Open(path)
 	if err != nil {
@@ -851,9 +846,10 @@ func readDockerUsage(docker string) (dockerUsage, error) {
 const dockerTime = "2006-01-02 15:04:05.999999999 -0700 MST"
 
 // builderCache is a docker-container builder's records, by its container
-// (door.BuilderContainerOf), as buildctl in it gives them with their times, bounded.
-func (g *gcScope) builderCache(container string) ([]cacheRecord, error) {
-	out, err := outputWithin(g.builderCmd("exec", container, "buildctl", "du", "--format", "{{json .}}"), g.timing.orServer().lock)
+// (door.BuilderContainerOf), as buildctl in it gives them with their times, bounded, holding
+// held, the builder's lock (onBuilder).
+func (g *gcScope) builderCache(held *os.File, container string) ([]cacheRecord, error) {
+	out, err := outputWithin(g.builderCmd(held, "exec", container, "buildctl", "du", "--format", "{{json .}}"), g.timing.orServer().lock)
 	if err != nil {
 		return nil, dockerFailed("buildctl du", err)
 	}
@@ -1080,7 +1076,7 @@ func (g *gcScope) remove(p gcPlan) int {
 	// 2. Build cache, decided by BuildKit itself, by the listing's cutoff: prune takes only a
 	// duration, so the time since the listing is added, a second over, so that no record
 	// used after the cutoff goes.
-	prune := func(b gcBuilder) error {
+	prune := func(b gcBuilder, held *os.File) error {
 		// Taken at the prune itself: a builder's boot, and the previous one's stop, come between
 		// the removal's start and its prune, and would move a cutoff taken before them past the
 		// listing's.
@@ -1088,7 +1084,7 @@ func (g *gcScope) remove(p gcPlan) int {
 		// Each builder by the name its listing gave, the daemon's its context's (daemonBuilder).
 		cmd := exec.Command(g.docker, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 		if b.Project != "" {
-			cmd = g.builderCmd("buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
+			cmd = g.builderCmd(held, "buildx", "prune", "--builder", b.Name, "-a", "-f", "--filter", until)
 		}
 		log.Info("removing the build cache of " + b.who() + " unused for " + duration(g.ages.BuildCache))
 		out, err := outputWithin(cmd, gcPruneWait)
@@ -1105,13 +1101,13 @@ func (g *gcScope) remove(p gcPlan) int {
 	for _, b := range p.Builders {
 		var err error
 		if b.Project == "" {
-			err = prune(b)
+			err = prune(b, nil)
 		} else {
 			// A project user's builder, booted once: read here in remove, where something goes
 			// is said only once it is known to.
-			err = g.onBuilder(b.Project, func() error {
+			err = g.onBuilder(b.Project, func(held *os.File) error {
 				if g.mode == "remove" {
-					rs, err := g.builderCache(door.BuilderContainerOf(b.Project))
+					rs, err := g.builderCache(held, door.BuilderContainerOf(b.Project))
 					if err != nil {
 						return err
 					}
@@ -1119,7 +1115,7 @@ func (g *gcScope) remove(p gcPlan) int {
 						return nil
 					}
 				}
-				return prune(b)
+				return prune(b, held)
 			})
 		}
 		if err != nil {

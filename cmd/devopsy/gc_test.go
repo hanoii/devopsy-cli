@@ -556,7 +556,7 @@ func gcOnBuilderHelper(dir string) {
 	g := &gcScope{docker: filepath.Join(dir, "bin", "docker"), self: os.Args[0],
 		door:   &remote.Door{Space: filepath.Join(dir, "space"), Users: map[string]remote.DoorUser{door.UserOf("shop"): {Project: "shop"}}},
 		timing: builderTiming{lock: time.Minute, answer: 5 * time.Second, every: time.Second, bound: time.Minute, stop: 3 * time.Second}}
-	_ = g.onBuilder("shop", func() error { return nil })
+	_ = g.onBuilder("shop", func(*os.File) error { return nil })
 	os.Exit(0)
 }
 
@@ -575,11 +575,12 @@ func TestGCCutMidBootLeavesTheBuilderStopped(t *testing.T) {
 	dir := t.TempDir()
 	space := filepath.Join(dir, "space")
 	bin := filepath.Join(dir, "bin")
-	booting, running := filepath.Join(dir, "booting"), filepath.Join(dir, "running")
-	// The boot's start lands seconds after it began, as a loaded Docker's does.
+	booting, running, booted := filepath.Join(dir, "booting"), filepath.Join(dir, "running"), filepath.Join(dir, "booted")
+	// The boot's start lands seconds after it began, as a loaded Docker's does; booted says the
+	// boot is over, which the builder's stop leaves (running goes with the stop).
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 case "$*" in
-  'buildx inspect --bootstrap devopsy-shop') : >`+booting+`; sleep 3; : >`+running+` ;;
+  'buildx inspect --bootstrap devopsy-shop') : >`+booting+`; sleep 3; : >`+running+`; : >`+booted+` ;;
   'ps -q --filter name=^/buildx_buildkit_devopsy-shop0$ --filter status=running') if [ -e `+running+` ]; then echo c0ffee; fi ;;
   'stop buildx_buildkit_devopsy-shop0') rm -f `+running+` ;;
   *) exit 9 ;;
@@ -594,7 +595,7 @@ esac
 	waitFile(t, booting, "--gc's boot of the builder", startWait, func() string { return "" })
 	_ = syscall.Kill(-c.Process.Pid, syscall.SIGTERM)
 	_ = c.Wait()
-	waitFile(t, running, "the boot's start", startWait, func() string { return "" })
+	waitFile(t, booted, "the boot's end", startWait, func() string { return "" })
 	waitStoppersGone(t, space, "shop")
 	if _, err := os.Stat(running); err == nil {
 		t.Error("a --gc cut mid-boot left the builder running with no stopper")
