@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -207,10 +208,10 @@ func awaitBoot(ctx context.Context, log *report.Logger, end rebootEnd, bound, ev
 }
 
 // runRebootStep implements the hidden RebootStepFlag look|act [<seconds>], as the deploy user
-// on the server: both refuse what would refuse the reboot; look prints what the prompt says
-// (rebootLook) and changes nothing; act asks systemd for the reboot, as root through the util
-// image, holding the release and setup locks until the shutdown ends it or seconds
-// (rebootDownBound by default) did.
+// on the server: both refuse what would refuse the reboot, logind's block inhibitors among it;
+// look prints what the prompt says (rebootLook) and changes nothing; act asks logind for the
+// reboot (rebootAsk), as root through the util image, holding the release and setup locks
+// until the shutdown ends it or seconds (rebootDownBound by default) did.
 func runRebootStep(args []string) int {
 	usage := "usage: devopsy " + remote.RebootStepFlag + " look|act [<seconds>]"
 	if len(args) == 0 || len(args) > 2 || !slices.Contains([]string{"look", "act"}, args[0]) {
@@ -243,6 +244,10 @@ func runRebootStep(args []string) int {
 			msg, remedies := refusalWords(rf)
 			report.Say(report.ErrorLevel, msg+": nothing rebooted", nil, append(remedies, asRoot)...)
 		}
+		return 1
+	}
+	inhibitors, logind := logindInhibitors()
+	if blocked(inhibitors) {
 		return 1
 	}
 	if !look {
@@ -282,12 +287,16 @@ func runRebootStep(args []string) int {
 		return 0
 	}
 	fmt.Println(remote.RebootBoot, bootID, hostname)
-	// systemctl refuses a command from a chroot without SYSTEMD_IGNORE_CHROOT, exiting 0;
-	// what it says goes to stderr, so stdout keeps the act's lines alone.
-	run := hostRun{PID: true, Script: "SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot", Stderr: os.Stderr}
+	// What the run says goes into its error, so stdout keeps the act's lines alone.
+	var said bytes.Buffer
+	run := rebootAsk(h, logind)
+	run.Stderr = &said
 	// A run that failed while systemd shuts down took the reboot: Docker went down under it.
 	if err := run.runReady(context.Background(), os.Stderr, func(err error) error { return err }); err != nil && !shuttingDown() {
-		report.Say(report.ErrorLevel, "the reboot was not asked: systemctl reboot, as root: "+oneLine(err.Error()), nil, asRoot)
+		// A block taken since the check is logind's refusal, said by who holds it.
+		if again, _ := logindInhibitors(); !blocked(again) {
+			report.Say(report.ErrorLevel, "the reboot was not asked: "+cmp.Or(oneLine(said.String()), oneLine(err.Error())), nil, asRoot)
+		}
 		fmt.Println(remote.RebootFailed)
 		return 1
 	}
@@ -304,11 +313,87 @@ func runRebootStep(args []string) int {
 	return 1
 }
 
-// shuttingDown says whether systemd is stopping the system, as any user may ask it.
+// rebootAsk is the act's root run: logind's Reboot where logind answers (logind), so its
+// inhibitors hold, a delay one holding the shutdown off while its holder finishes (an install
+// under way), and systemctl reboot where it does not, with no inhibitor to hold. busctl
+// fails with logind's own words rather than falling back to systemd's reboot job, as
+// systemctl does on any of logind's errors. Where the host's dbus-daemon applies AppArmor's
+// rules (its kernel's features/dbus), Docker's profile refuses the container the system bus,
+// so the run goes without it.
+func rebootAsk(h setupHost, logind bool) hostRun {
+	if !logind {
+		// systemctl refuses a command from a chroot without SYSTEMD_IGNORE_CHROOT, exiting 0.
+		return hostRun{PID: true, Script: "SYSTEMD_IGNORE_CHROOT=1 exec systemctl reboot"}
+	}
+	_, err := os.Stat(h.path("/sys/kernel/security/apparmor/features/dbus"))
+	return hostRun{PID: true, Unconfined: err == nil, Script: "exec busctl call " + logindManager + " Reboot b false"}
+}
+
+// logindManager is logind's manager object, as busctl names it.
+const logindManager = "org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager"
+
+// inhibitor is one of logind's inhibitors (ListInhibitors): What it holds off (shutdown,
+// sleep, colon-separated), Who and Why as its holder said, Mode block or delay.
+type inhibitor struct{ What, Who, Why, Mode string }
+
+// logindInhibitors are logind's inhibitors, as any user may list them, and whether logind
+// answered at all: without it, nothing is inhibited.
+func logindInhibitors() ([]inhibitor, bool) {
+	out, err := exec.Command("busctl", append([]string{"--json=short", "call"}, append(strings.Fields(logindManager), "ListInhibitors")...)...).Output()
+	if err != nil {
+		return nil, false
+	}
+	return parseInhibitors(out), true
+}
+
+// parseInhibitors reads ListInhibitors' a(ssssuu) from busctl's JSON, its one value an array
+// of structs, each an array of its fields.
+func parseInhibitors(out []byte) []inhibitor {
+	var v struct {
+		Data [][][]any `json:"data"`
+	}
+	if json.Unmarshal(out, &v) != nil || len(v.Data) == 0 {
+		return nil
+	}
+	var is []inhibitor
+	for _, f := range v.Data[0] {
+		if len(f) < 4 {
+			continue
+		}
+		s := make([]string, 4)
+		for i := range s {
+			s[i], _ = f[i].(string)
+		}
+		is = append(is, inhibitor{What: s[0], Who: s[1], Why: s[2], Mode: s[3]})
+	}
+	return is
+}
+
+// blocked says each inhibitor that blocks a shutdown as an error, the reboot refused, and
+// whether there was one: logind refuses the reboot while it holds, root's included.
+func blocked(is []inhibitor) bool {
+	found := false
+	for _, i := range is {
+		if i.Mode == "block" && slices.Contains(strings.Split(i.What, ":"), "shutdown") {
+			report.Say(report.ErrorLevel, i.Who+" holds off a shutdown ("+i.Why+"), which logind refuses while it holds: nothing rebooted", nil,
+				report.Fix("run --reboot again once it ends"))
+			found = true
+		}
+	}
+	return found
+}
+
+// shuttingDown says whether the system is on its way down, as any user may ask it: systemd
+// stopping it, or logind preparing the shutdown while a delay inhibitor holds it off, the
+// system still running then.
 func shuttingDown() bool {
 	// It exits non-zero for every state but running, stopping among them: its words decide.
 	out, _ := exec.Command("systemctl", "is-system-running").Output()
-	return strings.TrimSpace(string(out)) == "stopping"
+	if strings.TrimSpace(string(out)) == "stopping" {
+		return true
+	}
+	out, _ = exec.Command("busctl", append([]string{"get-property"}, append(strings.Fields(logindManager), "PreparingForShutdown")...)...).Output()
+	return strings.TrimSpace(string(out)) == "b true"
 }
 
 // rebootFix is the fix of what waits for a reboot: --reboot on ref, the server as an address

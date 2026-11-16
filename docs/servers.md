@@ -604,7 +604,8 @@ devopsy @vm1 --gc --yes       # removed without asking
 ## `--reboot`
 
 `devopsy @vm1 --reboot` reboots the server, as its deploy user, by
-`systemctl reboot` as root through devopsy's util image, then waits up to
+asking logind for it as root through devopsy's util image (`systemctl
+reboot` where logind does not answer), then waits up to
 10 minutes for the server to answer on a new boot (its boot id, in
 `/proc/sys/kernel/random/boot_id`). The containers Docker restarts (a
 restart policy) come back with Docker; [`--server-info`](#--server-info)
@@ -615,8 +616,7 @@ containers stop, what waits for a reboot (`/run/reboot-required` and its
 packages) and the projects there, the deploy user's and the project
 users', with what it cuts of theirs, then asks for the server's
 hostname: the name proves the machine, whatever alias or address reached
-it. A second session decides
-everything again before it asks systemd. `--yes` reboots without looking
+it. A second session decides everything again before it asks logind. `--yes` reboots without looking
 or asking; without a terminal and without `--yes` nothing is rebooted.
 
 A reboot is the deploy user's: a project user is refused before
@@ -626,11 +626,18 @@ one of the deploy user's environments, or a setup of the server runs.
 Project users' releases are not waited for: one under way is cut. It is
 refused too when Docker does not answer or is not this host's (rootless,
 another host's), or systemd is not the host's init: a root shell
-([Shells](#shells)) reboots it then. The locks stay held until the
-shutdown ends the session, so nothing starts in between.
+([Shells](#shells)) reboots it then. It is refused while something holds
+off shutdowns (a block inhibitor, `systemd-inhibit --list`, for example
+apt installing packages), which logind refuses root too. A delay
+inhibitor holds the shutdown off while its holder finishes (for example
+unattended-upgrades stopping an install cleanly), up to logind's
+`InhibitDelayMaxSec`. Where the host's AppArmor rules the system bus
+(Ubuntu), the util container runs without Docker's AppArmor profile for
+this call alone, which that profile would refuse. The locks stay held
+until the shutdown ends the session, so nothing starts in between.
 
-It fails when systemd refuses the reboot, when the server is still up 2
-minutes after systemd took it, and when the wait ends: on the same boot
+It fails when logind refuses the reboot, when the server is still up 2
+minutes after logind took it, and when the wait ends: on the same boot
 the server did not reboot, and with no answer it did not come back.
 
 ```sh
