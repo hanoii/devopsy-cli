@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -29,6 +30,37 @@ func TestDeployUserStepsRefuseAProjectUser(t *testing.T) {
 	for _, flag := range []string{remote.ServerReadyFlag, remote.MntReadyFlag, remote.SyncKeyFlag, "--server-info", "--status"} {
 		if err := deployUserStep(flag, func() bool { t.Errorf("%s asked who runs it", flag); return true }); err != nil {
 			t.Errorf("%s: %v", flag, err)
+		}
+	}
+}
+
+// A step of the whole server is a project user's only for a login in the project users' group
+// that the server's record does not name its deploy user: the deploy user in the group by
+// mistake is still the deploy user, refused by the step in its own words; with no record, or
+// one that does not read, the group decides; a login outside it is never asked about.
+func TestStepAsProjectUserSparesTheRecordedDeployUser(t *testing.T) {
+	t.Parallel()
+	me := login{uid: 61001, name: "devopsy"}
+	record := func(name string, err error) func() (string, error) {
+		return func() (string, error) { return name, err }
+	}
+	for _, c := range []struct {
+		inGroup bool
+		record  func() (string, error)
+		want    bool
+	}{
+		{true, record("devopsy", nil), false},
+		{true, record("admin", nil), true},
+		{true, record("", nil), true},
+		{true, record("", errors.New("cannot be read")), true},
+		{false, func() (string, error) { t.Error("the record read for a login outside the group"); return "", nil }, false},
+	} {
+		if got := stepAsProjectUser(func() bool { return c.inGroup }, me, c.record); got != c.want {
+			name, err := "", error(nil)
+			if c.inGroup {
+				name, err = c.record()
+			}
+			t.Errorf("in the group %v, record %q (%v): %v, want %v", c.inGroup, name, err, got, c.want)
 		}
 	}
 }

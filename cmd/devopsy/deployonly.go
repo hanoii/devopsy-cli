@@ -29,3 +29,25 @@ func deployUserStep(flag string, projectUser func() bool) error {
 	}
 	return errors.New(w[0] + ", never a project user's: " + w[1])
 }
+
+// stepAsProjectUser says whether a step of the whole server runs as a project user: a login in
+// the project users' group (projectUser) that is not the server's deploy user, by its record
+// (record, deployUserRecord's name). The group can hold the deploy user by mistake, which the
+// steps refuse in their own words, with the fix (--project-users: sshd then ignores its keys);
+// a record that does not read, or none, leaves the group to decide.
+func stepAsProjectUser(projectUser func() bool, me login, record func() (string, error)) bool {
+	if !projectUser() {
+		return false
+	}
+	deploy, err := record()
+	return err != nil || deploy == "" || deploy != me.name
+}
+
+// asProjectUserStep is stepAsProjectUser of this login, on this host's record.
+func asProjectUserStep() bool {
+	h := deployUserHost()
+	return stepAsProjectUser(asProjectUser, loginOn(h), func() (string, error) {
+		name, _, err := deployUserRecord(h)
+		return name, err
+	})
+}

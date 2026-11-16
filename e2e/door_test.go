@@ -15,6 +15,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/setup"
 	"github.com/hanoii/devopsy-cli/internal/uids"
 )
 
@@ -2329,9 +2330,11 @@ volumes:
 	if out, code := op(t, "/", "devopsy @devopsy@doorsrv2: --project-users add doorpair-eu 2>&1"); code == 0 || !strings.Contains(out, "doorpair-eu extends doorpair's name") {
 		t.Errorf("a name extending another project's (%d): %s", code, out)
 	}
-	execIn(t, []string{second}, "usermod -aG devopsy-projects devopsy")
+	// The deploy user is the one the server's record names, as --server-setup writes it: in the
+	// group by mistake it is still that user, not a project user (resetLane removes the record).
+	execIn(t, []string{second}, "mkdir -p /etc/devopsy && printf '%s' "+quote(setup.DeployUserText("devopsy"))+" >"+setup.DeployUserFile+" && usermod -aG devopsy-projects devopsy")
 	out, code := execIn(t, []string{"-u", "devopsy", "-w", "/home/devopsy", second}, "devopsy --project-users-step add doorpairb 2>&1")
-	execIn(t, []string{second}, "gpasswd -d devopsy devopsy-projects >/dev/null")
+	execIn(t, []string{second}, "gpasswd -d devopsy devopsy-projects >/dev/null; rm -f "+setup.DeployUserFile)
 	if code == 0 || !strings.Contains(out, "devopsy is in devopsy-projects") {
 		t.Errorf("an add with the deploy user in the group (%d): %s", code, out)
 	}

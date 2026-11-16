@@ -126,7 +126,7 @@ func run() int {
 	// directory cannot be read (another user's, as root's is for a deploy
 	// user).
 	if len(args) > 0 {
-		if err := deployUserStep(args[0], asProjectUser); err != nil {
+		if err := deployUserStep(args[0], asProjectUserStep); err != nil {
 			return failErr(err)
 		}
 		switch args[0] {
