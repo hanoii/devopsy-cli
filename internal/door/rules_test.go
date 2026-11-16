@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 var testPolicy = Policy{
@@ -757,5 +759,38 @@ func TestCheckFileRefusesABindInsideAnEntry(t *testing.T) {
 	file := parse(t, `{"name":"shop-prod","services":{"web":`+safe(`,"volumes":[{"type":"bind","source":"/space/mnt/shop-prod/data/sub","target":"/d"}]`)+`}}`)
 	if errs := CheckFile(file, testPolicy, "up", &fakePaths{}); !anyHolds(errs, "a host path") {
 		t.Errorf("a bind of a directory inside an entry: %v", errs)
+	}
+}
+
+// Bug: in image mode nothing builds on the server, and the listing names no sharer there
+// (images.ParseComposeConfig without doorBuilds: the record claims a profile's tool by the
+// name it wrote, from its registry), but the render cannot tell the mode and still moves a
+// sharer onto devopsy's name for its builder's build, which no release in image mode ever
+// builds: a tool under a profile that shares a profile's build's registry image (neither
+// named by devopsy's own file) was claimed and run before, and its start is now refused as
+// "its image devopsy.internal/shop-prod/tool is not here". The listing and the render must
+// name a service's image alike.
+func TestCheckFileNamesAnImageModeSharerAsItsListingDoes(t *testing.T) {
+	t.Parallel()
+	const config = `{"name":"shop-prod","services":{
+		"tool":{"image":"registry.example.com/shop/tool:1","profiles":["tools"],"build":{"context":"/home/devopsy-shop/shop/prod/releases/20260101000000/code"},"user":"10001:10001","security_opt":["no-new-privileges"]},
+		"migrate":{"image":"registry.example.com/shop/tool:1","profiles":["tools"],"user":"10001:10001","security_opt":["no-new-privileges"]}}}`
+	// Image mode's listing: doorBuilds false (doorBuildsIn).
+	svcs, err := images.ParseComposeConfig([]byte(config), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := ""
+	for _, s := range svcs {
+		if s.Name == "migrate" {
+			listed = s.Ref
+		}
+	}
+	file := parse(t, config)
+	if errs := CheckFile(file, testPolicy, "run", &fakePaths{}); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if got, _ := file["services"].(map[string]any)["migrate"].(map[string]any)["image"].(string); got != listed {
+		t.Errorf("in image mode a start runs migrate on %q, and its release listed and claimed %q", got, listed)
 	}
 }
