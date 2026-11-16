@@ -492,3 +492,55 @@ func TestStopperWithNoAnswerStillStops(t *testing.T) {
 		t.Errorf("the builder's lock file holds %q", b)
 	}
 }
+
+// --gc reads and prunes a project user's builder whose network a prune took: a stopped
+// builder's container has no endpoint on its network, so docker network prune removes it, the
+// container kept (docker system prune takes the stopped container too, and --gc then skips the
+// builder as one never booted).
+//
+// The bug this proves (onBuilder, gc.go): --gc boots the builder as it finds it (buildx inspect
+// --bootstrap), its network never looked at, where only a build's ensureBuilder makes it again,
+// and that by name alone, the container left on the old network's id. So after a prune every
+// --gc warns that the cache of each stopped builder stays, and exits as if something was left,
+// until each project builds again (and, the container kept, after that too). The fake boots as
+// Docker does: a container that is there starts only on the network whose id it keeps, one that
+// is not there is made on the network as named.
+func TestGCBootsABuilderWhoseNetworkWasPruned(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	log := filepath.Join(dir, "docker.log")
+	// net holds the network's id while it is there; attached the id the builder's container
+	// (booted once, stopped) was made on.
+	net, attached := filepath.Join(dir, "net"), filepath.Join(dir, "attached")
+	write(t, attached, "old\n", 0o644)
+	old := `[{"id":"x","inUse":false,"size":3000,"createdAt":"2026-09-01T00:00:00Z","lastUsedAt":"2026-09-02T00:00:00Z","parents":null,"shared":false}]`
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  'ps -q '*) ;;
+  'buildx inspect --bootstrap devopsy-shop')
+    [ -e `+net+` ] || { echo 'network devopsy-shop-build not found' >&2; exit 1; }
+    [ -e `+attached+` ] || cp `+net+` `+attached+`
+    cmp -s `+net+` `+attached+` || { echo "failed to set up container networking: network $(cat `+attached+`) not found" >&2; exit 1; } ;;
+  'exec buildx_buildkit_devopsy-shop0 buildctl du --format {{json .}}') echo '`+old+`' ;;
+  'buildx prune '*) printf 'Total:\t3kB\n' ;;
+  'container inspect '*) [ -e `+attached+` ] && echo no ;;
+  'rm -f buildx_buildkit_devopsy-shop0'|'rm buildx_buildkit_devopsy-shop0') rm -f `+attached+` ;;
+  'network inspect devopsy-shop-build') [ -e `+net+` ] ;;
+  'network create devopsy-shop-build') echo new >`+net+` ;;
+  'network disconnect '*) ;;
+  'network connect devopsy-shop-build buildx_buildkit_devopsy-shop0') cp `+net+` `+attached+` ;;
+  *) ;;
+esac
+`, 0o755)
+	stopper := filepath.Join(dir, "stopper")
+	write(t, stopper, "#!/bin/sh\nprintf d >&3\n", 0o755)
+	g := &gcScope{docker: docker, now: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC), listedAt: time.Now(), ages: remote.ServerGC{BuildCache: 30 * 24 * time.Hour},
+		door: &remote.Door{Space: space, Users: map[string]remote.DoorUser{door.UserOf("shop"): {Project: "shop"}}}, mode: "remove", self: stopper, timing: testBuilderTiming}
+	code := g.remove(gcPlan{Builders: []gcBuilder{{Name: "devopsy-shop", Project: "shop"}}})
+	if asked := readString(log); code != 0 || !strings.Contains(asked, "buildx prune ") {
+		t.Errorf("--gc on a stopped builder whose network a prune took: exit %d, its cache not pruned; docker was asked:\n%s", code, asked)
+	}
+}
