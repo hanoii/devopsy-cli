@@ -1961,13 +1961,9 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 	// remote's uploadpack) git then runs as the deploy user, Docker's socket in hand.
 	b := []string{"BUILDX_CONFIG=" + door.BuildxConfigOf(s.policy.Space), "BUILDX_BUILDER=" + name, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
 	env := builderEnv(s.env, s.policy.Space)
-	run := func(args ...string) ([]byte, error) {
-		c := s.docker(args...)
-		c.Env, c.Stderr = env, os.Stderr
-		return c.Output()
-	}
-	// A look whose failure is an answer (no network yet) says nothing: its words read as a
-	// failure of the build.
+	// Every docker call here is quiet, its words in the refusal alone: a look whose failure is an
+	// answer, or a make another use won (a lost race), says nothing, as its words would read as
+	// a failure of the build.
 	probe := func(args ...string) ([]byte, error) {
 		c := s.docker(args...)
 		c.Env = env
@@ -1989,19 +1985,22 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 	}
 	// Its network, made again when a prune took it, and its container on it (builderBootable).
 	network_ := func() error {
-		if err := builderBootable(probe, run, s.policy.Space, s.policy.Project, s.timing.orServer()); err != nil {
+		if err := builderBootable(probe, s.policy.Space, s.policy.Project, s.timing.orServer()); err != nil {
 			return fmt.Errorf("refused: %s's builder cannot boot: %v", s.policy.Project, err)
 		}
 		return nil
 	}
-	// create records the builder, its network made after, at its boot's look (network_).
+	// create records the builder, quiet (a lost race says nothing), its network made after, at
+	// its boot's look (network_).
 	create := func() error {
-		if _, err := run("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no"); err != nil {
-			// Another environment's build may have made it meanwhile.
-			if _, ok, _ := right(); ok {
-				return nil
-			}
-			return fmt.Errorf("it could not be made: %v", err)
+		err := madeOrThere(func() ([]byte, error) {
+			return probe("buildx", "create", "--name", name, "--driver", "docker-container", "--driver-opt", "network="+network, "--driver-opt", "restart-policy=no")
+		}, func() bool {
+			_, ok, _ := right()
+			return ok
+		})
+		if err != nil {
+			return fmt.Errorf("could not be made: %v", dockerFailed("docker buildx create", err))
 		}
 		return nil
 	}
@@ -2016,21 +2015,30 @@ func (s *doorSide) ensureBuilder() ([]string, error) {
 		// of its name left with no builder (a boot racing a key's removal), which a builder
 		// made anew would take, a removed key's cache with them: removed and made again
 		// (repairUnder), so that no build boots or runs on it meanwhile.
+		// Its refusal says which step stopped it: the wait (it stays as it is), a look (it does
+		// not read), the removal (it stays) or the make (it is gone).
 		err := repairUnder(s.policy.Space, s.policy.Project, s.timing.orServer(), func() (bool, error) {
 			_, ok, err := right()
-			return ok, err
+			if err != nil {
+				return false, fmt.Errorf("does not read: %v", err)
+			}
+			return ok, nil
 		}, func() error {
 			if err := dropBuilder(probe, s.policy.Space, s.policy.Project); err != nil {
-				return fmt.Errorf("it could not be removed: %v", err)
+				return fmt.Errorf("is not as devopsy makes it, and could not be removed: %v", err)
 			}
 			return create()
 		})
-		if err != nil {
+		var waited waitEnded
+		if errors.As(err, &waited) {
 			return nil, fmt.Errorf("refused: %s's builder is not as devopsy makes it, and stays: %v", s.policy.Project, err)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("refused: %s's builder %v", s.policy.Project, err)
 		}
 	default:
 		if err := create(); err != nil {
-			return nil, fmt.Errorf("refused: %s's builder: %v", s.policy.Project, err)
+			return nil, fmt.Errorf("refused: %s's builder %v", s.policy.Project, err)
 		}
 	}
 	return b, network_()

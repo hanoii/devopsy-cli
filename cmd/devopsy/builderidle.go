@@ -415,22 +415,22 @@ func builderNetworkID(run func(args ...string) ([]byte, error), project string) 
 	return strings.TrimSpace(string(out)), nil
 }
 
-// builderBootable makes project's builder in space bootable, with probe's docker for its looks
-// and run's for its changes, its caller holding none of its locks: its network there, made
+// builderBootable makes project's builder in space bootable, with run's docker, quiet (Docker's
+// words go in its errors alone: a lost race says nothing), its caller holding none of its locks: its network there, made
 // again when gone (a prune takes it from a builder stopped between builds, no endpoint on it),
 // and its container on that network. A stopped container keeps the id of the network it was
 // made on, never the name alone, so one on a network made again cannot start: it is removed,
 // its state volume, the cache, kept, for the next boot to make it on the network now
 // (repairUnder).
-func builderBootable(probe, run func(args ...string) ([]byte, error), space, project string, t builderTiming) error {
+func builderBootable(run func(args ...string) ([]byte, error), space, project string, t builderTiming) error {
 	network, container := door.BuilderNetworkOf(project), door.BuilderContainerOf(project)
 	// stale says whether the container is on a network that is not the one now, with the
 	// network's id ("" when gone).
 	look := func() (stale bool, id string, err error) {
-		if id, err = builderNetworkID(probe, project); err != nil {
+		if id, err = builderNetworkID(run, project); err != nil {
 			return false, "", err
 		}
-		on, err := probe("container", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}", container)
+		on, err := run("container", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}", container)
 		if err != nil {
 			// No container: its boot makes one on the network as named.
 			return false, id, nil
@@ -451,27 +451,40 @@ func builderBootable(probe, run func(args ...string) ([]byte, error), space, pro
 			}
 			return nil
 		})
+		var waited waitEnded
+		if errors.As(err, &waited) {
+			return fmt.Errorf("its container is on a network gone, and stays: %w", err)
+		}
 		if err != nil {
 			return err
 		}
-		if id, err = builderNetworkID(probe, project); err != nil {
+		if id, err = builderNetworkID(run, project); err != nil {
 			return err
 		}
 	}
 	if id == "" {
-		if _, err := run("network", "create", network); err != nil {
-			// Another use may have made it meanwhile: Docker makes no second of a name.
-			if again, lerr := builderNetworkID(probe, project); lerr == nil && again != "" {
-				return nil
-			}
+		err := madeOrThere(func() ([]byte, error) { return run("network", "create", network) }, func() bool {
+			id, err := builderNetworkID(run, project)
+			return err == nil && id != ""
+		})
+		if err != nil {
 			return fmt.Errorf("its network could not be made: %w", dockerFailed("docker network create", err))
 		}
 	}
 	return nil
 }
 
+// madeOrThere runs make, a failure of which is no failure when there says the thing is there
+// after it: another use made it meanwhile, and Docker and buildx make no second of a name.
+func madeOrThere(make func() ([]byte, error), there func() bool) error {
+	if _, err := make(); err != nil && !there() {
+		return err
+	}
+	return nil
+}
+
 // dockerRunner runs docker at path under env for what it prints, each call bounded by within
-// (outputWithin): the builders' looks and changes outside a request.
+// (outputWithin; 0 for none): the builders' looks and changes outside a request.
 func dockerRunner(path string, env []string, within time.Duration) func(args ...string) ([]byte, error) {
 	return func(args ...string) ([]byte, error) {
 		c := exec.Command(path, args...)

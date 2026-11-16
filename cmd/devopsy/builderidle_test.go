@@ -645,7 +645,7 @@ case "$*" in
 esac
 `, 0o755)
 	run := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
-	if err := builderBootable(run, run, space, "shop", testBuilderTiming); err != nil {
+	if err := builderBootable(run, space, "shop", testBuilderTiming); err != nil {
 		t.Errorf("a build whose builder's network another build made first is refused, the network there: %v", err)
 	}
 }
@@ -681,7 +681,7 @@ case "$*" in
 esac
 `, 0o755)
 	run := func(args ...string) ([]byte, error) { return exec.Command(docker, args...).Output() }
-	if err := builderBootable(run, run, filepath.Join(dir, "space"), "shop", testBuilderTiming); err != nil {
+	if err := builderBootable(run, filepath.Join(dir, "space"), "shop", testBuilderTiming); err != nil {
 		t.Errorf("a build whose builder's network another build made meanwhile is refused: %v; docker was asked:\n%s", err, readString(log))
 	}
 }

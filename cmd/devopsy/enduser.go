@@ -154,7 +154,9 @@ func endBuilder(who string) error {
 // removeBuilder is endBuilder's removal, by docker under base and the door's BUILDX_CONFIG in
 // space.
 func removeBuilder(dockerPath string, base []string, space, who string) error {
-	run := dockerRunner(dockerPath, builderEnv(base, space), builderTimes.lock)
+	// Unbounded: removing a large cache takes as long as its disk does, and a removal killed
+	// halfway leaves buildx's record behind.
+	run := dockerRunner(dockerPath, builderEnv(base, space), 0)
 	project := door.ProjectOfUser(who)
 	if err := dropBuilder(run, space, project); err != nil {
 		return err
