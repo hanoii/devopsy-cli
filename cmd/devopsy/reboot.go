@@ -205,10 +205,19 @@ func awaitBoot(ctx context.Context, log *report.Logger, end rebootEnd, bound, ev
 // (rebootLook) and changes nothing; act asks systemd for the reboot, as root through the util
 // image, holding the release and setup locks until the shutdown ends it or seconds
 // (rebootDownBound by default) did.
-func runRebootStep(args []string) int {
+func runRebootStep(args []string) int { return rebootStep(args, asProjectUser) }
+
+// rebootStep is runRebootStep, projectUser telling a project user's login (asProjectUser).
+func rebootStep(args []string, projectUser func() bool) int {
 	usage := "usage: devopsy " + remote.RebootStepFlag + " look|act [<seconds>]"
 	if len(args) == 0 || len(args) > 2 || !slices.Contains([]string{"look", "act"}, args[0]) {
 		return fail(usage)
+	}
+	// A project user's devopsy never goes on, whatever called it: the session's script refuses
+	// it first (askedAsProjectUser), and its docker is the door, whose refusal of the root run
+	// must never be what stops a reboot.
+	if projectUser() {
+		return fail("a reboot is the server's deploy user's, never a project user's: nothing rebooted")
 	}
 	down := rebootDownBound
 	if len(args) == 2 {

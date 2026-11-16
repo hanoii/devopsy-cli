@@ -611,12 +611,13 @@ machine, whatever alias or address reached it. A second session decides
 everything again before it asks systemd. `--yes` reboots without looking
 or asking; without a terminal and without `--yes` nothing is rebooted.
 
-It is refused, nothing rebooted and nothing waited for, while a release
-or another change that holds an environment's lock runs in one of the
-deploy user's environments, or a setup of the server runs. Project
-users' releases are not waited for: one under way is cut. It is refused
-too when Docker does not answer or is not this host's (rootless, another
-host's), or systemd is not the host's init: a root shell
+A reboot is the deploy user's: a project user is refused before
+anything. It is refused, nothing rebooted and nothing waited for, while
+a release or another change that holds an environment's lock runs in
+one of the deploy user's environments, or a setup of the server runs.
+Project users' releases are not waited for: one under way is cut. It is
+refused too when Docker does not answer or is not this host's (rootless,
+another host's), or systemd is not the host's init: a root shell
 ([Shells](#shells)) reboots it then. The locks stay held until the
 shutdown ends the session, so nothing starts in between.
 

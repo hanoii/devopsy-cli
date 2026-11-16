@@ -281,6 +281,19 @@ func TestReboot(t *testing.T) {
 	})
 }
 
+// TestRebootStepRefusesAProjectUser keeps the step itself refusing a project user, before it
+// reads or runs anything (its usage aside), for a call that never went through the session's
+// script: its docker is the door, which must never be what stops a reboot.
+func TestRebootStepRefusesAProjectUser(t *testing.T) {
+	t.Parallel()
+	asked := false
+	for _, args := range [][]string{{"look"}, {"act", "1"}} {
+		if code := rebootStep(args, func() bool { asked = true; return true }); code != 1 || !asked {
+			t.Errorf("%v: %d, asked %v", args, code, asked)
+		}
+	}
+}
+
 // TestReadRebootAct keeps how the act's lines read: a line the reboot cut is ignored.
 func TestReadRebootAct(t *testing.T) {
 	t.Parallel()
