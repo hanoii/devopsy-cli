@@ -514,3 +514,36 @@ esac
 		t.Errorf("a project user (%d):\n%s", code, out)
 	}
 }
+
+// A project user's builder's prune goes by the listing's cutoff as it stands when the prune
+// runs: its boot (and the previous builder's stop, the lock's waits) comes between the start
+// of the removal and the prune, and each second of it moves a cutoff taken before it past the
+// listing's, removing records used after it. Bug: remove takes prune's until once, before the
+// builders are booted (onBuilder), so a boot of 2 s prunes 1 s past the listing's cutoff.
+func TestGCPruneCutoffCountsTheBoot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	space := filepath.Join(dir, "space")
+	until := filepath.Join(dir, "until")
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+case "$*" in
+  'buildx inspect --bootstrap '*) sleep 2 ;;
+  'buildx inspect '*) echo 'Status: running' ;;
+  'buildx prune '*) echo "${8#until=}" >`+until+` ;;
+esac
+`, 0o755)
+	stopper := filepath.Join(dir, "stopper")
+	write(t, stopper, "#!/bin/sh\nprintf d >&3\n", 0o755)
+	listed := time.Now()
+	g := &gcScope{docker: docker, now: listed, listedAt: listed, ages: remote.ServerGC{BuildCache: time.Hour},
+		door: &remote.Door{Space: space, Users: map[string]remote.DoorUser{door.UserOf("shop"): {Project: "shop"}}},
+		mode: "remove-listed", self: stopper, timing: testBuilderTiming}
+	g.remove(gcPlan{Builders: []gcBuilder{{Name: "devopsy-shop", Project: "shop"}}})
+	got := mustDuration(t, strings.TrimSpace(readString(until)))
+	// The prune ran at least the boot's 2 s after the listing: a cutoff of the listing's
+	// takes at least those 2 s over the age.
+	if got < time.Hour+2*time.Second {
+		t.Errorf("pruned with until=%s at least 2s after the listing: past the listing's cutoff", got)
+	}
+}
