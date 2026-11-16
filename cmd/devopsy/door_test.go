@@ -1050,6 +1050,57 @@ esac
 	}
 }
 
+// A builder whose network a prune took boots once its network is back: Docker keeps, in a
+// stopped container, the id of each network it was on, never the name alone, so a network made
+// again under the same name is another to it, and its start fails on the old id.
+//
+// The bug this proves (ensureBuilder's network_, door.go, round 3's fix): the network is made
+// again by name, the builder's container left as it is, so its next boot still fails ("failed
+// to set up container networking: network <old id> not found", Docker 29.8.2 and buildx
+// 0.37.2, checked by hand: a docker-container builder on a network of its own, booted,
+// stopped, docker network prune, the network made again, then buildx inspect --bootstrap), and
+// every build of the project fails at its boot. Removing the container, its state volume
+// kept, let buildx make it again at the boot on the new network, its cache kept. The fake
+// keeps the network's id in the container as Docker does.
+func TestDoorBuilderBootsOnItsNetworkMadeAgain(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "docker.log")
+	space := filepath.Join(dir, "space")
+	// net holds the network's id while it is there; attached the id the builder's container
+	// (booted once, stopped, policy no) was made on.
+	net, attached := filepath.Join(dir, "net"), filepath.Join(dir, "attached")
+	write(t, attached, "old\n", 0o644)
+	record := filepath.Join(door.BuildxConfigOf(space), "instances", "devopsy-shop")
+	write(t, record, `{"Name":"devopsy-shop","Driver":"docker-container"}`, 0o644)
+	docker := filepath.Join(dir, "docker")
+	write(t, docker, `#!/bin/sh
+echo "$*" >>`+log+`
+case "$*" in
+  "buildx inspect devopsy-shop") [ -e `+record+` ] && echo 'Driver Options: network="devopsy-shop-build" restart-policy="no"' ;;
+  "buildx create "*) mkdir -p "$BUILDX_CONFIG/instances" && : >`+record+` ;;
+  "buildx rm devopsy-shop") rm -f `+record+` `+attached+` ;;
+  "container inspect --format "*) [ -e `+attached+` ] && echo no ;;
+  "rm -f buildx_buildkit_devopsy-shop0"|"rm buildx_buildkit_devopsy-shop0") rm -f `+attached+` ;;
+  "network inspect devopsy-shop-build") [ -e `+net+` ] ;;
+  "network create devopsy-shop-build") echo new >`+net+` ;;
+  "network disconnect "*) : ;;
+  "network connect devopsy-shop-build buildx_buildkit_devopsy-shop0") cp `+net+` `+attached+` ;;
+  "volume "*) : ;;
+  *) exit 9 ;;
+esac
+`, 0o755)
+	side := &doorSide{policy: door.Policy{Project: "shop", Space: space}, real: docker, timing: builderTiming{lock: 300 * time.Millisecond}}
+	if _, err := side.builder(); err != nil {
+		t.Fatalf("a build on a builder whose network is gone: %v", err)
+	}
+	// The boot: buildx makes a container that is not there on the network as named; one that
+	// is there starts only on the network whose id it keeps.
+	if on, err := os.ReadFile(attached); err == nil && string(on) != readString(net) {
+		t.Errorf("the builder's container is left on the network a prune took (%q, the network now %q), so its boot fails; docker was asked:\n%s", strings.TrimSpace(string(on)), strings.TrimSpace(readString(net)), readString(log))
+	}
+}
+
 // A root copy's modes narrow what the project user may write in an entry it wrote (an ACL's
 // mask), so the door gives it back there, as root, where it was lost; with no entry, nothing.
 func TestDoorRegrantsWhatACopyWrote(t *testing.T) {
