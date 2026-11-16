@@ -124,6 +124,23 @@ so a build never lands on a name a registry serves, which another
 project could pull and run. `--releases` shows that name, and
 `devopsy -- config` the `image:` the project wrote.
 
+A service with no `build:` whose `image:` is the name another service's
+build has runs that build, as it would with plain compose:
+
+```yaml
+services:
+  app:
+    build: .
+    image: shop-app
+  migrate:
+    image: shop-app     # runs app's build
+    pull_policy: never  # still needed for a deploy user's release
+```
+
+A release refuses such a service when its image is built by more than
+one service, since each build is an image of its own here, and when its
+build is only under a profile the release does not use.
+
 Any other image belongs to a project only once it has fetched the
 image with its own registry logins (the `auths` of its
 `~/.docker/config.json`), before it runs, inspects or tags it. A
@@ -525,12 +542,14 @@ On the server, the project user's `docker compose` and `docker` work
 for what is its own: its containers, images, volumes and networks.
 
 An image with no registry host is a name on Docker Hub, so the door
-fetches it like any other at a start, even with `pull_policy: never`.
+fetches it like any other at a start, even with `pull_policy: never`,
+unless it is the name of one of the project's builds (Images, above).
 A deploy user's own build under that name stays as it is, and the
 project runs the registry's image.
 
 A project user's `docker compose pull` is the door's own: it fetches
-each service's image as above, skipping the project's own builds,
+each service's image as above, skipping the project's own builds
+(and, with `--ignore-buildable`, the services that run one),
 services with `pull_policy: never`, and those with `missing` or
 `if_not_present` whose image the project has already, and says `pulling <image>` and then
 its time on stderr, nothing with `-q`. It takes compose's `-q`,

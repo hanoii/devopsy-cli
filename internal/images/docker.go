@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -173,14 +174,61 @@ const NoReleaseComposeEnv = "DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE"
 // command there), with the release script's variables, without devopsy's
 // own file and without profiles. door says the listing is a project
 // user's, behind the door, whose builds the door names (DoorBuild).
+//
+// Behind the door, in a release that builds, a sharer of a build is named
+// from every profile's services, as the door's render reads them: the
+// listing reads every profile's config first, which is the listing itself
+// when no service is under a profile (both configs are then the same), and
+// otherwise keeps of it the services the plain config has (activeOf), so
+// which are active is compose's own reading.
 func ListCompose(rel string, door bool) ([]Service, error) {
-	return listCompose(rel, door, "--", "config", "--format", "json")
+	if !doorBuildsIn(rel, door) {
+		return listCompose(rel, door, plainConfig...)
+	}
+	all, err := listCompose(rel, door, everyProfileConfig...)
+	if err != nil || !slices.ContainsFunc(all, func(s Service) bool { return s.Profiled }) {
+		return all, err
+	}
+	plain, err := listCompose(rel, door, plainConfig...)
+	if err != nil {
+		return nil, err
+	}
+	return activeOf(all, plain)
 }
 
 // ListComposeAll is ListCompose of every profile's services: the labels of
 // what a copy, a take and an export write (parentData).
 func ListComposeAll(rel string, door bool) ([]Service, error) {
-	return listCompose(rel, door, "--", "--profile", "*", "config", "--format", "json")
+	return listCompose(rel, door, everyProfileConfig...)
+}
+
+var (
+	plainConfig        = []string{"--", "config", "--format", "json"}
+	everyProfileConfig = []string{"--", "--profile", "*", "config", "--format", "json"}
+)
+
+// activeOf is all, every profile's services, kept to those of plain, the
+// active ones: each named as every profile's listing names it (a sharer
+// by its builder's build). A sharer kept whose builder is not refuses
+// (SharedUnbuilt): the release builds no such build, and the name the
+// door gives it is the environment's, so an older build under it would
+// run.
+func activeOf(all, plain []Service) ([]Service, error) {
+	active := map[string]bool{}
+	for _, s := range plain {
+		active[s.Name] = true
+	}
+	var kept []Service
+	for _, s := range all {
+		if !active[s.Name] {
+			continue
+		}
+		if s.Shares != "" && !active[s.Shares] {
+			return nil, SharedUnbuilt(s.Name, s.Shares)
+		}
+		kept = append(kept, s)
+	}
+	return kept, nil
 }
 
 func listCompose(rel string, door bool, args ...string) ([]Service, error) {
@@ -204,7 +252,9 @@ func listCompose(rel string, door bool, args ...string) ([]Service, error) {
 // the services' order by name. With doorBuilds (doorBuildsIn) a build is
 // named as the door's render names it, DoorBuild, whatever image: says:
 // a project user's config runs unrendered, so the listing names it once
-// here, the only place it is named past the render.
+// here, the only place it is named past the render. A sharer of a build
+// (Shared) is named as its builder's build, and one whose image several
+// services build refuses (SharedTwice), as the render does.
 func ParseComposeConfig(data []byte, doorBuilds bool) ([]Service, error) {
 	var cfg struct {
 		Name     string
@@ -213,10 +263,20 @@ func ParseComposeConfig(data []byte, doorBuilds bool) ([]Service, error) {
 			Build      json.RawMessage
 			Labels     map[string]string
 			PullPolicy string `json:"pull_policy"`
+			Profiles   []string
 		}
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("compose config: %w", err)
+	}
+	builds := func(raw json.RawMessage) bool { return len(raw) > 0 && string(raw) != "null" }
+	var shared map[string][]string
+	if doorBuilds {
+		specs := map[string]ImageSpec{}
+		for n, c := range cfg.Services {
+			specs[n] = ImageSpec{Image: c.Image, Builds: builds(c.Build)}
+		}
+		shared = Shared(cfg.Name, specs)
 	}
 	names := make([]string, 0, len(cfg.Services))
 	for n := range cfg.Services {
@@ -234,15 +294,19 @@ func ParseComposeConfig(data []byte, doorBuilds bool) ([]Service, error) {
 		if data {
 			method = cmp.Or(c.Labels[DataCopyLabel], CopyVolumes)
 		}
-		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", BuildSpec: c.Build, Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
+		svc := Service{Name: n, Ref: c.Image, Build: builds(c.Build), BuildSpec: c.Build, Data: data, Method: method, NeverPull: c.PullPolicy == "never", Profiled: len(c.Profiles) > 0}
 		if data {
 			svc.DataVersion = c.Labels[DataVersionLabel]
 		}
-		switch {
+		switch b := shared[n]; {
 		case svc.Build && doorBuilds:
 			svc.Ref = DoorBuild(cfg.Name, n)
-		case svc.Ref == "":
-			svc.Ref = cfg.Name + "-" + n
+		case len(b) > 1:
+			return nil, SharedTwice(n, c.Image, b)
+		case len(b) == 1:
+			svc.Ref, svc.Shares = DoorBuild(cfg.Name, b[0]), b[0]
+		default:
+			svc.Ref = BuildName(cfg.Name, n, svc.Ref)
 		}
 		svcs = append(svcs, svc)
 	}

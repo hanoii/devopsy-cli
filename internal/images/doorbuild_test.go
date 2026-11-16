@@ -70,6 +70,14 @@ func TestListingNamesADoorProjectsBuilds(t *testing.T) {
 			}
 		}
 	}
+	// What it shares, a data service's tag as a build's (none to check), and its profiles.
+	shared := []byte(`{"name":"shop-prod","services":{
+		"app":{"build":{"context":"."}},
+		"seed":{"image":"shop-prod-app","labels":{"devopsy.data":"true"},"profiles":["tools"]}}}`)
+	svcs, err := ParseComposeConfig(shared, true)
+	if err != nil || len(svcs) != 2 || svcs[0].Shares != "" || svcs[0].Profiled || svcs[1].Shares != "app" || svcs[1].tag() != "" || !svcs[1].Profiled {
+		t.Errorf("a data service sharing a build, under a profile: %+v (%v)", svcs, err)
+	}
 	twice := []byte(`{"name":"shop-prod","services":{
 		"web":{"build":{"context":"."},"image":"shop-web"},
 		"worker":{"build":{"context":"."},"image":"shop-web"},

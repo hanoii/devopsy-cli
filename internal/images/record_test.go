@@ -277,7 +277,7 @@ func TestRecordListsEveryProfileOnce(t *testing.T) {
 	}
 	e.set.ListAll = func(string) ([]Service, error) { return nil, errors.New("compose config: exit status 1") }
 	out.Reset()
-	if err := e.set.derive(filepath.Dir(e.dir), e.rel(id), map[string]Service{local.Name: local}, false); err != nil || !strings.Contains(out.String(), "its tools stay as they were recorded, and one sharing a build's image runs what its name holds") {
+	if err := e.set.derive(filepath.Dir(e.dir), e.rel(id), map[string]Service{local.Name: local}, false); err != nil || !strings.Contains(out.String(), "its tools stay as they were recorded, and one sharing a build's image may not run that build") {
 		t.Errorf("a landing whose profiles could not be listed (%v) said:\n%s", err, out.String())
 	}
 }
@@ -538,5 +538,36 @@ func TestFailedRecordKeepsItsTools(t *testing.T) {
 	e.set.Undo(e.rel(r2), false)
 	if got := d.names[toolTag("app-prod", r2, jq.Ref)]; got != "sha256:j2" {
 		t.Errorf("the failed release's tool bookmark holds %q, want the image its fetch pulled: %v\n%s", got, d.names, out.String())
+	}
+}
+
+// A listing that fails is said where a check, a record or a restore reads it: a refusal of the
+// listing's own (a report.Failure, a sharer of two builds) as devopsy's usual error, its
+// detail and its fix on lines of their own; any other failure after the words saying which
+// listing failed.
+func TestListingFailureSaidWithItsFix(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	e := newRecEnv(t, newFake(), "app-prod", ModeBuild, &out)
+	id := e.release(Service{Name: "web", Ref: "shop-web", Build: true})
+	e.set.List = func(string) ([]Service, error) {
+		return nil, SharedTwice("migrate", "shop-web", []string{"web", "worker"})
+	}
+	if err := e.set.Check(e.rel(id)); err == nil {
+		t.Fatal("a check of a listing that failed passed")
+	}
+	want := []string{
+		"devopsy: error: migrate runs shop-web, which both web and worker build",
+		"devopsy: | for a project user each build is an image of its own, so devopsy cannot tell which one migrate should run",
+		"devopsy: | to fix it:",
+		"devopsy: | give web and worker different image: names, or keep build: on one of them and let the other use its image",
+	}
+	if got := strings.Split(strings.TrimSpace(out.String()), "\n"); !slices.Equal(got, want) {
+		t.Errorf("a listing's refusal said:\n%s", out.String())
+	}
+	out.Reset()
+	e.set.List = func(string) ([]Service, error) { return nil, errors.New("compose config: exit status 1") }
+	if err := e.set.Record(e.rel(id), ""); err == nil || !strings.Contains(out.String(), "devopsy: error: could not list the images of "+id+": compose config: exit status 1") {
+		t.Errorf("a listing that failed (%v) said:\n%s", err, out.String())
 	}
 }

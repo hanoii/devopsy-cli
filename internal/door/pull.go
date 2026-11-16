@@ -24,10 +24,10 @@ type Pull struct {
 // active ones (compose's own reading of the profiles), their dependencies only with
 // --include-deps. A service is skipped when it names no image, when its image is the
 // project's own (OwnRef: a build's name, a hold), when the project set pull_policy never,
-// and with --ignore-buildable when it builds; one that builds is otherwise claimed, as
-// compose pulls it (a release in image mode relies on a missing tag failing). Under
-// pull_policy missing or if_not_present an image is one of IfMissing. A service named that
-// the file does not have is refused.
+// and with --ignore-buildable when it builds or shares a build's image (sharers); one that
+// builds is otherwise claimed, as compose pulls it (a release in image mode relies on a
+// missing tag failing). Under pull_policy missing or if_not_present an image is one of
+// IfMissing. A service named that the file does not have is refused.
 func PlanPull(file map[string]any, active []string, argv []string, p Policy) (Pull, error) {
 	services, _ := file["services"].(map[string]any)
 	var pull Pull
@@ -58,12 +58,16 @@ func PlanPull(file map[string]any, active []string, argv []string, p Policy) (Pu
 		selected = withDependencies(services, selected)
 	}
 	slices.Sort(selected)
+	project, _ := file["name"].(string)
+	shared := sharers(project, services, p)
 	pulled := map[string]bool{}
 	for _, name := range slices.Compact(selected) {
 		s, _ := services[name].(map[string]any)
 		image, _ := s["image"].(string)
 		policy, _ := s["pull_policy"].(string)
-		if image == "" || p.OwnRef(image) || policy == "never" || ignoreBuildable && s["build"] != nil {
+		// A sharer of a build (sharers) is the build's image: skipped with it.
+		builds := s["build"] != nil || len(shared[name]) > 0
+		if image == "" || p.OwnRef(image) || policy == "never" || ignoreBuildable && builds {
 			continue
 		}
 		if !slices.Contains(pull.Images, image) {

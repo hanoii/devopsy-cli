@@ -232,15 +232,36 @@ func CheckFile(file map[string]any, p Policy, verb string, paths Paths) []error 
 	checkTopVolumes(file, name, fail)
 	checkTopNetworks(file, name, p, fail)
 	services, _ := file["services"].(map[string]any)
+	shared := sharers(name, services, p)
 	for _, svc := range sortedKeys(services) {
 		s, ok := services[svc].(map[string]any)
 		if !ok {
 			fail("%s: not a service", svc)
 			continue
 		}
-		checkService(file, name, svc, s, p, verb, paths, fail)
+		checkService(file, name, svc, s, shared[svc], p, verb, paths, fail)
 	}
 	return errs
+}
+
+// sharers are the services of a file that share a build's image (images.Shared: no build:,
+// their image: the name a service's build has), each with the services that build it; one
+// devopsy's own file names (a pin, a name only the project writes: a bookmark, a hold) keeps
+// its name.
+func sharers(name string, services map[string]any, p Policy) map[string][]string {
+	specs := map[string]images.ImageSpec{}
+	for svc, v := range services {
+		s, _ := v.(map[string]any)
+		image, _ := s["image"].(string)
+		specs[svc] = images.ImageSpec{Image: image, Builds: s["build"] != nil}
+	}
+	shared := images.Shared(name, specs)
+	for svc := range shared {
+		if image := specs[svc].Image; images.Pinned(image) || p.OwnRef(image) {
+			delete(shared, svc)
+		}
+	}
+	return shared
 }
 
 // variableIn is a string of the file, keys included, holding a `$` not doubled.
@@ -331,7 +352,7 @@ func checkTopNetworks(file map[string]any, name string, p Policy, fail func(stri
 	}
 }
 
-func checkService(file map[string]any, name, svc string, s map[string]any, p Policy, verb string, paths Paths, fail func(string, ...any)) {
+func checkService(file map[string]any, name, svc string, s map[string]any, shares []string, p Policy, verb string, paths Paths, fail func(string, ...any)) {
 	// Compose reads other forms of these too, which the rules would not read at all.
 	for _, want := range []struct {
 		key   string
@@ -351,6 +372,17 @@ func checkService(file map[string]any, name, svc string, s map[string]any, p Pol
 		delete(labels, "")
 	}
 	switch b := s["build"]; {
+	case b == nil && len(shares) > 0 && verb != "pull":
+		// A sharer of a build runs that build, by the name this render gives it: the name it
+		// wrote is a registry's, which only compose's build of it ever meant. Two builds of
+		// its name are two images here, and the name says neither. A pull leaves it as it is:
+		// in image mode a registry serves the name to the builder and to it alike.
+		if len(shares) > 1 {
+			image, _ := s["image"].(string)
+			fail("%s", images.SharedTwiceLine(svc, image, shares))
+		} else {
+			s["image"] = images.DoorBuild(name, shares[0])
+		}
 	case b == nil:
 	case verb == "build":
 		block, _ := b.(map[string]any)

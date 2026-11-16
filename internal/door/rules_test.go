@@ -520,7 +520,7 @@ func TestCheckFileBuildOnAnotherServicesBuild(t *testing.T) {
 	file := func(contexts string) map[string]any {
 		return parse(t, `{"name":"shop-prod","services":{`+
 			`"base":`+safe(`,"build":{"context":"`+ctx+`/base"}`)+`,`+
-			`"db":`+safe(``)+`,`+
+			`"db":`+strings.Replace(safe(``), "busybox:1.37", "mariadb:11.8", 1)+`,`+
 			`"app":`+safe(`,"build":{"context":"`+ctx+`","additional_contexts":`+contexts+`}`)+`}}`)
 	}
 	if errs := CheckFile(file(`{"shop-base":"service:base"}`), testPolicy, "build", &fakePaths{}); len(errs) != 0 {

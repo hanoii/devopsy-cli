@@ -92,6 +92,8 @@ func (m *sim) fetchID(id string) {
 		switch t := tags[svc.Name]; {
 		case t != "" && svc.Build:
 		case t != "":
+		// A sharer of a build behind the door is that build's image, built with it.
+		case svc.Shares != "":
 		case svc.own(m.e.mode):
 			m.n++
 			m.d.pull(svc.Ref, fmt.Sprintf("%s-build-%d", m.e.set.Name, m.n))
@@ -3338,6 +3340,56 @@ func TestDoorProjectFetchesWithoutAFetchFile(t *testing.T) {
 	}
 	if imgs, _, _ := composeFacts(m.e.rel(m.cur)); !isBookmark(imgs["web"]) || fileImage(d, m.e.rel(m.cur), "web", "") != m.runs("web") {
 		t.Errorf("a door project's file runs web by %q", imgs["web"])
+	}
+}
+
+// Behind the door a service sharing a build's image (Shares, as the listing names it: by the
+// build's name) is the build's: the record gives both one bookmark, so a rollback runs the
+// build it restores for both, never what the name holds since; a profile's sharer runs that
+// bookmark too and is no tool; and a record fails when the build it shares is not there.
+func TestDoorSharerRunsItsBuildersBuild(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	ref := DoorBuild("app-prod", "web")
+	web := Service{Name: "web", Ref: ref, Build: true}
+	migrate := Service{Name: "migrate", Ref: ref, Shares: "web"}
+	tool := Service{Name: "tool", Ref: ref, Shares: "web", Profiled: true}
+	m := newSim(t, d, "app-prod", &out)
+	m.e.set.Door = true
+	m.e.set.ListAll = func(rel string) ([]Service, error) {
+		return append(slices.Clone(m.e.svcs[filepath.Base(rel)]), tool), nil
+	}
+	r1, err := m.release(false, web, migrate)
+	if err != nil {
+		m.fail("the first release: %v", err)
+	}
+	first := m.runs("web")
+	imgs, _, _ := composeFacts(m.e.rel(r1))
+	if first == "" || m.runs("migrate") != first || !isBookmark(imgs["migrate"]) || imgs["migrate"] != imgs["web"] {
+		m.fail("migrate runs %q by %q, web %q by %q", m.runs("migrate"), imgs["migrate"], first, imgs["web"])
+	}
+	if got := fileImage(d, m.e.rel(r1), "tool", ""); got != first {
+		m.fail("the profile's sharer runs %q, not web's build %s", got, first)
+	}
+	for _, e := range readTools(m.e.rel(r1)) {
+		if e.Service == "tool" {
+			m.fail("the profile's sharer is a tool: %+v", e)
+		}
+	}
+	if _, err := m.release(false, web, migrate); err != nil || m.runs("migrate") == first {
+		m.fail("the second release (%v): migrate still runs %s", err, first)
+	}
+	if err := m.rollback(r1, false); err != nil {
+		m.fail("rollback: %v", err)
+	}
+	if m.runs("migrate") != first || m.runs("web") != first {
+		m.fail("after the rollback migrate runs %q and web %q, want %s", m.runs("migrate"), m.runs("web"), first)
+	}
+	none := newSim(t, newFake(), "app-prod", &bytes.Buffer{})
+	none.e.set.Door = true
+	if _, err := none.release(false, migrate); !errors.Is(err, errFetchedNone) {
+		t.Errorf("a sharer whose build is not there: %v", err)
 	}
 }
 

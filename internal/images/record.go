@@ -1,6 +1,7 @@
 package images
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,19 @@ func (s *Set) sayAll(lv report.Level, msg string, details []string, fixes ...rep
 	for _, l := range report.Lines(lv, msg, details, fixes) {
 		_, _ = io.WriteString(s.Out, l+"\n")
 	}
+}
+
+// sayListing says that rel's listing failed with err, what being what it
+// lists (services, images): a refusal of the listing's own (a
+// report.Failure: a sharer of two builds, of a build not built) as its
+// message, details and fixes, any other error after these words.
+func (s *Set) sayListing(what, rel string, err error) {
+	var f *report.Failure
+	if errors.As(err, &f) {
+		s.sayAll(report.ErrorLevel, f.Msg, f.Details, f.Remedies...)
+		return
+	}
+	s.say(report.ErrorLevel, "could not list the %s of %s: %v", what, filepath.Base(rel), err)
 }
 
 // judged is one data service as a check judged it: why the rule refused
@@ -181,7 +195,7 @@ func (s *Set) Check(rel string) error {
 func (s *Set) judgeRelease(rel string) ([]judged, error) {
 	svcs, err := s.List(rel)
 	if err != nil {
-		s.say(report.ErrorLevel, "could not list the services of %s: %v", filepath.Base(rel), err)
+		s.sayListing("services", rel, err)
 		return nil, err
 	}
 	h := readHistory(baseOf(rel))
@@ -218,7 +232,7 @@ func (s *Set) Record(rel, prev string) (err error) {
 	}()
 	es, err := s.entries(rel, true)
 	if err != nil {
-		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
+		s.sayListing("images", rel, err)
 		return err
 	}
 	old := readList(prev)

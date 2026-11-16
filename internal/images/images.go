@@ -283,6 +283,11 @@ type Service struct {
 	// release's code).
 	BuildSpec json.RawMessage
 	BuildKey  string
+	// Shares is the service whose build it runs, behind the door (Shared):
+	// it has no build: and its image: is that build's name. Profiled: it
+	// is under a profile.
+	Shares   string
+	Profiled bool
 }
 
 // own says whether a service's image is the project's own: built (in
@@ -291,7 +296,7 @@ type Service struct {
 // (ModeOf), never by the image: Docker's containerd store gives built
 // and loaded images registry digests too.
 func (svc Service) own(mode string) bool {
-	return svc.NeverPull || (svc.Build && mode != ModeImage)
+	return svc.NeverPull || svc.Shares != "" || (svc.Build && mode != ModeImage)
 }
 
 // entry is one image a release runs.
@@ -630,7 +635,7 @@ func (s *Set) entries(rel string, strict bool) ([]entry, error) {
 				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, t)
 			}
 			ref = t
-		} else if strict && s.Door && svc.Build {
+		} else if strict && s.Door && (svc.Build || svc.Shares != "") {
 			// Behind the door, with no fetch file, by the name the door built it under.
 			if _, err := s.Docker.ID(ref); err != nil {
 				return nil, fmt.Errorf("%s: %w (%s)", svc.Name, errFetchedNone, ref)
@@ -671,10 +676,11 @@ func (s *Set) entryOf(svc Service, ref, mode string) entry {
 }
 
 // tag is what the rule compares of a data service's image (TagOf of
-// compose's image:), "" for one with build:, which has no tag check: a
-// built data service is protected by its version alone.
+// compose's image:), "" for one with build: or that shares one (Shares),
+// which has no tag check: a built data service is protected by its
+// version alone.
 func (svc Service) tag() string {
-	if svc.Build {
+	if svc.Build || svc.Shares != "" {
 		return ""
 	}
 	return TagOf(svc.Ref)
@@ -844,7 +850,7 @@ func (s *Set) beside(rel string, es []entry, ps *profiles, withTools bool) (shar
 			// Every owner of a profiles records tools (a record, a restore, a landing, an undo).
 			costs := []string{"its tools stay as they were recorded"}
 			if needSharers {
-				costs = append(costs, "one sharing a build's image runs what its name holds")
+				costs = append(costs, "one sharing a build's image may not run that build")
 			}
 			s.say(report.WarnLevel, "could not list every profile's services of %s (%v): %s", s.idOf(rel), err, strings.Join(costs, ", and "))
 		}
@@ -865,7 +871,7 @@ func (s *Set) beside(rel string, es []entry, ps *profiles, withTools bool) (shar
 			if needSharers {
 				sharers[svc.Name] = ref
 			}
-		case !withTools || listed[ref] || svc.Build || svc.NeverPull:
+		case !withTools || listed[ref] || svc.Build || svc.NeverPull || svc.Shares != "":
 		default:
 			e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
 			if !ps.byName {
